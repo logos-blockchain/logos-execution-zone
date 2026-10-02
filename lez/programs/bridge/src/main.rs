@@ -1,7 +1,7 @@
 use bridge_core::Message;
 use lee_core::{
     native_token::custody_transfer,
-    program::{ProgramEvent, ReceiveInput, Response, run_actor},
+    program::{ProgramEvent, ReceiveInput, Response, SendMode, run_actor},
 };
 
 /// A written receipt is one marker byte; crediting the receipt's balance does not affect this.
@@ -44,6 +44,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
             bridge_core::compute_bridge_seed(),
             recipient_id,
             u128::from(amount),
+            SendMode::Call,
         ))
         .event(ProgramEvent {
             selector: bridge_core::event::Deposit::SELECTOR,
@@ -108,6 +109,7 @@ mod tests {
                     bridge_core::compute_bridge_seed(),
                     RECIPIENT,
                     5,
+                    SendMode::Call
                 )],
                 Vec::new()
             )

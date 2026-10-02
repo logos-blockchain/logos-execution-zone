@@ -12,11 +12,9 @@ use amm_core::{
 };
 use lee_core::{
     account::{AccountId, Actor, ActorState},
-    program::{Call, ReceiveInput, Transition},
+    program::{Call, ReceiveInput, SendMode, Transition},
 };
-use token_core::{
-    Delivery, NewTokenDefinition, Notification, TokenDescriptor, TokenKind, expected_sends,
-};
+use token_core::{NewTokenDefinition, Notification, TokenDescriptor, TokenKind, expected_sends};
 
 const AMM_PROGRAM_ID: AccountId = AccountId::new([1; 32]);
 const TOKEN_PROGRAM_ID: AccountId = AccountId::new([15; 32]);
@@ -167,7 +165,7 @@ fn transfer(
     to: AccountId,
     definition_id: AccountId,
     amount: u128,
-    delivery: Delivery,
+    mode: SendMode,
 ) -> Call {
     Call::new(
         token_actor(from),
@@ -176,7 +174,7 @@ fn transfer(
             descriptor: fungible_of(definition_id),
             amount,
             notify: None,
-            delivery,
+            mode,
         },
     )
 }
@@ -186,9 +184,9 @@ fn withdrawal(
     to: AccountId,
     definition_id: AccountId,
     amount: u128,
-    delivery: Delivery,
+    mode: SendMode,
 ) -> Call {
-    transfer(vault, to, definition_id, amount, delivery)
+    transfer(vault, to, definition_id, amount, mode)
         .with_pda_seeds(vec![compute_vault_pda_seed(pool_id(), definition_id)])
 }
 
@@ -316,7 +314,7 @@ fn exact_input_turn(
     input_is_token_a: bool,
     amount_in: u128,
     min_amount_out: u128,
-    delivery: Delivery,
+    mode: SendMode,
 ) -> Transition {
     let (definition_id_in, definition_id_out) = definitions(input_is_token_a);
     let [input_vault, _, _, user_output] = swap_route(input_is_token_a);
@@ -331,7 +329,7 @@ fn exact_input_turn(
                 definition_id_out,
                 min_amount_out,
                 payout: user_output,
-                delivery,
+                mode,
             }),
         ),
     )
@@ -497,14 +495,14 @@ fn call_add_liquidity_successful() {
                     vault_b_id(),
                     TOKEN_B_ID,
                     ADD_ACTUAL_B,
-                    Delivery::Call
+                    SendMode::Call
                 ),
                 transfer(
                     USER_A_ID,
                     vault_a_id(),
                     TOKEN_A_ID,
                     ADD_ACTUAL_A,
-                    Delivery::Call
+                    SendMode::Call
                 ),
             ],
             Vec::new()
@@ -616,14 +614,14 @@ fn call_remove_liquidity_successful() {
                     USER_B_ID,
                     TOKEN_B_ID,
                     REMOVE_B,
-                    Delivery::Call
+                    SendMode::Call
                 ),
                 withdrawal(
                     vault_a_id(),
                     USER_A_ID,
                     TOKEN_A_ID,
                     REMOVE_A,
-                    Delivery::Call
+                    SendMode::Call
                 ),
             ],
             Vec::new()
@@ -740,14 +738,14 @@ fn new_definition_uninitialized_pool_creates_the_liquidity_definition() {
                     vault_b_id(),
                     TOKEN_B_ID,
                     RESERVE_B,
-                    Delivery::Call
+                    SendMode::Call
                 ),
                 transfer(
                     USER_A_ID,
                     vault_a_id(),
                     TOKEN_A_ID,
                     RESERVE_A,
-                    Delivery::Call
+                    SendMode::Call
                 ),
             ],
             Vec::new()
@@ -932,7 +930,7 @@ fn a_swap_pays_the_signed_amounts_and_seeds_only_the_withdrawal() {
                     user_output,
                     definition_id_out,
                     amount_out,
-                    Delivery::Call
+                    SendMode::Call
                 )],
                 Vec::new()
             )
@@ -1029,7 +1027,7 @@ fn a_swap_refuses_a_trader_holding_that_is_a_vault() {
 
 #[test]
 fn an_exact_input_swap_pays_its_live_quote_by_the_requested_delivery() {
-    for delivery in [Delivery::Cast, Delivery::Call] {
+    for mode in [SendMode::Cast, SendMode::Call] {
         for (input_is_token_a, amount_in, min_amount_out, quote, (reserve_a, reserve_b)) in [
             (true, 500, 166, 166, (1_500, 334)),
             (false, 200, 100, 285, (715, 700)),
@@ -1042,7 +1040,7 @@ fn an_exact_input_swap_pays_its_live_quote_by_the_requested_delivery() {
                 input_is_token_a,
                 amount_in,
                 min_amount_out,
-                delivery,
+                mode,
             );
 
             assert_eq!(
@@ -1061,7 +1059,7 @@ fn an_exact_input_swap_pays_its_live_quote_by_the_requested_delivery() {
                         user_output,
                         definition_id_out,
                         quote,
-                        delivery
+                        mode
                     )],
                     Vec::new()
                 )
@@ -1073,11 +1071,11 @@ fn an_exact_input_swap_pays_its_live_quote_by_the_requested_delivery() {
 #[should_panic(expected = "The live quote is below the minimum output")]
 #[test]
 fn an_exact_input_swap_refuses_a_minimum_above_its_live_quote() {
-    let _transition = exact_input_turn(&pool_base(), true, 500, 167, Delivery::Cast);
+    let _transition = exact_input_turn(&pool_base(), true, 500, 167, SendMode::Cast);
 }
 
 #[should_panic(expected = "Swap amounts must be nonzero")]
 #[test]
 fn an_exact_input_swap_refuses_an_input_that_quotes_nothing() {
-    let _transition = exact_input_turn(&pool_base(), true, 1, 0, Delivery::Cast);
+    let _transition = exact_input_turn(&pool_base(), true, 1, 0, SendMode::Cast);
 }

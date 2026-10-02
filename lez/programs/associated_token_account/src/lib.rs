@@ -4,9 +4,9 @@ pub use associated_token_account_core as core;
 use associated_token_account_core::{Message, PdaSeed, ata_of};
 use lee_core::{
     account::{AccountId, Actor},
-    program::{Call, ReceiveInput, Response},
+    program::{Call, ReceiveInput, Response, SendMode},
 };
-use token_core::{Delivery, TokenDescriptor};
+use token_core::TokenDescriptor;
 
 #[cfg(test)]
 mod execution_tests;
@@ -66,7 +66,7 @@ pub fn receive(input: &ReceiveInput, message: Message) -> Response {
                         descriptor,
                         amount,
                         notify: None,
-                        delivery: Delivery::Call,
+                        mode: SendMode::Call,
                     },
                 )
                 .with_pda_seeds(vec![seed]),

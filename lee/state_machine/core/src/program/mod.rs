@@ -375,6 +375,14 @@ impl Cast {
     }
 }
 
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+pub enum SendMode {
+    Call,
+    Cast,
+}
+
 pub trait Sendable {
     fn send_into(self, calls: &mut Vec<Call>, casts: &mut Vec<Cast>);
 }
@@ -482,6 +490,13 @@ impl Response {
 
     pub fn cast<M: BorshSerialize>(self, to: Actor, message: &M) -> Self {
         self.send(Cast::new(to, message))
+    }
+
+    pub fn send_as<M: BorshSerialize>(self, mode: SendMode, to: Actor, message: &M) -> Self {
+        match mode {
+            SendMode::Call => self.call(to, message),
+            SendMode::Cast => self.cast(to, message),
+        }
     }
 
     pub fn send(mut self, message: impl Sendable) -> Self {

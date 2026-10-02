@@ -4,7 +4,7 @@ use lee_core::{
     BlockId,
     account::{AccountId, Actor},
     native_token::{self, custody_transfer},
-    program::{BlockValidityWindow, Call, ReceiveInput, Response, run_actor},
+    program::{BlockValidityWindow, Call, ReceiveInput, Response, SendMode, run_actor},
 };
 use sequencer_stake_core::{
     ChannelParams, Message, PendingUnstake, SequencerEntry, SequencerKey, SequencerStakeConfig,
@@ -110,6 +110,7 @@ fn stake(
             &native_token::Message::Transfer {
                 to: stake_funds_account_id(program, &ownership),
                 amount,
+                mode: SendMode::Call,
             },
         )
 }
@@ -177,16 +178,13 @@ fn finalize_unstake(input: &ReceiveInput, sequencer_key: SequencerKey) -> Respon
     let program = input.receiver.program_account_id;
     Response::write(config.to_bytes())
         .block_window(pending.releasable_at(exit_delay)..)
-        .send(
-            Call::new(
-                Actor::native_balance(stake_funds_account_id(program, &ownership)),
-                &native_token::Message::CastTransfer {
-                    to: pending.destination,
-                    amount: pending.amount,
-                },
-            )
-            .with_pda_seeds(vec![stake_funds_seed(&ownership)]),
-        )
+        .send(custody_transfer(
+            stake_funds_account_id(program, &ownership),
+            stake_funds_seed(&ownership),
+            pending.destination,
+            pending.amount,
+            SendMode::Cast,
+        ))
 }
 
 fn slash(
@@ -216,6 +214,7 @@ fn slash(
         stake_funds_seed(&entry.account_id),
         slash_sink_account_id(program),
         entry.total_staked,
+        SendMode::Call,
     ))
 }
 
@@ -651,16 +650,13 @@ mod tests {
         assert_eq!(
             (transition.response.calls, transition.response.casts),
             (
-                vec![
-                    Call::new(
-                        Actor::native_balance(funds_of(OWNER)),
-                        &native_token::Message::CastTransfer {
-                            to: DESTINATION,
-                            amount: 500,
-                        },
-                    )
-                    .with_pda_seeds(vec![stake_funds_seed(&OWNER)])
-                ],
+                vec![custody_transfer(
+                    funds_of(OWNER),
+                    stake_funds_seed(&OWNER),
+                    DESTINATION,
+                    500,
+                    SendMode::Cast,
+                )],
                 Vec::new()
             )
         );
@@ -786,6 +782,7 @@ mod tests {
                         &native_token::Message::Transfer {
                             to: funds_of(OWNER),
                             amount: MINIMUM,
+                            mode: SendMode::Call
                         },
                     ),
                 ],
@@ -883,6 +880,7 @@ mod tests {
                     stake_funds_seed(&OWNER),
                     slash_sink_account_id(PROGRAM),
                     3_000,
+                    SendMode::Call
                 )],
                 Vec::new()
             )

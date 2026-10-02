@@ -12,7 +12,7 @@ pub use lee_core::{
     native_token,
     program::{
         Call, Cast, MessageBody, MessageData, MessageDigest, MessageEnvelope, MessageRef,
-        ProgramId, StoredMessage,
+        ProgramId, SendMode, StoredMessage,
     },
 };
 pub use privacy_preserving_circuit::{

@@ -47,11 +47,11 @@ use lee_core::{
     },
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
-    program::{MessageData, ReceiveInput, Transition},
+    program::{MessageData, ReceiveInput, SendMode, Transition},
 };
 use risc0_zkvm::{ExecutorEnv, default_executor, default_prover};
 use serde::Serialize;
-use token_core::{Delivery, TokenDefinition, TokenDescriptor, TokenHolding, TokenKind};
+use token_core::{TokenDefinition, TokenDescriptor, TokenHolding, TokenKind};
 
 /// The AMM pool fixture's reserves: lp supply is `sqrt(1000*500) = 707`.
 const AMM_RESERVE_A: u128 = 1_000;
@@ -631,7 +631,7 @@ fn cases() -> Result<[Case; 7]> {
                 descriptor: fungible(token_definition_id()),
                 amount: 5_000,
                 notify: None,
-                delivery: Delivery::Call,
+                mode: SendMode::Call,
             },
         )?,
         Case::new(

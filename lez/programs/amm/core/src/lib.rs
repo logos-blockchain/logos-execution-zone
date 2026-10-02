@@ -3,9 +3,9 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, Actor, ActorState},
-    program::PdaSeed,
+    program::{PdaSeed, SendMode},
 };
-use token_core::{Delivery, Notify, TokenDescriptor};
+use token_core::{Notify, TokenDescriptor};
 
 pub const AMM_NAME: [u8; 3] = *b"amm";
 
@@ -53,7 +53,7 @@ pub struct ExactInput {
     pub definition_id_out: AccountId,
     pub min_amount_out: u128,
     pub payout: AccountId,
-    pub delivery: Delivery,
+    pub mode: SendMode,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -293,6 +293,6 @@ pub fn swap_transfer(
             to: pool,
             payload: borsh::to_vec(&request).expect("borsh serialization is infallible"),
         }),
-        delivery: Delivery::Call,
+        mode: SendMode::Call,
     }
 }

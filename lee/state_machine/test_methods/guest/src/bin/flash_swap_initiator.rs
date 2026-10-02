@@ -26,7 +26,9 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, Actor},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID, custody_transfer, decode_balance},
-    program::{Call, PdaSeed, ReadState, ReceiveInput, Response, StateReply, run_actor_with},
+    program::{
+        Call, PdaSeed, ReadState, ReceiveInput, Response, SendMode, StateReply, run_actor_with,
+    },
 };
 
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -123,6 +125,7 @@ fn answer(input: &ReceiveInput, mut pending: Vec<Phase>, reply: &StateReply) -> 
                     PdaSeed::new([0; 32]),
                     receiver,
                     amount_out,
+                    SendMode::Call,
                 ))
                 .send(Call {
                     to: callback,

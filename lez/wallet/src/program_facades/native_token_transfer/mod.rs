@@ -1,7 +1,7 @@
 use lee::program::Program;
 use lee_core::{
     native_token::{Message, NATIVE_TOKEN_PROGRAM_ID, decode_balance},
-    program::MessageData,
+    program::{MessageData, SendMode},
 };
 
 use crate::{AccountMention, ExecutionFailureKind, SelectedShard, WalletCore};
@@ -28,6 +28,7 @@ fn native_transfer_preparation(
     let message = Program::serialize_message(Message::Transfer {
         to: accounts[1].identity.account_id(),
         amount: balance_to_move,
+        mode: SendMode::Call,
     })
     .unwrap();
 

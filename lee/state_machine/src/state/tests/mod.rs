@@ -20,7 +20,7 @@ use lee_core::{
     program::{
         BlockValidityWindow, Call, ExecutionValidationError, MessageEnvelope,
         PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ProgramId, ProgramSegment, ReadState,
-        StoredMessage, TimestampValidityWindow, TransactionEvent,
+        SendMode, StoredMessage, TimestampValidityWindow, TransactionEvent,
     },
 };
 use test_guest_core::{ForgeField, Script};
@@ -145,7 +145,11 @@ pub fn scripted_programs() -> ProgramCatalog {
 }
 
 pub const fn transfer(to: AccountId, amount: Balance) -> NativeMessage {
-    NativeMessage::Transfer { to, amount }
+    NativeMessage::Transfer {
+        to,
+        amount,
+        mode: SendMode::Call,
+    }
 }
 
 pub fn credit(from: Actor, to: Actor, amount: Balance) -> Delivery<Actor> {

@@ -28,7 +28,9 @@ use integration_tests::{
 };
 use lee::{Account, AccountId, PrivateKey, PublicKey, program::Program};
 use lee_core::{
-    Identifier, native_token::NATIVE_TOKEN_PROGRAM_ID, program::PROGRAM_LOADER_ACCOUNT_ID,
+    Identifier,
+    native_token::NATIVE_TOKEN_PROGRAM_ID,
+    program::{PROGRAM_LOADER_ACCOUNT_ID, SendMode},
 };
 use token_core::{NewTokenDefinition, TokenDefinition, TokenHolding};
 use wallet::{DEFAULT_MAX_FEE, account::HumanReadableAccount};
@@ -1666,9 +1668,12 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
     let account_mentions = Box::into_raw(ffi_accs.into_boxed_slice()) as *const FfiAccountMention;
 
     // The sender's native actor, mention 0, is the root.
-    let message =
-        Program::serialize_message(lee_core::native_token::Message::Transfer { to: to_id, amount })
-            .unwrap();
+    let message = Program::serialize_message(lee_core::native_token::Message::Transfer {
+        to: to_id,
+        amount,
+        mode: SendMode::Call,
+    })
+    .unwrap();
     let message_size = message.len();
     let message_ptr = Box::into_raw(message.into_boxed_slice()) as *const u8;
 

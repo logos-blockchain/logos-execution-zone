@@ -8,7 +8,7 @@ use lee_core::{
     native_token::{
         Message as NativeMessage, NATIVE_TOKEN_PROGRAM_ID, custody_transfer, decode_balance,
     },
-    program::{ReadState, ReceiveInput, Response, StateReply, run_actor_with},
+    program::{ReadState, ReceiveInput, Response, SendMode, StateReply, run_actor_with},
 };
 
 fn main() {
@@ -67,9 +67,13 @@ fn receive(input: &ReceiveInput) -> Response {
                 }),
             )
         }
-        Message::Refund { amount, payer } => {
-            Response::keep().send(custody_transfer(inbox, fee_inbox_seed(), payer, amount))
-        }
+        Message::Refund { amount, payer } => Response::keep().send(custody_transfer(
+            inbox,
+            fee_inbox_seed(),
+            payer,
+            amount,
+            SendMode::Call,
+        )),
     }
 }
 
@@ -111,7 +115,7 @@ fn pay_out(input: &ReceiveInput, reply: &StateReply) -> Response {
     .fold(
         Response::write(fee_state.to_bytes()),
         |response, (from, seed, to, amount)| {
-            response.send(custody_transfer(from, seed, to, amount))
+            response.send(custody_transfer(from, seed, to, amount, SendMode::Call))
         },
     )
 }
@@ -276,9 +280,9 @@ mod tests {
             (transition.response.calls, transition.response.casts),
             (
                 vec![
-                    custody_transfer(inbox, fee_inbox_seed(), escrow, 1_000),
-                    custody_transfer(inbox, fee_inbox_seed(), PRODUCER, 7,),
-                    custody_transfer(escrow, fee_escrow_seed(), PRODUCER, payout,),
+                    custody_transfer(inbox, fee_inbox_seed(), escrow, 1_000, SendMode::Call),
+                    custody_transfer(inbox, fee_inbox_seed(), PRODUCER, 7, SendMode::Call),
+                    custody_transfer(escrow, fee_escrow_seed(), PRODUCER, payout, SendMode::Call),
                 ],
                 Vec::new()
             )
@@ -301,7 +305,13 @@ mod tests {
         assert_eq!(
             (transition.response.calls, transition.response.casts),
             (
-                vec![custody_transfer(inbox, fee_inbox_seed(), escrow, 10)],
+                vec![custody_transfer(
+                    inbox,
+                    fee_inbox_seed(),
+                    escrow,
+                    10,
+                    SendMode::Call
+                )],
                 Vec::new()
             )
         );

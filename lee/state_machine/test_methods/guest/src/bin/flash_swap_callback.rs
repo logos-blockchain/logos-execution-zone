@@ -27,7 +27,7 @@
 use lee_core::{
     account::AccountId,
     native_token::custody_transfer,
-    program::{PdaSeed, ReceiveInput, Response, run_actor},
+    program::{PdaSeed, ReceiveInput, Response, SendMode, run_actor},
 };
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -46,6 +46,7 @@ fn main() {
                 PdaSeed::new([1; 32]),
                 message.vault,
                 message.amount,
+                SendMode::Call,
             ))
         } else {
             Response::keep()

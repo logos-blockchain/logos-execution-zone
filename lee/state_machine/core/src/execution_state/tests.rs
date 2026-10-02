@@ -6,7 +6,7 @@ use crate::{
     AuthorizationSecretKey, Identifier,
     encryption::ViewingPublicKey,
     native_token,
-    program::{Call, Cast, Response},
+    program::{Call, Cast, Response, SendMode},
 };
 
 const ENTRY: Actor = Actor::new(AccountId::new([1; 32]), AccountId::new([9; 32]));
@@ -1125,6 +1125,7 @@ fn a_public_turn_requests_a_private_debit_that_the_private_credential_authorizes
                         message: borsh::to_vec(&native_token::Message::Transfer {
                             to: payee.account_id,
                             amount: 0,
+                            mode: SendMode::Call,
                         })
                         .unwrap(),
                     },

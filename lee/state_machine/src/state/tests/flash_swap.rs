@@ -87,6 +87,7 @@ impl FlashSwap {
             RECEIVER_SEED,
             self.vault_id,
             amount,
+            SendMode::Call,
         )
     }
 

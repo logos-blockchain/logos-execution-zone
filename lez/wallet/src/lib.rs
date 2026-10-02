@@ -1498,9 +1498,9 @@ mod tests {
     use lee::AccountId;
     use lee_core::{
         account::Actor,
-        program::{MessageBody, StoredMessage},
+        program::{MessageBody, SendMode, StoredMessage},
     };
-    use token_core::{Delivery, Message, Notify, TokenDescriptor, TokenKind};
+    use token_core::{Message, Notify, TokenDescriptor, TokenKind};
 
     use super::{ExecutionFailureKind, NATIVE_TOKEN_PROGRAM_ID, check_receivable, native_token};
 
@@ -1546,7 +1546,7 @@ mod tests {
             descriptor: DESCRIPTOR,
             amount: 5,
             notify: None,
-            delivery: Delivery::Call,
+            mode: SendMode::Call,
         };
         let notifying = credit(Some(Notify {
             to: Actor::new(AccountId::new([4; 32]), AccountId::new([5; 32])),
@@ -1586,12 +1586,20 @@ mod tests {
             record(
                 native,
                 native,
-                &native_token::Message::Transfer { to, amount: 5 },
+                &native_token::Message::Transfer {
+                    to,
+                    amount: 5,
+                    mode: SendMode::Call,
+                },
             ),
             record(
                 native,
                 native,
-                &native_token::Message::CastTransfer { to, amount: 5 },
+                &native_token::Message::Transfer {
+                    to,
+                    amount: 5,
+                    mode: SendMode::Cast,
+                },
             ),
             record(
                 AccountId::new([6; 32]),

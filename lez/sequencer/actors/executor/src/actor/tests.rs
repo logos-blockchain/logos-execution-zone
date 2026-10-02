@@ -12,7 +12,7 @@ use lee::{
     Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction, Signature,
     public_transaction::{Message, WitnessSet},
 };
-use lee_core::native_token::Message as NativeMessage;
+use lee_core::{native_token::Message as NativeMessage, program::SendMode};
 use mockall::predicate::{always, eq, function};
 use num_bigint::BigUint;
 use sequencer_bedrock_actor::{
@@ -91,6 +91,7 @@ fn transfer_to(recipient: AccountId) -> NativeMessage {
     NativeMessage::Transfer {
         to: recipient,
         amount: 1337,
+        mode: SendMode::Call,
     }
 }
 

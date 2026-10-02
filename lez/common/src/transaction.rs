@@ -1,5 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee::{AccountId, Actor, TransactionEntry, V03State, ValidatedStateDiff};
+use lee::{AccountId, Actor, SendMode, TransactionEntry, V03State, ValidatedStateDiff};
 use lee_core::{
     BlockId, Timestamp, account::Balance, native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::TransactionEvent,
@@ -402,6 +402,7 @@ pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_tra
         lee_core::native_token::Message::Transfer {
             to: inbox.account_id,
             amount,
+            mode: SendMode::Call,
         },
     )
     .expect("Fee reserve message should always be constructable")

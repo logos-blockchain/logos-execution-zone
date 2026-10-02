@@ -25,7 +25,7 @@ use lee::{
 use lee_core::{
     AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, Identifier, MembershipProof, NullifierPublicKey,
     NullifierSecretKey, NullifierWitness, PrivateWitness, WitnessKind, account::Nonce,
-    encryption::ViewingPublicKey, execution_state::TransactionEntry,
+    encryption::ViewingPublicKey, execution_state::TransactionEntry, program::SendMode,
 };
 use sequencer_core::config::GenesisAction;
 use sequencer_service_rpc::RpcClient as _;
@@ -96,6 +96,7 @@ impl TpsTestManager {
                     lee_core::native_token::Message::Transfer {
                         to: recipient.account_id,
                         amount,
+                        mode: SendMode::Call,
                     },
                     // A generous max_fee (a ceiling, not the fee paid) so the
                     // base-fee rise this test's own sustained load causes cannot
@@ -271,6 +272,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                 message: Program::serialize_message(lee_core::native_token::Message::Transfer {
                     to: recipient_id,
                     amount: balance_to_move,
+                    mode: SendMode::Call,
                 })
                 .unwrap(),
             },

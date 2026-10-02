@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use common::HashType;
 use derive_more::Display;
 use futures::TryFutureExt as _;
-use lee_core::BlockId;
+use lee_core::{BlockId, program::SendMode};
 use sequencer_service_rpc::RpcClient as _;
 
 pub use crate::helperfunctions::{read_mnemonic, read_pin};
@@ -333,12 +333,8 @@ pub fn identifier_or_random(identifier: Option<lee_core::Identifier>) -> lee_cor
     identifier.unwrap_or_else(|| lee_core::Identifier::new(rand::random()))
 }
 
-pub(crate) const fn delivery(cast: bool) -> token_core::Delivery {
-    if cast {
-        token_core::Delivery::Cast
-    } else {
-        token_core::Delivery::Call
-    }
+pub(crate) const fn send_mode(cast: bool) -> SendMode {
+    if cast { SendMode::Cast } else { SendMode::Call }
 }
 
 pub fn read_password_from_stdin() -> Result<String> {

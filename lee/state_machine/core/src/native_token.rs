@@ -2,7 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::{
     account::{AccountId, Actor, ActorState, Balance},
-    program::{Call, PdaSeed, ReadState, ReceiveInput, Response, StateReply, Transition},
+    program::{Call, PdaSeed, ReadState, ReceiveInput, Response, SendMode, StateReply, Transition},
 };
 
 /// Hardcoded native token shard address.
@@ -10,9 +10,12 @@ pub const NATIVE_TOKEN_PROGRAM_ID: AccountId = AccountId::new([0; 32]);
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Message {
-    Transfer { to: AccountId, amount: Balance },
+    Transfer {
+        to: AccountId,
+        amount: Balance,
+        mode: SendMode,
+    },
     Credit(Balance),
-    CastTransfer { to: AccountId, amount: Balance },
     ReadState(ReadState),
     StateReply(StateReply),
 }
@@ -69,12 +72,11 @@ pub fn receive(input: &ReceiveInput) -> Result<Transition, TransferError> {
     };
     let account_id = input.receiver.account_id;
     let response = match message {
-        Message::Transfer { to, amount } => {
-            debit(input, to, amount)?.call(Actor::native_balance(to), &Message::Credit(amount))
-        }
-        Message::CastTransfer { to, amount } => {
-            debit(input, to, amount)?.cast(Actor::native_balance(to), &Message::Credit(amount))
-        }
+        Message::Transfer { to, amount, mode } => debit(input, to, amount)?.send_as(
+            mode,
+            Actor::native_balance(to),
+            &Message::Credit(amount),
+        ),
         Message::Credit(amount) => {
             if !input.from_own_program() {
                 return Err(TransferError::ForeignCredit { account_id });
@@ -108,10 +110,16 @@ fn debit(input: &ReceiveInput, to: AccountId, amount: Balance) -> Result<Respons
 
 /// A transfer out of an account the caller holds under `seed`.
 #[must_use]
-pub fn custody_transfer(from: AccountId, seed: PdaSeed, to: AccountId, amount: Balance) -> Call {
+pub fn custody_transfer(
+    from: AccountId,
+    seed: PdaSeed,
+    to: AccountId,
+    amount: Balance,
+    mode: SendMode,
+) -> Call {
     Call::new(
         Actor::native_balance(from),
-        &Message::Transfer { to, amount },
+        &Message::Transfer { to, amount, mode },
     )
     .with_pda_seeds(vec![seed])
 }
@@ -150,13 +158,15 @@ mod tests {
         Message::Transfer {
             to: AccountId::new([2; 32]),
             amount,
+            mode: SendMode::Call,
         }
     }
 
     fn cast_transfer(amount: Balance) -> Message {
-        Message::CastTransfer {
+        Message::Transfer {
             to: AccountId::new([2; 32]),
             amount,
+            mode: SendMode::Cast,
         }
     }
 
@@ -197,6 +207,7 @@ mod tests {
         let to_self = Message::Transfer {
             to: AccountId::new([1; 32]),
             amount: 30,
+            mode: SendMode::Call,
         };
 
         assert_eq!(
@@ -294,7 +305,13 @@ mod tests {
         let seed = PdaSeed::new([3; 32]);
 
         assert_eq!(
-            custody_transfer(AccountId::new([1; 32]), seed, AccountId::new([2; 32]), 7),
+            custody_transfer(
+                AccountId::new([1; 32]),
+                seed,
+                AccountId::new([2; 32]),
+                7,
+                SendMode::Call
+            ),
             Call {
                 to: native(1),
                 message: borsh::to_vec(&transfer(7)).unwrap(),

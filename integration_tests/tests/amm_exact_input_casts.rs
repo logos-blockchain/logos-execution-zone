@@ -16,7 +16,8 @@ use integration_tests::{
 use lee::{
     Actor, PrivacyPreservingTransaction, privacy_preserving_transaction::circuit::ProgramCatalog,
 };
-use token_core::{Delivery, TokenHolding};
+use lee_core::program::SendMode;
+use token_core::TokenHolding;
 use tokio::test;
 
 const SUPPLY: u128 = 10_000;
@@ -41,7 +42,7 @@ async fn prepare_swap(
             definition_id_out: pool.definition_b,
             min_amount_out,
             payout: trader.output,
-            delivery: Delivery::Cast,
+            mode: SendMode::Cast,
         }),
         vec![spent],
         vec![Vec::new()],

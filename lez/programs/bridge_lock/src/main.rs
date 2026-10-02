@@ -6,7 +6,7 @@ use cross_zone_outbox_core::Message as OutboxMessage;
 use lee_core::{
     account::Actor,
     native_token::custody_transfer,
-    program::{ReceiveInput, Response, run_actor, write_once},
+    program::{ReceiveInput, Response, SendMode, run_actor, write_once},
 };
 use wrapped_token_core::{MAX_MINT_AMOUNT, Message as WrappedMessage};
 
@@ -89,6 +89,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
                     holding_seed(&holder),
                     escrow_account_id(program),
                     amount,
+                    SendMode::Call,
                 ))
                 .call(
                     outbox,
@@ -297,6 +298,7 @@ mod tests {
                         holding_seed(&holder),
                         escrow_account_id(BRIDGE_LOCK_ID),
                         AMOUNT,
+                        SendMode::Call
                     ),
                     Call::new(
                         outbox_actor(),

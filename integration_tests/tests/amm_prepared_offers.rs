@@ -16,8 +16,11 @@ use integration_tests::{
     restored_private_account, sync_private, wait_for_inclusion,
 };
 use lee::{Actor, PrivacyPreservingTransaction};
-use lee_core::{NullifierWitness, PrivateWitness, WitnessKind, program::Call};
-use token_core::{Delivery, TokenHolding, expected_sends};
+use lee_core::{
+    NullifierWitness, PrivateWitness, WitnessKind,
+    program::{Call, SendMode},
+};
+use token_core::{TokenHolding, expected_sends};
 use tokio::test;
 use wallet::{AccountIdentity, program_facades::amm::Amm};
 
@@ -34,7 +37,7 @@ fn predicted_payout(pool: &PoolFixture, trader: &Trader) -> Vec<Vec<lee::Deliver
         descriptor: fungible(pool.definition_b),
         amount: OFFER_OUT,
         notify: None,
-        delivery: Delivery::Call,
+        mode: SendMode::Call,
     };
     let (calls, casts) = expected_sends(vault_b, &payout);
     assert!(

@@ -11,7 +11,7 @@ use lee_core::{
     Timestamp,
     account::{AccountId, Actor},
     native_token,
-    program::{ReceiveInput, Response, run_actor},
+    program::{ReceiveInput, Response, SendMode, run_actor},
 };
 
 fn main() {
@@ -35,6 +35,7 @@ fn receive(
             &native_token::Message::Transfer {
                 to: receiver,
                 amount,
+                mode: SendMode::Call,
             },
         )
 }

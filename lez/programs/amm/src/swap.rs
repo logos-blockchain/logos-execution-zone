@@ -1,9 +1,9 @@
 use amm_core::{PoolDefinition, SwapRequest};
 use lee_core::{
     account::ActorState,
-    program::{ReceiveInput, Response},
+    program::{ReceiveInput, Response, SendMode},
 };
-use token_core::{Delivery, Notification};
+use token_core::Notification;
 
 use crate::sends::withdrawal;
 
@@ -13,16 +13,14 @@ use crate::sends::withdrawal;
 pub fn swap(input: &ReceiveInput, pool: &PoolDefinition, notification: &Notification) -> Response {
     let request: SwapRequest =
         borsh::from_slice(&notification.payload).expect("a swap notification must carry an offer");
-    let (definition_id_out, offered_out, payout, delivery) = match request {
+    let (definition_id_out, offered_out, payout, mode) = match request {
         SwapRequest::Offer(offer) => (
             offer.definition_id_out,
             Some(offer.amount_out),
             offer.payout,
-            Delivery::Call,
+            SendMode::Call,
         ),
-        SwapRequest::ExactInput(exact) => {
-            (exact.definition_id_out, None, exact.payout, exact.delivery)
-        }
+        SwapRequest::ExactInput(exact) => (exact.definition_id_out, None, exact.payout, exact.mode),
     };
     let amount_in = notification.amount;
 
@@ -100,7 +98,7 @@ pub fn swap(input: &ReceiveInput, pool: &PoolDefinition, notification: &Notifica
         output.definition_id,
         payout,
         amount_out,
-        delivery,
+        mode,
     );
     Response::write(ActorState::from(&PoolDefinition {
         reserve_a,

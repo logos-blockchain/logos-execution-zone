@@ -5,9 +5,9 @@ use associated_token_account_core::{
 };
 use lee_core::{
     account::{AccountId, Actor, ActorState},
-    program::{Call, PdaSeed, ReceiveInput, Transition},
+    program::{Call, PdaSeed, ReceiveInput, SendMode, Transition},
 };
-use token_core::{Delivery, TokenDescriptor, TokenKind};
+use token_core::{TokenDescriptor, TokenKind};
 
 const ATA_PROGRAM_ID: AccountId = AccountId::new([1u8; 32]);
 const TOKEN_PROGRAM_ID: AccountId = AccountId::new([2u8; 32]);
@@ -195,7 +195,7 @@ fn transfer_delegates_the_proposed_descriptor_under_the_ata_seed() {
                         descriptor: descriptor(),
                         amount: TRANSFER_AMOUNT,
                         notify: None,
-                        delivery: Delivery::Call,
+                        mode: SendMode::Call,
                     },
                 )
                 .with_pda_seeds(seeds)

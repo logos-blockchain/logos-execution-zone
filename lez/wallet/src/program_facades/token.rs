@@ -2,9 +2,9 @@ use common::HashType;
 use lee::{AccountId, privacy_preserving_transaction::circuit::ProgramCatalog, program::Program};
 use lee_core::{
     Identifier, NullifierPublicKey, PrivateAccountKind, SharedSecretKey,
-    encryption::ViewingPublicKey,
+    encryption::ViewingPublicKey, program::SendMode,
 };
-use token_core::{Delivery, Message, NewTokenDefinition, TokenDescriptor, TokenHolding};
+use token_core::{Message, NewTokenDefinition, TokenDescriptor, TokenHolding};
 
 use crate::{
     AccountIdentity, AccountMention, ExecutionFailureKind, WalletCore,
@@ -274,7 +274,7 @@ impl Token<'_> {
                     descriptor,
                     amount,
                     notify: None,
-                    delivery: Delivery::Cast,
+                    mode: SendMode::Cast,
                 }),
                 &ProgramCatalog::from([(token_program_id, programs::token())]),
             )
@@ -519,7 +519,7 @@ fn transfer(
         descriptor,
         amount,
         notify: None,
-        delivery: Delivery::Call,
+        mode: SendMode::Call,
     }
 }
 

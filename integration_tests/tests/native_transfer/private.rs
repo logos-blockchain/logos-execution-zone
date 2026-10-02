@@ -14,7 +14,7 @@ use lee::{
 use lee_core::{
     DUMMY_COMMITMENT_HASH, Identifier, Nullifier, NullifierPublicKey, NullifierWitness,
     PrivateWitness, WitnessKind, encryption::ViewingPublicKey, execution_state::TransactionEntry,
-    native_token,
+    native_token, program::SendMode,
 };
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
@@ -621,6 +621,7 @@ fn prove_init_with_commitment_root(
                 message: Program::serialize_message(native_token::Message::Transfer {
                     to: recipient_account_id,
                     amount: 1,
+                    mode: SendMode::Call,
                 })?,
             },
             context: PublicExecutionContext::new(vec![sender], [sender_id]),

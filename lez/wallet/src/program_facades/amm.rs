@@ -9,8 +9,11 @@ use lee::{
     AccountId, Actor, MessageEnvelope, privacy_preserving_transaction::circuit::ProgramCatalog,
     program::Program,
 };
-use lee_core::{SharedSecretKey, program::Call};
-use token_core::{Delivery, TokenDescriptor, TokenHolding, TokenKind, expected_sends};
+use lee_core::{
+    SharedSecretKey,
+    program::{Call, SendMode},
+};
+use token_core::{TokenDescriptor, TokenHolding, TokenKind, expected_sends};
 
 use crate::{
     AccountIdentity, AccountMention, ExecutionFailureKind, WalletCore,
@@ -146,7 +149,7 @@ impl Amm<'_> {
         user_output: AccountIdentity,
         amount_in: u128,
         min_amount_out: u128,
-        delivery: Delivery,
+        mode: SendMode,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         self.send_swap_request(
             pool_id,
@@ -155,7 +158,7 @@ impl Amm<'_> {
             amount_in,
             Request::ExactInput {
                 min_amount_out,
-                delivery,
+                mode,
             },
         )
         .await
@@ -184,7 +187,7 @@ impl Amm<'_> {
         if matches!(
             terms.request,
             Request::ExactInput {
-                delivery: Delivery::Cast,
+                mode: SendMode::Cast,
                 ..
             }
         ) {
@@ -313,7 +316,7 @@ enum Request {
     },
     ExactInput {
         min_amount_out: u128,
-        delivery: Delivery,
+        mode: SendMode,
     },
 }
 
@@ -392,12 +395,12 @@ impl SwapTerms {
                 }),
                 Request::ExactInput {
                     min_amount_out,
-                    delivery,
+                    mode,
                 } => SwapRequest::ExactInput(ExactInput {
                     definition_id_out: self.definition_id_out,
                     min_amount_out,
                     payout,
-                    delivery,
+                    mode,
                 }),
             },
         )
@@ -414,7 +417,7 @@ impl SwapTerms {
         let amount_out = match self.request {
             Request::Offer { amount_out } => amount_out,
             Request::ExactInput {
-                delivery: Delivery::Call,
+                mode: SendMode::Call,
                 ..
             } if accounts[1].identity.is_private() => {
                 return Err(ExecutionFailureKind::TransactionBuildError(
@@ -433,7 +436,7 @@ impl SwapTerms {
             descriptor: fungible(self.definition_id_out),
             amount: amount_out,
             notify: None,
-            delivery: Delivery::Call,
+            mode: SendMode::Call,
         };
         let (calls, _) = expected_sends(vault, &payout);
         Ok(vec![
@@ -725,7 +728,7 @@ mod tests {
         .unwrap()
     }
 
-    fn exact_input(delivery: Delivery) -> SwapTerms {
+    fn exact_input(mode: SendMode) -> SwapTerms {
         SwapTerms::new(
             POOL,
             &pool(),
@@ -734,7 +737,7 @@ mod tests {
             100,
             Request::ExactInput {
                 min_amount_out: 40,
-                delivery,
+                mode,
             },
         )
         .unwrap()
@@ -909,7 +912,7 @@ mod tests {
                 descriptor: super::fungible(terms.definition_id_out),
                 amount: 45,
                 notify: None,
-                delivery: Delivery::Call,
+                mode: SendMode::Call,
             },
         );
         let Call { to, message, .. } = calls.remove(0);
@@ -934,25 +937,25 @@ mod tests {
 
     #[test]
     fn an_exact_input_swap_promises_an_empty_group_when_cast_or_paid_publicly() {
-        for (delivery, destination) in [
-            (Delivery::Cast, AccountIdentity::PrivateOwned(DESTINATION)),
-            (Delivery::Cast, AccountIdentity::Public(DESTINATION)),
-            (Delivery::Call, AccountIdentity::Public(DESTINATION)),
+        for (mode, destination) in [
+            (SendMode::Cast, AccountIdentity::PrivateOwned(DESTINATION)),
+            (SendMode::Cast, AccountIdentity::Public(DESTINATION)),
+            (SendMode::Call, AccountIdentity::Public(DESTINATION)),
         ] {
-            let terms = exact_input(delivery);
+            let terms = exact_input(mode);
             let accounts =
                 terms.accounts(AccountIdentity::PrivateOwned(SOURCE), destination.clone());
             assert_eq!(
                 terms.promised_payout(&accounts).unwrap(),
                 vec![Vec::new()],
-                "{delivery:?} into {destination:?}"
+                "{mode:?} into {destination:?}"
             );
         }
     }
 
     #[test]
     fn an_exact_input_payout_into_a_private_holding_is_refused_unless_it_is_cast() {
-        let terms = exact_input(Delivery::Call);
+        let terms = exact_input(SendMode::Call);
         let accounts = terms.accounts(
             AccountIdentity::PrivateOwned(SOURCE),
             AccountIdentity::PrivateOwned(DESTINATION),

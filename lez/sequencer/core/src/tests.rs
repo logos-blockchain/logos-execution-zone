@@ -15,7 +15,7 @@ use lee::{
     Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction, TransactionEntry,
     V03State, program::Program,
 };
-use lee_core::{GENESIS_BLOCK_ID, account::Nonce};
+use lee_core::{GENESIS_BLOCK_ID, account::Nonce, program::SendMode};
 use logos_blockchain_core::{
     events::DepositRecreatedNotes,
     header::HeaderId,
@@ -4130,6 +4130,7 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
         lee_core::native_token::Message::Transfer {
             to: funds_id,
             amount: donation,
+            mode: SendMode::Call,
         },
     )
     .unwrap();
@@ -4210,6 +4211,7 @@ fn dust_credited_before_a_stake_neither_blocks_nor_inflates_it() {
         lee_core::native_token::Message::Transfer {
             to: funds_id,
             amount: dust,
+            mode: SendMode::Call,
         },
     )
     .unwrap();

@@ -69,7 +69,7 @@ impl PublicTransaction {
 
 #[cfg(test)]
 pub mod tests {
-    use lee_core::{account::Actor, native_token::Message as NativeMessage};
+    use lee_core::{account::Actor, native_token::Message as NativeMessage, program::SendMode};
     use sha2::{Digest as _, digest::FixedOutput as _};
 
     use crate::{
@@ -91,6 +91,7 @@ pub mod tests {
         NativeMessage::Transfer {
             to: recipient,
             amount: 1337,
+            mode: SendMode::Call,
         }
     }
 

@@ -18,10 +18,10 @@ use lee_core::{
     encryption::ViewingPublicKey,
     execution_state::TransactionEntry,
     native_token,
-    program::{Call, StoredMessage},
+    program::{Call, SendMode, StoredMessage},
 };
 use test_guest_core::Script;
-use token_core::{Delivery, TokenDescriptor, TokenHolding, TokenKind};
+use token_core::{TokenDescriptor, TokenHolding, TokenKind};
 
 use super::PpeBenchResult;
 
@@ -120,6 +120,7 @@ pub fn prove_native_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircui
                 message: to_vec(&native_token::Message::Transfer {
                     to: recipient_id,
                     amount: AMOUNT_TO_TRANSFER,
+                    mode: SendMode::Call,
                 })?,
             },
             vec![sender],
@@ -159,7 +160,7 @@ const fn token_transfer_message() -> token_core::Message {
         },
         amount: AMOUNT_TO_TRANSFER,
         notify: None,
-        delivery: Delivery::Call,
+        mode: SendMode::Call,
     }
 }
 

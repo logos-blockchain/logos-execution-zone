@@ -20,7 +20,11 @@ use lee::{
     error::{InvalidProgramBehaviorError, LeeError},
     public_transaction::{Message, WitnessSet},
 };
-use lee_core::{account::Account, native_token::TransferError, program::Call};
+use lee_core::{
+    account::Account,
+    native_token::TransferError,
+    program::{Call, SendMode},
+};
 use ping_core::{
     ReceiverMessage, outbox_bytes, ping_record_pda, read_outbox, receiver_config_account_id,
     sender_config_account_id,
@@ -1283,6 +1287,7 @@ fn a_direct_transfer_from_the_holding_is_refused() {
         lee_core::native_token::Message::Transfer {
             to: escrow.account_id,
             amount: INITIAL_BALANCE,
+            mode: SendMode::Call,
         },
     )
     .expect("build transfer message");

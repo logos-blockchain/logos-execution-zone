@@ -193,7 +193,7 @@ impl AmmProgramAgnosticSubcommand {
                         user_output,
                         amount_in,
                         min_amount_out,
-                        crate::cli::delivery(cast),
+                        crate::cli::send_mode(cast),
                     )
                     .await?
             }
