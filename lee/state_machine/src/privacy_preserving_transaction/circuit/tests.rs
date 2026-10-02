@@ -561,14 +561,14 @@ fn shared_account_receives_via_simple_transfer() {
     assert_eq!(output.private_actions.len(), 1);
 }
 
-/// A regular init with an npk derived from the held `nsk` and a non-default identifier
-/// produces a ciphertext that decrypts to `PrivateAccountKind::Regular` carrying the correct
-/// identifier.
+/// A regular init with a non-default identifier, whether authorized by the held `ask` or foreign
+/// (the caller does not own the account), produces a ciphertext that decrypts to
+/// `PrivateAccountKind::Regular` carrying the correct identifier.
 #[test]
-fn private_authorized_init_encrypts_regular_kind_with_identifier() {
+fn private_authorized_and_foreign_inits_encrypt_regular_kind_with_identifier() {
     let keys = test_private_account_keys_1();
     let identifier = Identifier::new([99; 32]);
-    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+    let account_id = regular_id(&keys, identifier);
     let esk = EphemeralSecretKey::new(
         &account_id,
         &[0; 32],
@@ -576,37 +576,19 @@ fn private_authorized_init_encrypts_regular_kind_with_identifier() {
     );
     let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
 
-    let (output, _) =
-        prove_scripted(init_witness(&keys, identifier), &Script::default(), None).unwrap();
+    for (init, ask) in [("authorized", Some(keys.ask)), ("foreign", None)] {
+        let witness = PrivateWitness {
+            kind: WitnessKind::Regular { ask },
+            ..init_witness(&keys, identifier)
+        };
+        let (output, _) = prove_scripted(witness, &Script::default(), None).unwrap();
 
-    assert_eq!(
-        decrypt_kind(&output, &ssk, 0),
-        PrivateAccountKind::Regular(identifier)
-    );
-}
-
-/// A regular init with a directly-supplied npk (the caller does not own the account) and a
-/// non-default identifier produces a ciphertext that decrypts to `PrivateAccountKind::Regular`
-/// carrying the correct identifier.
-#[test]
-fn private_foreign_init_encrypts_regular_kind_with_identifier() {
-    let keys = test_private_account_keys_1();
-    let identifier = Identifier::new([99; 32]);
-    let recipient_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
-    let esk = EphemeralSecretKey::new(
-        &recipient_id,
-        &[0; 32],
-        &Nonce::private_account_nonce_init(&recipient_id),
-    );
-    let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
-
-    let (output, _) =
-        prove_scripted(init_witness(&keys, identifier), &Script::default(), None).unwrap();
-
-    assert_eq!(
-        decrypt_kind(&output, &ssk, 0),
-        PrivateAccountKind::Regular(identifier)
-    );
+        assert_eq!(
+            decrypt_kind(&output, &ssk, 0),
+            PrivateAccountKind::Regular(identifier),
+            "{init} init"
+        );
+    }
 }
 
 /// A regular update with a non-default identifier produces a ciphertext that decrypts
