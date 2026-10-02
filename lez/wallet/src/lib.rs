@@ -652,21 +652,16 @@ impl WalletCore {
         &self,
         keep: impl Fn(&StoredMessage) -> bool,
     ) -> Result<Vec<StoredMessage>> {
-        const PAGE: u16 = 256;
+        const PAGE: u32 = 256;
         let mut records = Vec::new();
         let mut from_sequence = 0;
         loop {
-            let page = self
-                .get_pending_messages(from_sequence, u32::from(PAGE))
-                .await?;
-            let last_page = page.len() < usize::from(PAGE);
-            if let Some(last) = page.last() {
-                from_sequence = last.sequence.saturating_add(1);
-            }
-            records.extend(page.into_iter().filter(&keep));
-            if last_page {
+            let page = self.get_pending_messages(from_sequence, PAGE).await?;
+            let Some(last) = page.last() else {
                 return Ok(records);
-            }
+            };
+            from_sequence = last.sequence.saturating_add(1);
+            records.extend(page.into_iter().filter(&keep));
         }
     }
 
