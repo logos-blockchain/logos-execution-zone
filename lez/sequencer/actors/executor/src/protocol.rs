@@ -3,7 +3,7 @@ use std::ops::RangeInclusive;
 use common::{HashType, transaction::LeeTransaction};
 use kameo::Reply;
 use lee_core::{BlockId, Commitment, CommitmentSetDigest, MembershipProof, account::AccountId};
-pub use sequencer_bedrock_actor::protocol::ChannelId;
+pub use sequencer_bedrock_actor::protocol::{ChannelId, MsgId};
 pub use sequencer_core::AccreditedKeys;
 pub use sequencer_storage_actor::protocol::{CrossZoneMessageKey, DeadLetterRequeue};
 
@@ -122,6 +122,24 @@ pub struct GetAccount {
 }
 
 pub struct GetChannelId;
+
+pub struct GetStatus;
+
+/// What the executor is doing.
+#[derive(Debug, Clone, Reply)]
+pub enum ExecutorStatus {
+    /// Replaying the channel's finalized history up to the tip it had at startup.
+    Bootstrapping {
+        /// The channel entry bootstrapping completes at.
+        target: MsgId,
+        /// The last channel entry replayed, [`None`] before the first.
+        replayed_to: Option<MsgId>,
+        /// Height of the chain replayed so far, [`None`] while it is empty.
+        height: Option<BlockId>,
+    },
+    /// Following the channel and producing blocks on its turns.
+    Online { height: BlockId, is_our_turn: bool },
+}
 
 pub struct GetCrossZoneDeadLetters;
 

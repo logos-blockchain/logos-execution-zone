@@ -6,7 +6,7 @@ use futures::{
 };
 use kameo::{
     Actor,
-    actor::{ActorRef, PreparedActor, WeakActorRef},
+    actor::{ActorRef, WeakActorRef},
     error::ActorStopReason,
     mailbox::{MailboxReceiver, Signal},
     message::{Context, Message},
@@ -34,10 +34,10 @@ use crate::{
     actor::state::State,
     error::Error,
     protocol::{
-        AccreditedKeys, ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces,
-        GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
+        AccreditedKeys, ChannelId, ExecutorStatus, FeeStateQuote, GetAccount, GetAccountBalance,
+        GetAccountNonces, GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
         GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetProofsAndRoot,
-        GetProofsAndRootReply, GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter,
+        GetProofsAndRootReply, GetStatus, GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter,
         RequeueCrossZoneDeadLetterReply, Transaction,
     },
 };
@@ -54,7 +54,6 @@ const BLOCK_RANGE_CONCURRENCY: usize = 16;
 const BLOCKED_ATTEMPTS_BEFORE_WEDGED: u32 = 4;
 
 pub struct ExecutorActor<S: StorageActorTrait, B: BedrockActorTrait> {
-    // TODO: Add some observability for current state of Executor
     state: State<S, B>,
     channel_id: ChannelId,
     storage_ref: ActorRef<S>,
@@ -103,7 +102,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
         storage_ref: ActorRef<S>,
         bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
         accredited_keys_pubsub_ref: ActorRef<PubSub<AccreditedKeys>>,
-        slasher_prepared: PreparedActor<SlasherActor<S>>,
+        slasher_ref: ActorRef<SlasherActor<S>>,
     ) -> impl Future<Output = Result<Self>> + Send + 'static {
         sequencer_executor_actor_metrics::init();
 
@@ -115,7 +114,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
                 storage_ref.clone(),
                 bedrock_pool_ref,
                 accredited_keys_pubsub_ref,
-                slasher_prepared,
+                slasher_ref,
             )
             .await?;
 
@@ -176,7 +175,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
         ProduceBlock: ProduceBlock,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let online = self.state.online_mut()?;
+        let State::Online(online) = &mut self.state else {
+            info!("Not online yet, skipping the production turn");
+            return Ok(());
+        };
 
         // Only produce on our turn. Losing the seat ends any blocked run: a node
         // dropped from the committee is not wedged, and would otherwise hold the
@@ -468,6 +470,29 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetChannelId> for Execu
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         Reply(self.channel_id)
+    }
+}
+
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetStatus> for ExecutorActor<S, B> {
+    type Reply = ExecutorStatus;
+
+    async fn handle(
+        &mut self,
+        GetStatus: GetStatus,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        match &self.state {
+            State::Error(details) => panic!("Actor has encountered an error state: {details}"),
+            State::Bootstrapping(bootstrapping) => ExecutorStatus::Bootstrapping {
+                target: bootstrapping.bootstrap_to(),
+                replayed_to: bootstrapping.chain().channel_cursor(),
+                height: bootstrapping.chain().head_tip().map(|tip| tip.block_id),
+            },
+            State::Online(online) => ExecutorStatus::Online {
+                height: online.sequencer().chain_height().await,
+                is_our_turn: online.is_our_turn(),
+            },
+        }
     }
 }
 

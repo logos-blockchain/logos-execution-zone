@@ -11344,7 +11344,6 @@ name = "sequencer_service_protocol"
 version = "0.1.0"
 dependencies = [
  "common",
- "hex",
  "lee",
  "lee_core",
  "serde",
@@ -12447,6 +12446,7 @@ dependencies = [
  "sequencer_core",
  "sequencer_genesis",
  "sequencer_service",
+ "sequencer_service_protocol",
  "sequencer_service_rpc",
  "sequencer_stake_core",
  "sequencer_storage_actor",

@@ -149,6 +149,15 @@ async fn start_sequencer_on(
         crate::load_or_create_signing_key(&config.home.join("bedrock_signing_key")).unwrap();
     let mempool = MemPool::new(config.mempool_max_size);
     let mempool_handle = mempool.handle().clone();
+    let slasher_ref = SlasherActor::spawn(
+        SlasherActor::load(
+            storage_ref.clone(),
+            bedrock_signing_key.clone(),
+            sequencer_stake_core::SequencerStakeConfig::default(),
+            *config.bedrock_config.channel_id.as_ref(),
+        )
+        .await,
+    );
 
     let sequencer = SequencerCore::new(
         config,
@@ -158,7 +167,7 @@ async fn start_sequencer_on(
         storage_ref,
         bedrock_pool_ref,
         PubSub::spawn(PubSub::new(DeliveryStrategy::Guaranteed)),
-        SlasherActor::prepare(),
+        slasher_ref,
     )
     .await
     .expect("Failed to start the sequencer");

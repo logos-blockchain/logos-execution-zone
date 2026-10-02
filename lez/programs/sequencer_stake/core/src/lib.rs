@@ -174,7 +174,7 @@ pub struct ChannelParams {
 
 /// The single program-owned config account: minimum stake plus per-key standing, kept current
 /// incrementally.
-#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct SequencerStakeConfig {
     /// `None` until genesis runs [`Instruction::InitChannelParams`], which is
     /// the only state that instruction accepts.

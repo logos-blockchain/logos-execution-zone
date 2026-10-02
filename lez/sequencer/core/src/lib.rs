@@ -17,7 +17,7 @@ use common::{
 };
 use config::SequencerConfig;
 use cross_zone_inbox_core::CrossZoneMessage;
-use kameo::actor::{ActorRef, PreparedActor};
+use kameo::actor::ActorRef;
 use kameo_actors::pubsub::PubSub;
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
@@ -195,7 +195,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         storage_ref: ActorRef<S>,
         bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
         accredited_keys_pubsub_ref: ActorRef<PubSub<AccreditedKeys>>,
-        slasher_prepared: PreparedActor<SlasherActor<S>>,
+        slasher_ref: ActorRef<SlasherActor<S>>,
     ) -> Result<Self> {
         let channel_id = config.bedrock_config.channel_id;
 
@@ -222,16 +222,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             "sequencer_stake config account is absent or undecodable; this chain's state is not \
              one this sequencer can operate on",
         )?;
-        let slasher_ref = slasher_prepared.actor_ref().clone();
-        slasher_prepared.spawn(
-            SlasherActor::load(
-                storage_ref.clone(),
-                bedrock_signing_key.clone(),
-                stake_config,
-                *config.bedrock_config.channel_id.as_ref(),
-            )
-            .await,
-        );
+        slasher_ref
+            .tell(SetCommittee(stake_config))
+            .await
+            .context("Failed to hand the slasher its committee")?;
 
         let mut sequencer = Self {
             channel_id,

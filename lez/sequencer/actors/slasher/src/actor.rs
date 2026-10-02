@@ -66,7 +66,8 @@ pub struct SlasherActor<S: StorageActorTrait> {
 
 impl<S: StorageActorTrait> SlasherActor<S> {
     /// Restores the persisted record, empty if none was written. `config` is the
-    /// committee at startup, so no approval is ever screened against nothing.
+    /// committee approvals are screened against until [`SetCommittee`] or
+    /// [`Propose`] brings a newer one.
     pub async fn load(
         storage_ref: ActorRef<S>,
         approver: Ed25519Key,

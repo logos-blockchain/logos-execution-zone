@@ -16,7 +16,7 @@ use sequencer_gossip_actor::protocol::PublishTransaction;
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
     CrossZoneDeadLetter, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, FeeStateQuote,
-    HashType, MembershipProof, Nonce, ProgramId,
+    HashType, MembershipProof, MsgId, Nonce, ProgramId, SequencerStatus,
 };
 
 pub struct Service<E: ExecutorActorTrait> {
@@ -242,6 +242,34 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             .map_err(map_infallible_error)
     }
 
+    async fn get_sequencer_status(&self) -> Result<SequencerStatus, ErrorObjectOwned> {
+        let status = self
+            .executor_ref
+            .ask(sequencer_executor_actor::protocol::GetStatus)
+            .await
+            .map_err(map_infallible_error)?;
+        let msg_id = |msg: sequencer_executor_actor::protocol::MsgId| MsgId(*msg.as_ref());
+
+        Ok(match status {
+            sequencer_executor_actor::protocol::ExecutorStatus::Bootstrapping {
+                target,
+                replayed_to,
+                height,
+            } => SequencerStatus::Bootstrapping {
+                target: msg_id(target),
+                replayed_to: replayed_to.map(msg_id),
+                height,
+            },
+            sequencer_executor_actor::protocol::ExecutorStatus::Online {
+                height,
+                is_our_turn,
+            } => SequencerStatus::Online {
+                height,
+                is_our_turn,
+            },
+        })
+    }
+
     async fn get_cross_zone_dead_letters(
         &self,
     ) -> Result<CrossZoneDeadLetterReport, ErrorObjectOwned> {
@@ -315,9 +343,6 @@ const fn map_fee_state_quote(
 fn map_executor_error<M>(
     err: SendError<M, sequencer_executor_actor::error::Error>,
 ) -> ErrorObjectOwned {
-    const MEMPOOL_IS_FULL_ERROR_CODE: i32 = -31900;
-    const SEQUENCER_IS_NOT_ONLINE: i32 = -31901;
-
     match err {
         SendError::HandlerError(handle_err) => match handle_err {
             incorrect_fee @ sequencer_executor_actor::error::Error::IncorrectFee(_) => {
@@ -328,12 +353,12 @@ fn map_executor_error<M>(
                 )
             }
             sequencer_executor_actor::error::Error::MempoolIsFull => ErrorObjectOwned::owned(
-                ErrorCode::ServerError(MEMPOOL_IS_FULL_ERROR_CODE).code(),
+                ErrorCode::ServerError(sequencer_service_rpc::MEMPOOL_IS_FULL_ERROR_CODE).code(),
                 "Mempool is full".to_owned(),
                 None::<()>,
             ),
             sequencer_executor_actor::error::Error::NotOnline => ErrorObjectOwned::owned(
-                ErrorCode::ServerError(SEQUENCER_IS_NOT_ONLINE).code(),
+                ErrorCode::ServerError(sequencer_service_rpc::SEQUENCER_IS_NOT_ONLINE_ERROR_CODE).code(),
                 "Sequencer is not online yet, try again later".to_owned(),
                 None::<()>,
             ),

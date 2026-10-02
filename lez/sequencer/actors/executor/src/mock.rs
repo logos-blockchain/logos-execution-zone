@@ -22,10 +22,11 @@ use crate::{
     ExecutorActorTrait, Result,
     error::Error,
     protocol::{
-        ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetBlock,
-        GetBlockRange, GetChannelId, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply,
-        GetFeeQuote, GetLastBlockId, GetProofsAndRoot, GetProofsAndRootReply, GetTransaction,
-        ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, Transaction,
+        ChannelId, ExecutorStatus, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces,
+        GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
+        GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetProofsAndRoot,
+        GetProofsAndRootReply, GetStatus, GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter,
+        RequeueCrossZoneDeadLetterReply, Transaction,
     },
 };
 
@@ -96,6 +97,12 @@ mockall::mock! {
             msg: GetChannelId,
             ctx: &mut Context<Self, Reply<ChannelId>>
         ) -> Reply<ChannelId>;
+
+        pub fn handle_get_status(
+            &mut self,
+            msg: GetStatus,
+            ctx: &mut Context<Self, ExecutorStatus>
+        ) -> ExecutorStatus;
 
         pub fn handle_get_cross_zone_dead_letters(
             &mut self,
@@ -278,6 +285,18 @@ impl Message<GetChannelId> for MockExecutorActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_channel_id(msg, ctx)
+    }
+}
+
+impl Message<GetStatus> for MockExecutorActor {
+    type Reply = ExecutorStatus;
+
+    async fn handle(
+        &mut self,
+        msg: GetStatus,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_status(msg, ctx)
     }
 }
 

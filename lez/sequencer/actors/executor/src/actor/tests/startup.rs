@@ -18,10 +18,15 @@ use sequencer_storage_actor::{
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 use tokio::test;
 
-use super::{finalized_at, new_executor, sequencer_config, spawn_bedrock_pool};
+use super::{
+    finalized_at, new_executor, sequencer_config, spawn_bedrock_pool, stored_chain::genesis,
+};
 use crate::{
     ExecutorActor,
-    protocol::{GetAccountBalance, GetLastBlockId, ProduceBlock, Transaction, TransactionOrigin},
+    protocol::{
+        ExecutorStatus, GetAccountBalance, GetLastBlockId, GetStatus, ProduceBlock, Transaction,
+        TransactionOrigin,
+    },
 };
 
 type Executor = ExecutorActor<MockStorageActor, MockBedrockActor>;
@@ -142,6 +147,31 @@ async fn a_start_over_a_stored_genesis_bootstraps_from_the_channel() -> Result<(
         .ask(ChannelEvent {
             channel_id: config.bedrock_config.channel_id,
             event: ChannelEventKind::FinalizedBlock(Box::new(finalized_at(&genesis, 0))),
+        })
+        .await?;
+
+    assert_eq!(executor.ask(GetLastBlockId).await?, 1);
+    Ok(())
+}
+
+/// A config change moves the channel tip slot past the slot of the last message, so the tip is
+/// reached on that message alone.
+#[test]
+async fn bootstrapping_reaches_a_tip_whose_slot_a_config_change_moved() -> Result<()> {
+    let (config, _home) = sequencer_config();
+    let genesis = genesis();
+    let channel = CannedChannel {
+        tip_slot: Some(Slot::from(50)),
+        tip: Some(mock_msg_of(&genesis)),
+        ..CannedChannel::absent()
+    }
+    .share();
+    let executor = start(&config, &SharedStore::default(), &channel).await?;
+
+    executor
+        .ask(ChannelEvent {
+            channel_id: config.bedrock_config.channel_id,
+            event: ChannelEventKind::FinalizedBlock(Box::new(finalized_at(&genesis, 10))),
         })
         .await?;
 
@@ -461,6 +491,66 @@ async fn a_restart_reanchors_on_the_persisted_final_snapshot() -> Result<()> {
         store.lock().blocks[&2].header.hash,
         blocks[1].header.hash,
         "a finalized block stays stored"
+    );
+    Ok(())
+}
+
+/// The scheduler ticks from startup on, so a turn while bootstrapping is skipped rather than
+/// stopping the actor.
+#[test]
+async fn a_production_turn_while_bootstrapping_does_not_stop_the_actor() -> Result<()> {
+    let (config, _home) = sequencer_config();
+    let store = SharedStore::default();
+    let channel = CannedChannel {
+        tip: Some(MsgId::from([7_u8; 32])),
+        ..CannedChannel::empty()
+    }
+    .share();
+    let executor = start(&config, &store, &channel).await?;
+
+    executor.ask(ProduceBlock).await?;
+
+    assert!(executor.is_alive(), "the actor must survive the turn");
+    assert!(stored_ids(&store).is_empty(), "nothing is produced");
+    Ok(())
+}
+
+/// A bootstrapping executor reports the tip it replays to, and goes on to report itself online.
+#[test]
+async fn the_status_follows_bootstrapping_to_online() -> Result<()> {
+    let (config, _home) = sequencer_config();
+    let genesis = genesis();
+    let channel = CannedChannel {
+        tip: Some(mock_msg_of(&genesis)),
+        ..CannedChannel::empty()
+    }
+    .share();
+    let executor = start(&config, &SharedStore::default(), &channel).await?;
+
+    let bootstrapping = executor.ask(GetStatus).await?;
+    assert!(
+        matches!(
+            bootstrapping,
+            ExecutorStatus::Bootstrapping {
+                target,
+                replayed_to: None,
+                height: None,
+            } if target == mock_msg_of(&genesis)
+        ),
+        "{bootstrapping:?}"
+    );
+
+    executor
+        .ask(ChannelEvent {
+            channel_id: config.bedrock_config.channel_id,
+            event: ChannelEventKind::FinalizedBlock(Box::new(finalized_at(&genesis, 0))),
+        })
+        .await?;
+
+    let online = executor.ask(GetStatus).await?;
+    assert!(
+        matches!(online, ExecutorStatus::Online { height: 1, .. }),
+        "{online:?}"
     );
     Ok(())
 }

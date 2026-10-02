@@ -1,5 +1,5 @@
 use chain_state::{Anchor, AnchorConsistencyCheck, ChainConsistency, ChainState, Tip};
-use kameo::actor::{ActorRef, PreparedActor};
+use kameo::actor::ActorRef;
 use kameo_actors::pubsub::PubSub;
 use log::info;
 use sequencer_actors_common::SendErrorExt;
@@ -35,7 +35,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
         storage_ref: ActorRef<S>,
         bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
         accredited_keys_pubsub_ref: ActorRef<PubSub<AccreditedKeys>>,
-        slasher_prepared: PreparedActor<SlasherActor<S>>,
+        slasher_ref: ActorRef<SlasherActor<S>>,
     ) -> Result<Self> {
         // TODO: Rework this encapsulation cringe
         sequencer_core_metrics::init();
@@ -59,18 +59,16 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
             storage_ref,
             bedrock_pool_ref,
             accredited_keys_pubsub_ref,
-            slasher_prepared,
+            slasher_ref,
         };
 
-        if let Some((channel_tip_slot, channel_tip_msg_id)) =
-            channel_tip_slot.zip(channel_tip_msg_id)
+        // A channel only configured so far has the root as its tip message.
+        if let Some(bootstrap_to) = channel_tip_slot
+            .and(channel_tip_msg_id)
+            .filter(|msg_id| *msg_id != MsgId::root())
         {
             info!("Channel already exists; joining as a non channel creator");
 
-            let bootstrap_to = bootstrapping::Tip {
-                msg_id: channel_tip_msg_id,
-                slot: channel_tip_slot,
-            };
             Ok(Self::Bootstrapping(bootstrapping::BootstrappingState::new(
                 config,
                 chain,
@@ -97,14 +95,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
     }
 
     pub const fn online(&self) -> Result<&online::OnlineState<S, B>> {
-        if let Self::Online(online) = self {
-            Ok(online)
-        } else {
-            Err(Error::NotOnline)
-        }
-    }
-
-    pub const fn online_mut(&mut self) -> Result<&mut online::OnlineState<S, B>> {
         if let Self::Online(online) = self {
             Ok(online)
         } else {
@@ -257,11 +247,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
     }
 }
 
+#[expect(
+    clippy::struct_field_names,
+    reason = "Every field is an actor ref, named the way they are everywhere else"
+)]
 struct ActorsBundle<S: StorageActorTrait, B: BedrockActorTrait> {
     storage_ref: ActorRef<S>,
     bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
     accredited_keys_pubsub_ref: ActorRef<PubSub<AccreditedKeys>>,
-    slasher_prepared: PreparedActor<SlasherActor<S>>,
+    slasher_ref: ActorRef<SlasherActor<S>>,
 }
 
 /// The persisted zone-sdk checkpoint, decoded from the encoding

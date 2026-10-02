@@ -206,7 +206,7 @@ pub fn run(
         let storage_ref = StorageActor::spawn(storage);
         info!("Storage Actor spawned");
 
-        let executor_prepared = ExecutorActor::prepare();
+        let executor_prepared = ExecutorActor::prepare_with_mailbox(kameo::mailbox::unbounded());
 
         let bedrock_broker = Broker::new(DeliveryStrategy::Guaranteed);
         let bedrock_broker_ref = Broker::spawn(bedrock_broker);
@@ -267,8 +267,18 @@ pub fn run(
         };
         info!("Accredited Keys PubSub Actor spawned");
 
-        let slasher_prepared = SlasherActor::prepare();
-        let slasher_ref = slasher_prepared.actor_ref().clone();
+        // Starts without a committee: the executor hands it one once it has a
+        // chain.
+        let slasher_ref = SlasherActor::spawn(
+            SlasherActor::load(
+                storage_ref.clone(),
+                bedrock_signing_key.clone(),
+                sequencer_slasher_actor::protocol::SequencerStakeConfig::default(),
+                *bedrock_config.channel_id.as_ref(),
+            )
+            .await,
+        );
+        info!("Slasher Actor spawned");
 
         let executor = ExecutorActor::new(
             config,
@@ -276,7 +286,7 @@ pub fn run(
             storage_ref.clone(),
             bedrock_pool_ref.clone(),
             accredited_keys_pubsub_ref.clone(),
-            slasher_prepared,
+            slasher_ref.clone(),
         )
         .await
         .context("Failed to set up Executor Actor")?;
@@ -447,7 +457,7 @@ async fn setup_gossip(
 }
 
 #[cfg(not(feature = "standalone"))]
-fn bedrock_actor_args(
+const fn bedrock_actor_args(
     node_url: Url,
     basic_auth: Option<BasicAuthCredentials>,
     channel_id: ChannelId,

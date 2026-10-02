@@ -1,15 +1,21 @@
 //! Reexports of types used by sequencer rpc specification.
 
-use std::{fmt::Display, str::FromStr};
-
 pub use common::{HashType, block::Block, transaction::LeeTransaction};
 pub use lee::{Account, AccountId, ProgramId};
 pub use lee_core::{BlockId, Commitment, CommitmentSetDigest, MembershipProof, account::Nonce};
 use serde::{Deserialize, Serialize};
-use serde_with::{DeserializeFromStr, SerializeDisplay};
+use serde_with::{hex::Hex, serde_as};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr)]
-pub struct ChannelId(pub [u8; 32]);
+#[serde_as]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ChannelId(#[serde_as(as = "Hex")] pub [u8; 32]);
+
+/// Id of an entry on a Bedrock channel.
+#[serde_as]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct MsgId(#[serde_as(as = "Hex")] pub [u8; 32]);
 
 /// The fee market priced off the head state, for wallets sizing `max_fee`.
 ///
@@ -75,19 +81,57 @@ pub enum CrossZoneDeadLetterRequeue {
     NotRetained,
 }
 
-impl Display for ChannelId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let hex_string = hex::encode(self.0);
-        write!(f, "{hex_string}")
-    }
+/// What the sequencer is doing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum SequencerStatus {
+    /// Replaying the channel's finalized history up to the tip it had at startup.
+    #[serde(rename_all = "camelCase")]
+    Bootstrapping {
+        /// The channel entry bootstrapping completes at.
+        target: MsgId,
+        /// The last channel entry replayed, [`None`] before the first.
+        replayed_to: Option<MsgId>,
+        /// Height of the chain replayed so far, [`None`] while it is empty.
+        height: Option<BlockId>,
+    },
+    /// Following the channel and producing blocks on its turns.
+    #[serde(rename_all = "camelCase")]
+    Online { height: BlockId, is_our_turn: bool },
 }
 
-impl FromStr for ChannelId {
-    type Err = hex::FromHexError;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut bytes = [0_u8; 32];
-        hex::decode_to_slice(s, &mut bytes)?;
-        Ok(Self(bytes))
+    #[test]
+    fn ids_serialize_as_lowercase_hex() {
+        let channel_id = ChannelId([0xab; 32]);
+        let json = serde_json::to_string(&channel_id).unwrap();
+
+        assert_eq!(json, format!("\"{}\"", "ab".repeat(32)));
+        assert_eq!(
+            serde_json::from_str::<ChannelId>(&json).unwrap(),
+            channel_id
+        );
+    }
+
+    #[test]
+    fn status_is_tagged_by_state() {
+        let status = SequencerStatus::Bootstrapping {
+            target: MsgId([1; 32]),
+            replayed_to: None,
+            height: Some(3),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&status).unwrap(),
+            serde_json::json!({
+                "state": "bootstrapping",
+                "target": "01".repeat(32),
+                "replayedTo": null,
+                "height": 3,
+            })
+        );
     }
 }

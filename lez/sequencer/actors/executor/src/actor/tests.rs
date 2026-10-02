@@ -278,15 +278,34 @@ async fn new_executor<S: StorageActorTrait>(
         sequencer_core::load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
             .expect("Failed to load or create bedrock signing key");
 
+    let slasher_ref = spawn_slasher(&config, &storage_ref, &bedrock_signing_key).await;
+
     ExecutorActor::new(
         config,
         bedrock_signing_key,
         storage_ref,
         bedrock_pool_ref,
         PubSub::spawn(PubSub::new(DeliveryStrategy::Guaranteed)),
-        SlasherActor::prepare(),
+        slasher_ref,
     )
     .await
+}
+
+/// A slasher over `storage_ref`, its committee empty until the executor hands it one.
+async fn spawn_slasher<S: StorageActorTrait>(
+    config: &SequencerConfig,
+    storage_ref: &ActorRef<S>,
+    bedrock_signing_key: &sequencer_bedrock_actor::protocol::Ed25519Key,
+) -> ActorRef<SlasherActor<S>> {
+    SlasherActor::spawn(
+        SlasherActor::load(
+            storage_ref.clone(),
+            bedrock_signing_key.clone(),
+            sequencer_stake_core::SequencerStakeConfig::default(),
+            *config.bedrock_config.channel_id.as_ref(),
+        )
+        .await,
+    )
 }
 
 /// Initializes the executor state over `store`, against a Bedrock serving `channel`.
@@ -299,14 +318,16 @@ pub(super) async fn initialize_state(
         sequencer_core::load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
             .expect("Failed to load or create bedrock signing key");
     let channel = channel.clone();
+    let storage_ref = MockStorageActor::spawn(store.mock());
+    let slasher_ref = spawn_slasher(&config, &storage_ref, &bedrock_signing_key).await;
 
     Box::pin(State::initialize(
         config,
         bedrock_signing_key,
-        MockStorageActor::spawn(store.mock()),
+        storage_ref,
         spawn_bedrock_pool(move |_channel_id| channel.mock()),
         PubSub::spawn(PubSub::new(DeliveryStrategy::Guaranteed)),
-        SlasherActor::prepare(),
+        slasher_ref,
     ))
     .await
 }

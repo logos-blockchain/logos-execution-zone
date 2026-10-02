@@ -12,7 +12,8 @@ use lee::{AccountId, PrivateKey, PublicKey};
 use log::{debug, warn};
 use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
 use sequencer_service::{GenesisAction, SequencerHandle};
-use sequencer_service_rpc::{SequencerClient, SequencerClientBuilder};
+use sequencer_service_protocol::SequencerStatus;
+use sequencer_service_rpc::{ClientError, RpcClient as _, SequencerClient, SequencerClientBuilder};
 use sequencer_storage_actor::{StorageActor, protocol::DbDump};
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
@@ -185,13 +186,43 @@ impl SequencerSetup {
         .context("Failed to create Sequencer config")?;
 
         // Boxed to keep the sequencer startup future out of every test context future.
-        Box::pin(sequencer_service::run(
+        let handle = Box::pin(sequencer_service::run(
             config,
             SocketAddr::from(([127, 0, 0, 1], 0)),
         ))
         .await
-        .context("Failed to run Sequencer Service")
+        .context("Failed to run Sequencer Service")?;
+
+        wait_until_online(&sequencer_client(handle.addr())?)
+            .await
+            .context("Encountered an error while waiting for the sequencer to come online")?;
+        Ok(handle)
     }
+}
+
+/// Waits until the sequencer behind `client` is online, i.e. done bootstrapping from the channel.
+async fn wait_until_online(client: &SequencerClient) -> Result<()> {
+    let mut last_status = None;
+    let wait = async {
+        loop {
+            match client.get_sequencer_status().await {
+                Ok(SequencerStatus::Online { .. }) => return Ok(()),
+                Ok(status @ SequencerStatus::Bootstrapping { .. }) => {
+                    debug!("Sequencer is not online yet: {status:?}");
+                    last_status = Some(status);
+                }
+                // Going online can keep the sequencer busy past a request's timeout.
+                Err(ClientError::RequestTimeout) => continue,
+                Err(err) => return Err(err.into()),
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(360), wait)
+        .await
+        .with_context(|| {
+            format!("Timed out waiting for the sequencer to come online, last seen {last_status:?}")
+        })?
 }
 
 /// Committed single-file dump of the prebuilt sequencer database (`just regenerate-test-fixture`).

@@ -41,24 +41,38 @@ use crate::{
     },
 };
 
+pub struct PublisherConfig {
+    pub channel_id: ChannelId,
+    pub bedrock_signing_key: Ed25519Key,
+    pub funding_pk: ZkPublicKey,
+    pub priority_fee_percent: u64,
+    pub resubmit_interval: Duration,
+}
+
 pub struct Publisher {
     node: NodeHttpClient,
     sequencer: ZoneSequencer<NodeHttpClient>,
     bedrock_signing_key: Ed25519Key,
     funding_pk: ZkPublicKey,
     priority_fee_percent: u64,
+    broker_ref: ActorRef<Broker<ChannelEvent>>,
 }
 
 impl Publisher {
     pub async fn new(
+        config: PublisherConfig,
         node: NodeHttpClient,
-        channel_id: ChannelId,
-        bedrock_signing_key: Ed25519Key,
-        funding_pk: ZkPublicKey,
-        priority_fee_percent: u64,
         initial_checkpoint: Option<SequencerCheckpoint>,
-        resubmit_interval: Duration,
+        broker_ref: ActorRef<Broker<ChannelEvent>>,
     ) -> Result<Self> {
+        let PublisherConfig {
+            channel_id,
+            bedrock_signing_key,
+            funding_pk,
+            priority_fee_percent,
+            resubmit_interval,
+        } = config;
+
         if let Some(checkpoint) = &initial_checkpoint
             && has_channel_activity(checkpoint)
             && node
@@ -90,10 +104,11 @@ impl Publisher {
         );
 
         // Wait for cold-start backfill to complete before returning so callers
-        // can publish immediately without racing readiness.
+        // can publish immediately without racing readiness. The events on the
+        // way report the channel up to its tip, so they are published as well.
         while !sequencer.is_ready() {
-            // Zone SDK sequencer will process ready event internally.
-            sequencer.next_event().await;
+            let event = sequencer.next_event().await;
+            Self::on_event(event, channel_id, &broker_ref).await?;
         }
 
         Ok(Self {
@@ -102,22 +117,35 @@ impl Publisher {
             bedrock_signing_key,
             funding_pk,
             priority_fee_percent,
+            broker_ref,
         })
     }
 
-    pub async fn step(
-        &mut self,
+    pub async fn step(&mut self, channel_id: ChannelId) -> Result<()> {
+        let event = self.sequencer.next_event().await;
+        Self::on_event(event, channel_id, &self.broker_ref).await
+    }
+
+    /// Publishes what `event` reports to `broker_ref`.
+    async fn on_event(
+        event: Event,
         channel_id: ChannelId,
         broker_ref: &ActorRef<Broker<ChannelEvent>>,
     ) -> Result<()> {
-        let event = self.sequencer.next_event().await;
-
         match event {
             Event::BlocksProcessed {
                 checkpoint,
                 channel_update,
                 finalized,
             } => {
+                // An L1 block that moved nothing on this channel: it only advances the checkpoint.
+                if channel_update.adopted.is_empty()
+                    && channel_update.orphaned.is_empty()
+                    && finalized.is_empty()
+                {
+                    return Ok(());
+                }
+
                 let adopted = channel_update
                     .adopted
                     .iter()

@@ -104,7 +104,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             storage_ref,
             bedrock_pool_ref,
             accredited_keys_pubsub_ref,
-            slasher_prepared,
+            slasher_ref,
         } = actors;
 
         let initial_checkpoint = zone_checkpoint(&storage_ref).await?;
@@ -202,7 +202,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             storage_ref,
             bedrock_pool_ref,
             accredited_keys_pubsub_ref,
-            slasher_prepared,
+            slasher_ref,
         )
         .await
         .map_err(Error::SequencerStartFailed)?;

@@ -20,18 +20,14 @@ use crate::{
 #[cfg(test)]
 mod tests;
 
-#[derive(Clone, PartialEq, Eq)]
-pub struct Tip {
-    pub slot: Slot,
-    pub msg_id: MsgId,
-}
-
 pub struct BootstrappingState<S: StorageActorTrait, B: BedrockActorTrait> {
     pub(super) config: SequencerConfig,
     pub(super) chain: ChainState,
     pub(super) bedrock_signing_key: Ed25519Key,
     pub(super) consistency_check: Option<AnchorConsistencyCheck>,
-    pub(super) bootstrap_to: Tip,
+    /// Channel tip at startup. Only its message identifies it: a config change moves the tip
+    /// slot without a message the finalized stream would carry.
+    pub(super) bootstrap_to: MsgId,
     pub(super) actors: ActorsBundle<S, B>,
 }
 
@@ -41,7 +37,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
         chain: ChainState,
         bedrock_signing_key: Ed25519Key,
         consistency_check: Option<AnchorConsistencyCheck>,
-        bootstrap_to: Tip,
+        bootstrap_to: MsgId,
         actors: ActorsBundle<S, B>,
     ) -> Self {
         Self {
@@ -52,6 +48,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             bootstrap_to,
             actors,
         }
+    }
+
+    /// The channel entry bootstrapping completes at.
+    pub const fn bootstrap_to(&self) -> MsgId {
+        self.bootstrap_to
+    }
+
+    pub const fn chain(&self) -> &ChainState {
+        &self.chain
     }
 
     /// Apply a finalized block to the bootstrapping state.
@@ -80,12 +85,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             }
         }
 
-        let current_tip = Tip {
-            slot: finalized.slot,
-            msg_id: finalized.msg_id,
-        };
-
-        if current_tip == self.bootstrap_to {
+        if finalized.msg_id == self.bootstrap_to {
             return Ok(State::Online(
                 online::OnlineState::from_bootstrapping(self).await?,
             ));

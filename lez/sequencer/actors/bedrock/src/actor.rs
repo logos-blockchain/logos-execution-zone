@@ -113,10 +113,10 @@ impl<S: StorageActorTrait> BedrockActor<S> {
         let stream = futures::stream::try_unfold(initial_state, move |mut stream_state| {
             let node = node.clone();
             async move {
-                // Fetch new lib_slot if needed
+                // Fetch new lib_slot once caught up with the known one
                 while stream_state
                     .last_processed_slot
-                    .is_none_or(|slot| slot >= stream_state.last_known_lib_slot)
+                    .is_some_and(|slot| slot >= stream_state.last_known_lib_slot)
                 {
                     let mut attempt_count: usize = 0;
                     let block_event = loop {
@@ -276,7 +276,6 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
                 }
                 Some(res) = OptionFuture::from(self.publisher.as_mut().map(|writer| writer.step(
                     self.channel_id,
-                    &self.broker_ref,
                 ))) => {
                     res?;
                 }
@@ -311,13 +310,16 @@ impl<S: StorageActorTrait> Message<InitializeChannelPublisher> for BedrockActor<
 
         self.publisher = Some(
             publisher::Publisher::new(
+                publisher::PublisherConfig {
+                    channel_id: self.channel_id,
+                    bedrock_signing_key,
+                    funding_pk,
+                    priority_fee_percent,
+                    resubmit_interval,
+                },
                 self.node.clone(),
-                self.channel_id,
-                bedrock_signing_key,
-                funding_pk,
-                priority_fee_percent,
                 initial_checkpoint,
-                resubmit_interval,
+                self.broker_ref.clone(),
             )
             .await?,
         );
