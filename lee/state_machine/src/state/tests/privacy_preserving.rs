@@ -747,42 +747,36 @@ fn a_nested_boundary_settles_both_public_writes() {
 }
 
 #[test]
-fn a_tampered_predicted_crossing_is_rejected() {
+fn a_tampered_crossing_or_public_root_is_rejected() {
     use crate::validated_state_diff::ValidatedStateDiff;
 
-    let mut nested = NestedBoundary::prove(&outer_turn(&inner_turn()));
+    let nested = NestedBoundary::prove(&outer_turn(&inner_turn()));
+    let verify = |tx: &PrivacyPreservingTransaction| {
+        ValidatedStateDiff::from_privacy_preserving_transaction(tx, &nested.state, 1, 0)
+    };
     assert!(
-        ValidatedStateDiff::from_privacy_preserving_transaction(&nested.tx, &nested.state, 1, 0)
-            .is_ok(),
+        verify(&nested.tx).is_ok(),
         "the unmodified statement must verify"
     );
-
-    let BoundaryStep::EnterPrivate(crossing) = &mut nested.tx.message.execution.boundary[0] else {
+    let mut crossing_tampered = nested.tx.clone();
+    let BoundaryStep::EnterPrivate(crossing) = &mut crossing_tampered.message.execution.boundary[0]
+    else {
         panic!("the nested boundary opens by entering the private turn");
     };
     crossing.envelope.message[0] ^= 0xFF;
-
-    assert!(matches!(
-        ValidatedStateDiff::from_privacy_preserving_transaction(&nested.tx, &nested.state, 1, 0),
-        Err(LeeError::InvalidPrivacyPreservingProof)
-    ));
-}
-
-#[test]
-fn a_tampered_public_root_is_rejected() {
-    use crate::validated_state_diff::ValidatedStateDiff;
-
-    let mut nested = NestedBoundary::prove(&outer_turn(&inner_turn()));
-    let Some(TransactionEntry::Call { message, .. }) = &mut nested.tx.message.execution.entry
+    let mut root_tampered = nested.tx.clone();
+    let Some(TransactionEntry::Call { message, .. }) = &mut root_tampered.message.execution.entry
     else {
         panic!("the nested statement starts with a public call");
     };
     message[0] ^= 0xFF;
 
-    assert!(matches!(
-        ValidatedStateDiff::from_privacy_preserving_transaction(&nested.tx, &nested.state, 1, 0),
-        Err(LeeError::InvalidPrivacyPreservingProof)
-    ));
+    for tampered in [crossing_tampered, root_tampered] {
+        assert!(matches!(
+            verify(&tampered),
+            Err(LeeError::InvalidPrivacyPreservingProof)
+        ));
+    }
 }
 
 #[test]
