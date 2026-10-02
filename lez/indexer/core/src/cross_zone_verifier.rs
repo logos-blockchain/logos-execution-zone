@@ -914,7 +914,7 @@ impl CrossZoneVerifier {
                 src_block_id: msg.src_block_id,
                 src_block_hash: peer_block.recompute_hash().0,
                 src_tx_index: msg.src_tx_index,
-                src_account_id: to.program_account_id,
+                src_account_id: emission.source,
             },
             emission.target_account_id,
             &emission.target_accounts,

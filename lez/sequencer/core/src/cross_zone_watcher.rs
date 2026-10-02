@@ -674,7 +674,7 @@ async fn record_block_deliveries<S: StorageActorTrait>(
                 src_block_id: block.header.block_id,
                 src_block_hash: block_hash.0,
                 src_tx_index,
-                src_account_id: to.program_account_id,
+                src_account_id: emission.source,
             },
             emission.target_account_id,
             &emission.target_accounts,

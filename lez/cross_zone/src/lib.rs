@@ -28,6 +28,7 @@ pub mod test_utils;
 /// The cross-zone emission fields a watcher or verifier reads off a source
 /// transaction, common to every emitter program.
 pub struct Emission {
+    pub source: AccountId,
     pub target_zone: ZoneId,
     pub target_account_id: AccountId,
     pub target_accounts: Vec<Actor>,
@@ -81,6 +82,7 @@ pub fn extract_emission(tx: &lee::PublicTransaction) -> Option<Emission> {
             return None;
         };
         Some(Emission {
+            source: to.program_account_id,
             target_zone,
             target_account_id,
             target_accounts,
@@ -98,6 +100,7 @@ pub fn extract_emission(tx: &lee::PublicTransaction) -> Option<Emission> {
             return None;
         };
         Some(Emission {
+            source: to.program_account_id,
             target_zone,
             target_account_id,
             target_accounts,
