@@ -195,8 +195,7 @@ mod tests {
                 timestamp: 0,
             }
             .to_bytes()
-            .try_into()
-            .expect("clock data fits"),
+            .into(),
         );
         state_with(stakes).with_public_accounts([(system_accounts::clock_account_ids()[0], clock)])
     }
@@ -231,8 +230,7 @@ mod tests {
                     .collect(),
             }
             .to_bytes()
-            .try_into()
-            .expect("config fits"),
+            .into(),
         );
 
         lee::V03State::new()

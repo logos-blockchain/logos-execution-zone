@@ -72,10 +72,7 @@ pub fn fee_account_ids() -> [AccountId; 3] {
 pub fn fee_state_account() -> Account {
     Account::default().with_shard(
         programs::fee_account_id(),
-        fee_core::state::FeeState::genesis()
-            .to_bytes()
-            .try_into()
-            .expect("FeeState data should fit"),
+        fee_core::state::FeeState::genesis().to_bytes().into(),
     )
 }
 
@@ -117,8 +114,7 @@ pub fn sequencer_stake_config_account(
             entries: BTreeMap::new(),
         }
         .to_bytes()
-        .try_into()
-        .expect("sequencer stake config data should fit"),
+        .into(),
     )
 }
 
@@ -131,7 +127,6 @@ pub fn clock_account() -> Account {
             timestamp: 0,
         }
         .to_bytes()
-        .try_into()
-        .expect("Clock account data should fit"),
+        .into(),
     )
 }

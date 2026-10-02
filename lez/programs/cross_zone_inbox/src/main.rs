@@ -151,7 +151,7 @@ mod tests {
             receiver,
             origin,
             is_authorized: false,
-            pre_state: ActorState::try_from(pre).unwrap(),
+            pre_state: ActorState::from(pre),
             message: borsh::to_vec(&message).unwrap(),
         };
         receive(&input, message).into_transition(input)
@@ -175,7 +175,7 @@ mod tests {
     }
 
     fn written(bytes: Vec<u8>) -> ActorState {
-        ActorState::try_from(bytes).unwrap()
+        ActorState::from(bytes)
     }
 
     fn config() -> Vec<u8> {

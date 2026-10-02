@@ -113,14 +113,14 @@ mod tests {
             receiver,
             origin,
             is_authorized: false,
-            pre_state: ActorState::try_from(pre.to_bytes()).unwrap(),
+            pre_state: ActorState::from(pre.to_bytes()),
             message: borsh::to_vec(&message).unwrap(),
         };
         receive(&input, message).into_transition(input)
     }
 
     fn written(data: ClockAccountData) -> Option<ActorState> {
-        Some(ActorState::try_from(data.to_bytes()).unwrap())
+        Some(ActorState::from(data.to_bytes()))
     }
 
     fn record_to(account_id: AccountId, data: ClockAccountData) -> Call {

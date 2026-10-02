@@ -170,8 +170,8 @@ fn get_program_via_reads_the_loader_shard() {
         bytecode: vec![1, 2, 3],
         next_segment: None,
     };
-    let program_shard: ActorState = header.to_bytes().try_into().unwrap();
-    let segment_shard: ActorState = segment.to_bytes().try_into().unwrap();
+    let program_shard: ActorState = header.to_bytes().into();
+    let segment_shard: ActorState = segment.to_bytes().into();
     let lookup = |id| {
         if id == program_account {
             Some(&program_shard)
@@ -449,11 +449,11 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
             receiver,
             origin: Origin::Root,
             is_authorized: true,
-            pre_state: ActorState::try_from(b"ab".to_vec()).unwrap(),
+            pre_state: ActorState::from(b"ab".to_vec()),
             message: b"m".to_vec(),
         },
         response: Response {
-            post_state: Some(ActorState::try_from(b"xyz".to_vec()).unwrap()),
+            post_state: Some(ActorState::from(b"xyz".to_vec())),
             calls: vec![Call {
                 to: Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32])),
                 message: b"q".to_vec(),

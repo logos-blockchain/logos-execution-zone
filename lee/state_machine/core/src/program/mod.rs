@@ -460,15 +460,9 @@ impl Response {
         }
     }
 
-    pub fn write<D>(data: D) -> Self
-    where
-        D: TryInto<ActorState, Error: std::fmt::Debug>,
-    {
+    pub fn write(data: impl Into<ActorState>) -> Self {
         Self {
-            post_state: Some(
-                data.try_into()
-                    .expect("a written shard fits within the data limit"),
-            ),
+            post_state: Some(data.into()),
             ..Self::keep()
         }
     }
@@ -789,8 +783,7 @@ pub fn immutable_mirror_commitment(
     let mirror_account_id = AccountId::for_immutable_mirror(header_account_id);
     let mirrored_account = Account::default().with_shard(
         PROGRAM_LOADER_ACCOUNT_ID,
-        ActorState::try_from(program_header.to_bytes())
-            .expect("program header must fit under DATA_MAX_LENGTH"),
+        ActorState::from(program_header.to_bytes()),
     );
     Commitment::new(&mirror_account_id, &mirrored_account)
 }

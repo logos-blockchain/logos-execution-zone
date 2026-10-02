@@ -189,8 +189,7 @@ fn prepare_mock_storage_with_stake(
                 entries,
             }
             .to_bytes()
-            .try_into()
-            .expect("Sequencer stake config must fit into ActorState"),
+            .into(),
         ),
     )]);
     state

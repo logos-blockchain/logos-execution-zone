@@ -254,10 +254,7 @@ mod tests {
     }
 
     fn account_with_data(data_len: usize) -> Account {
-        Account::default().with_shard(
-            AccountId::new([8_u8; 32]),
-            vec![7_u8; data_len].try_into().expect("data fits"),
-        )
+        Account::default().with_shard(AccountId::new([8_u8; 32]), vec![7_u8; data_len].into())
     }
 
     fn plaintext_len(account: &Account) -> u32 {
@@ -371,10 +368,8 @@ mod tests {
         let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
         let receiver_ss = SharedSecretKey::decapsulate(&epk, &d, &z).unwrap();
 
-        let account = Account::funded(999).with_shard(
-            AccountId::new([12; 32]),
-            b"shard record".to_vec().try_into().unwrap(),
-        );
+        let account = Account::funded(999)
+            .with_shard(AccountId::new([12; 32]), b"shard record".to_vec().into());
         let kind = PrivateAccountKind::Regular(Identifier::ZERO);
         let nullifier = Nullifier::for_account_initialization(&AccountId::new([7_u8; 32]));
 

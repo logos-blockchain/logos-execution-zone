@@ -315,7 +315,7 @@ mod tests {
     }
 
     fn data(bytes: &[u8]) -> ActorState {
-        bytes.to_vec().try_into().expect("test data is small")
+        bytes.to_vec().into()
     }
 
     #[test]

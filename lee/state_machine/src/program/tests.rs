@@ -44,10 +44,7 @@ fn program_execution() {
     // The transition echoes the exact input it was handed — that echo is what the engine matches
     // against the delivery it scheduled.
     assert_eq!(transition.input, input);
-    assert_eq!(
-        transition.response.post_state,
-        Some(written.try_into().unwrap())
-    );
+    assert_eq!(transition.response.post_state, Some(written.into()));
     assert!(transition.response.calls.is_empty() && transition.response.casts.is_empty());
 }
 

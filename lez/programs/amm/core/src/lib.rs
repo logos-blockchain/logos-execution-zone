@@ -130,7 +130,7 @@ impl From<&PoolDefinition> for ActorState {
         BorshSerialize::serialize(definition, &mut data)
             .expect("Serialization to Vec should not fail");
 
-        Self::try_from(data).expect("Token definition encoded data should fit into ActorState")
+        Self::from(data)
     }
 }
 

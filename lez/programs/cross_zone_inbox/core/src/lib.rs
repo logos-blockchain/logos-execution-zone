@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use cross_zone_marker_core::Delivery;
 use lee_core::{
-    account::{AccountId, Balance, data::DATA_MAX_LENGTH},
+    account::{AccountId, Balance},
     program::PdaSeed,
 };
 use serde::{Deserialize, Serialize};
@@ -160,11 +160,6 @@ impl InboxConfig {
 ///
 /// Indices, not message keys: the shard's address already binds
 /// `(src_zone, src_block_id)`, so a key stored inside it adds nothing.
-///
-/// A shard costs an account plus a 36-byte header and breaks even against a
-/// shared shard at about five deliveries. What that buys is saturation
-/// resistance: at 32 bytes per delivery one peer block could overflow the
-/// account, and the guest's only answer is a panic that costs the message.
 #[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct SeenShard {
     /// Recomputed hash of the peer block this shard records deliveries from.
@@ -175,29 +170,6 @@ pub struct SeenShard {
 }
 
 impl SeenShard {
-    /// Deliveries one shard can hold before it exceeds `DATA_MAX_LENGTH`.
-    ///
-    /// Borsh is 32 bytes of hash, a 4-byte count, then 4 bytes per index, so
-    /// this is exactly the `DATA_MAX_LENGTH` an account may carry.
-    ///
-    /// Out of reach only because of the L1 inscription cap: a block inscribes as
-    /// one op near 1.75 MiB and a minimal emitting transaction is about 257
-    /// bytes, capping a peer block near 7,100 deliveries. Raising that L1 cap
-    /// past roughly 6.3 MiB puts this back in reach.
-    pub const MAX_DELIVERIES: usize = {
-        let remaining_bytes = DATA_MAX_LENGTH.as_u64() - 36;
-        let count = remaining_bytes
-            .checked_div(4)
-            .expect("division is well-defined");
-        #[expect(
-            clippy::as_conversions,
-            clippy::cast_possible_truncation,
-            reason = "usize::try_from is not yet const-stable; the value is tiny and always fits"
-        )]
-        let count = count as usize;
-        count
-    };
-
     /// Decodes a shard from account data; empty data is an unclaimed shard.
     pub fn from_bytes(bytes: &[u8]) -> borsh::io::Result<Self> {
         if bytes.is_empty() {
@@ -391,30 +363,6 @@ mod tests {
         assert_eq!(
             SeenShard::from_bytes(&shard.to_bytes()).expect("shard decodes"),
             shard
-        );
-    }
-
-    #[test]
-    fn a_full_shard_fits_in_account_data() {
-        // Exact only because `DATA_MAX_LENGTH` is whole KiB, hence a multiple of 4.
-        let mut shard = SeenShard::default();
-        for index in 0..SeenShard::MAX_DELIVERIES {
-            shard.insert([5; 32], u32::try_from(index).expect("index fits"));
-        }
-        let max = usize::try_from(DATA_MAX_LENGTH.as_u64()).expect("cap fits in usize");
-        assert_eq!(
-            shard.to_bytes().len(),
-            max,
-            "MAX_DELIVERIES is exactly what an account can carry"
-        );
-
-        shard.insert(
-            [5; 32],
-            u32::try_from(SeenShard::MAX_DELIVERIES).expect("index fits"),
-        );
-        assert!(
-            shard.to_bytes().len() > max,
-            "and one more does not fit, so the guest would fail rather than truncate"
         );
     }
 }

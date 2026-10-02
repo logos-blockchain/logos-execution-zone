@@ -91,7 +91,7 @@ fn a_cast_publishes_a_pending_record_that_a_later_transaction_receives() {
             .get_account_by_id(receiver().account_id)
             .data
             .shard(scripted_id()),
-        &ActorState::try_from(b"received".to_vec()).unwrap()
+        &ActorState::from(b"received".to_vec())
     );
     assert!(state.pending_messages_from(0).next().is_none());
 }
@@ -414,7 +414,7 @@ fn a_prepared_receipt_to_an_unproven_public_receiver_fails_before_proving() {
             .get_account_by_id(receiver().account_id)
             .data
             .shard(scripted_id()),
-        &ActorState::try_from(b"received".to_vec()).unwrap()
+        &ActorState::from(b"received".to_vec())
     );
 }
 
@@ -622,7 +622,7 @@ fn a_private_receipt_root_that_calls_a_public_actor_needs_no_identity_evidence()
             .get_account_by_id(receiver().account_id)
             .data
             .shard(scripted_id()),
-        &ActorState::try_from(b"called".to_vec()).unwrap()
+        &ActorState::from(b"called".to_vec())
     );
 }
 

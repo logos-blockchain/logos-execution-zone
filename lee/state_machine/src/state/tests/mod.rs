@@ -11,7 +11,7 @@ use lee_core::{
     AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, Identifier,
     MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness,
     PrivacyPreservingCircuitOutput, PrivateWitness, Timestamp, WitnessKind,
-    account::{Account, AccountId, Actor, Balance, Nonce, data::ActorState},
+    account::{Account, AccountId, Actor, ActorState, Balance, Nonce},
     encryption::ViewingPublicKey,
     execution_state::{Assumption, ExecutionError, TransactionEntry},
     native_token::{
@@ -303,14 +303,13 @@ fn force_insert_segment_chain(state: &mut V03State, elf: &[u8], key_seed: u8) ->
             segment_ids[i],
             Account::default().with_shard(
                 PROGRAM_LOADER_ACCOUNT_ID,
-                ActorState::try_from(
+                ActorState::from(
                     ProgramSegment {
                         bytecode: chunks[i].to_vec(),
                         next_segment: segment_ids.get(i + 1).copied(),
                     }
                     .to_bytes(),
-                )
-                .expect("segment must fit under DATA_MAX_LENGTH"),
+                ),
             ),
         );
     }

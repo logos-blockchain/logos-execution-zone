@@ -1214,8 +1214,7 @@ mod tests {
     fn an_application_scoped_candidate_is_funded_by_the_balance_read() {
         // Prepared for an application shard alone, so its balance is absent until read.
         let program_id = AccountId::new([9; 32]);
-        let scoped =
-            Account::default().with_shard(program_id, vec![1_u8; 4].try_into().expect("data fits"));
+        let scoped = Account::default().with_shard(program_id, vec![1_u8; 4].into());
         let candidate = public_signing_state_with(6, scoped);
         let candidate_id = candidate.account().account_id;
         let mut manager = manager(vec![candidate]);
@@ -1495,10 +1494,10 @@ mod tests {
         let State::Private(pre) = &mut state else {
             panic!("private_state builds a private account")
         };
-        pre.pre_state.account.data.set_shard(
-            AccountId::new([9_u8; 32]),
-            vec![0_u8; pad].try_into().expect("data fits"),
-        );
+        pre.pre_state
+            .account
+            .data
+            .set_shard(AccountId::new([9_u8; 32]), vec![0_u8; pad].into());
         let account_id = pre.pre_state.account_id;
 
         assert_eq!(

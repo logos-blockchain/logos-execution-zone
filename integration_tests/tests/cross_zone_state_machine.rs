@@ -100,13 +100,7 @@ fn seed_inbox_config(state: &mut V03State, self_zone: [u8; 32]) {
     let config = InboxConfig { self_zone };
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         inbox_config_account_id(inbox_id),
-        Account::default().with_shard(
-            inbox_id,
-            config
-                .to_bytes()
-                .try_into()
-                .expect("config fits in account data"),
-        ),
+        Account::default().with_shard(inbox_id, config.to_bytes().into()),
     )]);
 }
 
@@ -169,13 +163,7 @@ fn seed_wrapped_config_entries(
     };
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         wrapped_token_core::config_account_id(wrapped_token_id),
-        Account::default().with_shard(
-            wrapped_token_id,
-            config
-                .to_bytes()
-                .try_into()
-                .expect("wrapped-token config fits in account data"),
-        ),
+        Account::default().with_shard(wrapped_token_id, config.to_bytes().into()),
     )]);
 }
 
@@ -205,13 +193,7 @@ fn seed_receiver_config_with_governance(
     };
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         receiver_config_account_id(receiver_id),
-        Account::default().with_shard(
-            receiver_id,
-            config
-                .to_bytes()
-                .try_into()
-                .expect("receiver config fits in account data"),
-        ),
+        Account::default().with_shard(receiver_id, config.to_bytes().into()),
     )]);
 }
 
@@ -225,8 +207,7 @@ fn seed_ping_sender_config(state: &mut V03State) {
             sender_id,
             outbox_bytes(programs::cross_zone_outbox_account_id())
                 .to_vec()
-                .try_into()
-                .expect("outbox id fits in account data"),
+                .into(),
         ),
     )]);
 }
@@ -258,8 +239,7 @@ fn seed_bridge_lock_config(state: &mut V03State) {
                 programs::wrapped_token_account_id(),
             )
             .to_vec()
-            .try_into()
-            .expect("pinned ids fit in account data"),
+            .into(),
         ),
     )]);
 }
@@ -2708,13 +2688,7 @@ fn mint_replay_rejected() {
     shard.insert(SRC_BLOCK_HASH, src_tx_index);
     state = state.with_public_accounts([(
         seen_id,
-        Account::default().with_shard(
-            inbox_id,
-            shard
-                .to_bytes()
-                .try_into()
-                .expect("shard fits in account data"),
-        ),
+        Account::default().with_shard(inbox_id, shard.to_bytes().into()),
     )]);
 
     let msg = CrossZoneMessage {
@@ -2785,13 +2759,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
     shard.insert(SRC_BLOCK_HASH, 0);
     state = state.with_public_accounts([(
         seen_id,
-        Account::default().with_shard(
-            inbox_id,
-            shard
-                .to_bytes()
-                .try_into()
-                .expect("shard fits in account data"),
-        ),
+        Account::default().with_shard(inbox_id, shard.to_bytes().into()),
     )]);
 
     let payload = borsh::to_vec(&ReceiverMessage::Record {

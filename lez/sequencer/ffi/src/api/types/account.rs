@@ -51,21 +51,10 @@ impl TryFrom<FfiAccountData> for AccountData {
             return Err(OperationStatus::CastError);
         }
 
-        let mut values_std = vec![];
-
-        for raw_shard in values_std_raw {
-            let shard: ActorState = raw_shard.try_into().map_err(|e| {
-                log::error!("Failed to cast `FfiAccount` into `Account`, err: {e}");
-                OperationStatus::CastError
-            })?;
-
-            values_std.push(shard);
-        }
-
         Ok(Self {
             shards: keys_std
                 .into_iter()
-                .zip(values_std)
+                .zip(values_std_raw.into_iter().map(ActorState::from))
                 .collect::<BTreeMap<_, _>>(),
         })
     }
@@ -168,18 +157,9 @@ mod tests {
     fn account_roundtrip() {
         let mut shards = BTreeMap::new();
 
-        shards.insert(
-            AccountId::new([42; 32]),
-            ActorState::try_from(vec![1, 1, 1, 1]).expect("Must fit"),
-        );
-        shards.insert(
-            AccountId::new([43; 32]),
-            ActorState::try_from(vec![2, 2, 2, 2]).expect("Must fit"),
-        );
-        shards.insert(
-            AccountId::new([44; 32]),
-            ActorState::try_from(vec![3, 3, 3, 3]).expect("Must fit"),
-        );
+        shards.insert(AccountId::new([42; 32]), ActorState::from(vec![1, 1, 1, 1]));
+        shards.insert(AccountId::new([43; 32]), ActorState::from(vec![2, 2, 2, 2]));
+        shards.insert(AccountId::new([44; 32]), ActorState::from(vec![3, 3, 3, 3]));
 
         let account_std = Account {
             nonce: Nonce::from(5),

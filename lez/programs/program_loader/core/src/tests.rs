@@ -27,19 +27,18 @@ impl Shards {
     fn segment(self, account_id: AccountId, bytecode: Vec<u8>, next: Option<AccountId>) -> Self {
         self.with(
             account_id,
-            ActorState::try_from(
+            ActorState::from(
                 ProgramSegment {
                     bytecode,
                     next_segment: next,
                 }
                 .to_bytes(),
-            )
-            .unwrap(),
+            ),
         )
     }
 
     fn header(self, account_id: AccountId, header: &ProgramHeader) -> Self {
-        self.with(account_id, ActorState::try_from(header.to_bytes()).unwrap())
+        self.with(account_id, ActorState::from(header.to_bytes()))
     }
 
     fn read<'shards>(&'shards self) -> impl Fn(AccountId) -> &'shards ActorState + 'shards {
@@ -108,7 +107,7 @@ fn write_segment_rejects_an_occupied_loader_shard() {
 fn write_segment_rejects_a_next_segment_with_malformed_data() {
     let target_id = AccountId::new([1; 32]);
     let next_id = AccountId::new([2; 32]);
-    let shards = Shards::default().with(next_id, ActorState::try_from(vec![0xff, 0xff]).unwrap());
+    let shards = Shards::default().with(next_id, ActorState::from(vec![0xff, 0xff]));
     let message = Message::WriteSegment {
         bytecode: vec![1],
         next_segment: Some(next_id),

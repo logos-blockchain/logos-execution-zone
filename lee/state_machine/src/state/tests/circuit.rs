@@ -30,8 +30,8 @@ fn authorized() -> Script {
 fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
     let program_id = scripted_id();
     let stranger = AccountId::new([9; 32]);
-    let stranger_data: ActorState = b"stranger".to_vec().try_into().unwrap();
-    let replaced: ActorState = b"replaced".to_vec().try_into().unwrap();
+    let stranger_data: ActorState = b"stranger".to_vec().into();
+    let replaced: ActorState = b"replaced".to_vec().into();
     let written = vec![7; 4];
     let keys = test_private_account_keys_1();
     let account_id = regular_id(&keys, Identifier::ZERO);
@@ -71,7 +71,7 @@ fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
             .private_account_nonce_increment(&keys.nsk()),
         ..Account::funded(42)
             .with_shard(stranger, stranger_data)
-            .with_shard(program_id, written.try_into().unwrap())
+            .with_shard(program_id, written.into())
     };
     let shared_secret =
         SharedSecretKey::decapsulate(&action.encrypted_post_state.epk, &keys.d, &keys.z)
@@ -96,7 +96,7 @@ fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
 fn a_private_account_may_act_under_two_shards_in_one_transaction() {
     let program_id = scripted_id();
     let stranger = AccountId::new([9; 32]);
-    let stranger_data: ActorState = b"stranger".to_vec().try_into().unwrap();
+    let stranger_data: ActorState = b"stranger".to_vec().into();
     let written = vec![7; 4];
     let amount: u128 = 30;
     let keys = test_private_account_keys_1();
@@ -141,7 +141,7 @@ fn a_private_account_may_act_under_two_shards_in_one_transaction() {
             .private_account_nonce_increment(&keys.nsk()),
         ..Account::funded(100 - amount)
             .with_shard(stranger, stranger_data)
-            .with_shard(program_id, written.try_into().unwrap())
+            .with_shard(program_id, written.into())
     };
     let shared_secret =
         SharedSecretKey::decapsulate(&action.encrypted_post_state.epk, &keys.d, &keys.z)

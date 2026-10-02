@@ -472,8 +472,7 @@ fn clock_account(account_id: AccountId, block_id: BlockId) -> Fixture {
             timestamp: Timestamp::from(0_u64),
         }
         .to_bytes()
-        .try_into()
-        .expect("ClockAccountData should fit in account data"),
+        .into(),
     )
 }
 

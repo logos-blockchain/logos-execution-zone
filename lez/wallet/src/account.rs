@@ -123,10 +123,7 @@ impl From<HumanReadableAccount> for lee::Account {
                     .parse()
                     .expect("Invalid base58 in HumanReadableAccount.shards key");
                 let data = hex::decode(&data).expect("Invalid hex in HumanReadableAccount.shards");
-                let data = data
-                    .try_into()
-                    .expect("Invalid account data: exceeds maximum allowed size");
-                (program, data)
+                (program, data.into())
             })
             .collect();
 

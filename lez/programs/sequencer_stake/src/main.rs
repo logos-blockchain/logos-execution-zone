@@ -533,7 +533,7 @@ mod tests {
             receiver: Actor::new(account, program),
             origin,
             is_authorized,
-            pre_state: ActorState::try_from(pre_state.to_vec()).unwrap(),
+            pre_state: ActorState::from(pre_state.to_vec()),
             message: borsh::to_vec(message).unwrap(),
         }
     }

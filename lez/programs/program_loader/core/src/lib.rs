@@ -18,10 +18,9 @@ use lee_core::{
     program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramId, ReceiveInput, Response, Transition},
 };
 
-/// Recommended max bytes of bytecode per segment.
+/// Recommended bytecode chunk size for deployment.
 ///
-/// Not enforced here — writing a segment rejects one over the account's own `DATA_MAX_LENGTH`
-/// cap regardless — this just keeps a live deploy's segments comfortably under it.
+/// This is a client-side batching choice, not a limit enforced by the program.
 pub const MAX_SEGMENT_DATA_LEN: usize = 96 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]

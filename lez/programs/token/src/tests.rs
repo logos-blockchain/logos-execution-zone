@@ -715,7 +715,7 @@ fn ensure_holding_zeroizes_an_empty_or_mismatched_authorized_target() {
     let targets = [
         ActorState::empty(),
         ActorState::from(&other_definition),
-        ActorState::try_from(vec![0xFF; 4]).expect("fits the shard limit"),
+        ActorState::from(vec![0xFF; 4]),
     ];
 
     for target in targets {

@@ -359,7 +359,7 @@ mod tests {
             receiver,
             origin,
             is_authorized,
-            pre_state: ActorState::try_from(pre).unwrap(),
+            pre_state: ActorState::from(pre),
             message: borsh::to_vec(message).unwrap(),
         };
         receive(&input).into_transition(input)
@@ -564,8 +564,7 @@ mod tests {
                 .response
                 .post_state
         };
-        let balance =
-            |amount: u128| Some(ActorState::try_from(balance_bytes(amount).to_vec()).unwrap());
+        let balance = |amount: u128| Some(ActorState::from(balance_bytes(amount).to_vec()));
         assert_eq!(written(40, 2), balance(42));
         assert_eq!(written(0, 42), balance(42));
     }

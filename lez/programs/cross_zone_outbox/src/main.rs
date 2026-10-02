@@ -98,7 +98,7 @@ mod tests {
             receiver,
             origin,
             is_authorized: false,
-            pre_state: ActorState::try_from(pre).unwrap(),
+            pre_state: ActorState::from(pre),
             message: borsh::to_vec(&emit()).unwrap(),
         };
         receive(&input, emit()).into_transition(input)
@@ -112,7 +112,7 @@ mod tests {
     fn an_empty_slot_takes_the_record() {
         assert_eq!(
             run(from_emitter(), Vec::new()).response.post_state,
-            Some(ActorState::try_from(record().to_bytes()).unwrap())
+            Some(ActorState::from(record().to_bytes()))
         );
     }
 

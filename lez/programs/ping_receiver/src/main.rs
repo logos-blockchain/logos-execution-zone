@@ -243,7 +243,7 @@ mod tests {
             receiver,
             origin,
             is_authorized,
-            pre_state: ActorState::try_from(pre).unwrap(),
+            pre_state: ActorState::from(pre),
             message: borsh::to_vec(message).unwrap(),
         };
         receive(&input).into_transition(input)

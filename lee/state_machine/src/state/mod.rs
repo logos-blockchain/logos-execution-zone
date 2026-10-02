@@ -258,14 +258,13 @@ impl V03State {
         for (i, chunk) in chunks.iter().enumerate() {
             let segment = Account::default().with_shard(
                 PROGRAM_LOADER_ACCOUNT_ID,
-                ActorState::try_from(
+                ActorState::from(
                     ProgramSegment {
                         bytecode: chunk.to_vec(),
                         next_segment: segment_account_ids.get(i.saturating_add(1)).copied(),
                     }
                     .to_bytes(),
-                )
-                .expect("segment fits under DATA_MAX_LENGTH"),
+                ),
             );
             self.public_state.insert(segment_account_ids[i], segment);
         }
@@ -277,8 +276,7 @@ impl V03State {
         };
         let header = Account::default().with_shard(
             PROGRAM_LOADER_ACCOUNT_ID,
-            ActorState::try_from(program_header.to_bytes())
-                .expect("program header fits under DATA_MAX_LENGTH"),
+            ActorState::from(program_header.to_bytes()),
         );
         self.public_state.insert(header_account_id, header);
 

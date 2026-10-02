@@ -134,7 +134,7 @@ fn holder(keys: &Keys) -> Actor {
 }
 
 fn data(bytes: &[u8]) -> ActorState {
-    bytes.to_vec().try_into().unwrap()
+    bytes.to_vec().into()
 }
 
 fn send_to(receiver: Actor) -> Call {

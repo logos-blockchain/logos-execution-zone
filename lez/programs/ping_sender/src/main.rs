@@ -77,7 +77,7 @@ mod tests {
             receiver,
             origin,
             is_authorized: false,
-            pre_state: ActorState::try_from(pre.to_vec()).unwrap(),
+            pre_state: ActorState::from(pre.to_vec()),
             message: borsh::to_vec(&message).unwrap(),
         };
         receive(&input, message).into_transition(input)
@@ -95,7 +95,7 @@ mod tests {
     }
 
     fn config(outbox: AccountId) -> ActorState {
-        ActorState::try_from(outbox_bytes(outbox).to_vec()).unwrap()
+        ActorState::from(outbox_bytes(outbox).to_vec())
     }
 
     #[test]

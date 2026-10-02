@@ -1,8 +1,8 @@
 use std::{collections::BTreeMap, fmt::Display, str::FromStr};
 
+pub use actor_state::ActorState;
 use base58::{FromBase58 as _, ToBase58 as _};
 use borsh::{BorshDeserialize, BorshSerialize};
-pub use data::ActorState;
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
@@ -12,7 +12,7 @@ use crate::{
     native_token::{InvalidBalanceEncoding, NATIVE_TOKEN_PROGRAM_ID, decode_balance},
 };
 
-pub mod data;
+pub mod actor_state;
 
 #[derive(Copy, Debug, Default, Clone, Eq, PartialEq)]
 pub struct Nonce(pub u128);
@@ -422,8 +422,7 @@ mod tests {
     #[test]
     fn apply_output_prunes_an_emptied_shard() {
         let program = AccountId::new([3; 32]);
-        let mut account =
-            Account::funded(10).with_shard(program, b"record".to_vec().try_into().unwrap());
+        let mut account = Account::funded(10).with_shard(program, b"record".to_vec().into());
 
         account.data.set_shard(program, ActorState::empty());
 
@@ -437,7 +436,7 @@ mod tests {
         let absent = AccountId::new([4; 32]);
         let data = Account::funded(9)
             .data
-            .with_shard(held, b"record".to_vec().try_into().unwrap());
+            .with_shard(held, b"record".to_vec().into());
 
         let projection = data.project([held, absent]);
 
@@ -451,7 +450,7 @@ mod tests {
         let program = AccountId::new([3; 32]);
         let mut account = Account {
             nonce: Nonce(7),
-            ..Account::funded(9).with_shard(program, b"record".to_vec().try_into().unwrap())
+            ..Account::funded(9).with_shard(program, b"record".to_vec().into())
         };
 
         account.data.update(&AccountData {
@@ -469,8 +468,8 @@ mod tests {
         let untouched = AccountId::new([4; 32]);
         let data = Account::funded(9)
             .data
-            .with_shard(touched, b"record".to_vec().try_into().unwrap())
-            .with_shard(untouched, b"other".to_vec().try_into().unwrap());
+            .with_shard(touched, b"record".to_vec().into())
+            .with_shard(untouched, b"other".to_vec().into());
 
         let mut applied = data.clone();
         applied.update(&data.project([touched]));
@@ -482,10 +481,8 @@ mod tests {
     fn an_account_json_round_trip_holds_the_largest_balance_and_nonce() {
         let account = Account {
             nonce: Nonce(u128::MAX),
-            ..Account::funded(u128::MAX).with_shard(
-                AccountId::new([3; 32]),
-                b"record".to_vec().try_into().unwrap(),
-            )
+            ..Account::funded(u128::MAX)
+                .with_shard(AccountId::new([3; 32]), b"record".to_vec().into())
         };
 
         let json = serde_json::to_string(&account).unwrap();

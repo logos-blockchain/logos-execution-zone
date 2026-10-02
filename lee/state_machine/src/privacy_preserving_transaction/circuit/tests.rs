@@ -357,10 +357,7 @@ fn note_ciphertext_is_padded_to_the_requested_length() {
     let keys = test_private_account_keys_1();
     let identifier = Identifier::new([7; 32]);
     let account_id = regular_id(&keys, identifier);
-    let account = Account::default().with_shard(
-        scripted_id(),
-        ActorState::try_from(vec![9_u8; 200]).unwrap(),
-    );
+    let account = Account::default().with_shard(scripted_id(), ActorState::from(vec![9_u8; 200]));
     let expected_post_state = account.data.clone();
     let commitment = Commitment::new(&account_id, &account);
     let mut commitment_set = CommitmentSet::with_capacity(1);

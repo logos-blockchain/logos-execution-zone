@@ -100,14 +100,6 @@ impl NestedBoundary {
     }
 }
 
-fn assert_program_execution_failure<T>(result: &Result<T, LeeError>, expected: &str) {
-    assert!(
-        matches!(result, Err(LeeError::ProgramExecutionFailed(msg)) if msg.contains(expected)),
-        "expected ProgramExecutionFailed containing {expected:?}, got: {:?}",
-        result.as_ref().err()
-    );
-}
-
 #[test]
 fn transition_from_privacy_preserving_transaction_shielded() {
     let sender_keys = test_public_account_keys_1();
@@ -519,35 +511,6 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
             .native_balance(),
         Ok(recipient_initial_balance + balance_to_move)
     );
-}
-
-#[test]
-fn scripted_program_should_fail_for_too_large_data_in_privacy_preserving_circuit() {
-    let keys = test_private_account_keys_1();
-    let witness = init_witness(&keys, Identifier::ZERO);
-    let account_id = witness.account_id();
-
-    let large_data: Vec<u8> =
-        vec![
-            0;
-            usize::try_from(lee_core::account::data::DATA_MAX_LENGTH.as_u64())
-                .expect("DATA_MAX_LENGTH fits in usize")
-                + 1
-        ];
-
-    let result = execute_and_prove(
-        ProvingInput {
-            private_witnesses: vec![witness],
-            ..proving_input(root(
-                Actor::new(account_id, scripted_id()),
-                &Script::write(large_data),
-            ))
-        },
-        &Simulation::default(),
-        &synthetic_program(crate::test_methods::scripted()),
-    );
-
-    assert_program_execution_failure(&result, "a written shard fits within the data limit");
 }
 
 #[test]

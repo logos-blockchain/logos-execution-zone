@@ -112,10 +112,8 @@ mod tests {
     fn shard_bearing_account() -> Account {
         Account {
             nonce: 42_u128.into(),
-            ..Account::funded(123_456_789_012_345_678_901_234_567_890_123_456).with_shard(
-                AccountId::new([7; 32]),
-                b"hola mundo".to_vec().try_into().unwrap(),
-            )
+            ..Account::funded(123_456_789_012_345_678_901_234_567_890_123_456)
+                .with_shard(AccountId::new([7; 32]), b"hola mundo".to_vec().into())
         }
     }
 

@@ -78,7 +78,7 @@ fn repairing_a_squat_requires_the_owner_and_disturbs_nothing_else() {
     const SQUATTER_DEFINITION_ID: AccountId = AccountId::new([0x11; 32]);
     const THROWAWAY_HOLDING_ID: AccountId = AccountId::new([0x12; 32]);
     const FOREIGN_PROGRAM_ID: AccountId = AccountId::new([0x13; 32]);
-    let foreign_shard = ActorState::try_from(vec![7u8; 4]).unwrap();
+    let foreign_shard = ActorState::from(vec![7u8; 4]);
 
     let (owner_key, owner_id) = owner_keys();
     let (ata_id, _) = ata_of(

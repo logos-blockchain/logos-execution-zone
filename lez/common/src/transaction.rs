@@ -827,7 +827,7 @@ mod tests {
         let mut post = pre.clone();
         post.data.set_shard(
             programs::cross_zone_inbox_account_id(),
-            lee::ActorState::try_from(vec![1]).expect("fits"),
+            lee::ActorState::from(vec![1]),
         );
         state_and_diff(AccountId::new([5; 32]), pre, post)
     }

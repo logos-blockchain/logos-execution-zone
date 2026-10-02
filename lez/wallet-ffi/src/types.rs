@@ -427,8 +427,7 @@ impl TryFrom<&FfiAccount> for lee::Account {
             for shard in shards {
                 let data = if shard.data_len > 0 {
                     let bytes = unsafe { slice::from_raw_parts(shard.data, shard.data_len) };
-                    ActorState::try_from(bytes.to_vec())
-                        .map_err(|_err| WalletFfiError::InvalidTypeConversion)?
+                    ActorState::from(bytes.to_vec())
                 } else {
                     ActorState::default()
                 };

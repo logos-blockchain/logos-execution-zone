@@ -53,7 +53,7 @@ pub fn forges_echo() -> ! {
             ..input
         },
         ForgeField::PreState => ReceiveInput {
-            pre_state: ActorState::try_from(b"forged".to_vec()).expect("fits"),
+            pre_state: ActorState::from(b"forged".to_vec()),
             ..input
         },
         ForgeField::Message => ReceiveInput {

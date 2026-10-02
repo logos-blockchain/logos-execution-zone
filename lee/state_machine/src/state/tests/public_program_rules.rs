@@ -96,7 +96,7 @@ fn a_data_write_on_the_executing_shard_is_accepted_publicly() {
     // leaves the native balance shard alone.
     assert_eq!(
         state.get_account_by_id(target_id),
-        Account::funded(250).with_shard(program_id, written.try_into().unwrap())
+        Account::funded(250).with_shard(program_id, written.into())
     );
 }
 
@@ -207,8 +207,8 @@ fn insufficient_balance_transfer_leaves_state_untouched() {
 fn a_sent_turn_on_another_shard_of_the_root_account_keeps_its_other_shards() {
     let account_id = AccountId::new([1; 32]);
     let stranger = AccountId::new([9; 32]);
-    let on_chain: ActorState = b"on-chain".to_vec().try_into().unwrap();
-    let stranger_data: ActorState = b"stranger".to_vec().try_into().unwrap();
+    let on_chain: ActorState = b"on-chain".to_vec().into();
+    let stranger_data: ActorState = b"stranger".to_vec().into();
     let written = vec![7; 4];
     let mut state = V03State::new()
         .with_public_accounts([(
@@ -239,7 +239,7 @@ fn a_sent_turn_on_another_shard_of_the_root_account_keeps_its_other_shards() {
         Account {
             nonce: Nonce(3),
             ..Account::funded(5)
-                .with_shard(TWIN, written.try_into().unwrap())
+                .with_shard(TWIN, written.into())
                 .with_shard(stranger, stranger_data)
         }
     );

@@ -163,7 +163,7 @@ mod tests {
             receiver,
             origin,
             is_authorized: false,
-            pre_state: ActorState::try_from(pre).unwrap(),
+            pre_state: ActorState::from(pre),
             message: borsh::to_vec(message).unwrap(),
         };
         receive(&input).into_transition(input)
@@ -226,7 +226,7 @@ mod tests {
         let transition = distribute_at(&state, block, payout);
         assert_eq!(
             transition.response.post_state,
-            Some(ActorState::try_from(expected.to_bytes()).unwrap())
+            Some(ActorState::from(expected.to_bytes()))
         );
     }
 
@@ -370,7 +370,7 @@ mod tests {
 
         assert_eq!(
             transition.response.post_state,
-            Some(ActorState::try_from(expected.to_bytes()).unwrap())
+            Some(ActorState::from(expected.to_bytes()))
         );
     }
 

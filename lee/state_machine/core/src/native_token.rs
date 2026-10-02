@@ -46,8 +46,7 @@ pub fn encode_balance(balance: Balance) -> ActorState {
     if balance == 0 {
         ActorState::empty()
     } else {
-        ActorState::try_from(balance.to_le_bytes().to_vec())
-            .expect("an encoded balance is 16 bytes")
+        ActorState::from(balance.to_le_bytes().to_vec())
     }
 }
 
@@ -169,7 +168,7 @@ mod tests {
     #[test]
     fn non_canonical_encodings_are_rejected() {
         for bytes in [vec![0; 16], vec![1], vec![1; 15], vec![1; 17], vec![0; 32]] {
-            let data = ActorState::try_from(bytes.clone()).expect("fits the shard limit");
+            let data = ActorState::from(bytes.clone());
             assert_eq!(
                 decode_balance(&data),
                 Err(InvalidBalanceEncoding),

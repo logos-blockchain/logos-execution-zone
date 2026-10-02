@@ -43,16 +43,14 @@ impl From<lee_core::account::Account> for Account {
     }
 }
 
-impl TryFrom<Account> for lee_core::account::Account {
-    type Error = lee_core::account::data::DataTooBigError;
-
-    fn try_from(value: Account) -> Result<Self, Self::Error> {
+impl From<Account> for lee_core::account::Account {
+    fn from(value: Account) -> Self {
         let Account { nonce, data } = value;
 
-        Ok(Self {
+        Self {
             nonce: Nonce(nonce),
-            data: data.try_into()?,
-        })
+            data: data.into(),
+        }
     }
 }
 
@@ -69,18 +67,16 @@ impl From<lee_core::account::AccountData> for AccountData {
     }
 }
 
-impl TryFrom<AccountData> for lee_core::account::AccountData {
-    type Error = lee_core::account::data::DataTooBigError;
-
-    fn try_from(value: AccountData) -> Result<Self, Self::Error> {
+impl From<AccountData> for lee_core::account::AccountData {
+    fn from(value: AccountData) -> Self {
         let AccountData { shards } = value;
 
-        Ok(Self {
+        Self {
             shards: shards
                 .into_iter()
-                .map(|(program, data)| Ok((program.into(), data.try_into()?)))
-                .collect::<Result<_, Self::Error>>()?,
-        })
+                .map(|(program, data)| (program.into(), data.into()))
+                .collect(),
+        }
     }
 }
 
@@ -118,11 +114,9 @@ impl From<lee_core::account::ActorState> for ActorState {
     }
 }
 
-impl TryFrom<ActorState> for lee_core::account::ActorState {
-    type Error = lee_core::account::data::DataTooBigError;
-
-    fn try_from(value: ActorState) -> Result<Self, Self::Error> {
-        Self::try_from(value.0)
+impl From<ActorState> for lee_core::account::ActorState {
+    fn from(value: ActorState) -> Self {
+        Self::from(value.0)
     }
 }
 
@@ -1202,7 +1196,7 @@ mod tests {
             nonce: lee_core::account::Nonce(u128::MAX),
             data: lee_core::account::Account::funded(u128::MAX)
                 .data
-                .with_shard(program, b"record".to_vec().try_into().unwrap()),
+                .with_shard(program, b"record".to_vec().into()),
         };
 
         let mirrored = Account::from(account.clone());
@@ -1211,10 +1205,7 @@ mod tests {
 
         assert_eq!(restored.nonce, u128::MAX);
         assert_eq!(restored.data.balance(), Some(u128::MAX));
-        assert_eq!(
-            lee_core::account::Account::try_from(restored).unwrap(),
-            account
-        );
+        assert_eq!(lee_core::account::Account::from(restored), account);
     }
 
     #[test]

@@ -2305,7 +2305,7 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
         .await;
     corrupted
         .data
-        .set_shard(clock_program_id, vec![0xff; 3].try_into().unwrap());
+        .set_shard(clock_program_id, vec![0xff; 3].into());
     sequencer
         .chain()
         .lock()
@@ -2519,9 +2519,7 @@ fn cooldown_opens_after_the_cooldown_elapses() {
         state_id,
         Account::default().with_shard(
             AccountId::from_builtin_program(test_programs::cooldown().id()),
-            cooldown_data(cooldown_ms, last_run_timestamp)
-                .try_into()
-                .unwrap(),
+            cooldown_data(cooldown_ms, last_run_timestamp).into(),
         ),
     );
 
@@ -2563,9 +2561,7 @@ fn cooldown_rejects_before_the_cooldown_elapses() {
         state_id,
         Account::default().with_shard(
             AccountId::from_builtin_program(test_programs::cooldown().id()),
-            cooldown_data(cooldown_ms, last_run_timestamp)
-                .try_into()
-                .unwrap(),
+            cooldown_data(cooldown_ms, last_run_timestamp).into(),
         ),
     );
 
@@ -4736,10 +4732,9 @@ fn a_slash_burns_the_tracked_stake_to_the_sink() {
 fn write_stranger_shard_on_stake_funds(state: &mut V03State, ownership_id: AccountId) -> AccountId {
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
     let mut funds = state.get_account_by_id(funds_id);
-    funds.data.set_shard(
-        AccountId::new([66; 32]),
-        vec![1].try_into().expect("1 byte fits in account data"),
-    );
+    funds
+        .data
+        .set_shard(AccountId::new([66; 32]), vec![1].into());
     state.force_insert_account(funds_id, funds);
     funds_id
 }
@@ -5389,8 +5384,7 @@ fn a_private_withdrawal_to_a_private_destination_is_received_only_by_proof() {
             program_id,
             sequencer_stake_core::StakeRecord { sequencer_key }
                 .to_bytes()
-                .try_into()
-                .expect("a stake record fits a shard"),
+                .into(),
         )
     };
     let requested_at = 4;

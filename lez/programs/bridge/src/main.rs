@@ -86,7 +86,7 @@ mod tests {
             receiver,
             origin,
             is_authorized: false,
-            pre_state: ActorState::try_from(pre.to_vec()).unwrap(),
+            pre_state: ActorState::from(pre.to_vec()),
             message: borsh::to_vec(&deposit()).unwrap(),
         };
         receive(&input, deposit()).into_transition(input)
@@ -98,7 +98,7 @@ mod tests {
 
         assert_eq!(
             transition.response.post_state,
-            Some(ActorState::try_from(RECEIPT_MARKER.to_vec()).unwrap())
+            Some(ActorState::from(RECEIPT_MARKER.to_vec()))
         );
         assert_eq!(
             (transition.response.calls, transition.response.casts),

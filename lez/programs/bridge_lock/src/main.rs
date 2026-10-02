@@ -202,7 +202,7 @@ mod tests {
             receiver,
             origin,
             is_authorized,
-            pre_state: ActorState::try_from(pre).unwrap(),
+            pre_state: ActorState::from(pre),
             message: borsh::to_vec(&message).unwrap(),
         };
         receive(&input, message).into_transition(input)
@@ -380,7 +380,7 @@ mod tests {
             init(Origin::Root, WRAPPED_ID, Vec::new())
                 .response
                 .post_state,
-            Some(ActorState::try_from(config()).unwrap())
+            Some(ActorState::from(config()))
         );
     }
 
@@ -388,7 +388,7 @@ mod tests {
     fn replaying_the_same_init_is_a_no_op() {
         assert_eq!(
             init(Origin::Root, WRAPPED_ID, config()).response.post_state,
-            Some(ActorState::try_from(config()).unwrap())
+            Some(ActorState::from(config()))
         );
     }
 

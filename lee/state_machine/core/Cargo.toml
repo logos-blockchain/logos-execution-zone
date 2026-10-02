@@ -13,9 +13,15 @@ borsh.workspace = true
 serde.workspace = true
 serde_with.workspace = true
 thiserror.workspace = true
-bytesize.workspace = true
 base58.workspace = true
-derive_more = { workspace = true, features = ["debug", "display", "as_ref"] }
+derive_more = { workspace = true, features = [
+    "debug",
+    "display",
+    "as_ref",
+    "from",
+    "into",
+    "deref",
+] }
 ml-kem = { workspace = true }
 chacha20 = { version = "0.10" }
 

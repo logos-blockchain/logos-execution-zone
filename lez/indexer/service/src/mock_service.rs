@@ -294,7 +294,7 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
                 .iter()
                 .map(|(program, data)| ShardSummary {
                     program_account_id: *program,
-                    len: u64::try_from(data.0.len()).expect("a shard is capped well under u64"),
+                    len: u64::try_from(data.0.len()).expect("actor-state length fits in u64"),
                 })
                 .collect(),
         })
