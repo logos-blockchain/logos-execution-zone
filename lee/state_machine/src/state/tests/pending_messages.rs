@@ -688,3 +688,125 @@ fn a_public_receipt_without_identity_evidence_is_rejected_not_charged() {
     );
     assert!(!error.is_chargeable());
 }
+
+fn private_root() -> Actor {
+    let keys = test_private_account_keys_1();
+    Actor::new(
+        AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::ZERO),
+        scripted_id(),
+    )
+}
+
+fn proven_casting(
+    root_script: &Script,
+    context: PublicExecutionContext,
+) -> PrivacyPreservingTransaction {
+    let proven = execute_and_prove(
+        ProvingInput {
+            context,
+            private_witnesses: vec![init_witness(
+                &test_private_account_keys_1(),
+                Identifier::ZERO,
+            )],
+            ..proving_input(root(private_root(), root_script))
+        },
+        &Simulation::default(),
+        &scripted_programs(),
+    )
+    .unwrap();
+    private_tx(proven, vec![], &[])
+}
+
+fn cast_body(script: &Script) -> MessageBody {
+    MessageBody {
+        source: scripted_id(),
+        to: receiver(),
+        message: borsh::to_vec(script).unwrap(),
+    }
+}
+
+#[test]
+fn identical_casts_are_received_independently_and_out_of_order() {
+    let mut state = V03State::new().with_test_programs();
+    let cast_twice = public_tx(
+        sender(),
+        vec![sender()],
+        vec![],
+        Script::default()
+            .cast(Cast::new(receiver(), &received()))
+            .cast(Cast::new(receiver(), &received())),
+        &[],
+    );
+    state
+        .transition_from_public_transaction(&cast_twice, 1, 0)
+        .unwrap();
+    let [first, second] =
+        <[_; 2]>::try_from(state.pending_messages_from(0).cloned().collect::<Vec<_>>()).unwrap();
+
+    state
+        .transition_from_public_transaction(
+            &receipt(
+                second.id(),
+                receiver(),
+                vec![PublicIdentity::Key(receiver_pk())],
+            ),
+            2,
+            0,
+        )
+        .unwrap();
+
+    assert_eq!(
+        state.pending_messages_from(0).cloned().collect::<Vec<_>>(),
+        vec![first]
+    );
+}
+
+#[test]
+fn a_mixed_transaction_publishes_its_live_casts_before_its_proven_casts() {
+    let live = Script::default().cast(Cast::new(receiver(), &replying()));
+    let tx = proven_casting(
+        &Script::default()
+            .cast(Cast::new(receiver(), &received()))
+            .call(Call::new(sender(), &live)),
+        PublicExecutionContext::new(vec![sender()], []),
+    );
+    let mut state = V03State::new().with_test_programs();
+
+    state
+        .transition_from_privacy_preserving_transaction(&tx, 1, 0)
+        .unwrap();
+
+    assert_eq!(
+        state.pending_messages_from(0).cloned().collect::<Vec<_>>(),
+        vec![
+            StoredMessage {
+                sequence: 0,
+                body: cast_body(&replying()),
+            },
+            StoredMessage {
+                sequence: 1,
+                body: cast_body(&received()),
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_tampered_proven_cast_is_rejected() {
+    let mut tx = proven_casting(
+        &Script::default().cast(Cast::new(receiver(), &received())),
+        PublicExecutionContext::default(),
+    );
+    let state = V03State::new().with_test_programs();
+    assert!(
+        ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0).is_ok(),
+        "the unmodified statement must verify"
+    );
+
+    tx.message.execution.casts[0].message[0] ^= 0xFF;
+
+    assert!(matches!(
+        ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0),
+        Err(LeeError::InvalidPrivacyPreservingProof)
+    ));
+}
