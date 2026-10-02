@@ -1,5 +1,5 @@
 use super::{
-    ScheduleOp::{CallPublic, EnterPrivate, LeavePrivate, ReturnPublic},
+    BoundaryStep::{CallPublic, EnterPrivate, LeavePrivate, ReturnPublic},
     *,
 };
 use crate::{
@@ -265,11 +265,20 @@ fn stored(source: AccountId, to: Actor, message: &[u8]) -> StoredMessage {
 
 // A statement whose only public call is the root delivery to `ENTRY`.
 fn root_statement() -> Boundary {
-    Boundary {
-        public_deliveries: vec![public(DeliverySource::Root, ENTRY, &[])],
-        schedule: vec![CallPublic, ReturnPublic],
-        ..Boundary::default()
-    }
+    vec![
+        CallPublic(public(DeliverySource::Root, ENTRY, &[])),
+        ReturnPublic,
+    ]
+}
+
+fn public_calls(boundary: &[BoundaryStep]) -> Vec<PublicDelivery> {
+    boundary
+        .iter()
+        .filter_map(|step| match step {
+            CallPublic(delivery) => Some(delivery.clone()),
+            EnterPrivate(_) | LeavePrivate | ReturnPublic => None,
+        })
+        .collect()
 }
 
 // `ENTRY` enters the private holder, whose turn calls `CALLEE`.
@@ -700,11 +709,12 @@ fn a_private_root_records_its_public_call_and_the_assumed_reply() {
     );
     assert_eq!(
         boundary,
-        Boundary {
-            public_deliveries: vec![public(DeliverySource::Call(id(8)), vault, b"credit")],
-            assumptions: vec![reply],
-            schedule: vec![CallPublic, EnterPrivate, LeavePrivate, ReturnPublic],
-        }
+        vec![
+            CallPublic(public(DeliverySource::Call(id(8)), vault, b"credit")),
+            EnterPrivate(reply),
+            LeavePrivate,
+            ReturnPublic,
+        ]
     );
     assert_eq!(
         private_accounts[&owner.account_id],
@@ -717,21 +727,14 @@ fn a_public_call_made_inside_an_assumed_delivery_is_bracketed_within_it() {
     let (boundary, script) = record_nested(nested_assumed());
 
     assert_eq!(
-        boundary.schedule,
+        boundary,
         vec![
-            CallPublic,
-            EnterPrivate,
-            CallPublic,
+            CallPublic(public(DeliverySource::Root, ENTRY, &[])),
+            EnterPrivate(nested_assumed()[0][0].clone()),
+            CallPublic(public(DeliverySource::Call(id(8)), CALLEE, &[])),
             ReturnPublic,
             LeavePrivate,
             ReturnPublic,
-        ]
-    );
-    assert_eq!(
-        boundary.public_deliveries,
-        vec![
-            public(DeliverySource::Root, ENTRY, &[]),
-            public(DeliverySource::Call(id(8)), CALLEE, &[]),
         ]
     );
     assert_eq!(
@@ -850,46 +853,33 @@ fn a_check_replays_the_public_side_of_a_recorded_statement() {
 fn a_check_rejects_public_behaviour_that_departs_from_the_statement() {
     let boundary = record_nested(nested_assumed()).0;
     let checked = |sends: Vec<Call>| check_nested(boundary.clone(), sends).0;
-    let truncated = Boundary {
-        schedule: vec![CallPublic],
-        ..boundary.clone()
-    };
+    let truncated = boundary[..1].to_vec();
 
     assert!(matches!(
         checked(vec![send_to(BYSTANDER)]),
-        Err(ExecutionError::ScheduleMismatch {
-            index: 1,
-            expected: ReturnPublic
-        })
+        Err(ExecutionError::BoundaryMismatch { index: 1 })
     ));
     assert!(matches!(
         checked(vec![enter(b"other")]),
-        Err(ExecutionError::AssumptionMismatch { index: 0 })
+        Err(ExecutionError::AssumptionMismatch { index: 1 })
     ));
     assert!(matches!(
         checked(vec![enter(ENTER), enter(ENTER)]),
-        Err(ExecutionError::ScheduleMismatch {
-            index: 5,
-            expected: EnterPrivate
-        })
+        Err(ExecutionError::BoundaryMismatch { index: 5 })
     ));
     assert!(matches!(
         check_nested(truncated, vec![enter(ENTER), send_to(BYSTANDER)]).0,
-        Err(ExecutionError::ScheduleMismatch {
-            index: 1,
-            expected: EnterPrivate
-        })
+        Err(ExecutionError::BoundaryMismatch { index: 1 })
     ));
 }
 
 #[test]
 fn a_check_runs_a_privately_originated_call_with_its_private_origin() {
     let origin = Origin::Program(id(8));
-    let boundary = Boundary {
-        public_deliveries: vec![public(DeliverySource::Call(id(8)), ENTRY, &[])],
-        schedule: vec![CallPublic, ReturnPublic],
-        ..Boundary::default()
-    };
+    let boundary = vec![
+        CallPublic(public(DeliverySource::Call(id(8)), ENTRY, &[])),
+        ReturnPublic,
+    ];
 
     let (result, script) = check_nested(boundary, Vec::new());
 
@@ -1045,7 +1035,7 @@ fn an_assumption_must_claim_exactly_the_delivered_grants() {
     for claimed in [vec![sibling.account_id], Vec::new()] {
         assert!(matches!(
             relayed_grant(claimed).0,
-            Err(ExecutionError::AssumptionMismatch { index: 0 })
+            Err(ExecutionError::AssumptionMismatch { index: 1 })
         ));
     }
 }
@@ -1092,10 +1082,7 @@ fn a_private_grant_crosses_a_public_actor_and_authorizes_the_return() {
         vec![(owner, false), (custody, true), (custody, true)]
     );
     let boundary = recorded_boundary(recorded);
-    assert_eq!(
-        boundary.public_deliveries[0].grants,
-        vec![custody.account_id]
-    );
+    assert_eq!(public_calls(&boundary)[0].grants, vec![custody.account_id]);
 
     let mut checking = Script::default()
         .on(
@@ -1204,7 +1191,7 @@ fn a_public_turn_requests_a_private_debit_that_the_private_credential_authorizes
     };
 
     assert_eq!(
-        recorded_boundary(record(true).unwrap()).public_deliveries[1],
+        public_calls(&recorded_boundary(record(true).unwrap()))[1],
         public(
             DeliverySource::Call(native_token::NATIVE_TOKEN_PROGRAM_ID),
             payee,
@@ -1316,7 +1303,7 @@ fn an_output_from_a_private_sender_carries_only_its_programs_provenance() {
     .unwrap();
 
     assert_eq!(
-        recorded_boundary(recorded).public_deliveries,
+        public_calls(&recorded_boundary(recorded)),
         vec![public(
             DeliverySource::Call(holder(&keys).program_account_id),
             ENTRY,
@@ -1341,7 +1328,7 @@ fn a_live_delivery_from_another_actor_of_the_same_program_does_not_satisfy_an_as
 
     assert!(matches!(
         result,
-        Err(ExecutionError::AssumptionMismatch { index: 0 })
+        Err(ExecutionError::AssumptionMismatch { index: 1 })
     ));
 }
 
@@ -1494,7 +1481,13 @@ fn a_record_keeps_its_casts_out_of_the_boundary_and_a_check_returns_only_live_ca
         panic!("expected a recorded execution")
     };
 
-    assert_eq!(boundary.schedule, vec![CallPublic, ReturnPublic]);
+    assert_eq!(
+        boundary,
+        vec![
+            CallPublic(public(DeliverySource::Call(id(8)), ENTRY, &[])),
+            ReturnPublic,
+        ]
+    );
     assert_eq!(proven_casts, vec![private_cast]);
 
     let mut checking = Script::default().on(ENTRY, move |input| {

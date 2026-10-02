@@ -98,37 +98,25 @@ impl DeliverySource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct PublicDelivery {
-    pub envelope: MessageEnvelope<DeliverySource>,
+pub struct BoundaryDelivery<S> {
+    pub envelope: MessageEnvelope<S>,
     pub grants: Vec<AccountId>,
     pub pda_seeds: Vec<PdaSeed>,
 }
+
+pub type PublicDelivery = BoundaryDelivery<DeliverySource>;
+
+pub type Assumption = BoundaryDelivery<Actor>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct Assumption {
-    pub envelope: MessageEnvelope<Actor>,
-    pub grants: Vec<AccountId>,
-    pub pda_seeds: Vec<PdaSeed>,
-}
-
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
-)]
-pub enum ScheduleOp {
-    CallPublic,
-    EnterPrivate,
+pub enum BoundaryStep {
+    CallPublic(PublicDelivery),
+    EnterPrivate(Assumption),
     LeavePrivate,
     ReturnPublic,
 }
 
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
-)]
-pub struct Boundary {
-    pub public_deliveries: Vec<PublicDelivery>,
-    pub assumptions: Vec<Assumption>,
-    pub schedule: Vec<ScheduleOp>,
-}
+pub type Boundary = Vec<BoundaryStep>;
 
 pub trait Backend {
     type Error: From<ExecutionError>;
@@ -205,10 +193,10 @@ pub enum ExecutionError {
     #[error("Assumed delivery sender {actor:?} is not a declared public actor")]
     UndeclaredAssumedSender { actor: Actor },
 
-    #[error("Boundary schedule does not have {expected:?} at {index}")]
-    ScheduleMismatch { index: usize, expected: ScheduleOp },
+    #[error("Boundary step {index} does not match the execution")]
+    BoundaryMismatch { index: usize },
 
-    #[error("Boundary assumption {index} does not match the executed delivery")]
+    #[error("The assumption at boundary step {index} does not match the executed delivery")]
     AssumptionMismatch { index: usize },
 
     #[error("Boundary was not consumed exactly by the execution")]
@@ -304,13 +292,12 @@ enum ModeState {
     },
     Record {
         assumed: Vec<Vec<Assumption>>,
+        next_group: usize,
         boundary: Boundary,
     },
     Check {
         boundary: Boundary,
         cursor: usize,
-        public_deliveries_consumed: usize,
-        assumptions_consumed: usize,
     },
 }
 
@@ -421,7 +408,8 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 Some(root),
                 ModeState::Record {
                     assumed,
-                    boundary: Boundary::default(),
+                    next_group: 0,
+                    boundary: Boundary::new(),
                 },
             ),
             Mode::Check(boundary) => (
@@ -429,8 +417,6 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 ModeState::Check {
                     boundary,
                     cursor: 0,
-                    public_deliveries_consumed: 0,
-                    assumptions_consumed: 0,
                 },
             ),
         };
@@ -478,28 +464,24 @@ impl<'witnesses> ExecutionState<'witnesses> {
         while let Some(item) = self.pending.pop_front() {
             match item {
                 Item::Deliver(delivery) => self.deliver(*delivery, backend)?,
-                Item::ClosePublic => self.close(ScheduleOp::ReturnPublic)?,
-                Item::ClosePrivate => self.close(ScheduleOp::LeavePrivate)?,
+                Item::ClosePublic => self.close(BoundaryStep::ReturnPublic)?,
+                Item::ClosePrivate => self.close(BoundaryStep::LeavePrivate)?,
                 Item::Continue { root } => self.resume(root)?,
             }
         }
         match &self.mode {
             ModeState::Live | ModeState::Derive { .. } => {}
-            ModeState::Record { assumed, boundary } => {
-                if assumed.len() > boundary.public_deliveries.len() {
+            ModeState::Record {
+                assumed,
+                next_group,
+                ..
+            } => {
+                if assumed.len() > *next_group {
                     return Err(ExecutionError::UnusedAssumedDeliveries.into());
                 }
             }
-            ModeState::Check {
-                boundary,
-                cursor,
-                public_deliveries_consumed,
-                assumptions_consumed,
-            } => {
-                if *cursor != boundary.schedule.len()
-                    || *public_deliveries_consumed != boundary.public_deliveries.len()
-                    || *assumptions_consumed != boundary.assumptions.len()
-                {
+            ModeState::Check { boundary, cursor } => {
+                if *cursor != boundary.len() {
                     return Err(ExecutionError::IncompleteBoundary.into());
                 }
             }
@@ -507,7 +489,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
         Ok(self.finish())
     }
 
-    fn close(&mut self, op: ScheduleOp) -> Result<(), ExecutionError> {
+    fn close(&mut self, marker: BoundaryStep) -> Result<(), ExecutionError> {
         match &mut self.mode {
             ModeState::Live => unreachable!("a live execution crosses no boundary"),
             ModeState::Derive { open, .. } => {
@@ -515,61 +497,54 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 Ok(())
             }
             ModeState::Record { boundary, .. } => {
-                boundary.schedule.push(op);
+                boundary.push(marker);
                 Ok(())
             }
-            ModeState::Check {
-                boundary, cursor, ..
-            } => expect_op(&boundary.schedule, cursor, op),
+            ModeState::Check { boundary, cursor } => {
+                if boundary.get(*cursor) != Some(&marker) {
+                    return Err(ExecutionError::BoundaryMismatch { index: *cursor });
+                }
+                step_past(cursor);
+                Ok(())
+            }
         }
     }
 
     fn resume(&mut self, root: bool) -> Result<(), ExecutionError> {
-        let ModeState::Check {
-            boundary,
-            cursor,
-            public_deliveries_consumed,
-            ..
-        } = &mut self.mode
-        else {
+        let ModeState::Check { boundary, cursor } = &mut self.mode else {
             unreachable!("only a check resumes a proven continuation");
         };
-        match (boundary.schedule.get(*cursor), root) {
-            (Some(ScheduleOp::CallPublic), _) => {
-                let PublicDelivery {
+        match (boundary.get(*cursor), root) {
+            (
+                Some(BoundaryStep::CallPublic(PublicDelivery {
                     envelope,
                     grants,
                     pda_seeds,
-                } = boundary
-                    .public_deliveries
-                    .get(*public_deliveries_consumed)
-                    .ok_or(ExecutionError::IncompleteBoundary)?
-                    .clone();
-                expect_op(&boundary.schedule, cursor, ScheduleOp::CallPublic)?;
-                *public_deliveries_consumed = public_deliveries_consumed
-                    .checked_add(1)
-                    .expect("bounded by the public delivery count");
+                })),
+                _,
+            ) => {
+                let delivery = Delivery {
+                    envelope: envelope.clone(),
+                    sender: None,
+                    grants: grants.iter().copied().collect(),
+                    pda_seeds: pda_seeds.clone(),
+                };
+                step_past(cursor);
                 self.pending.push_front(Item::Continue { root });
                 self.pending.push_front(Item::ClosePublic);
-                self.pending.push_front(Item::Deliver(Box::new(Delivery {
-                    envelope,
-                    sender: None,
-                    grants: grants.into_iter().collect(),
-                    pda_seeds,
-                })));
+                self.pending.push_front(Item::Deliver(Box::new(delivery)));
                 Ok(())
             }
-            (None, true) | (Some(ScheduleOp::LeavePrivate), false) => Ok(()),
+            (None, true) | (Some(BoundaryStep::LeavePrivate), false) => Ok(()),
             (
                 None
                 | Some(
-                    ScheduleOp::EnterPrivate | ScheduleOp::LeavePrivate | ScheduleOp::ReturnPublic,
+                    BoundaryStep::EnterPrivate(_)
+                    | BoundaryStep::LeavePrivate
+                    | BoundaryStep::ReturnPublic,
                 ),
                 _,
-            ) => Err(ExecutionError::ScheduleMismatch {
-                index: *cursor,
-                expected: ScheduleOp::CallPublic,
-            }),
+            ) => Err(ExecutionError::BoundaryMismatch { index: *cursor }),
         }
     }
 
@@ -629,8 +604,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
                     groups[group].push(assumption);
                 }
                 ModeState::Record { boundary, .. } => {
-                    boundary.schedule.push(ScheduleOp::EnterPrivate);
-                    boundary.assumptions.push(assumption);
+                    boundary.push(BoundaryStep::EnterPrivate(assumption));
                     self.pending.push_front(Item::ClosePrivate);
                 }
                 ModeState::Live | ModeState::Check { .. } => {
@@ -642,21 +616,13 @@ impl<'witnesses> ExecutionState<'witnesses> {
     }
 
     fn check_assumption(&mut self, delivery: &Delivery) -> Result<(), ExecutionError> {
-        let ModeState::Check {
-            boundary,
-            cursor,
-            assumptions_consumed,
-            ..
-        } = &mut self.mode
-        else {
+        let ModeState::Check { boundary, cursor } = &mut self.mode else {
             unreachable!("only a check matches assumed deliveries");
         };
-        expect_op(&boundary.schedule, cursor, ScheduleOp::EnterPrivate)?;
-        let index = *assumptions_consumed;
-        let assumed = boundary
-            .assumptions
-            .get(index)
-            .ok_or(ExecutionError::IncompleteBoundary)?;
+        let index = *cursor;
+        let Some(BoundaryStep::EnterPrivate(assumed)) = boundary.get(index) else {
+            return Err(ExecutionError::BoundaryMismatch { index });
+        };
         // A proven turn ran under exactly the authority the live delivery carries.
         if Some(assumed.envelope.source) != delivery.sender
             || assumed.envelope.to != delivery.envelope.to
@@ -666,9 +632,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
         {
             return Err(ExecutionError::AssumptionMismatch { index });
         }
-        *assumptions_consumed = index
-            .checked_add(1)
-            .expect("bounded by the assumption count");
+        step_past(cursor);
         self.pending.push_front(Item::ClosePrivate);
         self.pending.push_front(Item::Continue { root: false });
         Ok(())
@@ -679,8 +643,12 @@ impl<'witnesses> ExecutionState<'witnesses> {
         delivery: Delivery,
         backend: &mut B,
     ) -> Result<(), B::Error> {
-        let (assumed, boundary) = match &mut self.mode {
-            ModeState::Record { assumed, boundary } => (assumed, boundary),
+        let (assumed, next_group, boundary) = match &mut self.mode {
+            ModeState::Record {
+                assumed,
+                next_group,
+                boundary,
+            } => (assumed, next_group, boundary),
             // A call from the root or a private turn is what a record publishes as a public
             // delivery.
             ModeState::Derive { groups, open } => {
@@ -696,12 +664,12 @@ impl<'witnesses> ExecutionState<'witnesses> {
             }
             ModeState::Live | ModeState::Check { .. } => return self.execute(delivery, backend),
         };
-        let index = boundary.public_deliveries.len();
-        boundary.public_deliveries.push(public_delivery(&delivery));
-        boundary.schedule.push(ScheduleOp::CallPublic);
+        let index = *next_group;
+        boundary.push(BoundaryStep::CallPublic(public_delivery(&delivery)));
         let deliveries = assumed
             .get(index)
             .ok_or(ExecutionError::MissingAssumedDeliveries { index })?;
+        step_past(next_group);
         self.pending.push_front(Item::ClosePublic);
         for Assumption {
             envelope,
@@ -943,21 +911,10 @@ impl<'witnesses> ExecutionState<'witnesses> {
     }
 }
 
-fn expect_op(
-    schedule: &[ScheduleOp],
-    cursor: &mut usize,
-    op: ScheduleOp,
-) -> Result<(), ExecutionError> {
-    if schedule.get(*cursor) != Some(&op) {
-        return Err(ExecutionError::ScheduleMismatch {
-            index: *cursor,
-            expected: op,
-        });
-    }
-    *cursor = cursor
+const fn step_past(position: &mut usize) {
+    *position = position
         .checked_add(1)
-        .expect("bounded by the schedule length");
-    Ok(())
+        .expect("bounded by the length of what it indexes");
 }
 
 fn public_delivery(delivery: &Delivery) -> PublicDelivery {

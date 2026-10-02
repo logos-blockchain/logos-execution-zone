@@ -310,34 +310,26 @@ pub enum DeliverySource {
     Cast(AccountId),
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub enum ScheduleOp {
-    CallPublic,
-    EnterPrivate,
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct BoundaryDelivery<S> {
+    pub envelope: MessageEnvelope<S>,
+    pub grants: Vec<AccountId>,
+    pub pda_seeds: Vec<PdaSeed>,
+}
+
+pub type PublicDelivery = BoundaryDelivery<DeliverySource>;
+
+pub type Assumption = BoundaryDelivery<Actor>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum BoundaryStep {
+    CallPublic(PublicDelivery),
+    EnterPrivate(Assumption),
     LeavePrivate,
     ReturnPublic,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct PublicDelivery {
-    pub envelope: MessageEnvelope<DeliverySource>,
-    pub grants: Vec<AccountId>,
-    pub pda_seeds: Vec<PdaSeed>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct Assumption {
-    pub envelope: MessageEnvelope<Actor>,
-    pub grants: Vec<AccountId>,
-    pub pda_seeds: Vec<PdaSeed>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct Boundary {
-    pub public_deliveries: Vec<PublicDelivery>,
-    pub assumptions: Vec<Assumption>,
-    pub schedule: Vec<ScheduleOp>,
-}
+pub type Boundary = Vec<BoundaryStep>;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct Declared {

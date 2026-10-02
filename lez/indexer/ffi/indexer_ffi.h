@@ -28,18 +28,18 @@ typedef enum FfiPublicIdentityKind {
   Pda,
 } FfiPublicIdentityKind;
 
+typedef enum FfiBoundaryStepKind {
+  CallPublic = 0,
+  EnterPrivate,
+  LeavePrivate,
+  ReturnPublic,
+} FfiBoundaryStepKind;
+
 typedef enum FfiDeliverySourceKind {
   RootSource = 0,
   CallSource,
   CastSource,
 } FfiDeliverySourceKind;
-
-typedef enum FfiScheduleOp {
-  CallPublic = 0,
-  EnterPrivate,
-  LeavePrivate,
-  ReturnPublic,
-} FfiScheduleOp;
 
 typedef enum FfiTransactionKind {
   Public = 0,
@@ -299,14 +299,6 @@ typedef struct FfiPublicDelivery {
   FfiPdaSeedList pda_seeds;
 } FfiPublicDelivery;
 
-typedef struct FfiVec_FfiPublicDelivery {
-  struct FfiPublicDelivery *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiPublicDelivery;
-
-typedef struct FfiVec_FfiPublicDelivery FfiPublicDeliveryList;
-
 typedef struct FfiAssumption {
   struct FfiActor source;
   struct FfiActor to;
@@ -315,27 +307,23 @@ typedef struct FfiAssumption {
   FfiPdaSeedList pda_seeds;
 } FfiAssumption;
 
-typedef struct FfiVec_FfiAssumption {
-  struct FfiAssumption *entries;
+/**
+ * One step of a proof's boundary trace (`public_delivery`, meaningful only for `CallPublic`, and
+ * `assumption`, meaningful only for `EnterPrivate`).
+ */
+typedef struct FfiBoundaryStep {
+  enum FfiBoundaryStepKind kind;
+  struct FfiPublicDelivery public_delivery;
+  struct FfiAssumption assumption;
+} FfiBoundaryStep;
+
+typedef struct FfiVec_FfiBoundaryStep {
+  struct FfiBoundaryStep *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiAssumption;
+} FfiVec_FfiBoundaryStep;
 
-typedef struct FfiVec_FfiAssumption FfiAssumptionList;
-
-typedef struct FfiVec_FfiScheduleOp {
-  enum FfiScheduleOp *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiScheduleOp;
-
-typedef struct FfiVec_FfiScheduleOp FfiScheduleOpList;
-
-typedef struct FfiBoundary {
-  FfiPublicDeliveryList public_deliveries;
-  FfiAssumptionList assumptions;
-  FfiScheduleOpList schedule;
-} FfiBoundary;
+typedef struct FfiVec_FfiBoundaryStep FfiBoundaryStepList;
 
 typedef struct FfiMessageBody {
   FfiAccountId source;
@@ -376,7 +364,7 @@ typedef struct FfiVec_FfiPrivateAction FfiPrivateActionList;
 
 typedef struct FfiPrivacyPreservingMessage {
   struct FfiDeclared declared;
-  struct FfiBoundary boundary;
+  FfiBoundaryStepList boundary;
   FfiMessageBodyList casts;
   bool has_consumed_message;
   struct FfiBytes32 consumed_message;

@@ -1,5 +1,5 @@
 use indexer_service_protocol::{
-    Boundary, Declared, PrivacyPreservingMessage, PrivacyPreservingTransaction, PublicMessage,
+    BoundaryStep, Declared, PrivacyPreservingMessage, PrivacyPreservingTransaction, PublicMessage,
     PublicTransaction, TransactionEntry, WitnessSet,
 };
 use leptos::prelude::*;
@@ -117,28 +117,31 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
         public_actors,
         authorized_accounts,
     } = declared;
-    let Boundary {
-        public_deliveries,
-        assumptions,
-        schedule,
-    } = boundary;
     let private_action_count = private_actions.len();
     let public_actor_count = public_actors.len();
     let authorized_count = authorized_accounts.len();
-    let schedule_str = schedule
+    let steps_str = boundary
         .iter()
-        .map(|op| format!("{op:?}"))
+        .map(|step| match step {
+            BoundaryStep::CallPublic(_) => "CallPublic",
+            BoundaryStep::EnterPrivate(_) => "EnterPrivate",
+            BoundaryStep::LeavePrivate => "LeavePrivate",
+            BoundaryStep::ReturnPublic => "ReturnPublic",
+        })
         .collect::<Vec<_>>()
         .join(", ");
     // The public actors the private execution called, and those that called into it.
-    let delivery_receivers: Vec<_> = public_deliveries
-        .into_iter()
-        .map(|delivery| delivery.envelope.to)
-        .collect();
-    let assumption_senders: Vec<_> = assumptions
-        .into_iter()
-        .map(|assumption| assumption.envelope.source)
-        .collect();
+    let mut delivery_receivers = Vec::new();
+    let mut assumption_senders = Vec::new();
+    for step in boundary {
+        match step {
+            BoundaryStep::CallPublic(delivery) => delivery_receivers.push(delivery.envelope.to),
+            BoundaryStep::EnterPrivate(assumption) => {
+                assumption_senders.push(assumption.envelope.source);
+            }
+            BoundaryStep::LeavePrivate | BoundaryStep::ReturnPublic => {}
+        }
+    }
     let signer_nonces_str = nonces
         .iter()
         .map(ToString::to_string)
@@ -183,8 +186,8 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
                     <span class="info-value">{signer_nonces_str}</span>
                 </div>
                 <div class="info-row">
-                    <span class="info-label">"Boundary Schedule:"</span>
-                    <span class="info-value">{schedule_str}</span>
+                    <span class="info-label">"Boundary Steps:"</span>
+                    <span class="info-value">{steps_str}</span>
                 </div>
             </div>
 

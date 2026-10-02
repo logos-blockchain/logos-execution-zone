@@ -1,6 +1,6 @@
 use lee_core::{
     EncryptionScheme, Identifier, SharedSecretKey,
-    execution_state::{DeliverySource, PublicDelivery},
+    execution_state::{BoundaryStep, DeliverySource, PublicDelivery},
     program::{PrivateAccountKind, ProgramHeader, immutable_mirror_commitment},
 };
 use program_loader_core::Message as LoaderMessage;
@@ -162,16 +162,19 @@ fn a_private_account_may_act_under_two_shards_in_one_transaction() {
     assert_eq!(action.commitment, Commitment::new(&sender_id, &expected));
 
     assert_eq!(
-        output.boundary.public_deliveries,
-        vec![PublicDelivery {
-            envelope: MessageEnvelope {
-                source: DeliverySource::Call(NATIVE_TOKEN_PROGRAM_ID),
-                to: recipient,
-                message: credit,
-            },
-            grants: Vec::new(),
-            pda_seeds: Vec::new(),
-        }]
+        output.boundary,
+        vec![
+            BoundaryStep::CallPublic(PublicDelivery {
+                envelope: MessageEnvelope {
+                    source: DeliverySource::Call(NATIVE_TOKEN_PROGRAM_ID),
+                    to: recipient,
+                    message: credit,
+                },
+                grants: Vec::new(),
+                pda_seeds: Vec::new(),
+            }),
+            BoundaryStep::ReturnPublic,
+        ]
     );
 }
 
@@ -250,7 +253,7 @@ fn private_pda_witness_binding_succeeds() {
     .expect("witness-bound private PDA should succeed");
 
     assert_eq!(output.private_actions.len(), 1);
-    assert!(output.boundary.public_deliveries.is_empty());
+    assert!(output.boundary.is_empty());
 }
 
 #[test]
@@ -488,7 +491,13 @@ fn a_delegated_public_pda_is_authorized_at_settlement_but_not_exported_as_a_gran
 
     // The statement carries the seed, not a grant: a seed grant is not a signer-backed claim, so
     // settlement re-derives it.
-    let [delegated] = <[_; 1]>::try_from(output.boundary.public_deliveries.clone()).unwrap();
+    let [
+        BoundaryStep::CallPublic(delegated),
+        BoundaryStep::ReturnPublic,
+    ] = output.boundary.as_slice()
+    else {
+        panic!("the statement makes exactly one public call");
+    };
     assert_eq!(delegated.envelope.to, callee);
     assert!(delegated.grants.is_empty());
     assert_eq!(delegated.pda_seeds, vec![DELEGATED_SEED]);
@@ -1063,7 +1072,7 @@ fn shadow_program_claims_a_private_pda_it_legitimately_owns() {
 
     let (output, _proof) = result.expect("shadow program's private PDA claim should succeed");
     assert_eq!(output.private_actions.len(), 1);
-    assert!(output.boundary.public_deliveries.is_empty());
+    assert!(output.boundary.is_empty());
     assert!(
         output.program_image_claims.is_empty(),
         "a shadow program must never appear in the circuit's program_image_claims output"
@@ -1094,7 +1103,7 @@ fn shadow_program_claims_a_regular_private_account_it_legitimately_owns() {
     let (output, _proof) =
         result.expect("shadow program's regular private account claim should succeed");
     assert_eq!(output.private_actions.len(), 1);
-    assert!(output.boundary.public_deliveries.is_empty());
+    assert!(output.boundary.is_empty());
     assert!(
         output.program_image_claims.is_empty(),
         "a shadow program must never appear in the circuit's program_image_claims output"

@@ -143,7 +143,7 @@ impl From<ExecutionError> for LeeError {
             | ExecutionError::MissingAssumedDeliveries { .. }
             | ExecutionError::UnusedAssumedDeliveries
             | ExecutionError::UndeclaredAssumedSender { .. }
-            | ExecutionError::ScheduleMismatch { .. }
+            | ExecutionError::BoundaryMismatch { .. }
             | ExecutionError::AssumptionMismatch { .. }
             | ExecutionError::IncompleteBoundary => Self::InvalidProgramBehavior(error.into()),
         }

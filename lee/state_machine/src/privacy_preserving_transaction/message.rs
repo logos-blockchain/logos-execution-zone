@@ -104,7 +104,7 @@ pub mod tests {
         account::{Account, AccountId, Actor, Nonce},
         encryption::{Ciphertext, ViewingPublicKey},
         execution_state::{
-            Assumption, Boundary, Declared, DeliverySource, PublicDelivery, ScheduleOp,
+            Assumption, Boundary, BoundaryStep, Declared, DeliverySource, PublicDelivery,
         },
         program::{BlockValidityWindow, MessageEnvelope, TimestampValidityWindow},
     };
@@ -176,8 +176,8 @@ pub mod tests {
                     public_actors: vec![public],
                     authorized_accounts: vec![AccountId::new([7; 32])],
                 },
-                boundary: Boundary {
-                    public_deliveries: vec![PublicDelivery {
+                boundary: vec![
+                    BoundaryStep::CallPublic(PublicDelivery {
                         envelope: MessageEnvelope {
                             source: DeliverySource::Call(private.program_account_id),
                             to: public,
@@ -185,8 +185,8 @@ pub mod tests {
                         },
                         grants: Vec::new(),
                         pda_seeds: Vec::new(),
-                    }],
-                    assumptions: vec![Assumption {
+                    }),
+                    BoundaryStep::EnterPrivate(Assumption {
                         envelope: MessageEnvelope {
                             source: public,
                             to: private,
@@ -194,14 +194,10 @@ pub mod tests {
                         },
                         grants: Vec::new(),
                         pda_seeds: Vec::new(),
-                    }],
-                    schedule: vec![
-                        ScheduleOp::CallPublic,
-                        ScheduleOp::EnterPrivate,
-                        ScheduleOp::LeavePrivate,
-                        ScheduleOp::ReturnPublic,
-                    ],
-                },
+                    }),
+                    BoundaryStep::LeavePrivate,
+                    BoundaryStep::ReturnPublic,
+                ],
                 casts: Vec::new(),
                 consumed_message: None,
                 private_actions: vec![],
@@ -219,7 +215,8 @@ pub mod tests {
             &[6; 32],
             &[1, 0, 0, 0], // declared.authorized_accounts: one account
             &[7; 32],
-            &[1, 0, 0, 0], // boundary.public_deliveries: one delivery
+            &[4, 0, 0, 0], // boundary: four steps
+            &[0],          // BoundaryStep::CallPublic
             &[1],          // source: DeliverySource::Call
             &[8; 32],
             &[5; 32], // to
@@ -228,7 +225,7 @@ pub mod tests {
             b"o",
             &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
-            &[1, 0, 0, 0], // boundary.assumptions: one assumption
+            &[1],          // BoundaryStep::EnterPrivate
             &[5; 32],      // from
             &[6; 32],
             &[9; 32], // to
@@ -237,8 +234,8 @@ pub mod tests {
             b"a",
             &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
-            &[4, 0, 0, 0], // boundary.schedule: four ops
-            &[0, 1, 2, 3],
+            &[2],          // BoundaryStep::LeavePrivate
+            &[3],          // BoundaryStep::ReturnPublic
             &[0, 0, 0, 0], // casts: none
             &[0],          // consumed_message: None
             &[0, 0, 0, 0], // private_actions: none

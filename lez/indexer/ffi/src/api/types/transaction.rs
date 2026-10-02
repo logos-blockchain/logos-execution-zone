@@ -1,18 +1,18 @@
 use indexer_service_protocol::{
-    AccountId, Actor, Assumption, Boundary, Ciphertext, Commitment, CommitmentSetDigest, Declared,
-    DeliverySource, EncryptedAccountData, EphemeralPublicKey, FeeDeclaration, HashType,
+    AccountId, Actor, Assumption, BoundaryStep, Ciphertext, Commitment, CommitmentSetDigest,
+    Declared, DeliverySource, EncryptedAccountData, EphemeralPublicKey, FeeDeclaration, HashType,
     MessageBody, MessageEnvelope, MessageId, Nullifier, PdaSeed, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, Proof, PublicDelivery, PublicIdentity, PublicKey,
-    PublicMessage, PublicTransaction, ScheduleOp, Signature, Transaction, TransactionEntry,
-    ValidityWindow, WitnessSet,
+    PublicMessage, PublicTransaction, Signature, Transaction, TransactionEntry, ValidityWindow,
+    WitnessSet,
 };
 
 use crate::api::types::{
     FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiU128, FfiVec,
     vectors::{
-        FfiAccountIdList, FfiActorList, FfiAssumptionList, FfiMessageBodyList, FfiMessageDataList,
-        FfiNonceList, FfiPdaSeedList, FfiPrivateActionList, FfiProof, FfiPublicDeliveryList,
-        FfiPublicIdentityList, FfiScheduleOpList, FfiSignaturePubKeyList, FfiVecU8,
+        FfiAccountIdList, FfiActorList, FfiBoundaryStepList, FfiMessageBodyList,
+        FfiMessageDataList, FfiNonceList, FfiPdaSeedList, FfiPrivateActionList, FfiProof,
+        FfiPublicIdentityList, FfiSignaturePubKeyList, FfiVecU8,
     },
 };
 
@@ -338,7 +338,10 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
             hash: HashType(value.hash.data),
             message: PrivacyPreservingMessage {
                 declared: value.message.declared.into(),
-                boundary: value.message.boundary.into(),
+                boundary: {
+                    let std_vec: Vec<FfiBoundaryStep> = value.message.boundary.into();
+                    std_vec.into_iter().map(Into::into).collect()
+                },
                 casts: {
                     let std_vec: Vec<FfiMessageBody> = value.message.casts.into();
                     std_vec.into_iter().map(Into::into).collect()
@@ -554,31 +557,58 @@ impl From<FfiAssumption> for Assumption {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub enum FfiScheduleOp {
+pub enum FfiBoundaryStepKind {
     CallPublic = 0,
     EnterPrivate,
     LeavePrivate,
     ReturnPublic,
 }
 
-impl From<ScheduleOp> for FfiScheduleOp {
-    fn from(value: ScheduleOp) -> Self {
+/// One step of a proof's boundary trace (`public_delivery`, meaningful only for `CallPublic`, and
+/// `assumption`, meaningful only for `EnterPrivate`).
+#[repr(C)]
+pub struct FfiBoundaryStep {
+    pub kind: FfiBoundaryStepKind,
+    pub public_delivery: FfiPublicDelivery,
+    pub assumption: FfiAssumption,
+}
+
+impl From<BoundaryStep> for FfiBoundaryStep {
+    fn from(value: BoundaryStep) -> Self {
         match value {
-            ScheduleOp::CallPublic => Self::CallPublic,
-            ScheduleOp::EnterPrivate => Self::EnterPrivate,
-            ScheduleOp::LeavePrivate => Self::LeavePrivate,
-            ScheduleOp::ReturnPublic => Self::ReturnPublic,
+            BoundaryStep::CallPublic(delivery) => Self {
+                kind: FfiBoundaryStepKind::CallPublic,
+                public_delivery: delivery.into(),
+                assumption: empty_assumption(),
+            },
+            BoundaryStep::EnterPrivate(assumption) => Self {
+                kind: FfiBoundaryStepKind::EnterPrivate,
+                public_delivery: empty_public_delivery(),
+                assumption: assumption.into(),
+            },
+            BoundaryStep::LeavePrivate => Self {
+                kind: FfiBoundaryStepKind::LeavePrivate,
+                public_delivery: empty_public_delivery(),
+                assumption: empty_assumption(),
+            },
+            BoundaryStep::ReturnPublic => Self {
+                kind: FfiBoundaryStepKind::ReturnPublic,
+                public_delivery: empty_public_delivery(),
+                assumption: empty_assumption(),
+            },
         }
     }
 }
 
-impl From<FfiScheduleOp> for ScheduleOp {
-    fn from(value: FfiScheduleOp) -> Self {
-        match value {
-            FfiScheduleOp::CallPublic => Self::CallPublic,
-            FfiScheduleOp::EnterPrivate => Self::EnterPrivate,
-            FfiScheduleOp::LeavePrivate => Self::LeavePrivate,
-            FfiScheduleOp::ReturnPublic => Self::ReturnPublic,
+impl From<FfiBoundaryStep> for BoundaryStep {
+    fn from(value: FfiBoundaryStep) -> Self {
+        let public_delivery = PublicDelivery::from(value.public_delivery);
+        let assumption = Assumption::from(value.assumption);
+        match value.kind {
+            FfiBoundaryStepKind::CallPublic => Self::CallPublic(public_delivery),
+            FfiBoundaryStepKind::EnterPrivate => Self::EnterPrivate(assumption),
+            FfiBoundaryStepKind::LeavePrivate => Self::LeavePrivate,
+            FfiBoundaryStepKind::ReturnPublic => Self::ReturnPublic,
         }
     }
 }
@@ -614,55 +644,6 @@ impl From<FfiMessageBody> for MessageBody {
             },
             to: value.to.into(),
             message: value.message.into(),
-        }
-    }
-}
-
-#[repr(C)]
-pub struct FfiBoundary {
-    pub public_deliveries: FfiPublicDeliveryList,
-    pub assumptions: FfiAssumptionList,
-    pub schedule: FfiScheduleOpList,
-}
-
-impl From<Boundary> for FfiBoundary {
-    fn from(value: Boundary) -> Self {
-        let Boundary {
-            public_deliveries,
-            assumptions,
-            schedule,
-        } = value;
-
-        Self {
-            public_deliveries: public_deliveries
-                .into_iter()
-                .map(Into::into)
-                .collect::<Vec<_>>()
-                .into(),
-            assumptions: assumptions
-                .into_iter()
-                .map(Into::into)
-                .collect::<Vec<_>>()
-                .into(),
-            schedule: schedule
-                .into_iter()
-                .map(Into::into)
-                .collect::<Vec<_>>()
-                .into(),
-        }
-    }
-}
-
-impl From<FfiBoundary> for Boundary {
-    fn from(value: FfiBoundary) -> Self {
-        let public_deliveries: Vec<FfiPublicDelivery> = value.public_deliveries.into();
-        let assumptions: Vec<FfiAssumption> = value.assumptions.into();
-        let schedule: Vec<FfiScheduleOp> = value.schedule.into();
-
-        Self {
-            public_deliveries: public_deliveries.into_iter().map(Into::into).collect(),
-            assumptions: assumptions.into_iter().map(Into::into).collect(),
-            schedule: schedule.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -736,7 +717,7 @@ impl From<PrivateAction> for FfiPrivateAction {
 #[repr(C)]
 pub struct FfiPrivacyPreservingMessage {
     pub declared: FfiDeclared,
-    pub boundary: FfiBoundary,
+    pub boundary: FfiBoundaryStepList,
     pub casts: FfiMessageBodyList,
     pub has_consumed_message: bool,
     pub consumed_message: FfiBytes32,
@@ -763,7 +744,11 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
 
         Self {
             declared: declared.into(),
-            boundary: boundary.into(),
+            boundary: boundary
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
             casts: casts.into_iter().map(Into::into).collect::<Vec<_>>().into(),
             has_consumed_message: consumed_message.is_some(),
             consumed_message: consumed_message.map(message_id_to_ffi).unwrap_or_default(),
@@ -975,6 +960,29 @@ pub unsafe extern "C" fn free_ffi_transaction_vec(val: *mut FfiVec<FfiTransactio
     free_transaction_vec_value(*boxed);
 }
 
+fn empty_public_delivery() -> FfiPublicDelivery {
+    FfiPublicDelivery {
+        source: FfiDeliverySource {
+            kind: FfiDeliverySourceKind::RootSource,
+            program: FfiAccountId::default(),
+        },
+        to: FfiActor::default(),
+        message: Vec::new().into(),
+        grants: Vec::new().into(),
+        pda_seeds: Vec::new().into(),
+    }
+}
+
+fn empty_assumption() -> FfiAssumption {
+    FfiAssumption {
+        source: FfiActor::default(),
+        to: FfiActor::default(),
+        message: Vec::new().into(),
+        grants: Vec::new().into(),
+        pda_seeds: Vec::new().into(),
+    }
+}
+
 fn grants_to_ffi(grants: Vec<AccountId>) -> FfiAccountIdList {
     grants
         .into_iter()
@@ -1054,16 +1062,12 @@ mod tests {
             hash: HashType([4; 32]),
             message: PrivacyPreservingMessage {
                 declared: Declared::default(),
-                boundary: Boundary {
-                    public_deliveries: vec![delivery(7), delivery(8), delivery(9), delivery(7)],
-                    assumptions: vec![],
-                    schedule: vec![
-                        ScheduleOp::CallPublic,
-                        ScheduleOp::CallPublic,
-                        ScheduleOp::CallPublic,
-                        ScheduleOp::CallPublic,
-                    ],
-                },
+                boundary: vec![
+                    BoundaryStep::CallPublic(delivery(7)),
+                    BoundaryStep::CallPublic(delivery(8)),
+                    BoundaryStep::CallPublic(delivery(9)),
+                    BoundaryStep::CallPublic(delivery(7)),
+                ],
                 casts: vec![],
                 consumed_message: None,
                 nonces: vec![],
@@ -1081,10 +1085,7 @@ mod tests {
         let ffi: FfiPrivateTransactionBody = original.clone().into();
         let back: PrivacyPreservingTransaction = Box::new(ffi).into();
 
-        assert_eq!(
-            back.message.boundary.public_deliveries,
-            original.message.boundary.public_deliveries
-        );
+        assert_eq!(back.message.boundary, original.message.boundary);
     }
 
     #[test]
@@ -1180,37 +1181,35 @@ mod tests {
             hash: HashType([4; 32]),
             message: PrivacyPreservingMessage {
                 declared: Declared::default(),
-                boundary: Boundary {
-                    public_deliveries: vec![
-                        PublicDelivery {
-                            envelope: MessageEnvelope {
-                                source: DeliverySource::Root,
-                                to: actor(5, 6),
-                                message: vec![7],
-                            },
-                            grants: vec![],
-                            pda_seeds: vec![],
+                boundary: vec![
+                    BoundaryStep::CallPublic(PublicDelivery {
+                        envelope: MessageEnvelope {
+                            source: DeliverySource::Root,
+                            to: actor(5, 6),
+                            message: vec![7],
                         },
-                        PublicDelivery {
-                            envelope: MessageEnvelope {
-                                source: DeliverySource::Call(account_id(12)),
-                                to: actor(9, 10),
-                                message: vec![11],
-                            },
-                            grants: vec![account_id(15)],
-                            pda_seeds: vec![PdaSeed([16; 32])],
+                        grants: vec![],
+                        pda_seeds: vec![],
+                    }),
+                    BoundaryStep::CallPublic(PublicDelivery {
+                        envelope: MessageEnvelope {
+                            source: DeliverySource::Call(account_id(12)),
+                            to: actor(9, 10),
+                            message: vec![11],
                         },
-                        PublicDelivery {
-                            envelope: MessageEnvelope {
-                                source: DeliverySource::Cast(account_id(40)),
-                                to: actor(41, 42),
-                                message: vec![43],
-                            },
-                            grants: vec![],
-                            pda_seeds: vec![],
+                        grants: vec![account_id(15)],
+                        pda_seeds: vec![PdaSeed([16; 32])],
+                    }),
+                    BoundaryStep::CallPublic(PublicDelivery {
+                        envelope: MessageEnvelope {
+                            source: DeliverySource::Cast(account_id(40)),
+                            to: actor(41, 42),
+                            message: vec![43],
                         },
-                    ],
-                    assumptions: vec![Assumption {
+                        grants: vec![],
+                        pda_seeds: vec![],
+                    }),
+                    BoundaryStep::EnterPrivate(Assumption {
                         envelope: MessageEnvelope {
                             source: actor(17, 18),
                             to: actor(19, 20),
@@ -1218,9 +1217,10 @@ mod tests {
                         },
                         grants: vec![],
                         pda_seeds: vec![],
-                    }],
-                    schedule: vec![ScheduleOp::CallPublic],
-                },
+                    }),
+                    BoundaryStep::LeavePrivate,
+                    BoundaryStep::ReturnPublic,
+                ],
                 casts: vec![MessageBody {
                     source: account_id(23),
                     to: actor(24, 25),

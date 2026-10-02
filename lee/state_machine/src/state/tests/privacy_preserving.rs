@@ -1,4 +1,4 @@
-use lee_core::execution_state::ScheduleOp;
+use lee_core::execution_state::BoundaryStep;
 
 use super::*;
 
@@ -374,9 +374,10 @@ fn a_tampered_boundary_output_is_rejected() {
         "the unmodified transfer must verify"
     );
 
-    tx.message.execution.boundary.public_deliveries[0]
-        .envelope
-        .message[0] ^= 0xFF;
+    let BoundaryStep::CallPublic(delivery) = &mut tx.message.execution.boundary[0] else {
+        panic!("the transfer's boundary opens with its public call");
+    };
+    delivery.envelope.message[0] ^= 0xFF;
 
     assert!(matches!(
         ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0),
@@ -757,17 +758,17 @@ fn outer_turn(delivered: &Script) -> Script {
 fn a_nested_boundary_settles_both_public_writes() {
     let mut nested = NestedBoundary::prove(&outer_turn(&inner_turn()));
 
-    assert_eq!(
-        nested.tx.message.execution.boundary.schedule,
-        vec![
-            ScheduleOp::CallPublic,
-            ScheduleOp::EnterPrivate,
-            ScheduleOp::CallPublic,
-            ScheduleOp::ReturnPublic,
-            ScheduleOp::LeavePrivate,
-            ScheduleOp::ReturnPublic,
+    assert!(matches!(
+        nested.tx.message.execution.boundary.as_slice(),
+        [
+            BoundaryStep::CallPublic(_),
+            BoundaryStep::EnterPrivate(_),
+            BoundaryStep::CallPublic(_),
+            BoundaryStep::ReturnPublic,
+            BoundaryStep::LeavePrivate,
+            BoundaryStep::ReturnPublic,
         ]
-    );
+    ));
 
     nested
         .state
@@ -798,9 +799,11 @@ fn a_tampered_assumption_is_rejected() {
         "the unmodified statement must verify"
     );
 
-    nested.tx.message.execution.boundary.assumptions[0]
-        .envelope
-        .message[0] ^= 0xFF;
+    let BoundaryStep::EnterPrivate(assumption) = &mut nested.tx.message.execution.boundary[1]
+    else {
+        panic!("the nested boundary enters the private turn second");
+    };
+    assumption.envelope.message[0] ^= 0xFF;
 
     assert!(matches!(
         ValidatedStateDiff::from_privacy_preserving_transaction(&nested.tx, &nested.state, 1, 0),

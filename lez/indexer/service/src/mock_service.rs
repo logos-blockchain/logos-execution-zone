@@ -14,12 +14,12 @@ use std::{
 
 use indexer_service_protocol::{
     Account, AccountData, AccountId, AccountSummary, Actor, ActorState, BedrockStatus, Block,
-    BlockBody, BlockHeader, BlockId, Boundary, Commitment, CommitmentSetDigest, Declared,
+    BlockBody, BlockHeader, BlockId, BoundaryStep, Commitment, CommitmentSetDigest, Declared,
     DeliverySource, EncryptedAccountData, EventRecord, EventSubscriptionFilter, GetEventsFilter,
     HashType, IndexerStatus, IndexerSyncState, MessageEnvelope, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, PublicDelivery, PublicKey, PublicMessage,
-    PublicTransaction, ScheduleOp, Selector, ShardSummary, Signature, Transaction,
-    TransactionEntry, ValidityWindow, WitnessSet,
+    PublicTransaction, Selector, ShardSummary, Signature, Transaction, TransactionEntry,
+    ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -555,19 +555,15 @@ fn mock_privacy_preserving_tx(
                 public_actors: vec![to],
                 authorized_accounts: vec![],
             },
-            boundary: Boundary {
-                public_deliveries: vec![PublicDelivery {
-                    envelope: MessageEnvelope {
-                        source: DeliverySource::Root,
-                        to,
-                        message: vec![0xdd, 0xee],
-                    },
-                    grants: vec![],
-                    pda_seeds: vec![],
-                }],
-                assumptions: vec![],
-                schedule: vec![ScheduleOp::CallPublic],
-            },
+            boundary: vec![BoundaryStep::CallPublic(PublicDelivery {
+                envelope: MessageEnvelope {
+                    source: DeliverySource::Root,
+                    to,
+                    message: vec![0xdd, 0xee],
+                },
+                grants: vec![],
+                pda_seeds: vec![],
+            })],
             casts: vec![],
             consumed_message: None,
             nonces: vec![block_id as u128],

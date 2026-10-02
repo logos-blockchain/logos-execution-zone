@@ -3,14 +3,14 @@
 use lee_core::account::Nonce;
 
 use crate::{
-    Account, AccountData, AccountId, Actor, ActorState, Assumption, BedrockStatus, Block,
-    BlockBody, BlockHeader, BlockId, BlockIngestError, Boundary, Ciphertext, Commitment,
+    Account, AccountData, AccountId, Actor, ActorState, BedrockStatus, Block, BlockBody,
+    BlockHeader, BlockId, BlockIngestError, BoundaryDelivery, BoundaryStep, Ciphertext, Commitment,
     CommitmentSetDigest, CrossZoneHalt, Declared, DeliverySource, EncryptedAccountData,
     EphemeralPublicKey, EventRecord, FeeDeclaration, HashType, IndexerStatus, IndexerSyncState,
     MessageEnvelope, MessageId, Nullifier, PdaSeed, PeerHealth, PeerStatus,
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, Proof, PublicDelivery,
-    PublicIdentity, PublicKey, PublicMessage, PublicTransaction, ScheduleOp, Selector, Signature,
-    StallReason, Transaction, TransactionEntry, ValidityWindow, WitnessSet,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, Proof, PublicIdentity,
+    PublicKey, PublicMessage, PublicTransaction, Selector, Signature, StallReason, Transaction,
+    TransactionEntry, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -479,114 +479,58 @@ impl From<DeliverySource> for lee_core::execution_state::DeliverySource {
     }
 }
 
-impl From<lee_core::execution_state::ScheduleOp> for ScheduleOp {
-    fn from(value: lee_core::execution_state::ScheduleOp) -> Self {
+impl<S: Into<T>, T> From<lee_core::execution_state::BoundaryDelivery<S>> for BoundaryDelivery<T> {
+    fn from(value: lee_core::execution_state::BoundaryDelivery<S>) -> Self {
+        let lee_core::execution_state::BoundaryDelivery {
+            envelope,
+            grants,
+            pda_seeds,
+        } = value;
+        Self {
+            envelope: envelope.into(),
+            grants: grants.into_iter().map(Into::into).collect(),
+            pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl<S: Into<T>, T> From<BoundaryDelivery<S>> for lee_core::execution_state::BoundaryDelivery<T> {
+    fn from(value: BoundaryDelivery<S>) -> Self {
+        let BoundaryDelivery {
+            envelope,
+            grants,
+            pda_seeds,
+        } = value;
+        Self {
+            envelope: envelope.into(),
+            grants: grants.into_iter().map(Into::into).collect(),
+            pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<lee_core::execution_state::BoundaryStep> for BoundaryStep {
+    fn from(value: lee_core::execution_state::BoundaryStep) -> Self {
         match value {
-            lee_core::execution_state::ScheduleOp::CallPublic => Self::CallPublic,
-            lee_core::execution_state::ScheduleOp::EnterPrivate => Self::EnterPrivate,
-            lee_core::execution_state::ScheduleOp::LeavePrivate => Self::LeavePrivate,
-            lee_core::execution_state::ScheduleOp::ReturnPublic => Self::ReturnPublic,
+            lee_core::execution_state::BoundaryStep::CallPublic(delivery) => {
+                Self::CallPublic(delivery.into())
+            }
+            lee_core::execution_state::BoundaryStep::EnterPrivate(assumption) => {
+                Self::EnterPrivate(assumption.into())
+            }
+            lee_core::execution_state::BoundaryStep::LeavePrivate => Self::LeavePrivate,
+            lee_core::execution_state::BoundaryStep::ReturnPublic => Self::ReturnPublic,
         }
     }
 }
 
-impl From<ScheduleOp> for lee_core::execution_state::ScheduleOp {
-    fn from(value: ScheduleOp) -> Self {
+impl From<BoundaryStep> for lee_core::execution_state::BoundaryStep {
+    fn from(value: BoundaryStep) -> Self {
         match value {
-            ScheduleOp::CallPublic => Self::CallPublic,
-            ScheduleOp::EnterPrivate => Self::EnterPrivate,
-            ScheduleOp::LeavePrivate => Self::LeavePrivate,
-            ScheduleOp::ReturnPublic => Self::ReturnPublic,
-        }
-    }
-}
-
-impl From<lee_core::execution_state::PublicDelivery> for PublicDelivery {
-    fn from(value: lee_core::execution_state::PublicDelivery) -> Self {
-        let lee_core::execution_state::PublicDelivery {
-            envelope,
-            grants,
-            pda_seeds,
-        } = value;
-        Self {
-            envelope: envelope.into(),
-            grants: grants.into_iter().map(Into::into).collect(),
-            pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-impl From<PublicDelivery> for lee_core::execution_state::PublicDelivery {
-    fn from(value: PublicDelivery) -> Self {
-        let PublicDelivery {
-            envelope,
-            grants,
-            pda_seeds,
-        } = value;
-        Self {
-            envelope: envelope.into(),
-            grants: grants.into_iter().map(Into::into).collect(),
-            pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-impl From<lee_core::execution_state::Assumption> for Assumption {
-    fn from(value: lee_core::execution_state::Assumption) -> Self {
-        let lee_core::execution_state::Assumption {
-            envelope,
-            grants,
-            pda_seeds,
-        } = value;
-        Self {
-            envelope: envelope.into(),
-            grants: grants.into_iter().map(Into::into).collect(),
-            pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-impl From<Assumption> for lee_core::execution_state::Assumption {
-    fn from(value: Assumption) -> Self {
-        let Assumption {
-            envelope,
-            grants,
-            pda_seeds,
-        } = value;
-        Self {
-            envelope: envelope.into(),
-            grants: grants.into_iter().map(Into::into).collect(),
-            pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-impl From<lee_core::execution_state::Boundary> for Boundary {
-    fn from(value: lee_core::execution_state::Boundary) -> Self {
-        let lee_core::execution_state::Boundary {
-            public_deliveries,
-            assumptions,
-            schedule,
-        } = value;
-        Self {
-            public_deliveries: public_deliveries.into_iter().map(Into::into).collect(),
-            assumptions: assumptions.into_iter().map(Into::into).collect(),
-            schedule: schedule.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-impl From<Boundary> for lee_core::execution_state::Boundary {
-    fn from(value: Boundary) -> Self {
-        let Boundary {
-            public_deliveries,
-            assumptions,
-            schedule,
-        } = value;
-        Self {
-            public_deliveries: public_deliveries.into_iter().map(Into::into).collect(),
-            assumptions: assumptions.into_iter().map(Into::into).collect(),
-            schedule: schedule.into_iter().map(Into::into).collect(),
+            BoundaryStep::CallPublic(delivery) => Self::CallPublic(delivery.into()),
+            BoundaryStep::EnterPrivate(assumption) => Self::EnterPrivate(assumption.into()),
+            BoundaryStep::LeavePrivate => Self::LeavePrivate,
+            BoundaryStep::ReturnPublic => Self::ReturnPublic,
         }
     }
 }
@@ -650,7 +594,7 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
         } = value;
         Self {
             declared: declared.into(),
-            boundary: boundary.into(),
+            boundary: boundary.into_iter().map(Into::into).collect(),
             casts: casts.into_iter().map(Into::into).collect(),
             consumed_message: consumed_message.map(Into::into),
             nonces: nonces.iter().map(|x| x.0).collect(),
@@ -694,7 +638,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
         Ok(Self {
             execution: lee_core::PrivacyPreservingCircuitOutput {
                 declared: declared.into(),
-                boundary: boundary.into(),
+                boundary: boundary.into_iter().map(Into::into).collect(),
                 casts: casts.into_iter().map(Into::into).collect(),
                 consumed_message: consumed_message.map(Into::into),
                 private_actions,
@@ -1289,18 +1233,20 @@ mod tests {
             grants: vec![],
             pda_seeds: vec![],
         };
-        let boundary = lee_core::execution_state::Boundary {
-            public_deliveries: vec![delivery(7), delivery(8), delivery(9), delivery(7)],
-            assumptions: vec![],
-            schedule: vec![],
-        };
+        let boundary: lee_core::execution_state::Boundary = [7, 8, 9, 7]
+            .into_iter()
+            .map(|data| lee_core::execution_state::BoundaryStep::CallPublic(delivery(data)))
+            .collect();
 
-        let mirrored = Boundary::from(boundary.clone());
+        let mirrored: Vec<BoundaryStep> = boundary.clone().into_iter().map(Into::into).collect();
         let json = serde_json::to_string(&mirrored).unwrap();
-        let restored: Boundary = serde_json::from_str(&json).unwrap();
+        let restored: Vec<BoundaryStep> = serde_json::from_str(&json).unwrap();
 
         assert_eq!(
-            lee_core::execution_state::Boundary::from(restored),
+            restored
+                .into_iter()
+                .map(Into::into)
+                .collect::<lee_core::execution_state::Boundary>(),
             boundary
         );
     }
@@ -1439,8 +1385,8 @@ mod tests {
         let message = lee::privacy_preserving_transaction::message::Message {
             execution: lee_core::PrivacyPreservingCircuitOutput {
                 declared: lee_core::execution_state::Declared::default(),
-                boundary: lee_core::execution_state::Boundary {
-                    public_deliveries: vec![
+                boundary: vec![
+                    lee_core::execution_state::BoundaryStep::CallPublic(
                         lee_core::execution_state::PublicDelivery {
                             envelope: lee_core::program::MessageEnvelope {
                                 source: lee_core::execution_state::DeliverySource::Root,
@@ -1450,6 +1396,8 @@ mod tests {
                             grants: vec![],
                             pda_seeds: vec![],
                         },
+                    ),
+                    lee_core::execution_state::BoundaryStep::CallPublic(
                         lee_core::execution_state::PublicDelivery {
                             envelope: lee_core::program::MessageEnvelope {
                                 source: lee_core::execution_state::DeliverySource::Call(
@@ -1461,6 +1409,8 @@ mod tests {
                             grants: vec![account_id(14)],
                             pda_seeds: vec![lee_core::program::PdaSeed::new([15; 32])],
                         },
+                    ),
+                    lee_core::execution_state::BoundaryStep::CallPublic(
                         lee_core::execution_state::PublicDelivery {
                             envelope: lee_core::program::MessageEnvelope {
                                 source: lee_core::execution_state::DeliverySource::Cast(
@@ -1472,18 +1422,21 @@ mod tests {
                             grants: vec![],
                             pda_seeds: vec![],
                         },
-                    ],
-                    assumptions: vec![lee_core::execution_state::Assumption {
-                        envelope: lee_core::program::MessageEnvelope {
-                            source: actor(16, 17),
-                            to: actor(18, 19),
-                            message: vec![20],
+                    ),
+                    lee_core::execution_state::BoundaryStep::EnterPrivate(
+                        lee_core::execution_state::Assumption {
+                            envelope: lee_core::program::MessageEnvelope {
+                                source: actor(16, 17),
+                                to: actor(18, 19),
+                                message: vec![20],
+                            },
+                            grants: vec![],
+                            pda_seeds: vec![],
                         },
-                        grants: vec![],
-                        pda_seeds: vec![],
-                    }],
-                    schedule: vec![lee_core::execution_state::ScheduleOp::CallPublic],
-                },
+                    ),
+                    lee_core::execution_state::BoundaryStep::LeavePrivate,
+                    lee_core::execution_state::BoundaryStep::ReturnPublic,
+                ],
                 casts: vec![lee_core::program::MessageBody {
                     source: account_id(22),
                     to: actor(23, 24),

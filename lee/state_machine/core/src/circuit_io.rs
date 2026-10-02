@@ -284,7 +284,7 @@ mod tests {
         Commitment, Nullifier,
         account::{Account, AccountId, Actor},
         encryption::{Ciphertext, EphemeralPublicKey},
-        execution_state::{DeliverySource, PublicDelivery, ScheduleOp},
+        execution_state::{BoundaryStep, DeliverySource, PublicDelivery},
         program::{MessageBody, MessageEnvelope},
     };
 
@@ -296,8 +296,8 @@ mod tests {
                 public_actors: vec![public],
                 authorized_accounts: vec![AccountId::new([7; 32])],
             },
-            Boundary {
-                public_deliveries: vec![PublicDelivery {
+            vec![
+                BoundaryStep::CallPublic(PublicDelivery {
                     envelope: MessageEnvelope {
                         source: DeliverySource::Call(private.program_account_id),
                         to: public,
@@ -305,8 +305,8 @@ mod tests {
                     },
                     grants: Vec::new(),
                     pda_seeds: Vec::new(),
-                }],
-                assumptions: vec![Assumption {
+                }),
+                BoundaryStep::EnterPrivate(Assumption {
                     envelope: MessageEnvelope {
                         source: public,
                         to: private,
@@ -314,14 +314,10 @@ mod tests {
                     },
                     grants: Vec::new(),
                     pda_seeds: Vec::new(),
-                }],
-                schedule: vec![
-                    ScheduleOp::CallPublic,
-                    ScheduleOp::EnterPrivate,
-                    ScheduleOp::LeavePrivate,
-                    ScheduleOp::ReturnPublic,
-                ],
-            },
+                }),
+                BoundaryStep::LeavePrivate,
+                BoundaryStep::ReturnPublic,
+            ],
         )
     }
 
@@ -340,13 +336,14 @@ mod tests {
         };
 
         let expected: Vec<u8> = [
-            &[132, 1, 0, 0][..], // frame length: the 388 bytes below
+            &[124, 1, 0, 0][..], // frame length: the 380 bytes below
             &[1, 0, 0, 0],       // declared.public_actors: one actor
             &[5; 32],
             &[6; 32],
             &[1, 0, 0, 0], // declared.authorized_accounts: one account
             &[7; 32],
-            &[1, 0, 0, 0], // boundary.public_deliveries: one delivery
+            &[4, 0, 0, 0], // boundary: four steps
+            &[0],          // BoundaryStep::CallPublic
             &[1],          // source: DeliverySource::Call
             &[8; 32],
             &[5; 32], // to
@@ -355,7 +352,7 @@ mod tests {
             b"o",
             &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
-            &[1, 0, 0, 0], // boundary.assumptions: one assumption
+            &[1],          // BoundaryStep::EnterPrivate
             &[5; 32],      // from
             &[6; 32],
             &[9; 32], // to
@@ -364,8 +361,8 @@ mod tests {
             b"a",
             &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
-            &[4, 0, 0, 0], // boundary.schedule: four ops
-            &[0, 1, 2, 3],
+            &[2],          // BoundaryStep::LeavePrivate
+            &[3],          // BoundaryStep::ReturnPublic
             &[0, 0, 0, 0], // casts: none
             &[0],          // consumed_message: None
             &[0, 0, 0, 0], // private_actions: none
@@ -386,8 +383,8 @@ mod tests {
                 public_actors: vec![public],
                 authorized_accounts: Vec::new(),
             },
-            boundary: Boundary {
-                public_deliveries: vec![PublicDelivery {
+            boundary: vec![
+                BoundaryStep::CallPublic(PublicDelivery {
                     envelope: MessageEnvelope {
                         source: DeliverySource::Cast(AccountId::new([8; 32])),
                         to: public,
@@ -395,10 +392,9 @@ mod tests {
                     },
                     grants: Vec::new(),
                     pda_seeds: Vec::new(),
-                }],
-                assumptions: Vec::new(),
-                schedule: vec![ScheduleOp::CallPublic, ScheduleOp::ReturnPublic],
-            },
+                }),
+                BoundaryStep::ReturnPublic,
+            ],
             casts: vec![MessageBody {
                 source: AccountId::new([8; 32]),
                 to: Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32])),
@@ -412,12 +408,13 @@ mod tests {
         };
 
         let expected: Vec<u8> = [
-            &[90, 1, 0, 0][..], // frame length: the 346 bytes below
+            &[82, 1, 0, 0][..], // frame length: the 338 bytes below
             &[1, 0, 0, 0],      // declared.public_actors: one actor
             &[5; 32],
             &[6; 32],
             &[0, 0, 0, 0], // declared.authorized_accounts: none
-            &[1, 0, 0, 0], // boundary.public_deliveries: one delivery
+            &[2, 0, 0, 0], // boundary: two steps
+            &[0],          // BoundaryStep::CallPublic
             &[2],          // source: DeliverySource::Cast
             &[8; 32],
             &[5; 32], // to
@@ -426,9 +423,7 @@ mod tests {
             b"o",
             &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
-            &[0, 0, 0, 0], // boundary.assumptions: none
-            &[2, 0, 0, 0], // boundary.schedule: two ops
-            &[0, 3],
+            &[3],          // BoundaryStep::ReturnPublic
             &[1, 0, 0, 0], // casts: one message
             &[8; 32],      // source
             &[3; 32],      // to
@@ -445,18 +440,6 @@ mod tests {
         .concat();
 
         assert_eq!(output.to_bytes(), expected);
-    }
-
-    #[test]
-    fn schedule_op_tags_follow_declaration_order() {
-        for (op, tag) in [
-            (ScheduleOp::CallPublic, 0),
-            (ScheduleOp::EnterPrivate, 1),
-            (ScheduleOp::LeavePrivate, 2),
-            (ScheduleOp::ReturnPublic, 3),
-        ] {
-            assert_eq!(borsh::to_vec(&op).unwrap(), [tag]);
-        }
     }
 
     #[test]
