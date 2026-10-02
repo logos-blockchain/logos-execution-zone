@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque, hash_map::Entry};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque, hash_map::Entry};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
@@ -225,17 +225,33 @@ pub enum ExecutionResult {
     },
 }
 
-enum Visibility {
+enum AccountEntry {
     Public {
         is_authorized: bool,
-        observed: BTreeSet<AccountId>,
+        loaded: BTreeMap<AccountId, ActorState>,
     },
-    Private(usize),
+    Private {
+        witness_index: usize,
+        data: AccountData,
+    },
 }
 
-struct AccountEntry {
-    data: AccountData,
-    visibility: Visibility,
+impl AccountEntry {
+    fn staged(&self, program_account_id: AccountId) -> Option<&ActorState> {
+        match self {
+            Self::Public { loaded, .. } => loaded.get(&program_account_id),
+            Self::Private { data, .. } => Some(data.shard(program_account_id)),
+        }
+    }
+
+    fn stage(&mut self, program_account_id: AccountId, state: ActorState) {
+        match self {
+            Self::Public { loaded, .. } => {
+                loaded.insert(program_account_id, state);
+            }
+            Self::Private { data, .. } => data.set_shard(program_account_id, state),
+        }
+    }
 }
 
 enum Item {
@@ -358,9 +374,9 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 };
                 (
                     account_id,
-                    AccountEntry {
+                    AccountEntry::Private {
+                        witness_index: index,
                         data,
-                        visibility: Visibility::Private(index),
                     },
                 )
             })
@@ -374,13 +390,12 @@ impl<'witnesses> ExecutionState<'witnesses> {
             if !public_actors.insert(*actor) {
                 return Err(ExecutionError::DuplicatePublicActor { actor: *actor });
             }
-            accounts.entry(account_id).or_insert_with(|| AccountEntry {
-                data: AccountData::default(),
-                visibility: Visibility::Public {
+            accounts
+                .entry(account_id)
+                .or_insert_with(|| AccountEntry::Public {
                     is_authorized: declared.authorized_accounts.contains(&account_id),
-                    observed: BTreeSet::new(),
-                },
-            });
+                    loaded: BTreeMap::new(),
+                });
         }
         // Public seed grants land only at declared, proof-bound addresses, so none can conflict.
         if let Some(account_id) = pda_family_binding
@@ -562,15 +577,11 @@ impl<'witnesses> ExecutionState<'witnesses> {
         if self.public_actors.contains(&to) {
             return self.deliver_public(delivery, backend);
         }
-        match (
-            &self.mode,
-            self.accounts
-                .get(&to.account_id)
-                .map(|entry| &entry.visibility),
-        ) {
-            (ModeState::Derive { .. } | ModeState::Record { .. }, Some(Visibility::Private(_))) => {
-                self.deliver_private(delivery, backend)
-            }
+        match (&self.mode, self.accounts.get(&to.account_id)) {
+            (
+                ModeState::Derive { .. } | ModeState::Record { .. },
+                Some(AccountEntry::Private { .. }),
+            ) => self.deliver_private(delivery, backend),
             (ModeState::Check { .. }, None) => Ok(self.check_assumption(&delivery)?),
             _ => Err(ExecutionError::UndeclaredActor { actor: to }.into()),
         }
@@ -702,18 +713,19 @@ impl<'witnesses> ExecutionState<'witnesses> {
             .accounts
             .get_mut(&actor.account_id)
             .expect("an authorized actor has an entry");
-        if let Visibility::Public { observed, .. } = &mut entry.visibility
-            && !observed.contains(&actor.program_account_id)
+        if let AccountEntry::Public { loaded, .. } = entry
+            && !loaded.contains_key(&actor.program_account_id)
         {
-            let shard = backend.public_shard(actor)?;
-            observed.insert(actor.program_account_id);
-            entry.data.set_shard(actor.program_account_id, shard);
+            loaded.insert(actor.program_account_id, backend.public_shard(actor)?);
         }
         let input = ReceiveInput {
             receiver: actor,
             origin: delivery.envelope.source.origin(),
             is_authorized,
-            pre_state: entry.data.shard(actor.program_account_id).clone(),
+            pre_state: entry
+                .staged(actor.program_account_id)
+                .expect("a delivered actor's state is loaded")
+                .clone(),
             message: delivery.envelope.message,
         };
 
@@ -740,8 +752,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
             self.accounts
                 .get_mut(&actor.account_id)
                 .expect("an authorized actor has an entry")
-                .data
-                .set_shard(actor.program_account_id, data);
+                .stage(actor.program_account_id, data);
         }
         if matches!(self.mode, ModeState::Live | ModeState::Check { .. }) {
             self.events.extend(
@@ -792,9 +803,9 @@ impl<'witnesses> ExecutionState<'witnesses> {
             .accounts
             .get(&account_id)
             .ok_or(ExecutionError::UndeclaredActor { actor })?;
-        let (credential, granted) = match entry.visibility {
-            Visibility::Public { is_authorized, .. } => (
-                is_authorized,
+        let (credential, granted) = match entry {
+            AccountEntry::Public { is_authorized, .. } => (
+                *is_authorized,
                 caller_account_id.and_then(|caller| {
                     delivery
                         .pda_seeds
@@ -803,8 +814,8 @@ impl<'witnesses> ExecutionState<'witnesses> {
                         .map(|seed| (caller, *seed))
                 }),
             ),
-            Visibility::Private(index) => {
-                let witness = &self.witnesses[index];
+            AccountEntry::Private { witness_index, .. } => {
+                let witness = &self.witnesses[*witness_index];
                 (
                     matches!(witness.kind, WitnessKind::Regular { ask: Some(_) }),
                     private_seed_grant(caller_account_id, &delivery.pda_seeds, witness),
@@ -831,9 +842,10 @@ impl<'witnesses> ExecutionState<'witnesses> {
 
     #[must_use]
     pub fn runs_privately(&self, account_id: AccountId) -> bool {
-        self.accounts
-            .get(&account_id)
-            .is_some_and(|entry| matches!(entry.visibility, Visibility::Private(_)))
+        matches!(
+            self.accounts.get(&account_id),
+            Some(AccountEntry::Private { .. })
+        )
     }
 
     #[must_use]
@@ -847,13 +859,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
         account_id: AccountId,
         program_account_id: AccountId,
     ) -> Option<&ActorState> {
-        let entry = self.accounts.get(&account_id)?;
-        match &entry.visibility {
-            Visibility::Public { observed, .. } if !observed.contains(&program_account_id) => None,
-            Visibility::Public { .. } | Visibility::Private(_) => {
-                Some(entry.data.shard(program_account_id))
-            }
-        }
+        self.accounts.get(&account_id)?.staged(program_account_id)
     }
 
     fn finish(self) -> ExecutionOutcome {
@@ -873,8 +879,9 @@ impl<'witnesses> ExecutionState<'witnesses> {
             ModeState::Record { boundary, .. } => ExecutionResult::Recorded {
                 private_accounts: accounts
                     .into_iter()
-                    .filter_map(|(account_id, AccountEntry { data, visibility })| {
-                        matches!(visibility, Visibility::Private(_)).then_some((account_id, data))
+                    .filter_map(|(account_id, entry)| match entry {
+                        AccountEntry::Private { data, .. } => Some((account_id, data)),
+                        AccountEntry::Public { .. } => None,
                     })
                     .collect(),
                 boundary,
@@ -883,17 +890,12 @@ impl<'witnesses> ExecutionState<'witnesses> {
             ModeState::Live | ModeState::Check { .. } => {
                 let mut public = Vec::new();
                 for actor in declared.public_actors {
-                    let Some(AccountEntry {
-                        mut data,
-                        visibility: Visibility::Public { observed, .. },
-                    }) = accounts.remove(&actor.account_id)
+                    let Some(AccountEntry::Public { loaded, .. }) =
+                        accounts.remove(&actor.account_id)
                     else {
                         continue;
                     };
-                    for program in observed {
-                        data.shards.entry(program).or_default();
-                    }
-                    public.push((actor.account_id, data));
+                    public.push((actor.account_id, AccountData { shards: loaded }));
                 }
                 ExecutionResult::Settled {
                     public,
