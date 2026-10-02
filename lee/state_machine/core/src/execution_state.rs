@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque, hash_map::Entry};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
@@ -350,7 +350,7 @@ pub struct ExecutionState<'witnesses> {
     public_actors: HashSet<Actor>,
     accounts: HashMap<AccountId, AccountEntry>,
     pda_family_binding: HashMap<(AccountId, PdaSeed), AccountId>,
-    pending: VecDeque<Item>,
+    pending: Vec<Item>,
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
     mode: ModeState,
@@ -491,7 +491,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
             public_actors,
             accounts,
             pda_family_binding,
-            pending: VecDeque::from([first]),
+            pending: vec![first],
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
             mode,
@@ -504,7 +504,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
         mut self,
         environment: &mut E,
     ) -> Result<ExecutionOutcome, E::Error> {
-        while let Some(item) = self.pending.pop_front() {
+        while let Some(item) = self.pending.pop() {
             match item {
                 Item::Deliver(delivery) => self.deliver(*delivery, environment)?,
                 Item::ClosePublic => self.close(BoundaryStep::ReturnPublic)?,
@@ -573,9 +573,9 @@ impl<'witnesses> ExecutionState<'witnesses> {
                     pda_seeds: pda_seeds.clone(),
                 };
                 step_past(cursor);
-                self.pending.push_front(Item::Continue { root });
-                self.pending.push_front(Item::ClosePublic);
-                self.pending.push_front(Item::Deliver(Box::new(delivery)));
+                self.pending.push(Item::Continue { root });
+                self.pending.push(Item::ClosePublic);
+                self.pending.push(Item::Deliver(Box::new(delivery)));
                 Ok(())
             }
             (None, true) | (Some(BoundaryStep::LeavePrivate), false) => Ok(()),
@@ -648,7 +648,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 }
                 ModeState::Record { boundary, .. } => {
                     boundary.push(BoundaryStep::EnterPrivate(assumption));
-                    self.pending.push_front(Item::ClosePrivate);
+                    self.pending.push(Item::ClosePrivate);
                 }
                 ModeState::Live | ModeState::Check { .. } => {
                     unreachable!("only a derivation or a record executes private turns")
@@ -676,8 +676,8 @@ impl<'witnesses> ExecutionState<'witnesses> {
             return Err(ExecutionError::AssumptionMismatch { index });
         }
         step_past(cursor);
-        self.pending.push_front(Item::ClosePrivate);
-        self.pending.push_front(Item::Continue { root: false });
+        self.pending.push(Item::ClosePrivate);
+        self.pending.push(Item::Continue { root: false });
         Ok(())
     }
 
@@ -701,7 +701,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 {
                     open.push(groups.len());
                     groups.push(Vec::new());
-                    self.pending.push_front(Item::ClosePublic);
+                    self.pending.push(Item::ClosePublic);
                 }
                 return self.execute(delivery, environment);
             }
@@ -715,7 +715,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
             .get(index)
             .ok_or(ExecutionError::MissingAssumedDeliveries { index })?;
         step_past(next_group);
-        self.pending.push_front(Item::ClosePublic);
+        self.pending.push(Item::ClosePublic);
         for Assumption {
             envelope,
             grants,
@@ -728,14 +728,13 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 }
                 .into());
             }
-            self.pending
-                .push_front(Item::Deliver(Box::new(Delivery::sent(
-                    envelope.source,
-                    envelope.to,
-                    envelope.message.clone(),
-                    grants.iter().copied().collect(),
-                    pda_seeds.clone(),
-                ))));
+            self.pending.push(Item::Deliver(Box::new(Delivery::sent(
+                envelope.source,
+                envelope.to,
+                envelope.message.clone(),
+                grants.iter().copied().collect(),
+                pda_seeds.clone(),
+            ))));
         }
         Ok(())
     }
@@ -824,14 +823,13 @@ impl<'witnesses> ExecutionState<'witnesses> {
             pda_seeds,
         } in transition.response.calls.into_iter().rev()
         {
-            self.pending
-                .push_front(Item::Deliver(Box::new(Delivery::sent(
-                    actor,
-                    to,
-                    message,
-                    grants.clone(),
-                    pda_seeds,
-                ))));
+            self.pending.push(Item::Deliver(Box::new(Delivery::sent(
+                actor,
+                to,
+                message,
+                grants.clone(),
+                pda_seeds,
+            ))));
         }
         Ok(())
     }
