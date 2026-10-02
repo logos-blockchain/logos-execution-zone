@@ -31,7 +31,7 @@ use lee_core::{
     account::{Actor, Nonce},
     execution_state::TransactionEntry,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
-    program::{MessageData, MessageId, StoredMessage},
+    program::{MessageData, MessageRef, StoredMessage},
 };
 use log::warn;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
@@ -640,11 +640,12 @@ impl WalletCore {
             .await
     }
 
-    pub async fn find_pending_message(&self, id: MessageId) -> Result<Option<StoredMessage>> {
+    pub async fn find_pending_message(&self, sequence: u128) -> Result<Option<StoredMessage>> {
         Ok(self
-            .pending_messages_where(|record| record.id() == id)
+            .get_pending_messages(sequence, 1)
             .await?
-            .pop())
+            .into_iter()
+            .find(|record| record.sequence == sequence))
     }
 
     async fn pending_messages_where(
@@ -965,10 +966,7 @@ impl WalletCore {
             None => {
                 let simulation = Simulation {
                     public_shards: acc_manager.public_shards(),
-                    proven_public_accounts: identities
-                        .iter()
-                        .map(PublicIdentity::account_id)
-                        .collect(),
+                    identities: identities.clone(),
                 };
                 tokio::task::spawn_blocking(move || {
                     lee::execute_and_prove(input, &simulation, &programs)
@@ -1064,7 +1062,7 @@ impl WalletCore {
     async fn send_public(
         &self,
         accounts: Vec<AccountMention>,
-        root: TransactionEntry<MessageId>,
+        root: TransactionEntry<MessageRef>,
         identities: Vec<PublicIdentity>,
         payer: Option<AccountId>,
         tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
@@ -1210,7 +1208,7 @@ impl WalletCore {
         };
         self.send_public(
             vec![identity.select_program_shard(to.program_account_id)],
-            TransactionEntry::Cast(record.id()),
+            TransactionEntry::Cast(record.reference()),
             evidence.into_iter().collect(),
             payer,
             |_| Ok(()),

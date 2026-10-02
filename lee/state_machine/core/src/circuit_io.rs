@@ -8,7 +8,7 @@ use crate::{
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
     execution_state::{Boundary, Delivery, PublicExecutionContext, TransactionEntry},
     program::{
-        BlockValidityWindow, MessageBody, MessageId, PdaSeed, ProgramHeader, ProgramId, Response,
+        BlockValidityWindow, MessageBody, MessageRef, PdaSeed, ProgramHeader, ProgramId, Response,
         StoredMessage, TimestampValidityWindow, immutable_mirror_commitment,
     },
 };
@@ -120,7 +120,7 @@ impl ProvingInput {
     }
 
     #[must_use]
-    pub fn entry(&self) -> Option<TransactionEntry<MessageId>> {
+    pub fn entry(&self) -> Option<TransactionEntry<MessageRef>> {
         match &self.root {
             TransactionEntry::Call { to, message } => {
                 self.root_is_public().then(|| TransactionEntry::Call {
@@ -128,7 +128,7 @@ impl ProvingInput {
                     message: message.clone(),
                 })
             }
-            TransactionEntry::Cast(record) => Some(TransactionEntry::Cast(record.id())),
+            TransactionEntry::Cast(record) => Some(TransactionEntry::Cast(record.reference())),
         }
     }
 
@@ -264,7 +264,7 @@ pub struct PrivacyPreservingCircuitOutput {
     pub boundary: Boundary,
     pub casts: Vec<MessageBody>,
     /// How the transaction starts, as far as the proof reveals it: `None` for a private call.
-    pub entry: Option<TransactionEntry<MessageId>>,
+    pub entry: Option<TransactionEntry<MessageRef>>,
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
@@ -312,7 +312,7 @@ mod tests {
         account::{Account, AccountId, Actor},
         encryption::{Ciphertext, EphemeralPublicKey},
         execution_state::{BoundaryStep, Delivery},
-        program::{MessageBody, MessageEnvelope},
+        program::{MessageBody, MessageDigest, MessageEnvelope},
     };
 
     fn pinned_statement() -> (PublicExecutionContext, Boundary) {
@@ -415,7 +415,10 @@ mod tests {
                 to: Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32])),
                 message: b"p".to_vec(),
             }],
-            entry: Some(TransactionEntry::Cast(MessageId::new([7; 32]))),
+            entry: Some(TransactionEntry::Cast(MessageRef {
+                sequence: 9,
+                digest: MessageDigest::new([7; 32]),
+            })),
             private_actions: Vec::new(),
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
@@ -423,7 +426,7 @@ mod tests {
         };
 
         let expected: Vec<u8> = [
-            &[227, 0, 0, 0][..], // frame length: the 227 bytes below
+            &[243, 0, 0, 0][..], // frame length: the 243 bytes below
             &[1, 0, 0, 0],       // context.actors: one actor
             &[5; 32],
             &[6; 32],
@@ -435,11 +438,13 @@ mod tests {
             &[4; 32],
             &[1, 0, 0, 0], // message
             b"p",
-            &[1], // entry: Some
-            &[1], // TransactionEntry::Cast
-            &[7; 32],
-            &[0, 0, 0, 0], // private_actions: none
-            &[0, 0],       // block_validity_window: from None, to None
+            &[1],                                              // entry: Some
+            &[1],                                              // TransactionEntry::Cast
+            &[9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], // sequence
+            &[7; 32],                                          // digest
+            &[0, 0, 0, 0],                                     // private_actions: none
+            &[0, 0],                                           /* block_validity_window: from
+                                                                * None, to None */
             &[0, 0],       // timestamp_validity_window: from None, to None
             &[0, 0, 0, 0], // program_image_claims: none
         ]

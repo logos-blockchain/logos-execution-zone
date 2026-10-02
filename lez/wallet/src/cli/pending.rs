@@ -1,10 +1,7 @@
 use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use lee::{AccountId, PublicIdentity, privacy_preserving_transaction::circuit::ProgramCatalog};
-use lee_core::{
-    native_token::NATIVE_TOKEN_PROGRAM_ID,
-    program::{MessageId, PdaSeed},
-};
+use lee_core::{native_token::NATIVE_TOKEN_PROGRAM_ID, program::PdaSeed};
 
 use crate::{
     AccDecodeData::Decode,
@@ -24,9 +21,9 @@ pub enum PendingSubcommand {
     /// A public destination whose key the wallet holds signs and pays the fee, unless `payer`
     /// pays it instead. A public PDA destination needs `payer`, `pda_program` and `pda_seed`.
     Receive {
-        /// `id` - valid 32 byte base58 string.
+        /// `sequence` - the pending message's sequence number.
         #[arg(long)]
-        id: String,
+        sequence: u128,
         /// Either 32 byte base58 account id string with privacy prefix or a label.
         #[arg(long)]
         payer: Option<CliAccountMention>,
@@ -49,8 +46,7 @@ impl WalletSubcommand for PendingSubcommand {
             Self::List => {
                 for record in wallet_core.owned_pending_messages().await? {
                     println!(
-                        "Message {}: sequence {}, to {} at program {}, from program {}, {} bytes",
-                        AccountId::new(*record.id().as_bytes()),
+                        "Message {}: to {} at program {}, from program {}, {} bytes",
                         record.sequence,
                         record.body.to.account_id,
                         record.body.to.program_account_id,
@@ -61,16 +57,11 @@ impl WalletSubcommand for PendingSubcommand {
                 Ok(SubcommandReturnValue::Empty)
             }
             Self::Receive {
-                id,
+                sequence,
                 payer,
                 pda_program,
                 pda_seed,
             } => {
-                let id = MessageId::new(
-                    id.parse::<AccountId>()
-                        .context("Message id must be a valid 32 byte base58 string")?
-                        .into_value(),
-                );
                 let payer = match payer
                     .map(|payer| payer.resolve(wallet_core.storage()))
                     .transpose()?
@@ -93,9 +84,9 @@ impl WalletSubcommand for PendingSubcommand {
                     }),
                 };
                 let record = wallet_core
-                    .find_pending_message(id)
+                    .find_pending_message(sequence)
                     .await?
-                    .context("No pending message with this id")?;
+                    .context("No pending message with this sequence")?;
                 let to = record.body.to;
                 let programs = receipt_programs(to.program_account_id)?;
 

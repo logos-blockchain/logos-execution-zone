@@ -497,7 +497,7 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
 }
 
 #[test]
-fn stored_message_id_matches_pinned_value() {
+fn stored_message_digest_matches_pinned_value() {
     let record = StoredMessage {
         sequence: 7,
         body: MessageBody {
@@ -506,15 +506,15 @@ fn stored_message_id_matches_pinned_value() {
             message: b"m".to_vec(),
         },
     };
-    let expected = MessageId::new([
-        18, 79, 162, 189, 144, 82, 236, 102, 13, 249, 53, 102, 25, 58, 13, 193, 29, 158, 189, 139,
-        26, 164, 42, 72, 252, 78, 151, 246, 254, 209, 91, 24,
+    let expected = MessageDigest::new([
+        68, 198, 156, 22, 154, 169, 242, 234, 24, 198, 217, 1, 26, 59, 6, 145, 61, 226, 134, 128,
+        169, 93, 134, 241, 23, 241, 191, 9, 86, 240, 147, 136,
     ]);
-    assert_eq!(record.id(), expected);
+    assert_eq!(record.digest(), expected);
 }
 
 #[test]
-fn stored_message_id_differs_for_different_sequence() {
+fn stored_message_digest_differs_for_different_sequence() {
     let record = |sequence| StoredMessage {
         sequence,
         body: MessageBody {
@@ -523,5 +523,5 @@ fn stored_message_id_differs_for_different_sequence() {
             message: b"m".to_vec(),
         },
     };
-    assert_ne!(record(0).id(), record(1).id());
+    assert_ne!(record(0).digest(), record(1).digest());
 }

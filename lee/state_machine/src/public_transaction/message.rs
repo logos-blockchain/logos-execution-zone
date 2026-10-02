@@ -2,7 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{Actor, Nonce},
     execution_state::TransactionEntry,
-    program::{MessageData, MessageId, PdaSeed},
+    program::{MessageData, MessageRef, PdaSeed},
 };
 use sha2::{Digest as _, Sha256};
 
@@ -28,7 +28,7 @@ impl PublicIdentity {
 
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
-    pub root: TransactionEntry<MessageId>,
+    pub root: TransactionEntry<MessageRef>,
     pub public_actors: Vec<Actor>,
     pub nonces: Vec<Nonce>,
     /// The fee declaration, or `None` for a fee-exempt (system) transaction.
@@ -58,7 +58,7 @@ impl std::fmt::Debug for Message {
 impl Message {
     #[must_use]
     pub const fn new(
-        root: TransactionEntry<MessageId>,
+        root: TransactionEntry<MessageRef>,
         public_actors: Vec<Actor>,
         nonces: Vec<Nonce>,
         fee: Option<FeeDeclaration>,
@@ -154,7 +154,7 @@ mod tests {
     use lee_core::{
         account::{AccountId, Actor, Nonce},
         execution_state::TransactionEntry,
-        program::MessageId,
+        program::{MessageDigest, MessageRef},
     };
     use sha2::{Digest as _, Sha256};
 
@@ -190,7 +190,10 @@ mod tests {
     fn a_public_message_with_a_receipt_root_has_a_pinned_layout() {
         let to = Actor::new(AccountId::new([42; 32]), AccountId::new([0; 32]));
         let message = Message::new(
-            TransactionEntry::Cast(MessageId::new([9; 32])),
+            TransactionEntry::Cast(MessageRef {
+                sequence: 3,
+                digest: MessageDigest::new([9; 32]),
+            }),
             vec![to],
             Vec::new(),
             None,
@@ -198,9 +201,10 @@ mod tests {
         );
 
         let expected: Vec<u8> = [
-            &[1][..],      // root: TransactionEntry::Cast
-            &[9; 32],      // message id
-            &[1, 0, 0, 0], // public_actors: one actor
+            &[1][..],                                          // root: TransactionEntry::Cast
+            &[3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], // sequence
+            &[9; 32],                                          // digest
+            &[1, 0, 0, 0],                                     // public_actors: one actor
             &[42; 32],
             &[0; 32],
             &[0, 0, 0, 0], // nonces: none

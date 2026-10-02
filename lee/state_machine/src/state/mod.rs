@@ -6,7 +6,7 @@ use lee_core::{
     Timestamp,
     account::{Account, AccountId, ActorState},
     program::{
-        MessageId, PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramId, ProgramSegment,
+        MessageRef, PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramId, ProgramSegment,
         StoredMessage, TransactionEvent, get_program_via, immutable_mirror_commitment,
     },
 };
@@ -114,7 +114,6 @@ impl BorshDeserialize for NullifierSet {
 #[cfg_attr(test, derive(Debug))]
 struct PendingMessages {
     records: BTreeMap<u128, StoredMessage>,
-    ids: BTreeMap<MessageId, u128>,
     next_sequence: u128,
 }
 
@@ -300,9 +299,7 @@ impl V03State {
             published,
         } = diff.into_state_diff();
         ensure!(
-            consumed
-                .iter()
-                .all(|id| self.pending_messages.ids.contains_key(id)),
+            consumed.is_none_or(|reference| self.pending_message(reference).is_some()),
             LeeError::InvalidInput("A consumed message is no longer pending".into())
         );
         ensure!(
@@ -324,10 +321,8 @@ impl V03State {
         }
         self.private_state.0.extend(&new_commitments);
         self.private_state.1.extend(&new_nullifiers);
-        for id in consumed {
-            if let Some(sequence) = self.pending_messages.ids.remove(&id) {
-                self.pending_messages.records.remove(&sequence);
-            }
+        if let Some(reference) = consumed {
+            self.pending_messages.records.remove(&reference.sequence);
         }
         for body in published {
             let record = StoredMessage {
@@ -338,9 +333,6 @@ impl V03State {
                 .sequence
                 .checked_add(1)
                 .expect("the message sequence was checked to have room");
-            self.pending_messages
-                .ids
-                .insert(record.id(), record.sequence);
             self.pending_messages
                 .records
                 .insert(record.sequence, record);
@@ -389,9 +381,11 @@ impl V03State {
     }
 
     #[must_use]
-    pub fn pending_message(&self, id: MessageId) -> Option<&StoredMessage> {
-        let sequence = self.pending_messages.ids.get(&id)?;
-        self.pending_messages.records.get(sequence)
+    pub fn pending_message(&self, reference: MessageRef) -> Option<&StoredMessage> {
+        self.pending_messages
+            .records
+            .get(&reference.sequence)
+            .filter(|record| record.digest() == reference.digest)
     }
 
     pub fn pending_messages_from(

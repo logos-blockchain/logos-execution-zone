@@ -261,9 +261,9 @@ impl AccountId {
     BorshSerialize,
     BorshDeserialize,
 )]
-pub struct MessageId([u8; 32]);
+pub struct MessageDigest([u8; 32]);
 
-impl MessageId {
+impl MessageDigest {
     #[must_use]
     pub const fn new(value: [u8; 32]) -> Self {
         Self(value)
@@ -273,6 +273,23 @@ impl MessageId {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    BorshSerialize,
+    BorshDeserialize,
+)]
+pub struct MessageRef {
+    pub sequence: u128,
+    pub digest: MessageDigest,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -292,23 +309,31 @@ pub struct StoredMessage {
 
 impl StoredMessage {
     #[must_use]
-    pub fn id(&self) -> MessageId {
+    pub fn digest(&self) -> MessageDigest {
         use risc0_zkvm::sha::{Impl, Sha256 as _};
-        const MESSAGE_ID_PREFIX: &[u8; 32] =
-            b"/LEE/v0.3/MessageId/\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+        const MESSAGE_DIGEST_PREFIX: &[u8; 32] =
+            b"/LEE/v0.3/MessageDigest/\x00\x00\x00\x00\x00\x00\x00\x00";
 
         let bytes = [
-            MESSAGE_ID_PREFIX.as_slice(),
+            MESSAGE_DIGEST_PREFIX.as_slice(),
             &self.sequence.to_le_bytes(),
             &borsh::to_vec(&self.body).expect("borsh serialization is infallible"),
         ]
         .concat();
-        MessageId(
+        MessageDigest(
             Impl::hash_bytes(&bytes)
                 .as_bytes()
                 .try_into()
                 .expect("Hash output must be exactly 32 bytes long"),
         )
+    }
+
+    #[must_use]
+    pub fn reference(&self) -> MessageRef {
+        MessageRef {
+            sequence: self.sequence,
+            digest: self.digest(),
+        }
     }
 }
 

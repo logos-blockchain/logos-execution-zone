@@ -12,7 +12,9 @@ use lee_core::{
         PublicExecutionContext, PublicOutcome, PublicPart, TransactionEntry, TurnView,
         WholeTransaction,
     },
-    program::{MessageBody, MessageId, PROGRAM_LOADER_ACCOUNT_ID, StoredMessage, TransactionEvent},
+    program::{
+        MessageBody, MessageRef, PROGRAM_LOADER_ACCOUNT_ID, StoredMessage, TransactionEvent,
+    },
 };
 use public_backend::PublicBackend;
 
@@ -32,7 +34,7 @@ pub struct StateDiff {
     pub new_commitments: Vec<Commitment>,
     pub new_nullifiers: Vec<Nullifier>,
     pub events: Vec<TransactionEvent>,
-    pub consumed: Vec<MessageId>,
+    pub consumed: Option<MessageRef>,
     pub published: Vec<MessageBody>,
 }
 
@@ -171,7 +173,7 @@ impl ValidatedStateDiff {
                 new_commitments: Vec::new(),
                 new_nullifiers: Vec::new(),
                 events: Vec::new(),
-                consumed: Vec::new(),
+                consumed: None,
                 published: Vec::new(),
             }),
             // A non-chargeable failure is a structural defect a correct proposer
@@ -250,7 +252,7 @@ impl ValidatedStateDiff {
         reason = "the execution core threads the full invocation context"
     )]
     fn execute_authorized(
-        root: TransactionEntry<MessageId>,
+        root: TransactionEntry<MessageRef>,
         public_actors: &[Actor],
         authorized: &HashSet<AccountId>,
         nonce_bearers: Vec<AccountId>,
@@ -261,28 +263,21 @@ impl ValidatedStateDiff {
         cycle_budget: u64,
         cycles_used: &mut u64,
     ) -> Result<Self, LeeError> {
-        let (root, consumed_message) = match root {
+        let context =
+            PublicExecutionContext::new(public_actors.to_vec(), authorized.iter().copied());
+        let (root, consumed) = match root {
             TransactionEntry::Call { to, message } => {
                 (TransactionEntry::Call { to, message }, None)
             }
-            TransactionEntry::Cast(id) => {
-                let record = state
-                    .pending_message(id)
-                    .ok_or_else(|| LeeError::InvalidInput("Root message is not pending".into()))?;
-                (TransactionEntry::Cast(record.clone()), Some(id))
+            TransactionEntry::Cast(reference) => {
+                let record = admit_receipt(state, reference, &context, identities)?;
+                (TransactionEntry::Cast(record.clone()), Some(reference))
             }
         };
-        let context =
-            PublicExecutionContext::new(public_actors.to_vec(), authorized.iter().copied());
         ensure!(
             public_actors.contains(&root.destination()),
             LeeError::InvalidInput("Root actor is not declared".into())
         );
-        if let Some(record) = root.cast() {
-            admit_public_receipt(record, &context, |account_id| {
-                identities.contains(&account_id) || state.is_designated_public_account(account_id)
-            })?;
-        }
         let request = WholeTransaction::new(context, root, &[])
             .map_err(|error| LeeError::InvalidInput(error.to_string()))?;
         let settled = settle(
@@ -296,7 +291,7 @@ impl ValidatedStateDiff {
 
         Ok(Self(StateDiff {
             signer_account_ids: nonce_bearers,
-            consumed: consumed_message.into_iter().collect(),
+            consumed,
             ..settled
         }))
     }
@@ -388,24 +383,22 @@ impl ValidatedStateDiff {
         state.check_nullifiers_are_valid(&nullifiers)?;
 
         // 7. Entry: a public root runs here; a receipt consumes its pending message either way.
-        let (root, consumed_message) = match execution.entry.clone() {
+        let (root, consumed) = match execution.entry.clone() {
             None => (None, None),
             Some(TransactionEntry::Call { to, message: data }) => {
                 (Some(TransactionEntry::Call { to, message: data }), None)
             }
-            Some(TransactionEntry::Cast(id)) => {
-                let record = state.pending_message(id).ok_or_else(|| {
-                    LeeError::InvalidInput("A consumed message is not pending".into())
-                })?;
-                let identities = identity_account_ids(&message.identities);
-                admit_public_receipt(record, &execution.context, |account_id| {
-                    identities.contains(&account_id)
-                        || state.is_designated_public_account(account_id)
-                })?;
+            Some(TransactionEntry::Cast(reference)) => {
+                let record = admit_receipt(
+                    state,
+                    reference,
+                    &execution.context,
+                    &identity_account_ids(&message.identities),
+                )?;
                 let runs_publicly = execution.context.actors.contains(&record.body.to);
                 (
                     runs_publicly.then(|| TransactionEntry::Cast(record.clone())),
-                    Some(id),
+                    Some(reference),
                 )
             }
         };
@@ -432,7 +425,7 @@ impl ValidatedStateDiff {
                 .chain(settled.new_commitments)
                 .collect(),
             new_nullifiers,
-            consumed: consumed_message.into_iter().collect(),
+            consumed,
             ..settled
         }))
     }
@@ -493,6 +486,21 @@ fn catch_program_loader_panic<T>(run: impl FnOnce() -> T) -> Result<T, LeeError>
             .unwrap_or_else(|| "program_loader panicked".to_owned());
         LeeError::ProgramExecutionFailed(message)
     })
+}
+
+fn admit_receipt<'state>(
+    state: &'state V03State,
+    reference: MessageRef,
+    context: &PublicExecutionContext,
+    identities: &HashSet<AccountId>,
+) -> Result<&'state StoredMessage, LeeError> {
+    let record = state
+        .pending_message(reference)
+        .ok_or_else(|| LeeError::InvalidInput("A consumed message is not pending".into()))?;
+    admit_public_receipt(record, context, |account_id| {
+        identities.contains(&account_id) || state.is_designated_public_account(account_id)
+    })?;
+    Ok(record)
 }
 
 pub fn admit_public_receipt(
@@ -557,7 +565,7 @@ fn settle(
         new_commitments: backend.into_outputs(),
         new_nullifiers: Vec::new(),
         events,
-        consumed: Vec::new(),
+        consumed: None,
         published: casts,
     })
 }

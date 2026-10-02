@@ -6,11 +6,11 @@ use crate::{
     Account, AccountData, AccountId, Actor, ActorState, BedrockStatus, Block, BlockBody,
     BlockHeader, BlockId, BlockIngestError, BoundaryStep, Ciphertext, Commitment,
     CommitmentSetDigest, CrossZoneHalt, Delivery, EncryptedAccountData, EphemeralPublicKey,
-    EventRecord, FeeDeclaration, HashType, IndexerStatus, IndexerSyncState, MessageEnvelope,
-    MessageId, Nullifier, PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, Proof, PublicExecutionContext, PublicIdentity,
-    PublicKey, PublicMessage, PublicTransaction, Selector, Signature, StallReason, Transaction,
-    TransactionEntry, ValidityWindow, WitnessSet,
+    EventRecord, FeeDeclaration, HashType, IndexerStatus, IndexerSyncState, MessageDigest,
+    MessageEnvelope, MessageRef, Nullifier, PdaSeed, PeerHealth, PeerStatus,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, Proof,
+    PublicExecutionContext, PublicIdentity, PublicKey, PublicMessage, PublicTransaction, Selector,
+    Signature, StallReason, Transaction, TransactionEntry, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -343,24 +343,26 @@ impl TryFrom<PublicMessage> for lee::public_transaction::Message {
     }
 }
 
-impl From<lee_core::execution_state::TransactionEntry<lee_core::program::MessageId>>
+impl From<lee_core::execution_state::TransactionEntry<lee_core::program::MessageRef>>
     for TransactionEntry
 {
     fn from(
-        value: lee_core::execution_state::TransactionEntry<lee_core::program::MessageId>,
+        value: lee_core::execution_state::TransactionEntry<lee_core::program::MessageRef>,
     ) -> Self {
         match value {
             lee_core::execution_state::TransactionEntry::Call { to, message } => Self::Call {
                 to: to.into(),
                 message,
             },
-            lee_core::execution_state::TransactionEntry::Cast(id) => Self::Cast(id.into()),
+            lee_core::execution_state::TransactionEntry::Cast(reference) => {
+                Self::Cast(reference.into())
+            }
         }
     }
 }
 
 impl From<TransactionEntry>
-    for lee_core::execution_state::TransactionEntry<lee_core::program::MessageId>
+    for lee_core::execution_state::TransactionEntry<lee_core::program::MessageRef>
 {
     fn from(value: TransactionEntry) -> Self {
         match value {
@@ -368,7 +370,7 @@ impl From<TransactionEntry>
                 to: to.into(),
                 message,
             },
-            TransactionEntry::Cast(id) => Self::Cast(id.into()),
+            TransactionEntry::Cast(reference) => Self::Cast(reference.into()),
         }
     }
 }
@@ -411,15 +413,35 @@ impl From<PdaSeed> for lee_core::program::PdaSeed {
     }
 }
 
-impl From<lee_core::program::MessageId> for MessageId {
-    fn from(value: lee_core::program::MessageId) -> Self {
+impl From<lee_core::program::MessageDigest> for MessageDigest {
+    fn from(value: lee_core::program::MessageDigest) -> Self {
         Self(*value.as_bytes())
     }
 }
 
-impl From<MessageId> for lee_core::program::MessageId {
-    fn from(value: MessageId) -> Self {
+impl From<MessageDigest> for lee_core::program::MessageDigest {
+    fn from(value: MessageDigest) -> Self {
         Self::new(value.0)
+    }
+}
+
+impl From<lee_core::program::MessageRef> for MessageRef {
+    fn from(value: lee_core::program::MessageRef) -> Self {
+        let lee_core::program::MessageRef { sequence, digest } = value;
+        Self {
+            sequence,
+            digest: digest.into(),
+        }
+    }
+}
+
+impl From<MessageRef> for lee_core::program::MessageRef {
+    fn from(value: MessageRef) -> Self {
+        let MessageRef { sequence, digest } = value;
+        Self {
+            sequence,
+            digest: digest.into(),
+        }
     }
 }
 
@@ -1284,8 +1306,11 @@ mod tests {
         lee_core::account::Actor::new(account_id(account_tag), account_id(program_tag))
     }
 
-    fn message_id(tag: u8) -> lee_core::program::MessageId {
-        lee_core::program::MessageId::new([tag; 32])
+    fn message_ref(tag: u8) -> lee_core::program::MessageRef {
+        lee_core::program::MessageRef {
+            sequence: u128::from_le_bytes([tag; 16]),
+            digest: lee_core::program::MessageDigest::new([tag; 32]),
+        }
     }
 
     fn identities() -> Vec<lee::PublicIdentity> {
@@ -1302,7 +1327,7 @@ mod tests {
     #[test]
     fn a_public_message_with_a_receipt_root_and_identities_round_trips_through_the_mirror() {
         let message = lee::public_transaction::Message::new(
-            lee_core::execution_state::TransactionEntry::Cast(message_id(4)),
+            lee_core::execution_state::TransactionEntry::Cast(message_ref(4)),
             vec![actor(5, 6)],
             vec![lee_core::account::Nonce(7)],
             Some(lee::FeeDeclaration::new(account_id(8), 9, 10, 11)),
@@ -1383,7 +1408,7 @@ mod tests {
                     2
                 ],
                 entry: Some(lee_core::execution_state::TransactionEntry::Cast(
-                    message_id(26),
+                    message_ref(26),
                 )),
                 private_actions: vec![],
                 block_validity_window: lee_core::program::BlockValidityWindow::new_unbounded(),
@@ -1402,14 +1427,6 @@ mod tests {
         assert_eq!(
             lee::privacy_preserving_transaction::message::Message::try_from(restored).unwrap(),
             message
-        );
-    }
-
-    #[test]
-    fn a_message_id_displays_in_base58_like_an_account_id() {
-        assert_eq!(
-            MessageId::from(message_id(1)).to_string(),
-            "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"
         );
     }
 }

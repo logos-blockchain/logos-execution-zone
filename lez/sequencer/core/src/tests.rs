@@ -4055,7 +4055,7 @@ fn unstake_request_transaction(
 fn pending_payouts(
     state: &V03State,
     destination: AccountId,
-) -> Vec<(lee::MessageId, lee_core::native_token::Message)> {
+) -> Vec<(lee::MessageRef, lee_core::native_token::Message)> {
     state
         .pending_messages_from(0)
         .filter(|record| {
@@ -4064,7 +4064,7 @@ fn pending_payouts(
         })
         .map(|record| {
             (
-                record.id(),
+                record.reference(),
                 borsh::from_slice(&record.body.message).unwrap(),
             )
         })

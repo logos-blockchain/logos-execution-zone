@@ -3,8 +3,9 @@ use std::collections::BTreeSet;
 use common::transaction::LeeTransaction;
 use lee::{
     AccountId, Actor, BoundaryStep, Delivery, EphemeralPublicKey, FeeDeclaration, MessageBody,
-    MessageEnvelope, MessageId, PrivacyPreservingTransaction, PublicExecutionContext,
-    PublicIdentity, PublicKey, PublicTransaction, Signature, TransactionEntry,
+    MessageDigest, MessageEnvelope, MessageRef, PrivacyPreservingTransaction,
+    PublicExecutionContext, PublicIdentity, PublicKey, PublicTransaction, Signature,
+    TransactionEntry,
     privacy_preserving_transaction::{circuit::Proof, message::EncryptedAccountData},
 };
 use lee_core::{
@@ -177,6 +178,31 @@ impl From<FfiActor> for Actor {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FfiMessageRef {
+    pub sequence: FfiU128,
+    pub digest: FfiBytes32,
+}
+
+impl From<MessageRef> for FfiMessageRef {
+    fn from(value: MessageRef) -> Self {
+        Self {
+            sequence: value.sequence.into(),
+            digest: FfiBytes32::from_bytes(*value.digest.as_bytes()),
+        }
+    }
+}
+
+impl From<FfiMessageRef> for MessageRef {
+    fn from(value: FfiMessageRef) -> Self {
+        Self {
+            sequence: value.sequence.into(),
+            digest: MessageDigest::new(value.digest.data),
+        }
+    }
+}
+
+#[repr(C)]
 pub enum FfiTransactionEntryKind {
     Call = 0x0,
     Cast,
@@ -187,29 +213,29 @@ pub struct FfiTransactionEntry {
     pub kind: FfiTransactionEntryKind,
     pub to: FfiActor,
     pub message: FfiMessageDataList,
-    pub message_id: FfiBytes32,
+    pub message_ref: FfiMessageRef,
 }
 
-impl From<TransactionEntry<MessageId>> for FfiTransactionEntry {
-    fn from(value: TransactionEntry<MessageId>) -> Self {
+impl From<TransactionEntry<MessageRef>> for FfiTransactionEntry {
+    fn from(value: TransactionEntry<MessageRef>) -> Self {
         match value {
             TransactionEntry::Call { to, message } => Self {
                 kind: FfiTransactionEntryKind::Call,
                 to: to.into(),
                 message: message.into(),
-                message_id: FfiBytes32::default(),
+                message_ref: FfiMessageRef::default(),
             },
-            TransactionEntry::Cast(id) => Self {
+            TransactionEntry::Cast(reference) => Self {
                 kind: FfiTransactionEntryKind::Cast,
                 to: FfiActor::default(),
                 message: Vec::new().into(),
-                message_id: message_id_to_ffi(id),
+                message_ref: reference.into(),
             },
         }
     }
 }
 
-impl From<FfiTransactionEntry> for TransactionEntry<MessageId> {
+impl From<FfiTransactionEntry> for TransactionEntry<MessageRef> {
     fn from(value: FfiTransactionEntry) -> Self {
         let message: Vec<u8> = value.message.into();
 
@@ -218,7 +244,7 @@ impl From<FfiTransactionEntry> for TransactionEntry<MessageId> {
                 to: value.to.into(),
                 message,
             },
-            FfiTransactionEntryKind::Cast => Self::Cast(ffi_to_message_id(value.message_id)),
+            FfiTransactionEntryKind::Cast => Self::Cast(value.message_ref.into()),
         }
     }
 }
@@ -1000,7 +1026,7 @@ fn empty_transaction_entry() -> FfiTransactionEntry {
         kind: FfiTransactionEntryKind::Call,
         to: FfiActor::default(),
         message: Vec::new().into(),
-        message_id: FfiBytes32::default(),
+        message_ref: FfiMessageRef::default(),
     }
 }
 
@@ -1033,14 +1059,6 @@ const fn pda_seed_to_ffi(seed: PdaSeed) -> FfiBytes32 {
 
 const fn ffi_to_pda_seed(seed: FfiBytes32) -> PdaSeed {
     PdaSeed::new(seed.data)
-}
-
-const fn message_id_to_ffi(id: MessageId) -> FfiBytes32 {
-    FfiBytes32::from_bytes(*id.as_bytes())
-}
-
-const fn ffi_to_message_id(id: FfiBytes32) -> MessageId {
-    MessageId::new(id.data)
 }
 
 fn cast_validity_window(window: ValidityWindow<u64>) -> [u64; 2] {
@@ -1149,7 +1167,10 @@ mod tests {
     fn public_transaction_receipt_root_and_identities_roundtrip_over_the_ffi() {
         let original = PublicTransaction {
             message: lee::public_transaction::Message {
-                root: TransactionEntry::Cast(MessageId::new([4; 32])),
+                root: TransactionEntry::Cast(MessageRef {
+                    sequence: u128::MAX,
+                    digest: MessageDigest::new([4; 32]),
+                }),
                 public_actors: vec![actor(5, 6)],
                 nonces: vec![],
                 fee: None,
@@ -1222,7 +1243,10 @@ mod tests {
                         };
                         2
                     ],
-                    entry: Some(TransactionEntry::Cast(MessageId::new([26; 32]))),
+                    entry: Some(TransactionEntry::Cast(MessageRef {
+                        sequence: u128::MAX - 1,
+                        digest: MessageDigest::new([26; 32]),
+                    })),
                     private_actions: vec![],
                     block_validity_window: ValidityWindow::new_unbounded(),
                     timestamp_validity_window: ValidityWindow::new_unbounded(),

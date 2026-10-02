@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
@@ -16,7 +16,7 @@ use risc0_zkvm::{
 };
 
 use crate::{
-    PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
+    PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID, PublicIdentity,
     error::{InvalidProgramBehaviorError, LeeError},
     program::{DEFAULT_PUBLIC_CYCLE_BUDGET, Program, check_exit_code, transition_journal},
     validated_state_diff::admit_public_receipt,
@@ -140,9 +140,8 @@ impl ProgramCatalog {
 #[derive(Default)]
 pub struct Simulation {
     pub public_shards: HashMap<Actor, ActorState>,
-    /// Accounts settlement accepts as proven public identities: identity evidence and designated
-    /// accounts.
-    pub proven_public_accounts: HashSet<AccountId>,
+    /// The identity evidence the transaction carries.
+    pub identities: Vec<PublicIdentity>,
 }
 
 struct Simulator<'input> {
@@ -229,7 +228,10 @@ pub fn execute_and_prove(
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     if let Some(record) = input.root.cast() {
         admit_public_receipt(record, &input.context, |account_id| {
-            simulation.proven_public_accounts.contains(&account_id)
+            simulation
+                .identities
+                .iter()
+                .any(|identity| identity.account_id() == account_id)
         })?;
     }
     let predicted_crossings = WholeTransaction::new(

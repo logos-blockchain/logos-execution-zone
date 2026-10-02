@@ -1,4 +1,4 @@
-use lee_core::program::{MessageBody, MessageId, StoredMessage};
+use lee_core::program::{MessageBody, MessageRef, StoredMessage};
 
 use super::*;
 use crate::{PublicIdentity, ValidatedStateDiff};
@@ -43,9 +43,9 @@ fn cast_script(state: &mut V03State, to: Actor, script: &Script) -> StoredMessag
         .unwrap()
 }
 
-fn receipt(id: MessageId, to: Actor, identities: Vec<PublicIdentity>) -> PublicTransaction {
+fn receipt(reference: MessageRef, to: Actor, identities: Vec<PublicIdentity>) -> PublicTransaction {
     let message = public_transaction::Message::new(
-        TransactionEntry::Cast(id),
+        TransactionEntry::Cast(reference),
         vec![to],
         vec![],
         None,
@@ -77,7 +77,7 @@ fn a_cast_publishes_a_pending_record_that_a_later_transaction_receives() {
     state
         .transition_from_public_transaction(
             &receipt(
-                record.id(),
+                record.reference(),
                 receiver(),
                 vec![PublicIdentity::Key(receiver_pk())],
             ),
@@ -135,7 +135,7 @@ fn pending_records_are_numbered_in_publication_order_across_transactions() {
             body: body.clone(),
         }
     );
-    assert_ne!(first.id(), second.id());
+    assert_ne!(first.digest(), second.digest());
     assert_eq!(
         cast(&mut state, receiver()),
         StoredMessage { sequence: 2, body }
@@ -147,7 +147,7 @@ fn a_replayed_receipt_is_rejected_and_leaves_the_state_unchanged() {
     let mut state = V03State::new().with_test_programs();
     let record = cast(&mut state, receiver());
     let tx = receipt(
-        record.id(),
+        record.reference(),
         receiver(),
         vec![PublicIdentity::Key(receiver_pk())],
     );
@@ -158,7 +158,7 @@ fn a_replayed_receipt_is_rejected_and_leaves_the_state_unchanged() {
 
     assert!(matches!(
         result,
-        Err(LeeError::InvalidInput(message)) if message == "Root message is not pending"
+        Err(LeeError::InvalidInput(message)) if message == "A consumed message is not pending"
     ));
     assert_eq!(state, settled);
 }
@@ -168,18 +168,21 @@ fn a_public_receipt_needs_identity_evidence_for_an_unauthorized_receiver() {
     let mut state = V03State::new().with_test_programs();
     let record = cast(&mut state, receiver());
 
-    let result =
-        state.transition_from_public_transaction(&receipt(record.id(), receiver(), vec![]), 2, 0);
+    let result = state.transition_from_public_transaction(
+        &receipt(record.reference(), receiver(), vec![]),
+        2,
+        0,
+    );
 
     assert!(matches!(
         result,
         Err(LeeError::UnprovenPublicIdentity { actor }) if actor == receiver()
     ));
-    assert_eq!(state.pending_message(record.id()), Some(&record));
+    assert_eq!(state.pending_message(record.reference()), Some(&record));
     state
         .transition_from_public_transaction(
             &receipt(
-                record.id(),
+                record.reference(),
                 receiver(),
                 vec![PublicIdentity::Key(receiver_pk())],
             ),
@@ -201,7 +204,7 @@ fn a_cast_to_a_private_account_cannot_be_received_publicly() {
 
     let result = state.transition_from_public_transaction(
         &receipt(
-            record.id(),
+            record.reference(),
             private_receiver,
             vec![PublicIdentity::Key(receiver_pk())],
         ),
@@ -213,7 +216,7 @@ fn a_cast_to_a_private_account_cannot_be_received_publicly() {
         result,
         Err(LeeError::UnprovenPublicIdentity { actor }) if actor == private_receiver
     ));
-    assert_eq!(state.pending_message(record.id()), Some(&record));
+    assert_eq!(state.pending_message(record.reference()), Some(&record));
 }
 
 #[test]
@@ -229,7 +232,7 @@ fn a_public_pda_proves_its_identity_by_its_seed() {
     state
         .transition_from_public_transaction(
             &receipt(
-                record.id(),
+                record.reference(),
                 pda,
                 vec![PublicIdentity::Pda {
                     program: scripted_id(),
@@ -251,7 +254,7 @@ fn a_designated_public_account_receives_without_identity_evidence() {
     let record = cast(&mut state, designated);
 
     state
-        .transition_from_public_transaction(&receipt(record.id(), designated, vec![]), 2, 0)
+        .transition_from_public_transaction(&receipt(record.reference(), designated, vec![]), 2, 0)
         .expect("a designated account must need no identity evidence");
 }
 
@@ -264,7 +267,7 @@ fn a_private_account_receives_a_cast_by_proof() {
     );
     let mut state = V03State::new().with_test_programs();
     let record = cast(&mut state, private_receiver);
-    let id = record.id();
+    let reference = record.reference();
     let proven = execute_and_prove(
         ProvingInput {
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
@@ -280,8 +283,11 @@ fn a_private_account_receives_a_cast_by_proof() {
         .transition_from_privacy_preserving_transaction(&tx, 2, 0)
         .unwrap();
 
-    assert_eq!(tx.message.execution.entry, Some(TransactionEntry::Cast(id)));
-    assert!(state.pending_message(id).is_none());
+    assert_eq!(
+        tx.message.execution.entry,
+        Some(TransactionEntry::Cast(reference))
+    );
+    assert!(state.pending_message(reference).is_none());
 }
 
 #[test]
@@ -350,7 +356,7 @@ fn a_private_pda_with_a_nonzero_identifier_receives_a_cast_without_a_grant() {
     );
     let mut state = V03State::new().with_test_programs();
     let record = cast(&mut state, pda);
-    let id = record.id();
+    let reference = record.reference();
     let proven = execute_and_prove(
         ProvingInput {
             private_witnesses: vec![init_pda_witness(&keys, identifier, (scripted_id(), seed))],
@@ -365,7 +371,7 @@ fn a_private_pda_with_a_nonzero_identifier_receives_a_cast_without_a_grant() {
         .transition_from_privacy_preserving_transaction(&private_tx(proven, vec![], &[]), 2, 0)
         .expect("a private PDA must receive a cast by proof alone");
 
-    assert!(state.pending_message(id).is_none());
+    assert!(state.pending_message(reference).is_none());
 }
 
 #[test]
@@ -373,8 +379,8 @@ fn a_prepared_receipt_to_an_unproven_public_receiver_fails_before_proving() {
     let keys = test_private_account_keys_1();
     let mut state = V03State::new().with_test_programs();
     let record = cast(&mut state, receiver());
-    let id = record.id();
-    let prove = |identities: HashSet<AccountId>| {
+    let reference = record.reference();
+    let prove = |identities: Vec<PublicIdentity>| {
         execute_and_prove(
             ProvingInput {
                 context: PublicExecutionContext::new(vec![receiver()], []),
@@ -382,7 +388,7 @@ fn a_prepared_receipt_to_an_unproven_public_receiver_fails_before_proving() {
                 ..proving_input(TransactionEntry::Cast(record.clone()))
             },
             &Simulation {
-                proven_public_accounts: identities,
+                identities,
                 ..Simulation::default()
             },
             &scripted_programs(),
@@ -390,10 +396,10 @@ fn a_prepared_receipt_to_an_unproven_public_receiver_fails_before_proving() {
     };
 
     assert!(matches!(
-        prove(HashSet::new()),
+        prove(Vec::new()),
         Err(LeeError::UnprovenPublicIdentity { actor }) if actor == receiver()
     ));
-    let (output, proof) = prove([receiver().account_id].into()).unwrap();
+    let (output, proof) = prove(vec![PublicIdentity::Key(receiver_pk())]).unwrap();
     let message = Message {
         identities: vec![PublicIdentity::Key(receiver_pk())],
         ..Message::from_circuit_output(vec![], output)
@@ -408,7 +414,7 @@ fn a_prepared_receipt_to_an_unproven_public_receiver_fails_before_proving() {
         )
         .expect("the receiver's key must prove its identity at settlement");
 
-    assert!(state.pending_message(id).is_none());
+    assert!(state.pending_message(reference).is_none());
     assert_eq!(
         state
             .get_account_by_id(receiver().account_id)
@@ -440,7 +446,7 @@ fn a_second_diff_receiving_an_already_received_record_is_refused_at_apply() {
     let mut state = V03State::new().with_test_programs();
     let record = cast_script(&mut state, receiver(), &replying());
     let tx = receipt(
-        record.id(),
+        record.reference(),
         receiver(),
         vec![PublicIdentity::Key(receiver_pk())],
     );
@@ -505,7 +511,7 @@ fn a_receipt_that_fails_after_casting_keeps_its_record_pending_and_publishes_not
 
     let result = state.transition_from_public_transaction(
         &receipt(
-            record.id(),
+            record.reference(),
             receiver(),
             vec![PublicIdentity::Key(receiver_pk())],
         ),
@@ -528,7 +534,7 @@ fn a_receipt_root_naming_an_unknown_program_is_rejected_not_charged() {
 
     let (_, result) = ValidatedStateDiff::from_public_transaction_metered(
         &receipt(
-            record.id(),
+            record.reference(),
             unknown,
             vec![PublicIdentity::Key(receiver_pk())],
         ),
@@ -553,7 +559,7 @@ fn a_proven_receipt_at_a_public_root_needs_identity_evidence_at_settlement() {
     let keys = test_private_account_keys_1();
     let mut state = V03State::new().with_test_programs();
     let record = cast(&mut state, receiver());
-    let id = record.id();
+    let reference = record.reference();
     let (output, proof) = execute_and_prove_with_crossings(
         ProvingInput {
             context: PublicExecutionContext::new(vec![receiver()], []),
@@ -581,10 +587,10 @@ fn a_proven_receipt_at_a_public_root_needs_identity_evidence_at_settlement() {
         submit(&mut state, Vec::new()),
         Err(LeeError::UnprovenPublicIdentity { actor }) if actor == receiver()
     ));
-    assert_eq!(state.pending_message(id), Some(&record));
+    assert_eq!(state.pending_message(reference), Some(&record));
     submit(&mut state, vec![PublicIdentity::Key(receiver_pk())])
         .expect("the receiver's key must prove its identity at settlement");
-    assert!(state.pending_message(id).is_none());
+    assert!(state.pending_message(reference).is_none());
 }
 
 #[test]
@@ -600,7 +606,7 @@ fn a_private_receipt_root_that_calls_a_public_actor_needs_no_identity_evidence()
         private_receiver,
         &received().call(receiver(), &Script::write(b"called".to_vec())),
     );
-    let id = record.id();
+    let reference = record.reference();
     let proven = execute_and_prove(
         ProvingInput {
             context: PublicExecutionContext::new(vec![receiver()], []),
@@ -616,7 +622,7 @@ fn a_private_receipt_root_that_calls_a_public_actor_needs_no_identity_evidence()
         .transition_from_privacy_preserving_transaction(&private_tx(proven, vec![], &[]), 2, 0)
         .expect("a private receipt root must need no public identity evidence");
 
-    assert!(state.pending_message(id).is_none());
+    assert!(state.pending_message(reference).is_none());
     assert_eq!(
         state
             .get_account_by_id(receiver().account_id)
@@ -631,7 +637,7 @@ fn a_signing_public_receiver_needs_no_identity_evidence() {
     let mut state = V03State::new().with_test_programs();
     let record = cast(&mut state, receiver());
     let message = public_transaction::Message::new(
-        TransactionEntry::Cast(record.id()),
+        TransactionEntry::Cast(record.reference()),
         vec![receiver()],
         vec![Nonce(0)],
         None,
@@ -646,7 +652,7 @@ fn a_signing_public_receiver_needs_no_identity_evidence() {
         .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 2, 0)
         .expect("the receiver's signature must prove its identity");
 
-    assert!(state.pending_message(record.id()).is_none());
+    assert!(state.pending_message(record.reference()).is_none());
 }
 
 #[test]
@@ -655,7 +661,7 @@ fn a_public_receipt_without_identity_evidence_is_rejected_not_charged() {
     let record = cast(&mut state, receiver());
 
     let (_, result) = ValidatedStateDiff::from_public_transaction_metered(
-        &receipt(record.id(), receiver(), Vec::new()),
+        &receipt(record.reference(), receiver(), Vec::new()),
         &state,
         2,
         0,
@@ -729,7 +735,7 @@ fn identical_casts_are_received_independently_and_out_of_order() {
     state
         .transition_from_public_transaction(
             &receipt(
-                second.id(),
+                second.reference(),
                 receiver(),
                 vec![PublicIdentity::Key(receiver_pk())],
             ),

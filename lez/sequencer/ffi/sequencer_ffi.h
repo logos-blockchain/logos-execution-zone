@@ -168,11 +168,23 @@ typedef struct FfiVec_u8 {
 
 typedef struct FfiVec_u8 FfiMessageDataList;
 
+/**
+ * U128 - 16 bytes little endian.
+ */
+typedef struct FfiU128 {
+  uint8_t data[16];
+} FfiU128;
+
+typedef struct FfiMessageRef {
+  struct FfiU128 sequence;
+  struct FfiBytes32 digest;
+} FfiMessageRef;
+
 typedef struct FfiTransactionEntry {
   enum FfiTransactionEntryKind kind;
   struct FfiActor to;
   FfiMessageDataList message;
-  struct FfiBytes32 message_id;
+  struct FfiMessageRef message_ref;
 } FfiTransactionEntry;
 
 typedef struct FfiVec_FfiActor {
@@ -182,13 +194,6 @@ typedef struct FfiVec_FfiActor {
 } FfiVec_FfiActor;
 
 typedef struct FfiVec_FfiActor FfiActorList;
-
-/**
- * U128 - 16 bytes little endian.
- */
-typedef struct FfiU128 {
-  uint8_t data[16];
-} FfiU128;
 
 typedef struct FfiU128 FfiNonce;
 

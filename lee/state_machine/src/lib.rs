@@ -11,7 +11,8 @@ pub use lee_core::{
     execution_state::{Boundary, BoundaryStep, Delivery, PublicExecutionContext, TransactionEntry},
     native_token,
     program::{
-        Call, Cast, MessageBody, MessageData, MessageEnvelope, MessageId, ProgramId, StoredMessage,
+        Call, Cast, MessageBody, MessageData, MessageDigest, MessageEnvelope, MessageRef,
+        ProgramId, StoredMessage,
     },
 };
 pub use privacy_preserving_circuit::{

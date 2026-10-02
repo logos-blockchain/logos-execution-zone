@@ -270,16 +270,16 @@ pub struct PdaSeed(
 );
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct MessageId(
+pub struct MessageDigest(
     #[serde(with = "base64::arr")]
-    #[schemars(with = "String", description = "base64-encoded message id")]
+    #[schemars(with = "String", description = "base64-encoded message digest")]
     pub [u8; 32],
 );
 
-impl Display for MessageId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0.to_base58())
-    }
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct MessageRef {
+    pub sequence: u128,
+    pub digest: MessageDigest,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -294,7 +294,7 @@ pub type MessageBody = MessageEnvelope<AccountId>;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum TransactionEntry {
     Call { to: Actor, message: MessageData },
-    Cast(MessageId),
+    Cast(MessageRef),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

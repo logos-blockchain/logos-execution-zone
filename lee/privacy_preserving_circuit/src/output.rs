@@ -7,13 +7,13 @@ use lee_core::{
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
     execution_state::{PrivatePartOutcome, PublicExecutionContext, TransactionEntry},
-    program::MessageId,
+    program::MessageRef,
 };
 
 pub fn compute_circuit_output(
     outcome: PrivatePartOutcome,
     context: PublicExecutionContext,
-    entry: Option<TransactionEntry<MessageId>>,
+    entry: Option<TransactionEntry<MessageRef>>,
     private_witnesses: &[PrivateWitness],
     dummy_inputs: Vec<DummyInput>,
     ciphertext_padding: Option<u32>,
