@@ -18,5 +18,5 @@ fn main() {
 fn receive(_input: &ReceiveInput, callee: Actor) -> Response {
     let greeting: Vec<u8> = b"Hello from tail call".to_vec();
 
-    Response::keep().send(Call::new(callee, &greeting))
+    Response::keep().call(Call::new(callee, &greeting))
 }

@@ -3,7 +3,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, Actor, ActorState},
-    program::{Action, Call, Cast},
+    program::{Call, Cast},
 };
 use serde::{Deserialize, Serialize};
 
@@ -277,12 +277,10 @@ impl From<&TokenMetadata> for ActorState {
 }
 
 #[must_use]
-pub fn expected_sends(receiver: Actor, message: &Message) -> Vec<Action> {
+pub fn expected_sends(receiver: Actor, message: &Message) -> (Vec<Call>, Vec<Cast>) {
     let own = |account_id: AccountId| Actor::new(account_id, receiver.program_account_id);
-    let create = |to: AccountId, data: ActorState| -> Action {
-        Call::new(own(to), &Message::Create(data)).into()
-    };
-    match message {
+    let create = |to: AccountId, data: ActorState| Call::new(own(to), &Message::Create(data));
+    let calls = match message {
         Message::Transfer {
             to,
             descriptor,
@@ -295,10 +293,10 @@ pub fn expected_sends(receiver: Actor, message: &Message) -> Vec<Action> {
                 amount: *amount,
                 notify: notify.clone(),
             };
-            vec![match delivery {
-                Delivery::Call => Call::new(own(*to), &credit).into(),
-                Delivery::Cast => Cast::new(own(*to), &credit).into(),
-            }]
+            match delivery {
+                Delivery::Call => vec![Call::new(own(*to), &credit)],
+                Delivery::Cast => return (Vec::new(), vec![Cast::new(own(*to), &credit)]),
+            }
         }
         Message::Credit {
             descriptor,
@@ -316,24 +314,20 @@ pub fn expected_sends(receiver: Actor, message: &Message) -> Vec<Action> {
                         payload: target.payload.clone(),
                     }),
                 )
-                .into()
             })
             .collect(),
         Message::Burn {
             descriptor,
             amount,
             definition,
-        } => vec![
-            Call::new(
-                own(*definition),
-                &Message::BurnSupply {
-                    definition_id: descriptor.definition_id,
-                    kind: descriptor.kind,
-                    amount: *amount,
-                },
-            )
-            .into(),
-        ],
+        } => vec![Call::new(
+            own(*definition),
+            &Message::BurnSupply {
+                definition_id: descriptor.definition_id,
+                kind: descriptor.kind,
+                amount: *amount,
+            },
+        )],
         Message::PrintNft {
             printed,
             definition_id,
@@ -376,26 +370,24 @@ pub fn expected_sends(receiver: Actor, message: &Message) -> Vec<Action> {
                 }))
                 .collect()
         }
-        Message::Mint { to, amount } => vec![
-            Call::new(
-                own(*to),
-                &Message::Credit {
-                    descriptor: TokenDescriptor {
-                        definition_id: receiver.account_id,
-                        kind: TokenKind::Fungible,
-                    },
-                    amount: *amount,
-                    notify: None,
+        Message::Mint { to, amount } => vec![Call::new(
+            own(*to),
+            &Message::Credit {
+                descriptor: TokenDescriptor {
+                    definition_id: receiver.account_id,
+                    kind: TokenKind::Fungible,
                 },
-            )
-            .into(),
-        ],
+                amount: *amount,
+                notify: None,
+            },
+        )],
         Message::EnsureHolding { .. }
         | Message::BurnSupply { .. }
         | Message::AssertKind { .. }
         | Message::Create(_)
         | Message::Notification(_) => Vec::new(),
-    }
+    };
+    (calls, Vec::new())
 }
 
 #[must_use]

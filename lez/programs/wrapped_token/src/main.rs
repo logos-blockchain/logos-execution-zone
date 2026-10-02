@@ -44,7 +44,7 @@ fn receive(input: &ReceiveInput) -> Response {
             );
             let mut cfg = decode_config(&input.pre_state);
             mint_source(&mut cfg, deliverer, &src_zone, src_account_id, amount);
-            Response::write(cfg.to_bytes()).send(Call::new(
+            Response::write(cfg.to_bytes()).call(Call::new(
                 Actor::new(holding_account_id(program, &recipient), program),
                 &Message::Credit(amount),
             ))
@@ -171,7 +171,7 @@ fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
         panic!("a delivery to wrapped_token must carry a Mint");
     };
     let program = input.receiver.program_account_id;
-    Response::keep().send(Call::new(
+    Response::keep().call(Call::new(
         Actor::new(config_account_id(program), program),
         &Message::MintFrom {
             deliverer: input.origin_program().expect("a delivery has a sender"),
@@ -189,7 +189,7 @@ fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
 fn forward_as_authority(input: &ReceiveInput, message: &Message, unsigned: &str) -> Response {
     assert!(input.is_authorized, "{unsigned}");
     let program = input.receiver.program_account_id;
-    Response::keep().send(Call::new(
+    Response::keep().call(Call::new(
         Actor::new(config_account_id(program), program),
         message,
     ))
@@ -277,10 +277,7 @@ fn mint_source(
 #[cfg(test)]
 mod tests {
     use borsh::BorshSerialize;
-    use lee_core::{
-        account::ActorState,
-        program::{Action, Transition},
-    };
+    use lee_core::{account::ActorState, program::Transition};
     use wrapped_token_core::SourcePolicy;
 
     use super::*;
@@ -420,14 +417,15 @@ mod tests {
     // forwards, as the driver would deliver it.
     fn through_authority(origin: Origin, is_authorized: bool, message: &Message) -> Transition {
         let entry = run(actor(AUTHORITY), origin, is_authorized, Vec::new(), message);
-        let [forwarded] =
-            <[Action; 1]>::try_from(entry.response.sends).expect("one forwarded change");
-        let Action::Call(Call {
-            to, message: data, ..
-        }) = forwarded
-        else {
-            panic!("the forwarded change is an inline call");
-        };
+        assert!(
+            entry.response.casts.is_empty(),
+            "the forwarded change is an inline call"
+        );
+        let [
+            Call {
+                to, message: data, ..
+            },
+        ] = <[Call; 1]>::try_from(entry.response.calls).expect("one forwarded change");
         assert_eq!(to, config_actor());
         at_config(
             Origin::Program(WRAPPED_ID),
@@ -465,8 +463,11 @@ mod tests {
 
         assert_eq!(transition.response.post_state, None);
         assert_eq!(
-            transition.response.sends,
-            vec![to_config(&mint_from(MINTER, ZONE_A, PEER_A, 10)).into()],
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![to_config(&mint_from(MINTER, ZONE_A, PEER_A, 10))],
+                Vec::new()
+            ),
             "the deliverer travels from the runtime's origin, and the config is checked first"
         );
     }
@@ -498,8 +499,11 @@ mod tests {
             ]
         );
         assert_eq!(
-            transition.response.sends,
-            vec![Call::new(holding_actor(), &Message::Credit(400)).into()]
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![Call::new(holding_actor(), &Message::Credit(400))],
+                Vec::new()
+            )
         );
     }
 
@@ -740,15 +744,15 @@ mod tests {
             },
         );
         assert_eq!(
-            transition.response.sends,
-            vec![
-                to_config(&Message::UpdateSources {
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![to_config(&Message::UpdateSources {
                     authority: AUTHORITY,
                     via: None,
                     sources: vec![policy(ZONE_A, PEER_A, None)],
-                })
-                .into()
-            ]
+                })],
+                Vec::new()
+            )
         );
     }
 

@@ -18,7 +18,7 @@ mod tests;
 
 pub fn receive(input: &ReceiveInput, message: Message) -> Response {
     let from_token = input.from_own_program();
-    let sends = expected_sends(input.receiver, &message);
+    let (calls, casts) = expected_sends(input.receiver, &message);
     let post = match message {
         Message::Transfer {
             descriptor, amount, ..
@@ -93,8 +93,9 @@ pub fn receive(input: &ReceiveInput, message: Message) -> Response {
         }
         Message::Notification(_) => panic!("A token actor does not accept notifications"),
     };
-    sends.into_iter().fold(
-        post.map_or_else(Response::keep, Response::write),
-        Response::send,
-    )
+    Response {
+        calls,
+        casts,
+        ..post.map_or_else(Response::keep, Response::write)
+    }
 }

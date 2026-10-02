@@ -48,7 +48,7 @@ fn program_execution() {
         transition.response.post_state,
         Some(written.try_into().unwrap())
     );
-    assert!(transition.response.sends.is_empty());
+    assert!(transition.response.calls.is_empty() && transition.response.casts.is_empty());
 }
 
 #[test]

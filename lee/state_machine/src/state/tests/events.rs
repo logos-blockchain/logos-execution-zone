@@ -76,13 +76,13 @@ fn events_of_sent_turns_follow_depth_first_pre_order() {
     let to_emitter = emitter();
 
     let grandchild = emitting(vec![emitted(2)]);
-    let first_callee = emitting(vec![emitted(1)]).send(Call::new(to_emitter, &grandchild));
+    let first_callee = emitting(vec![emitted(1)]).call(Call::new(to_emitter, &grandchild));
     let second_callee = emitting(vec![emitted(3)]);
 
     let tx = emitter_transaction(
         emitting(vec![emitted(0)])
-            .send(Call::new(to_emitter, &first_callee))
-            .send(Call::new(to_emitter, &second_callee)),
+            .call(Call::new(to_emitter, &first_callee))
+            .call(Call::new(to_emitter, &second_callee)),
     );
 
     let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();

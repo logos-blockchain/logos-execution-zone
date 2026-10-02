@@ -28,8 +28,8 @@ fn public_sent_calls() {
         ],
         vec![Nonce(0)],
         Script::default()
-            .send(native_send(from, to, amount))
-            .send(native_send(from, to, amount)),
+            .call(native_send(from, to, amount))
+            .call(native_send(from, to, amount)),
         &[&key],
     );
 
@@ -46,7 +46,7 @@ fn public_sent_calls() {
 
 fn self_sends(actor: Actor, depth: usize) -> Script {
     (0..depth).fold(Script::default(), |script, _| {
-        Script::default().send(Call::new(actor, &script))
+        Script::default().call(Call::new(actor, &script))
     })
 }
 
@@ -88,7 +88,7 @@ fn execution_that_requires_authentication_of_a_program_derived_account_id_succee
             Actor::native_balance(to),
         ],
         vec![],
-        Script::default().send(native_send(from, to, amount).with_pda_seeds(vec![pda_seed])),
+        Script::default().call(native_send(from, to, amount).with_pda_seeds(vec![pda_seed])),
         &[],
     );
 
@@ -121,8 +121,8 @@ fn a_pda_seed_delegated_to_one_sibling_does_not_leak_to_another() {
         vec![delegator, Actor::new(pda_id, TWIN)],
         vec![],
         Script::default()
-            .send(Call::new(callee, &Script::default().authorized()).with_pda_seeds(vec![seed]))
-            .send(Call::new(callee, &Script::default().authorized())),
+            .call(Call::new(callee, &Script::default().authorized()).with_pda_seeds(vec![seed]))
+            .call(Call::new(callee, &Script::default().authorized())),
         &[],
     );
 
@@ -164,7 +164,7 @@ fn a_credit_leaves_a_stranger_shard_at_the_recipient_untouched() {
             Actor::native_balance(to),
         ],
         vec![Nonce(0), Nonce(0)],
-        Script::default().send(native_send(from, to, amount)),
+        Script::default().call(native_send(from, to, amount)),
         &[&from_key, &to_key],
     );
 
@@ -216,7 +216,7 @@ fn private_sent_calls(number_of_calls: u32) {
         &transfer(to_account_id, amount),
     );
     let script =
-        (0..number_of_calls).fold(Script::default(), |script, _| script.send(send.clone()));
+        (0..number_of_calls).fold(Script::default(), |script, _| script.call(send.clone()));
 
     let from_new_nonce = Nonce::default().private_account_nonce_increment(&from_keys.nsk());
     let to_new_nonce = Nonce::default().private_account_nonce_increment(&to_keys.nsk());

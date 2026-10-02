@@ -138,7 +138,7 @@ async fn spend_private_pda(
         }
         .balance(),
     ];
-    let spend = Script::default().send(
+    let spend = Script::default().call(
         Call::new(
             accounts[1].actor(),
             &NativeMessage::Transfer {

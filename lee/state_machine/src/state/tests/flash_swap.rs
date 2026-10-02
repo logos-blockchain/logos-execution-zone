@@ -191,14 +191,14 @@ fn a_callback_may_start_a_nested_flash_swap() {
     let inner = swap.loan(
         50,
         INITIAL_BALANCE - AMOUNT_OUT,
-        &Script::default().send(swap.repay(50)),
+        &Script::default().call(swap.repay(50)),
     );
     let outer = swap.loan(
         AMOUNT_OUT,
         INITIAL_BALANCE,
         &Script::default()
-            .send(Call::new(swap.initiator(), &inner))
-            .send(swap.repay(AMOUNT_OUT)),
+            .call(Call::new(swap.initiator(), &inner))
+            .call(swap.repay(AMOUNT_OUT)),
     );
 
     let result = swap.submit(&outer);
@@ -223,7 +223,7 @@ fn a_callback_injecting_a_vault_reply_is_rolled_back() {
     let loan = swap.loan(
         AMOUNT_OUT,
         INITIAL_BALANCE,
-        &Script::default().send(swap.repay(AMOUNT_OUT)).send(inject),
+        &Script::default().call(swap.repay(AMOUNT_OUT)).call(inject),
     );
 
     let result = swap.submit(&loan);

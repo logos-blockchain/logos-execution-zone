@@ -21,8 +21,11 @@ pub fn scripted() -> ! {
         if let Some(origin) = script.require_origin {
             assert_eq!(input.origin, origin, "scripted: unexpected origin");
         }
-        let response = script.write.map_or_else(Response::keep, Response::write);
-        let response = script.sends.into_iter().fold(response, Response::send);
+        let response = Response {
+            calls: script.calls,
+            casts: script.casts,
+            ..script.write.map_or_else(Response::keep, Response::write)
+        };
         script
             .events
             .into_iter()

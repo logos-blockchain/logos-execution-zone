@@ -12,7 +12,7 @@ use amm_core::{
 };
 use lee_core::{
     account::{AccountId, Actor, ActorState},
-    program::{Action, Call, Origin, ReceiveInput, Transition},
+    program::{Call, Origin, ReceiveInput, Transition},
 };
 use token_core::{
     Delivery, NewTokenDefinition, Notification, TokenDescriptor, TokenKind, expected_sends,
@@ -485,30 +485,30 @@ fn call_add_liquidity_successful() {
         }
     );
     assert_eq!(
-        transition.response.sends,
-        vec![
-            lp_send(&token_core::Message::Mint {
-                to: USER_LP_ID,
-                amount: ADD_LP,
-            })
-            .into(),
-            transfer(
-                USER_B_ID,
-                vault_b_id(),
-                TOKEN_B_ID,
-                ADD_ACTUAL_B,
-                Delivery::Call
-            )
-            .into(),
-            transfer(
-                USER_A_ID,
-                vault_a_id(),
-                TOKEN_A_ID,
-                ADD_ACTUAL_A,
-                Delivery::Call
-            )
-            .into(),
-        ]
+        (transition.response.calls, transition.response.casts),
+        (
+            vec![
+                lp_send(&token_core::Message::Mint {
+                    to: USER_LP_ID,
+                    amount: ADD_LP,
+                }),
+                transfer(
+                    USER_B_ID,
+                    vault_b_id(),
+                    TOKEN_B_ID,
+                    ADD_ACTUAL_B,
+                    Delivery::Call
+                ),
+                transfer(
+                    USER_A_ID,
+                    vault_a_id(),
+                    TOKEN_A_ID,
+                    ADD_ACTUAL_A,
+                    Delivery::Call
+                ),
+            ],
+            Vec::new()
+        )
     );
 }
 
@@ -600,34 +600,34 @@ fn call_remove_liquidity_successful() {
         }
     );
     assert_eq!(
-        transition.response.sends,
-        vec![
-            Call::new(
-                token_actor(USER_LP_ID),
-                &token_core::Message::Burn {
-                    descriptor: fungible_of(token_lp_id()),
-                    amount: REMOVE_LP,
-                    definition: token_lp_id(),
-                },
-            )
-            .into(),
-            withdrawal(
-                vault_b_id(),
-                USER_B_ID,
-                TOKEN_B_ID,
-                REMOVE_B,
-                Delivery::Call
-            )
-            .into(),
-            withdrawal(
-                vault_a_id(),
-                USER_A_ID,
-                TOKEN_A_ID,
-                REMOVE_A,
-                Delivery::Call
-            )
-            .into(),
-        ]
+        (transition.response.calls, transition.response.casts),
+        (
+            vec![
+                Call::new(
+                    token_actor(USER_LP_ID),
+                    &token_core::Message::Burn {
+                        descriptor: fungible_of(token_lp_id()),
+                        amount: REMOVE_LP,
+                        definition: token_lp_id(),
+                    },
+                ),
+                withdrawal(
+                    vault_b_id(),
+                    USER_B_ID,
+                    TOKEN_B_ID,
+                    REMOVE_B,
+                    Delivery::Call
+                ),
+                withdrawal(
+                    vault_a_id(),
+                    USER_A_ID,
+                    TOKEN_A_ID,
+                    REMOVE_A,
+                    Delivery::Call
+                ),
+            ],
+            Vec::new()
+        )
     );
 }
 
@@ -724,34 +724,34 @@ fn new_definition_uninitialized_pool_creates_the_liquidity_definition() {
     assert_eq!(written(&transition), pool_base());
     // The supply the pool records and the supply the LP definition is created with are one value.
     assert_eq!(
-        transition.response.sends,
-        vec![
-            lp_send(&token_core::Message::NewDefinition {
-                definition: NewTokenDefinition::Fungible {
-                    name: String::from("LP Token"),
-                    total_supply: LP_SUPPLY,
-                },
-                holding: USER_LP_ID,
-                metadata: None,
-            })
-            .into(),
-            transfer(
-                USER_B_ID,
-                vault_b_id(),
-                TOKEN_B_ID,
-                RESERVE_B,
-                Delivery::Call
-            )
-            .into(),
-            transfer(
-                USER_A_ID,
-                vault_a_id(),
-                TOKEN_A_ID,
-                RESERVE_A,
-                Delivery::Call
-            )
-            .into(),
-        ]
+        (transition.response.calls, transition.response.casts),
+        (
+            vec![
+                lp_send(&token_core::Message::NewDefinition {
+                    definition: NewTokenDefinition::Fungible {
+                        name: String::from("LP Token"),
+                        total_supply: LP_SUPPLY,
+                    },
+                    holding: USER_LP_ID,
+                    metadata: None,
+                }),
+                transfer(
+                    USER_B_ID,
+                    vault_b_id(),
+                    TOKEN_B_ID,
+                    RESERVE_B,
+                    Delivery::Call
+                ),
+                transfer(
+                    USER_A_ID,
+                    vault_a_id(),
+                    TOKEN_A_ID,
+                    RESERVE_A,
+                    Delivery::Call
+                ),
+            ],
+            Vec::new()
+        )
     );
 }
 
@@ -769,14 +769,11 @@ fn new_definition_lp_asymmetric_amounts() {
 
     assert_eq!(written(&transition).liquidity_pool_supply, LP_SUPPLY);
     assert_eq!(
-        transition.response.sends.first(),
-        Some(
-            &lp_send(&token_core::Message::Mint {
-                to: USER_LP_ID,
-                amount: LP_SUPPLY,
-            })
-            .into()
-        )
+        transition.response.calls.first(),
+        Some(&lp_send(&token_core::Message::Mint {
+            to: USER_LP_ID,
+            amount: LP_SUPPLY,
+        }))
     );
 }
 
@@ -787,18 +784,15 @@ fn new_definition_lp_symmetric_amounts() {
 
     assert_eq!(written(&transition).liquidity_pool_supply, 100);
     assert_eq!(
-        transition.response.sends.first(),
-        Some(
-            &lp_send(&token_core::Message::NewDefinition {
-                definition: NewTokenDefinition::Fungible {
-                    name: String::from("LP Token"),
-                    total_supply: 100,
-                },
-                holding: USER_LP_ID,
-                metadata: None,
-            })
-            .into()
-        )
+        transition.response.calls.first(),
+        Some(&lp_send(&token_core::Message::NewDefinition {
+            definition: NewTokenDefinition::Fungible {
+                name: String::from("LP Token"),
+                total_supply: 100,
+            },
+            holding: USER_LP_ID,
+            metadata: None,
+        }))
     );
 }
 
@@ -929,20 +923,19 @@ fn a_swap_pays_the_signed_amounts_and_seeds_only_the_withdrawal() {
         let (_, definition_id_out) = definitions(input_is_token_a);
         let [_, output_vault, _, user_output] = swap_route(input_is_token_a);
 
+        let transition = swap_turn(&pool_base(), input_is_token_a, amount_in, amount_out);
         assert_eq!(
-            swap_turn(&pool_base(), input_is_token_a, amount_in, amount_out)
-                .response
-                .sends,
-            vec![
-                withdrawal(
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![withdrawal(
                     output_vault,
                     user_output,
                     definition_id_out,
                     amount_out,
                     Delivery::Call
-                )
-                .into()
-            ]
+                )],
+                Vec::new()
+            )
         );
     }
 }
@@ -962,24 +955,20 @@ fn a_swap_is_a_notified_transfer_whose_payout_the_token_program_predicts() {
         SwapRequest::Offer(offer(definition_id_out, 45, user_output)),
     );
 
-    let inline = |action: Action| {
-        let Action::Call(Call { to, message, .. }) = action else {
-            panic!("a token send is an inline call");
-        };
-        (to, message)
-    };
+    let inline = |call: Call| (call.to, call.message);
     let decoded = |message: &[u8]| -> token_core::Message {
         borsh::from_slice(message).expect("a token send carries a token message")
     };
-    let [credit] = <[Action; 1]>::try_from(expected_sends(token_actor(user_input), &trade))
-        .expect("a transfer sends one credit");
+    let (credits, credit_casts) = expected_sends(token_actor(user_input), &trade);
+    assert!(credit_casts.is_empty(), "a token send is an inline call");
+    let [credit] = <[Call; 1]>::try_from(credits).expect("a transfer sends one credit");
     let (credit_to, credit_message) = inline(credit);
     assert_eq!(credit_to, token_actor(input_vault));
-    let [notice] = <[Action; 1]>::try_from(expected_sends(
-        token_actor(input_vault),
-        &decoded(&credit_message),
-    ))
-    .expect("a notified credit sends one notification");
+    let (notices, notice_casts) =
+        expected_sends(token_actor(input_vault), &decoded(&credit_message));
+    assert!(notice_casts.is_empty(), "a token send is an inline call");
+    let [notice] =
+        <[Call; 1]>::try_from(notices).expect("a notified credit sends one notification");
     let (notice_to, notice_message) = inline(notice);
     assert_eq!(notice_to, pool);
 
@@ -988,23 +977,27 @@ fn a_swap_is_a_notified_transfer_whose_payout_the_token_program_predicts() {
         Origin::Program(TOKEN_PROGRAM_ID),
         notice_message,
     );
+    assert!(
+        settled.response.casts.is_empty(),
+        "a token send is an inline call"
+    );
     let [payout] =
-        <[Action; 1]>::try_from(settled.response.sends).expect("a swap sends one withdrawal");
+        <[Call; 1]>::try_from(settled.response.calls).expect("a swap sends one withdrawal");
     let (payout_to, payout_message) = inline(payout);
     assert_eq!(payout_to, token_actor(output_vault));
     assert_eq!(
         expected_sends(token_actor(output_vault), &decoded(&payout_message)),
-        vec![
-            Call::new(
+        (
+            vec![Call::new(
                 token_actor(user_output),
                 &token_core::Message::Credit {
                     descriptor: fungible_of(definition_id_out),
                     amount: 45,
                     notify: None,
                 },
-            )
-            .into()
-        ]
+            )],
+            Vec::new()
+        )
     );
 }
 
@@ -1060,28 +1053,36 @@ fn an_exact_input_swap_pays_its_live_quote_by_cast() {
             }
         );
         assert_eq!(
-            transition.response.sends,
-            vec![
-                withdrawal(
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![withdrawal(
                     output_vault,
                     user_output,
                     definition_id_out,
                     quote,
                     Delivery::Cast
-                )
-                .into()
-            ]
+                )],
+                Vec::new()
+            )
         );
     }
 }
 
 #[test]
 fn an_exact_input_swap_pays_its_live_quote_by_call_when_asked() {
+    let transition = exact_input_turn(&pool_base(), true, 500, 166, Delivery::Call);
     assert_eq!(
-        exact_input_turn(&pool_base(), true, 500, 166, Delivery::Call)
-            .response
-            .sends,
-        vec![withdrawal(vault_b_id(), USER_B_ID, TOKEN_B_ID, 166, Delivery::Call).into()]
+        (transition.response.calls, transition.response.casts),
+        (
+            vec![withdrawal(
+                vault_b_id(),
+                USER_B_ID,
+                TOKEN_B_ID,
+                166,
+                Delivery::Call
+            )],
+            Vec::new()
+        )
     );
 }
 

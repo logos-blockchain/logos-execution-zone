@@ -52,10 +52,10 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
             // every-block account's own.
             let mut response = Response::write(updated_data.to_bytes());
             if block_id.is_multiple_of(10) {
-                response = response.send(record(CLOCK_10_PROGRAM_ACCOUNT_ID));
+                response = response.call(record(CLOCK_10_PROGRAM_ACCOUNT_ID));
             }
             if block_id.is_multiple_of(50) {
-                response = response.send(record(CLOCK_50_PROGRAM_ACCOUNT_ID));
+                response = response.call(record(CLOCK_50_PROGRAM_ACCOUNT_ID));
             }
             response
         }
@@ -132,15 +132,18 @@ mod tests {
         let transition = run(CLOCK_01_PROGRAM_ACCOUNT_ID, Origin::Root, data(7), tick(8));
 
         assert_eq!(transition.response.post_state, written(data(8)));
-        assert!(transition.response.sends.is_empty());
+        assert!(transition.response.calls.is_empty() && transition.response.casts.is_empty());
     }
 
     #[test]
     fn a_tick_records_into_the_coarser_accounts_it_is_due_at() {
         let at_ten = run(CLOCK_01_PROGRAM_ACCOUNT_ID, Origin::Root, data(9), tick(10));
         assert_eq!(
-            at_ten.response.sends,
-            vec![record_to(CLOCK_10_PROGRAM_ACCOUNT_ID, data(10)).into()]
+            (at_ten.response.calls, at_ten.response.casts),
+            (
+                vec![record_to(CLOCK_10_PROGRAM_ACCOUNT_ID, data(10))],
+                Vec::new()
+            )
         );
 
         let at_fifty = run(
@@ -150,11 +153,14 @@ mod tests {
             tick(50),
         );
         assert_eq!(
-            at_fifty.response.sends,
-            vec![
-                record_to(CLOCK_10_PROGRAM_ACCOUNT_ID, data(50)).into(),
-                record_to(CLOCK_50_PROGRAM_ACCOUNT_ID, data(50)).into(),
-            ]
+            (at_fifty.response.calls, at_fifty.response.casts),
+            (
+                vec![
+                    record_to(CLOCK_10_PROGRAM_ACCOUNT_ID, data(50)),
+                    record_to(CLOCK_50_PROGRAM_ACCOUNT_ID, data(50)),
+                ],
+                Vec::new()
+            )
         );
     }
 
@@ -215,7 +221,7 @@ mod tests {
         );
 
         assert_eq!(transition.response.post_state, None);
-        assert!(transition.response.sends.is_empty());
+        assert!(transition.response.calls.is_empty() && transition.response.casts.is_empty());
     }
 
     #[test]

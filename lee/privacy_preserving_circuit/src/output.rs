@@ -26,14 +26,16 @@ pub fn compute_circuit_output(
             ExecutionResult::Recorded {
                 mut private_accounts,
                 boundary,
+                casts,
             },
     } = outcome
     else {
-        unreachable!("a record yields its private accounts and boundary")
+        unreachable!("a record yields its private accounts, boundary and casts")
     };
     let mut output = PrivacyPreservingCircuitOutput {
         declared,
         boundary,
+        casts,
         consumed_message,
         private_actions: Vec::new(),
         block_validity_window,
@@ -308,6 +310,7 @@ mod tests {
                 result: ExecutionResult::Recorded {
                     private_accounts: private.into_iter().collect(),
                     boundary: Boundary::default(),
+                    casts: Vec::new(),
                 },
             },
             Declared::default(),

@@ -486,7 +486,6 @@ impl From<lee_core::execution_state::ScheduleOp> for ScheduleOp {
             lee_core::execution_state::ScheduleOp::EnterPrivate => Self::EnterPrivate,
             lee_core::execution_state::ScheduleOp::LeavePrivate => Self::LeavePrivate,
             lee_core::execution_state::ScheduleOp::ReturnPublic => Self::ReturnPublic,
-            lee_core::execution_state::ScheduleOp::Cast => Self::Cast,
         }
     }
 }
@@ -498,7 +497,6 @@ impl From<ScheduleOp> for lee_core::execution_state::ScheduleOp {
             ScheduleOp::EnterPrivate => Self::EnterPrivate,
             ScheduleOp::LeavePrivate => Self::LeavePrivate,
             ScheduleOp::ReturnPublic => Self::ReturnPublic,
-            ScheduleOp::Cast => Self::Cast,
         }
     }
 }
@@ -568,13 +566,11 @@ impl From<lee_core::execution_state::Boundary> for Boundary {
         let lee_core::execution_state::Boundary {
             public_deliveries,
             assumptions,
-            casts,
             schedule,
         } = value;
         Self {
             public_deliveries: public_deliveries.into_iter().map(Into::into).collect(),
             assumptions: assumptions.into_iter().map(Into::into).collect(),
-            casts: casts.into_iter().map(Into::into).collect(),
             schedule: schedule.into_iter().map(Into::into).collect(),
         }
     }
@@ -585,13 +581,11 @@ impl From<Boundary> for lee_core::execution_state::Boundary {
         let Boundary {
             public_deliveries,
             assumptions,
-            casts,
             schedule,
         } = value;
         Self {
             public_deliveries: public_deliveries.into_iter().map(Into::into).collect(),
             assumptions: assumptions.into_iter().map(Into::into).collect(),
-            casts: casts.into_iter().map(Into::into).collect(),
             schedule: schedule.into_iter().map(Into::into).collect(),
         }
     }
@@ -641,6 +635,7 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
                 lee_core::PrivacyPreservingCircuitOutput {
                     declared,
                     boundary,
+                    casts,
                     consumed_message,
                     private_actions,
                     block_validity_window,
@@ -656,6 +651,7 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
         Self {
             declared: declared.into(),
             boundary: boundary.into(),
+            casts: casts.into_iter().map(Into::into).collect(),
             consumed_message: consumed_message.map(Into::into),
             nonces: nonces.iter().map(|x| x.0).collect(),
             private_actions: private_actions.into_iter().map(Into::into).collect(),
@@ -684,6 +680,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
         let PrivacyPreservingMessage {
             declared,
             boundary,
+            casts,
             consumed_message,
             nonces,
             private_actions,
@@ -698,6 +695,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             execution: lee_core::PrivacyPreservingCircuitOutput {
                 declared: declared.into(),
                 boundary: boundary.into(),
+                casts: casts.into_iter().map(Into::into).collect(),
                 consumed_message: consumed_message.map(Into::into),
                 private_actions,
                 block_validity_window: block_validity_window
@@ -1294,7 +1292,6 @@ mod tests {
         let boundary = lee_core::execution_state::Boundary {
             public_deliveries: vec![delivery(7), delivery(8), delivery(9), delivery(7)],
             assumptions: vec![],
-            casts: vec![],
             schedule: vec![],
         };
 
@@ -1485,16 +1482,13 @@ mod tests {
                         grants: vec![],
                         pda_seeds: vec![],
                     }],
-                    casts: vec![lee_core::program::MessageBody {
-                        source: account_id(22),
-                        to: actor(23, 24),
-                        message: vec![25],
-                    }],
-                    schedule: vec![
-                        lee_core::execution_state::ScheduleOp::CallPublic,
-                        lee_core::execution_state::ScheduleOp::Cast,
-                    ],
+                    schedule: vec![lee_core::execution_state::ScheduleOp::CallPublic],
                 },
+                casts: vec![lee_core::program::MessageBody {
+                    source: account_id(22),
+                    to: actor(23, 24),
+                    message: vec![25],
+                }],
                 consumed_message: Some(message_id(26)),
                 private_actions: vec![],
                 block_validity_window: lee_core::program::BlockValidityWindow::new_unbounded(),

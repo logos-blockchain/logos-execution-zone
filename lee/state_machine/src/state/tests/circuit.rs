@@ -123,7 +123,7 @@ fn a_private_account_may_act_under_two_shards_in_one_transaction() {
             )],
             ..proving_input(root(
                 Actor::new(sender_id, program_id),
-                &Script::write(written.clone()).send(Call::new(
+                &Script::write(written.clone()).call(Call::new(
                     Actor::native_balance(sender_id),
                     &transfer(recipient.account_id, amount),
                 )),
@@ -347,7 +347,7 @@ fn prove_delegation(
 #[test]
 fn caller_pda_seeds_authorize_private_pda_for_callee() {
     let (output, _proof) = prove_delegation(
-        &Script::default().send(
+        &Script::default().call(
             Call::new(delegated_pda(TWIN), &authorized()).with_pda_seeds(vec![DELEGATED_SEED]),
         ),
         false,
@@ -365,7 +365,7 @@ fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
     let wrong_delegated_seed = PdaSeed::new([88; 32]);
 
     let result = prove_delegation(
-        &Script::default().send(
+        &Script::default().call(
             Call::new(delegated_pda(TWIN), &authorized())
                 .with_pda_seeds(vec![wrong_delegated_seed]),
         ),
@@ -381,10 +381,10 @@ fn delegated_pda_is_not_authorized_in_sibling_call() {
     // it sees `is_authorized == false` and panics on it inside its own guest execution.
     let result = prove_delegation(
         &Script::default()
-            .send(
+            .call(
                 Call::new(delegated_pda(TWIN), &authorized()).with_pda_seeds(vec![DELEGATED_SEED]),
             )
-            .send(Call::new(delegated_pda(TWIN), &authorized())),
+            .call(Call::new(delegated_pda(TWIN), &authorized())),
         false,
     );
 
@@ -401,10 +401,10 @@ fn delegated_pda_is_not_authorized_in_sibling_call() {
 fn sibling_call_may_declare_delegated_pda_unauthorized() {
     prove_delegation(
         &Script::default()
-            .send(
+            .call(
                 Call::new(delegated_pda(TWIN), &authorized()).with_pda_seeds(vec![DELEGATED_SEED]),
             )
-            .send(Call::new(delegated_pda(TWIN), &Script::default())),
+            .call(Call::new(delegated_pda(TWIN), &Script::default())),
         false,
     )
     .expect("a sibling declaring the delegated PDA unauthorized must be accepted");
@@ -412,11 +412,11 @@ fn sibling_call_may_declare_delegated_pda_unauthorized() {
 
 #[test]
 fn delegated_pda_stays_authorized_in_delegated_subtree() {
-    let forward = Script::default().send(Call::new(delegated_pda(scripted_id()), &authorized()));
+    let forward = Script::default().call(Call::new(delegated_pda(scripted_id()), &authorized()));
 
     prove_delegation(
         &Script::default()
-            .send(Call::new(delegated_pda(TWIN), &forward).with_pda_seeds(vec![DELEGATED_SEED])),
+            .call(Call::new(delegated_pda(TWIN), &forward).with_pda_seeds(vec![DELEGATED_SEED])),
         false,
     )
     .expect("a callee that forwards without re-delegating must keep the PDA authorized");
@@ -426,10 +426,10 @@ fn delegated_pda_stays_authorized_in_delegated_subtree() {
 fn holder_authorization_survives_across_sibling_calls() {
     prove_delegation(
         &Script::default()
-            .send(
+            .call(
                 Call::new(delegated_pda(TWIN), &authorized()).with_pda_seeds(vec![DELEGATED_SEED]),
             )
-            .send(Call::new(credential_holder(), &authorized())),
+            .call(Call::new(credential_holder(), &authorized())),
         true,
     )
     .expect("an account authorized by its own credential stays authorized in a sibling call");
@@ -437,13 +437,13 @@ fn holder_authorization_survives_across_sibling_calls() {
 
 #[test]
 fn inherited_scope_passes_through_nested_intermediate_calls() {
-    let forward_through_nested_call = Script::default().send(Call::new(
+    let forward_through_nested_call = Script::default().call(Call::new(
         delegated_pda(scripted_id()),
-        &Script::default().send(Call::new(delegated_pda(TWIN), &authorized())),
+        &Script::default().call(Call::new(delegated_pda(TWIN), &authorized())),
     ));
 
     prove_delegation(
-        &Script::default().send(
+        &Script::default().call(
             Call::new(delegated_pda(TWIN), &forward_through_nested_call)
                 .with_pda_seeds(vec![DELEGATED_SEED]),
         ),
@@ -468,7 +468,7 @@ fn prove_public_outputs(
                 script,
             ))
         },
-        vec![Vec::new(); script.sends.len()],
+        vec![Vec::new(); script.calls.len()],
         &scripted_programs(),
     )
     .unwrap()
@@ -481,7 +481,7 @@ fn a_delegated_public_pda_is_authorized_at_settlement_but_not_exported_as_a_gran
 
     let (output, proof) = prove_public_outputs(
         &Script::default()
-            .send(Call::new(callee, &authorized()).with_pda_seeds(vec![DELEGATED_SEED])),
+            .call(Call::new(callee, &authorized()).with_pda_seeds(vec![DELEGATED_SEED])),
         vec![callee],
         HashSet::new(),
     );
@@ -511,7 +511,7 @@ fn a_wrong_seed_leaves_a_signer_on_its_credential() {
     let wrong_seed = PdaSeed::new([88; 32]);
 
     let proven = prove_public_outputs(
-        &Script::default().send(Call::new(callee, &authorized()).with_pda_seeds(vec![wrong_seed])),
+        &Script::default().call(Call::new(callee, &authorized()).with_pda_seeds(vec![wrong_seed])),
         vec![callee],
         [signer_id].into(),
     );
@@ -533,8 +533,8 @@ fn a_public_pda_seed_from_a_private_turn_does_not_extend_to_a_sibling_output() {
 
     let proven = prove_public_outputs(
         &Script::default()
-            .send(Call::new(callee, &authorized()).with_pda_seeds(vec![DELEGATED_SEED]))
-            .send(Call::new(callee, &authorized())),
+            .call(Call::new(callee, &authorized()).with_pda_seeds(vec![DELEGATED_SEED]))
+            .call(Call::new(callee, &authorized())),
         vec![callee],
         HashSet::new(),
     );
@@ -804,7 +804,7 @@ fn two_private_pda_family_members_receive_and_spend() {
                 private_witnesses: vec![witness],
                 ..proving_input(root(
                     Actor::new(pda_id, proxy_id),
-                    &Script::default().send(
+                    &Script::default().call(
                         Call::new(
                             Actor::native_balance(pda_id),
                             &transfer(recipient.account_id, amount),

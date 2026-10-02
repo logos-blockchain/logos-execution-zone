@@ -3,7 +3,7 @@
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::program::{
-    Action, BlockValidityWindow, Origin, ProgramEvent, TimestampValidityWindow,
+    BlockValidityWindow, Call, Cast, Origin, ProgramEvent, TimestampValidityWindow,
 };
 
 pub mod guests;
@@ -11,7 +11,8 @@ pub mod guests;
 #[derive(Clone, Default, BorshSerialize, BorshDeserialize)]
 pub struct Script {
     pub write: Option<Vec<u8>>,
-    pub sends: Vec<Action>,
+    pub calls: Vec<Call>,
+    pub casts: Vec<Cast>,
     pub events: Vec<ProgramEvent>,
     pub block_window: BlockValidityWindow,
     pub timestamp_window: TimestampValidityWindow,
@@ -29,8 +30,14 @@ impl Script {
     }
 
     #[must_use]
-    pub fn send(mut self, action: impl Into<Action>) -> Self {
-        self.sends.push(action.into());
+    pub fn call(mut self, call: Call) -> Self {
+        self.calls.push(call);
+        self
+    }
+
+    #[must_use]
+    pub fn cast(mut self, cast: Cast) -> Self {
+        self.casts.push(cast);
         self
     }
 

@@ -2260,7 +2260,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         caller,
         public_actors,
         vec![], // no signers
-        Script::default().send(Call::new(
+        Script::default().call(Call::new(
             clock_actors[0],
             &clock_core::Message::Tick {
                 timestamp,

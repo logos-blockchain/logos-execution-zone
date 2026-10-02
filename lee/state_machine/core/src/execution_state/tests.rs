@@ -179,7 +179,10 @@ fn sending(calls: Vec<Call>) -> impl Fn(&ReceiveInput) -> Transition {
     move |input| {
         echo(
             input,
-            calls.iter().cloned().fold(Response::keep(), Response::send),
+            Response {
+                calls: calls.clone(),
+                ..Response::keep()
+            },
         )
     }
 }
@@ -447,7 +450,7 @@ fn a_revisited_actor_sees_its_staged_write() {
     let looping = actor(1, 9);
     let mut script = Script::default().on(looping, move |input| {
         if input.pre_state.is_empty() {
-            echo(input, Response::write(b"x".to_vec()).send(send_to(looping)))
+            echo(input, Response::write(b"x".to_vec()).call(send_to(looping)))
         } else {
             echo(input, Response::keep())
         }
@@ -543,7 +546,7 @@ fn turn_windows_intersect_and_disjoint_ones_are_rejected() {
                     Response::keep()
                         .try_block_window(1_u64..10)
                         .unwrap()
-                        .send(send_to(inner)),
+                        .call(send_to(inner)),
                 )
             })
             .on(inner, move |input| {
@@ -578,7 +581,7 @@ fn a_long_self_send_chain_completes() {
             Response::keep()
         } else {
             remaining = remaining.saturating_sub(1);
-            Response::keep().send(send_to(revisited))
+            Response::keep().call(send_to(revisited))
         };
         echo(input, response)
     });
@@ -596,7 +599,7 @@ fn a_public_shard_is_fetched_once_and_a_cleared_shard_is_reported_empty() {
             if input.pre_state.is_empty() {
                 echo(input, Response::keep())
             } else {
-                echo(input, Response::write(Vec::new()).send(send_to(clearing)))
+                echo(input, Response::write(Vec::new()).call(send_to(clearing)))
             }
         });
 
@@ -662,7 +665,7 @@ fn a_private_root_records_its_public_call_and_the_assumed_reply() {
         if input.origin == Origin::Root {
             echo(
                 input,
-                Response::write(b"first".to_vec()).send(credit.clone()),
+                Response::write(b"first".to_vec()).call(credit.clone()),
             )
         } else {
             echo(
@@ -675,6 +678,7 @@ fn a_private_root_records_its_public_call_and_the_assumed_reply() {
     let ExecutionResult::Recorded {
         private_accounts,
         boundary,
+        ..
     } = run(
         declared(vec![vault]),
         &[keys.regular(true)],
@@ -699,7 +703,6 @@ fn a_private_root_records_its_public_call_and_the_assumed_reply() {
         Boundary {
             public_deliveries: vec![public(DeliverySource::Call(id(8)), vault, b"credit")],
             assumptions: vec![reply],
-            casts: Vec::new(),
             schedule: vec![CallPublic, EnterPrivate, LeavePrivate, ReturnPublic],
         }
     );
@@ -1259,7 +1262,7 @@ fn a_check_whose_live_subtree_makes_more_than_64_deliveries_succeeds() {
             Response::keep()
         } else {
             remaining = remaining.saturating_sub(1);
-            Response::keep().send(send_to(ENTRY))
+            Response::keep().call(send_to(ENTRY))
         };
         echo(input, response)
     });
@@ -1343,25 +1346,25 @@ fn a_live_delivery_from_another_actor_of_the_same_program_does_not_satisfy_an_as
 }
 
 #[test]
-fn a_cast_is_published_after_the_subtree_of_the_call_before_it() {
+fn a_parents_casts_precede_its_childrens_and_never_run_their_recipients() {
     let (outer_target, inner_target) = (actor(6, 7), actor(7, 7));
     let mut script = Script::default()
         .on(ENTRY, move |input| {
             echo(
                 input,
                 Response::keep()
-                    .send(send_to(CALLEE))
-                    .send(Cast {
+                    .call(send_to(CALLEE))
+                    .cast(Cast {
                         to: outer_target,
                         message: b"x".to_vec(),
                     })
-                    .send(send_to(BYSTANDER)),
+                    .call(send_to(BYSTANDER)),
             )
         })
         .on(CALLEE, move |input| {
             echo(
                 input,
-                Response::keep().send(Cast {
+                Response::keep().cast(Cast {
                     to: inner_target,
                     message: b"y".to_vec(),
                 }),
@@ -1392,13 +1395,13 @@ fn a_cast_is_published_after_the_subtree_of_the_call_before_it() {
         vec![
             MessageBody {
                 source: id(9),
-                to: inner_target,
-                message: b"y".to_vec(),
+                to: outer_target,
+                message: b"x".to_vec(),
             },
             MessageBody {
                 source: id(9),
-                to: outer_target,
-                message: b"x".to_vec(),
+                to: inner_target,
+                message: b"y".to_vec(),
             },
         ]
     );
@@ -1455,7 +1458,7 @@ fn a_recorded_receipt_root_to_a_private_actor_runs_privately_with_its_stored_ori
 }
 
 #[test]
-fn a_checked_private_cast_is_published_in_execution_order_with_the_live_casts() {
+fn a_record_keeps_its_casts_out_of_the_boundary_and_a_check_returns_only_live_casts() {
     let keys = Keys::new(1);
     let (private_target, public_target) = (actor(6, 7), actor(7, 7));
     let private_cast = MessageBody {
@@ -1466,35 +1469,38 @@ fn a_checked_private_cast_is_published_in_execution_order_with_the_live_casts() 
     let mut recording = Script::default().on(holder(&keys), move |input| {
         echo(
             input,
-            Response::keep().send(send_to(ENTRY)).send(Cast {
+            Response::keep().call(send_to(ENTRY)).cast(Cast {
                 to: private_target,
                 message: b"x".to_vec(),
             }),
         )
     });
-    let boundary = recorded_boundary(
-        run(
-            declared(vec![ENTRY]),
-            &[keys.regular(false)],
-            Mode::Record {
-                root: root(holder(&keys)),
-                assumed: vec![Vec::new()],
-            },
-            &mut recording,
-        )
-        .unwrap(),
-    );
+    let ExecutionResult::Recorded {
+        boundary,
+        casts: proven_casts,
+        ..
+    } = run(
+        declared(vec![ENTRY]),
+        &[keys.regular(false)],
+        Mode::Record {
+            root: root(holder(&keys)),
+            assumed: vec![Vec::new()],
+        },
+        &mut recording,
+    )
+    .unwrap()
+    .result
+    else {
+        panic!("expected a recorded execution")
+    };
 
-    assert_eq!(
-        boundary.schedule,
-        vec![CallPublic, ReturnPublic, ScheduleOp::Cast]
-    );
-    assert_eq!(boundary.casts, vec![private_cast.clone()]);
+    assert_eq!(boundary.schedule, vec![CallPublic, ReturnPublic]);
+    assert_eq!(proven_casts, vec![private_cast]);
 
     let mut checking = Script::default().on(ENTRY, move |input| {
         echo(
             input,
-            Response::keep().send(Cast {
+            Response::keep().cast(Cast {
                 to: public_target,
                 message: b"y".to_vec(),
             }),
@@ -1512,35 +1518,10 @@ fn a_checked_private_cast_is_published_in_execution_order_with_the_live_casts() 
 
     assert_eq!(
         casts,
-        vec![
-            MessageBody {
-                source: id(9),
-                to: public_target,
-                message: b"y".to_vec(),
-            },
-            private_cast,
-        ]
+        vec![MessageBody {
+            source: id(9),
+            to: public_target,
+            message: b"y".to_vec(),
+        }]
     );
-}
-
-#[test]
-fn a_check_rejects_a_cast_its_schedule_never_reaches() {
-    let boundary = Boundary {
-        casts: vec![MessageBody {
-            source: id(8),
-            to: CALLEE,
-            message: b"x".to_vec(),
-        }],
-        ..root_statement()
-    };
-    let mut script = Script::default().on(ENTRY, sending(Vec::new()));
-
-    let result = run(
-        declared(vec![ENTRY]),
-        &[],
-        Mode::Check(boundary),
-        &mut script,
-    );
-
-    assert!(matches!(result, Err(ExecutionError::IncompleteBoundary)));
 }

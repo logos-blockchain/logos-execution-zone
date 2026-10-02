@@ -7,10 +7,7 @@ use lee::{
     AccountId, Actor, Assumption, MessageEnvelope,
     privacy_preserving_transaction::circuit::ProgramCatalog, program::Program,
 };
-use lee_core::{
-    SharedSecretKey,
-    program::{Action, Call},
-};
+use lee_core::{SharedSecretKey, program::Call};
 use token_core::{Delivery, TokenDescriptor, TokenHolding, TokenKind, expected_sends};
 
 use crate::{
@@ -436,34 +433,33 @@ impl SwapTerms {
             notify: None,
             delivery: Delivery::Call,
         };
+        let (calls, _) = expected_sends(vault, &payout);
         Ok(vec![
-            expected_sends(vault, &payout)
+            calls
                 .into_iter()
-                .filter_map(|action| {
-                    let Action::Call(Call {
-                        to,
-                        message,
-                        pda_seeds,
-                    }) = action
-                    else {
-                        return None;
-                    };
-                    accounts
-                        .iter()
-                        .any(|mention| {
-                            mention.identity.is_private()
-                                && mention.identity.account_id() == to.account_id
-                        })
-                        .then(|| Assumption {
-                            envelope: MessageEnvelope {
-                                source: vault,
-                                to,
-                                message,
-                            },
-                            grants: vec![self.output_vault_id],
-                            pda_seeds,
-                        })
-                })
+                .filter_map(
+                    |Call {
+                         to,
+                         message,
+                         pda_seeds,
+                     }| {
+                        accounts
+                            .iter()
+                            .any(|mention| {
+                                mention.identity.is_private()
+                                    && mention.identity.account_id() == to.account_id
+                            })
+                            .then(|| Assumption {
+                                envelope: MessageEnvelope {
+                                    source: vault,
+                                    to,
+                                    message,
+                                },
+                                grants: vec![self.output_vault_id],
+                                pda_seeds,
+                            })
+                    },
+                )
                 .collect(),
         ])
     }
@@ -904,7 +900,7 @@ mod tests {
                 .unwrap()
         };
         let vault = Actor::new(terms.output_vault_id, terms.token_program_id);
-        let Action::Call(Call { to, message, .. }) = expected_sends(
+        let (mut calls, _) = expected_sends(
             vault,
             &token_core::Message::Transfer {
                 to: DESTINATION,
@@ -913,10 +909,8 @@ mod tests {
                 notify: None,
                 delivery: Delivery::Call,
             },
-        )
-        .remove(0) else {
-            panic!("the token program's payout is an inline call");
-        };
+        );
+        let Call { to, message, .. } = calls.remove(0);
 
         assert_eq!(
             payout_to(AccountIdentity::PrivateOwned(DESTINATION)),

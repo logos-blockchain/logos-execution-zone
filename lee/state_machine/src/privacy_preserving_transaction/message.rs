@@ -145,6 +145,7 @@ pub mod tests {
             execution: PrivacyPreservingCircuitOutput {
                 declared: Declared::default(),
                 boundary: Boundary::default(),
+                casts: Vec::new(),
                 consumed_message: None,
                 private_actions: vec![PrivateAction {
                     nullifier,
@@ -194,7 +195,6 @@ pub mod tests {
                         grants: Vec::new(),
                         pda_seeds: Vec::new(),
                     }],
-                    casts: Vec::new(),
                     schedule: vec![
                         ScheduleOp::CallPublic,
                         ScheduleOp::EnterPrivate,
@@ -202,6 +202,7 @@ pub mod tests {
                         ScheduleOp::ReturnPublic,
                     ],
                 },
+                casts: Vec::new(),
                 consumed_message: None,
                 private_actions: vec![],
                 block_validity_window: BlockValidityWindow::new_unbounded(),
@@ -236,9 +237,9 @@ pub mod tests {
             b"a",
             &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
-            &[0, 0, 0, 0], // boundary.casts: none
             &[4, 0, 0, 0], // boundary.schedule: four ops
             &[0, 1, 2, 3],
+            &[0, 0, 0, 0], // casts: none
             &[0],          // consumed_message: None
             &[0, 0, 0, 0], // private_actions: none
             &[0, 0],       // block_validity_window: from None, to None

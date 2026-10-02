@@ -118,18 +118,18 @@ fn answer(input: &ReceiveInput, mut pending: Vec<Phase>, reply: &StateReply) -> 
                 vault_balance,
             });
             keep(&pending)
-                .send(custody_transfer(
+                .call(custody_transfer(
                     vault,
                     PdaSeed::new([0; 32]),
                     receiver,
                     amount_out,
                 ))
-                .send(Call {
+                .call(Call {
                     to: callback,
                     message: callback_message,
                     pda_seeds: Vec::new(),
                 })
-                .send(read_vault(vault, input.receiver))
+                .call(read_vault(vault, input.receiver))
         }
         Phase::Repaying { .. } => {
             assert_eq!(
@@ -156,6 +156,6 @@ fn main() {
             borsh::from_slice(&input.message).expect("a flash swap message must decode");
         let read = read_vault(loan.vault, input.receiver);
         pending.push(Phase::Lending(loan));
-        keep(&pending).send(read)
+        keep(&pending).call(read)
     })
 }

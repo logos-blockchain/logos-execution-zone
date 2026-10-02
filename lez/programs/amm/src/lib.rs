@@ -87,7 +87,8 @@ pub fn receive(input: &ReceiveInput) -> Response {
             (pool, after, false)
         }
     };
-    liquidity_sends(input.receiver.account_id, &pool, &message, creates_lp)
-        .into_iter()
-        .fold(Response::write(ActorState::from(&after)), Response::send)
+    Response {
+        calls: liquidity_sends(input.receiver.account_id, &pool, &message, creates_lp),
+        ..Response::write(ActorState::from(&after))
+    }
 }

@@ -20,7 +20,7 @@ fn received() -> Script {
 }
 
 fn replying() -> Script {
-    received().send(Cast::new(sender(), &received()))
+    received().cast(Cast::new(sender(), &received()))
 }
 
 fn cast(state: &mut V03State, to: Actor) -> StoredMessage {
@@ -32,7 +32,7 @@ fn cast_script(state: &mut V03State, to: Actor, script: &Script) -> StoredMessag
         sender(),
         vec![sender()],
         vec![],
-        Script::default().send(Cast::new(to, script)),
+        Script::default().cast(Cast::new(to, script)),
         &[],
     );
     state.transition_from_public_transaction(&tx, 1, 0).unwrap();
@@ -104,8 +104,8 @@ fn pending_records_are_numbered_in_publication_order_across_transactions() {
         vec![sender()],
         vec![],
         Script::default()
-            .send(Cast::new(receiver(), &received()))
-            .send(Cast::new(receiver(), &received())),
+            .cast(Cast::new(receiver(), &received()))
+            .cast(Cast::new(receiver(), &received())),
         &[],
     );
     let body = MessageBody {
@@ -330,7 +330,7 @@ fn a_cast_from_a_private_root_is_published_at_settlement() {
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
             ..proving_input(root(
                 private_root,
-                &Script::default().send(Cast::new(receiver(), &received())),
+                &Script::default().cast(Cast::new(receiver(), &received())),
             ))
         },
         &Simulation::default(),
@@ -517,7 +517,7 @@ fn a_receipt_that_fails_after_casting_keeps_its_record_pending_and_publishes_not
     let record = cast_script(
         &mut state,
         receiver(),
-        &replying().send(Call::new(receiver(), &Script::default().authorized())),
+        &replying().call(Call::new(receiver(), &Script::default().authorized())),
     );
 
     let result = state.transition_from_public_transaction(
@@ -615,7 +615,7 @@ fn a_private_receipt_root_that_calls_a_public_actor_needs_no_identity_evidence()
     let record = cast_script(
         &mut state,
         private_receiver,
-        &received().send(Call::new(receiver(), &Script::write(b"called".to_vec()))),
+        &received().call(Call::new(receiver(), &Script::write(b"called".to_vec()))),
     );
     let id = record.id();
     let proven = execute_and_prove(

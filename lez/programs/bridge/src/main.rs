@@ -39,7 +39,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
     );
 
     Response::write(RECEIPT_MARKER.to_vec())
-        .send(custody_transfer(
+        .call(custody_transfer(
             bridge_core::compute_bridge_account_id(bridge),
             bridge_core::compute_bridge_seed(),
             recipient_id,
@@ -101,16 +101,16 @@ mod tests {
             Some(ActorState::try_from(RECEIPT_MARKER.to_vec()).unwrap())
         );
         assert_eq!(
-            transition.response.sends,
-            vec![
-                custody_transfer(
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![custody_transfer(
                     bridge_core::compute_bridge_account_id(BRIDGE),
                     bridge_core::compute_bridge_seed(),
                     RECIPIENT,
                     5,
-                )
-                .into()
-            ]
+                )],
+                Vec::new()
+            )
         );
         assert_eq!(transition.response.events.len(), 1);
     }

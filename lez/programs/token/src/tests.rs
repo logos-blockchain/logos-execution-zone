@@ -4,7 +4,7 @@ use std::collections::{HashMap, VecDeque};
 
 use lee_core::{
     account::{AccountId, Actor, ActorState},
-    program::{Action, Call, Cast, Origin, ReceiveInput, Transition},
+    program::{Call, Cast, Origin, ReceiveInput, Transition},
 };
 use token_core::{
     Delivery, Message, MetadataStandard, NewTokenDefinition, NewTokenMetadata, Notification,
@@ -212,13 +212,14 @@ fn settle(
             state.insert(account, post_state);
         }
         let sender = Origin::Program(token_actor(account).program_account_id);
-        for action in transition.response.sends.into_iter().rev() {
-            let Action::Call(Call {
-                to, message: data, ..
-            }) = action
-            else {
-                panic!("a token send is an inline call");
-            };
+        assert!(
+            transition.response.casts.is_empty(),
+            "a token send is an inline call"
+        );
+        for Call {
+            to, message: data, ..
+        } in transition.response.calls.into_iter().rev()
+        {
             let sent = borsh::from_slice(&data).expect("a token send carries a message");
             pending.push_front((to.account_id, sender, sent));
         }
@@ -341,21 +342,20 @@ fn every_sent_creation_writes_only_into_an_empty_target() {
     ];
 
     for (operation, receiver, message, targets) in cases {
-        let creations: Vec<(AccountId, Message)> =
-            expected_sends(Actor::new(receiver, TOKEN_PROGRAM_ID), &message)
-                .into_iter()
-                .filter_map(|action| {
-                    let Action::Call(Call {
-                        to, message: data, ..
-                    }) = action
-                    else {
-                        panic!("a token send is an inline call");
-                    };
+        let (calls, casts) = expected_sends(Actor::new(receiver, TOKEN_PROGRAM_ID), &message);
+        assert!(casts.is_empty(), "a token send is an inline call");
+        let creations: Vec<(AccountId, Message)> = calls
+            .into_iter()
+            .filter_map(
+                |Call {
+                     to, message: data, ..
+                 }| {
                     let sent: Message =
                         borsh::from_slice(&data).expect("a token send carries a message");
                     matches!(sent, Message::Create(_)).then_some((to.account_id, sent))
-                })
-                .collect();
+                },
+            )
+            .collect();
         assert_eq!(
             creations
                 .iter()
@@ -600,9 +600,9 @@ fn a_credit_with_notify_sends_one_notification() {
     );
 
     assert_eq!(
-        transition.response.sends,
-        vec![
-            Call::new(
+        (transition.response.calls, transition.response.casts),
+        (
+            vec![Call::new(
                 listener,
                 &Message::Notification(Notification {
                     credited_account: HOLDING_ID,
@@ -610,9 +610,9 @@ fn a_credit_with_notify_sends_one_notification() {
                     amount: TRANSFER_AMOUNT,
                     payload: b"swap".to_vec(),
                 })
-            )
-            .into()
-        ]
+            )],
+            Vec::new()
+        )
     );
 }
 
@@ -640,13 +640,13 @@ fn expected_sends_for_a_transfer_is_one_credit_to_the_recipient() {
             Actor::new(HOLDING_ID, TOKEN_PROGRAM_ID),
             &transfer(FUNGIBLE, TRANSFER_AMOUNT)
         ),
-        vec![
-            Call::new(
+        (
+            vec![Call::new(
                 token_actor(HOLDING_ID_2),
                 &credit(FUNGIBLE, TRANSFER_AMOUNT)
-            )
-            .into()
-        ]
+            )],
+            Vec::new()
+        )
     );
 }
 
@@ -664,14 +664,14 @@ fn a_cast_transfer_writes_the_sender_like_a_call_and_sends_one_cast_credit() {
             .post_state
     );
     assert_eq!(
-        cast.response.sends,
-        vec![
-            Cast::new(
+        (cast.response.calls, cast.response.casts),
+        (
+            Vec::new(),
+            vec![Cast::new(
                 token_actor(HOLDING_ID_2),
                 &credit(FUNGIBLE, TRANSFER_AMOUNT)
-            )
-            .into()
-        ]
+            )]
+        )
     );
 }
 
@@ -694,13 +694,13 @@ fn expected_sends_for_a_cast_transfer_is_one_cast_credit_to_the_recipient() {
             Actor::new(HOLDING_ID, TOKEN_PROGRAM_ID),
             &cast_transfer(FUNGIBLE, TRANSFER_AMOUNT)
         ),
-        vec![
-            Cast::new(
+        (
+            Vec::new(),
+            vec![Cast::new(
                 token_actor(HOLDING_ID_2),
                 &credit(FUNGIBLE, TRANSFER_AMOUNT)
-            )
-            .into()
-        ]
+            )]
+        )
     );
 }
 
@@ -1221,18 +1221,18 @@ fn a_burn_sends_the_supply_burn_to_the_definition_it_names() {
     );
 
     assert_eq!(
-        transition.response.sends,
-        vec![
-            Call::new(
+        (transition.response.calls, transition.response.casts),
+        (
+            vec![Call::new(
                 token_actor(DEFINITION_ID),
                 &Message::BurnSupply {
                     definition_id: DEFINITION_ID,
                     kind: TokenKind::Fungible,
                     amount: BURN_SUCCESS,
                 }
-            )
-            .into()
-        ]
+            )],
+            Vec::new()
+        )
     );
 }
 

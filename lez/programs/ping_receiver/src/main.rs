@@ -46,7 +46,7 @@ fn receive(input: &ReceiveInput) -> Response {
                 }),
                 "Record is only callable for a peer source this receiver authorizes"
             );
-            Response::keep().send(Call::new(
+            Response::keep().call(Call::new(
                 Actor::new(ping_record_pda(program), program),
                 &ReceiverMessage::WriteRecord(payload),
             ))
@@ -135,7 +135,7 @@ fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
         panic!("a delivery to ping_receiver must carry a Record");
     };
     let program = input.receiver.program_account_id;
-    Response::keep().send(Call::new(
+    Response::keep().call(Call::new(
         Actor::new(receiver_config_account_id(program), program),
         &ReceiverMessage::RecordFrom {
             deliverer: input.origin_program().expect("a delivery has a sender"),
@@ -155,7 +155,7 @@ fn forward_as_authority(input: &ReceiveInput, message: &ReceiverMessage) -> Resp
         "the configured authority must authorize a change"
     );
     let program = input.receiver.program_account_id;
-    Response::keep().send(Call::new(
+    Response::keep().call(Call::new(
         Actor::new(receiver_config_account_id(program), program),
         message,
     ))
@@ -200,10 +200,7 @@ fn assert_authority(
 #[cfg(test)]
 mod tests {
     use borsh::BorshSerialize;
-    use lee_core::{
-        account::ActorState,
-        program::{Action, Transition},
-    };
+    use lee_core::{account::ActorState, program::Transition};
     use ping_core::ZoneId;
 
     use super::*;
@@ -274,14 +271,15 @@ mod tests {
         message: &ReceiverMessage,
     ) -> Transition {
         let entry = run(actor(AUTHORITY), origin, is_authorized, Vec::new(), message);
-        let [forwarded] =
-            <[Action; 1]>::try_from(entry.response.sends).expect("one forwarded change");
-        let Action::Call(Call {
-            to, message: data, ..
-        }) = forwarded
-        else {
-            panic!("the forwarded change is an inline call");
-        };
+        assert!(
+            entry.response.casts.is_empty(),
+            "the forwarded change is an inline call"
+        );
+        let [
+            Call {
+                to, message: data, ..
+            },
+        ] = <[Call; 1]>::try_from(entry.response.calls).expect("one forwarded change");
         assert_eq!(to, config_actor());
         at_config(
             Origin::Program(RECEIVER),
@@ -336,8 +334,8 @@ mod tests {
 
         assert_eq!(transition.response.post_state, None);
         assert_eq!(
-            transition.response.sends,
-            vec![to_config(&record_from(INBOX, SOURCE)).into()]
+            (transition.response.calls, transition.response.casts),
+            (vec![to_config(&record_from(INBOX, SOURCE))], Vec::new())
         );
     }
 
@@ -365,14 +363,14 @@ mod tests {
 
         assert_eq!(transition.response.post_state, None);
         assert_eq!(
-            transition.response.sends,
-            vec![
-                Call::new(
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![Call::new(
                     actor(ping_record_pda(RECEIVER)),
                     &ReceiverMessage::WriteRecord(b"ping".to_vec()),
-                )
-                .into()
-            ]
+                )],
+                Vec::new()
+            )
         );
     }
 
@@ -425,8 +423,8 @@ mod tests {
         );
 
         assert_eq!(
-            transition.response.sends,
-            vec![to_config(&update(AUTHORITY, None)).into()]
+            (transition.response.calls, transition.response.casts),
+            (vec![to_config(&update(AUTHORITY, None))], Vec::new())
         );
     }
 

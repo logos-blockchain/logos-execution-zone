@@ -418,6 +418,10 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                 execution: PrivacyPreservingCircuitOutput {
                     declared: value.message.declared.into(),
                     boundary: value.message.boundary.into(),
+                    casts: {
+                        let std_vec: Vec<FfiMessageBody> = value.message.casts.into();
+                        std_vec.into_iter().map(Into::into).collect()
+                    },
                     consumed_message: value
                         .message
                         .has_consumed_message
@@ -647,7 +651,6 @@ pub enum FfiScheduleOp {
     EnterPrivate,
     LeavePrivate,
     ReturnPublic,
-    Cast,
 }
 
 impl From<ScheduleOp> for FfiScheduleOp {
@@ -657,7 +660,6 @@ impl From<ScheduleOp> for FfiScheduleOp {
             ScheduleOp::EnterPrivate => Self::EnterPrivate,
             ScheduleOp::LeavePrivate => Self::LeavePrivate,
             ScheduleOp::ReturnPublic => Self::ReturnPublic,
-            ScheduleOp::Cast => Self::Cast,
         }
     }
 }
@@ -669,7 +671,6 @@ impl From<FfiScheduleOp> for ScheduleOp {
             FfiScheduleOp::EnterPrivate => Self::EnterPrivate,
             FfiScheduleOp::LeavePrivate => Self::LeavePrivate,
             FfiScheduleOp::ReturnPublic => Self::ReturnPublic,
-            FfiScheduleOp::Cast => Self::Cast,
         }
     }
 }
@@ -711,7 +712,6 @@ impl From<FfiMessageBody> for MessageBody {
 pub struct FfiBoundary {
     pub public_deliveries: FfiPublicDeliveryList,
     pub assumptions: FfiAssumptionList,
-    pub casts: FfiMessageBodyList,
     pub schedule: FfiScheduleOpList,
 }
 
@@ -720,7 +720,6 @@ impl From<Boundary> for FfiBoundary {
         let Boundary {
             public_deliveries,
             assumptions,
-            casts,
             schedule,
         } = value;
 
@@ -735,7 +734,6 @@ impl From<Boundary> for FfiBoundary {
                 .map(Into::into)
                 .collect::<Vec<_>>()
                 .into(),
-            casts: casts.into_iter().map(Into::into).collect::<Vec<_>>().into(),
             schedule: schedule
                 .into_iter()
                 .map(Into::into)
@@ -749,13 +747,11 @@ impl From<FfiBoundary> for Boundary {
     fn from(value: FfiBoundary) -> Self {
         let public_deliveries: Vec<FfiPublicDelivery> = value.public_deliveries.into();
         let assumptions: Vec<FfiAssumption> = value.assumptions.into();
-        let casts: Vec<FfiMessageBody> = value.casts.into();
         let schedule: Vec<FfiScheduleOp> = value.schedule.into();
 
         Self {
             public_deliveries: public_deliveries.into_iter().map(Into::into).collect(),
             assumptions: assumptions.into_iter().map(Into::into).collect(),
-            casts: casts.into_iter().map(Into::into).collect(),
             schedule: schedule.into_iter().map(Into::into).collect(),
         }
     }
@@ -828,6 +824,7 @@ impl From<PrivateAction> for FfiPrivateAction {
 pub struct FfiPrivacyPreservingMessage {
     pub declared: FfiDeclared,
     pub boundary: FfiBoundary,
+    pub casts: FfiMessageBodyList,
     pub has_consumed_message: bool,
     pub consumed_message: FfiBytes32,
     pub nonces: FfiNonceList,
@@ -845,6 +842,7 @@ impl From<lee::privacy_preserving_transaction::Message> for FfiPrivacyPreserving
                 PrivacyPreservingCircuitOutput {
                     declared,
                     boundary,
+                    casts,
                     consumed_message,
                     private_actions,
                     block_validity_window,
@@ -858,6 +856,7 @@ impl From<lee::privacy_preserving_transaction::Message> for FfiPrivacyPreserving
         Self {
             declared: declared.into(),
             boundary: boundary.into(),
+            casts: casts.into_iter().map(Into::into).collect::<Vec<_>>().into(),
             has_consumed_message: consumed_message.is_some(),
             consumed_message: consumed_message.map(message_id_to_ffi).unwrap_or_default(),
             nonces: nonces
@@ -1307,13 +1306,13 @@ mod tests {
                             grants: vec![],
                             pda_seeds: vec![],
                         }],
-                        casts: vec![MessageBody {
-                            source: account_id(22),
-                            to: actor(23, 24),
-                            message: vec![25],
-                        }],
-                        schedule: vec![ScheduleOp::CallPublic, ScheduleOp::Cast],
+                        schedule: vec![ScheduleOp::CallPublic],
                     },
+                    casts: vec![MessageBody {
+                        source: account_id(22),
+                        to: actor(23, 24),
+                        message: vec![25],
+                    }],
                     consumed_message: Some(MessageId::new([26; 32])),
                     private_actions: vec![],
                     block_validity_window: ValidityWindow::new_unbounded(),

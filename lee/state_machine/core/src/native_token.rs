@@ -70,11 +70,11 @@ pub fn receive(input: &ReceiveInput) -> Result<Transition, TransferError> {
     };
     let account_id = input.receiver.account_id;
     let response = match message {
-        Message::Transfer { to, amount } => debit(input, to, amount)?.send(Call::new(
+        Message::Transfer { to, amount } => debit(input, to, amount)?.call(Call::new(
             Actor::native_balance(to),
             &Message::Credit(amount),
         )),
-        Message::CastTransfer { to, amount } => debit(input, to, amount)?.send(Cast::new(
+        Message::CastTransfer { to, amount } => debit(input, to, amount)?.cast(Cast::new(
             Actor::native_balance(to),
             &Message::Credit(amount),
         )),
@@ -87,7 +87,7 @@ pub fn receive(input: &ReceiveInput) -> Result<Transition, TransferError> {
                 .ok_or(TransferError::BalanceOverflow { account_id })?;
             Response::write(encode_balance(post))
         }
-        Message::ReadState(read) => Response::keep().send(Call::new(
+        Message::ReadState(read) => Response::keep().call(Call::new(
             read.reply_to,
             &Message::StateReply(StateReply::from(input)),
         )),
@@ -187,8 +187,8 @@ mod tests {
 
         assert_eq!(transition.response.post_state, Some(encode_balance(70)));
         assert_eq!(
-            transition.response.sends,
-            vec![Call::new(native(2), &Message::Credit(30)).into()]
+            (transition.response.calls, transition.response.casts),
+            (vec![Call::new(native(2), &Message::Credit(30))], Vec::new())
         );
     }
 
@@ -221,8 +221,8 @@ mod tests {
 
         assert_eq!(transition.response.post_state, Some(encode_balance(70)));
         assert_eq!(
-            transition.response.sends,
-            vec![Cast::new(native(2), &Message::Credit(30)).into()]
+            (transition.response.calls, transition.response.casts),
+            (Vec::new(), vec![Cast::new(native(2), &Message::Credit(30))])
         );
     }
 
@@ -320,17 +320,17 @@ mod tests {
 
         assert_eq!(transition.response.post_state, None);
         assert_eq!(
-            transition.response.sends,
-            vec![
-                Call::new(
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![Call::new(
                     reply_to,
                     &Message::StateReply(StateReply {
                         subject: native(1),
                         state: encode_balance(100),
                     }),
-                )
-                .into()
-            ]
+                )],
+                Vec::new()
+            )
         );
     }
 

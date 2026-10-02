@@ -77,20 +77,20 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
             // The config checks it before the debit and the emission are delivered, as the read
             // it replaces did.
             Response::keep()
-                .send(Call::new(
+                .call(Call::new(
                     Actor::new(config_account_id(program), program),
                     &Message::CheckRoute {
                         outbox_account_id: outbox.program_account_id,
                         target_account_id,
                     },
                 ))
-                .send(custody_transfer(
+                .call(custody_transfer(
                     holding_account_id(program, &holder),
                     holding_seed(&holder),
                     escrow_account_id(program),
                     amount,
                 ))
-                .send(Call::new(
+                .call(Call::new(
                     outbox,
                     &OutboxMessage::Emit {
                         target_zone,
@@ -286,35 +286,35 @@ mod tests {
         let holder = HOLDER.into_value();
         assert_eq!(transition.response.post_state, None);
         assert_eq!(
-            transition.response.sends,
-            vec![
-                Call::new(
-                    config_actor(),
-                    &Message::CheckRoute {
-                        outbox_account_id: OUTBOX_ID,
-                        target_account_id: WRAPPED_ID,
-                    },
-                )
-                .into(),
-                custody_transfer(
-                    holding_account_id(BRIDGE_LOCK_ID, &holder),
-                    holding_seed(&holder),
-                    escrow_account_id(BRIDGE_LOCK_ID),
-                    AMOUNT,
-                )
-                .into(),
-                Call::new(
-                    outbox_actor(),
-                    &OutboxMessage::Emit {
-                        target_zone: ZONE,
-                        target_account_id: WRAPPED_ID,
-                        target_accounts: target_accounts(),
-                        payload: mint_payload(AMOUNT),
-                        ordinal: 0,
-                    },
-                )
-                .into(),
-            ],
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![
+                    Call::new(
+                        config_actor(),
+                        &Message::CheckRoute {
+                            outbox_account_id: OUTBOX_ID,
+                            target_account_id: WRAPPED_ID,
+                        },
+                    ),
+                    custody_transfer(
+                        holding_account_id(BRIDGE_LOCK_ID, &holder),
+                        holding_seed(&holder),
+                        escrow_account_id(BRIDGE_LOCK_ID),
+                        AMOUNT,
+                    ),
+                    Call::new(
+                        outbox_actor(),
+                        &OutboxMessage::Emit {
+                            target_zone: ZONE,
+                            target_account_id: WRAPPED_ID,
+                            target_accounts: target_accounts(),
+                            payload: mint_payload(AMOUNT),
+                            ordinal: 0,
+                        },
+                    ),
+                ],
+                Vec::new()
+            ),
             "the route is checked first, then the escrow debit, then the emission"
         );
     }

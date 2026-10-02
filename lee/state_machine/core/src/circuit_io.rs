@@ -8,8 +8,8 @@ use crate::{
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
     execution_state::{Assumption, Boundary, Declared, TransactionEntry},
     program::{
-        BlockValidityWindow, MessageId, PdaSeed, ProgramHeader, ProgramId, Response, StoredMessage,
-        TimestampValidityWindow, immutable_mirror_commitment,
+        BlockValidityWindow, MessageBody, MessageId, PdaSeed, ProgramHeader, ProgramId, Response,
+        StoredMessage, TimestampValidityWindow, immutable_mirror_commitment,
     },
 };
 
@@ -238,6 +238,7 @@ pub struct PrivateAction {
 pub struct PrivacyPreservingCircuitOutput {
     pub declared: Declared,
     pub boundary: Boundary,
+    pub casts: Vec<MessageBody>,
     pub consumed_message: Option<MessageId>,
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: BlockValidityWindow,
@@ -314,7 +315,6 @@ mod tests {
                     grants: Vec::new(),
                     pda_seeds: Vec::new(),
                 }],
-                casts: Vec::new(),
                 schedule: vec![
                     ScheduleOp::CallPublic,
                     ScheduleOp::EnterPrivate,
@@ -331,6 +331,7 @@ mod tests {
         let output = PrivacyPreservingCircuitOutput {
             declared,
             boundary,
+            casts: Vec::new(),
             consumed_message: None,
             private_actions: Vec::new(),
             block_validity_window: BlockValidityWindow::new_unbounded(),
@@ -363,9 +364,9 @@ mod tests {
             b"a",
             &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
-            &[0, 0, 0, 0], // boundary.casts: none
             &[4, 0, 0, 0], // boundary.schedule: four ops
             &[0, 1, 2, 3],
+            &[0, 0, 0, 0], // casts: none
             &[0],          // consumed_message: None
             &[0, 0, 0, 0], // private_actions: none
             &[0, 0],       // block_validity_window: from None, to None
@@ -396,17 +397,13 @@ mod tests {
                     pda_seeds: Vec::new(),
                 }],
                 assumptions: Vec::new(),
-                casts: vec![MessageBody {
-                    source: AccountId::new([8; 32]),
-                    to: Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32])),
-                    message: b"p".to_vec(),
-                }],
-                schedule: vec![
-                    ScheduleOp::CallPublic,
-                    ScheduleOp::ReturnPublic,
-                    ScheduleOp::Cast,
-                ],
+                schedule: vec![ScheduleOp::CallPublic, ScheduleOp::ReturnPublic],
             },
+            casts: vec![MessageBody {
+                source: AccountId::new([8; 32]),
+                to: Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32])),
+                message: b"p".to_vec(),
+            }],
             consumed_message: Some(MessageId::new([7; 32])),
             private_actions: Vec::new(),
             block_validity_window: BlockValidityWindow::new_unbounded(),
@@ -415,7 +412,7 @@ mod tests {
         };
 
         let expected: Vec<u8> = [
-            &[91, 1, 0, 0][..], // frame length: the 347 bytes below
+            &[90, 1, 0, 0][..], // frame length: the 346 bytes below
             &[1, 0, 0, 0],      // declared.public_actors: one actor
             &[5; 32],
             &[6; 32],
@@ -430,14 +427,14 @@ mod tests {
             &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
             &[0, 0, 0, 0], // boundary.assumptions: none
-            &[1, 0, 0, 0], // boundary.casts: one message
+            &[2, 0, 0, 0], // boundary.schedule: two ops
+            &[0, 3],
+            &[1, 0, 0, 0], // casts: one message
             &[8; 32],      // source
             &[3; 32],      // to
             &[4; 32],
             &[1, 0, 0, 0], // message
             b"p",
-            &[3, 0, 0, 0], // boundary.schedule: three ops
-            &[0, 3, 4],
             &[1], // consumed_message: Some
             &[7; 32],
             &[0, 0, 0, 0], // private_actions: none
@@ -457,7 +454,6 @@ mod tests {
             (ScheduleOp::EnterPrivate, 1),
             (ScheduleOp::LeavePrivate, 2),
             (ScheduleOp::ReturnPublic, 3),
-            (ScheduleOp::Cast, 4),
         ] {
             assert_eq!(borsh::to_vec(&op).unwrap(), [tag]);
         }
@@ -468,6 +464,7 @@ mod tests {
         let output = PrivacyPreservingCircuitOutput {
             declared: Declared::default(),
             boundary: Boundary::default(),
+            casts: Vec::new(),
             consumed_message: None,
             private_actions: vec![PrivateAction {
                 nullifier: Nullifier::for_account_update(

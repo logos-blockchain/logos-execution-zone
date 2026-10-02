@@ -316,7 +316,6 @@ pub enum ScheduleOp {
     EnterPrivate,
     LeavePrivate,
     ReturnPublic,
-    Cast,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -337,7 +336,6 @@ pub struct Assumption {
 pub struct Boundary {
     pub public_deliveries: Vec<PublicDelivery>,
     pub assumptions: Vec<Assumption>,
-    pub casts: Vec<MessageBody>,
     pub schedule: Vec<ScheduleOp>,
 }
 
@@ -362,6 +360,7 @@ pub struct PrivateAction {
 pub struct PrivacyPreservingMessage {
     pub declared: Declared,
     pub boundary: Boundary,
+    pub casts: Vec<MessageBody>,
     pub consumed_message: Option<MessageId>,
     pub nonces: Vec<Nonce>,
     pub private_actions: Vec<PrivateAction>,

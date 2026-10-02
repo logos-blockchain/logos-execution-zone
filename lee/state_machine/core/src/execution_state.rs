@@ -7,7 +7,7 @@ use crate::{
     NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, WitnessKind,
     account::{AccountData, AccountId, Actor, ActorState},
     program::{
-        Action, BlockValidityWindow, Call, ExecutionValidationError, InvalidWindow, MessageBody,
+        BlockValidityWindow, Call, Cast, ExecutionValidationError, InvalidWindow, MessageBody,
         MessageData, MessageEnvelope, Origin, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent,
         ReceiveInput, StoredMessage, TimestampValidityWindow, Transition, validate_transition,
     },
@@ -119,7 +119,6 @@ pub enum ScheduleOp {
     EnterPrivate,
     LeavePrivate,
     ReturnPublic,
-    Cast,
 }
 
 #[derive(
@@ -128,7 +127,6 @@ pub enum ScheduleOp {
 pub struct Boundary {
     pub public_deliveries: Vec<PublicDelivery>,
     pub assumptions: Vec<Assumption>,
-    pub casts: Vec<MessageBody>,
     pub schedule: Vec<ScheduleOp>,
 }
 
@@ -230,6 +228,7 @@ pub enum ExecutionResult {
     Recorded {
         private_accounts: HashMap<AccountId, AccountData>,
         boundary: Boundary,
+        casts: Vec<MessageBody>,
     },
     Settled {
         public: Vec<(AccountId, AccountData)>,
@@ -253,7 +252,6 @@ struct AccountEntry {
 
 enum Item {
     Deliver(Box<Delivery>),
-    Cast(MessageBody),
     ClosePublic,
     ClosePrivate,
     Continue { root: bool },
@@ -313,7 +311,6 @@ enum ModeState {
         cursor: usize,
         public_deliveries_consumed: usize,
         assumptions_consumed: usize,
-        casts_consumed: usize,
     },
 }
 
@@ -434,7 +431,6 @@ impl<'witnesses> ExecutionState<'witnesses> {
                     cursor: 0,
                     public_deliveries_consumed: 0,
                     assumptions_consumed: 0,
-                    casts_consumed: 0,
                 },
             ),
         };
@@ -482,7 +478,6 @@ impl<'witnesses> ExecutionState<'witnesses> {
         while let Some(item) = self.pending.pop_front() {
             match item {
                 Item::Deliver(delivery) => self.deliver(*delivery, backend)?,
-                Item::Cast(body) => self.cast(body),
                 Item::ClosePublic => self.close(ScheduleOp::ReturnPublic)?,
                 Item::ClosePrivate => self.close(ScheduleOp::LeavePrivate)?,
                 Item::Continue { root } => self.resume(root)?,
@@ -500,12 +495,10 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 cursor,
                 public_deliveries_consumed,
                 assumptions_consumed,
-                casts_consumed,
             } => {
                 if *cursor != boundary.schedule.len()
                     || *public_deliveries_consumed != boundary.public_deliveries.len()
                     || *assumptions_consumed != boundary.assumptions.len()
-                    || *casts_consumed != boundary.casts.len()
                 {
                     return Err(ExecutionError::IncompleteBoundary.into());
                 }
@@ -536,7 +529,6 @@ impl<'witnesses> ExecutionState<'witnesses> {
             boundary,
             cursor,
             public_deliveries_consumed,
-            casts_consumed,
             ..
         } = &mut self.mode
         else {
@@ -567,20 +559,6 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 })));
                 Ok(())
             }
-            (Some(ScheduleOp::Cast), _) => {
-                let cast = boundary
-                    .casts
-                    .get(*casts_consumed)
-                    .ok_or(ExecutionError::IncompleteBoundary)?
-                    .clone();
-                expect_op(&boundary.schedule, cursor, ScheduleOp::Cast)?;
-                *casts_consumed = casts_consumed
-                    .checked_add(1)
-                    .expect("bounded by the cast count");
-                self.casts.push(cast);
-                self.pending.push_front(Item::Continue { root });
-                Ok(())
-            }
             (None, true) | (Some(ScheduleOp::LeavePrivate), false) => Ok(()),
             (
                 None
@@ -592,17 +570,6 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 index: *cursor,
                 expected: ScheduleOp::CallPublic,
             }),
-        }
-    }
-
-    fn cast(&mut self, body: MessageBody) {
-        match &mut self.mode {
-            ModeState::Live | ModeState::Check { .. } => self.casts.push(body),
-            ModeState::Record { boundary, .. } => {
-                boundary.schedule.push(ScheduleOp::Cast);
-                boundary.casts.push(body);
-            }
-            ModeState::Derive { .. } => {}
         }
     }
 
@@ -817,25 +784,31 @@ impl<'witnesses> ExecutionState<'witnesses> {
                     .map(|event| (actor, event)),
             );
         }
-        for action in transition.response.sends.into_iter().rev() {
-            self.pending.push_front(match action {
-                Action::Call(Call {
+        self.casts.extend(
+            transition
+                .response
+                .casts
+                .into_iter()
+                .map(|Cast { to, message }| MessageBody {
+                    source: actor.program_account_id,
                     to,
                     message,
-                    pda_seeds,
-                }) => Item::Deliver(Box::new(Delivery::sent(
+                }),
+        );
+        for Call {
+            to,
+            message,
+            pda_seeds,
+        } in transition.response.calls.into_iter().rev()
+        {
+            self.pending
+                .push_front(Item::Deliver(Box::new(Delivery::sent(
                     actor,
                     to,
                     message,
                     grants.clone(),
                     pda_seeds,
-                ))),
-                Action::Cast(cast) => Item::Cast(MessageBody {
-                    source: actor.program_account_id,
-                    to: cast.to,
-                    message: cast.message,
-                }),
-            });
+                ))));
         }
         Ok(())
     }
@@ -937,6 +910,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
                     })
                     .collect(),
                 boundary,
+                casts,
             },
             ModeState::Live | ModeState::Check { .. } => {
                 let mut public = Vec::new();

@@ -57,7 +57,7 @@ fn receive(input: &ReceiveInput, proposed: Timestamp) -> Response {
         }
         .to_bytes(),
     )
-    .send(Call::new(
+    .call(Call::new(
         Actor::new(CLOCK_01_PROGRAM_ACCOUNT_ID, clock_core::clock_account_id()),
         &clock_core::Message::AssertTimestamp {
             at_least: proposed,

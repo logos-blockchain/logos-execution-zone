@@ -37,7 +37,6 @@ typedef enum FfiScheduleOp {
   EnterPrivate,
   LeavePrivate,
   ReturnPublic,
-  Cast,
 } FfiScheduleOp;
 
 typedef enum FfiProgramImageClaimKind {
@@ -324,6 +323,20 @@ typedef struct FfiVec_FfiAssumption {
 
 typedef struct FfiVec_FfiAssumption FfiAssumptionList;
 
+typedef struct FfiVec_FfiScheduleOp {
+  enum FfiScheduleOp *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiScheduleOp;
+
+typedef struct FfiVec_FfiScheduleOp FfiScheduleOpList;
+
+typedef struct FfiBoundary {
+  FfiPublicDeliveryList public_deliveries;
+  FfiAssumptionList assumptions;
+  FfiScheduleOpList schedule;
+} FfiBoundary;
+
 typedef struct FfiMessageBody {
   FfiAccountId source;
   struct FfiActor to;
@@ -337,21 +350,6 @@ typedef struct FfiVec_FfiMessageBody {
 } FfiVec_FfiMessageBody;
 
 typedef struct FfiVec_FfiMessageBody FfiMessageBodyList;
-
-typedef struct FfiVec_FfiScheduleOp {
-  enum FfiScheduleOp *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiScheduleOp;
-
-typedef struct FfiVec_FfiScheduleOp FfiScheduleOpList;
-
-typedef struct FfiBoundary {
-  FfiPublicDeliveryList public_deliveries;
-  FfiAssumptionList assumptions;
-  FfiMessageBodyList casts;
-  FfiScheduleOpList schedule;
-} FfiBoundary;
 
 typedef struct FfiVec_u8 FfiVecU8;
 
@@ -394,6 +392,7 @@ typedef struct FfiVec_FfiProgramImageClaim FfiProgramImageClaims;
 typedef struct FfiPrivacyPreservingMessage {
   struct FfiDeclared declared;
   struct FfiBoundary boundary;
+  FfiMessageBodyList casts;
   bool has_consumed_message;
   struct FfiBytes32 consumed_message;
   FfiNonceList nonces;

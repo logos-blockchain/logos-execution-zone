@@ -22,9 +22,7 @@ use lee::{
     program::Program,
 };
 use lee_core::{
-    NullifierWitness, PrivateWitness, WitnessKind,
-    execution_state::TransactionEntry,
-    program::{Action, Call},
+    NullifierWitness, PrivateWitness, WitnessKind, execution_state::TransactionEntry, program::Call,
 };
 use sequencer_service_rpc::RpcClient as _;
 use token_core::{Delivery, TokenDescriptor, TokenHolding, TokenKind, expected_sends};
@@ -73,28 +71,31 @@ fn payout_assumed(pool: &PoolFixture, trader: &Trader) -> Vec<Vec<lee::Assumptio
         notify: None,
         delivery: Delivery::Call,
     };
+    let (calls, casts) = expected_sends(vault_b, &payout);
+    assert!(
+        casts.is_empty(),
+        "the token program's payout is an inline call"
+    );
     vec![
-        expected_sends(vault_b, &payout)
+        calls
             .into_iter()
-            .map(|credit| {
-                let Action::Call(Call {
-                    to,
-                    message,
-                    pda_seeds,
-                }) = credit
-                else {
-                    panic!("the token program's payout is an inline call");
-                };
-                lee::Assumption {
-                    envelope: lee::MessageEnvelope {
-                        source: vault_b,
-                        to,
-                        message,
-                    },
-                    grants: vec![pool.vault_b],
-                    pda_seeds,
-                }
-            })
+            .map(
+                |Call {
+                     to,
+                     message,
+                     pda_seeds,
+                 }| {
+                    lee::Assumption {
+                        envelope: lee::MessageEnvelope {
+                            source: vault_b,
+                            to,
+                            message,
+                        },
+                        grants: vec![pool.vault_b],
+                        pda_seeds,
+                    }
+                },
+            )
             .collect(),
     ]
 }

@@ -358,24 +358,6 @@ impl Cast {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub enum Action {
-    Call(Call),
-    Cast(Cast),
-}
-
-impl From<Call> for Action {
-    fn from(call: Call) -> Self {
-        Self::Call(call)
-    }
-}
-
-impl From<Cast> for Action {
-    fn from(cast: Cast) -> Self {
-        Self::Cast(cast)
-    }
-}
-
 /// The scheduled input of one turn, echoed whole in the journal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ReceiveInput {
@@ -443,7 +425,8 @@ impl Transition {
 #[must_use]
 pub struct Response {
     pub post_state: Option<ActorState>,
-    pub sends: Vec<Action>,
+    pub calls: Vec<Call>,
+    pub casts: Vec<Cast>,
     pub events: Vec<ProgramEvent>,
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
@@ -453,7 +436,8 @@ impl Response {
     pub const fn keep() -> Self {
         Self {
             post_state: None,
-            sends: Vec::new(),
+            calls: Vec::new(),
+            casts: Vec::new(),
             events: Vec::new(),
             block_validity_window: ValidityWindow::new_unbounded(),
             timestamp_validity_window: ValidityWindow::new_unbounded(),
@@ -473,8 +457,13 @@ impl Response {
         }
     }
 
-    pub fn send(mut self, action: impl Into<Action>) -> Self {
-        self.sends.push(action.into());
+    pub fn call(mut self, call: Call) -> Self {
+        self.calls.push(call);
+        self
+    }
+
+    pub fn cast(mut self, cast: Cast) -> Self {
+        self.casts.push(cast);
         self
     }
 

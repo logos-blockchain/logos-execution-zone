@@ -96,7 +96,7 @@ fn stake(
     let program = input.receiver.program_account_id;
     let ownership = input.receiver.account_id;
     Response::write(StakeRecord { sequencer_key }.to_bytes())
-        .send(to_config(
+        .call(to_config(
             program,
             &Message::RecordStake {
                 sequencer_key,
@@ -105,7 +105,7 @@ fn stake(
                 has_record,
             },
         ))
-        .send(Call::new(
+        .call(Call::new(
             Actor::native_balance(funding),
             &native_token::Message::Transfer {
                 to: stake_funds_account_id(program, &ownership),
@@ -135,7 +135,7 @@ fn unstake_request(
     // The config holds the request; the transfer happens in FinalizeUnstake.
     Response::keep()
         .block_window(request_window(requested_at))
-        .send(to_config(
+        .call(to_config(
             input.receiver.program_account_id,
             &Message::TrackUnstakeRequest {
                 sequencer_key,
@@ -177,7 +177,7 @@ fn finalize_unstake(input: &ReceiveInput, sequencer_key: SequencerKey) -> Respon
     let program = input.receiver.program_account_id;
     Response::write(config.to_bytes())
         .block_window(pending.releasable_at(exit_delay)..)
-        .send(
+        .call(
             Call::new(
                 Actor::native_balance(stake_funds_account_id(program, &ownership)),
                 &native_token::Message::CastTransfer {
@@ -211,7 +211,7 @@ fn slash(
         .expect("slashed key must have a config entry");
 
     let program = input.receiver.program_account_id;
-    Response::write(config.to_bytes()).send(custody_transfer(
+    Response::write(config.to_bytes()).call(custody_transfer(
         stake_funds_account_id(program, &entry.account_id),
         stake_funds_seed(&entry.account_id),
         slash_sink_account_id(program),
@@ -649,18 +649,20 @@ mod tests {
         );
         assert_eq!(transition.response.block_validity_window.end(), None);
         assert_eq!(
-            transition.response.sends,
-            vec![
-                Call::new(
-                    Actor::native_balance(funds_of(OWNER)),
-                    &native_token::Message::CastTransfer {
-                        to: DESTINATION,
-                        amount: 500,
-                    },
-                )
-                .with_pda_seeds(vec![stake_funds_seed(&OWNER)])
-                .into()
-            ]
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![
+                    Call::new(
+                        Actor::native_balance(funds_of(OWNER)),
+                        &native_token::Message::CastTransfer {
+                            to: DESTINATION,
+                            amount: 500,
+                        },
+                    )
+                    .with_pda_seeds(vec![stake_funds_seed(&OWNER)])
+                ],
+                Vec::new()
+            )
         );
     }
 
@@ -718,8 +720,8 @@ mod tests {
             Some(REQUESTED_AT + 1)
         );
         assert_eq!(
-            transition.response.sends,
-            vec![to_config(PROGRAM, &track(OWNER, 500)).into()]
+            (transition.response.calls, transition.response.casts),
+            (vec![to_config(PROGRAM, &track(OWNER, 500))], Vec::new())
         );
     }
 
@@ -775,18 +777,20 @@ mod tests {
 
         assert_eq!(written(&transition), record(key(1)));
         assert_eq!(
-            transition.response.sends,
-            vec![
-                to_config(PROGRAM, &record_stake(OWNER, MINIMUM, false)).into(),
-                Call::new(
-                    Actor::native_balance(FUNDING),
-                    &native_token::Message::Transfer {
-                        to: funds_of(OWNER),
-                        amount: MINIMUM,
-                    },
-                )
-                .into(),
-            ]
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![
+                    to_config(PROGRAM, &record_stake(OWNER, MINIMUM, false)),
+                    Call::new(
+                        Actor::native_balance(FUNDING),
+                        &native_token::Message::Transfer {
+                            to: funds_of(OWNER),
+                            amount: MINIMUM,
+                        },
+                    ),
+                ],
+                Vec::new()
+            )
         );
     }
 
@@ -878,16 +882,16 @@ mod tests {
 
         assert!(!decoded_config(&transition).entries.contains_key(&key(1)));
         assert_eq!(
-            transition.response.sends,
-            vec![
-                custody_transfer(
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![custody_transfer(
                     funds_of(OWNER),
                     stake_funds_seed(&OWNER),
                     slash_sink_account_id(PROGRAM),
                     3_000,
-                )
-                .into()
-            ]
+                )],
+                Vec::new()
+            )
         );
     }
 

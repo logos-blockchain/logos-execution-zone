@@ -394,7 +394,7 @@ impl ValidatedStateDiff {
         }
 
         let mut cycles_used = 0;
-        let settled = settle(
+        let mut settled = settle(
             state,
             execution.declared.clone(),
             Mode::Check(execution.boundary.clone()),
@@ -403,6 +403,8 @@ impl ValidatedStateDiff {
             crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
             &mut cycles_used,
         )?;
+        // The proven private Casts follow the live public ones.
+        settled.published.extend(execution.casts.iter().cloned());
         let new_nullifiers = nullifiers.iter().map(|(nullifier, _)| *nullifier).collect();
 
         Ok(Self(StateDiff {

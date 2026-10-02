@@ -85,7 +85,7 @@ fn write_segment_writes_the_loader_shard() {
     let segment = ProgramSegment::from_bytes(&post_state).expect("valid segment");
     assert_eq!(segment.bytecode, vec![1, 2, 3]);
     assert_eq!(segment.next_segment, None);
-    assert!(transition.response.sends.is_empty());
+    assert!(transition.response.calls.is_empty() && transition.response.casts.is_empty());
     assert!(new_commitment.is_none());
 }
 

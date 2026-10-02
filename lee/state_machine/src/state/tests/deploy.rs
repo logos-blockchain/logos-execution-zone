@@ -541,14 +541,14 @@ fn a_program_deployed_earlier_in_the_transaction_is_dispatchable_by_a_later_call
         vec![deployer, header, deployed],
         vec![Nonce(0)],
         Script::default()
-            .send(Call::new(
+            .call(Call::new(
                 header,
                 &LoaderMessage::CreateHeader {
                     first_segment: segment_account_ids[0],
                     immutable: true,
                 },
             ))
-            .send(Call::new(deployed, &Script::write(vec![7; 4]))),
+            .call(Call::new(deployed, &Script::write(vec![7; 4]))),
         &[&header_key],
     );
 

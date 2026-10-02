@@ -417,7 +417,7 @@ fn circuit_fails_when_turn_validity_windows_have_empty_intersection() {
         block_window: (1..4).try_into().unwrap(),
         ..Script::default()
     }
-    .send(Call::new(
+    .call(Call::new(
         Actor::new(regular_id(&account_keys, Identifier::ZERO), scripted_id()),
         &later,
     ));
@@ -477,7 +477,7 @@ fn prove_pda_spend(
             private_witnesses: vec![witness],
             ..proving_input(root(
                 Actor::new(handle_account, scripted_id()),
-                &Script::default().send(
+                &Script::default().call(
                     Call::new(
                         Actor::native_balance(handle_account),
                         &transfer(recipient.account_id, amount),
@@ -929,7 +929,7 @@ fn the_prover_never_reads_a_public_shard() {
     let account_id = AccountId::new([7; 32]);
     let root_actor = Actor::new(account_id, scripted_id());
     let callee = Actor::new(account_id, TWIN);
-    let script = Script::default().send(Call::new(callee, &Script::write(vec![3; 16])));
+    let script = Script::default().call(Call::new(callee, &Script::write(vec![3; 16])));
 
     // `Prover` supplies no public shard, so executing either public turn would fail the proof.
     let (output, proof) = execute_and_prove(
@@ -964,7 +964,7 @@ fn a_send_to_an_actor_the_transaction_never_declared_is_rejected() {
 
     let result = prove_scripted(
         init_witness(&keys, Identifier::ZERO),
-        &Script::default().send(Call::new(undeclared, &Script::default())),
+        &Script::default().call(Call::new(undeclared, &Script::default())),
         None,
     );
 
@@ -1137,7 +1137,7 @@ fn a_receipt_for_other_inputs_does_not_bind_in_the_circuit() {
 #[test]
 fn an_undeclared_actor_is_rejected_by_the_circuit() {
     let scripted = crate::test_methods::scripted();
-    let script = Script::default().send(Call::new(Actor::native_balance(BOB), &Script::default()));
+    let script = Script::default().call(Call::new(Actor::native_balance(BOB), &Script::default()));
     let (receipt, response) = receive_receipt(&scripted, &scripted_root_input(&script, true));
     let input = direct_input(scripted_id(), &script, &[&scripted], vec![response]);
 

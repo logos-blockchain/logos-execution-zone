@@ -29,7 +29,7 @@ fn receive(input: &ReceiveInput, message: SenderMessage) -> Response {
                 pinned, outbox.program_account_id,
                 "the emission names a program the ping-sender config does not pin as its outbox"
             );
-            Response::keep().send(Call::new(
+            Response::keep().call(Call::new(
                 outbox,
                 &OutboxMessage::Emit {
                     target_zone,
@@ -104,9 +104,9 @@ mod tests {
 
         assert_eq!(transition.response.post_state, None);
         assert_eq!(
-            transition.response.sends,
-            vec![
-                Call::new(
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![Call::new(
                     Actor::new(AccountId::new([2; 32]), OUTBOX),
                     &OutboxMessage::Emit {
                         target_zone: [1; 32],
@@ -115,9 +115,9 @@ mod tests {
                         payload: b"ping".to_vec(),
                         ordinal: 0,
                     },
-                )
-                .into()
-            ]
+                )],
+                Vec::new()
+            )
         );
     }
 

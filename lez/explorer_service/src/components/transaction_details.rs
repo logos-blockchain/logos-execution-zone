@@ -105,6 +105,7 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
     let PrivacyPreservingMessage {
         declared,
         boundary,
+        casts: _,
         consumed_message: _,
         nonces,
         private_actions,
@@ -119,7 +120,6 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
     let Boundary {
         public_deliveries,
         assumptions,
-        casts: _,
         schedule,
     } = boundary;
     let private_action_count = private_actions.len();

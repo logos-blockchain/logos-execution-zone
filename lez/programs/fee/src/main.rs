@@ -60,7 +60,7 @@ fn receive(input: &ReceiveInput) -> Response {
                 payout,
                 producer,
             });
-            Response::write(fee_state.to_bytes()).send(Call::new(
+            Response::write(fee_state.to_bytes()).call(Call::new(
                 Actor::native_balance(inbox),
                 &NativeMessage::ReadState(ReadState {
                     reply_to: input.receiver,
@@ -68,7 +68,7 @@ fn receive(input: &ReceiveInput) -> Response {
             ))
         }
         Message::Refund { amount, payer } => {
-            Response::keep().send(custody_transfer(inbox, fee_inbox_seed(), payer, amount))
+            Response::keep().call(custody_transfer(inbox, fee_inbox_seed(), payer, amount))
         }
     }
 }
@@ -111,7 +111,7 @@ fn pay_out(input: &ReceiveInput, reply: &StateReply) -> Response {
     .fold(
         Response::write(fee_state.to_bytes()),
         |response, (from, seed, to, amount)| {
-            response.send(custody_transfer(from, seed, to, amount))
+            response.call(custody_transfer(from, seed, to, amount))
         },
     )
 }
@@ -273,12 +273,15 @@ mod tests {
         let inbox = compute_fee_inbox_account_id(FEE);
         let escrow = compute_fee_escrow_account_id(FEE);
         assert_eq!(
-            transition.response.sends,
-            vec![
-                custody_transfer(inbox, fee_inbox_seed(), escrow, 1_000).into(),
-                custody_transfer(inbox, fee_inbox_seed(), PRODUCER, 7,).into(),
-                custody_transfer(escrow, fee_escrow_seed(), PRODUCER, payout,).into(),
-            ]
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![
+                    custody_transfer(inbox, fee_inbox_seed(), escrow, 1_000),
+                    custody_transfer(inbox, fee_inbox_seed(), PRODUCER, 7,),
+                    custody_transfer(escrow, fee_escrow_seed(), PRODUCER, payout,),
+                ],
+                Vec::new()
+            )
         );
     }
 
@@ -296,8 +299,11 @@ mod tests {
         let inbox = compute_fee_inbox_account_id(FEE);
         let escrow = compute_fee_escrow_account_id(FEE);
         assert_eq!(
-            transition.response.sends,
-            vec![custody_transfer(inbox, fee_inbox_seed(), escrow, 10).into()]
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![custody_transfer(inbox, fee_inbox_seed(), escrow, 10)],
+                Vec::new()
+            )
         );
     }
 
@@ -339,16 +345,16 @@ mod tests {
         let transition = distribute_at(&state, block, payout);
 
         assert_eq!(
-            transition.response.sends,
-            vec![
-                Call::new(
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![Call::new(
                     Actor::native_balance(compute_fee_inbox_account_id(FEE)),
                     &NativeMessage::ReadState(ReadState {
                         reply_to: Actor::new(compute_fee_state_account_id(FEE), FEE),
                     }),
-                )
-                .into()
-            ]
+                )],
+                Vec::new()
+            )
         );
     }
 
