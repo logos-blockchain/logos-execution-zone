@@ -1274,4 +1274,57 @@ mod tests {
 
         assert_eq!(back.message, original.message);
     }
+
+    #[test]
+    fn boundary_steps_decode_only_the_payload_their_kind_selects() {
+        let delivery = PublicDelivery {
+            envelope: MessageEnvelope {
+                source: DeliverySource::Call(account_id(1)),
+                to: actor(2, 3),
+                message: vec![4],
+            },
+            grants: vec![account_id(5)],
+            pda_seeds: vec![PdaSeed([6; 32])],
+        };
+        let assumption = Assumption {
+            envelope: MessageEnvelope {
+                source: actor(7, 8),
+                to: actor(9, 10),
+                message: vec![11],
+            },
+            grants: vec![account_id(12)],
+            pda_seeds: vec![PdaSeed([13; 32])],
+        };
+        let zeroed = || unsafe { std::mem::zeroed::<FfiBoundaryStep>() };
+        let steps = [
+            FfiBoundaryStep {
+                kind: FfiBoundaryStepKind::CallPublic,
+                public_delivery: delivery.clone().into(),
+                ..zeroed()
+            },
+            FfiBoundaryStep {
+                kind: FfiBoundaryStepKind::EnterPrivate,
+                assumption: assumption.clone().into(),
+                ..zeroed()
+            },
+            FfiBoundaryStep {
+                kind: FfiBoundaryStepKind::LeavePrivate,
+                ..zeroed()
+            },
+            FfiBoundaryStep {
+                kind: FfiBoundaryStepKind::ReturnPublic,
+                ..zeroed()
+            },
+        ];
+
+        assert_eq!(
+            steps.map(BoundaryStep::from),
+            [
+                BoundaryStep::CallPublic(delivery),
+                BoundaryStep::EnterPrivate(assumption),
+                BoundaryStep::LeavePrivate,
+                BoundaryStep::ReturnPublic,
+            ]
+        );
+    }
 }
