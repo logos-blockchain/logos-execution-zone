@@ -62,7 +62,7 @@ fn swap_message(pool: &PoolFixture, trader: &Trader) -> Result<Vec<u8>> {
 
 // Vault B's payout into the output note, the one delivery the proof assumes of public execution,
 // made under the pool's grant of vault B: promised whatever the pool's price is at preparation.
-fn payout_assumed(pool: &PoolFixture, trader: &Trader) -> Vec<Vec<lee::Assumption>> {
+fn payout_assumed(pool: &PoolFixture, trader: &Trader) -> Vec<lee::PublicCallAssumptions> {
     let vault_b = Actor::new(pool.vault_b, token_program_id());
     let payout = token_core::Message::Transfer {
         to: trader.output,

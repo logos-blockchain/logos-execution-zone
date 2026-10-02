@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use lee_core::{
     PrivacyPreservingCircuitInput, ProgramImageWitness, ProvingInput,
     account::AccountId,
-    execution_state::{ExecutionState, Mode},
+    execution_state::PrivatePart,
     native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramId, StoredMessage, read_input_frame},
 };
@@ -26,7 +26,7 @@ fn main() {
         program_image_witnesses,
         shadow_program_witnesses,
         responses,
-        assumed,
+        assumptions,
     } = borsh::from_slice(&read_input_frame()).expect("circuit input must be valid borsh");
 
     // The sequencer checks disclosed images against chain state.
@@ -53,14 +53,12 @@ fn main() {
     }
 
     let consumed_message = root.receipt().map(StoredMessage::id);
-    let state = ExecutionState::initialize(
-        context.clone(),
-        &private_witnesses,
-        Mode::Record { root, assumed },
-    )
-    .unwrap_or_else(|e| panic!("{e}"));
+    let private_part = PrivatePart::new(context.clone(), root, &private_witnesses, assumptions)
+        .unwrap_or_else(|e| panic!("{e}"));
     let mut backend = PrivateBackend::new(image_id_by_account_id, responses);
-    let outcome = state.run(&mut backend).unwrap_or_else(|e| panic!("{e}"));
+    let outcome = private_part
+        .execute(&mut backend)
+        .unwrap_or_else(|e| panic!("{e}"));
     backend.finish();
 
     let program_image_claims = program_image_witnesses

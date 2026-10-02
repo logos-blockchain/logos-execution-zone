@@ -60,14 +60,31 @@ impl PublicExecutionContext {
     }
 }
 
-pub enum Mode {
-    Live(TransactionEntry<StoredMessage>),
-    Derive(TransactionEntry<StoredMessage>),
-    Record {
-        root: TransactionEntry<StoredMessage>,
-        assumed: Vec<Vec<Assumption>>,
-    },
-    Check(Boundary),
+pub struct WholeTransaction<'witnesses>(Interpreter<'witnesses>);
+
+pub struct PrivatePart<'witnesses>(Interpreter<'witnesses>);
+
+pub struct PublicPart(Interpreter<'static>);
+
+pub struct PublicOutcome {
+    pub block_validity_window: BlockValidityWindow,
+    pub timestamp_validity_window: TimestampValidityWindow,
+    pub accounts: Vec<(AccountId, AccountData)>,
+    pub events: Vec<(Actor, ProgramEvent)>,
+    pub casts: Vec<MessageBody>,
+}
+
+pub struct WholeTransactionOutcome {
+    pub public: PublicOutcome,
+    pub assumptions: Vec<PublicCallAssumptions>,
+}
+
+pub struct PrivatePartOutcome {
+    pub block_validity_window: BlockValidityWindow,
+    pub timestamp_validity_window: TimestampValidityWindow,
+    pub private_accounts: HashMap<AccountId, AccountData>,
+    pub boundary: Boundary,
+    pub casts: Vec<MessageBody>,
 }
 
 #[derive(
@@ -117,6 +134,8 @@ pub enum BoundaryStep {
 }
 
 pub type Boundary = Vec<BoundaryStep>;
+
+pub type PublicCallAssumptions = Vec<Assumption>;
 
 pub trait ExecutionEnvironment {
     type Error: From<ExecutionError>;
@@ -185,7 +204,7 @@ pub enum ExecutionError {
     #[error(
         "The program loader runs only in a wholly public execution, but {actor:?} was reached in a private or mixed one"
     )]
-    LoaderOutsideLiveExecution { actor: Actor },
+    LoaderOutsidePublicExecution { actor: Actor },
 
     #[error("A delivery named {actor:?}, which is neither a declared public actor nor private")]
     UndeclaredActor { actor: Actor },
@@ -228,28 +247,6 @@ pub enum ExecutionError {
 
     #[error("Boundary was not consumed exactly by the execution")]
     IncompleteBoundary,
-}
-
-pub struct ExecutionOutcome {
-    pub block_validity_window: BlockValidityWindow,
-    pub timestamp_validity_window: TimestampValidityWindow,
-    pub result: ExecutionResult,
-}
-
-pub enum ExecutionResult {
-    Derived {
-        assumed: Vec<Vec<Assumption>>,
-    },
-    Recorded {
-        private_accounts: HashMap<AccountId, AccountData>,
-        boundary: Boundary,
-        casts: Vec<MessageBody>,
-    },
-    Settled {
-        public: Vec<(AccountId, AccountData)>,
-        events: Vec<(Actor, ProgramEvent)>,
-        casts: Vec<MessageBody>,
-    },
 }
 
 enum AccountEntry {
@@ -327,24 +324,23 @@ impl Delivery {
     }
 }
 
-enum ModeState {
-    Live,
-    Derive {
-        groups: Vec<Vec<Assumption>>,
+enum Scope {
+    WholeTransaction {
+        groups: Vec<PublicCallAssumptions>,
         open: Vec<usize>,
     },
-    Record {
-        assumed: Vec<Vec<Assumption>>,
+    PrivatePart {
+        assumptions: Vec<PublicCallAssumptions>,
         next_group: usize,
-        boundary: Boundary,
+        trace: Boundary,
     },
-    Check {
+    PublicPart {
         boundary: Boundary,
         cursor: usize,
     },
 }
 
-pub struct ExecutionState<'witnesses> {
+struct Interpreter<'witnesses> {
     witnesses: &'witnesses [PrivateWitness],
     context: PublicExecutionContext,
     public_actors: HashSet<Actor>,
@@ -353,16 +349,102 @@ pub struct ExecutionState<'witnesses> {
     pending: Vec<Item>,
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
-    mode: ModeState,
+    scope: Scope,
     events: Vec<(Actor, ProgramEvent)>,
     casts: Vec<MessageBody>,
 }
 
-impl<'witnesses> ExecutionState<'witnesses> {
-    pub fn initialize(
+struct Finished {
+    context: PublicExecutionContext,
+    accounts: HashMap<AccountId, AccountEntry>,
+    events: Vec<(Actor, ProgramEvent)>,
+    casts: Vec<MessageBody>,
+    block_validity_window: BlockValidityWindow,
+    timestamp_validity_window: TimestampValidityWindow,
+}
+
+impl<'witnesses> WholeTransaction<'witnesses> {
+    pub fn new(
+        context: PublicExecutionContext,
+        root: TransactionEntry<StoredMessage>,
+        witnesses: &'witnesses [PrivateWitness],
+    ) -> Result<Self, ExecutionError> {
+        let scope = Scope::WholeTransaction {
+            groups: Vec::new(),
+            open: Vec::new(),
+        };
+        Interpreter::start(context, witnesses, Some(root), scope).map(Self)
+    }
+
+    pub fn execute<E: ExecutionEnvironment>(
+        self,
+        environment: &mut E,
+    ) -> Result<WholeTransactionOutcome, E::Error> {
+        let (scope, finished) = self.0.run(environment)?;
+        let Scope::WholeTransaction { groups, .. } = scope else {
+            unreachable!("a whole transaction ends in its own scope")
+        };
+        Ok(WholeTransactionOutcome {
+            public: finished.public(),
+            assumptions: groups,
+        })
+    }
+}
+
+impl<'witnesses> PrivatePart<'witnesses> {
+    pub fn new(
+        context: PublicExecutionContext,
+        root: TransactionEntry<StoredMessage>,
+        witnesses: &'witnesses [PrivateWitness],
+        assumptions: Vec<PublicCallAssumptions>,
+    ) -> Result<Self, ExecutionError> {
+        let scope = Scope::PrivatePart {
+            assumptions,
+            next_group: 0,
+            trace: Boundary::new(),
+        };
+        Interpreter::start(context, witnesses, Some(root), scope).map(Self)
+    }
+
+    pub fn execute<E: ExecutionEnvironment>(
+        self,
+        environment: &mut E,
+    ) -> Result<PrivatePartOutcome, E::Error> {
+        let (scope, finished) = self.0.run(environment)?;
+        let Scope::PrivatePart { trace, .. } = scope else {
+            unreachable!("a private part ends in its own scope")
+        };
+        Ok(finished.private_part(trace))
+    }
+}
+
+impl PublicPart {
+    pub fn new(
+        context: PublicExecutionContext,
+        boundary: Boundary,
+    ) -> Result<Self, ExecutionError> {
+        let scope = Scope::PublicPart {
+            boundary,
+            cursor: 0,
+        };
+        Interpreter::start(context, &[], None, scope).map(Self)
+    }
+
+    pub fn execute<E: ExecutionEnvironment>(
+        self,
+        environment: &mut E,
+    ) -> Result<PublicOutcome, E::Error> {
+        let (_, finished) = self.0.run(environment)?;
+        Ok(finished.public())
+    }
+}
+
+impl<'witnesses> Interpreter<'witnesses> {
+    fn start(
         context: PublicExecutionContext,
         witnesses: &'witnesses [PrivateWitness],
-        mode: Mode,
+        root: Option<TransactionEntry<StoredMessage>>,
+        scope: Scope,
     ) -> Result<Self, ExecutionError> {
         let mut witness_index = HashMap::with_capacity(witnesses.len());
         let mut pda_family_binding = HashMap::new();
@@ -436,32 +518,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
             return Err(ExecutionError::PublicFamilyMemberDeclared { account_id });
         }
 
-        let (entry, mode) = match mode {
-            Mode::Live(entry) => (Some(entry), ModeState::Live),
-            Mode::Derive(entry) => (
-                Some(entry),
-                ModeState::Derive {
-                    groups: Vec::new(),
-                    open: Vec::new(),
-                },
-            ),
-            Mode::Record { root, assumed } => (
-                Some(root),
-                ModeState::Record {
-                    assumed,
-                    next_group: 0,
-                    boundary: Boundary::new(),
-                },
-            ),
-            Mode::Check(boundary) => (
-                None,
-                ModeState::Check {
-                    boundary,
-                    cursor: 0,
-                },
-            ),
-        };
-        let first = match entry {
+        let first = match root {
             Some(TransactionEntry::Call { to, message }) => {
                 Item::Deliver(Box::new(Delivery::entry(MessageEnvelope {
                     source: DeliverySource::Root,
@@ -494,16 +551,16 @@ impl<'witnesses> ExecutionState<'witnesses> {
             pending: vec![first],
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
-            mode,
+            scope,
             events: Vec::new(),
             casts: Vec::new(),
         })
     }
 
-    pub fn run<E: ExecutionEnvironment>(
+    fn run<E: ExecutionEnvironment>(
         mut self,
         environment: &mut E,
-    ) -> Result<ExecutionOutcome, E::Error> {
+    ) -> Result<(Scope, Finished), E::Error> {
         while let Some(item) = self.pending.pop() {
             match item {
                 Item::Deliver(delivery) => self.deliver(*delivery, environment)?,
@@ -512,18 +569,18 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 Item::Continue { root } => self.resume(root)?,
             }
         }
-        match &self.mode {
-            ModeState::Live | ModeState::Derive { .. } => {}
-            ModeState::Record {
-                assumed,
+        match &self.scope {
+            Scope::WholeTransaction { .. } => {}
+            Scope::PrivatePart {
+                assumptions,
                 next_group,
                 ..
             } => {
-                if assumed.len() > *next_group {
+                if assumptions.len() > *next_group {
                     return Err(ExecutionError::UnusedAssumedDeliveries.into());
                 }
             }
-            ModeState::Check { boundary, cursor } => {
+            Scope::PublicPart { boundary, cursor } => {
                 if *cursor != boundary.len() {
                     return Err(ExecutionError::IncompleteBoundary.into());
                 }
@@ -533,17 +590,16 @@ impl<'witnesses> ExecutionState<'witnesses> {
     }
 
     fn close(&mut self, marker: BoundaryStep) -> Result<(), ExecutionError> {
-        match &mut self.mode {
-            ModeState::Live => unreachable!("a live execution crosses no boundary"),
-            ModeState::Derive { open, .. } => {
+        match &mut self.scope {
+            Scope::WholeTransaction { open, .. } => {
                 open.pop();
                 Ok(())
             }
-            ModeState::Record { boundary, .. } => {
-                boundary.push(marker);
+            Scope::PrivatePart { trace, .. } => {
+                trace.push(marker);
                 Ok(())
             }
-            ModeState::Check { boundary, cursor } => {
+            Scope::PublicPart { boundary, cursor } => {
                 if boundary.get(*cursor) != Some(&marker) {
                     return Err(ExecutionError::BoundaryMismatch { index: *cursor });
                 }
@@ -554,8 +610,8 @@ impl<'witnesses> ExecutionState<'witnesses> {
     }
 
     fn resume(&mut self, root: bool) -> Result<(), ExecutionError> {
-        let ModeState::Check { boundary, cursor } = &mut self.mode else {
-            unreachable!("only a check resumes a proven continuation");
+        let Scope::PublicPart { boundary, cursor } = &mut self.scope else {
+            unreachable!("only a public part resumes a proven continuation");
         };
         match (boundary.get(*cursor), root) {
             (
@@ -592,7 +648,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
     }
 
     // Placement is positive: a declared public actor runs publicly, a private witness's account
-    // runs privately, and while checking any other destination must be the next assumed
+    // runs privately, and in a public part any other destination must be the next assumed
     // delivery.
     fn deliver<E: ExecutionEnvironment>(
         &mut self,
@@ -602,25 +658,26 @@ impl<'witnesses> ExecutionState<'witnesses> {
         let to = delivery.envelope.to;
         // No code upgrade may land between a proof's image claims and the turns it covers.
         if to.program_account_id == PROGRAM_LOADER_ACCOUNT_ID
-            && !matches!(self.mode, ModeState::Live)
+            && !(matches!(self.scope, Scope::WholeTransaction { .. }) && self.witnesses.is_empty())
         {
-            return Err(ExecutionError::LoaderOutsideLiveExecution { actor: to }.into());
+            return Err(ExecutionError::LoaderOutsidePublicExecution { actor: to }.into());
         }
         if self.public_actors.contains(&to) {
             return self.deliver_public(delivery, environment);
         }
-        match (&self.mode, self.accounts.get(&to.account_id)) {
+        match (&self.scope, self.accounts.get(&to.account_id)) {
             (
-                ModeState::Derive { .. } | ModeState::Record { .. },
+                Scope::WholeTransaction { .. } | Scope::PrivatePart { .. },
                 Some(AccountEntry::Private { .. }),
             ) => self.deliver_private(delivery, environment),
-            (ModeState::Check { .. }, None) => Ok(self.check_assumption(&delivery)?),
+            (Scope::PublicPart { .. }, None) => Ok(self.check_assumption(&delivery)?),
             _ => Err(ExecutionError::UndeclaredActor { actor: to }.into()),
         }
     }
 
     // A private delivery from a declared public actor is where the execution crosses into a proven
-    // turn: a derivation assumes it within the innermost open public call, a record replays it.
+    // turn: a whole transaction collects it into the innermost open public Call's assumptions, a
+    // private part records it.
     fn deliver_private<E: ExecutionEnvironment>(
         &mut self,
         delivery: Delivery,
@@ -639,19 +696,21 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 grants: delivery.grants.iter().copied().collect(),
                 pda_seeds: delivery.pda_seeds.clone(),
             };
-            match &mut self.mode {
-                ModeState::Derive { groups, open } => {
+            match &mut self.scope {
+                Scope::WholeTransaction { groups, open } => {
                     let group = *open
                         .last()
                         .expect("a public sender runs within an open call");
                     groups[group].push(assumption);
                 }
-                ModeState::Record { boundary, .. } => {
-                    boundary.push(BoundaryStep::EnterPrivate(assumption));
+                Scope::PrivatePart { trace, .. } => {
+                    trace.push(BoundaryStep::EnterPrivate(assumption));
                     self.pending.push(Item::ClosePrivate);
                 }
-                ModeState::Live | ModeState::Check { .. } => {
-                    unreachable!("only a derivation or a record executes private turns")
+                Scope::PublicPart { .. } => {
+                    unreachable!(
+                        "only a whole transaction or a private part executes private turns"
+                    )
                 }
             }
         }
@@ -659,8 +718,8 @@ impl<'witnesses> ExecutionState<'witnesses> {
     }
 
     fn check_assumption(&mut self, delivery: &Delivery) -> Result<(), ExecutionError> {
-        let ModeState::Check { boundary, cursor } = &mut self.mode else {
-            unreachable!("only a check matches assumed deliveries");
+        let Scope::PublicPart { boundary, cursor } = &mut self.scope else {
+            unreachable!("only a public part matches assumed deliveries");
         };
         let index = *cursor;
         let Some(BoundaryStep::EnterPrivate(assumed)) = boundary.get(index) else {
@@ -686,15 +745,15 @@ impl<'witnesses> ExecutionState<'witnesses> {
         delivery: Delivery,
         environment: &mut E,
     ) -> Result<(), E::Error> {
-        let (assumed, next_group, boundary) = match &mut self.mode {
-            ModeState::Record {
-                assumed,
+        let (assumptions, next_group, trace) = match &mut self.scope {
+            Scope::PrivatePart {
+                assumptions,
                 next_group,
-                boundary,
-            } => (assumed, next_group, boundary),
-            // A call from the root or a private turn is what a record publishes as a public
-            // delivery.
-            ModeState::Derive { groups, open } => {
+                trace,
+            } => (assumptions, next_group, trace),
+            // A Call from the root or a private turn is what a private part records as a public
+            // Call.
+            Scope::WholeTransaction { groups, open } => {
                 if delivery
                     .sender
                     .is_none_or(|sender| !self.public_actors.contains(&sender))
@@ -705,13 +764,11 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 }
                 return self.execute(delivery, environment);
             }
-            ModeState::Live | ModeState::Check { .. } => {
-                return self.execute(delivery, environment);
-            }
+            Scope::PublicPart { .. } => return self.execute(delivery, environment),
         };
         let index = *next_group;
-        boundary.push(BoundaryStep::CallPublic(public_delivery(&delivery)));
-        let deliveries = assumed
+        trace.push(BoundaryStep::CallPublic(public_delivery(&delivery)));
+        let deliveries = assumptions
             .get(index)
             .ok_or(ExecutionError::MissingAssumedDeliveries { index })?;
         step_past(next_group);
@@ -797,7 +854,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 .expect("an authorized actor has an entry")
                 .stage(actor.program_account_id, data);
         }
-        if matches!(self.mode, ModeState::Live | ModeState::Check { .. }) {
+        if !matches!(self.scope, Scope::PrivatePart { .. }) {
             self.events.extend(
                 transition
                     .response
@@ -872,63 +929,72 @@ impl<'witnesses> ExecutionState<'witnesses> {
         Ok((credential || grants.contains(&account_id), grants))
     }
 
-    #[must_use]
-    pub const fn block_validity_window(&self) -> BlockValidityWindow {
-        self.block_validity_window
-    }
-
-    #[must_use]
-    pub const fn timestamp_validity_window(&self) -> TimestampValidityWindow {
-        self.timestamp_validity_window
-    }
-
-    fn finish(self) -> ExecutionOutcome {
+    fn finish(self) -> (Scope, Finished) {
         let Self {
             context,
-            mut accounts,
+            accounts,
             block_validity_window,
             timestamp_validity_window,
-            mode,
+            scope,
             events,
             casts,
             ..
         } = self;
-
-        let result = match mode {
-            ModeState::Derive { groups, .. } => ExecutionResult::Derived { assumed: groups },
-            ModeState::Record { boundary, .. } => ExecutionResult::Recorded {
-                private_accounts: accounts
-                    .into_iter()
-                    .filter_map(|(account_id, entry)| match entry {
-                        AccountEntry::Private { data, .. } => Some((account_id, data)),
-                        AccountEntry::Public { .. } => None,
-                    })
-                    .collect(),
-                boundary,
+        (
+            scope,
+            Finished {
+                context,
+                accounts,
+                events,
                 casts,
+                block_validity_window,
+                timestamp_validity_window,
             },
-            ModeState::Live | ModeState::Check { .. } => {
-                let mut public = Vec::new();
-                for actor in context.actors {
-                    let Some(AccountEntry::Public { loaded, .. }) =
-                        accounts.remove(&actor.account_id)
-                    else {
-                        continue;
-                    };
-                    public.push((actor.account_id, AccountData { shards: loaded }));
-                }
-                ExecutionResult::Settled {
-                    public,
-                    events,
-                    casts,
-                }
-            }
-        };
+        )
+    }
+}
 
-        ExecutionOutcome {
+impl Finished {
+    fn public(self) -> PublicOutcome {
+        let Self {
+            context,
+            mut accounts,
+            events,
+            casts,
             block_validity_window,
             timestamp_validity_window,
-            result,
+        } = self;
+        let mut public = Vec::new();
+        for actor in context.actors {
+            let Some(AccountEntry::Public { loaded, .. }) = accounts.remove(&actor.account_id)
+            else {
+                continue;
+            };
+            public.push((actor.account_id, AccountData { shards: loaded }));
+        }
+        PublicOutcome {
+            block_validity_window,
+            timestamp_validity_window,
+            accounts: public,
+            events,
+            casts,
+        }
+    }
+
+    fn private_part(self, boundary: Boundary) -> PrivatePartOutcome {
+        PrivatePartOutcome {
+            block_validity_window: self.block_validity_window,
+            timestamp_validity_window: self.timestamp_validity_window,
+            private_accounts: self
+                .accounts
+                .into_iter()
+                .filter_map(|(account_id, entry)| match entry {
+                    AccountEntry::Private { data, .. } => Some((account_id, data)),
+                    AccountEntry::Public { .. } => None,
+                })
+                .collect(),
+            boundary,
+            casts: self.casts,
         }
     }
 }

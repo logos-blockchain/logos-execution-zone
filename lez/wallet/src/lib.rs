@@ -19,8 +19,8 @@ use common::{HashType, block::Block, transaction::LeeTransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
-    Account, AccountId, Assumption, PrivacyPreservingTransaction, ProgramId, ProvingInput,
-    PublicExecutionContext, PublicIdentity, Simulation,
+    Account, AccountId, PrivacyPreservingTransaction, ProgramId, ProvingInput,
+    PublicCallAssumptions, PublicExecutionContext, PublicIdentity, Simulation,
     privacy_preserving_transaction::{
         circuit::ProgramCatalog,
         message::{EncryptedAccountData, Message},
@@ -909,7 +909,7 @@ impl WalletCore {
         accounts: Vec<AccountMention>,
         root: usize,
         message: MessageData,
-        assumed: Vec<Vec<Assumption>>,
+        assumed: Vec<PublicCallAssumptions>,
         programs: &ProgramCatalog,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let root = TransactionEntry::Call {
@@ -928,7 +928,7 @@ impl WalletCore {
         root: TransactionEntry<StoredMessage>,
         identities: Vec<PublicIdentity>,
         programs: &ProgramCatalog,
-        assumed: Option<Vec<Vec<Assumption>>>,
+        assumed: Option<Vec<PublicCallAssumptions>>,
         tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;

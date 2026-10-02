@@ -6,7 +6,7 @@ use lee_core::{
     ProgramImageWitness, ProvingInput, ShadowProgramWitness,
     account::{AccountId, Actor, ActorState, Cycles},
     execution_state::{
-        Assumption, ExecutionEnvironment, ExecutionResult, ExecutionState, Mode, TurnView,
+        ExecutionEnvironment, PrivatePart, PublicCallAssumptions, TurnView, WholeTransaction,
     },
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
@@ -234,27 +234,24 @@ pub fn execute_and_prove(
             simulation.proven_public_accounts.contains(&account_id)
         })?;
     }
-    let ExecutionResult::Derived { assumed } = ExecutionState::initialize(
+    let assumptions = WholeTransaction::new(
         input.context.clone(),
+        input.root.clone(),
         &input.private_witnesses,
-        Mode::Derive(input.root.clone()),
     )?
-    .run(&mut Simulator {
+    .execute(&mut Simulator {
         programs: &programs.programs,
         public_shards: &simulation.public_shards,
     })?
-    .result
-    else {
-        unreachable!("a derivation yields its assumptions")
-    };
-    execute_and_prove_assuming(input, assumed, programs)
+    .assumptions;
+    execute_and_prove_assuming(input, assumptions, programs)
 }
 
 /// Like [`execute_and_prove`], but under the given assumptions, which settlement matches against
 /// live public execution; a prover that did not derive them may produce a proof settlement refuses.
 pub fn execute_and_prove_assuming(
     input: ProvingInput,
-    assumed: Vec<Vec<Assumption>>,
+    assumptions: Vec<PublicCallAssumptions>,
     programs: &ProgramCatalog,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     let ProgramCatalog { programs } = programs;
@@ -264,15 +261,13 @@ pub fn execute_and_prove_assuming(
         env_builder: ExecutorEnv::builder(),
         responses: Vec::new(),
     };
-    ExecutionState::initialize(
+    PrivatePart::new(
         input.context.clone(),
+        input.root.clone(),
         &input.private_witnesses,
-        Mode::Record {
-            root: input.root.clone(),
-            assumed: assumed.clone(),
-        },
+        assumptions.clone(),
     )?
-    .run(&mut backend)?;
+    .execute(&mut backend)?;
     let Prover {
         mut env_builder,
         responses,
@@ -316,7 +311,7 @@ pub fn execute_and_prove_assuming(
         program_image_witnesses,
         shadow_program_witnesses,
         responses,
-        assumed,
+        assumptions,
     };
 
     let circuit_input_payload = borsh::to_vec(&circuit_input)?;

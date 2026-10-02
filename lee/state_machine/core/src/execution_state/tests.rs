@@ -15,11 +15,6 @@ const BYSTANDER: Actor = Actor::new(AccountId::new([3; 32]), AccountId::new([9; 
 const ENTER: &[u8] = b"enter";
 
 type Handler = Box<dyn FnMut(&ReceiveInput) -> Transition>;
-type Settled = (
-    Vec<(AccountId, AccountData)>,
-    Vec<(Actor, ProgramEvent)>,
-    Vec<MessageBody>,
-);
 
 struct Keys {
     ask: AuthorizationSecretKey,
@@ -205,10 +200,6 @@ fn root(to: Actor) -> TransactionEntry<StoredMessage> {
     }
 }
 
-fn live(to: Actor) -> Mode {
-    Mode::Live(root(to))
-}
-
 fn context(actors: Vec<Actor>) -> PublicExecutionContext {
     PublicExecutionContext {
         actors,
@@ -216,13 +207,39 @@ fn context(actors: Vec<Actor>) -> PublicExecutionContext {
     }
 }
 
-fn run(
+fn whole(
     context: PublicExecutionContext,
     witnesses: &[PrivateWitness],
-    mode: Mode,
+    entry: TransactionEntry<StoredMessage>,
     script: &mut Script,
-) -> Result<ExecutionOutcome, ExecutionError> {
-    ExecutionState::initialize(context, witnesses, mode)?.run(script)
+) -> Result<WholeTransactionOutcome, ExecutionError> {
+    WholeTransaction::new(context, entry, witnesses)?.execute(script)
+}
+
+fn public_transaction(
+    context: PublicExecutionContext,
+    to: Actor,
+    script: &mut Script,
+) -> Result<PublicOutcome, ExecutionError> {
+    Ok(whole(context, &[], root(to), script)?.public)
+}
+
+fn private_part(
+    context: PublicExecutionContext,
+    witnesses: &[PrivateWitness],
+    entry: TransactionEntry<StoredMessage>,
+    assumptions: Vec<PublicCallAssumptions>,
+    script: &mut Script,
+) -> Result<PrivatePartOutcome, ExecutionError> {
+    PrivatePart::new(context, entry, witnesses, assumptions)?.execute(script)
+}
+
+fn public_part(
+    context: PublicExecutionContext,
+    boundary: Boundary,
+    script: &mut Script,
+) -> Result<PublicOutcome, ExecutionError> {
+    PublicPart::new(context, boundary)?.execute(script)
 }
 
 fn order(script: &Script) -> Vec<(Actor, Origin)> {
@@ -282,7 +299,7 @@ fn public_calls(boundary: &[BoundaryStep]) -> Vec<PublicDelivery> {
 }
 
 // `ENTRY` enters the private holder, whose turn calls `CALLEE`.
-fn nested_assumed() -> Vec<Vec<Assumption>> {
+fn nested_assumed() -> Vec<PublicCallAssumptions> {
     vec![
         vec![Assumption {
             envelope: MessageEnvelope {
@@ -308,49 +325,27 @@ fn nested_public(script: Script, entry_sends: Vec<Call>) -> Script {
         .on(BYSTANDER, sending(Vec::new()))
 }
 
-fn recorded_boundary(outcome: ExecutionOutcome) -> Boundary {
-    let ExecutionResult::Recorded { boundary, .. } = outcome.result else {
-        panic!("expected a recorded execution")
-    };
-    boundary
-}
-
-fn settled(outcome: ExecutionOutcome) -> Settled {
-    let ExecutionResult::Settled {
-        public,
-        events,
-        casts,
-    } = outcome.result
-    else {
-        panic!("expected a settled execution")
-    };
-    (public, events, casts)
-}
-
-fn record_nested(assumed: Vec<Vec<Assumption>>) -> (Boundary, Script) {
+fn record_nested(assumptions: Vec<PublicCallAssumptions>) -> (Boundary, Script) {
     let mut script = nested_private();
-    let outcome = run(
+    let outcome = private_part(
         context(vec![ENTRY, CALLEE, BYSTANDER]),
         &[Keys::new(1).regular(false)],
-        Mode::Record {
-            root: root(ENTRY),
-            assumed,
-        },
+        root(ENTRY),
+        assumptions,
         &mut script,
     )
     .unwrap();
-    (recorded_boundary(outcome), script)
+    (outcome.boundary, script)
 }
 
 fn check_nested(
     boundary: Boundary,
     entry_sends: Vec<Call>,
-) -> (Result<ExecutionOutcome, ExecutionError>, Script) {
+) -> (Result<PublicOutcome, ExecutionError>, Script) {
     let mut script = nested_public(Script::default(), entry_sends);
-    let result = run(
+    let result = public_part(
         context(vec![ENTRY, CALLEE, BYSTANDER]),
-        &[],
-        Mode::Check(boundary),
+        boundary,
         &mut script,
     );
     (result, script)
@@ -373,8 +368,11 @@ fn a_root_delivery_stages_its_write_and_reports_its_events() {
             )
         });
 
-    let (public, events, _) =
-        settled(run(context(vec![receiver]), &[], live(receiver), &mut script).unwrap());
+    let PublicOutcome {
+        accounts: public,
+        events,
+        ..
+    } = public_transaction(context(vec![receiver]), receiver, &mut script).unwrap();
 
     assert_eq!(
         public,
@@ -395,10 +393,9 @@ fn sends_run_depth_first_with_each_senders_program_as_origin() {
         .on(second, sending(Vec::new()))
         .on(nested, sending(Vec::new()));
 
-    run(
+    public_transaction(
         context(vec![parent, first, second, nested]),
-        &[],
-        live(parent),
+        parent,
         &mut script,
     )
     .unwrap();
@@ -421,12 +418,7 @@ fn a_send_to_an_undeclared_actor_is_rejected() {
         .on(parent, sending(vec![send_to(stranger), send_to(sibling)]))
         .on(sibling, sending(Vec::new()));
 
-    let result = run(
-        context(vec![parent, sibling]),
-        &[],
-        live(parent),
-        &mut script,
-    );
+    let result = public_transaction(context(vec![parent, sibling]), parent, &mut script);
 
     assert!(matches!(
         result,
@@ -446,7 +438,7 @@ fn a_transition_that_forges_its_input_is_rejected() {
     });
 
     assert!(matches!(
-        run(context(vec![receiver]), &[], live(receiver), &mut script),
+        public_transaction(context(vec![receiver]), receiver, &mut script),
         Err(ExecutionError::ExecutionValidation {
             source: ExecutionValidationError::TransitionInputMismatch { .. },
             ..
@@ -465,7 +457,7 @@ fn a_revisited_actor_sees_its_staged_write() {
         }
     });
 
-    run(context(vec![looping]), &[], live(looping), &mut script).unwrap();
+    public_transaction(context(vec![looping]), looping, &mut script).unwrap();
 
     let seen: Vec<_> = script
         .log
@@ -499,10 +491,9 @@ fn a_seed_grants_its_pda_and_the_grant_is_inherited_downstream() {
         .on(relay, sending(vec![send_to(vault)]))
         .on(forwarder, sending(vec![send_to(vault)]));
 
-    run(
+    public_transaction(
         context(vec![owner, forwarder, relay, vault]),
-        &[],
-        live(owner),
+        owner,
         &mut script,
     )
     .unwrap();
@@ -527,13 +518,12 @@ fn a_root_authorized_public_account_is_authorized_from_any_origin() {
         .on(signer, sending_when(Origin::Root, vec![send_to(peer)]))
         .on(peer, sending(vec![send_to(signer)]));
 
-    run(
+    public_transaction(
         PublicExecutionContext {
             actors: vec![signer, peer],
             authorized_accounts: vec![signer.account_id],
         },
-        &[],
-        live(signer),
+        signer,
         &mut script,
     )
     .unwrap();
@@ -567,7 +557,8 @@ fn turn_windows_intersect_and_disjoint_ones_are_rejected() {
                 )
             })
     };
-    let execute = |script: &mut Script| run(context(vec![outer, inner]), &[], live(outer), script);
+    let execute =
+        |script: &mut Script| public_transaction(context(vec![outer, inner]), outer, script);
 
     let outcome = execute(&mut windowed(5..20)).unwrap();
 
@@ -595,7 +586,7 @@ fn a_long_self_send_chain_completes() {
         echo(input, response)
     });
 
-    run(context(vec![revisited]), &[], live(revisited), &mut script).unwrap();
+    public_transaction(context(vec![revisited]), revisited, &mut script).unwrap();
     assert_eq!(script.log.len(), 129);
 }
 
@@ -612,8 +603,9 @@ fn a_public_shard_is_fetched_once_and_a_cleared_shard_is_reported_empty() {
             }
         });
 
-    let (public, _, _) =
-        settled(run(context(vec![clearing]), &[], live(clearing), &mut script).unwrap());
+    let public = public_transaction(context(vec![clearing]), clearing, &mut script)
+        .unwrap()
+        .accounts;
 
     let seen: Vec<_> = script
         .log
@@ -631,20 +623,6 @@ fn a_public_shard_is_fetched_once_and_a_cleared_shard_is_reported_empty() {
             }
         )]
     );
-}
-
-#[test]
-fn a_live_execution_runs_nothing_privately() {
-    let keys = Keys::new(1);
-    assert!(matches!(
-        run(
-            PublicExecutionContext::default(),
-            &[keys.regular(true)],
-            live(holder(&keys)),
-            &mut Script::default()
-        ),
-        Err(ExecutionError::UndeclaredActor { actor }) if actor == holder(&keys)
-    ));
 }
 
 #[test]
@@ -684,24 +662,18 @@ fn a_private_root_records_its_public_call_and_the_assumed_reply() {
         }
     });
 
-    let ExecutionResult::Recorded {
+    let PrivatePartOutcome {
         private_accounts,
         boundary,
         ..
-    } = run(
+    } = private_part(
         context(vec![vault]),
         &[keys.regular(true)],
-        Mode::Record {
-            root: root(owner),
-            assumed: vec![vec![reply.clone()]],
-        },
+        root(owner),
+        vec![vec![reply.clone()]],
         &mut script,
     )
-    .unwrap()
-    .result
-    else {
-        panic!("expected a recorded execution")
-    };
+    .unwrap();
 
     assert_eq!(
         order(&script),
@@ -748,15 +720,13 @@ fn assumed_deliveries_must_match_the_recorded_public_deliveries() {
     let keys = Keys::new(1);
     let vault = actor(2, 9);
     let stranger = actor(5, 9);
-    let record = |assumed: Vec<Vec<Assumption>>| {
+    let record = |assumptions: Vec<PublicCallAssumptions>| {
         let mut script = Script::default().on(holder(&keys), sending(vec![send_to(vault)]));
-        run(
+        private_part(
             context(vec![vault]),
             &[keys.regular(false)],
-            Mode::Record {
-                root: root(holder(&keys)),
-                assumed,
-            },
+            root(holder(&keys)),
+            assumptions,
             &mut script,
         )
     };
@@ -815,13 +785,11 @@ fn a_private_credential_holds_from_any_origin_beside_a_seed_grant() {
         },
     ]];
 
-    run(
+    private_part(
         context(vec![vault]),
         &[keys.regular(true), keys.pda(vault.program_account_id, seed)],
-        Mode::Record {
-            root: root(owner),
-            assumed,
-        },
+        root(owner),
+        assumed,
         &mut script,
     )
     .unwrap();
@@ -894,7 +862,7 @@ fn initialization_rejects_inconsistent_declarations() {
     let public_actor = actor(2, 9);
     let private_witnesses = [keys.regular(false)];
     let init = |public_actors: Vec<Actor>, witnesses: &[PrivateWitness]| {
-        ExecutionState::initialize(context(public_actors), witnesses, live(public_actor)).err()
+        WholeTransaction::new(context(public_actors), root(public_actor), witnesses).err()
     };
 
     assert!(matches!(
@@ -914,16 +882,11 @@ fn a_check_whose_live_subtree_reaches_the_loader_fails() {
         .on(ENTRY, sending(vec![send_to(loader)]))
         .on(loader, sending(Vec::new()));
 
-    let result = run(
-        context(vec![ENTRY, loader]),
-        &[],
-        Mode::Check(root_statement()),
-        &mut script,
-    );
+    let result = public_part(context(vec![ENTRY, loader]), root_statement(), &mut script);
 
     assert!(matches!(
         result,
-        Err(ExecutionError::LoaderOutsideLiveExecution { actor }) if actor == loader
+        Err(ExecutionError::LoaderOutsidePublicExecution { actor }) if actor == loader
     ));
     assert_eq!(order(&script), vec![(ENTRY, Origin::Root)]);
 }
@@ -934,19 +897,17 @@ fn a_record_refuses_an_explicit_delivery_to_the_loader() {
     let loader = Actor::new(id(4), PROGRAM_LOADER_ACCOUNT_ID);
     let mut script = Script::default().on(holder(&keys), sending(vec![send_to(loader)]));
 
-    let result = run(
+    let result = private_part(
         context(vec![loader]),
         &[keys.regular(false)],
-        Mode::Record {
-            root: root(holder(&keys)),
-            assumed: vec![Vec::new()],
-        },
+        root(holder(&keys)),
+        vec![Vec::new()],
         &mut script,
     );
 
     assert!(matches!(
         result,
-        Err(ExecutionError::LoaderOutsideLiveExecution { actor }) if actor == loader
+        Err(ExecutionError::LoaderOutsidePublicExecution { actor }) if actor == loader
     ));
     assert_eq!(order(&script), vec![(holder(&keys), Origin::Root)]);
 }
@@ -955,7 +916,7 @@ fn a_record_refuses_an_explicit_delivery_to_the_loader() {
 // carries its grant. `assumed_grants` is what the proof claims the relay received.
 fn relayed_grant(
     assumed_grants: Vec<AccountId>,
-) -> (Result<ExecutionOutcome, ExecutionError>, Script) {
+) -> (Result<PublicOutcome, ExecutionError>, Script) {
     let keys = Keys::new(1);
     let relay = holder(&keys);
     let owner = ENTRY;
@@ -965,24 +926,22 @@ fn relayed_grant(
     let actors = vec![owner, sibling, vault];
 
     let mut recording = Script::default().on(relay, sending(vec![send_to(vault)]));
-    let recorded = run(
+    let recorded = private_part(
         context(actors.clone()),
         &[keys.regular(false)],
-        Mode::Record {
-            root: root(owner),
-            assumed: vec![
-                vec![Assumption {
-                    envelope: MessageEnvelope {
-                        source: vault,
-                        to: relay,
-                        message: ENTER.to_vec(),
-                    },
-                    grants: assumed_grants,
-                    pda_seeds: Vec::new(),
-                }],
-                Vec::new(),
-            ],
-        },
+        root(owner),
+        vec![
+            vec![Assumption {
+                envelope: MessageEnvelope {
+                    source: vault,
+                    to: relay,
+                    message: ENTER.to_vec(),
+                },
+                grants: assumed_grants,
+                pda_seeds: Vec::new(),
+            }],
+            Vec::new(),
+        ],
         &mut recording,
     )
     .unwrap();
@@ -1000,12 +959,7 @@ fn relayed_grant(
             vault,
             sending_when(Origin::Program(id(9)), vec![enter(ENTER)]),
         );
-    let result = run(
-        context(actors),
-        &[],
-        Mode::Check(recorded_boundary(recorded)),
-        &mut checking,
-    );
+    let result = public_part(context(actors), recorded.boundary, &mut checking);
     (result, checking)
 }
 
@@ -1055,24 +1009,22 @@ fn a_private_grant_crosses_a_public_actor_and_authorizes_the_return() {
             sending_when(Origin::Program(id(8)), vec![send_to(peer)]),
         );
 
-    let recorded = run(
+    let recorded = private_part(
         context(vec![peer, peer_vault]),
         &[
             keys.regular(false),
             pda_keys.pda(owner.program_account_id, seed),
         ],
-        Mode::Record {
-            root: root(owner),
-            assumed: vec![vec![Assumption {
-                envelope: MessageEnvelope {
-                    source: peer,
-                    to: custody,
-                    message: Vec::new(),
-                },
-                grants: vec![custody.account_id],
-                pda_seeds: Vec::new(),
-            }]],
-        },
+        root(owner),
+        vec![vec![Assumption {
+            envelope: MessageEnvelope {
+                source: peer,
+                to: custody,
+                message: Vec::new(),
+            },
+            grants: vec![custody.account_id],
+            pda_seeds: Vec::new(),
+        }]],
         &mut recording,
     )
     .unwrap();
@@ -1081,7 +1033,7 @@ fn a_private_grant_crosses_a_public_actor_and_authorizes_the_return() {
         authorized(&recording),
         vec![(owner, false), (custody, true), (custody, true)]
     );
-    let boundary = recorded_boundary(recorded);
+    let boundary = recorded.boundary;
     assert_eq!(public_calls(&boundary)[0].grants, vec![custody.account_id]);
 
     let mut checking = Script::default()
@@ -1090,15 +1042,7 @@ fn a_private_grant_crosses_a_public_actor_and_authorizes_the_return() {
             sending(vec![send_to(custody), seeded_to(peer_vault, seed)]),
         )
         .on(peer_vault, sending(Vec::new()));
-    assert!(
-        run(
-            context(vec![peer, peer_vault]),
-            &[],
-            Mode::Check(boundary),
-            &mut checking,
-        )
-        .is_ok()
-    );
+    assert!(public_part(context(vec![peer, peer_vault]), boundary, &mut checking).is_ok());
     assert_eq!(
         authorized(&checking),
         vec![(peer, false), (peer_vault, true)]
@@ -1113,13 +1057,11 @@ fn a_private_pda_family_cannot_declare_its_public_member() {
     let public_member = Actor::new(AccountId::for_public_pda(&program, &seed), id(9));
     let witnesses = [keys.pda(program, seed)];
 
-    let result = ExecutionState::initialize(
+    let result = PrivatePart::new(
         context(vec![public_member]),
+        root(custody),
         &witnesses,
-        Mode::Record {
-            root: root(custody),
-            assumed: Vec::new(),
-        },
+        Vec::new(),
     );
 
     assert!(matches!(
@@ -1140,15 +1082,9 @@ fn a_check_publishes_live_events() {
         echo(input, Response::keep().event(emitted.clone()))
     });
 
-    let (_, events, _) = settled(
-        run(
-            context(vec![ENTRY]),
-            &[],
-            Mode::Check(root_statement()),
-            &mut checking,
-        )
-        .unwrap(),
-    );
+    let events = public_part(context(vec![ENTRY]), root_statement(), &mut checking)
+        .unwrap()
+        .events;
 
     assert_eq!(events, vec![(ENTRY, event)]);
 }
@@ -1164,34 +1100,32 @@ fn a_public_turn_requests_a_private_debit_that_the_private_credential_authorizes
         let mut script = Script::default().on(payer, |input| {
             native_token::receive(input).unwrap_or_else(|error| panic!("{error}"))
         });
-        run(
+        private_part(
             context(vec![requester, payee]),
             &[keys.regular(credential)],
-            Mode::Record {
-                root: root(requester),
-                assumed: vec![
-                    vec![Assumption {
-                        envelope: MessageEnvelope {
-                            source: requester,
-                            to: payer,
-                            message: borsh::to_vec(&native_token::Message::Transfer {
-                                to: payee.account_id,
-                                amount: 0,
-                            })
-                            .unwrap(),
-                        },
-                        grants: Vec::new(),
-                        pda_seeds: Vec::new(),
-                    }],
-                    Vec::new(),
-                ],
-            },
+            root(requester),
+            vec![
+                vec![Assumption {
+                    envelope: MessageEnvelope {
+                        source: requester,
+                        to: payer,
+                        message: borsh::to_vec(&native_token::Message::Transfer {
+                            to: payee.account_id,
+                            amount: 0,
+                        })
+                        .unwrap(),
+                    },
+                    grants: Vec::new(),
+                    pda_seeds: Vec::new(),
+                }],
+                Vec::new(),
+            ],
             &mut script,
         )
     };
 
     assert_eq!(
-        public_calls(&recorded_boundary(record(true).unwrap()))[1],
+        public_calls(&record(true).unwrap().boundary)[1],
         public(
             DeliverySource::Call(native_token::NATIVE_TOKEN_PROGRAM_ID),
             payee,
@@ -1216,27 +1150,20 @@ fn an_undeclared_actor_of_a_declared_public_account_is_refused() {
     let stray = Actor::new(ENTRY.account_id, id(7));
 
     let mut recording = Script::default().on(owner, sending(vec![send_to(stray)]));
-    let recorded = run(
+    let recorded = private_part(
         context(vec![ENTRY]),
         &[keys.regular(false)],
-        Mode::Record {
-            root: root(owner),
-            assumed: Vec::new(),
-        },
+        root(owner),
+        Vec::new(),
         &mut recording,
     );
     let mut checking = Script::default().on(ENTRY, sending(vec![send_to(stray)]));
-    let checked = run(
-        context(vec![ENTRY]),
-        &[],
-        Mode::Check(root_statement()),
-        &mut checking,
-    );
+    let checked = public_part(context(vec![ENTRY]), root_statement(), &mut checking);
 
-    for result in [recorded, checked] {
+    for error in [recorded.err(), checked.err()] {
         assert!(matches!(
-            result,
-            Err(ExecutionError::UndeclaredActor { actor }) if actor == stray
+            error,
+            Some(ExecutionError::UndeclaredActor { actor }) if actor == stray
         ));
     }
 }
@@ -1254,13 +1181,7 @@ fn a_check_whose_live_subtree_makes_more_than_64_deliveries_succeeds() {
         echo(input, response)
     });
 
-    run(
-        context(vec![ENTRY]),
-        &[],
-        Mode::Check(root_statement()),
-        &mut script,
-    )
-    .unwrap();
+    public_part(context(vec![ENTRY]), root_statement(), &mut script).unwrap();
     assert_eq!(script.log.len(), 101);
 }
 
@@ -1269,20 +1190,17 @@ fn a_derived_statement_records_and_checks_a_nested_mixed_graph() {
     let entry_sends = vec![enter(ENTER), send_to(BYSTANDER)];
     let mut deriving = nested_public(nested_private(), entry_sends.clone());
 
-    let ExecutionResult::Derived { assumed } = run(
+    let assumptions = whole(
         context(vec![ENTRY, CALLEE, BYSTANDER]),
         &[Keys::new(1).regular(false)],
-        Mode::Derive(root(ENTRY)),
+        root(ENTRY),
         &mut deriving,
     )
     .unwrap()
-    .result
-    else {
-        panic!("expected a derived execution")
-    };
+    .assumptions;
 
-    assert_eq!(assumed, nested_assumed());
-    let (boundary, _) = record_nested(assumed);
+    assert_eq!(assumptions, nested_assumed());
+    let (boundary, _) = record_nested(assumptions);
     assert!(check_nested(boundary, entry_sends).0.is_ok());
 }
 
@@ -1291,19 +1209,17 @@ fn an_output_from_a_private_sender_carries_only_its_programs_provenance() {
     let keys = Keys::new(1);
     let mut script = Script::default().on(holder(&keys), sending(vec![send_to(ENTRY)]));
 
-    let recorded = run(
+    let recorded = private_part(
         context(vec![ENTRY]),
         &[keys.regular(false)],
-        Mode::Record {
-            root: root(holder(&keys)),
-            assumed: vec![Vec::new()],
-        },
+        root(holder(&keys)),
+        vec![Vec::new()],
         &mut script,
     )
     .unwrap();
 
     assert_eq!(
-        public_calls(&recorded_boundary(recorded)),
+        public_calls(&recorded.boundary),
         vec![public(
             DeliverySource::Call(holder(&keys).program_account_id),
             ENTRY,
@@ -1319,10 +1235,9 @@ fn a_live_delivery_from_another_actor_of_the_same_program_does_not_satisfy_an_as
         .on(BYSTANDER, sending(vec![enter(ENTER)]));
     assert_eq!(BYSTANDER.program_account_id, ENTRY.program_account_id);
 
-    let result = run(
+    let result = public_part(
         context(vec![ENTRY, CALLEE, BYSTANDER]),
-        &[],
-        Mode::Check(boundary),
+        boundary,
         &mut script,
     );
 
@@ -1359,15 +1274,9 @@ fn a_parents_casts_precede_its_childrens_and_never_run_their_recipients() {
         })
         .on(BYSTANDER, sending(Vec::new()));
 
-    let (_, _, casts) = settled(
-        run(
-            context(vec![ENTRY, CALLEE, BYSTANDER]),
-            &[],
-            live(ENTRY),
-            &mut script,
-        )
-        .unwrap(),
-    );
+    let casts = public_transaction(context(vec![ENTRY, CALLEE, BYSTANDER]), ENTRY, &mut script)
+        .unwrap()
+        .casts;
 
     assert_eq!(
         order(&script),
@@ -1400,10 +1309,10 @@ fn a_receipt_root_delivers_its_stored_origin_and_message_and_its_origin_grants_n
     let record = stored(id(5), vault, b"stored");
     let mut script = Script::default().on(vault, sending(Vec::new()));
 
-    run(
+    whole(
         context(vec![vault]),
         &[],
-        Mode::Live(TransactionEntry::Receive(record)),
+        TransactionEntry::Receive(record),
         &mut script,
     )
     .unwrap();
@@ -1426,13 +1335,11 @@ fn a_recorded_receipt_root_to_a_private_actor_runs_privately_with_its_stored_ori
     let record = stored(id(5), holder(&keys), b"stored");
     let mut script = Script::default().on(holder(&keys), sending(Vec::new()));
 
-    let outcome = run(
+    let outcome = private_part(
         PublicExecutionContext::default(),
         &[keys.regular(false)],
-        Mode::Record {
-            root: TransactionEntry::Receive(record),
-            assumed: Vec::new(),
-        },
+        TransactionEntry::Receive(record),
+        Vec::new(),
         &mut script,
     )
     .unwrap();
@@ -1441,7 +1348,7 @@ fn a_recorded_receipt_root_to_a_private_actor_runs_privately_with_its_stored_ori
         order(&script),
         vec![(holder(&keys), Origin::Program(id(5)))]
     );
-    assert_eq!(recorded_boundary(outcome), Boundary::default());
+    assert_eq!(outcome.boundary, Boundary::default());
 }
 
 #[test]
@@ -1462,24 +1369,18 @@ fn a_record_keeps_its_casts_out_of_the_boundary_and_a_check_returns_only_live_ca
             }),
         )
     });
-    let ExecutionResult::Recorded {
+    let PrivatePartOutcome {
         boundary,
         casts: proven_casts,
         ..
-    } = run(
+    } = private_part(
         context(vec![ENTRY]),
         &[keys.regular(false)],
-        Mode::Record {
-            root: root(holder(&keys)),
-            assumed: vec![Vec::new()],
-        },
+        root(holder(&keys)),
+        vec![Vec::new()],
         &mut recording,
     )
-    .unwrap()
-    .result
-    else {
-        panic!("expected a recorded execution")
-    };
+    .unwrap();
 
     assert_eq!(
         boundary,
@@ -1499,15 +1400,9 @@ fn a_record_keeps_its_casts_out_of_the_boundary_and_a_check_returns_only_live_ca
             }),
         )
     });
-    let (_, _, casts) = settled(
-        run(
-            context(vec![ENTRY]),
-            &[],
-            Mode::Check(boundary),
-            &mut checking,
-        )
-        .unwrap(),
-    );
+    let casts = public_part(context(vec![ENTRY]), boundary, &mut checking)
+        .unwrap()
+        .casts;
 
     assert_eq!(
         casts,

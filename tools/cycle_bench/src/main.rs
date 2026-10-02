@@ -43,8 +43,7 @@ use lee_core::{
     BlockId, Timestamp,
     account::{AccountId, Actor, ActorState},
     execution_state::{
-        ExecutionEnvironment, ExecutionState, Mode, PublicExecutionContext, TransactionEntry,
-        TurnView,
+        ExecutionEnvironment, PublicExecutionContext, TransactionEntry, TurnView, WholeTransaction,
     },
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
@@ -272,12 +271,8 @@ impl Case {
             exec_iters,
             rows: Vec::new(),
         };
-        ExecutionState::initialize(
-            context,
-            &[],
-            Mode::Live(TransactionEntry::Call { to: root, message }),
-        )?
-        .run(&mut meter)?;
+        WholeTransaction::new(context, TransactionEntry::Call { to: root, message }, &[])?
+            .execute(&mut meter)?;
         Ok(meter.rows)
     }
 }

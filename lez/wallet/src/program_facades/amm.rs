@@ -4,7 +4,7 @@ use amm_core::{
 };
 use common::HashType;
 use lee::{
-    AccountId, Actor, Assumption, MessageEnvelope,
+    AccountId, Actor, Assumption, MessageEnvelope, PublicCallAssumptions,
     privacy_preserving_transaction::circuit::ProgramCatalog, program::Program,
 };
 use lee_core::{SharedSecretKey, program::Call};
@@ -408,7 +408,7 @@ impl SwapTerms {
     fn promised_payout(
         &self,
         accounts: &[AccountMention],
-    ) -> Result<Vec<Vec<Assumption>>, ExecutionFailureKind> {
+    ) -> Result<Vec<PublicCallAssumptions>, ExecutionFailureKind> {
         let amount_out = match self.request {
             Request::Offer { amount_out } => amount_out,
             Request::ExactInput {

@@ -6,12 +6,12 @@ use lee_core::{
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
-    execution_state::{ExecutionOutcome, ExecutionResult, PublicExecutionContext},
+    execution_state::{PrivatePartOutcome, PublicExecutionContext},
     program::MessageId,
 };
 
 pub fn compute_circuit_output(
-    outcome: ExecutionOutcome,
+    outcome: PrivatePartOutcome,
     context: PublicExecutionContext,
     consumed_message: Option<MessageId>,
     private_witnesses: &[PrivateWitness],
@@ -19,19 +19,13 @@ pub fn compute_circuit_output(
     ciphertext_padding: Option<u32>,
     program_image_claims: Vec<ProgramImageClaim>,
 ) -> PrivacyPreservingCircuitOutput {
-    let ExecutionOutcome {
+    let PrivatePartOutcome {
         block_validity_window,
         timestamp_validity_window,
-        result:
-            ExecutionResult::Recorded {
-                mut private_accounts,
-                boundary,
-                casts,
-            },
-    } = outcome
-    else {
-        unreachable!("a record yields its private accounts, boundary and casts")
-    };
+        mut private_accounts,
+        boundary,
+        casts,
+    } = outcome;
     let mut output = PrivacyPreservingCircuitOutput {
         context,
         boundary,
@@ -304,14 +298,12 @@ mod tests {
         witnesses: &[PrivateWitness],
     ) -> PrivacyPreservingCircuitOutput {
         compute_circuit_output(
-            ExecutionOutcome {
+            PrivatePartOutcome {
                 block_validity_window: BlockValidityWindow::new_unbounded(),
                 timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
-                result: ExecutionResult::Recorded {
-                    private_accounts: private.into_iter().collect(),
-                    boundary: Boundary::default(),
-                    casts: Vec::new(),
-                },
+                private_accounts: private.into_iter().collect(),
+                boundary: Boundary::default(),
+                casts: Vec::new(),
             },
             PublicExecutionContext::default(),
             None,

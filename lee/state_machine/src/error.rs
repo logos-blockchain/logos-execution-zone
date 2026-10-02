@@ -135,7 +135,7 @@ impl From<ExecutionError> for LeeError {
             | ExecutionError::InvalidAuthorizationKey { .. }
             | ExecutionError::FamilyBindingConflict { .. }
             | ExecutionError::PublicFamilyMemberDeclared { .. }
-            | ExecutionError::LoaderOutsideLiveExecution { .. }
+            | ExecutionError::LoaderOutsidePublicExecution { .. }
             | ExecutionError::UndeclaredActor { .. }
             | ExecutionError::ExecutionValidation { .. }
             | ExecutionError::PublicAndPrivate { .. }

@@ -9,7 +9,8 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, ProgramImageClaim, Timestamp,
     account::{Account, AccountId, Actor, ActorState, Cycles, Nonce},
     execution_state::{
-        ExecutionResult, ExecutionState, Mode, PublicExecutionContext, TransactionEntry, TurnView,
+        PublicExecutionContext, PublicOutcome, PublicPart, TransactionEntry, TurnView,
+        WholeTransaction,
     },
     program::{MessageBody, MessageId, PROGRAM_LOADER_ACCOUNT_ID, StoredMessage, TransactionEvent},
 };
@@ -282,10 +283,11 @@ impl ValidatedStateDiff {
                 identities.contains(&account_id) || state.is_designated_public_account(account_id)
             })?;
         }
+        let request = WholeTransaction::new(context, root, &[])
+            .map_err(|error| LeeError::InvalidInput(error.to_string()))?;
         let settled = settle(
             state,
-            context,
-            Mode::Live(root),
+            |backend| Ok(request.execute(backend)?.public),
             block_id,
             timestamp,
             cycle_budget,
@@ -396,11 +398,12 @@ impl ValidatedStateDiff {
             })?;
         }
 
+        let request = PublicPart::new(execution.context.clone(), execution.boundary.clone())
+            .map_err(|error| LeeError::InvalidInput(error.to_string()))?;
         let mut cycles_used = 0;
         let mut settled = settle(
             state,
-            execution.context.clone(),
-            Mode::Check(execution.boundary.clone()),
+            |backend| request.execute(backend),
             block_id,
             timestamp,
             crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
@@ -497,36 +500,31 @@ pub fn admit_public_receipt(
 
 fn settle(
     state: &V03State,
-    context: PublicExecutionContext,
-    mode: Mode,
+    execute: impl FnOnce(&mut PublicBackend<'_>) -> Result<PublicOutcome, LeeError>,
     block_id: BlockId,
     timestamp: Timestamp,
     cycle_budget: Cycles,
     cycles_used: &mut Cycles,
 ) -> Result<StateDiff, LeeError> {
-    let execution = ExecutionState::initialize(context, &[], mode)
-        .map_err(|e| LeeError::InvalidInput(e.to_string()))?;
     let mut backend = PublicBackend::new(state, cycle_budget, cycles_used);
-    let outcome = execution.run(&mut backend)?;
-    ensure!(
-        outcome.block_validity_window.is_valid_for(block_id)
-            && outcome.timestamp_validity_window.is_valid_for(timestamp),
-        LeeError::OutOfValidityWindow
-    );
-    let ExecutionResult::Settled {
-        public,
+    let PublicOutcome {
+        block_validity_window,
+        timestamp_validity_window,
+        accounts,
         events,
         casts,
-    } = outcome.result
-    else {
-        unreachable!("a live or checked execution settles")
-    };
+    } = execute(&mut backend)?;
+    ensure!(
+        block_validity_window.is_valid_for(block_id)
+            && timestamp_validity_window.is_valid_for(timestamp),
+        LeeError::OutOfValidityWindow
+    );
     ensure!(
         u128::try_from(casts.len())
             .is_ok_and(|count| state.next_message_sequence().checked_add(count).is_some()),
         LeeError::InvalidInput("Message sequence exhausted".into())
     );
-    let public_diff = public
+    let public_diff = accounts
         .into_iter()
         .map(|(account_id, data)| {
             let mut account = state.get_account_by_id(account_id);

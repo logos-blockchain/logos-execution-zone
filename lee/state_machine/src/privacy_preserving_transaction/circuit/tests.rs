@@ -1039,7 +1039,7 @@ fn direct_input(
         program_image_witnesses: claims_for(claims),
         shadow_program_witnesses: Vec::new(),
         responses,
-        assumed: Vec::new(),
+        assumptions: Vec::new(),
     }
 }
 

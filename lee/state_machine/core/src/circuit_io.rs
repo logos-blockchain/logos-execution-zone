@@ -6,7 +6,7 @@ use crate::{
     account::{Account, AccountId},
     compute_digest_for_path,
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
-    execution_state::{Assumption, Boundary, PublicExecutionContext, TransactionEntry},
+    execution_state::{Boundary, PublicCallAssumptions, PublicExecutionContext, TransactionEntry},
     program::{
         BlockValidityWindow, MessageBody, MessageId, PdaSeed, ProgramHeader, ProgramId, Response,
         StoredMessage, TimestampValidityWindow, immutable_mirror_commitment,
@@ -122,7 +122,7 @@ pub struct PrivacyPreservingCircuitInput {
     /// Identities of every shadow program invoked in the call graph.
     pub shadow_program_witnesses: Vec<ShadowProgramWitness>,
     pub responses: Vec<Response>,
-    pub assumed: Vec<Vec<Assumption>>,
+    pub assumptions: Vec<PublicCallAssumptions>,
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
@@ -284,7 +284,7 @@ mod tests {
         Commitment, Nullifier,
         account::{Account, AccountId, Actor},
         encryption::{Ciphertext, EphemeralPublicKey},
-        execution_state::{BoundaryStep, DeliverySource, PublicDelivery},
+        execution_state::{Assumption, BoundaryStep, DeliverySource, PublicDelivery},
         program::{MessageBody, MessageEnvelope},
     };
 
