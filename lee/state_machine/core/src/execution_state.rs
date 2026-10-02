@@ -39,18 +39,18 @@ impl TransactionEntry<StoredMessage> {
 
 #[derive(Clone, Default, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-pub struct Declared {
-    pub public_actors: Vec<Actor>,
+pub struct PublicExecutionContext {
+    pub actors: Vec<Actor>,
     pub authorized_accounts: Vec<AccountId>,
 }
 
-impl Declared {
+impl PublicExecutionContext {
     pub fn new(
-        public_actors: Vec<Actor>,
+        actors: Vec<Actor>,
         authorized_accounts: impl IntoIterator<Item = AccountId>,
     ) -> Self {
         Self {
-            public_actors,
+            actors,
             authorized_accounts: authorized_accounts
                 .into_iter()
                 .collect::<BTreeSet<_>>()
@@ -319,7 +319,7 @@ enum ModeState {
 
 pub struct ExecutionState<'witnesses> {
     witnesses: &'witnesses [PrivateWitness],
-    declared: Declared,
+    context: PublicExecutionContext,
     public_actors: HashSet<Actor>,
     accounts: HashMap<AccountId, AccountEntry>,
     pda_family_binding: HashMap<(AccountId, PdaSeed), AccountId>,
@@ -334,7 +334,7 @@ pub struct ExecutionState<'witnesses> {
 
 impl<'witnesses> ExecutionState<'witnesses> {
     pub fn initialize(
-        declared: Declared,
+        context: PublicExecutionContext,
         witnesses: &'witnesses [PrivateWitness],
         mode: Mode,
     ) -> Result<Self, ExecutionError> {
@@ -381,8 +381,8 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 )
             })
             .collect();
-        let mut public_actors = HashSet::with_capacity(declared.public_actors.len());
-        for actor in &declared.public_actors {
+        let mut public_actors = HashSet::with_capacity(context.actors.len());
+        for actor in &context.actors {
             let account_id = actor.account_id;
             if witness_index.contains_key(&account_id) {
                 return Err(ExecutionError::PublicAndPrivate { account_id });
@@ -393,7 +393,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
             accounts
                 .entry(account_id)
                 .or_insert_with(|| AccountEntry::Public {
-                    is_authorized: declared.authorized_accounts.contains(&account_id),
+                    is_authorized: context.authorized_accounts.contains(&account_id),
                     loaded: BTreeMap::new(),
                 });
         }
@@ -461,7 +461,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
 
         Ok(Self {
             witnesses,
-            declared,
+            context,
             public_actors,
             accounts,
             pda_family_binding,
@@ -864,7 +864,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
 
     fn finish(self) -> ExecutionOutcome {
         let Self {
-            declared,
+            context,
             mut accounts,
             block_validity_window,
             timestamp_validity_window,
@@ -889,7 +889,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
             },
             ModeState::Live | ModeState::Check { .. } => {
                 let mut public = Vec::new();
-                for actor in declared.public_actors {
+                for actor in context.actors {
                     let Some(AccountEntry::Public { loaded, .. }) =
                         accounts.remove(&actor.account_id)
                     else {

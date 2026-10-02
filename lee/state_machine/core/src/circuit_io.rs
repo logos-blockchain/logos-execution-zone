@@ -6,7 +6,7 @@ use crate::{
     account::{Account, AccountId},
     compute_digest_for_path,
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
-    execution_state::{Assumption, Boundary, Declared, TransactionEntry},
+    execution_state::{Assumption, Boundary, PublicExecutionContext, TransactionEntry},
     program::{
         BlockValidityWindow, MessageBody, MessageId, PdaSeed, ProgramHeader, ProgramId, Response,
         StoredMessage, TimestampValidityWindow, immutable_mirror_commitment,
@@ -104,7 +104,7 @@ pub struct ShadowProgramWitness {
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct ProvingInput {
     pub root: TransactionEntry<StoredMessage>,
-    pub declared: Declared,
+    pub context: PublicExecutionContext,
     /// One witness for each private account used by the transaction.
     pub private_witnesses: Vec<PrivateWitness>,
     pub dummy_inputs: Vec<DummyInput>,
@@ -236,7 +236,7 @@ pub struct PrivateAction {
     derive(Debug, Clone, PartialEq, Eq, Default)
 )]
 pub struct PrivacyPreservingCircuitOutput {
-    pub declared: Declared,
+    pub context: PublicExecutionContext,
     pub boundary: Boundary,
     pub casts: Vec<MessageBody>,
     pub consumed_message: Option<MessageId>,
@@ -288,12 +288,12 @@ mod tests {
         program::{MessageBody, MessageEnvelope},
     };
 
-    fn pinned_statement() -> (Declared, Boundary) {
+    fn pinned_statement() -> (PublicExecutionContext, Boundary) {
         let public = Actor::new(AccountId::new([5; 32]), AccountId::new([6; 32]));
         let private = Actor::new(AccountId::new([9; 32]), AccountId::new([8; 32]));
         (
-            Declared {
-                public_actors: vec![public],
+            PublicExecutionContext {
+                actors: vec![public],
                 authorized_accounts: vec![AccountId::new([7; 32])],
             },
             vec![
@@ -323,9 +323,9 @@ mod tests {
 
     #[test]
     fn a_circuit_output_journal_has_a_pinned_layout() {
-        let (declared, boundary) = pinned_statement();
+        let (context, boundary) = pinned_statement();
         let output = PrivacyPreservingCircuitOutput {
-            declared,
+            context,
             boundary,
             casts: Vec::new(),
             consumed_message: None,
@@ -337,10 +337,10 @@ mod tests {
 
         let expected: Vec<u8> = [
             &[124, 1, 0, 0][..], // frame length: the 380 bytes below
-            &[1, 0, 0, 0],       // declared.public_actors: one actor
+            &[1, 0, 0, 0],       // context.actors: one actor
             &[5; 32],
             &[6; 32],
-            &[1, 0, 0, 0], // declared.authorized_accounts: one account
+            &[1, 0, 0, 0], // context.authorized_accounts: one account
             &[7; 32],
             &[4, 0, 0, 0], // boundary: four steps
             &[0],          // BoundaryStep::CallPublic
@@ -379,8 +379,8 @@ mod tests {
     fn a_circuit_output_journal_with_a_consumed_message_has_a_pinned_layout() {
         let public = Actor::new(AccountId::new([5; 32]), AccountId::new([6; 32]));
         let output = PrivacyPreservingCircuitOutput {
-            declared: Declared {
-                public_actors: vec![public],
+            context: PublicExecutionContext {
+                actors: vec![public],
                 authorized_accounts: Vec::new(),
             },
             boundary: vec![
@@ -409,10 +409,10 @@ mod tests {
 
         let expected: Vec<u8> = [
             &[82, 1, 0, 0][..], // frame length: the 338 bytes below
-            &[1, 0, 0, 0],      // declared.public_actors: one actor
+            &[1, 0, 0, 0],      // context.actors: one actor
             &[5; 32],
             &[6; 32],
-            &[0, 0, 0, 0], // declared.authorized_accounts: none
+            &[0, 0, 0, 0], // context.authorized_accounts: none
             &[2, 0, 0, 0], // boundary: two steps
             &[0],          // BoundaryStep::CallPublic
             &[2],          // source: DeliverySource::Cast
@@ -445,7 +445,7 @@ mod tests {
     #[test]
     fn privacy_preserving_circuit_output_to_bytes_round_trips_via_borsh_frame() {
         let output = PrivacyPreservingCircuitOutput {
-            declared: Declared::default(),
+            context: PublicExecutionContext::default(),
             boundary: Boundary::default(),
             casts: Vec::new(),
             consumed_message: None,

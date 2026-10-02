@@ -7,7 +7,7 @@ use std::{collections::HashSet, time::Instant};
 
 use borsh::to_vec;
 use lee::{
-    Declared, ProvingInput, Simulation, execute_and_prove,
+    ProvingInput, PublicExecutionContext, Simulation, execute_and_prove,
     privacy_preserving_transaction::circuit::{ProgramCatalog, Proof},
 };
 use lee_core::{
@@ -93,7 +93,7 @@ fn proving_input(
 ) -> ProvingInput {
     ProvingInput {
         root,
-        declared: Declared::new(public_actors, signers),
+        context: PublicExecutionContext::new(public_actors, signers),
         private_witnesses,
         dummy_inputs: Vec::new(),
         ciphertext_padding: None,

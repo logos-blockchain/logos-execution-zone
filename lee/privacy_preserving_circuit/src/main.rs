@@ -18,7 +18,7 @@ fn main() {
         input:
             ProvingInput {
                 root,
-                declared,
+                context,
                 private_witnesses,
                 dummy_inputs,
                 ciphertext_padding,
@@ -54,7 +54,7 @@ fn main() {
 
     let consumed_message = root.receipt().map(StoredMessage::id);
     let state = ExecutionState::initialize(
-        declared.clone(),
+        context.clone(),
         &private_witnesses,
         Mode::Record { root, assumed },
     )
@@ -71,7 +71,7 @@ fn main() {
 
     let output = output::compute_circuit_output(
         outcome,
-        declared,
+        context,
         consumed_message,
         &private_witnesses,
         dummy_inputs,

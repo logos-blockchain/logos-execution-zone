@@ -184,7 +184,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
                 to: receipt,
                 message: deposit,
             },
-            declared: lee::Declared::new(public_actors, []),
+            context: lee::PublicExecutionContext::new(public_actors, []),
             private_witnesses: Vec::new(),
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,

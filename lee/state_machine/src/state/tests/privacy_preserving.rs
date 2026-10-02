@@ -34,7 +34,7 @@ impl PrivateRoot {
             .get_proof_for_commitment(&Commitment::new(&self.account_id, &self.pre_account))
             .expect("the account's commitment must be in state");
         ProvingInput {
-            declared: Declared::new(public_actors, []),
+            context: PublicExecutionContext::new(public_actors, []),
             private_witnesses: vec![update_witness(
                 &self.keys,
                 Identifier::ZERO,
@@ -71,7 +71,7 @@ impl NestedBoundary {
         let (outer, inner) = nested_actors();
         let proven = execute_and_prove_assuming(
             ProvingInput {
-                declared: Declared::new(vec![outer, inner], []),
+                context: PublicExecutionContext::new(vec![outer, inner], []),
                 private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
                 ..proving_input(root(outer, outer_script))
             },
@@ -337,7 +337,7 @@ fn a_journal_claiming_an_unsigned_account_authorized_is_rejected() {
     ));
 
     // Dropping the claim to match the missing signature detaches the statement from its proof.
-    message.execution.declared.authorized_accounts.clear();
+    message.execution.context.authorized_accounts.clear();
     let unclaimed = PrivacyPreservingTransaction::new(
         message.clone(),
         WitnessSet::for_message(&message, witness_set.proof, &[]),
@@ -407,7 +407,7 @@ fn a_failing_public_turn_leaves_the_state_untouched() {
     let script = Script::write(vec![1]).call(Call::new(sender, &transfer(recipient_id, overdraft)));
     let proven = execute_and_prove(
         ProvingInput {
-            declared: Declared::new(vec![own, sender], [sender_id]),
+            context: PublicExecutionContext::new(vec![own, sender], [sender_id]),
             private_witnesses: vec![init_witness(&recipient_keys, Identifier::ZERO)],
             ..proving_input(root(own, &script))
         },
@@ -565,7 +565,7 @@ fn an_unauthorized_public_debit_proves_but_is_refused_at_settlement() {
     // An honest prover would refuse the debit; this one assumes its credit without running it.
     let proven = execute_and_prove_assuming(
         ProvingInput {
-            declared: Declared::new(vec![sender], []),
+            context: PublicExecutionContext::new(vec![sender], []),
             private_witnesses: vec![init_witness(&recipient_keys, Identifier::ZERO)],
             ..proving_input(root(sender, &transfer(recipient_id, 10)))
         },

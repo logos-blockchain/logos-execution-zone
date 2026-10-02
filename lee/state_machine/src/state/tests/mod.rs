@@ -26,7 +26,7 @@ use lee_core::{
 use test_guest_core::{ForgeField, Script};
 
 use crate::{
-    Declared, ProvingInput, PublicKey, PublicTransaction, Simulation, V03State,
+    ProvingInput, PublicExecutionContext, PublicKey, PublicTransaction, Simulation, V03State,
     error::{InvalidProgramBehaviorError, LeeError},
     execute_and_prove, execute_and_prove_assuming,
     privacy_preserving_transaction::{
@@ -170,7 +170,7 @@ pub fn root(to: Actor, message: &impl BorshSerialize) -> TransactionEntry<Stored
 pub fn proving_input(root: TransactionEntry<StoredMessage>) -> ProvingInput {
     ProvingInput {
         root,
-        declared: Declared::default(),
+        context: PublicExecutionContext::default(),
         private_witnesses: Vec::new(),
         dummy_inputs: Vec::new(),
         ciphertext_padding: None,
@@ -409,7 +409,7 @@ fn shielded_balance_transfer_for_tests(
 
     let proven = execute_and_prove(
         ProvingInput {
-            declared: Declared::new(vec![sender], [sender_id]),
+            context: PublicExecutionContext::new(vec![sender], [sender_id]),
             private_witnesses: vec![init_witness(recipient_keys, Identifier::ZERO)],
             ..proving_input(root(sender, &transfer(recipient_id, balance_to_move)))
         },
@@ -490,7 +490,7 @@ fn deshielded_balance_transfer_for_tests(
 
     let proven = execute_and_prove(
         ProvingInput {
-            declared: Declared::new(vec![recipient], []),
+            context: PublicExecutionContext::new(vec![recipient], []),
             private_witnesses: vec![update_witness(
                 sender_keys,
                 Identifier::ZERO,

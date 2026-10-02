@@ -14,12 +14,12 @@ use std::{
 
 use indexer_service_protocol::{
     Account, AccountData, AccountId, AccountSummary, Actor, ActorState, BedrockStatus, Block,
-    BlockBody, BlockHeader, BlockId, BoundaryStep, Commitment, CommitmentSetDigest, Declared,
-    DeliverySource, EncryptedAccountData, EventRecord, EventSubscriptionFilter, GetEventsFilter,
-    HashType, IndexerStatus, IndexerSyncState, MessageEnvelope, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, PublicDelivery, PublicKey, PublicMessage,
-    PublicTransaction, Selector, ShardSummary, Signature, Transaction, TransactionEntry,
-    ValidityWindow, WitnessSet,
+    BlockBody, BlockHeader, BlockId, BoundaryStep, Commitment, CommitmentSetDigest, DeliverySource,
+    EncryptedAccountData, EventRecord, EventSubscriptionFilter, GetEventsFilter, HashType,
+    IndexerStatus, IndexerSyncState, MessageEnvelope, PrivacyPreservingMessage,
+    PrivacyPreservingTransaction, PrivateAction, PublicDelivery, PublicExecutionContext, PublicKey,
+    PublicMessage, PublicTransaction, Selector, ShardSummary, Signature, Transaction,
+    TransactionEntry, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -384,8 +384,8 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
                         .any(|actor| actor.account_id == account_id),
                     Transaction::PrivacyPreserving(priv_tx) => priv_tx
                         .message
-                        .declared
-                        .public_actors
+                        .context
+                        .actors
                         .iter()
                         .any(|actor| actor.account_id == account_id),
                 })
@@ -551,8 +551,8 @@ fn mock_privacy_preserving_tx(
     Transaction::PrivacyPreserving(PrivacyPreservingTransaction {
         hash: tx_hash,
         message: PrivacyPreservingMessage {
-            declared: Declared {
-                public_actors: vec![to],
+            context: PublicExecutionContext {
+                actors: vec![to],
                 authorized_accounts: vec![],
             },
             boundary: vec![BoundaryStep::CallPublic(PublicDelivery {

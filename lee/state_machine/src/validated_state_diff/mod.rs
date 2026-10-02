@@ -8,7 +8,9 @@ use std::{
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, ProgramImageClaim, Timestamp,
     account::{Account, AccountId, Actor, ActorState, Cycles, Nonce},
-    execution_state::{Declared, ExecutionResult, ExecutionState, Mode, TransactionEntry},
+    execution_state::{
+        ExecutionResult, ExecutionState, Mode, PublicExecutionContext, TransactionEntry,
+    },
     program::{MessageBody, MessageId, PROGRAM_LOADER_ACCOUNT_ID, StoredMessage, TransactionEvent},
 };
 use public_backend::PublicBackend;
@@ -269,19 +271,20 @@ impl ValidatedStateDiff {
                 (TransactionEntry::Receive(record.clone()), Some(id))
             }
         };
-        let declared = Declared::new(public_actors.to_vec(), authorized.iter().copied());
+        let context =
+            PublicExecutionContext::new(public_actors.to_vec(), authorized.iter().copied());
         ensure!(
             public_actors.contains(&root.destination()),
             LeeError::InvalidInput("Root actor is not declared".into())
         );
         if let Some(record) = root.receipt() {
-            admit_public_receipt(record, &declared, |account_id| {
+            admit_public_receipt(record, &context, |account_id| {
                 identities.contains(&account_id) || state.is_designated_public_account(account_id)
             })?;
         }
         let settled = settle(
             state,
-            declared,
+            context,
             Mode::Live(root),
             block_id,
             timestamp,
@@ -362,7 +365,7 @@ impl ValidatedStateDiff {
         }
 
         ensure!(
-            sorted(signer_account_ids.iter().copied()) == execution.declared.authorized_accounts,
+            sorted(signer_account_ids.iter().copied()) == execution.context.authorized_accounts,
             LeeError::InvalidInput("Authorized accounts do not match the signers".into())
         );
 
@@ -388,7 +391,7 @@ impl ValidatedStateDiff {
                 LeeError::InvalidInput("A consumed message is not pending".into())
             })?;
             let identities = identity_account_ids(&message.identities);
-            admit_public_receipt(record, &execution.declared, |account_id| {
+            admit_public_receipt(record, &execution.context, |account_id| {
                 identities.contains(&account_id) || state.is_designated_public_account(account_id)
             })?;
         }
@@ -396,7 +399,7 @@ impl ValidatedStateDiff {
         let mut cycles_used = 0;
         let mut settled = settle(
             state,
-            execution.declared.clone(),
+            execution.context.clone(),
             Mode::Check(execution.boundary.clone()),
             block_id,
             timestamp,
@@ -480,13 +483,13 @@ fn catch_program_loader_panic<T>(run: impl FnOnce() -> T) -> Result<T, LeeError>
 
 pub fn admit_public_receipt(
     record: &StoredMessage,
-    declared: &Declared,
+    context: &PublicExecutionContext,
     proves_identity: impl Fn(AccountId) -> bool,
 ) -> Result<(), LeeError> {
     let to = record.body.to;
     ensure!(
-        !declared.public_actors.contains(&to)
-            || declared.authorized_accounts.contains(&to.account_id)
+        !context.actors.contains(&to)
+            || context.authorized_accounts.contains(&to.account_id)
             || proves_identity(to.account_id),
         LeeError::UnprovenPublicIdentity { actor: to }
     );
@@ -495,14 +498,14 @@ pub fn admit_public_receipt(
 
 fn settle(
     state: &V03State,
-    declared: Declared,
+    context: PublicExecutionContext,
     mode: Mode,
     block_id: BlockId,
     timestamp: Timestamp,
     cycle_budget: Cycles,
     cycles_used: &mut Cycles,
 ) -> Result<StateDiff, LeeError> {
-    let execution = ExecutionState::initialize(declared, &[], mode)
+    let execution = ExecutionState::initialize(context, &[], mode)
         .map_err(|e| LeeError::InvalidInput(e.to_string()))?;
     let mut backend = PublicBackend::new(state, cycle_budget, cycles_used);
     let outcome = execution.run(&mut backend)?;

@@ -114,7 +114,7 @@ fn a_private_account_may_act_under_two_shards_in_one_transaction() {
 
     let (output, _proof) = execute_and_prove(
         ProvingInput {
-            declared: Declared::new(vec![recipient], []),
+            context: PublicExecutionContext::new(vec![recipient], []),
             private_witnesses: vec![update_witness(
                 &keys,
                 Identifier::ZERO,
@@ -464,7 +464,7 @@ fn prove_public_outputs(
     // Assumes each public output delivers nothing back, without running it.
     execute_and_prove_assuming(
         ProvingInput {
-            declared: Declared::new(public_actors, signers),
+            context: PublicExecutionContext::new(public_actors, signers),
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
             ..proving_input(root(
                 Actor::new(regular_id(&keys, Identifier::ZERO), scripted_id()),
@@ -793,7 +793,7 @@ fn two_private_pda_family_members_receive_and_spend() {
     let shield = |from: Actor, witness: PrivateWitness, pda_id: AccountId| {
         execute_and_prove(
             ProvingInput {
-                declared: Declared::new(vec![from], [from.account_id]),
+                context: PublicExecutionContext::new(vec![from], [from.account_id]),
                 private_witnesses: vec![witness],
                 ..proving_input(root(from, &transfer(pda_id, amount)))
             },
@@ -809,7 +809,7 @@ fn two_private_pda_family_members_receive_and_spend() {
     let spend = |witness: PrivateWitness, pda_id: AccountId, signers: HashSet<AccountId>| {
         execute_and_prove(
             ProvingInput {
-                declared: Declared::new(vec![recipient], signers),
+                context: PublicExecutionContext::new(vec![recipient], signers),
                 private_witnesses: vec![witness],
                 ..proving_input(root(
                     Actor::new(pda_id, proxy_id),
@@ -1120,7 +1120,7 @@ fn a_shadow_programs_public_effect_is_refused_at_settlement() {
 
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            declared: Declared::new(vec![public], []),
+            context: PublicExecutionContext::new(vec![public], []),
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
             ..proving_input(root(public, &Script::write(vec![7; 4])))
         },

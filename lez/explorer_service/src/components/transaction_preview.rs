@@ -46,7 +46,7 @@ pub fn TransactionPreview(transaction: Transaction) -> impl IntoView {
             } = tx;
             format!(
                 "{} public actors, {} commitments",
-                message.declared.public_actors.len(),
+                message.context.actors.len(),
                 message.private_actions.len()
             )
         }

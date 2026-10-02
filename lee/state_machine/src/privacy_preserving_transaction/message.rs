@@ -38,7 +38,7 @@ impl std::fmt::Debug for Message {
             })
             .collect();
         f.debug_struct("Message")
-            .field("declared", &execution.declared)
+            .field("declared", &execution.context)
             .field("boundary", &execution.boundary)
             .field("consumed_message", &execution.consumed_message)
             .field("private_actions", &private_actions)
@@ -71,8 +71,8 @@ impl Message {
     pub fn public_account_ids(&self) -> Vec<AccountId> {
         let mut seen = HashSet::new();
         self.execution
-            .declared
-            .public_actors
+            .context
+            .actors
             .iter()
             .map(|actor| actor.account_id)
             .filter(|account_id| seen.insert(*account_id))
@@ -104,7 +104,8 @@ pub mod tests {
         account::{Account, AccountId, Actor, Nonce},
         encryption::{Ciphertext, ViewingPublicKey},
         execution_state::{
-            Assumption, Boundary, BoundaryStep, Declared, DeliverySource, PublicDelivery,
+            Assumption, Boundary, BoundaryStep, DeliverySource, PublicDelivery,
+            PublicExecutionContext,
         },
         program::{BlockValidityWindow, MessageEnvelope, TimestampValidityWindow},
     };
@@ -143,7 +144,7 @@ pub mod tests {
 
         Message {
             execution: PrivacyPreservingCircuitOutput {
-                declared: Declared::default(),
+                context: PublicExecutionContext::default(),
                 boundary: Boundary::default(),
                 casts: Vec::new(),
                 consumed_message: None,
@@ -172,8 +173,8 @@ pub mod tests {
         let private = Actor::new(AccountId::new([9; 32]), AccountId::new([8; 32]));
         let message = Message {
             execution: PrivacyPreservingCircuitOutput {
-                declared: Declared {
-                    public_actors: vec![public],
+                context: PublicExecutionContext {
+                    actors: vec![public],
                     authorized_accounts: vec![AccountId::new([7; 32])],
                 },
                 boundary: vec![

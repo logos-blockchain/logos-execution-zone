@@ -1,10 +1,10 @@
 use indexer_service_protocol::{
     AccountId, Actor, Assumption, BoundaryStep, Ciphertext, Commitment, CommitmentSetDigest,
-    Declared, DeliverySource, EncryptedAccountData, EphemeralPublicKey, FeeDeclaration, HashType,
+    DeliverySource, EncryptedAccountData, EphemeralPublicKey, FeeDeclaration, HashType,
     MessageBody, MessageEnvelope, MessageId, Nullifier, PdaSeed, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, Proof, PublicDelivery, PublicIdentity, PublicKey,
-    PublicMessage, PublicTransaction, Signature, Transaction, TransactionEntry, ValidityWindow,
-    WitnessSet,
+    PrivacyPreservingTransaction, PrivateAction, Proof, PublicDelivery, PublicExecutionContext,
+    PublicIdentity, PublicKey, PublicMessage, PublicTransaction, Signature, Transaction,
+    TransactionEntry, ValidityWindow, WitnessSet,
 };
 
 use crate::api::types::{
@@ -337,7 +337,7 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
         Self {
             hash: HashType(value.hash.data),
             message: PrivacyPreservingMessage {
-                declared: value.message.declared.into(),
+                context: value.message.context.into(),
                 boundary: {
                     let std_vec: Vec<FfiBoundaryStep> = value.message.boundary.into();
                     std_vec.into_iter().map(Into::into).collect()
@@ -649,20 +649,20 @@ impl From<FfiMessageBody> for MessageBody {
 }
 
 #[repr(C)]
-pub struct FfiDeclared {
-    pub public_actors: FfiActorList,
+pub struct FfiPublicExecutionContext {
+    pub actors: FfiActorList,
     pub authorized_accounts: FfiAccountIdList,
 }
 
-impl From<Declared> for FfiDeclared {
-    fn from(value: Declared) -> Self {
-        let Declared {
-            public_actors,
+impl From<PublicExecutionContext> for FfiPublicExecutionContext {
+    fn from(value: PublicExecutionContext) -> Self {
+        let PublicExecutionContext {
+            actors,
             authorized_accounts,
         } = value;
 
         Self {
-            public_actors: public_actors
+            actors: actors
                 .into_iter()
                 .map(Into::into)
                 .collect::<Vec<_>>()
@@ -676,13 +676,13 @@ impl From<Declared> for FfiDeclared {
     }
 }
 
-impl From<FfiDeclared> for Declared {
-    fn from(value: FfiDeclared) -> Self {
-        let public_actors: Vec<FfiActor> = value.public_actors.into();
+impl From<FfiPublicExecutionContext> for PublicExecutionContext {
+    fn from(value: FfiPublicExecutionContext) -> Self {
+        let actors: Vec<FfiActor> = value.actors.into();
         let authorized_accounts: Vec<FfiAccountId> = value.authorized_accounts.into();
 
         Self {
-            public_actors: public_actors.into_iter().map(Into::into).collect(),
+            actors: actors.into_iter().map(Into::into).collect(),
             authorized_accounts: authorized_accounts
                 .into_iter()
                 .map(|id| AccountId { value: id.data })
@@ -716,7 +716,7 @@ impl From<PrivateAction> for FfiPrivateAction {
 
 #[repr(C)]
 pub struct FfiPrivacyPreservingMessage {
-    pub declared: FfiDeclared,
+    pub context: FfiPublicExecutionContext,
     pub boundary: FfiBoundaryStepList,
     pub casts: FfiMessageBodyList,
     pub has_consumed_message: bool,
@@ -731,7 +731,7 @@ pub struct FfiPrivacyPreservingMessage {
 impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
     fn from(value: PrivacyPreservingMessage) -> Self {
         let PrivacyPreservingMessage {
-            declared,
+            context,
             boundary,
             casts,
             consumed_message,
@@ -743,7 +743,7 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
         } = value;
 
         Self {
-            declared: declared.into(),
+            context: context.into(),
             boundary: boundary
                 .into_iter()
                 .map(Into::into)
@@ -1061,7 +1061,7 @@ mod tests {
         let original = PrivacyPreservingTransaction {
             hash: HashType([4; 32]),
             message: PrivacyPreservingMessage {
-                declared: Declared::default(),
+                context: PublicExecutionContext::default(),
                 boundary: vec![
                     BoundaryStep::CallPublic(delivery(7)),
                     BoundaryStep::CallPublic(delivery(8)),
@@ -1180,7 +1180,7 @@ mod tests {
         let original = PrivacyPreservingTransaction {
             hash: HashType([4; 32]),
             message: PrivacyPreservingMessage {
-                declared: Declared::default(),
+                context: PublicExecutionContext::default(),
                 boundary: vec![
                     BoundaryStep::CallPublic(PublicDelivery {
                         envelope: MessageEnvelope {

@@ -1,6 +1,6 @@
 use indexer_service_protocol::{
-    BoundaryStep, Declared, PrivacyPreservingMessage, PrivacyPreservingTransaction, PublicMessage,
-    PublicTransaction, TransactionEntry, WitnessSet,
+    BoundaryStep, PrivacyPreservingMessage, PrivacyPreservingTransaction, PublicExecutionContext,
+    PublicMessage, PublicTransaction, TransactionEntry, WitnessSet,
 };
 use leptos::prelude::*;
 
@@ -103,7 +103,7 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
         witness_set,
     } = tx;
     let PrivacyPreservingMessage {
-        declared,
+        context,
         boundary,
         casts: _,
         consumed_message: _,
@@ -113,10 +113,10 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
         timestamp_validity_window,
         identities: _,
     } = message;
-    let Declared {
-        public_actors,
+    let PublicExecutionContext {
+        actors: public_actors,
         authorized_accounts,
-    } = declared;
+    } = context;
     let private_action_count = private_actions.len();
     let public_actor_count = public_actors.len();
     let authorized_count = authorized_accounts.len();

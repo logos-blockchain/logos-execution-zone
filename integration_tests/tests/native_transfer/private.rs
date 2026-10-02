@@ -8,7 +8,7 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, Actor, Declared, ProvingInput, Simulation, execute_and_prove,
+    AccountId, Actor, ProvingInput, PublicExecutionContext, Simulation, execute_and_prove,
     privacy_preserving_transaction::circuit::ProgramCatalog, program::Program,
 };
 use lee_core::{
@@ -623,7 +623,7 @@ fn prove_init_with_commitment_root(
                     amount: 1,
                 })?,
             },
-            declared: Declared::new(vec![sender], [sender_id]),
+            context: PublicExecutionContext::new(vec![sender], [sender_id]),
             private_witnesses: vec![PrivateWitness {
                 vpk,
                 random_seed: [0; 32],

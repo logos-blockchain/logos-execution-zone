@@ -5266,7 +5266,7 @@ fn prove_and_settle(
     let (output, proof) = lee::execute_and_prove(
         lee::ProvingInput {
             root,
-            declared: lee::Declared::new(public_actors, []),
+            context: lee::PublicExecutionContext::new(public_actors, []),
             private_witnesses,
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,

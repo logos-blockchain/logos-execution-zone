@@ -6,13 +6,13 @@ use lee_core::{
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
-    execution_state::{Declared, ExecutionOutcome, ExecutionResult},
+    execution_state::{ExecutionOutcome, ExecutionResult, PublicExecutionContext},
     program::MessageId,
 };
 
 pub fn compute_circuit_output(
     outcome: ExecutionOutcome,
-    declared: Declared,
+    context: PublicExecutionContext,
     consumed_message: Option<MessageId>,
     private_witnesses: &[PrivateWitness],
     dummy_inputs: Vec<DummyInput>,
@@ -33,7 +33,7 @@ pub fn compute_circuit_output(
         unreachable!("a record yields its private accounts, boundary and casts")
     };
     let mut output = PrivacyPreservingCircuitOutput {
-        declared,
+        context,
         boundary,
         casts,
         consumed_message,
@@ -313,7 +313,7 @@ mod tests {
                     casts: Vec::new(),
                 },
             },
-            Declared::default(),
+            PublicExecutionContext::default(),
             None,
             witnesses,
             Vec::new(),

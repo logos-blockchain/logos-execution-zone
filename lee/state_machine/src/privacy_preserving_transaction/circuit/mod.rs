@@ -228,12 +228,12 @@ pub fn execute_and_prove(
     programs: &ProgramCatalog,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     if let Some(record) = input.root.receipt() {
-        admit_public_receipt(record, &input.declared, |account_id| {
+        admit_public_receipt(record, &input.context, |account_id| {
             simulation.proven_public_accounts.contains(&account_id)
         })?;
     }
     let ExecutionResult::Derived { assumed } = ExecutionState::initialize(
-        input.declared.clone(),
+        input.context.clone(),
         &input.private_witnesses,
         Mode::Derive(input.root.clone()),
     )?
@@ -263,7 +263,7 @@ pub fn execute_and_prove_assuming(
         responses: Vec::new(),
     };
     ExecutionState::initialize(
-        input.declared.clone(),
+        input.context.clone(),
         &input.private_witnesses,
         Mode::Record {
             root: input.root.clone(),

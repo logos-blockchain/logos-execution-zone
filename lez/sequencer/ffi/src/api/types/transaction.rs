@@ -1,8 +1,9 @@
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, Actor, Assumption, BoundaryStep, Declared, DeliverySource, EphemeralPublicKey,
-    FeeDeclaration, MessageBody, MessageEnvelope, MessageId, PrivacyPreservingTransaction,
-    PublicDelivery, PublicIdentity, PublicKey, PublicTransaction, Signature, TransactionEntry,
+    AccountId, Actor, Assumption, BoundaryStep, DeliverySource, EphemeralPublicKey, FeeDeclaration,
+    MessageBody, MessageEnvelope, MessageId, PrivacyPreservingTransaction, PublicDelivery,
+    PublicExecutionContext, PublicIdentity, PublicKey, PublicTransaction, Signature,
+    TransactionEntry,
     privacy_preserving_transaction::{circuit::Proof, message::EncryptedAccountData},
 };
 use lee_core::{
@@ -414,7 +415,7 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
         Ok(Self {
             message: lee::privacy_preserving_transaction::Message {
                 execution: PrivacyPreservingCircuitOutput {
-                    declared: value.message.declared.into(),
+                    context: value.message.context.into(),
                     boundary: {
                         let std_vec: Vec<FfiBoundaryStep> = value.message.boundary.into();
                         std_vec.into_iter().map(Into::into).collect()
@@ -737,20 +738,20 @@ impl From<FfiMessageBody> for MessageBody {
 }
 
 #[repr(C)]
-pub struct FfiDeclared {
-    pub public_actors: FfiActorList,
+pub struct FfiPublicExecutionContext {
+    pub actors: FfiActorList,
     pub authorized_accounts: FfiAccountIdList,
 }
 
-impl From<Declared> for FfiDeclared {
-    fn from(value: Declared) -> Self {
-        let Declared {
-            public_actors,
+impl From<PublicExecutionContext> for FfiPublicExecutionContext {
+    fn from(value: PublicExecutionContext) -> Self {
+        let PublicExecutionContext {
+            actors,
             authorized_accounts,
         } = value;
 
         Self {
-            public_actors: public_actors
+            actors: actors
                 .into_iter()
                 .map(Into::into)
                 .collect::<Vec<_>>()
@@ -764,13 +765,13 @@ impl From<Declared> for FfiDeclared {
     }
 }
 
-impl From<FfiDeclared> for Declared {
-    fn from(value: FfiDeclared) -> Self {
-        let public_actors: Vec<FfiActor> = value.public_actors.into();
+impl From<FfiPublicExecutionContext> for PublicExecutionContext {
+    fn from(value: FfiPublicExecutionContext) -> Self {
+        let actors: Vec<FfiActor> = value.actors.into();
         let authorized_accounts: Vec<FfiAccountId> = value.authorized_accounts.into();
 
         Self {
-            public_actors: public_actors.into_iter().map(Into::into).collect(),
+            actors: actors.into_iter().map(Into::into).collect(),
             authorized_accounts: authorized_accounts.into_iter().map(Into::into).collect(),
         }
     }
@@ -801,7 +802,7 @@ impl From<PrivateAction> for FfiPrivateAction {
 
 #[repr(C)]
 pub struct FfiPrivacyPreservingMessage {
-    pub declared: FfiDeclared,
+    pub context: FfiPublicExecutionContext,
     pub boundary: FfiBoundaryStepList,
     pub casts: FfiMessageBodyList,
     pub has_consumed_message: bool,
@@ -819,7 +820,7 @@ impl From<lee::privacy_preserving_transaction::Message> for FfiPrivacyPreserving
         let lee::privacy_preserving_transaction::Message {
             execution:
                 PrivacyPreservingCircuitOutput {
-                    declared,
+                    context,
                     boundary,
                     casts,
                     consumed_message,
@@ -833,7 +834,7 @@ impl From<lee::privacy_preserving_transaction::Message> for FfiPrivacyPreserving
         } = value;
 
         Self {
-            declared: declared.into(),
+            context: context.into(),
             boundary: boundary
                 .into_iter()
                 .map(Into::into)
@@ -1272,7 +1273,7 @@ mod tests {
         let original = PrivacyPreservingTransaction {
             message: lee::privacy_preserving_transaction::Message {
                 execution: PrivacyPreservingCircuitOutput {
-                    declared: Declared::default(),
+                    context: PublicExecutionContext::default(),
                     boundary: vec![
                         BoundaryStep::CallPublic(PublicDelivery {
                             envelope: MessageEnvelope {

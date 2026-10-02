@@ -9,8 +9,8 @@ pub use lee_core::{
     account::{Account, AccountData, AccountId, Actor, ActorState, Balance, Cycles, Fee, Gas},
     encryption::EphemeralPublicKey,
     execution_state::{
-        Assumption, Boundary, BoundaryDelivery, BoundaryStep, Declared, DeliverySource,
-        PublicDelivery, TransactionEntry,
+        Assumption, Boundary, BoundaryDelivery, BoundaryStep, DeliverySource, PublicDelivery,
+        PublicExecutionContext, TransactionEntry,
     },
     native_token,
     program::{

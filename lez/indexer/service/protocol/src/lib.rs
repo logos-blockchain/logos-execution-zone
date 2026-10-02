@@ -332,8 +332,8 @@ pub enum BoundaryStep {
 pub type Boundary = Vec<BoundaryStep>;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct Declared {
-    pub public_actors: Vec<Actor>,
+pub struct PublicExecutionContext {
+    pub actors: Vec<Actor>,
     pub authorized_accounts: Vec<AccountId>,
 }
 
@@ -350,7 +350,7 @@ pub struct PrivateAction {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PrivacyPreservingMessage {
-    pub declared: Declared,
+    pub context: PublicExecutionContext,
     pub boundary: Boundary,
     pub casts: Vec<MessageBody>,
     pub consumed_message: Option<MessageId>,

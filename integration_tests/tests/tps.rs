@@ -16,8 +16,8 @@ use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use integration_tests::config::SequencerPartialConfig;
 use lee::{
-    Account, AccountId, Actor, Declared, PrivacyPreservingTransaction, PrivateKey, ProvingInput,
-    PublicKey, PublicTransaction,
+    Account, AccountId, Actor, PrivacyPreservingTransaction, PrivateKey, ProvingInput,
+    PublicExecutionContext, PublicKey, PublicTransaction,
     privacy_preserving_transaction::{self as pptx, circuit},
     program::Program,
     public_transaction as putx,
@@ -274,7 +274,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                 })
                 .unwrap(),
             },
-            declared: Declared::default(),
+            context: PublicExecutionContext::default(),
             private_witnesses: vec![
                 PrivateWitness {
                     vpk: sender_vpk,

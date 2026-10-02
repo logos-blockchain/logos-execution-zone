@@ -42,7 +42,7 @@ use lee::program::Program;
 use lee_core::{
     BlockId, Timestamp,
     account::{AccountId, Actor, ActorState},
-    execution_state::{Backend, Declared, ExecutionState, Mode, TransactionEntry},
+    execution_state::{Backend, ExecutionState, Mode, PublicExecutionContext, TransactionEntry},
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{MessageData, ReceiveInput, Transition},
@@ -254,8 +254,8 @@ impl Case {
             fixtures,
             message,
         } = self;
-        let declared = Declared {
-            public_actors: fixtures.iter().map(|f| f.actor).collect(),
+        let context = PublicExecutionContext {
+            actors: fixtures.iter().map(|f| f.actor).collect(),
             authorized_accounts: fixtures
                 .iter()
                 .filter(|f| f.is_authorized)
@@ -270,7 +270,7 @@ impl Case {
             rows: Vec::new(),
         };
         ExecutionState::initialize(
-            declared,
+            context,
             &[],
             Mode::Live(TransactionEntry::Call { to: root, message }),
         )?

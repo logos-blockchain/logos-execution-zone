@@ -6,7 +6,8 @@ use lee_core::{
     SharedSecretKey, WitnessKind,
     account::{Account, AccountId, ActorState, Nonce},
     execution_state::{
-        Boundary, BoundaryStep, Declared, DeliverySource, ExecutionError, PublicDelivery,
+        Boundary, BoundaryStep, DeliverySource, ExecutionError, PublicDelivery,
+        PublicExecutionContext,
     },
     native_token::encode_balance,
     program::{
@@ -106,7 +107,7 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_accounts() {
     let root_transfer = transfer(recipient_account_id, balance_to_move);
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            declared: Declared::new(vec![sender], [sender_id]),
+            context: PublicExecutionContext::new(vec![sender], [sender_id]),
             private_witnesses: vec![init_witness(&recipient_keys, Identifier::ZERO)],
             ..proving_input(root(sender, &root_transfer))
         },
@@ -122,7 +123,7 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_accounts() {
     // A native transfer runs no guest, so it claims no program image.
     assert!(output.program_image_claims.is_empty());
 
-    assert_eq!(output.declared.authorized_accounts, vec![sender_id]);
+    assert_eq!(output.context.authorized_accounts, vec![sender_id]);
     // The journal carries the public call to settle and the delivery it assumes back, not a
     // claimed balance: the prover never read the sender's shard.
     assert_eq!(
@@ -476,7 +477,7 @@ fn prove_pda_spend(
     let recipient = Actor::native_balance(AccountId::new([0; 32]));
     execute_and_prove(
         ProvingInput {
-            declared: Declared::new(vec![recipient], [recipient.account_id]),
+            context: PublicExecutionContext::new(vec![recipient], [recipient.account_id]),
             private_witnesses: vec![witness],
             ..proving_input(root(
                 Actor::new(handle_account, scripted_id()),
@@ -544,7 +545,7 @@ fn shared_account_receives_via_simple_transfer() {
 
     let result = execute_and_prove(
         ProvingInput {
-            declared: Declared::new(vec![sender], [sender_id]),
+            context: PublicExecutionContext::new(vec![sender], [sender_id]),
             private_witnesses: vec![init_witness(&shared_keys, shared_identifier)],
             ..proving_input(root(sender, &transfer(shared_account_id, balance_to_move)))
         },
@@ -700,7 +701,7 @@ fn a_signer_entry_does_not_authorize_a_private_witness_without_ask() {
 
     let result = execute_and_prove(
         ProvingInput {
-            declared: Declared::new(Vec::new(), [account_id]),
+            context: PublicExecutionContext::new(Vec::new(), [account_id]),
             private_witnesses: vec![unauthorized_update(&keys, account, membership_proof)],
             ..proving_input(root(
                 Actor::new(account_id, scripted_id()),
@@ -903,7 +904,7 @@ fn a_signer_entry_does_not_authorize_a_private_pda() {
 
     let result = execute_and_prove(
         ProvingInput {
-            declared: Declared::new(Vec::new(), [account_id]),
+            context: PublicExecutionContext::new(Vec::new(), [account_id]),
             private_witnesses: vec![init_pda_witness(&keys, identifier, (scripted_id(), seed))],
             ..proving_input(root(
                 Actor::new(account_id, scripted_id()),
@@ -937,7 +938,7 @@ fn the_prover_never_reads_a_public_shard() {
     // `Prover` supplies no public shard, so executing either public turn would fail the proof.
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            declared: Declared::new(vec![root_actor, callee], []),
+            context: PublicExecutionContext::new(vec![root_actor, callee], []),
             ..proving_input(root(root_actor, &script))
         },
         &Simulation::default(),
@@ -1030,7 +1031,7 @@ fn direct_input(
                 Actor::new(regular_id(&keys, Identifier::ZERO), program_account_id),
                 script,
             ),
-            declared: Declared::default(),
+            context: PublicExecutionContext::default(),
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,

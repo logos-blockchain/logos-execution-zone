@@ -12,7 +12,8 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, Actor, Declared, PrivacyPreservingTransaction, PrivateKey, ProvingInput, PublicKey,
+    AccountId, Actor, PrivacyPreservingTransaction, PrivateKey, ProvingInput,
+    PublicExecutionContext, PublicKey,
     privacy_preserving_transaction::{
         circuit::{ProgramCatalog, Simulation, execute_and_prove},
         message::Message,
@@ -72,7 +73,7 @@ async fn fund_private_pda(
                 to: sender_actor,
                 message: transfer,
             },
-            declared: Declared::new(vec![sender_actor], [sender]),
+            context: PublicExecutionContext::new(vec![sender_actor], [sender]),
             private_witnesses: vec![PrivateWitness {
                 vpk,
                 random_seed: [0; 32],

@@ -5,10 +5,10 @@ use lee_core::account::Nonce;
 use crate::{
     Account, AccountData, AccountId, Actor, ActorState, BedrockStatus, Block, BlockBody,
     BlockHeader, BlockId, BlockIngestError, BoundaryDelivery, BoundaryStep, Ciphertext, Commitment,
-    CommitmentSetDigest, CrossZoneHalt, Declared, DeliverySource, EncryptedAccountData,
-    EphemeralPublicKey, EventRecord, FeeDeclaration, HashType, IndexerStatus, IndexerSyncState,
-    MessageEnvelope, MessageId, Nullifier, PdaSeed, PeerHealth, PeerStatus,
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, Proof, PublicIdentity,
+    CommitmentSetDigest, CrossZoneHalt, DeliverySource, EncryptedAccountData, EphemeralPublicKey,
+    EventRecord, FeeDeclaration, HashType, IndexerStatus, IndexerSyncState, MessageEnvelope,
+    MessageId, Nullifier, PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage,
+    PrivacyPreservingTransaction, PrivateAction, Proof, PublicExecutionContext, PublicIdentity,
     PublicKey, PublicMessage, PublicTransaction, Selector, Signature, StallReason, Transaction,
     TransactionEntry, ValidityWindow, WitnessSet,
 };
@@ -535,27 +535,27 @@ impl From<BoundaryStep> for lee_core::execution_state::BoundaryStep {
     }
 }
 
-impl From<lee_core::execution_state::Declared> for Declared {
-    fn from(value: lee_core::execution_state::Declared) -> Self {
-        let lee_core::execution_state::Declared {
-            public_actors,
+impl From<lee_core::execution_state::PublicExecutionContext> for PublicExecutionContext {
+    fn from(value: lee_core::execution_state::PublicExecutionContext) -> Self {
+        let lee_core::execution_state::PublicExecutionContext {
+            actors,
             authorized_accounts,
         } = value;
         Self {
-            public_actors: public_actors.into_iter().map(Into::into).collect(),
+            actors: actors.into_iter().map(Into::into).collect(),
             authorized_accounts: authorized_accounts.into_iter().map(Into::into).collect(),
         }
     }
 }
 
-impl From<Declared> for lee_core::execution_state::Declared {
-    fn from(value: Declared) -> Self {
-        let Declared {
-            public_actors,
+impl From<PublicExecutionContext> for lee_core::execution_state::PublicExecutionContext {
+    fn from(value: PublicExecutionContext) -> Self {
+        let PublicExecutionContext {
+            actors,
             authorized_accounts,
         } = value;
         Self {
-            public_actors: public_actors.into_iter().map(Into::into).collect(),
+            actors: actors.into_iter().map(Into::into).collect(),
             authorized_accounts: authorized_accounts.into_iter().map(Into::into).collect(),
         }
     }
@@ -577,7 +577,7 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
         let lee::privacy_preserving_transaction::message::Message {
             execution:
                 lee_core::PrivacyPreservingCircuitOutput {
-                    declared,
+                    context,
                     boundary,
                     casts,
                     consumed_message,
@@ -593,7 +593,7 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
             identities,
         } = value;
         Self {
-            declared: declared.into(),
+            context: context.into(),
             boundary: boundary.into_iter().map(Into::into).collect(),
             casts: casts.into_iter().map(Into::into).collect(),
             consumed_message: consumed_message.map(Into::into),
@@ -622,7 +622,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
 
     fn try_from(value: PrivacyPreservingMessage) -> Result<Self, Self::Error> {
         let PrivacyPreservingMessage {
-            declared,
+            context,
             boundary,
             casts,
             consumed_message,
@@ -637,7 +637,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
 
         Ok(Self {
             execution: lee_core::PrivacyPreservingCircuitOutput {
-                declared: declared.into(),
+                context: context.into(),
                 boundary: boundary.into_iter().map(Into::into).collect(),
                 casts: casts.into_iter().map(Into::into).collect(),
                 consumed_message: consumed_message.map(Into::into),
@@ -1384,7 +1384,7 @@ mod tests {
     fn a_private_message_with_a_consumed_message_round_trips_through_the_mirror() {
         let message = lee::privacy_preserving_transaction::message::Message {
             execution: lee_core::PrivacyPreservingCircuitOutput {
-                declared: lee_core::execution_state::Declared::default(),
+                context: lee_core::execution_state::PublicExecutionContext::default(),
                 boundary: vec![
                     lee_core::execution_state::BoundaryStep::CallPublic(
                         lee_core::execution_state::PublicDelivery {

@@ -14,7 +14,7 @@ use integration_tests::{
     wait_for_inclusion, wait_until,
 };
 use lee::{
-    AccountId, Actor, Declared, PrivacyPreservingTransaction, ProvingInput,
+    AccountId, Actor, PrivacyPreservingTransaction, ProvingInput, PublicExecutionContext,
     execute_and_prove_assuming,
     privacy_preserving_transaction::{
         circuit::ProgramCatalog, message::Message, witness_set::WitnessSet,
@@ -155,7 +155,7 @@ async fn prepare_offer(
                 to: Actor::new(trader.input, token_program_id()),
                 message: swap_message(pool, trader)?,
             },
-            declared: Declared::new(
+            context: PublicExecutionContext::new(
                 vec![
                     Actor::new(pool.pool_id, amm_program_id()),
                     Actor::new(pool.vault_a, token_program_id()),

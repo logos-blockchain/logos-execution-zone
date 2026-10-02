@@ -394,7 +394,7 @@ fn a_prepared_receipt_to_an_unproven_public_receiver_fails_before_proving() {
     let prove = |identities: HashSet<AccountId>| {
         execute_and_prove(
             ProvingInput {
-                declared: Declared::new(vec![receiver()], []),
+                context: PublicExecutionContext::new(vec![receiver()], []),
                 private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
                 ..proving_input(TransactionEntry::Receive(record.clone()))
             },
@@ -573,7 +573,7 @@ fn a_proven_receipt_at_a_public_root_needs_identity_evidence_at_settlement() {
     let id = record.id();
     let (output, proof) = execute_and_prove_assuming(
         ProvingInput {
-            declared: Declared::new(vec![receiver()], []),
+            context: PublicExecutionContext::new(vec![receiver()], []),
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
             ..proving_input(TransactionEntry::Receive(record.clone()))
         },
@@ -620,7 +620,7 @@ fn a_private_receipt_root_that_calls_a_public_actor_needs_no_identity_evidence()
     let id = record.id();
     let proven = execute_and_prove(
         ProvingInput {
-            declared: Declared::new(vec![receiver()], []),
+            context: PublicExecutionContext::new(vec![receiver()], []),
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
             ..proving_input(TransactionEntry::Receive(record))
         },

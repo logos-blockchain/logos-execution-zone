@@ -19,8 +19,8 @@ use common::{HashType, block::Block, transaction::LeeTransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
-    Account, AccountId, Assumption, Declared, PrivacyPreservingTransaction, ProgramId,
-    ProvingInput, PublicIdentity, Simulation,
+    Account, AccountId, Assumption, PrivacyPreservingTransaction, ProgramId, ProvingInput,
+    PublicExecutionContext, PublicIdentity, Simulation,
     privacy_preserving_transaction::{
         circuit::ProgramCatalog,
         message::{EncryptedAccountData, Message},
@@ -945,7 +945,10 @@ impl WalletCore {
         let private_account_keys = acc_manager.private_account_keys();
         let input = ProvingInput {
             root,
-            declared: Declared::new(acc_manager.public_actors(), acc_manager.signers()),
+            context: PublicExecutionContext::new(
+                acc_manager.public_actors(),
+                acc_manager.signers(),
+            ),
             private_witnesses: acc_manager.private_witnesses()?,
             dummy_inputs: acc_manager.dummy_inputs_default(),
             ciphertext_padding: Some(CIPHERTEXT_PAD_SIZE),

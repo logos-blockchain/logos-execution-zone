@@ -269,10 +269,10 @@ typedef struct FfiVec_FfiAccountId {
 
 typedef struct FfiVec_FfiAccountId FfiAccountIdList;
 
-typedef struct FfiDeclared {
-  FfiActorList public_actors;
+typedef struct FfiPublicExecutionContext {
+  FfiActorList actors;
   FfiAccountIdList authorized_accounts;
-} FfiDeclared;
+} FfiPublicExecutionContext;
 
 /**
  * Where a delivery came from: the root, or the program that called or cast it
@@ -378,7 +378,7 @@ typedef struct FfiVec_FfiProgramImageClaim {
 typedef struct FfiVec_FfiProgramImageClaim FfiProgramImageClaims;
 
 typedef struct FfiPrivacyPreservingMessage {
-  struct FfiDeclared declared;
+  struct FfiPublicExecutionContext context;
   FfiBoundaryStepList boundary;
   FfiMessageBodyList casts;
   bool has_consumed_message;

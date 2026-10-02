@@ -56,7 +56,7 @@ fn privacy_garbage_proof_is_rejected() {
         Commitment, EncryptedAccountData, Nullifier, PrivacyPreservingCircuitOutput, PrivateAction,
         account::Account,
         encryption::{Ciphertext, EphemeralPublicKey},
-        execution_state::{Boundary, Declared},
+        execution_state::{Boundary, PublicExecutionContext},
         program::{BlockValidityWindow, TimestampValidityWindow},
     };
 
@@ -79,7 +79,7 @@ fn privacy_garbage_proof_is_rejected() {
     let commitment = Commitment::new(&account_id, &Account::default());
     let message = Message {
         execution: PrivacyPreservingCircuitOutput {
-            declared: Declared::default(),
+            context: PublicExecutionContext::default(),
             boundary: Boundary::default(),
             casts: Vec::new(),
             consumed_message: None,
