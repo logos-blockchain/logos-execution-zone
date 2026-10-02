@@ -50,7 +50,7 @@ lee = { workspace = true, features = ["test-utils"] }
 sequencer_storage_actor = { workspace = true, features = ["mock"] }
 sequencer_bedrock_actor = { workspace = true, features = ["mock"] }
 bridge_core.workspace = true
-chain_state.workspace = true
+chain_state = { workspace = true, features = ["test-utils"] }
 cross_zone = { workspace = true, features = ["test-utils"] }
 cross_zone_inbox_core.workspace = true
 fee_core.workspace = true

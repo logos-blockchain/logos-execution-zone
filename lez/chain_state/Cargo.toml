@@ -28,6 +28,7 @@ tokio.workspace = true
 default = []
 # In-process guest execution with a memoized memory image, via `lee`.
 prove = ["lee/prove"]
+test-utils = []
 
 [dev-dependencies]
 testnet_initial_state.workspace = true

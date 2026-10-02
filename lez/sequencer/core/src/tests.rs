@@ -2806,7 +2806,7 @@ async fn a_conflict_dropping_a_garbage_entry_rewinds_only_the_pin() {
     let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
 
     let first = sequencer.run_production_turn().await.unwrap();
-    let kept = sequencer.chain().lock().await.view().to_vec();
+    let kept = sequencer.chain().lock().await.view();
     let pin = kept.last().unwrap().msg;
 
     let junk = MsgId::from([42_u8; 32]);
@@ -2882,7 +2882,7 @@ async fn the_bootstrap_publishes_leave_a_view_the_first_turn_extends() {
         start_sequencer_on(config, CannedChannel::absent()).await;
 
     // The published entries, chained from the root.
-    let view = sequencer.chain().lock().await.view().to_vec();
+    let view = sequencer.chain().lock().await.view();
     let mut parent = MsgId::root();
     for entry in &view {
         let block = entry
@@ -3399,7 +3399,7 @@ async fn a_conflict_keeping_our_block_requeues_nothing() {
         sequencer.mempool.pop().is_none(),
         "production must have drained the transaction into the block"
     );
-    let view = sequencer.chain().lock().await.view().to_vec();
+    let view = sequencer.chain().lock().await.view();
 
     sequencer
         .on_channel_update(Arc::new(ChannelUpdate {
@@ -3735,7 +3735,7 @@ async fn a_block_back_on_the_head_is_stored_again() {
     let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
 
     sequencer.run_production_turn().await.unwrap();
-    let view = sequencer.chain().lock().await.view().to_vec();
+    let view = sequencer.chain().lock().await.view();
     let block2 = view[1].block.clone().unwrap();
 
     for canonical in [view[..1].to_vec(), view.clone()] {
@@ -3765,7 +3765,7 @@ async fn a_restart_without_a_view_follows_the_channel_from_the_final_tier() {
     let (storage_weak, view) = {
         let (mut sequencer, _mempool_handle) = start_sequencer(config.clone()).await;
         sequencer.run_production_turn().await.unwrap();
-        let view = sequencer.chain().lock().await.view().to_vec();
+        let view = sequencer.chain().lock().await.view();
         sequencer
             .storage_ref
             .ask(AtomicUpdate {
