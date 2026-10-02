@@ -2,7 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::{
     account::{AccountId, Actor, ActorState, Balance},
-    program::{Call, Cast, PdaSeed, ReadState, ReceiveInput, Response, StateReply, Transition},
+    program::{Call, PdaSeed, ReadState, ReceiveInput, Response, StateReply, Transition},
 };
 
 /// Hardcoded native token shard address.
@@ -70,14 +70,12 @@ pub fn receive(input: &ReceiveInput) -> Result<Transition, TransferError> {
     };
     let account_id = input.receiver.account_id;
     let response = match message {
-        Message::Transfer { to, amount } => debit(input, to, amount)?.call(Call::new(
-            Actor::native_balance(to),
-            &Message::Credit(amount),
-        )),
-        Message::CastTransfer { to, amount } => debit(input, to, amount)?.cast(Cast::new(
-            Actor::native_balance(to),
-            &Message::Credit(amount),
-        )),
+        Message::Transfer { to, amount } => {
+            debit(input, to, amount)?.call(Actor::native_balance(to), &Message::Credit(amount))
+        }
+        Message::CastTransfer { to, amount } => {
+            debit(input, to, amount)?.cast(Actor::native_balance(to), &Message::Credit(amount))
+        }
         Message::Credit(amount) => {
             if !input.from_own_program() {
                 return Err(TransferError::ForeignCredit { account_id });
@@ -87,10 +85,9 @@ pub fn receive(input: &ReceiveInput) -> Result<Transition, TransferError> {
                 .ok_or(TransferError::BalanceOverflow { account_id })?;
             Response::write(encode_balance(post))
         }
-        Message::ReadState(read) => Response::keep().call(Call::new(
-            read.reply_to,
-            &Message::StateReply(StateReply::from(input)),
-        )),
+        Message::ReadState(read) => {
+            Response::keep().call(read.reply_to, &Message::StateReply(StateReply::from(input)))
+        }
         Message::StateReply(_) => return Err(TransferError::UnexpectedReply { account_id }),
     };
     Ok(response.into_transition(input.clone()))
@@ -123,7 +120,7 @@ pub fn custody_transfer(from: AccountId, seed: PdaSeed, to: AccountId, amount: B
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::program::Origin;
+    use crate::program::{Cast, Origin};
 
     fn native(tag: u8) -> Actor {
         Actor::native_balance(AccountId::new([tag; 32]))

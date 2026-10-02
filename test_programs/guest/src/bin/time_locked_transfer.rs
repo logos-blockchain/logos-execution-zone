@@ -11,7 +11,7 @@ use lee_core::{
     Timestamp,
     account::{AccountId, Actor},
     native_token,
-    program::{Call, ReceiveInput, Response, run_actor},
+    program::{ReceiveInput, Response, run_actor},
 };
 
 fn main() {
@@ -23,18 +23,18 @@ fn receive(
     (amount, deadline, receiver): (u128, Timestamp, AccountId),
 ) -> Response {
     Response::keep()
-        .call(Call::new(
+        .call(
             Actor::new(CLOCK_01_PROGRAM_ACCOUNT_ID, clock_core::clock_account_id()),
             &clock_core::Message::AssertTimestamp {
                 at_least: deadline,
                 at_most: Timestamp::MAX,
             },
-        ))
-        .call(Call::new(
+        )
+        .call(
             Actor::native_balance(input.receiver.account_id),
             &native_token::Message::Transfer {
                 to: receiver,
                 amount,
             },
-        ))
+        )
 }

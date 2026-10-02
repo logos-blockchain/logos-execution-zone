@@ -15,7 +15,7 @@ use lee::{
     Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction, TransactionEntry,
     V03State, program::Program,
 };
-use lee_core::{GENESIS_BLOCK_ID, account::Nonce, program::Call};
+use lee_core::{GENESIS_BLOCK_ID, account::Nonce};
 use logos_blockchain_core::{
     events::DepositRecreatedNotes,
     header::HeaderId,
@@ -2260,13 +2260,13 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         caller,
         public_actors,
         vec![], // no signers
-        Script::default().call(Call::new(
+        Script::default().call(
             clock_actors[0],
             &clock_core::Message::Tick {
                 timestamp,
                 block_id,
             },
-        )),
+        ),
     )
     .unwrap();
     let user_tx = LeeTransaction::Public(lee::PublicTransaction::new(

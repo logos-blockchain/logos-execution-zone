@@ -96,7 +96,7 @@ fn stake(
     let program = input.receiver.program_account_id;
     let ownership = input.receiver.account_id;
     Response::write(StakeRecord { sequencer_key }.to_bytes())
-        .call(to_config(
+        .send(to_config(
             program,
             &Message::RecordStake {
                 sequencer_key,
@@ -105,13 +105,13 @@ fn stake(
                 has_record,
             },
         ))
-        .call(Call::new(
+        .call(
             Actor::native_balance(funding),
             &native_token::Message::Transfer {
                 to: stake_funds_account_id(program, &ownership),
                 amount,
             },
-        ))
+        )
 }
 
 fn unstake_request(
@@ -135,7 +135,7 @@ fn unstake_request(
     // The config holds the request; the transfer happens in FinalizeUnstake.
     Response::keep()
         .block_window(request_window(requested_at))
-        .call(to_config(
+        .send(to_config(
             input.receiver.program_account_id,
             &Message::TrackUnstakeRequest {
                 sequencer_key,
@@ -177,7 +177,7 @@ fn finalize_unstake(input: &ReceiveInput, sequencer_key: SequencerKey) -> Respon
     let program = input.receiver.program_account_id;
     Response::write(config.to_bytes())
         .block_window(pending.releasable_at(exit_delay)..)
-        .call(
+        .send(
             Call::new(
                 Actor::native_balance(stake_funds_account_id(program, &ownership)),
                 &native_token::Message::CastTransfer {
@@ -211,7 +211,7 @@ fn slash(
         .expect("slashed key must have a config entry");
 
     let program = input.receiver.program_account_id;
-    Response::write(config.to_bytes()).call(custody_transfer(
+    Response::write(config.to_bytes()).send(custody_transfer(
         stake_funds_account_id(program, &entry.account_id),
         stake_funds_seed(&entry.account_id),
         slash_sink_account_id(program),

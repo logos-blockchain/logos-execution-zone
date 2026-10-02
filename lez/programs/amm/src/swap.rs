@@ -107,5 +107,5 @@ pub fn swap(input: &ReceiveInput, pool: &PoolDefinition, notification: &Notifica
         reserve_b,
         ..pool.clone()
     }))
-    .call(payout)
+    .send(payout)
 }

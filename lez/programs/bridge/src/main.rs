@@ -39,7 +39,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
     );
 
     Response::write(RECEIPT_MARKER.to_vec())
-        .call(custody_transfer(
+        .send(custody_transfer(
             bridge_core::compute_bridge_account_id(bridge),
             bridge_core::compute_bridge_seed(),
             recipient_id,

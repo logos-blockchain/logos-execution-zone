@@ -4,7 +4,7 @@ use cross_zone_inbox_core::{
 };
 use lee_core::{
     account::Actor,
-    program::{Call, Origin, ReceiveInput, Response, run_actor, write_once},
+    program::{Origin, ReceiveInput, Response, run_actor, write_once},
 };
 
 fn main() {
@@ -54,7 +54,7 @@ fn dispatch(input: &ReceiveInput, msg: CrossZoneMessage) -> Response {
         inbox_seen_shard_account_id(inbox, &msg.src_zone, msg.src_block_id),
         inbox,
     );
-    Response::keep().call(Call::new(seen, &Message::Mark(msg)))
+    Response::keep().call(seen, &Message::Mark(msg))
 }
 
 fn mark(input: &ReceiveInput, msg: CrossZoneMessage) -> Response {
@@ -86,14 +86,14 @@ fn mark(input: &ReceiveInput, msg: CrossZoneMessage) -> Response {
     shard.insert(msg.src_block_hash, msg.src_tx_index);
 
     let target = Actor::new(msg.target_account_id, msg.target_account_id);
-    Response::write(shard.to_bytes()).call(Call::new(
+    Response::write(shard.to_bytes()).call(
         target,
         &Delivery {
             src_zone: msg.src_zone,
             src_account_id: msg.src_account_id,
             payload: msg.payload,
         },
-    ))
+    )
 }
 
 fn assert_root_origin_at_config(input: &ReceiveInput) {
@@ -112,7 +112,7 @@ fn assert_root_origin_at_config(input: &ReceiveInput) {
 mod tests {
     use lee_core::{
         account::{AccountId, ActorState},
-        program::Transition,
+        program::{Call, Transition},
     };
 
     use super::*;

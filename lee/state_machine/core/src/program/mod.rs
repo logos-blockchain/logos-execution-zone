@@ -358,6 +358,22 @@ impl Cast {
     }
 }
 
+pub trait Sendable {
+    fn send_into(self, calls: &mut Vec<Call>, casts: &mut Vec<Cast>);
+}
+
+impl Sendable for Call {
+    fn send_into(self, calls: &mut Vec<Call>, _casts: &mut Vec<Cast>) {
+        calls.push(self);
+    }
+}
+
+impl Sendable for Cast {
+    fn send_into(self, _calls: &mut Vec<Call>, casts: &mut Vec<Cast>) {
+        casts.push(self);
+    }
+}
+
 /// The scheduled input of one turn, echoed whole in the journal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ReceiveInput {
@@ -457,13 +473,16 @@ impl Response {
         }
     }
 
-    pub fn call(mut self, call: Call) -> Self {
-        self.calls.push(call);
-        self
+    pub fn call<M: BorshSerialize>(self, to: Actor, message: &M) -> Self {
+        self.send(Call::new(to, message))
     }
 
-    pub fn cast(mut self, cast: Cast) -> Self {
-        self.casts.push(cast);
+    pub fn cast<M: BorshSerialize>(self, to: Actor, message: &M) -> Self {
+        self.send(Cast::new(to, message))
+    }
+
+    pub fn send(mut self, message: impl Sendable) -> Self {
+        message.send_into(&mut self.calls, &mut self.casts);
         self
     }
 

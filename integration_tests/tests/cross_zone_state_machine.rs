@@ -337,7 +337,7 @@ fn via_proxy(
     let caller = Actor::new(authority, proxy_id);
     let entry = Actor::new(authority, target);
     let config = Actor::new(config, target);
-    let script = Script::default().call(Call {
+    let script = Script::default().send(Call {
         to: entry,
         message: forwarded,
         pda_seeds: delegated.into_iter().collect(),

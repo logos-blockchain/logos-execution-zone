@@ -52,10 +52,10 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
             // every-block account's own.
             let mut response = Response::write(updated_data.to_bytes());
             if block_id.is_multiple_of(10) {
-                response = response.call(record(CLOCK_10_PROGRAM_ACCOUNT_ID));
+                response = response.send(record(CLOCK_10_PROGRAM_ACCOUNT_ID));
             }
             if block_id.is_multiple_of(50) {
-                response = response.call(record(CLOCK_50_PROGRAM_ACCOUNT_ID));
+                response = response.send(record(CLOCK_50_PROGRAM_ACCOUNT_ID));
             }
             response
         }

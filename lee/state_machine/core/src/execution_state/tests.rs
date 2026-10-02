@@ -451,7 +451,7 @@ fn a_revisited_actor_sees_its_staged_write() {
     let looping = actor(1, 9);
     let mut script = Script::default().on(looping, move |input| {
         if input.pre_state.is_empty() {
-            echo(input, Response::write(b"x".to_vec()).call(send_to(looping)))
+            echo(input, Response::write(b"x".to_vec()).send(send_to(looping)))
         } else {
             echo(input, Response::keep())
         }
@@ -545,7 +545,7 @@ fn turn_windows_intersect_and_disjoint_ones_are_rejected() {
                     Response::keep()
                         .try_block_window(1_u64..10)
                         .unwrap()
-                        .call(send_to(inner)),
+                        .send(send_to(inner)),
                 )
             })
             .on(inner, move |input| {
@@ -581,7 +581,7 @@ fn a_long_self_send_chain_completes() {
             Response::keep()
         } else {
             remaining = remaining.saturating_sub(1);
-            Response::keep().call(send_to(revisited))
+            Response::keep().send(send_to(revisited))
         };
         echo(input, response)
     });
@@ -599,7 +599,7 @@ fn a_public_shard_is_fetched_once_and_a_cleared_shard_is_reported_empty() {
             if input.pre_state.is_empty() {
                 echo(input, Response::keep())
             } else {
-                echo(input, Response::write(Vec::new()).call(send_to(clearing)))
+                echo(input, Response::write(Vec::new()).send(send_to(clearing)))
             }
         });
 
@@ -652,7 +652,7 @@ fn a_private_root_records_its_public_call_and_the_assumed_reply() {
         if input.origin == Origin::Root {
             echo(
                 input,
-                Response::write(b"first".to_vec()).call(credit.clone()),
+                Response::write(b"first".to_vec()).send(credit.clone()),
             )
         } else {
             echo(
@@ -1176,7 +1176,7 @@ fn a_check_whose_live_subtree_makes_more_than_64_deliveries_succeeds() {
             Response::keep()
         } else {
             remaining = remaining.saturating_sub(1);
-            Response::keep().call(send_to(ENTRY))
+            Response::keep().send(send_to(ENTRY))
         };
         echo(input, response)
     });
@@ -1255,18 +1255,18 @@ fn a_parents_casts_precede_its_childrens_and_never_run_their_recipients() {
             echo(
                 input,
                 Response::keep()
-                    .call(send_to(CALLEE))
-                    .cast(Cast {
+                    .send(send_to(CALLEE))
+                    .send(Cast {
                         to: outer_target,
                         message: b"x".to_vec(),
                     })
-                    .call(send_to(BYSTANDER)),
+                    .send(send_to(BYSTANDER)),
             )
         })
         .on(CALLEE, move |input| {
             echo(
                 input,
-                Response::keep().cast(Cast {
+                Response::keep().send(Cast {
                     to: inner_target,
                     message: b"y".to_vec(),
                 }),
@@ -1363,7 +1363,7 @@ fn a_record_keeps_its_casts_out_of_the_boundary_and_a_check_returns_only_live_ca
     let mut recording = Script::default().on(holder(&keys), move |input| {
         echo(
             input,
-            Response::keep().call(send_to(ENTRY)).cast(Cast {
+            Response::keep().send(send_to(ENTRY)).send(Cast {
                 to: private_target,
                 message: b"x".to_vec(),
             }),
@@ -1394,7 +1394,7 @@ fn a_record_keeps_its_casts_out_of_the_boundary_and_a_check_returns_only_live_ca
     let mut checking = Script::default().on(ENTRY, move |input| {
         echo(
             input,
-            Response::keep().cast(Cast {
+            Response::keep().send(Cast {
                 to: public_target,
                 message: b"y".to_vec(),
             }),
@@ -1426,7 +1426,7 @@ fn call_with(to: Actor, message: &[u8]) -> Call {
 fn sibling_receiver(receiver: Actor) -> impl FnMut(&ReceiveInput) -> Transition {
     move |input| {
         let response = match input.message.as_slice() {
-            b"c1" => Response::write(b"1".to_vec()).call(call_with(receiver, b"c1a")),
+            b"c1" => Response::write(b"1".to_vec()).send(call_with(receiver, b"c1a")),
             b"c1a" => Response::write(b"2".to_vec()),
             _ => Response::keep(),
         };
@@ -1555,7 +1555,7 @@ fn a_public_subtree_entered_from_c1_finishes_before_c2_in_every_part() {
             .on(sender, sending(siblings(receiver)))
             .on(receiver, move |input| {
                 let response = if input.message == b"c1" {
-                    Response::write(b"1".to_vec()).call(send_to(crossed))
+                    Response::write(b"1".to_vec()).send(send_to(crossed))
                 } else {
                     Response::keep()
                 };
@@ -1606,11 +1606,11 @@ fn a_failing_descendant_of_c1_stops_the_transaction_before_c2() {
         .on(receiver, move |input| {
             let response = if input.message == b"c1" {
                 Response::write(b"1".to_vec())
-                    .cast(Cast {
+                    .send(Cast {
                         to: stranger,
                         message: b"x".to_vec(),
                     })
-                    .call(send_to(stranger))
+                    .send(send_to(stranger))
             } else {
                 Response::keep()
             };

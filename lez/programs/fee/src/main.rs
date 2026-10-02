@@ -8,7 +8,7 @@ use lee_core::{
     native_token::{
         Message as NativeMessage, NATIVE_TOKEN_PROGRAM_ID, custody_transfer, decode_balance,
     },
-    program::{Call, Origin, ReadState, ReceiveInput, Response, StateReply, run_actor_with},
+    program::{Origin, ReadState, ReceiveInput, Response, StateReply, run_actor_with},
 };
 
 fn main() {
@@ -60,15 +60,15 @@ fn receive(input: &ReceiveInput) -> Response {
                 payout,
                 producer,
             });
-            Response::write(fee_state.to_bytes()).call(Call::new(
+            Response::write(fee_state.to_bytes()).call(
                 Actor::native_balance(inbox),
                 &NativeMessage::ReadState(ReadState {
                     reply_to: input.receiver,
                 }),
-            ))
+            )
         }
         Message::Refund { amount, payer } => {
-            Response::keep().call(custody_transfer(inbox, fee_inbox_seed(), payer, amount))
+            Response::keep().send(custody_transfer(inbox, fee_inbox_seed(), payer, amount))
         }
     }
 }
@@ -111,7 +111,7 @@ fn pay_out(input: &ReceiveInput, reply: &StateReply) -> Response {
     .fold(
         Response::write(fee_state.to_bytes()),
         |response, (from, seed, to, amount)| {
-            response.call(custody_transfer(from, seed, to, amount))
+            response.send(custody_transfer(from, seed, to, amount))
         },
     )
 }
@@ -122,7 +122,7 @@ mod tests {
     use lee_core::{
         account::{AccountId, ActorState, Balance},
         native_token::encode_balance,
-        program::Transition,
+        program::{Call, Transition},
     };
 
     use super::*;

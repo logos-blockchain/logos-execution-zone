@@ -217,7 +217,7 @@ fn prove_scripted_transfers(
     // The sender's scripted actor sends every transfer to the sender's own token holding.
     let transfer = Call::new(Actor::new(sender_id, token_id), &token_transfer_message());
     let script =
-        (0..num_transfers).fold(Script::default(), |script, _| script.call(transfer.clone()));
+        (0..num_transfers).fold(Script::default(), |script, _| script.send(transfer.clone()));
 
     Ok(execute_and_prove(
         proving_input(

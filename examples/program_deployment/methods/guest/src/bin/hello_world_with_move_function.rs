@@ -1,6 +1,6 @@
 use lee_core::{
     account::{AccountId, Actor},
-    program::{Call, ReceiveInput, Response, run_actor},
+    program::{ReceiveInput, Response, run_actor},
 };
 
 // Hello-world with write + move_data example program.
@@ -36,10 +36,10 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
                 data.as_slice(),
                 "the source account does not hold the bytes the instruction moves out of it"
             );
-            Response::write(Vec::new()).call(Call::new(
+            Response::write(Vec::new()).call(
                 Actor::new(to, input.receiver.program_account_id),
                 &Message::Append(data),
-            ))
+            )
         }
         Message::Append(data) => {
             assert!(

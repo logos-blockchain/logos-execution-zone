@@ -1,7 +1,7 @@
 use cross_zone_marker_core::{Delivery, inbox_source_marker_account_id};
 use lee_core::{
     account::{AccountId, Actor},
-    program::{Call, Origin, ReceiveInput, Response, run_actor_with, write_once},
+    program::{Origin, ReceiveInput, Response, run_actor_with, write_once},
 };
 use wrapped_token_core::{
     MAX_MINT_AMOUNT, Message, SourceEntry, WrappedTokenConfig, ZoneId, balance_bytes,
@@ -44,10 +44,10 @@ fn receive(input: &ReceiveInput) -> Response {
             );
             let mut cfg = decode_config(&input.pre_state);
             mint_source(&mut cfg, deliverer, &src_zone, src_account_id, amount);
-            Response::write(cfg.to_bytes()).call(Call::new(
+            Response::write(cfg.to_bytes()).call(
                 Actor::new(holding_account_id(program, &recipient), program),
                 &Message::Credit(amount),
-            ))
+            )
         }
         // The backstop against accumulation, which the per-mint cap does not bound.
         Message::Credit(amount) => {
@@ -171,7 +171,7 @@ fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
         panic!("a delivery to wrapped_token must carry a Mint");
     };
     let program = input.receiver.program_account_id;
-    Response::keep().call(Call::new(
+    Response::keep().call(
         Actor::new(config_account_id(program), program),
         &Message::MintFrom {
             deliverer: input.origin_program().expect("a delivery has a sender"),
@@ -180,7 +180,7 @@ fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
             recipient,
             amount,
         },
-    ))
+    )
 }
 
 /// The authority's own actor vouches that the authority authorized the change and names the
@@ -189,10 +189,7 @@ fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
 fn forward_as_authority(input: &ReceiveInput, message: &Message, unsigned: &str) -> Response {
     assert!(input.is_authorized, "{unsigned}");
     let program = input.receiver.program_account_id;
-    Response::keep().call(Call::new(
-        Actor::new(config_account_id(program), program),
-        message,
-    ))
+    Response::keep().call(Actor::new(config_account_id(program), program), message)
 }
 
 fn at_config(input: &ReceiveInput) -> bool {
@@ -277,7 +274,10 @@ fn mint_source(
 #[cfg(test)]
 mod tests {
     use borsh::BorshSerialize;
-    use lee_core::{account::ActorState, program::Transition};
+    use lee_core::{
+        account::ActorState,
+        program::{Call, Transition},
+    };
     use wrapped_token_core::SourcePolicy;
 
     use super::*;

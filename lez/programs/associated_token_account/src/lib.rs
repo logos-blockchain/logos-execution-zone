@@ -40,11 +40,11 @@ pub fn receive(input: &ReceiveInput, message: Message) -> Response {
                 },
             );
             Response::keep()
-                .call(Call::new(
+                .call(
                     Actor::new(definition_id, token_program_id),
                     &token_core::Message::AssertKind { kind },
-                ))
-                .call(if input.is_authorized {
+                )
+                .send(if input.is_authorized {
                     ensure.with_pda_seeds(vec![seed])
                 } else {
                     ensure
@@ -58,7 +58,7 @@ pub fn receive(input: &ReceiveInput, message: Message) -> Response {
         } => {
             assert!(input.is_authorized, "Owner authorization is missing");
             let (ata, seed) = holding(token_program_id, descriptor.definition_id);
-            Response::keep().call(
+            Response::keep().send(
                 Call::new(
                     ata,
                     &token_core::Message::Transfer {
@@ -79,7 +79,7 @@ pub fn receive(input: &ReceiveInput, message: Message) -> Response {
         } => {
             assert!(input.is_authorized, "Owner authorization is missing");
             let (ata, seed) = holding(token_program_id, descriptor.definition_id);
-            Response::keep().call(
+            Response::keep().send(
                 Call::new(
                     ata,
                     &token_core::Message::Burn {

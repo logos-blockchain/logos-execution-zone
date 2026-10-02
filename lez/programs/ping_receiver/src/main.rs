@@ -1,7 +1,7 @@
 use cross_zone_marker_core::{Delivery, inbox_source_marker_account_id};
 use lee_core::{
     account::{AccountId, Actor},
-    program::{Call, Origin, ReceiveInput, Response, run_actor_with, write_once},
+    program::{Origin, ReceiveInput, Response, run_actor_with, write_once},
 };
 use ping_core::{ReceiverConfig, ReceiverMessage, ping_record_pda, receiver_config_account_id};
 
@@ -46,10 +46,10 @@ fn receive(input: &ReceiveInput) -> Response {
                 }),
                 "Record is only callable for a peer source this receiver authorizes"
             );
-            Response::keep().call(Call::new(
+            Response::keep().call(
                 Actor::new(ping_record_pda(program), program),
                 &ReceiverMessage::WriteRecord(payload),
-            ))
+            )
         }
         ReceiverMessage::WriteRecord(payload) => {
             assert!(
@@ -135,7 +135,7 @@ fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
         panic!("a delivery to ping_receiver must carry a Record");
     };
     let program = input.receiver.program_account_id;
-    Response::keep().call(Call::new(
+    Response::keep().call(
         Actor::new(receiver_config_account_id(program), program),
         &ReceiverMessage::RecordFrom {
             deliverer: input.origin_program().expect("a delivery has a sender"),
@@ -143,7 +143,7 @@ fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
             src_account_id,
             payload,
         },
-    ))
+    )
 }
 
 /// The authority's own actor vouches that the authority authorized the change and names the
@@ -155,10 +155,10 @@ fn forward_as_authority(input: &ReceiveInput, message: &ReceiverMessage) -> Resp
         "the configured authority must authorize a change"
     );
     let program = input.receiver.program_account_id;
-    Response::keep().call(Call::new(
+    Response::keep().call(
         Actor::new(receiver_config_account_id(program), program),
         message,
-    ))
+    )
 }
 
 fn at_config(input: &ReceiveInput) -> bool {
@@ -200,7 +200,10 @@ fn assert_authority(
 #[cfg(test)]
 mod tests {
     use borsh::BorshSerialize;
-    use lee_core::{account::ActorState, program::Transition};
+    use lee_core::{
+        account::ActorState,
+        program::{Call, Transition},
+    };
     use ping_core::ZoneId;
 
     use super::*;

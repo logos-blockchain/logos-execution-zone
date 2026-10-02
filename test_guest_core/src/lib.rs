@@ -2,8 +2,11 @@
 //! callers cannot drift apart. `Script` is what `scripted` runs.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::program::{
-    BlockValidityWindow, Call, Cast, Origin, ProgramEvent, TimestampValidityWindow,
+use lee_core::{
+    account::Actor,
+    program::{
+        BlockValidityWindow, Call, Cast, Origin, ProgramEvent, Sendable, TimestampValidityWindow,
+    },
 };
 
 pub mod guests;
@@ -30,14 +33,18 @@ impl Script {
     }
 
     #[must_use]
-    pub fn call(mut self, call: Call) -> Self {
-        self.calls.push(call);
-        self
+    pub fn call<M: BorshSerialize>(self, to: Actor, message: &M) -> Self {
+        self.send(Call::new(to, message))
     }
 
     #[must_use]
-    pub fn cast(mut self, cast: Cast) -> Self {
-        self.casts.push(cast);
+    pub fn cast<M: BorshSerialize>(self, to: Actor, message: &M) -> Self {
+        self.send(Cast::new(to, message))
+    }
+
+    #[must_use]
+    pub fn send(mut self, message: impl Sendable) -> Self {
+        message.send_into(&mut self.calls, &mut self.casts);
         self
     }
 

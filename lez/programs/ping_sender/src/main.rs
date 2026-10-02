@@ -1,5 +1,5 @@
 use cross_zone_outbox_core::Message as OutboxMessage;
-use lee_core::program::{Call, Origin, ReceiveInput, Response, run_actor, write_once};
+use lee_core::program::{Origin, ReceiveInput, Response, run_actor, write_once};
 use ping_core::{SenderMessage, outbox_bytes, read_outbox, sender_config_account_id};
 
 fn main() {
@@ -29,7 +29,7 @@ fn receive(input: &ReceiveInput, message: SenderMessage) -> Response {
                 pinned, outbox.program_account_id,
                 "the emission names a program the ping-sender config does not pin as its outbox"
             );
-            Response::keep().call(Call::new(
+            Response::keep().call(
                 outbox,
                 &OutboxMessage::Emit {
                     target_zone,
@@ -38,7 +38,7 @@ fn receive(input: &ReceiveInput, message: SenderMessage) -> Response {
                     payload,
                     ordinal,
                 },
-            ))
+            )
         }
         // Genesis is replayed onto seeded state during multi-sequencer reconstruction, so
         // a written config must already pin exactly this outbox.
@@ -63,7 +63,7 @@ fn assert_config_account(input: &ReceiveInput) {
 mod tests {
     use lee_core::{
         account::{AccountId, Actor, ActorState},
-        program::Transition,
+        program::{Call, Transition},
     };
 
     use super::*;

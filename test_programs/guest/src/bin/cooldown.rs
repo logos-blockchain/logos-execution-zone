@@ -10,7 +10,7 @@ use clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID;
 use lee_core::{
     Timestamp,
     account::Actor,
-    program::{Call, ReceiveInput, Response, run_actor},
+    program::{ReceiveInput, Response, run_actor},
 };
 
 struct CooldownState {
@@ -57,11 +57,11 @@ fn receive(input: &ReceiveInput, proposed: Timestamp) -> Response {
         }
         .to_bytes(),
     )
-    .call(Call::new(
+    .call(
         Actor::new(CLOCK_01_PROGRAM_ACCOUNT_ID, clock_core::clock_account_id()),
         &clock_core::Message::AssertTimestamp {
             at_least: proposed,
             at_most: proposed,
         },
-    ))
+    )
 }

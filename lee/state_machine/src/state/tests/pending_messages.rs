@@ -1,4 +1,4 @@
-use lee_core::program::{Cast, MessageBody, MessageId, StoredMessage};
+use lee_core::program::{MessageBody, MessageId, StoredMessage};
 
 use super::*;
 use crate::{PublicIdentity, ValidatedStateDiff};
@@ -20,7 +20,7 @@ fn received() -> Script {
 }
 
 fn replying() -> Script {
-    received().cast(Cast::new(sender(), &received()))
+    received().cast(sender(), &received())
 }
 
 fn cast(state: &mut V03State, to: Actor) -> StoredMessage {
@@ -32,7 +32,7 @@ fn cast_script(state: &mut V03State, to: Actor, script: &Script) -> StoredMessag
         sender(),
         vec![sender()],
         vec![],
-        Script::default().cast(Cast::new(to, script)),
+        Script::default().cast(to, script),
         &[],
     );
     state.transition_from_public_transaction(&tx, 1, 0).unwrap();
@@ -104,8 +104,8 @@ fn pending_records_are_numbered_in_publication_order_across_transactions() {
         vec![sender()],
         vec![],
         Script::default()
-            .cast(Cast::new(receiver(), &received()))
-            .cast(Cast::new(receiver(), &received())),
+            .cast(receiver(), &received())
+            .cast(receiver(), &received()),
         &[],
     );
     let body = MessageBody {
@@ -330,7 +330,7 @@ fn a_cast_from_a_private_root_is_published_at_settlement() {
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
             ..proving_input(root(
                 private_root,
-                &Script::default().cast(Cast::new(receiver(), &received())),
+                &Script::default().cast(receiver(), &received()),
             ))
         },
         &Simulation::default(),
@@ -517,7 +517,7 @@ fn a_receipt_that_fails_after_casting_keeps_its_record_pending_and_publishes_not
     let record = cast_script(
         &mut state,
         receiver(),
-        &replying().call(Call::new(receiver(), &Script::default().authorized())),
+        &replying().call(receiver(), &Script::default().authorized()),
     );
 
     let result = state.transition_from_public_transaction(
@@ -615,7 +615,7 @@ fn a_private_receipt_root_that_calls_a_public_actor_needs_no_identity_evidence()
     let record = cast_script(
         &mut state,
         private_receiver,
-        &received().call(Call::new(receiver(), &Script::write(b"called".to_vec()))),
+        &received().call(receiver(), &Script::write(b"called".to_vec())),
     );
     let id = record.id();
     let proven = execute_and_prove(
@@ -733,8 +733,8 @@ fn identical_casts_are_received_independently_and_out_of_order() {
         vec![sender()],
         vec![],
         Script::default()
-            .cast(Cast::new(receiver(), &received()))
-            .cast(Cast::new(receiver(), &received())),
+            .cast(receiver(), &received())
+            .cast(receiver(), &received()),
         &[],
     );
     state
@@ -763,11 +763,11 @@ fn identical_casts_are_received_independently_and_out_of_order() {
 
 #[test]
 fn a_mixed_transaction_publishes_its_live_casts_before_its_proven_casts() {
-    let live = Script::default().cast(Cast::new(receiver(), &replying()));
+    let live = Script::default().cast(receiver(), &replying());
     let tx = proven_casting(
         &Script::default()
-            .cast(Cast::new(receiver(), &received()))
-            .call(Call::new(sender(), &live)),
+            .cast(receiver(), &received())
+            .call(sender(), &live),
         PublicExecutionContext::new(vec![sender()], []),
     );
     let mut state = V03State::new().with_test_programs();
@@ -794,7 +794,7 @@ fn a_mixed_transaction_publishes_its_live_casts_before_its_proven_casts() {
 #[test]
 fn a_tampered_proven_cast_is_rejected() {
     let mut tx = proven_casting(
-        &Script::default().cast(Cast::new(receiver(), &received())),
+        &Script::default().cast(receiver(), &received()),
         PublicExecutionContext::default(),
     );
     let state = V03State::new().with_test_programs();

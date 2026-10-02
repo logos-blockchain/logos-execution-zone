@@ -1,4 +1,4 @@
-use lee_core::{execution_state::BoundaryStep, program::Cast};
+use lee_core::execution_state::BoundaryStep;
 
 use super::*;
 
@@ -404,7 +404,7 @@ fn a_failing_public_turn_leaves_the_state_untouched() {
     let overdraft: u128 = 11;
 
     // The builder's snapshot funds the overdraft, so it proves and only fails once settled.
-    let script = Script::write(vec![1]).call(Call::new(sender, &transfer(recipient_id, overdraft)));
+    let script = Script::write(vec![1]).call(sender, &transfer(recipient_id, overdraft));
     let proven = execute_and_prove(
         ProvingInput {
             context: PublicExecutionContext::new(vec![own, sender], [sender_id]),
@@ -646,11 +646,11 @@ fn a_private_roots_public_outputs_settle_against_live_state() {
 
     let tx = root.prove(
         &Script::default()
-            .call(Call::new(written_to, &Script::write(vec![5; 4])))
-            .call(Call::new(
+            .call(written_to, &Script::write(vec![5; 4]))
+            .call(
                 Actor::native_balance(root.account_id),
                 &transfer(recipient.account_id, amount),
-            )),
+            ),
         vec![written_to, recipient],
     );
 
@@ -684,10 +684,7 @@ fn assert_forged_field_is_refused(forge_field: ForgeField) {
 
     // The prover assumes the forger delivers nothing back, without running it.
     let proven = execute_and_prove_assuming(
-        root.proving_input(
-            &Script::default().call(Call::new(forger, &forge_field)),
-            vec![forger],
-        ),
+        root.proving_input(&Script::default().call(forger, &forge_field), vec![forger]),
         vec![Vec::new()],
         &synthetic_program(crate::test_methods::scripted()),
     )
@@ -739,7 +736,7 @@ fn nested_actors() -> (Actor, Actor) {
 }
 
 fn inner_turn() -> Script {
-    Script::default().call(Call::new(nested_actors().1, &Script::write(vec![2; 4])))
+    Script::default().call(nested_actors().1, &Script::write(vec![2; 4]))
 }
 
 fn nested_private() -> Actor {
@@ -751,7 +748,7 @@ fn nested_private() -> Actor {
 }
 
 fn outer_turn(delivered: &Script) -> Script {
-    Script::write(vec![1; 4]).call(Call::new(nested_private(), delivered))
+    Script::write(vec![1; 4]).call(nested_private(), delivered)
 }
 
 #[test]
@@ -840,8 +837,8 @@ fn a_public_turn_departing_from_its_assumed_delivery_is_rejected() {
 #[test]
 fn a_public_turn_departing_from_its_assumed_delivery_publishes_none_of_its_casts() {
     let casting = Script::write(vec![1; 4])
-        .cast(Cast::new(nested_actors().1, &Script::default()))
-        .call(Call::new(nested_private(), &Script::default()));
+        .cast(nested_actors().1, &Script::default())
+        .call(nested_private(), &Script::default());
     let mut nested = NestedBoundary::prove(&casting);
 
     let result = nested

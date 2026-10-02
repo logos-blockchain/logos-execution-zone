@@ -6,7 +6,7 @@ use cross_zone_outbox_core::Message as OutboxMessage;
 use lee_core::{
     account::Actor,
     native_token::custody_transfer,
-    program::{Call, Origin, ReceiveInput, Response, run_actor, write_once},
+    program::{Origin, ReceiveInput, Response, run_actor, write_once},
 };
 use wrapped_token_core::{MAX_MINT_AMOUNT, Message as WrappedMessage};
 
@@ -77,20 +77,20 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
             // The config checks it before the debit and the emission are delivered, as the read
             // it replaces did.
             Response::keep()
-                .call(Call::new(
+                .call(
                     Actor::new(config_account_id(program), program),
                     &Message::CheckRoute {
                         outbox_account_id: outbox.program_account_id,
                         target_account_id,
                     },
-                ))
-                .call(custody_transfer(
+                )
+                .send(custody_transfer(
                     holding_account_id(program, &holder),
                     holding_seed(&holder),
                     escrow_account_id(program),
                     amount,
                 ))
-                .call(Call::new(
+                .call(
                     outbox,
                     &OutboxMessage::Emit {
                         target_zone,
@@ -99,7 +99,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
                         payload,
                         ordinal,
                     },
-                ))
+                )
         }
         // Nothing releases an escrow, so an emission steered off the pinned route burns the
         // holder's balance with no compensating mint anywhere. This is all that stands between.
@@ -159,7 +159,7 @@ fn decode_mint(payload: &[u8]) -> WrappedMessage {
 mod tests {
     use lee_core::{
         account::{AccountId, ActorState},
-        program::Transition,
+        program::{Call, Transition},
     };
 
     use super::*;
