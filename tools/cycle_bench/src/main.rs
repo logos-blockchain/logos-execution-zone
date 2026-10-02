@@ -16,8 +16,6 @@
     clippy::as_conversions,
     clippy::cast_precision_loss,
     clippy::float_arithmetic,
-    clippy::integer_division,
-    clippy::integer_division_remainder_used,
     clippy::missing_const_for_fn,
     clippy::non_ascii_literal,
     clippy::print_stderr,
@@ -28,11 +26,7 @@
 
 use std::{collections::HashMap, path::PathBuf, time::Instant};
 
-use amm_core::{PoolDefinition, compute_liquidity_token_pda, compute_pool_pda, compute_vault_pda};
 use anyhow::{Result, bail};
-use associated_token_account_core::{
-    AtaContents, compute_ata_seed, get_associated_token_account_id,
-};
 use clap::Parser;
 use clock_core::{
     CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
@@ -44,16 +38,10 @@ use lee_core::{
     BlockId, Timestamp,
     account::{AccountId, ProgramShardSelector, ShardData},
     from_frame,
-    native_token::encode_balance,
     program::{AccountMeta, ApplyInput, GuestOutput, InstructionData, PlanInput, PlanOutput},
 };
 use risc0_zkvm::{ExecutorEnv, default_executor, default_prover};
 use serde::Serialize;
-use token_core::{TokenDefinition, TokenDescriptor, TokenHolding, TokenKind};
-
-/// The AMM pool fixture's reserves: lp supply is `sqrt(1000*500) = 707`.
-const AMM_RESERVE_A: u128 = 1_000;
-const AMM_RESERVE_B: u128 = 500;
 
 #[derive(Parser, Debug)]
 #[command(about = "Per-program executor and (optionally) prover cycle measurements")]
@@ -216,13 +204,6 @@ impl Fixture {
         Self {
             account: AccountMeta::new(account_id, is_authorized, program_account_id),
             data,
-        }
-    }
-
-    fn balance(account_id: AccountId, is_authorized: bool, balance: u128) -> Self {
-        Self {
-            account: AccountMeta::native_balance(account_id, is_authorized),
-            data: encode_balance(balance),
         }
     }
 }
@@ -411,61 +392,6 @@ fn apply_journal(journal: &[u8]) -> Result<lee_core::program::ApplyOutput> {
     }
 }
 
-fn token_holding(
-    definition_id: AccountId,
-    account_id: AccountId,
-    balance: u128,
-    is_authorized: bool,
-) -> Fixture {
-    Fixture::new(
-        account_id,
-        is_authorized,
-        programs::token_account_id(),
-        ShardData::from(&TokenHolding::Fungible {
-            definition_id,
-            balance,
-        }),
-    )
-}
-
-fn token_definition(account_id: AccountId, total_supply: u128, is_authorized: bool) -> Fixture {
-    Fixture::new(
-        account_id,
-        is_authorized,
-        programs::token_account_id(),
-        ShardData::from(&TokenDefinition::Fungible {
-            name: String::from("test"),
-            total_supply,
-            metadata_id: None,
-        }),
-    )
-}
-
-fn token_definition_id() -> AccountId {
-    AccountId::new([15; 32])
-}
-
-fn fungible(definition_id: AccountId) -> TokenDescriptor {
-    TokenDescriptor {
-        definition_id,
-        kind: TokenKind::Fungible,
-    }
-}
-
-fn token_transfer_accounts() -> Vec<Fixture> {
-    let def = token_definition_id();
-    let sender = token_holding(def, AccountId::new([17; 32]), 100_000, true);
-    let recipient = token_holding(def, AccountId::new([42; 32]), 50_000, true);
-    vec![sender, recipient]
-}
-
-fn token_definition_and_holding_accounts() -> Vec<Fixture> {
-    let def_id = token_definition_id();
-    let def = token_definition(def_id, 100_000, true);
-    let holding = token_holding(def_id, AccountId::new([17; 32]), 1_000, true);
-    vec![def, holding]
-}
-
 fn clock_account(account_id: AccountId, block_id: BlockId) -> Fixture {
     Fixture::new(
         account_id,
@@ -489,106 +415,6 @@ fn clock_accounts_tick_at(block_id: BlockId) -> Vec<Fixture> {
     ]
 }
 
-fn amm_lp_supply() -> u128 {
-    (AMM_RESERVE_A * AMM_RESERVE_B).isqrt()
-}
-
-fn amm_token_a_def_id() -> AccountId {
-    AccountId::new([42; 32])
-}
-fn amm_token_b_def_id() -> AccountId {
-    AccountId::new([43; 32])
-}
-fn amm_pool_id() -> AccountId {
-    compute_pool_pda(
-        programs::amm_account_id(),
-        amm_token_a_def_id(),
-        amm_token_b_def_id(),
-        programs::token_account_id(),
-    )
-}
-fn amm_vault_a_id() -> AccountId {
-    compute_vault_pda(
-        programs::amm_account_id(),
-        amm_pool_id(),
-        amm_token_a_def_id(),
-    )
-}
-fn amm_vault_b_id() -> AccountId {
-    compute_vault_pda(
-        programs::amm_account_id(),
-        amm_pool_id(),
-        amm_token_b_def_id(),
-    )
-}
-fn amm_lp_def_id() -> AccountId {
-    compute_liquidity_token_pda(programs::amm_account_id(), amm_pool_id())
-}
-
-fn amm_pool_account() -> Fixture {
-    Fixture::new(
-        amm_pool_id(),
-        true,
-        programs::amm_account_id(),
-        ShardData::from(&PoolDefinition {
-            token_program_id: programs::token_account_id(),
-            definition_token_a_id: amm_token_a_def_id(),
-            definition_token_b_id: amm_token_b_def_id(),
-            vault_a_id: amm_vault_a_id(),
-            vault_b_id: amm_vault_b_id(),
-            liquidity_pool_id: amm_lp_def_id(),
-            liquidity_pool_supply: amm_lp_supply(),
-            reserve_a: AMM_RESERVE_A,
-            reserve_b: AMM_RESERVE_B,
-            fees: 0,
-            active: true,
-        }),
-    )
-}
-
-fn amm_swap_accounts() -> Vec<Fixture> {
-    vec![
-        amm_pool_account(),
-        token_holding(amm_token_a_def_id(), amm_vault_a_id(), AMM_RESERVE_A, true),
-        token_holding(amm_token_b_def_id(), amm_vault_b_id(), AMM_RESERVE_B, true),
-        token_holding(amm_token_a_def_id(), AccountId::new([45; 32]), 1_000, true),
-        token_holding(amm_token_b_def_id(), AccountId::new([46; 32]), 500, false),
-    ]
-}
-
-fn amm_add_liquidity_accounts() -> Vec<Fixture> {
-    vec![
-        amm_pool_account(),
-        token_holding(amm_token_a_def_id(), amm_vault_a_id(), AMM_RESERVE_A, true),
-        token_holding(amm_token_b_def_id(), amm_vault_b_id(), AMM_RESERVE_B, true),
-        token_definition(amm_lp_def_id(), amm_lp_supply(), true),
-        token_holding(amm_token_a_def_id(), AccountId::new([45; 32]), 1_000, true),
-        token_holding(amm_token_b_def_id(), AccountId::new([46; 32]), 500, true),
-        token_holding(amm_lp_def_id(), AccountId::new([47; 32]), 0, true),
-    ]
-}
-
-fn ata_create_accounts() -> Vec<Fixture> {
-    let owner_id = AccountId::new([91; 32]);
-    let definition_id = token_definition_id();
-    let seed = compute_ata_seed(owner_id, definition_id, programs::token_account_id());
-    let ata_id = get_associated_token_account_id(&programs::ata_account_id(), &seed);
-    vec![
-        Fixture::balance(owner_id, true, 0),
-        token_definition(definition_id, 100_000, false),
-        Fixture::new(
-            ata_id,
-            false,
-            programs::token_account_id(),
-            ShardData::empty(),
-        ),
-    ]
-}
-
-fn mul_div(factor: u128, multiplier: u128, divisor: u128) -> u128 {
-    factor * multiplier / divisor
-}
-
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let prove = cli.prove;
@@ -597,107 +423,16 @@ fn main() -> Result<()> {
         eprintln!("cycle_bench: prove mode ON, this will be slow (~minutes per program)");
     }
 
-    // Priced off the pool fixture exactly as `wallet::program_facades::amm` prices a real
-    // swap off the pool it observed, because the pool's `apply` recomputes both and refuses
-    // anything else.
-    let swap_amount_in: u128 = 200;
-    let swap_amount_out = mul_div(
-        AMM_RESERVE_B,
-        swap_amount_in,
-        AMM_RESERVE_A + swap_amount_in,
-    );
-
-    let max_amount_to_add_token_a: u128 = 400;
-    let max_amount_to_add_token_b: u128 = 200;
-    let amount_to_add_token_a = mul_div(AMM_RESERVE_A, max_amount_to_add_token_b, AMM_RESERVE_B)
-        .min(max_amount_to_add_token_a);
-    let amount_to_add_token_b = mul_div(AMM_RESERVE_B, max_amount_to_add_token_a, AMM_RESERVE_A)
-        .min(max_amount_to_add_token_b);
-    let amount_liquidity = mul_div(amm_lp_supply(), amount_to_add_token_a, AMM_RESERVE_A).min(
-        mul_div(amm_lp_supply(), amount_to_add_token_b, AMM_RESERVE_B),
-    );
-
-    let cases = [
-        Case::new(
-            "token",
-            "Transfer",
-            programs::token(),
-            token_transfer_accounts(),
-            &token_core::Instruction::Transfer {
-                amount_to_transfer: 5_000,
-                descriptor: fungible(token_definition_id()),
-            },
-        )?,
-        Case::new(
-            "token",
-            "Mint",
-            programs::token(),
-            token_definition_and_holding_accounts(),
-            &token_core::Instruction::Mint {
-                amount_to_mint: 5_000,
-            },
-        )?,
-        Case::new(
-            "token",
-            "Burn",
-            programs::token(),
-            token_definition_and_holding_accounts(),
-            &token_core::Instruction::Burn {
-                amount_to_burn: 500,
-                kind: TokenKind::Fungible,
-            },
-        )?,
-        Case::new(
-            "clock",
-            "Tick (block_id+1, no multiples)",
-            programs::clock(),
-            clock_accounts_tick_at(0),
-            &clock_core::Instruction {
-                timestamp: Timestamp::from(1_700_000_000_u64),
-                block_id: 1,
-            },
-        )?,
-        Case::new(
-            "amm",
-            "Swap",
-            programs::amm(),
-            amm_swap_accounts(),
-            &amm_core::Instruction::Swap {
-                token_program_id: programs::token_account_id(),
-                definition_id_in: amm_token_a_def_id(),
-                definition_id_out: amm_token_b_def_id(),
-                amount_in: swap_amount_in,
-                amount_out: swap_amount_out,
-            },
-        )?,
-        Case::new(
-            "amm",
-            "AddLiquidity",
-            programs::amm(),
-            amm_add_liquidity_accounts(),
-            &amm_core::Instruction::AddLiquidity {
-                max_amount_to_add_token_a,
-                max_amount_to_add_token_b,
-                token_program_id: programs::token_account_id(),
-                definition_token_a_id: amm_token_a_def_id(),
-                definition_token_b_id: amm_token_b_def_id(),
-                amount_to_add_token_a,
-                amount_to_add_token_b,
-                amount_liquidity,
-            },
-        )?,
-        Case::new(
-            "ata",
-            "Create",
-            programs::ata(),
-            ata_create_accounts(),
-            &associated_token_account_core::Instruction::Create {
-                token_program_id: programs::token_account_id(),
-                kind: TokenKind::Fungible,
-                contents: AtaContents::Empty,
-            },
-        )?,
-    ];
+    let cases = [Case::new(
+        "clock",
+        "Tick (block_id+1, no multiples)",
+        programs::clock(),
+        clock_accounts_tick_at(0),
+        &clock_core::Instruction {
+            timestamp: Timestamp::from(1_700_000_000_u64),
+            block_id: 1,
+        },
+    )?];
 
     let mut results: Vec<BenchResult> = cases
         .into_iter()

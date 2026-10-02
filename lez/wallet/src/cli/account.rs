@@ -6,7 +6,6 @@ use itertools::Itertools as _;
 use key_protocol::key_management::{KeyChain, key_tree::chain_index::ChainIndex};
 use lee::{Account, AccountId, ProgramShardSelector, PublicKey};
 use lee_core::{account::AccountIdError, native_token::NATIVE_TOKEN_PROGRAM_ID};
-use token_core::{TokenDefinition, TokenHolding};
 
 use crate::{
     WalletCore,
@@ -705,38 +704,13 @@ fn print_account_details(account: &Account, indent: &str, balance_read: bool) {
     } else {
         println!("{indent}Balance not read, nonce {}", account.nonce.0);
     }
-    let token_prog_id = programs::token_account_id();
     for (program, data) in account
         .data
         .shards
         .iter()
         .filter(|(program, data)| **program != NATIVE_TOKEN_PROGRAM_ID && !data.is_empty())
     {
-        let (description, json_view) = if *program == token_prog_id {
-            TokenDefinition::try_from(data)
-                .map(|token_def| {
-                    (
-                        "Token program definition record".to_owned(),
-                        serde_json::to_string(&token_def).unwrap(),
-                    )
-                })
-                .or_else(|_err| {
-                    TokenHolding::try_from(data).map(|token_hold| {
-                        (
-                            "Token program holding record".to_owned(),
-                            serde_json::to_string(&token_hold).unwrap(),
-                        )
-                    })
-                })
-                .unwrap_or_else(|_err| {
-                    (
-                        "Unrecognized token program record".to_owned(),
-                        hex::encode(data),
-                    )
-                })
-        } else {
-            (format!("Record of program {program}"), hex::encode(data))
-        };
+        let (description, json_view) = (format!("Record of program {program}"), hex::encode(data));
         println!("{indent}{description}");
         println!("{indent}{json_view}");
     }

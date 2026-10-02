@@ -21,9 +21,8 @@ use crate::{
         keycard::KeycardSubcommand,
         network::NetworkAlias,
         programs::{
-            amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand, bridge::BridgeSubcommand,
-            native_token_transfer::AuthTransferSubcommand, program_loader::ProgramLoaderSubcommand,
-            token::TokenProgramAgnosticSubcommand,
+            bridge::BridgeSubcommand, native_token_transfer::AuthTransferSubcommand,
+            program_loader::ProgramLoaderSubcommand,
         },
         statistics::StatisticsSubcommand,
     },
@@ -58,15 +57,6 @@ pub enum Command {
     /// Account view and sync subcommand.
     #[command(subcommand)]
     Account(AccountSubcommand),
-    /// Token program interaction subcommand.
-    #[command(subcommand)]
-    Token(TokenProgramAgnosticSubcommand),
-    /// AMM program interaction subcommand.
-    #[command(subcommand)]
-    AMM(AmmProgramAgnosticSubcommand),
-    /// Associated Token Account program interaction subcommand.
-    #[command(subcommand)]
-    Ata(AtaSubcommand),
     /// Bridge program interaction subcommand.
     #[command(subcommand)]
     Bridge(BridgeSubcommand),
@@ -232,13 +222,6 @@ pub async fn execute_subcommand(
                 .get_program_ids()
                 .await
                 .expect("Error fetching program ids");
-            let Some(token_id) = remote_program_ids.get("token") else {
-                panic!("Missing token program ID from remote");
-            };
-            assert!(
-                token_id == &::programs::token().id(),
-                "Local ID for token program is different from remote"
-            );
             let Some(circuit_id) = remote_program_ids.get("privacy_preserving_circuit") else {
                 panic!("Missing privacy preserving circuit ID from remote");
             };
@@ -246,21 +229,11 @@ pub async fn execute_subcommand(
                 circuit_id == &lee::PRIVACY_PRESERVING_CIRCUIT_ID,
                 "Local ID for privacy preserving circuit is different from remote"
             );
-            let Some(amm_id) = remote_program_ids.get("amm") else {
-                panic!("Missing AMM program ID from remote");
-            };
-            assert!(
-                amm_id == &::programs::amm().id(),
-                "Local ID for AMM program is different from remote"
-            );
 
             println!("\u{2705}All looks good!");
 
             SubcommandReturnValue::Empty
         }
-        Command::Token(token_subcommand) => token_subcommand.handle_subcommand(wallet_core).await?,
-        Command::AMM(amm_subcommand) => amm_subcommand.handle_subcommand(wallet_core).await?,
-        Command::Ata(ata_subcommand) => ata_subcommand.handle_subcommand(wallet_core).await?,
         Command::Bridge(bridge_subcommand) => {
             bridge_subcommand.handle_subcommand(wallet_core).await?
         }

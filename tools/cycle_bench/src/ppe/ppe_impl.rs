@@ -3,7 +3,7 @@
 //! `prove_native_transfer_in_ppe` is reused by the `verify` criterion bench under
 //! `benches/verify.rs` (re-exported via `super::prove_native_transfer_in_ppe`).
 
-use std::{collections::HashMap, time::Instant};
+use std::time::Instant;
 
 use borsh::to_vec;
 use lee::{
@@ -14,12 +14,9 @@ use lee_core::{
     PrivacyPreservingCircuitOutput,
     account::{AccountId, ProgramShardSelector},
 };
-use test_guest_core::ChainCall;
-use token_core::{TokenDescriptor, TokenKind};
 
 use super::PpeBenchResult;
 
-const TOKEN_DEFINITION_ID: AccountId = AccountId::new([15; 32]);
 const SENDER_ID: AccountId = AccountId::new([17; 32]);
 const RECIPIENT_ID: AccountId = AccountId::new([42; 32]);
 const AMOUNT_TO_TRANSFER: u128 = 5_000;
@@ -72,88 +69,6 @@ pub fn prove_native_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircui
                 ProgramShardSelector::native_balance(recipient_id),
             ],
             signers: [sender_id, recipient_id].into(),
-            instruction_data,
-            ..Default::default()
-        },
-        &pwd,
-    )?)
-}
-
-pub fn run_token_transfer_in_ppe() -> PpeBenchResult {
-    timed(
-        "token Transfer in PPE".to_owned(),
-        0,
-        prove_token_transfer_in_ppe,
-    )
-}
-
-fn token_program_id() -> AccountId {
-    programs::token_account_id()
-}
-
-fn token_transfer_instruction() -> anyhow::Result<Vec<u8>> {
-    Ok(to_vec(&token_core::Instruction::Transfer {
-        amount_to_transfer: AMOUNT_TO_TRANSFER,
-        descriptor: TokenDescriptor {
-            definition_id: TOKEN_DEFINITION_ID,
-            kind: TokenKind::Fungible,
-        },
-    })?)
-}
-
-fn prove_token_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
-    let token = programs::token();
-    let token_id = token_program_id();
-    let pwd = ProgramWithDependencies::new(token, token_id, HashMap::new());
-
-    Ok(execute_and_prove(
-        ProvingInput {
-            shard_selectors: vec![
-                ProgramShardSelector::new(SENDER_ID, token_id),
-                ProgramShardSelector::new(RECIPIENT_ID, token_id),
-            ],
-            signers: [SENDER_ID, RECIPIENT_ID].into(),
-            instruction_data: token_transfer_instruction()?,
-            ..Default::default()
-        },
-        &pwd,
-    )?)
-}
-
-pub fn run_chain_caller(depth: u32) -> PpeBenchResult {
-    timed(
-        format!("chain_caller to token Transfer depth={depth}"),
-        depth as usize,
-        || prove_chain_caller(depth),
-    )
-}
-
-fn prove_chain_caller(
-    num_chain_calls: u32,
-) -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
-    let chain_caller = test_programs::chain_caller();
-    let chain_caller_id = chain_caller.id();
-    let token_id = token_program_id();
-    let pwd = ProgramWithDependencies::new(
-        chain_caller,
-        AccountId::from_builtin_program(chain_caller_id),
-        [(token_id, programs::token())].into(),
-    );
-
-    // chain_caller expects shard selectors = [recipient, sender].
-    let shard_selectors = vec![
-        ProgramShardSelector::new(RECIPIENT_ID, token_id),
-        ProgramShardSelector::new(SENDER_ID, token_id),
-    ];
-
-    let instruction =
-        ChainCall::new(token_id, token_transfer_instruction()?).repeated(num_chain_calls);
-    let instruction_data = to_vec(&instruction)?;
-
-    Ok(execute_and_prove(
-        ProvingInput {
-            shard_selectors,
-            signers: [RECIPIENT_ID, SENDER_ID].into(),
             instruction_data,
             ..Default::default()
         },
