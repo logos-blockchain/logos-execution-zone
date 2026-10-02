@@ -60,11 +60,11 @@ impl PublicExecutionContext {
     }
 }
 
-pub struct WholeTransaction<'witnesses>(Interpreter<'witnesses>);
+pub struct WholeTransaction<'witnesses>(Execution<'witnesses>);
 
-pub struct PrivatePart<'witnesses>(Interpreter<'witnesses>);
+pub struct PrivatePart<'witnesses>(Execution<'witnesses>);
 
-pub struct PublicPart(Interpreter<'static>);
+pub struct PublicPart(Execution<'static>);
 
 pub struct PublicOutcome {
     pub block_validity_window: BlockValidityWindow,
@@ -346,7 +346,7 @@ enum Scope {
     },
 }
 
-struct Interpreter<'witnesses> {
+struct Execution<'witnesses> {
     witnesses: &'witnesses [PrivateWitness],
     context: PublicExecutionContext,
     public_actors: HashSet<Actor>,
@@ -379,7 +379,7 @@ impl<'witnesses> WholeTransaction<'witnesses> {
             groups: Vec::new(),
             open: Vec::new(),
         };
-        Interpreter::start(context, witnesses, Some(root), scope).map(Self)
+        Execution::start(context, witnesses, Some(root), scope).map(Self)
     }
 
     pub fn execute<E: ExecutionEnvironment>(
@@ -409,7 +409,7 @@ impl<'witnesses> PrivatePart<'witnesses> {
             next_group: 0,
             trace: Boundary::new(),
         };
-        Interpreter::start(context, witnesses, root, scope).map(Self)
+        Execution::start(context, witnesses, root, scope).map(Self)
     }
 
     pub fn execute<E: ExecutionEnvironment>(
@@ -434,7 +434,7 @@ impl PublicPart {
             boundary,
             cursor: 0,
         };
-        Interpreter::start(context, &[], root, scope).map(Self)
+        Execution::start(context, &[], root, scope).map(Self)
     }
 
     pub fn execute<E: ExecutionEnvironment>(
@@ -446,7 +446,7 @@ impl PublicPart {
     }
 }
 
-impl<'witnesses> Interpreter<'witnesses> {
+impl<'witnesses> Execution<'witnesses> {
     fn start(
         context: PublicExecutionContext,
         witnesses: &'witnesses [PrivateWitness],
