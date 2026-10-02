@@ -471,7 +471,7 @@ fn prove_public_outputs(
                 script,
             ))
         },
-        vec![Vec::new(); script.calls.len()],
+        vec![Vec::new(); script.response.calls.len()],
         &scripted_programs(),
     )
     .unwrap()
