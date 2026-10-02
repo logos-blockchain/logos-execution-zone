@@ -924,7 +924,7 @@ pub fn immutable_mirror_commitment(
         ShardData::try_from(program_header.to_bytes())
             .expect("program header must fit under DATA_MAX_LENGTH"),
     );
-    Commitment::new(&mirror_account_id, &mirrored_account)
+    Commitment::new(mirror_account_id, &mirrored_account)
 }
 
 /// Checks that the output repeats the scheduled input exactly, then verifies

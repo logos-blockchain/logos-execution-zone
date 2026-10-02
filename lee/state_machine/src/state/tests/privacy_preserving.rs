@@ -132,7 +132,7 @@ fn transition_from_privacy_preserving_transaction_private() {
         Identifier::ZERO,
     );
     let expected_new_commitment_1 = Commitment::new(
-        &sender_account_id,
+        sender_account_id,
         &Account {
             nonce: sender_nonce.private_account_nonce_increment(&sender_keys.nsk()),
             ..Account::funded(
@@ -141,12 +141,12 @@ fn transition_from_privacy_preserving_transaction_private() {
         },
     );
 
-    let sender_pre_commitment = Commitment::new(&sender_account_id, &sender_private_account);
+    let sender_pre_commitment = Commitment::new(sender_account_id, &sender_private_account);
     let expected_new_nullifier =
         Nullifier::for_account_update(&sender_pre_commitment, &sender_keys.nsk());
 
     let expected_new_commitment_2 = Commitment::new(
-        &recipient_account_id,
+        recipient_account_id,
         &Account {
             nonce: Nonce::private_account_nonce_init(&recipient_account_id),
             ..Account::funded(balance_to_move)
@@ -349,7 +349,7 @@ fn a_failing_deferred_effect_leaves_the_state_untouched() {
         !state
             .private_state
             .1
-            .contains(&Nullifier::for_account_initialization(&recipient_id))
+            .contains(&Nullifier::for_account_initialization(recipient_id))
     );
 }
 
@@ -392,7 +392,7 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
         Identifier::ZERO,
     );
     let expected_new_commitment = Commitment::new(
-        &sender_account_id,
+        sender_account_id,
         &Account {
             nonce: sender_nonce.private_account_nonce_increment(&sender_keys.nsk()),
             ..Account::funded(
@@ -401,7 +401,7 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
         },
     );
 
-    let sender_pre_commitment = Commitment::new(&sender_account_id, &sender_private_account);
+    let sender_pre_commitment = Commitment::new(sender_account_id, &sender_private_account);
     let expected_new_nullifier =
         Nullifier::for_account_update(&sender_pre_commitment, &sender_keys.nsk());
 
@@ -591,7 +591,7 @@ fn a_guest_evaluated_public_effect_settles_against_live_state() {
         .with_test_programs()
         .with_private_account(&sender_keys, &pre_account);
     let membership_proof = state
-        .get_proof_for_commitment(&Commitment::new(&sender_id, &pre_account))
+        .get_proof_for_commitment(&Commitment::new(sender_id, &pre_account))
         .expect("the account's commitment must be in state");
 
     let (output, proof) = execute_and_prove(
@@ -656,7 +656,7 @@ fn assert_forged_field_is_refused(forge_field: ForgeField) {
         .with_test_programs()
         .with_private_account(&sender_keys, &pre_account);
     let membership_proof = state
-        .get_proof_for_commitment(&Commitment::new(&sender_id, &pre_account))
+        .get_proof_for_commitment(&Commitment::new(sender_id, &pre_account))
         .expect("the account's commitment must be in state");
 
     let (output, proof) = execute_and_prove(
@@ -714,7 +714,7 @@ fn a_deferred_apply_returning_chained_calls_is_refused_at_settlement() {
         .with_programs([crate::test_methods::chains_from_apply()])
         .with_private_account(&keys, &pre_account);
     let membership_proof = state
-        .get_proof_for_commitment(&Commitment::new(&private_id, &pre_account))
+        .get_proof_for_commitment(&Commitment::new(private_id, &pre_account))
         .expect("the account's commitment must be in state");
 
     let (output, proof) = execute_and_prove(

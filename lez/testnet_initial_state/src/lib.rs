@@ -148,8 +148,8 @@ fn initial_private_accounts() -> Vec<(lee_core::Commitment, lee_core::Nullifier)
             );
 
             (
-                lee_core::Commitment::new(&account_id, &init_comm_data.account),
-                lee_core::Nullifier::for_account_initialization(&account_id),
+                lee_core::Commitment::new(account_id, &init_comm_data.account),
+                lee_core::Nullifier::for_account_initialization(account_id),
             )
         })
         .collect()
