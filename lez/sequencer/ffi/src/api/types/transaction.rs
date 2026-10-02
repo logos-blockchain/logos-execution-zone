@@ -693,11 +693,9 @@ impl From<BoundaryStep> for FfiBoundaryStep {
 
 impl From<FfiBoundaryStep> for BoundaryStep {
     fn from(value: FfiBoundaryStep) -> Self {
-        let public_delivery = PublicDelivery::from(value.public_delivery);
-        let assumption = Assumption::from(value.assumption);
         match value.kind {
-            FfiBoundaryStepKind::CallPublic => Self::CallPublic(public_delivery),
-            FfiBoundaryStepKind::EnterPrivate => Self::EnterPrivate(assumption),
+            FfiBoundaryStepKind::CallPublic => Self::CallPublic(value.public_delivery.into()),
+            FfiBoundaryStepKind::EnterPrivate => Self::EnterPrivate(value.assumption.into()),
             FfiBoundaryStepKind::LeavePrivate => Self::LeavePrivate,
             FfiBoundaryStepKind::ReturnPublic => Self::ReturnPublic,
         }
