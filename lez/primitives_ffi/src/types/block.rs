@@ -1,8 +1,8 @@
 use common::block::{BedrockStatus, Block, BlockHeader};
 
-use crate::api::types::{
+use crate::types::{
     FfiBlockId, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiTimestamp, FfiVec,
-    transaction::sequencer_ffi_free_transaction_vec_value, vectors::FfiBlockBody,
+    transaction::primitives_ffi_free_transaction_vec_value, vectors::FfiBlockBody,
 };
 
 #[repr(C)]
@@ -115,15 +115,15 @@ impl From<FfiBedrockStatus> for BedrockStatus {
 /// The caller must ensure that:
 /// - `val` is a valid instance of `FfiBlock` produced by this library and not yet freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sequencer_ffi_free_ffi_block(val: FfiBlock) {
+pub unsafe extern "C" fn primitives_ffi_free_ffi_block(val: FfiBlock) {
     let ffi_tx_ffi_vec = val.body;
 
-    sequencer_ffi_free_transaction_vec_value(ffi_tx_ffi_vec);
+    primitives_ffi_free_transaction_vec_value(ffi_tx_ffi_vec);
 }
 
 /// Frees the resources associated with the given ffi block option.
 ///
-/// Takes ownership of the whole allocation produced by a `query_*` call: the
+/// Takes ownership of the whole allocation: the
 /// outer `Box<FfiBlockOpt>` (the `PointerResult.value` pointer), the inner
 /// `Box<FfiBlock>` (when present), and that block's transaction bodies.
 ///
@@ -140,7 +140,7 @@ pub unsafe extern "C" fn sequencer_ffi_free_ffi_block(val: FfiBlock) {
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiBlockOpt` produced by this library and not yet freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sequencer_ffi_free_ffi_block_opt(val: *mut FfiBlockOpt) {
+pub unsafe extern "C" fn primitives_ffi_free_ffi_block_opt(val: *mut FfiBlockOpt) {
     if val.is_null() {
         log::error!("Trying to free a null pointer. Exiting");
         return;
@@ -150,14 +150,14 @@ pub unsafe extern "C" fn sequencer_ffi_free_ffi_block_opt(val: *mut FfiBlockOpt)
     if opt.is_some {
         let block = unsafe { Box::from_raw(opt.value) };
         unsafe {
-            sequencer_ffi_free_ffi_block(*block);
+            primitives_ffi_free_ffi_block(*block);
         }
     }
 }
 
 /// Frees the resources associated with the given ffi block vector.
 ///
-/// Takes ownership of the whole allocation produced by a `query_*` call: the
+/// Takes ownership of the whole allocation: the
 /// outer `Box<FfiVec<FfiBlock>>` (the `PointerResult.value` pointer), the
 /// vector's backing buffer, and every block within it.
 ///
@@ -174,7 +174,7 @@ pub unsafe extern "C" fn sequencer_ffi_free_ffi_block_opt(val: *mut FfiBlockOpt)
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiVec<FfiBlock>` produced by this library and not yet freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sequencer_ffi_free_ffi_block_vec(val: *mut FfiVec<FfiBlock>) {
+pub unsafe extern "C" fn primitives_ffi_free_ffi_block_vec(val: *mut FfiVec<FfiBlock>) {
     if val.is_null() {
         log::error!("Trying to free a null pointer. Exiting");
         return;
@@ -184,7 +184,7 @@ pub unsafe extern "C" fn sequencer_ffi_free_ffi_block_vec(val: *mut FfiVec<FfiBl
     let ffi_block_std_vec: Vec<_> = (*boxed).into();
     for block in ffi_block_std_vec {
         unsafe {
-            sequencer_ffi_free_ffi_block(block);
+            primitives_ffi_free_ffi_block(block);
         }
     }
 }

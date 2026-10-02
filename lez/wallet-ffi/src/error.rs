@@ -4,6 +4,8 @@
 
 use std::str::Utf8Error;
 
+use primitives_ffi::errors::PrimitiveOperationStatus;
+
 /// Error codes returned by FFI functions.
 #[repr(C)]
 #[must_use]
@@ -63,6 +65,15 @@ impl WalletFfiError {
         let Self::Success = self else {
             panic!("Called `unwrap()` on error value `{self:#?}`");
         };
+    }
+}
+
+impl From<PrimitiveOperationStatus> for WalletFfiError {
+    fn from(value: PrimitiveOperationStatus) -> Self {
+        match value {
+            PrimitiveOperationStatus::Ok => Self::Success,
+            PrimitiveOperationStatus::CastError => Self::InvalidTypeConversion,
+        }
     }
 }
 

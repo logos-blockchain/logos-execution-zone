@@ -36,6 +36,7 @@ use ::wallet::ExecutionFailureKind;
 use error::WalletFfiError;
 // Re-export public types for cbindgen
 pub use error::WalletFfiError as FfiError;
+use primitives_ffi::types::FfiBytes32;
 use tokio::runtime::Handle;
 pub use types::*;
 

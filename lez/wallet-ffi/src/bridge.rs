@@ -3,13 +3,14 @@
 use std::{ffi::CString, ptr};
 
 use lee::AccountId;
+use primitives_ffi::types::FfiBytes32;
 use wallet::program_facades::bridge::Bridge;
 
 use crate::{
     block_on,
     error::{print_error, WalletFfiError},
     map_execution_error,
-    types::{FfiBytes32, FfiTransferResult, WalletHandle},
+    types::{FfiTransferResult, WalletHandle},
     wallet::get_wallet,
 };
 

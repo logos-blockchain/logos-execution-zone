@@ -1,0 +1,18 @@
+[package]
+name = "primitives_ffi"
+license = { workspace = true }
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lee.workspace = true
+lee_core.workspace = true
+sequencer_executor_actor = { workspace = true, features = ["actor"] }
+sequencer_storage_actor.workspace = true
+common.workspace = true
+
+tokio = { features = ["rt-multi-thread"], workspace = true }
+log = { workspace = true }
+
+[lints]
+workspace = true

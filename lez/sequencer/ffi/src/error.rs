@@ -1,3 +1,5 @@
+use primitives_ffi::errors::PrimitiveOperationStatus;
+
 #[derive(Debug, Default, PartialEq, Eq)]
 #[repr(C)]
 pub enum OperationStatus {
@@ -14,14 +16,21 @@ pub enum OperationStatus {
 
 impl OperationStatus {
     #[must_use]
-    #[unsafe(no_mangle)]
-    pub extern "C" fn is_ok(&self) -> bool {
+    pub fn is_ok(&self) -> bool {
         *self == Self::Ok
     }
 
     #[must_use]
-    #[unsafe(no_mangle)]
-    pub extern "C" fn is_error(&self) -> bool {
+    pub fn is_error(&self) -> bool {
         !self.is_ok()
+    }
+}
+
+impl From<PrimitiveOperationStatus> for OperationStatus {
+    fn from(value: PrimitiveOperationStatus) -> Self {
+        match value {
+            PrimitiveOperationStatus::Ok => Self::Ok,
+            PrimitiveOperationStatus::CastError => Self::CastError,
+        }
     }
 }

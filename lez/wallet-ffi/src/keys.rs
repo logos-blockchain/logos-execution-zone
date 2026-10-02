@@ -3,11 +3,12 @@
 use std::{ffi::CString, ptr};
 
 use lee::{AccountId, PublicKey};
+use primitives_ffi::types::{FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey};
 use wallet::AccountIdentity;
 
 use crate::{
     error::{print_error, WalletFfiError},
-    types::{FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey, WalletHandle},
+    types::WalletHandle,
     wallet::get_wallet,
     FfiAccountIdentity,
 };
@@ -128,46 +129,14 @@ pub unsafe extern "C" fn wallet_ffi_get_private_account_keys(
     let npk_bytes = key_chain.nullifier_public_key.0;
 
     // VPK is an ML-KEM-768 encapsulation key (1184 bytes)
-    let vpk_bytes = key_chain.viewing_public_key.to_bytes();
-    let vpk_len = vpk_bytes.len();
-    let vpk_vec = vpk_bytes.to_vec();
-    let vpk_boxed = vpk_vec.into_boxed_slice();
-    #[expect(
-        clippy::as_conversions,
-        reason = "We need to convert the boxed slice into a raw pointer for FFI"
-    )]
-    let vpk_ptr = Box::into_raw(vpk_boxed) as *const u8;
+    let vpk_ffi_vec = key_chain.viewing_public_key.to_bytes().to_vec().into();
 
     unsafe {
         (*out_keys).nullifier_public_key.data = npk_bytes;
-        (*out_keys).viewing_public_key = vpk_ptr;
-        (*out_keys).viewing_public_key_len = vpk_len;
+        (*out_keys).viewing_public_key = vpk_ffi_vec;
     }
 
     WalletFfiError::Success
-}
-
-/// Free private account keys returned by `wallet_ffi_get_private_account_keys`.
-///
-/// # Safety
-/// The keys must be either null or valid keys returned by
-/// `wallet_ffi_get_private_account_keys`.
-#[no_mangle]
-pub unsafe extern "C" fn wallet_ffi_free_private_account_keys(keys: *mut FfiPrivateAccountKeys) {
-    if keys.is_null() {
-        return;
-    }
-
-    unsafe {
-        let keys = &*keys;
-        if !keys.viewing_public_key.is_null() && keys.viewing_public_key_len > 0 {
-            let slice = std::slice::from_raw_parts_mut(
-                keys.viewing_public_key.cast_mut(),
-                keys.viewing_public_key_len,
-            );
-            drop(Box::from_raw(std::ptr::from_mut::<[u8]>(slice)));
-        }
-    }
 }
 
 /// Convert an account ID to a Base58 string.

@@ -14,8 +14,8 @@ use lee_core::{
 use sequencer_executor_actor::protocol::Transaction;
 
 use crate::{
-    OperationStatus,
-    api::types::{
+    errors::PrimitiveOperationStatus,
+    types::{
         FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiU128,
         FfiVec,
         vectors::{
@@ -56,7 +56,7 @@ impl From<PublicTransaction> for FfiPublicTransactionBody {
 }
 
 impl TryFrom<Box<FfiPublicTransactionBody>> for PublicTransaction {
-    type Error = OperationStatus;
+    type Error = PrimitiveOperationStatus;
 
     fn try_from(value: Box<FfiPublicTransactionBody>) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -85,7 +85,7 @@ impl TryFrom<Box<FfiPublicTransactionBody>> for PublicTransaction {
                         },
                         PublicKey::try_new(ffi_val.public_key.data).map_err(|e| {
                             log::error!("Failed to cast `[u8; 32]` into PublicKey, err: {e}");
-                            OperationStatus::CastError
+                            PrimitiveOperationStatus::CastError
                         })?,
                     ));
                 }
@@ -292,7 +292,7 @@ impl From<PrivacyPreservingTransaction> for FfiPrivateTransactionBody {
 }
 
 impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
-    type Error = OperationStatus;
+    type Error = PrimitiveOperationStatus;
 
     fn try_from(value: Box<FfiPrivateTransactionBody>) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -359,7 +359,7 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                             },
                             PublicKey::try_new(ffi_val.public_key.data).map_err(|e| {
                                 log::error!("Failed to cast `[u8; 32]` into PublicKey, err: {e}");
-                                OperationStatus::CastError
+                                PrimitiveOperationStatus::CastError
                             })?,
                         ));
                     }
@@ -580,7 +580,7 @@ impl From<Transaction> for FfiTransaction {
 }
 
 impl TryFrom<FfiTransaction> for LeeTransaction {
-    type Error = OperationStatus;
+    type Error = PrimitiveOperationStatus;
 
     fn try_from(value: FfiTransaction) -> Result<Self, Self::Error> {
         match value.kind {
@@ -619,11 +619,11 @@ pub enum FfiTransactionKind {
 /// The caller must ensure that:
 /// - `val` is a valid instance of `FfiTransaction`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sequencer_ffi_free_ffi_transaction(val: FfiTransaction) {
+pub unsafe extern "C" fn primitives_ffi_free_ffi_transaction(val: FfiTransaction) {
     match val.kind {
         FfiTransactionKind::Public => {
             let body = unsafe { Box::from_raw(val.body.public_body) };
-            let std_body_res: Result<PublicTransaction, OperationStatus> =
+            let std_body_res: Result<PublicTransaction, PrimitiveOperationStatus> =
                 body.try_into().inspect_err(|_| {
                     log::error!(
                         "Failed to cast `Box<FfiPublicTransactionBody>` into `PublicTransaction`"
@@ -636,7 +636,7 @@ pub unsafe extern "C" fn sequencer_ffi_free_ffi_transaction(val: FfiTransaction)
         }
         FfiTransactionKind::Private => {
             let body = unsafe { Box::from_raw(val.body.private_body) };
-            let std_body_res: Result<PrivacyPreservingTransaction, OperationStatus> = body.try_into()
+            let std_body_res: Result<PrivacyPreservingTransaction, PrimitiveOperationStatus> = body.try_into()
             .inspect_err(|_| log::error!("Failed to cast `Box<FfiPrivateTransactionBody>` into `PrivacyPreservingTransaction`"));
 
             if let Ok(std_body) = std_body_res {
@@ -648,7 +648,7 @@ pub unsafe extern "C" fn sequencer_ffi_free_ffi_transaction(val: FfiTransaction)
 
 /// Frees the resources associated with the given ffi transaction option.
 ///
-/// Takes ownership of the whole allocation produced by a `query_*` call: the
+/// Takes ownership of the whole allocation: the
 /// outer `Box<FfiOption<FfiTransaction>>` (the `PointerResult.value` pointer),
 /// the inner `Box<FfiTransaction>` (when present), and its body.
 ///
@@ -666,7 +666,7 @@ pub unsafe extern "C" fn sequencer_ffi_free_ffi_transaction(val: FfiTransaction)
 /// - `val` is a pointer to an `FfiOption<FfiTransaction>` produced by this library and not yet
 ///   freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sequencer_ffi_free_ffi_transaction_opt(
+pub unsafe extern "C" fn primitives_ffi_free_ffi_transaction_opt(
     val: *mut FfiOption<FfiTransaction>,
 ) {
     if val.is_null() {
@@ -678,7 +678,7 @@ pub unsafe extern "C" fn sequencer_ffi_free_ffi_transaction_opt(
     if opt.is_some {
         let tx = unsafe { Box::from_raw(opt.value) };
         unsafe {
-            sequencer_ffi_free_ffi_transaction(*tx);
+            primitives_ffi_free_ffi_transaction(*tx);
         }
     }
 }
@@ -687,21 +687,21 @@ pub unsafe extern "C" fn sequencer_ffi_free_ffi_transaction_opt(
 /// buffer and each transaction), without owning an outer box.
 ///
 /// This is the element-level helper shared by the block free path
-/// ([`crate::api::types::block::free_ffi_block`], whose body is a transaction
+/// ([`crate::types::block::free_ffi_block`], whose body is a transaction
 /// vector held by value) and the public [`free_ffi_transaction_vec`] entry
 /// point (which first reclaims the outer box).
-pub(crate) fn sequencer_ffi_free_transaction_vec_value(val: FfiVec<FfiTransaction>) {
+pub(crate) fn primitives_ffi_free_transaction_vec_value(val: FfiVec<FfiTransaction>) {
     let ffi_tx_std_vec: Vec<_> = val.into();
     for tx in ffi_tx_std_vec {
         unsafe {
-            sequencer_ffi_free_ffi_transaction(tx);
+            primitives_ffi_free_ffi_transaction(tx);
         }
     }
 }
 
 /// Frees the resources associated with the given vector of ffi transactions.
 ///
-/// Takes ownership of the whole allocation produced by a `query_*` call: the
+/// Takes ownership of the whole allocation: the
 /// outer `Box<FfiVec<FfiTransaction>>` (the `PointerResult.value` pointer), the
 /// vector's backing buffer, and every transaction within it.
 ///
@@ -718,14 +718,14 @@ pub(crate) fn sequencer_ffi_free_transaction_vec_value(val: FfiVec<FfiTransactio
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiVec<FfiTransaction>` produced by this library and not yet freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sequencer_ffi_free_ffi_transaction_vec(val: *mut FfiVec<FfiTransaction>) {
+pub unsafe extern "C" fn primitives_ffi_free_ffi_transaction_vec(val: *mut FfiVec<FfiTransaction>) {
     if val.is_null() {
         log::error!("Trying to free a null pointer. Exiting");
         return;
     }
     // Reclaim the outer box, then the backing buffer and each transaction.
     let boxed = unsafe { Box::from_raw(val) };
-    sequencer_ffi_free_transaction_vec_value(*boxed);
+    primitives_ffi_free_transaction_vec_value(*boxed);
 }
 
 fn cast_validity_window(window: ValidityWindow<u64>) -> [u64; 2] {
@@ -735,7 +735,9 @@ fn cast_validity_window(window: ValidityWindow<u64>) -> [u64; 2] {
     ]
 }
 
-fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> Result<ValidityWindow<u64>, OperationStatus> {
+fn cast_ffi_validity_window(
+    ffi_window: [u64; 2],
+) -> Result<ValidityWindow<u64>, PrimitiveOperationStatus> {
     let left = if ffi_window[0] == 0 {
         None
     } else {
@@ -750,7 +752,7 @@ fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> Result<ValidityWindow<u64>,
 
     ValidityWindow::try_from((left, right)).map_err(|e| {
         log::error!("Failed to cast ffi validity window: {e}");
-        OperationStatus::CastError
+        PrimitiveOperationStatus::CastError
     })
 }
 

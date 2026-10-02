@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use lee::{Account, AccountData, AccountId, ShardData};
 
 use crate::{
-    OperationStatus,
-    api::types::{FfiAccountId, FfiBytes32, FfiU128, FfiVec, vectors::FfiVecU8},
+    errors::PrimitiveOperationStatus,
+    types::{FfiAccountId, FfiBytes32, FfiU128, FfiVec, vectors::FfiVecU8},
 };
 
 #[repr(C)]
@@ -35,7 +35,7 @@ impl From<AccountData> for FfiAccountData {
 }
 
 impl TryFrom<FfiAccountData> for AccountData {
-    type Error = OperationStatus;
+    type Error = PrimitiveOperationStatus;
 
     fn try_from(value: FfiAccountData) -> Result<Self, Self::Error> {
         let keys_ffi: Vec<_> = value.account_data_keys.into();
@@ -48,7 +48,7 @@ impl TryFrom<FfiAccountData> for AccountData {
             log::error!(
                 "Failed to cast `FfiAccount` into `Account`, err: Keys and values length mismatch"
             );
-            return Err(OperationStatus::CastError);
+            return Err(PrimitiveOperationStatus::CastError);
         }
 
         let mut values_std = vec![];
@@ -56,7 +56,7 @@ impl TryFrom<FfiAccountData> for AccountData {
         for raw_shard in values_std_raw {
             let shard: ShardData = raw_shard.try_into().map_err(|e| {
                 log::error!("Failed to cast `FfiAccount` into `Account`, err: {e}");
-                OperationStatus::CastError
+                PrimitiveOperationStatus::CastError
             })?;
 
             values_std.push(shard);
@@ -83,6 +83,12 @@ pub struct FfiAccount {
     pub nonce: FfiU128,
 }
 
+impl Default for FfiAccount {
+    fn default() -> Self {
+        Account::default().into()
+    }
+}
+
 // Helper functions to convert between Rust and FFI types
 
 impl From<&lee::AccountId> for FfiBytes32 {
@@ -103,7 +109,7 @@ impl From<lee::Account> for FfiAccount {
 }
 
 impl TryFrom<FfiAccount> for Account {
-    type Error = OperationStatus;
+    type Error = PrimitiveOperationStatus;
 
     fn try_from(value: FfiAccount) -> Result<Self, Self::Error> {
         let FfiAccount {
@@ -120,7 +126,7 @@ impl TryFrom<FfiAccount> for Account {
 
 /// Frees the resources associated with the given ffi account.
 ///
-/// Takes ownership of the whole allocation produced by a `query_*` call: the
+/// Takes ownership of the whole allocation: the
 /// outer `Box<FfiAccount>` (the `PointerResult.value` pointer) *and* its inner
 /// data buffer. Passing the struct by value previously freed only the inner
 /// buffer and leaked the outer box.
@@ -138,7 +144,7 @@ impl TryFrom<FfiAccount> for Account {
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiAccount` produced by this library and not yet freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sequencer_ffi_free_ffi_account(val: *mut FfiAccount) {
+pub unsafe extern "C" fn primitives_ffi_free_ffi_account(val: *mut FfiAccount) {
     if val.is_null() {
         log::error!("Trying to free a null pointer. Exiting");
         return;
@@ -146,7 +152,7 @@ pub unsafe extern "C" fn sequencer_ffi_free_ffi_account(val: *mut FfiAccount) {
     // Reclaim the outer box, then convert to drop the inner data buffer.
     let boxed = unsafe { Box::from_raw(val) };
 
-    let orig_val_res: Result<Account, OperationStatus> = (*boxed)
+    let orig_val_res: Result<Account, PrimitiveOperationStatus> = (*boxed)
         .try_into()
         .inspect_err(|_| log::error!("Failed to cast `FfiAccount` into `Account`"));
 
@@ -162,7 +168,7 @@ mod tests {
     use lee::{Account, AccountData, AccountId, ShardData};
     use lee_core::account::Nonce;
 
-    use crate::api::types::account::FfiAccount;
+    use crate::types::account::FfiAccount;
 
     #[test]
     fn account_roundtrip() {

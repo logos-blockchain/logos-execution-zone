@@ -1,9 +1,10 @@
 use lee::AccountId;
-
-use crate::{
-    error::WalletFfiError, FfiBytes32, FfiIdentifier, FfiNullifierPublicKey, FfiPdaSeed,
-    FfiPrivateAccountKeys,
+use primitives_ffi::{
+    errors::PrimitiveOperationStatus,
+    types::{vectors::FfiVecU8, FfiBytes32, FfiIdentifier, FfiNullifierPublicKey, FfiPdaSeed},
 };
+
+use crate::error::WalletFfiError;
 
 /// Produce account id for public PDA.
 ///
@@ -47,32 +48,27 @@ pub unsafe extern "C" fn wallet_ffi_account_id_for_private_pda(
     program_account_id: FfiBytes32,
     pda_seed: FfiPdaSeed,
     npk: FfiNullifierPublicKey,
-    viewing_public_key: *const u8,
-    viewing_public_key_len: usize,
+    viewing_public_key: FfiVecU8,
     identifier: FfiIdentifier,
     account_id: *mut FfiBytes32,
 ) -> WalletFfiError {
-    if viewing_public_key.is_null() {
+    if viewing_public_key.entries.is_null() {
         return WalletFfiError::NullPointer;
     }
 
-    let ffi_private_keys = FfiPrivateAccountKeys {
-        nullifier_public_key: npk,
-        viewing_public_key,
-        viewing_public_key_len,
-    };
+    let std_npk = npk.into();
 
-    let vpk = ffi_private_keys.vpk();
+    let vpk: Result<_, PrimitiveOperationStatus> = viewing_public_key.try_into();
 
     if vpk.is_err() {
-        return vpk.err().unwrap();
+        return vpk.err().unwrap().into();
     }
 
     unsafe {
         *account_id = AccountId::for_private_pda(
             &AccountId::from(program_account_id),
             &pda_seed.into(),
-            &ffi_private_keys.npk(),
+            &std_npk,
             &vpk.unwrap(),
             identifier.into(),
         )
@@ -86,11 +82,11 @@ pub unsafe extern "C" fn wallet_ffi_account_id_for_private_pda(
 mod tests {
     use lee::AccountId;
     use lee_core::{encryption::ViewingPublicKey, program::PdaSeed, NullifierPublicKey};
+    use primitives_ffi::types::FfiBytes32;
 
     use crate::{
         error::WalletFfiError,
         pda::{wallet_ffi_account_id_for_private_pda, wallet_ffi_account_id_for_public_pda},
-        FfiBytes32,
     };
 
     #[test]
@@ -116,7 +112,7 @@ mod tests {
         let pda_id =
             AccountId::for_private_pda(&program_account_id, &pda_seed, &npk, &vpk, identifier);
 
-        let vpk_ptr = Box::into_raw(vpk.to_bytes().to_vec().into_boxed_slice()) as *const u8;
+        let ffi_vpk = vpk.to_bytes().to_vec().into();
 
         let mut ffi_pda_id_base = FfiBytes32 { data: [0; 32] };
         let ffi_pda_id = &raw mut ffi_pda_id_base;
@@ -126,8 +122,7 @@ mod tests {
                 program_account_id.into(),
                 pda_seed.into(),
                 npk.into(),
-                vpk_ptr,
-                1184,
+                ffi_vpk,
                 identifier.into(),
                 ffi_pda_id,
             )
@@ -136,8 +131,5 @@ mod tests {
         assert_eq!(err, WalletFfiError::Success);
 
         assert_eq!(pda_id.into_value(), unsafe { (*ffi_pda_id).data });
-
-        let vpk_slice = unsafe { std::slice::from_raw_parts_mut(vpk_ptr.cast_mut(), 1184) };
-        drop(unsafe { Box::from_raw(std::ptr::from_mut(vpk_slice)) });
     }
 }

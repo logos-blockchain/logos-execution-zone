@@ -4,17 +4,16 @@ use std::{ffi::c_char, ptr, str::FromStr as _};
 
 use key_protocol::key_management::{key_tree::chain_index::ChainIndex, KeyChain};
 use lee::{AccountId, ProgramShardSelector};
+use primitives_ffi::types::{
+    account::FfiAccount, FfiBytes32, FfiIdentifier, FfiPrivateAccountKeys,
+};
 use wallet::account::{AccountIdWithPrivacy, HumanReadableAccount};
 
 use crate::{
     block_on, c_str_to_string,
     error::{print_error, WalletFfiError},
-    types::{
-        FfiAccount, FfiAccountList, FfiAccountListEntry, FfiBytes32, FfiPrivateAccountKeys,
-        FfiShard, WalletHandle,
-    },
+    types::{FfiAccountList, FfiAccountListEntry, WalletHandle},
     wallet::get_wallet,
-    FfiIdentifier,
 };
 
 /// Create a new public account.
@@ -171,18 +170,11 @@ pub unsafe extern "C" fn wallet_ffi_create_private_accounts_key(
         .expect("Node was just inserted");
 
     let npk_bytes = key_chain.nullifier_public_key.0;
-    let vpk_bytes = key_chain.viewing_public_key.to_bytes();
-    let vpk_len = vpk_bytes.len();
-    #[expect(
-        clippy::as_conversions,
-        reason = "We need to convert the boxed slice into a raw pointer for FFI"
-    )]
-    let vpk_ptr = Box::into_raw(vpk_bytes.to_vec().into_boxed_slice()) as *const u8;
+    let vpk_ffi_vec = key_chain.viewing_public_key.to_bytes().to_vec().into();
 
     unsafe {
         (*out_keys).nullifier_public_key.data = npk_bytes;
-        (*out_keys).viewing_public_key = vpk_ptr;
-        (*out_keys).viewing_public_key_len = vpk_len;
+        (*out_keys).viewing_public_key = vpk_ffi_vec;
     }
 
     WalletFfiError::Success
@@ -235,11 +227,11 @@ pub unsafe extern "C" fn wallet_ffi_list_accounts(
         .account_ids()
         .map(|(account_id, _idx)| match account_id {
             AccountIdWithPrivacy::Public(account_id) => FfiAccountListEntry {
-                account_id: FfiBytes32::from_account_id(account_id),
+                account_id: FfiBytes32::from_account_id(&account_id),
                 is_public: true,
             },
             AccountIdWithPrivacy::Private(account_id) => FfiAccountListEntry {
-                account_id: FfiBytes32::from_account_id(account_id),
+                account_id: FfiBytes32::from_account_id(&account_id),
                 is_public: false,
             },
         })
@@ -531,34 +523,6 @@ pub unsafe extern "C" fn wallet_ffi_get_account_view(
     }
 
     WalletFfiError::Success
-}
-
-/// Free account data returned by any account query (`wallet_ffi_get_account_public`,
-/// `wallet_ffi_get_account_private`, or `wallet_ffi_get_account_view`).
-///
-/// # Safety
-/// The account must be either null or a valid account returned by one of those
-/// functions.
-#[no_mangle]
-pub unsafe extern "C" fn wallet_ffi_free_account_data(account: *mut FfiAccount) {
-    if account.is_null() {
-        return;
-    }
-
-    unsafe {
-        let account = &*account;
-        if account.shards.is_null() || account.shards_len == 0 {
-            return;
-        }
-        let shards = std::slice::from_raw_parts_mut(account.shards.cast_mut(), account.shards_len);
-        for shard in shards.iter() {
-            if !shard.data.is_null() && shard.data_len > 0 {
-                let slice = std::slice::from_raw_parts_mut(shard.data.cast_mut(), shard.data_len);
-                drop(Box::from_raw(std::ptr::from_mut::<[u8]>(slice)));
-            }
-        }
-        drop(Box::from_raw(std::ptr::from_mut::<[FfiShard]>(shards)));
-    }
 }
 
 /// Import a public account private key into wallet storage.

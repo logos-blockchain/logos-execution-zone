@@ -1,5 +1,15 @@
 use std::ffi::{CString, c_char};
 
+use primitives_ffi::{
+    result::PointerResult,
+    types::{
+        FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiSelector, FfiVec,
+        account::FfiAccount,
+        block::{FfiBlock, FfiBlockOpt},
+        event::FfiEventRecord,
+        transaction::FfiTransaction,
+    },
+};
 use sequencer_executor_actor::protocol::{
     BoundedRangeInclusive, GetAccount, GetAccountTransactions, GetBlock, GetBlockByHash,
     GetBlockRange, GetLastBlockId, GetTransaction, MAX_BLOCK_RANGE_LEN, Transaction,
@@ -10,20 +20,7 @@ use sequencer_storage_actor::{
     protocol::{GetBlockEvents, GetEventFilter, GetTxHashToBlockIdMapItem},
 };
 
-use crate::{
-    SequencerServiceFFI,
-    api::{
-        PointerResult,
-        types::{
-            FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiSelector, FfiVec,
-            account::FfiAccount,
-            block::{FfiBlock, FfiBlockOpt},
-            event::FfiEventRecord,
-            transaction::FfiTransaction,
-        },
-    },
-    errors::OperationStatus,
-};
+use crate::{SequencerServiceFFI, error::OperationStatus};
 
 /// Result of [`query_last_block`], returned **inline** (no heap allocation, so
 /// there is no corresponding `free_*` to call).
@@ -337,7 +334,7 @@ pub unsafe extern "C" fn sequencer_ffi_send_transaction(
 
     let sequencer = unsafe { &*sequencer };
 
-    let lee_tx_res = transaction.try_into();
+    let lee_tx_res = transaction.try_into().map_err(Into::into);
     if lee_tx_res.is_err() {
         return PointerResult::from_error(lee_tx_res.err().unwrap());
     }
