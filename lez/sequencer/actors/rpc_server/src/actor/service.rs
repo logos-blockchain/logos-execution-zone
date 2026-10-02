@@ -333,6 +333,13 @@ fn map_executor_error<M>(
                     None::<()>,
                 )
             }
+            refused @ sequencer_executor_actor::error::Error::PreviouslyFailedSettlement => {
+                ErrorObjectOwned::owned(
+                    ErrorCode::InvalidParams.code(),
+                    format!("{refused:#}"),
+                    None::<()>,
+                )
+            }
             sequencer_executor_actor::error::Error::MempoolIsFull => ErrorObjectOwned::owned(
                 MEMPOOL_IS_FULL_ERROR_CODE,
                 "Mempool is full".to_owned(),
