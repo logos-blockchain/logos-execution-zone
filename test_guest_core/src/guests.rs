@@ -3,7 +3,7 @@
 
 use lee_core::{
     account::{Actor, ActorState},
-    program::{Origin, ReceiveInput, Response, read_input_frame, run_actor},
+    program::{ReceiveInput, Response, read_input_frame, run_actor},
 };
 use risc0_zkvm::guest::env;
 
@@ -18,8 +18,8 @@ pub fn scripted() -> ! {
                 input.receiver.account_id
             );
         }
-        if let Some(origin) = script.require_origin {
-            assert_eq!(input.origin, origin, "scripted: unexpected origin");
+        if let Some(program) = script.require_origin {
+            assert_eq!(input.origin, Some(program), "scripted: unexpected origin");
         }
         let response = Response {
             calls: script.calls,
@@ -45,7 +45,7 @@ pub fn forges_echo() -> ! {
             ..input
         },
         ForgeField::Origin => ReceiveInput {
-            origin: Origin::Program(input.receiver.program_account_id),
+            origin: Some(input.receiver.program_account_id),
             ..input
         },
         ForgeField::IsAuthorized => ReceiveInput {

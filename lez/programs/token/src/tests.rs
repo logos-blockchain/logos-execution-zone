@@ -4,7 +4,7 @@ use std::collections::{HashMap, VecDeque};
 
 use lee_core::{
     account::{AccountId, Actor, ActorState},
-    program::{Call, Cast, Origin, ReceiveInput, Transition},
+    program::{Call, Cast, ReceiveInput, Transition},
 };
 use token_core::{
     Delivery, Message, MetadataStandard, NewTokenDefinition, NewTokenMetadata, Notification,
@@ -18,7 +18,7 @@ const OTHER_DEFINITION_ID: AccountId = AccountId::new([16; 32]);
 const HOLDING_ID: AccountId = AccountId::new([17; 32]);
 const HOLDING_ID_2: AccountId = AccountId::new([42; 32]);
 const METADATA_ID: AccountId = AccountId::new([43; 32]);
-const TOKEN_ORIGIN: Origin = Origin::Program(TOKEN_PROGRAM_ID);
+const TOKEN_ORIGIN: Option<AccountId> = Some(TOKEN_PROGRAM_ID);
 
 const INIT_SUPPLY: u128 = 100_000;
 const HOLDING_BALANCE: u128 = 1_000;
@@ -139,7 +139,7 @@ const fn credit(descriptor: TokenDescriptor, amount: u128) -> Message {
 fn turn(
     account: AccountId,
     is_authorized: bool,
-    origin: Origin,
+    origin: Option<AccountId>,
     pre_state: &ActorState,
     message: &Message,
 ) -> Transition {
@@ -197,7 +197,7 @@ fn settle(
     initial: &[(AccountId, ActorState)],
 ) -> HashMap<AccountId, ActorState> {
     let mut state: HashMap<AccountId, ActorState> = initial.iter().cloned().collect();
-    let mut pending = VecDeque::from([(root_account, Origin::Root, root_message.clone())]);
+    let mut pending = VecDeque::from([(root_account, None, root_message.clone())]);
 
     while let Some((account, origin, message)) = pending.pop_front() {
         let pre_state = state.get(&account).cloned().unwrap_or_default();
@@ -211,7 +211,7 @@ fn settle(
         if let Some(post_state) = transition.response.post_state {
             state.insert(account, post_state);
         }
-        let sender = Origin::Program(token_actor(account).program_account_id);
+        let sender = Some(token_actor(account).program_account_id);
         assert!(
             transition.response.casts.is_empty(),
             "a token send is an inline call"
@@ -403,7 +403,7 @@ fn transfer_without_sender_authorization_should_fail() {
     let _transition = turn(
         HOLDING_ID,
         false,
-        Origin::Root,
+        None,
         &ActorState::from(&fungible(INIT_SUPPLY)),
         &transfer(FUNGIBLE, TRANSFER_AMOUNT),
     );
@@ -533,7 +533,7 @@ fn transfer_of_an_unowned_printed_copy_should_fail() {
 
 #[test]
 fn a_transfer_requested_by_another_actor_needs_only_the_senders_authorization() {
-    let requester = Origin::Program(OTHER_DEFINITION_ID);
+    let requester = Some(OTHER_DEFINITION_ID);
     let sender = ActorState::from(&fungible(INIT_SUPPLY));
     let request = |is_authorized| {
         turn(
@@ -563,7 +563,7 @@ fn a_credit_from_the_root_is_rejected() {
     let _transition = turn(
         HOLDING_ID,
         true,
-        Origin::Root,
+        None,
         &ActorState::empty(),
         &credit(FUNGIBLE, TRANSFER_AMOUNT),
     );
@@ -575,7 +575,7 @@ fn a_creation_from_another_program_is_rejected() {
     let _transition = turn(
         HOLDING_ID,
         true,
-        Origin::Program(OTHER_DEFINITION_ID),
+        Some(OTHER_DEFINITION_ID),
         &ActorState::empty(),
         &Message::Create(ActorState::from(&fungible(INIT_SUPPLY))),
     );
@@ -653,7 +653,7 @@ fn expected_sends_for_a_transfer_is_one_credit_to_the_recipient() {
 #[test]
 fn a_cast_transfer_writes_the_sender_like_a_call_and_sends_one_cast_credit() {
     let sender = ActorState::from(&fungible(INIT_SUPPLY));
-    let run = |message: &Message| turn(HOLDING_ID, true, Origin::Root, &sender, message);
+    let run = |message: &Message| turn(HOLDING_ID, true, None, &sender, message);
 
     let cast = run(&cast_transfer(FUNGIBLE, TRANSFER_AMOUNT));
 
@@ -681,7 +681,7 @@ fn a_cast_transfer_without_sender_authorization_is_rejected() {
     let _transition = turn(
         HOLDING_ID,
         false,
-        Origin::Root,
+        None,
         &ActorState::from(&fungible(INIT_SUPPLY)),
         &cast_transfer(FUNGIBLE, TRANSFER_AMOUNT),
     );
@@ -741,7 +741,7 @@ fn ensure_holding_rejects_a_mismatched_unauthorized_target() {
     let _transition = turn(
         HOLDING_ID,
         false,
-        Origin::Root,
+        None,
         &ActorState::from(&other_definition),
         &Message::EnsureHolding {
             descriptor: FUNGIBLE,
@@ -751,7 +751,7 @@ fn ensure_holding_rejects_a_mismatched_unauthorized_target() {
 
 #[test]
 fn another_actor_replaces_a_funded_holding_only_with_authorization() {
-    let requester = Origin::Program(OTHER_DEFINITION_ID);
+    let requester = Some(OTHER_DEFINITION_ID);
     let funded = ActorState::from(&TokenHolding::Fungible {
         definition_id: OTHER_DEFINITION_ID,
         balance: HOLDING_BALANCE,
@@ -787,7 +787,7 @@ fn ensure_holding_keeps_a_matching_funded_holding() {
             turn(
                 HOLDING_ID,
                 is_authorized,
-                Origin::Root,
+                None,
                 &ActorState::from(&fungible(HOLDING_BALANCE)),
                 &Message::EnsureHolding {
                     descriptor: FUNGIBLE,
@@ -806,7 +806,7 @@ fn ensure_holding_keeps_a_funded_master_for_a_printed_copy_descriptor() {
         turn(
             HOLDING_ID,
             false,
-            Origin::Root,
+            None,
             &ActorState::from(&master(PRINTABLE_COPIES)),
             &Message::EnsureHolding {
                 descriptor: PRINTED,
@@ -881,7 +881,7 @@ fn mint_missing_authorization() {
     let _transition = turn(
         DEFINITION_ID,
         false,
-        Origin::Root,
+        None,
         &ActorState::from(&fungible_definition(INIT_SUPPLY)),
         &Message::Mint {
             to: HOLDING_ID,
@@ -1007,7 +1007,7 @@ fn burn_missing_authorization() {
     let _transition = turn(
         HOLDING_ID,
         false,
-        Origin::Root,
+        None,
         &ActorState::from(&fungible(HOLDING_BALANCE)),
         &Message::Burn {
             descriptor: FUNGIBLE,
@@ -1211,7 +1211,7 @@ fn a_burn_sends_the_supply_burn_to_the_definition_it_names() {
     let transition = turn(
         HOLDING_ID,
         true,
-        Origin::Root,
+        None,
         &ActorState::from(&fungible(HOLDING_BALANCE)),
         &Message::Burn {
             descriptor: FUNGIBLE,
@@ -1267,7 +1267,7 @@ fn print_nft_master_account_must_be_authorized() {
     let _transition = turn(
         HOLDING_ID,
         false,
-        Origin::Root,
+        None,
         &ActorState::from(&master(PRINTABLE_COPIES)),
         &print_nft(DEFINITION_ID),
     );

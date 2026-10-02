@@ -81,7 +81,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
 mod tests {
     use lee_core::{
         account::{AccountId, ActorState},
-        program::{Origin, Transition},
+        program::Transition,
     };
 
     use super::*;
@@ -104,7 +104,7 @@ mod tests {
 
     fn run(
         account_id: AccountId,
-        origin: Origin,
+        origin: Option<AccountId>,
         pre: ClockAccountData,
         message: Message,
     ) -> Transition {
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn the_every_block_account_advances_by_one() {
-        let transition = run(CLOCK_01_PROGRAM_ACCOUNT_ID, Origin::Root, data(7), tick(8));
+        let transition = run(CLOCK_01_PROGRAM_ACCOUNT_ID, None, data(7), tick(8));
 
         assert_eq!(transition.response.post_state, written(data(8)));
         assert!(transition.response.calls.is_empty() && transition.response.casts.is_empty());
@@ -137,7 +137,7 @@ mod tests {
 
     #[test]
     fn a_tick_records_into_the_coarser_accounts_it_is_due_at() {
-        let at_ten = run(CLOCK_01_PROGRAM_ACCOUNT_ID, Origin::Root, data(9), tick(10));
+        let at_ten = run(CLOCK_01_PROGRAM_ACCOUNT_ID, None, data(9), tick(10));
         assert_eq!(
             (at_ten.response.calls, at_ten.response.casts),
             (
@@ -146,12 +146,7 @@ mod tests {
             )
         );
 
-        let at_fifty = run(
-            CLOCK_01_PROGRAM_ACCOUNT_ID,
-            Origin::Root,
-            data(49),
-            tick(50),
-        );
+        let at_fifty = run(CLOCK_01_PROGRAM_ACCOUNT_ID, None, data(49), tick(50));
         assert_eq!(
             (at_fifty.response.calls, at_fifty.response.casts),
             (
@@ -168,24 +163,24 @@ mod tests {
     #[should_panic(expected = "Clock block id must advance by exactly one")]
     fn a_block_id_that_skips_ahead_is_refused() {
         // The block ID drives the 10/50 schedule, so a forged one would off schedule.
-        let _transition = run(CLOCK_01_PROGRAM_ACCOUNT_ID, Origin::Root, data(7), tick(9));
+        let _transition = run(CLOCK_01_PROGRAM_ACCOUNT_ID, None, data(7), tick(9));
     }
 
     #[test]
     #[should_panic(expected = "Clock block id must advance by exactly one")]
     fn a_block_id_that_repeats_is_refused() {
-        let _transition = run(CLOCK_01_PROGRAM_ACCOUNT_ID, Origin::Root, data(7), tick(7));
+        let _transition = run(CLOCK_01_PROGRAM_ACCOUNT_ID, None, data(7), tick(7));
     }
 
     #[test]
     #[should_panic(expected = "Tick is addressed to the every-block clock account")]
     fn only_the_every_block_account_takes_a_tick() {
-        let _transition = run(CLOCK_10_PROGRAM_ACCOUNT_ID, Origin::Root, data(9), tick(10));
+        let _transition = run(CLOCK_10_PROGRAM_ACCOUNT_ID, None, data(9), tick(10));
     }
 
     #[test]
     fn a_coarser_account_stores_the_same_values() {
-        let sender = Origin::Program(CLOCK);
+        let sender = Some(CLOCK);
         let transition = run(
             CLOCK_50_PROGRAM_ACCOUNT_ID,
             sender,
@@ -199,7 +194,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Clock records are only sent by the every-block clock account")]
     fn a_record_from_another_program_is_refused() {
-        let sender = Origin::Program(AccountId::new([3; 32]));
+        let sender = Some(AccountId::new([3; 32]));
         let _transition = run(
             CLOCK_50_PROGRAM_ACCOUNT_ID,
             sender,
@@ -212,7 +207,7 @@ mod tests {
     fn a_timestamp_within_bounds_is_kept() {
         let transition = run(
             CLOCK_50_PROGRAM_ACCOUNT_ID,
-            Origin::Root,
+            None,
             data(40),
             Message::AssertTimestamp {
                 at_least: 1_699_999_999,
@@ -229,7 +224,7 @@ mod tests {
     fn a_timestamp_outside_bounds_is_refused() {
         let _transition = run(
             CLOCK_50_PROGRAM_ACCOUNT_ID,
-            Origin::Root,
+            None,
             data(40),
             Message::AssertTimestamp {
                 at_least: 1_700_000_001,

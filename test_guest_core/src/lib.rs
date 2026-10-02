@@ -3,10 +3,8 @@
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::Actor,
-    program::{
-        BlockValidityWindow, Call, Cast, Origin, ProgramEvent, Sendable, TimestampValidityWindow,
-    },
+    account::{AccountId, Actor},
+    program::{BlockValidityWindow, Call, Cast, ProgramEvent, Sendable, TimestampValidityWindow},
 };
 
 pub mod guests;
@@ -20,7 +18,7 @@ pub struct Script {
     pub block_window: BlockValidityWindow,
     pub timestamp_window: TimestampValidityWindow,
     pub require_authorized: bool,
-    pub require_origin: Option<Origin>,
+    pub require_origin: Option<AccountId>,
 }
 
 impl Script {
@@ -55,8 +53,8 @@ impl Script {
     }
 
     #[must_use]
-    pub const fn from(mut self, origin: Origin) -> Self {
-        self.require_origin = Some(origin);
+    pub const fn from(mut self, program: AccountId) -> Self {
+        self.require_origin = Some(program);
         self
     }
 }

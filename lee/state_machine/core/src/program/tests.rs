@@ -4,7 +4,7 @@ fn receive_input() -> ReceiveInput {
     let receiver = Actor::native_balance(AccountId::default());
     ReceiveInput {
         receiver,
-        origin: Origin::Root,
+        origin: None,
         is_authorized: false,
         pre_state: ActorState::empty(),
         message: Vec::new(),
@@ -447,7 +447,7 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
     let transition = Transition {
         input: ReceiveInput {
             receiver,
-            origin: Origin::Root,
+            origin: None,
             is_authorized: true,
             pre_state: ActorState::from(b"ab".to_vec()),
             message: b"m".to_vec(),
@@ -470,7 +470,7 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
         &[206, 0, 0, 0][..], // frame length: the 206 bytes below
         &[1; 32],            // input.receiver.account_id
         &[2; 32],            // input.receiver.program_account_id
-        &[0],                // input.origin: Origin::Root
+        &[0],                // input.origin: None
         &[1],                // input.is_authorized
         &[2, 0, 0, 0],       // input.pre_state
         b"ab",
@@ -494,15 +494,6 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
     .concat();
 
     assert_eq!(crate::to_borsh_frame(&transition), expected);
-}
-
-#[test]
-fn origin_tags_follow_declaration_order() {
-    assert_eq!(borsh::to_vec(&Origin::Root).unwrap(), [0]);
-    assert_eq!(
-        borsh::to_vec(&Origin::Program(AccountId::new([2; 32]))).unwrap(),
-        [&[1][..], &[2; 32]].concat()
-    );
 }
 
 #[test]

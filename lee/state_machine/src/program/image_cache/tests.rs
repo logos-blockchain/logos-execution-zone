@@ -5,7 +5,7 @@
 
 use lee_core::{
     account::{AccountId, Actor, ActorState, Cycles},
-    program::{Origin, ReceiveInput},
+    program::ReceiveInput,
 };
 use risc0_binfmt::ProgramBinary;
 use risc0_zkvm::{ExecutorEnv, ExecutorImpl, default_executor};
@@ -42,7 +42,7 @@ fn env_for(program: &Program, message: &[u8], budget: Cycles) -> ExecutorEnv<'st
     Program::write_receive_input(
         &ReceiveInput {
             receiver,
-            origin: Origin::Root,
+            origin: None,
             is_authorized: true,
             pre_state: ActorState::empty(),
             message: message.to_vec(),

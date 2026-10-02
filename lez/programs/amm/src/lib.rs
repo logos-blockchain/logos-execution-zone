@@ -20,7 +20,7 @@ mod tests;
 
 pub fn receive(input: &ReceiveInput) -> Response {
     if let Ok(pool) = PoolDefinition::try_from(&input.pre_state)
-        && input.origin_program() == Some(pool.token_program_id)
+        && input.origin == Some(pool.token_program_id)
     {
         let token_core::Message::Notification(notification) =
             borsh::from_slice(&input.message).expect("a token message must decode")

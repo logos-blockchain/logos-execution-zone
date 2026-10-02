@@ -6,7 +6,7 @@ use cross_zone_outbox_core::Message as OutboxMessage;
 use lee_core::{
     account::Actor,
     native_token::custody_transfer,
-    program::{Origin, ReceiveInput, Response, run_actor, write_once},
+    program::{ReceiveInput, Response, run_actor, write_once},
 };
 use wrapped_token_core::{MAX_MINT_AMOUNT, Message as WrappedMessage};
 
@@ -145,7 +145,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
 
 fn assert_top_level(input: &ReceiveInput) {
     assert!(
-        matches!(input.origin, Origin::Root),
+        input.origin.is_none(),
         "bridge_lock is only invoked as a top-level user transaction"
     );
 }
@@ -193,7 +193,7 @@ mod tests {
 
     fn run(
         receiver: Actor,
-        origin: Origin,
+        origin: Option<AccountId>,
         is_authorized: bool,
         pre: Vec<u8>,
         message: Message,
@@ -241,7 +241,7 @@ mod tests {
         }
     }
 
-    fn lock(origin: Origin, is_authorized: bool, message: Message) -> Transition {
+    fn lock(origin: Option<AccountId>, is_authorized: bool, message: Message) -> Transition {
         run(holder_actor(), origin, is_authorized, Vec::new(), message)
     }
 
@@ -252,7 +252,7 @@ mod tests {
     ) -> Transition {
         run(
             config_actor(),
-            Origin::Program(holder_actor().program_account_id),
+            Some(holder_actor().program_account_id),
             false,
             pre,
             Message::CheckRoute {
@@ -262,7 +262,7 @@ mod tests {
         )
     }
 
-    fn init(origin: Origin, target_account_id: AccountId, pre: Vec<u8>) -> Transition {
+    fn init(origin: Option<AccountId>, target_account_id: AccountId, pre: Vec<u8>) -> Transition {
         run(
             config_actor(),
             origin,
@@ -277,11 +277,7 @@ mod tests {
 
     #[test]
     fn a_lock_pins_its_route_before_it_moves_anything() {
-        let transition = lock(
-            Origin::Root,
-            true,
-            lock_message(WRAPPED_ID, mint_payload(AMOUNT)),
-        );
+        let transition = lock(None, true, lock_message(WRAPPED_ID, mint_payload(AMOUNT)));
 
         let holder = HOLDER.into_value();
         assert_eq!(transition.response.post_state, None);
@@ -323,7 +319,7 @@ mod tests {
     #[should_panic(expected = "bridge_lock is only invoked as a top-level user transaction")]
     fn a_lock_from_another_program_is_refused() {
         let _transition = lock(
-            Origin::Program(OUTBOX_ID),
+            Some(OUTBOX_ID),
             true,
             lock_message(WRAPPED_ID, mint_payload(AMOUNT)),
         );
@@ -364,7 +360,7 @@ mod tests {
     fn a_route_check_from_outside_bridge_lock_is_refused() {
         let _transition = run(
             config_actor(),
-            Origin::Root,
+            None,
             false,
             config(),
             Message::CheckRoute {
@@ -377,9 +373,7 @@ mod tests {
     #[test]
     fn a_first_init_writes_the_route() {
         assert_eq!(
-            init(Origin::Root, WRAPPED_ID, Vec::new())
-                .response
-                .post_state,
+            init(None, WRAPPED_ID, Vec::new()).response.post_state,
             Some(ActorState::from(config()))
         );
     }
@@ -387,7 +381,7 @@ mod tests {
     #[test]
     fn replaying_the_same_init_is_a_no_op() {
         assert_eq!(
-            init(Origin::Root, WRAPPED_ID, config()).response.post_state,
+            init(None, WRAPPED_ID, config()).response.post_state,
             Some(ActorState::from(config()))
         );
     }
@@ -395,14 +389,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "shard already holds different data")]
     fn a_reinit_with_a_different_route_is_refused() {
-        let _transition = init(Origin::Root, AccountId::new([0xBB; 32]), config());
+        let _transition = init(None, AccountId::new([0xBB; 32]), config());
     }
 
     #[test]
     #[should_panic(expected = "bridge_lock is only invoked as a top-level user transaction")]
     fn an_init_from_another_program_is_refused() {
         let _transition = init(
-            Origin::Program(holder_actor().program_account_id),
+            Some(holder_actor().program_account_id),
             WRAPPED_ID,
             Vec::new(),
         );
@@ -412,7 +406,7 @@ mod tests {
     #[should_panic(expected = "locked amount must equal the wrapped mint amount")]
     fn a_payload_minting_more_than_is_locked_is_refused() {
         let _transition = lock(
-            Origin::Root,
+            None,
             true,
             lock_message(WRAPPED_ID, mint_payload(AMOUNT.saturating_mul(2))),
         );
@@ -424,7 +418,7 @@ mod tests {
         // A forged proposed target still has to name that target's own PDAs here, and the config
         // then refuses it.
         let _transition = lock(
-            Origin::Root,
+            None,
             true,
             lock_message(AccountId::new([0xBB; 32]), mint_payload(AMOUNT)),
         );
@@ -433,10 +427,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "holder must authorize the lock")]
     fn a_lock_without_the_holder_is_refused() {
-        let _transition = lock(
-            Origin::Root,
-            false,
-            lock_message(WRAPPED_ID, mint_payload(AMOUNT)),
-        );
+        let _transition = lock(None, false, lock_message(WRAPPED_ID, mint_payload(AMOUNT)));
     }
 }

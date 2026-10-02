@@ -1,5 +1,5 @@
 use cross_zone_outbox_core::Message as OutboxMessage;
-use lee_core::program::{Origin, ReceiveInput, Response, run_actor, write_once};
+use lee_core::program::{ReceiveInput, Response, run_actor, write_once};
 use ping_core::{SenderMessage, outbox_bytes, read_outbox, sender_config_account_id};
 
 fn main() {
@@ -8,7 +8,7 @@ fn main() {
 
 fn receive(input: &ReceiveInput, message: SenderMessage) -> Response {
     assert!(
-        matches!(input.origin, Origin::Root),
+        input.origin.is_none(),
         "ping_sender is only invoked as a top-level user transaction"
     );
     assert_config_account(input);
@@ -71,7 +71,7 @@ mod tests {
     const PING_SENDER: AccountId = AccountId::new([7; 32]);
     const OUTBOX: AccountId = AccountId::new([9; 32]);
 
-    fn run(origin: Origin, pre: &[u8], message: SenderMessage) -> Transition {
+    fn run(origin: Option<AccountId>, pre: &[u8], message: SenderMessage) -> Transition {
         let receiver = Actor::new(sender_config_account_id(PING_SENDER), PING_SENDER);
         let input = ReceiveInput {
             receiver,
@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn the_pinned_outbox_is_accepted() {
-        let transition = run(Origin::Root, &outbox_bytes(OUTBOX), send_through(OUTBOX));
+        let transition = run(None, &outbox_bytes(OUTBOX), send_through(OUTBOX));
 
         assert_eq!(transition.response.post_state, None);
         assert_eq!(
@@ -127,7 +127,7 @@ mod tests {
         // Unguarded this redirects the emission to an arbitrary program, which then records it,
         // or not, under its own interpretation.
         let _transition = run(
-            Origin::Root,
+            None,
             &outbox_bytes(OUTBOX),
             send_through(AccountId::new([1; 32])),
         );
@@ -139,7 +139,7 @@ mod tests {
             outbox_account_id: OUTBOX,
         };
         assert_eq!(
-            run(Origin::Root, &[], init).response.post_state,
+            run(None, &[], init).response.post_state,
             Some(config(OUTBOX))
         );
     }
@@ -150,9 +150,7 @@ mod tests {
             outbox_account_id: OUTBOX,
         };
         assert_eq!(
-            run(Origin::Root, &outbox_bytes(OUTBOX), init)
-                .response
-                .post_state,
+            run(None, &outbox_bytes(OUTBOX), init).response.post_state,
             Some(config(OUTBOX))
         );
     }
@@ -163,13 +161,13 @@ mod tests {
         let init = SenderMessage::InitConfig {
             outbox_account_id: AccountId::new([1; 32]),
         };
-        let _transition = run(Origin::Root, &outbox_bytes(OUTBOX), init);
+        let _transition = run(None, &outbox_bytes(OUTBOX), init);
     }
 
     #[test]
     #[should_panic(expected = "ping_sender is only invoked as a top-level user transaction")]
     fn a_message_from_another_program_is_refused() {
-        let sender = Origin::Program(AccountId::new([6; 32]));
+        let sender = Some(AccountId::new([6; 32]));
         let _transition = run(sender, &outbox_bytes(OUTBOX), send_through(OUTBOX));
     }
 }

@@ -119,7 +119,7 @@ pub fn custody_transfer(from: AccountId, seed: PdaSeed, to: AccountId, amount: B
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::program::{Cast, Origin};
+    use crate::program::Cast;
 
     fn native(tag: u8) -> Actor {
         Actor::native_balance(AccountId::new([tag; 32]))
@@ -128,14 +128,18 @@ mod tests {
     fn input(self_account: u8, authorized: bool, pre: Balance, message: &Message) -> ReceiveInput {
         ReceiveInput {
             receiver: native(self_account),
-            origin: Origin::Root,
+            origin: None,
             is_authorized: authorized,
             pre_state: encode_balance(pre),
             message: borsh::to_vec(message).unwrap(),
         }
     }
 
-    fn credit(amount: Balance, pre: Balance, origin: Origin) -> Result<Transition, TransferError> {
+    fn credit(
+        amount: Balance,
+        pre: Balance,
+        origin: Option<AccountId>,
+    ) -> Result<Transition, TransferError> {
         receive(&ReceiveInput {
             origin,
             ..input(2, false, pre, &Message::Credit(amount))
@@ -235,7 +239,7 @@ mod tests {
     #[test]
     fn a_public_origin_debits_an_account_only_with_its_authorization() {
         let from_public = |authorized| ReceiveInput {
-            origin: Origin::Program(NATIVE_TOKEN_PROGRAM_ID),
+            origin: Some(NATIVE_TOKEN_PROGRAM_ID),
             ..input(1, authorized, 100, &transfer(30))
         };
 
@@ -263,7 +267,7 @@ mod tests {
 
     #[test]
     fn a_credit_adds_to_the_balance_unless_it_overflows() {
-        let from_native = Origin::Program(NATIVE_TOKEN_PROGRAM_ID);
+        let from_native = Some(NATIVE_TOKEN_PROGRAM_ID);
         assert_eq!(
             credit(5, 100, from_native).unwrap().response.post_state,
             Some(encode_balance(105))
@@ -281,11 +285,8 @@ mod tests {
         let foreign = Err(TransferError::ForeignCredit {
             account_id: AccountId::new([2; 32]),
         });
-        assert_eq!(credit(5, 100, Origin::Root), foreign);
-        assert_eq!(
-            credit(5, 100, Origin::Program(AccountId::new([7; 32]))),
-            foreign
-        );
+        assert_eq!(credit(5, 100, None), foreign);
+        assert_eq!(credit(5, 100, Some(AccountId::new([7; 32]))), foreign);
     }
 
     #[test]

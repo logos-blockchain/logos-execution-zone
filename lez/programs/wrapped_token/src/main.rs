@@ -1,7 +1,7 @@
 use cross_zone_marker_core::{Delivery, inbox_source_marker_account_id};
 use lee_core::{
     account::{AccountId, Actor},
-    program::{Origin, ReceiveInput, Response, run_actor_with, write_once},
+    program::{ReceiveInput, Response, run_actor_with, write_once},
 };
 use wrapped_token_core::{
     MAX_MINT_AMOUNT, Message, SourceEntry, WrappedTokenConfig, ZoneId, balance_bytes,
@@ -14,7 +14,7 @@ fn main() {
 
 fn receive(input: &ReceiveInput) -> Response {
     let program = input.receiver.program_account_id;
-    if input.receiver.account_id == program && input.origin_program().is_some() {
+    if input.receiver.account_id == program && input.origin.is_some() {
         let delivery: Delivery = borsh::from_slice(&input.message).expect("a delivery decodes");
         return deliver(input, delivery);
     }
@@ -66,7 +66,7 @@ fn receive(input: &ReceiveInput) -> Response {
         }
         Message::InitConfig(config) => {
             assert!(
-                matches!(input.origin, Origin::Root),
+                input.origin.is_none(),
                 "InitConfig is a top-level genesis transaction"
             );
             assert!(
@@ -83,7 +83,7 @@ fn receive(input: &ReceiveInput) -> Response {
                     input,
                     &Message::RenounceAuthority {
                         authority: input.receiver.account_id,
-                        via: input.origin_program(),
+                        via: input.origin,
                     },
                     "the configured authority must authorize renouncing it",
                 );
@@ -109,7 +109,7 @@ fn receive(input: &ReceiveInput) -> Response {
                     input,
                     &Message::UpdateSources {
                         authority: input.receiver.account_id,
-                        via: input.origin_program(),
+                        via: input.origin,
                         sources,
                     },
                     "the configured authority must authorize a source change",
@@ -174,7 +174,7 @@ fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
     Response::keep().call(
         Actor::new(config_account_id(program), program),
         &Message::MintFrom {
-            deliverer: input.origin_program().expect("a delivery has a sender"),
+            deliverer: input.origin.expect("a delivery has a sender"),
             src_zone,
             src_account_id,
             recipient,
@@ -350,7 +350,7 @@ mod tests {
 
     fn run(
         receiver: Actor,
-        origin: Origin,
+        origin: Option<AccountId>,
         is_authorized: bool,
         pre: Vec<u8>,
         message: &impl BorshSerialize,
@@ -365,7 +365,11 @@ mod tests {
         receive(&input).into_transition(input)
     }
 
-    fn at_config(origin: Origin, pre: &WrappedTokenConfig, message: &Message) -> Transition {
+    fn at_config(
+        origin: Option<AccountId>,
+        pre: &WrappedTokenConfig,
+        message: &Message,
+    ) -> Transition {
         run(config_actor(), origin, false, pre.to_bytes(), message)
     }
 
@@ -385,7 +389,7 @@ mod tests {
     }
 
     fn mint_at_config(message: &Message) -> Transition {
-        at_config(Origin::Program(WRAPPED_ID), &config(), message)
+        at_config(Some(WRAPPED_ID), &config(), message)
     }
 
     fn written_config(transition: &Transition) -> WrappedTokenConfig {
@@ -399,7 +403,7 @@ mod tests {
         .expect("a config was written")
     }
 
-    fn credit_at_holding(origin: Origin, pre: u128, amount: u128) -> Transition {
+    fn credit_at_holding(origin: Option<AccountId>, pre: u128, amount: u128) -> Transition {
         run(
             holding_actor(),
             origin,
@@ -415,7 +419,11 @@ mod tests {
 
     // The authority's actor receives `message` from `origin`; the config then receives what it
     // forwards, as the driver would deliver it.
-    fn through_authority(origin: Origin, is_authorized: bool, message: &Message) -> Transition {
+    fn through_authority(
+        origin: Option<AccountId>,
+        is_authorized: bool,
+        message: &Message,
+    ) -> Transition {
         let entry = run(actor(AUTHORITY), origin, is_authorized, Vec::new(), message);
         assert!(
             entry.response.casts.is_empty(),
@@ -428,7 +436,7 @@ mod tests {
         ] = <[Call; 1]>::try_from(entry.response.calls).expect("one forwarded change");
         assert_eq!(to, config_actor());
         at_config(
-            Origin::Program(WRAPPED_ID),
+            Some(WRAPPED_ID),
             &config(),
             &borsh::from_slice(&data).expect("the forwarded change decodes"),
         )
@@ -455,7 +463,7 @@ mod tests {
         };
         let transition = run(
             actor(WRAPPED_ID),
-            Origin::Program(MINTER),
+            Some(MINTER),
             false,
             Vec::new(),
             &delivery,
@@ -477,7 +485,7 @@ mod tests {
     fn a_mint_sent_directly_is_refused() {
         let _transition = run(
             actor(WRAPPED_ID),
-            Origin::Root,
+            None,
             false,
             Vec::new(),
             &Message::Mint {
@@ -516,11 +524,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Mint is only callable by the authorized minter")]
     fn a_top_level_mint_is_refused() {
-        let _transition = at_config(
-            Origin::Root,
-            &config(),
-            &mint_from(MINTER, ZONE_A, PEER_A, 1),
-        );
+        let _transition = at_config(None, &config(), &mint_from(MINTER, ZONE_A, PEER_A, 1));
     }
 
     #[test]
@@ -560,7 +564,7 @@ mod tests {
     #[test]
     fn a_credit_adds_to_the_recipients_balance() {
         let written = |pre, amount| {
-            credit_at_holding(Origin::Program(WRAPPED_ID), pre, amount)
+            credit_at_holding(Some(WRAPPED_ID), pre, amount)
                 .response
                 .post_state
         };
@@ -572,19 +576,19 @@ mod tests {
     #[test]
     #[should_panic(expected = "wrapped-token balance overflow")]
     fn a_credit_that_overflows_the_holding_is_refused() {
-        let _transition = credit_at_holding(Origin::Program(WRAPPED_ID), u128::MAX, 1);
+        let _transition = credit_at_holding(Some(WRAPPED_ID), u128::MAX, 1);
     }
 
     #[test]
     #[should_panic(expected = "a credit is only sent by this token's config")]
     fn a_credit_from_another_program_is_refused() {
-        let _transition = credit_at_holding(Origin::Program(STRANGER), 0, 1);
+        let _transition = credit_at_holding(Some(STRANGER), 0, 1);
     }
 
     #[test]
     fn an_update_carries_over_a_kept_sources_counter_and_zeroes_a_re_added_one() {
         let transition = at_config(
-            Origin::Program(WRAPPED_ID),
+            Some(WRAPPED_ID),
             &config(),
             &Message::UpdateSources {
                 authority: AUTHORITY,
@@ -610,7 +614,7 @@ mod tests {
         // The second independent route to unbounded minting: install a source naming yourself
         // with no cap, then walk into `Mint`.
         let _transition = at_config(
-            Origin::Program(WRAPPED_ID),
+            Some(WRAPPED_ID),
             &config(),
             &Message::UpdateSources {
                 authority: STRANGER,
@@ -624,7 +628,7 @@ mod tests {
     #[should_panic(expected = "the authority acts at top level, or through the configured")]
     fn a_program_the_config_does_not_name_cannot_carry_a_governance_call() {
         let _transition = at_config(
-            Origin::Program(WRAPPED_ID),
+            Some(WRAPPED_ID),
             &config(),
             &update(AUTHORITY, Some(STRANGER)),
         );
@@ -633,7 +637,7 @@ mod tests {
     #[test]
     fn the_governance_program_may_act_for_the_authority() {
         let transition = at_config(
-            Origin::Program(WRAPPED_ID),
+            Some(WRAPPED_ID),
             &config(),
             &update(AUTHORITY, Some(GOVERNANCE)),
         );
@@ -644,7 +648,7 @@ mod tests {
     #[should_panic(expected = "a change is only forwarded by the authority's own actor")]
     fn the_governance_program_cannot_reach_the_config_past_the_authority() {
         let _transition = at_config(
-            Origin::Program(GOVERNANCE),
+            Some(GOVERNANCE),
             &config(),
             &update(AUTHORITY, Some(GOVERNANCE)),
         );
@@ -654,11 +658,8 @@ mod tests {
     // sends with the seed that derives the authority.
     #[test]
     fn governance_granting_the_authoritys_seed_acts_through_its_actor() {
-        let transition = through_authority(
-            Origin::Program(GOVERNANCE),
-            true,
-            &update(AUTHORITY, Some(GOVERNANCE)),
-        );
+        let transition =
+            through_authority(Some(GOVERNANCE), true, &update(AUTHORITY, Some(GOVERNANCE)));
         assert_eq!(written_config(&transition).sources, vec![]);
     }
 
@@ -666,7 +667,7 @@ mod tests {
     #[should_panic(expected = "the configured authority must authorize a source change")]
     fn governance_without_the_authoritys_seed_is_refused() {
         let _transition = through_authority(
-            Origin::Program(GOVERNANCE),
+            Some(GOVERNANCE),
             false,
             &update(AUTHORITY, Some(GOVERNANCE)),
         );
@@ -676,7 +677,7 @@ mod tests {
     #[should_panic(expected = "wrapped-token sources are fixed at genesis")]
     fn sources_cannot_be_replaced_once_the_authority_is_renounced() {
         let _transition = at_config(
-            Origin::Program(WRAPPED_ID),
+            Some(WRAPPED_ID),
             &config_with(None, vec![]),
             &Message::UpdateSources {
                 authority: AUTHORITY,
@@ -690,7 +691,7 @@ mod tests {
     #[should_panic(expected = "UpdateSources lists the same source twice")]
     fn an_update_listing_one_source_twice_is_refused() {
         let _transition = at_config(
-            Origin::Program(WRAPPED_ID),
+            Some(WRAPPED_ID),
             &config(),
             &Message::UpdateSources {
                 authority: AUTHORITY,
@@ -708,7 +709,7 @@ mod tests {
     fn an_unsigned_source_change_is_refused() {
         let _transition = run(
             actor(AUTHORITY),
-            Origin::Root,
+            None,
             false,
             Vec::new(),
             &update(AUTHORITY, None),
@@ -720,7 +721,7 @@ mod tests {
     #[should_panic(expected = "the authority acts at top level")]
     fn a_governance_change_entered_from_another_program_is_refused() {
         let _transition = through_authority(
-            Origin::Program(STRANGER),
+            Some(STRANGER),
             true,
             &Message::RenounceAuthority {
                 authority: AUTHORITY,
@@ -733,7 +734,7 @@ mod tests {
     fn an_update_pins_the_authenticated_caller_and_the_named_authority() {
         let transition = run(
             actor(AUTHORITY),
-            Origin::Root,
+            None,
             true,
             Vec::new(),
             &Message::UpdateSources {
@@ -758,7 +759,7 @@ mod tests {
     #[test]
     fn renouncing_clears_the_authority_and_leaves_the_sources_alone() {
         let transition = at_config(
-            Origin::Program(WRAPPED_ID),
+            Some(WRAPPED_ID),
             &config(),
             &Message::RenounceAuthority {
                 authority: AUTHORITY,
@@ -774,7 +775,7 @@ mod tests {
     #[should_panic(expected = "wrapped-token authority is already renounced")]
     fn a_second_renounce_is_refused() {
         let _transition = at_config(
-            Origin::Program(WRAPPED_ID),
+            Some(WRAPPED_ID),
             &config_with(None, vec![]),
             &Message::RenounceAuthority {
                 authority: AUTHORITY,
@@ -787,7 +788,7 @@ mod tests {
     #[should_panic(expected = "must be the configured authority")]
     fn a_stranger_cannot_renounce_the_authority() {
         let _transition = at_config(
-            Origin::Program(WRAPPED_ID),
+            Some(WRAPPED_ID),
             &config(),
             &Message::RenounceAuthority {
                 authority: STRANGER,
@@ -799,19 +800,16 @@ mod tests {
     #[test]
     fn a_first_init_writes_the_config_and_a_replay_is_a_no_op() {
         let init = Message::InitConfig(config());
-        let first = run(config_actor(), Origin::Root, false, Vec::new(), &init);
+        let first = run(config_actor(), None, false, Vec::new(), &init);
         assert_eq!(written_config(&first), config());
-        assert_eq!(
-            written_config(&at_config(Origin::Root, &config(), &init)),
-            config()
-        );
+        assert_eq!(written_config(&at_config(None, &config(), &init)), config());
     }
 
     #[test]
     #[should_panic(expected = "shard already holds different data")]
     fn a_reinit_with_different_contents_is_refused() {
         let _transition = at_config(
-            Origin::Root,
+            None,
             &config(),
             &Message::InitConfig(config_with(Some(STRANGER), vec![])),
         );
@@ -820,11 +818,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "InitConfig is a top-level genesis transaction")]
     fn an_inbox_delivered_init_is_refused() {
-        let _transition = at_config(
-            Origin::Program(MINTER),
-            &config(),
-            &Message::InitConfig(config()),
-        );
+        let _transition = at_config(Some(MINTER), &config(), &Message::InitConfig(config()));
     }
 
     #[test]
@@ -833,7 +827,7 @@ mod tests {
         // Unchecked, a genesis-shaped write into an empty holding would read back as a balance.
         let _transition = run(
             holding_actor(),
-            Origin::Root,
+            None,
             false,
             Vec::new(),
             &Message::InitConfig(config()),

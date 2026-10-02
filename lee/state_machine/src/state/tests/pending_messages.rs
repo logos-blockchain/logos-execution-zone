@@ -16,7 +16,7 @@ fn receiver() -> Actor {
 }
 
 fn received() -> Script {
-    Script::write(b"received".to_vec()).from(Origin::Program(scripted_id()))
+    Script::write(b"received".to_vec()).from(scripted_id())
 }
 
 fn replying() -> Script {

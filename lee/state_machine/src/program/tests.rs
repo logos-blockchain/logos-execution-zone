@@ -1,6 +1,6 @@
 use lee_core::{
     account::{AccountId, Actor, ActorState},
-    program::{Origin, ReceiveInput, Transition},
+    program::{ReceiveInput, Transition},
     to_frame,
 };
 use risc0_zkvm::{ExecutorEnv, default_executor};
@@ -18,7 +18,7 @@ fn receive_input(program: &Program, message: Vec<u8>) -> ReceiveInput {
     );
     ReceiveInput {
         receiver,
-        origin: Origin::Root,
+        origin: None,
         is_authorized: true,
         pre_state: ActorState::empty(),
         message,

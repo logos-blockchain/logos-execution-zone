@@ -182,7 +182,10 @@ fn sending(calls: Vec<Call>) -> impl Fn(&ReceiveInput) -> Transition {
     }
 }
 
-fn sending_when(origin: Origin, calls: Vec<Call>) -> impl Fn(&ReceiveInput) -> Transition {
+fn sending_when(
+    origin: Option<AccountId>,
+    calls: Vec<Call>,
+) -> impl Fn(&ReceiveInput) -> Transition {
     let send = sending(calls);
     move |input| {
         if input.origin == origin {
@@ -242,7 +245,7 @@ fn public_part(
     PublicPart::new(context, boundary)?.execute(script)
 }
 
-fn order(script: &Script) -> Vec<(Actor, Origin)> {
+fn order(script: &Script) -> Vec<(Actor, Option<AccountId>)> {
     script
         .log
         .iter()
@@ -403,10 +406,10 @@ fn sends_run_depth_first_with_each_senders_program_as_origin() {
     assert_eq!(
         order(&script),
         vec![
-            (parent, Origin::Root),
-            (first, Origin::Program(id(9))),
-            (nested, Origin::Program(id(7))),
-            (second, Origin::Program(id(9))),
+            (parent, None),
+            (first, Some(id(9))),
+            (nested, Some(id(7))),
+            (second, Some(id(9))),
         ]
     );
 }
@@ -424,7 +427,7 @@ fn a_send_to_an_undeclared_actor_is_rejected() {
         result,
         Err(ExecutionError::UndeclaredActor { actor: rejected }) if rejected == stranger
     ));
-    assert_eq!(order(&script), vec![(parent, Origin::Root)]);
+    assert_eq!(order(&script), vec![(parent, None)]);
 }
 
 #[test]
@@ -484,10 +487,7 @@ fn a_seed_grants_its_pda_and_the_grant_is_inherited_downstream() {
     };
     let mut script = Script::default()
         .on(owner, sending(vec![seeded, send_to(forwarder)]))
-        .on(
-            vault,
-            sending_when(Origin::Program(id(9)), vec![send_to(relay)]),
-        )
+        .on(vault, sending_when(Some(id(9)), vec![send_to(relay)]))
         .on(relay, sending(vec![send_to(vault)]))
         .on(forwarder, sending(vec![send_to(vault)]));
 
@@ -515,7 +515,7 @@ fn a_seed_grants_its_pda_and_the_grant_is_inherited_downstream() {
 fn a_root_authorized_public_account_is_authorized_from_any_origin() {
     let (signer, peer) = (actor(1, 9), actor(2, 9));
     let mut script = Script::default()
-        .on(signer, sending_when(Origin::Root, vec![send_to(peer)]))
+        .on(signer, sending_when(None, vec![send_to(peer)]))
         .on(peer, sending(vec![send_to(signer)]));
 
     public_transaction(
@@ -649,7 +649,7 @@ fn a_private_root_records_its_public_call_and_the_assumed_reply() {
         data: Vec::new(),
     };
     let mut script = Script::default().on(owner, move |input| {
-        if input.origin == Origin::Root {
+        if input.origin.is_none() {
             echo(
                 input,
                 Response::write(b"first".to_vec()).send(credit.clone()),
@@ -675,10 +675,7 @@ fn a_private_root_records_its_public_call_and_the_assumed_reply() {
     )
     .unwrap();
 
-    assert_eq!(
-        order(&script),
-        vec![(owner, Origin::Root), (owner, Origin::Program(id(9)))]
-    );
+    assert_eq!(order(&script), vec![(owner, None), (owner, Some(id(9)))]);
     assert_eq!(
         boundary,
         vec![
@@ -709,10 +706,7 @@ fn a_public_call_made_inside_an_assumed_delivery_is_bracketed_within_it() {
             ReturnPublic,
         ]
     );
-    assert_eq!(
-        order(&script),
-        vec![(holder(&Keys::new(1)), Origin::Program(id(9)))]
-    );
+    assert_eq!(order(&script), vec![(holder(&Keys::new(1)), Some(id(9)))]);
 }
 
 #[test]
@@ -762,7 +756,7 @@ fn a_private_credential_holds_from_any_origin_beside_a_seed_grant() {
     let seed = PdaSeed::new([5; 32]);
     let custody = Actor::new(keys.pda_id(vault.program_account_id, seed), id(8));
     let mut script = Script::default()
-        .on(owner, sending_when(Origin::Root, vec![send_to(vault)]))
+        .on(owner, sending_when(None, vec![send_to(vault)]))
         .on(custody, sending(Vec::new()));
     let assumed = vec![vec![
         Assumption {
@@ -810,9 +804,9 @@ fn a_check_replays_the_public_side_of_a_recorded_statement() {
     assert_eq!(
         order(&script),
         vec![
-            (ENTRY, Origin::Root),
-            (CALLEE, Origin::Program(id(8))),
-            (BYSTANDER, Origin::Program(id(9))),
+            (ENTRY, None),
+            (CALLEE, Some(id(8))),
+            (BYSTANDER, Some(id(9))),
         ]
     );
 }
@@ -843,7 +837,7 @@ fn a_check_rejects_public_behaviour_that_departs_from_the_statement() {
 
 #[test]
 fn a_check_runs_a_privately_originated_call_with_its_private_origin() {
-    let origin = Origin::Program(id(8));
+    let origin = Some(id(8));
     let boundary = vec![
         CallPublic(public(DeliverySource::Call(id(8)), ENTRY, &[])),
         ReturnPublic,
@@ -888,7 +882,7 @@ fn a_check_whose_live_subtree_reaches_the_loader_fails() {
         result,
         Err(ExecutionError::LoaderOutsidePublicExecution { actor }) if actor == loader
     ));
-    assert_eq!(order(&script), vec![(ENTRY, Origin::Root)]);
+    assert_eq!(order(&script), vec![(ENTRY, None)]);
 }
 
 #[test]
@@ -909,7 +903,7 @@ fn a_record_refuses_an_explicit_delivery_to_the_loader() {
         result,
         Err(ExecutionError::LoaderOutsidePublicExecution { actor }) if actor == loader
     ));
-    assert_eq!(order(&script), vec![(holder(&keys), Origin::Root)]);
+    assert_eq!(order(&script), vec![(holder(&keys), None)]);
 }
 
 // The public owner seeds two PDAs; the first enters the private relay, whose call back to it
@@ -955,10 +949,7 @@ fn relayed_grant(
             ]),
         )
         .on(sibling, sending(Vec::new()))
-        .on(
-            vault,
-            sending_when(Origin::Program(id(9)), vec![enter(ENTER)]),
-        );
+        .on(vault, sending_when(Some(id(9)), vec![enter(ENTER)]));
     let result = public_part(context(actors), recorded.boundary, &mut checking);
     (result, checking)
 }
@@ -1004,10 +995,7 @@ fn a_private_grant_crosses_a_public_actor_and_authorizes_the_return() {
     let peer_vault = public_pda(peer.program_account_id, seed);
     let mut recording = Script::default()
         .on(owner, sending(vec![seeded_to(custody, seed)]))
-        .on(
-            custody,
-            sending_when(Origin::Program(id(8)), vec![send_to(peer)]),
-        );
+        .on(custody, sending_when(Some(id(8)), vec![send_to(peer)]));
 
     let recorded = private_part(
         context(vec![peer, peer_vault]),
@@ -1281,9 +1269,9 @@ fn a_parents_casts_precede_its_childrens_and_never_run_their_recipients() {
     assert_eq!(
         order(&script),
         vec![
-            (ENTRY, Origin::Root),
-            (CALLEE, Origin::Program(id(9))),
-            (BYSTANDER, Origin::Program(id(9))),
+            (ENTRY, None),
+            (CALLEE, Some(id(9))),
+            (BYSTANDER, Some(id(9))),
         ]
     );
     assert_eq!(
@@ -1321,7 +1309,7 @@ fn a_receipt_root_delivers_its_stored_origin_and_message_and_its_origin_grants_n
         script.log,
         vec![ReceiveInput {
             receiver: vault,
-            origin: Origin::Program(id(5)),
+            origin: Some(id(5)),
             is_authorized: false,
             pre_state: ActorState::empty(),
             message: b"stored".to_vec(),
@@ -1344,10 +1332,7 @@ fn a_recorded_receipt_root_to_a_private_actor_runs_privately_with_its_stored_ori
     )
     .unwrap();
 
-    assert_eq!(
-        order(&script),
-        vec![(holder(&keys), Origin::Program(id(5)))]
-    );
+    assert_eq!(order(&script), vec![(holder(&keys), Some(id(5)))]);
     assert_eq!(outcome.boundary, Boundary::default());
 }
 
@@ -1588,11 +1573,11 @@ fn a_public_subtree_entered_from_c1_finishes_before_c2_in_every_part() {
     assert_eq!(
         order(&simulating),
         vec![
-            (sender, Origin::Root),
-            (receiver, Origin::Program(id(9))),
-            (crossed, Origin::Program(id(8))),
-            (descendant, Origin::Program(id(9))),
-            (receiver, Origin::Program(id(9))),
+            (sender, None),
+            (receiver, Some(id(9))),
+            (crossed, Some(id(8))),
+            (descendant, Some(id(9))),
+            (receiver, Some(id(9))),
         ]
     );
     assert!(public_part(context(actors), boundary, &mut scripted()).is_ok());
@@ -1638,7 +1623,7 @@ fn a_public_call_without_callbacks_keeps_an_empty_group_before_one_with_callback
         Script::default()
             .on(
                 owner,
-                sending_when(Origin::Root, vec![send_to(quiet), send_to(replying)]),
+                sending_when(None, vec![send_to(quiet), send_to(replying)]),
             )
             .on(quiet, sending(Vec::new()))
             .on(replying, sending(vec![call_with(owner, b"back")]))

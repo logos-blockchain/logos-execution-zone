@@ -5,7 +5,7 @@ use associated_token_account_core::{
 };
 use lee_core::{
     account::{AccountId, Actor, ActorState},
-    program::{Call, Origin, PdaSeed, ReceiveInput, Transition},
+    program::{Call, PdaSeed, ReceiveInput, Transition},
 };
 use token_core::{Delivery, TokenDescriptor, TokenKind};
 
@@ -46,7 +46,7 @@ fn holding(token_program_id: AccountId) -> (Actor, Vec<PdaSeed>) {
 fn turn(is_authorized: bool, message: Message) -> Transition {
     let input = ReceiveInput {
         receiver: Actor::new(owner_id(), ATA_PROGRAM_ID),
-        origin: Origin::Root,
+        origin: None,
         is_authorized,
         pre_state: ActorState::empty(),
         message: borsh::to_vec(&message).expect("the message serializes"),

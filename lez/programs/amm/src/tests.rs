@@ -12,7 +12,7 @@ use amm_core::{
 };
 use lee_core::{
     account::{AccountId, Actor, ActorState},
-    program::{Call, Origin, ReceiveInput, Transition},
+    program::{Call, ReceiveInput, Transition},
 };
 use token_core::{
     Delivery, NewTokenDefinition, Notification, TokenDescriptor, TokenKind, expected_sends,
@@ -103,7 +103,7 @@ fn swap_route(input_is_token_a: bool) -> [AccountId; 4] {
 fn turn(
     pool_account: AccountId,
     pool_state: ActorState,
-    origin: Origin,
+    origin: Option<AccountId>,
     message: Vec<u8>,
 ) -> Transition {
     let input = ReceiveInput {
@@ -116,7 +116,7 @@ fn turn(
     crate::receive(&input).into_transition(input)
 }
 
-fn pool_turn(pool_state: ActorState, origin: Origin, message: Vec<u8>) -> Transition {
+fn pool_turn(pool_state: ActorState, origin: Option<AccountId>, message: Vec<u8>) -> Transition {
     turn(pool_id(), pool_state, origin, message)
 }
 
@@ -124,7 +124,7 @@ fn pool_turn(pool_state: ActorState, origin: Origin, message: Vec<u8>) -> Transi
 fn user_turn(pool_state: ActorState, message: &Message) -> Transition {
     pool_turn(
         pool_state,
-        Origin::Root,
+        None,
         borsh::to_vec(message).expect("the message serializes"),
     )
 }
@@ -292,7 +292,7 @@ fn swap_turn(
     let [input_vault, _, _, user_output] = swap_route(input_is_token_a);
     pool_turn(
         pool_shard(pool),
-        Origin::Program(TOKEN_PROGRAM_ID),
+        Some(TOKEN_PROGRAM_ID),
         notification(
             input_vault,
             definition_id_in,
@@ -322,7 +322,7 @@ fn exact_input_turn(
     let [input_vault, _, _, user_output] = swap_route(input_is_token_a);
     pool_turn(
         pool_shard(pool),
-        Origin::Program(TOKEN_PROGRAM_ID),
+        Some(TOKEN_PROGRAM_ID),
         request_notification(
             input_vault,
             definition_id_in,
@@ -699,7 +699,7 @@ fn call_new_definition_wrong_pool_id() {
     let _transition = turn(
         UNRELATED_ID,
         ActorState::empty(),
-        Origin::Root,
+        None,
         borsh::to_vec(&new_definition_message(RESERVE_A, RESERVE_B))
             .expect("the message serializes"),
     );
@@ -869,25 +869,25 @@ fn a_swap_refuses_a_forged_notification() {
             // Not from the pool's token program, so it is not a swap at all.
             (
                 "token program",
-                Origin::Program(STRANGER_PROGRAM_ID),
+                Some(STRANGER_PROGRAM_ID),
                 honest,
                 "an AMM message must decode",
             ),
             (
                 "credited account",
-                Origin::Program(TOKEN_PROGRAM_ID),
+                Some(TOKEN_PROGRAM_ID),
                 notification(UNRELATED_ID, definition_id_in, 100, honest_offer),
                 "Input vault was not provided",
             ),
             (
                 "input definition",
-                Origin::Program(TOKEN_PROGRAM_ID),
+                Some(TOKEN_PROGRAM_ID),
                 notification(input_vault, token_lp_id(), 100, honest_offer),
                 "AccountId is not a token type for the pool",
             ),
             (
                 "output definition",
-                Origin::Program(TOKEN_PROGRAM_ID),
+                Some(TOKEN_PROGRAM_ID),
                 notification(
                     input_vault,
                     definition_id_in,
@@ -899,7 +899,7 @@ fn a_swap_refuses_a_forged_notification() {
             // A real vault of the pool, credited with the other side's token.
             (
                 "vault order",
-                Origin::Program(TOKEN_PROGRAM_ID),
+                Some(TOKEN_PROGRAM_ID),
                 notification(output_vault, definition_id_in, 100, honest_offer),
                 "Input vault was not provided",
             ),
@@ -974,7 +974,7 @@ fn a_swap_is_a_notified_transfer_whose_payout_the_token_program_predicts() {
 
     let settled = pool_turn(
         pool_shard(&pool_base()),
-        Origin::Program(TOKEN_PROGRAM_ID),
+        Some(TOKEN_PROGRAM_ID),
         notice_message,
     );
     assert!(
@@ -1011,7 +1011,7 @@ fn a_swap_refuses_a_trader_holding_that_is_a_vault() {
                 rejection(|| {
                     let _transition = pool_turn(
                         pool_shard(&pool_base()),
-                        Origin::Program(TOKEN_PROGRAM_ID),
+                        Some(TOKEN_PROGRAM_ID),
                         notification(
                             input_vault,
                             definition_id_in,

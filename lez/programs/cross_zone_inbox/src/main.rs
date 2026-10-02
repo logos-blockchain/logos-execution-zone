@@ -4,7 +4,7 @@ use cross_zone_inbox_core::{
 };
 use lee_core::{
     account::Actor,
-    program::{Origin, ReceiveInput, Response, run_actor, write_once},
+    program::{ReceiveInput, Response, run_actor, write_once},
 };
 
 fn main() {
@@ -98,7 +98,7 @@ fn mark(input: &ReceiveInput, msg: CrossZoneMessage) -> Response {
 
 fn assert_root_origin_at_config(input: &ReceiveInput) {
     assert!(
-        matches!(input.origin, Origin::Root),
+        input.origin.is_none(),
         "Inbox is only invoked as a top-level sequencer-origin transaction"
     );
     assert_eq!(
@@ -146,7 +146,12 @@ mod tests {
         Actor::new(inbox_seen_shard_account_id(INBOX, &PEER_ZONE, 3), INBOX)
     }
 
-    fn run(receiver: Actor, origin: Origin, pre: Vec<u8>, message: Message) -> Transition {
+    fn run(
+        receiver: Actor,
+        origin: Option<AccountId>,
+        pre: Vec<u8>,
+        message: Message,
+    ) -> Transition {
         let input = ReceiveInput {
             receiver,
             origin,
@@ -160,7 +165,7 @@ mod tests {
     fn mark_at_seen(pre: Vec<u8>, src_block_hash: [u8; 32], src_tx_index: u32) -> Transition {
         run(
             seen_actor(),
-            Origin::Program(config_actor().program_account_id),
+            Some(config_actor().program_account_id),
             pre,
             Message::Mark(msg(PEER_ZONE, src_block_hash, src_tx_index)),
         )
@@ -229,7 +234,7 @@ mod tests {
     fn a_mark_from_outside_the_inbox_is_refused() {
         let _transition = run(
             seen_actor(),
-            Origin::Root,
+            None,
             Vec::new(),
             Message::Mark(msg(PEER_ZONE, HASH, 3)),
         );
@@ -241,7 +246,7 @@ mod tests {
     fn an_own_origin_mark_at_another_inbox_actor_is_refused() {
         let _transition = run(
             Actor::new(INBOX, INBOX),
-            Origin::Program(seen_actor().program_account_id),
+            Some(seen_actor().program_account_id),
             Vec::new(),
             Message::Mark(msg(PEER_ZONE, HASH, 3)),
         );
@@ -252,7 +257,7 @@ mod tests {
         let message = msg(PEER_ZONE, HASH, 3);
         let transition = run(
             config_actor(),
-            Origin::Root,
+            None,
             config(),
             Message::Dispatch(message.clone()),
         );
@@ -272,7 +277,7 @@ mod tests {
     fn a_message_this_zone_addressed_to_itself_is_refused() {
         let _transition = run(
             config_actor(),
-            Origin::Root,
+            None,
             config(),
             Message::Dispatch(msg(SELF_ZONE, HASH, 3)),
         );
@@ -283,7 +288,7 @@ mod tests {
     fn a_dispatch_from_another_program_is_refused() {
         let _transition = run(
             config_actor(),
-            Origin::Program(AccountId::new([4; 32])),
+            Some(AccountId::new([4; 32])),
             config(),
             Message::Dispatch(msg(PEER_ZONE, HASH, 3)),
         );
@@ -294,7 +299,7 @@ mod tests {
     fn a_reinit_with_different_contents_is_refused() {
         let _transition = run(
             config_actor(),
-            Origin::Root,
+            None,
             config(),
             Message::InitConfig(InboxConfig { self_zone: [8; 32] }),
         );

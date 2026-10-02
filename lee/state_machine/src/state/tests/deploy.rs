@@ -107,7 +107,7 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
     let receiver = Actor::new(AccountId::new([21; 32]), header_account_id);
     let input = ReceiveInput {
         receiver,
-        origin: Origin::Root,
+        origin: None,
         is_authorized: true,
         pre_state: ActorState::empty(),
         message: Program::serialize_message(Script::write(vec![7; 4])).unwrap(),

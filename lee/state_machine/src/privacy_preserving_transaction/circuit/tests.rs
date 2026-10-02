@@ -10,9 +10,7 @@ use lee_core::{
         PublicExecutionContext,
     },
     native_token::encode_balance,
-    program::{
-        Call, MessageEnvelope, Origin, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, PrivateAccountKind,
-    },
+    program::{Call, MessageEnvelope, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, PrivateAccountKind},
 };
 use test_guest_core::Script;
 
@@ -1034,7 +1032,7 @@ fn scripted_root_input(script: &Script, is_authorized: bool) -> ReceiveInput {
     let keys = test_private_account_keys_1();
     ReceiveInput {
         receiver: Actor::new(regular_id(&keys, Identifier::ZERO), scripted_id()),
-        origin: Origin::Root,
+        origin: None,
         is_authorized,
         pre_state: ActorState::empty(),
         message: borsh::to_vec(script).unwrap(),

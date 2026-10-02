@@ -8,7 +8,7 @@ use lee_core::{
     native_token::{
         Message as NativeMessage, NATIVE_TOKEN_PROGRAM_ID, custody_transfer, decode_balance,
     },
-    program::{Origin, ReadState, ReceiveInput, Response, StateReply, run_actor_with},
+    program::{ReadState, ReceiveInput, Response, StateReply, run_actor_with},
 };
 
 fn main() {
@@ -21,7 +21,7 @@ fn receive(input: &ReceiveInput) -> Response {
         compute_fee_state_account_id(input.receiver.program_account_id),
         "Invalid fee state account"
     );
-    if input.origin_program() == Some(NATIVE_TOKEN_PROGRAM_ID) {
+    if input.origin == Some(NATIVE_TOKEN_PROGRAM_ID) {
         let NativeMessage::StateReply(reply) =
             borsh::from_slice(&input.message).expect("a native message must decode")
         else {
@@ -30,7 +30,7 @@ fn receive(input: &ReceiveInput) -> Response {
         return pay_out(input, &reply);
     }
     assert!(
-        matches!(input.origin, Origin::Root),
+        input.origin.is_none(),
         "Fee program is only invoked as a top-level system transaction"
     );
     let fee_account_id = input.receiver.program_account_id;
@@ -154,7 +154,7 @@ mod tests {
 
     fn run(
         account_id: AccountId,
-        origin: Origin,
+        origin: Option<AccountId>,
         pre: Vec<u8>,
         message: &impl BorshSerialize,
     ) -> Transition {
@@ -176,7 +176,7 @@ mod tests {
     ) -> Transition {
         run(
             compute_fee_state_account_id(FEE),
-            Origin::Root,
+            None,
             state.to_bytes(),
             &Message::Distribute {
                 summary: block,
@@ -196,7 +196,7 @@ mod tests {
         let distributed = distribute_at(state, block, payout).response.post_state;
         run(
             compute_fee_state_account_id(FEE),
-            Origin::Program(NATIVE_TOKEN_PROGRAM_ID),
+            Some(NATIVE_TOKEN_PROGRAM_ID),
             distributed
                 .expect("a distribution records its pending payout")
                 .to_vec(),
@@ -310,7 +310,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Fee program is only invoked as a top-level system transaction")]
     fn a_non_root_origin_is_refused() {
-        let sender = Origin::Program(AccountId::new([8; 32]));
+        let sender = Some(AccountId::new([8; 32]));
         let _transition = run(
             compute_fee_state_account_id(FEE),
             sender,
@@ -327,7 +327,7 @@ mod tests {
     fn a_wrong_receiver_is_refused() {
         let _transition = run(
             AccountId::new([99; 32]),
-            Origin::Root,
+            None,
             FeeState::genesis().to_bytes(),
             &Message::Refund {
                 amount: 1,
@@ -388,7 +388,7 @@ mod tests {
     fn an_unsolicited_reply_is_refused() {
         let _transition = run(
             compute_fee_state_account_id(FEE),
-            Origin::Program(NATIVE_TOKEN_PROGRAM_ID),
+            Some(NATIVE_TOKEN_PROGRAM_ID),
             FeeState::genesis().to_bytes(),
             &NativeMessage::StateReply(StateReply {
                 subject: Actor::native_balance(compute_fee_inbox_account_id(FEE)),
@@ -407,7 +407,7 @@ mod tests {
 
         let _transition = run(
             compute_fee_state_account_id(FEE),
-            Origin::Program(NATIVE_TOKEN_PROGRAM_ID),
+            Some(NATIVE_TOKEN_PROGRAM_ID),
             pending
                 .expect("a distribution records its pending payout")
                 .to_vec(),

@@ -10,7 +10,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
     // sets the origin, the sender cannot claim it. Note this is the immediate sender,
     // not the top-level program that cross-zone discovery names; the two coincide only
     // while every emitter refuses messages from another program, which both do today.
-    let Some(emitter) = input.origin_program() else {
+    let Some(emitter) = input.origin else {
         panic!("Outbox is only callable through a chain call from a user program");
     };
 
@@ -63,7 +63,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
 mod tests {
     use lee_core::{
         account::{AccountId, Actor, ActorState},
-        program::{Origin, Transition},
+        program::Transition,
     };
 
     use super::*;
@@ -92,7 +92,7 @@ mod tests {
         }
     }
 
-    fn run(origin: Origin, pre: Vec<u8>) -> Transition {
+    fn run(origin: Option<AccountId>, pre: Vec<u8>) -> Transition {
         let receiver = Actor::new(outbox_pda(OUTBOX, EMITTER, &[1; 32], 7), OUTBOX);
         let input = ReceiveInput {
             receiver,
@@ -104,14 +104,10 @@ mod tests {
         receive(&input, emit()).into_transition(input)
     }
 
-    fn from_emitter() -> Origin {
-        Origin::Program(EMITTER)
-    }
-
     #[test]
     fn an_empty_slot_takes_the_record() {
         assert_eq!(
-            run(from_emitter(), Vec::new()).response.post_state,
+            run(Some(EMITTER), Vec::new()).response.post_state,
             Some(ActorState::from(record().to_bytes()))
         );
     }
@@ -119,12 +115,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "Outbox slot already written")]
     fn an_occupied_slot_refuses_a_second_message() {
-        let _transition = run(from_emitter(), record().to_bytes());
+        let _transition = run(Some(EMITTER), record().to_bytes());
     }
 
     #[test]
     #[should_panic(expected = "Outbox is only callable through a chain call from a user program")]
     fn a_root_emit_has_no_emitter_and_is_refused() {
-        let _transition = run(Origin::Root, Vec::new());
+        let _transition = run(None, Vec::new());
     }
 }

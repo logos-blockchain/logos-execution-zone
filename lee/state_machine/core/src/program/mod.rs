@@ -248,14 +248,6 @@ impl AccountId {
 }
 
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
-)]
-pub enum Origin {
-    Root,
-    Program(AccountId),
-}
-
-#[derive(
     Debug,
     Clone,
     Copy,
@@ -378,26 +370,18 @@ impl Sendable for Cast {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ReceiveInput {
     pub receiver: Actor,
-    pub origin: Origin,
+    /// The program that sent this message; `None` when the transaction itself submitted it.
+    pub origin: Option<AccountId>,
     pub is_authorized: bool,
     pub pre_state: ActorState,
     pub message: MessageData,
 }
 
 impl ReceiveInput {
-    /// The program that sent this message; `None` when the transaction itself submitted it.
-    #[must_use]
-    pub const fn origin_program(&self) -> Option<AccountId> {
-        match self.origin {
-            Origin::Root => None,
-            Origin::Program(program_account_id) => Some(program_account_id),
-        }
-    }
-
     /// Whether the message came from another actor of the receiver's own program.
     #[must_use]
     pub fn from_own_program(&self) -> bool {
-        self.origin_program() == Some(self.receiver.program_account_id)
+        self.origin == Some(self.receiver.program_account_id)
     }
 }
 

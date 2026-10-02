@@ -144,7 +144,7 @@ fn answer(input: &ReceiveInput, mut pending: Vec<Phase>, reply: &StateReply) -> 
 fn main() {
     run_actor_with(|input| {
         let mut pending = pending(input);
-        if input.origin_program() == Some(NATIVE_TOKEN_PROGRAM_ID) {
+        if input.origin == Some(NATIVE_TOKEN_PROGRAM_ID) {
             let native_token::Message::StateReply(reply) =
                 borsh::from_slice(&input.message).expect("a native message must decode")
             else {

@@ -4,7 +4,7 @@ use lee_core::{
     BlockId,
     account::{AccountId, Actor},
     native_token::{self, custody_transfer},
-    program::{BlockValidityWindow, Call, Origin, ReceiveInput, Response, run_actor},
+    program::{BlockValidityWindow, Call, ReceiveInput, Response, run_actor},
 };
 use sequencer_stake_core::{
     ChannelParams, Message, PendingUnstake, SequencerEntry, SequencerKey, SequencerStakeConfig,
@@ -326,7 +326,7 @@ fn track_unstake_request(
 }
 
 fn assert_root_origin(input: &ReceiveInput, message: &str) {
-    assert!(matches!(input.origin, Origin::Root), "{message}");
+    assert!(input.origin.is_none(), "{message}");
 }
 
 /// Other accounts also hold this program's shards, so the config is pinned by address.
@@ -525,7 +525,7 @@ mod tests {
         account: AccountId,
         program: AccountId,
         is_authorized: bool,
-        origin: Origin,
+        origin: Option<AccountId>,
         pre_state: &[u8],
         message: &Message,
     ) -> ReceiveInput {
@@ -541,7 +541,7 @@ mod tests {
     fn run(
         account: AccountId,
         is_authorized: bool,
-        origin: Origin,
+        origin: Option<AccountId>,
         pre_state: &[u8],
         message: Message,
     ) -> Transition {
@@ -550,10 +550,10 @@ mod tests {
     }
 
     fn at_owner(is_authorized: bool, pre_state: &[u8], message: Message) -> Transition {
-        run(OWNER, is_authorized, Origin::Root, pre_state, message)
+        run(OWNER, is_authorized, None, pre_state, message)
     }
 
-    fn at_config(origin: Origin, pre_state: &[u8], message: Message) -> Transition {
+    fn at_config(origin: Option<AccountId>, pre_state: &[u8], message: Message) -> Transition {
         run(
             sequencer_stake_config_account_id(PROGRAM),
             false,
@@ -634,7 +634,7 @@ mod tests {
     #[test]
     fn a_release_matching_the_pending_request_consumes_it() {
         let transition = at_config(
-            Origin::Root,
+            None,
             &config_with(&[(key(1), entry(OWNER, 3_000, 500))]),
             finalize(key(1)),
         );
@@ -672,7 +672,7 @@ mod tests {
         // FinalizeUnstake carries no signature, so without this any caller drains the funds
         // account of an account that never asked to unstake.
         let _transition = at_config(
-            Origin::Root,
+            None,
             &config_with(&[(key(1), entry(OWNER, 3_000, 0))]),
             finalize(key(1)),
         );
@@ -681,7 +681,7 @@ mod tests {
     #[test]
     fn settling_a_release_drops_a_fully_drained_entry() {
         let transition = at_config(
-            Origin::Root,
+            None,
             &config_with(&[(key(1), entry(OWNER, 3_000, 3_000))]),
             finalize(key(1)),
         );
@@ -691,7 +691,7 @@ mod tests {
     #[test]
     fn settling_a_partial_release_leaves_the_rest_staked() {
         let transition = at_config(
-            Origin::Root,
+            None,
             &config_with(&[(key(1), entry(OWNER, 3_000, 1_000))]),
             finalize(key(1)),
         );
@@ -743,7 +743,7 @@ mod tests {
     #[should_panic(expected = "an unstake request is already pending")]
     fn a_second_request_is_refused() {
         let _transition = at_config(
-            Origin::Program(PROGRAM),
+            Some(PROGRAM),
             &config_with(&[(key(1), entry(OWNER, 3_000, 100))]),
             track(OWNER, 500),
         );
@@ -753,7 +753,7 @@ mod tests {
     #[should_panic(expected = "unstake request must be covered by the staked total")]
     fn a_request_beyond_the_tracked_stake_is_refused() {
         let _transition = at_config(
-            Origin::Program(PROGRAM),
+            Some(PROGRAM),
             &config_with(&[(key(1), entry(OWNER, 3_000, 0))]),
             track(OWNER, 3_001),
         );
@@ -763,7 +763,7 @@ mod tests {
     #[should_panic(expected = "config entry points at a different ownership account")]
     fn a_request_cannot_be_tracked_against_another_accounts_entry() {
         let _transition = at_config(
-            Origin::Program(PROGRAM),
+            Some(PROGRAM),
             &config_with(&[(key(1), entry(OWNER, 3_000, 0))]),
             track(ATTACKER, 500),
         );
@@ -803,13 +803,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Stake is only invoked as a top-level user transaction")]
     fn a_stake_from_another_program_is_refused() {
-        let _transition = run(
-            OWNER,
-            true,
-            Origin::Program(OTHER_PROGRAM),
-            &[],
-            stake(false),
-        );
+        let _transition = run(OWNER, true, Some(OTHER_PROGRAM), &[], stake(false));
     }
 
     #[test]
@@ -830,7 +824,7 @@ mod tests {
     #[should_panic(expected = "cannot top up while an unstake request is pending")]
     fn a_top_up_during_a_pending_release_is_refused() {
         let _transition = at_config(
-            Origin::Program(PROGRAM),
+            Some(PROGRAM),
             &config_with(&[(key(1), entry(OWNER, 3_000, 500))]),
             record_stake(OWNER, MINIMUM, true),
         );
@@ -840,7 +834,7 @@ mod tests {
     #[should_panic(expected = "a stake or top-up must add at least the minimum")]
     fn a_first_stake_below_the_minimum_is_refused() {
         let _transition = at_config(
-            Origin::Program(PROGRAM),
+            Some(PROGRAM),
             &config_with(&[]),
             record_stake(OWNER, MINIMUM - 1, false),
         );
@@ -850,7 +844,7 @@ mod tests {
     #[should_panic(expected = "config entry points at a different ownership account")]
     fn another_account_cannot_top_up_an_existing_key() {
         let _transition = at_config(
-            Origin::Program(PROGRAM),
+            Some(PROGRAM),
             &config_with(&[(key(1), entry(OWNER, 3_000, 0))]),
             record_stake(ATTACKER, MINIMUM, true),
         );
@@ -860,7 +854,7 @@ mod tests {
     #[should_panic(expected = "this sequencer key already has an ownership account")]
     fn a_first_stake_cannot_take_over_a_key_already_staked() {
         let _transition = at_config(
-            Origin::Program(PROGRAM),
+            Some(PROGRAM),
             &config_with(&[(key(1), entry(OWNER, 3_000, 0))]),
             record_stake(OTHER_OWNER, MINIMUM, false),
         );
@@ -871,7 +865,7 @@ mod tests {
     #[test]
     fn an_approved_slash_removes_the_entry() {
         let transition = at_config(
-            Origin::Root,
+            None,
             &config_with(&[
                 (key(1), entry(OWNER, 3_000, 500)),
                 (key(2), entry(OTHER_OWNER, 3_000, 0)),
@@ -901,7 +895,7 @@ mod tests {
         // Accreditation is the entire authorization for a slash, and only the real config
         // knows it.
         let _transition = at_config(
-            Origin::Root,
+            None,
             &config_with(&[(key(1), entry(OWNER, 3_000, 0))]),
             slash(vec![approval(9, key(1))]),
         );
@@ -911,7 +905,7 @@ mod tests {
     #[should_panic(expected = "slash carries fewer approvals than the threshold")]
     fn a_slash_approved_by_a_single_key_is_refused() {
         let _transition = at_config(
-            Origin::Root,
+            None,
             &committee_of_three(),
             slash(vec![approval(2, key(1))]),
         );
@@ -921,7 +915,7 @@ mod tests {
     #[should_panic(expected = "the same key approved twice")]
     fn a_slash_approved_twice_by_one_key_is_refused() {
         let _transition = at_config(
-            Origin::Root,
+            None,
             &committee_of_three(),
             slash(vec![approval(2, key(1)), approval(2, key(1))]),
         );
@@ -943,7 +937,7 @@ mod tests {
     #[should_panic(expected = "channel params are already set")]
     fn channel_params_cannot_be_set_twice() {
         let _transition = at_config(
-            Origin::Root,
+            None,
             &config_with(&[]),
             Message::InitChannelParams {
                 params: ChannelParams {
@@ -964,11 +958,7 @@ mod tests {
         expected = "stake bookkeeping is only sent by this program's ownership accounts"
     )]
     fn bookkeeping_from_the_root_is_refused() {
-        let _transition = at_config(
-            Origin::Root,
-            &config_with(&[]),
-            record_stake(OWNER, MINIMUM, false),
-        );
+        let _transition = at_config(None, &config_with(&[]), record_stake(OWNER, MINIMUM, false));
     }
 
     #[test]
@@ -977,7 +967,7 @@ mod tests {
     )]
     fn bookkeeping_from_another_program_is_refused() {
         let _transition = at_config(
-            Origin::Program(OTHER_PROGRAM),
+            Some(OTHER_PROGRAM),
             &config_with(&[]),
             record_stake(OWNER, MINIMUM, false),
         );
@@ -989,7 +979,7 @@ mod tests {
         let _transition = run(
             OWNER,
             false,
-            Origin::Program(PROGRAM),
+            Some(PROGRAM),
             &config_with(&[]),
             record_stake(OWNER, MINIMUM, false),
         );

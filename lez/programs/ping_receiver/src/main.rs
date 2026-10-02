@@ -1,7 +1,7 @@
 use cross_zone_marker_core::{Delivery, inbox_source_marker_account_id};
 use lee_core::{
     account::{AccountId, Actor},
-    program::{Origin, ReceiveInput, Response, run_actor_with, write_once},
+    program::{ReceiveInput, Response, run_actor_with, write_once},
 };
 use ping_core::{ReceiverConfig, ReceiverMessage, ping_record_pda, receiver_config_account_id};
 
@@ -11,7 +11,7 @@ fn main() {
 
 fn receive(input: &ReceiveInput) -> Response {
     let program = input.receiver.program_account_id;
-    if input.receiver.account_id == program && input.origin_program().is_some() {
+    if input.receiver.account_id == program && input.origin.is_some() {
         let delivery: Delivery = borsh::from_slice(&input.message).expect("a delivery decodes");
         return deliver(input, delivery);
     }
@@ -64,7 +64,7 @@ fn receive(input: &ReceiveInput) -> Response {
                     input,
                     &ReceiverMessage::RenounceAuthority {
                         authority: input.receiver.account_id,
-                        via: input.origin_program(),
+                        via: input.origin,
                     },
                 );
             }
@@ -89,7 +89,7 @@ fn receive(input: &ReceiveInput) -> Response {
                     input,
                     &ReceiverMessage::UpdateSources {
                         authority: input.receiver.account_id,
-                        via: input.origin_program(),
+                        via: input.origin,
                         sources,
                     },
                 );
@@ -107,7 +107,7 @@ fn receive(input: &ReceiveInput) -> Response {
         }
         ReceiverMessage::InitConfig(config) => {
             assert!(
-                matches!(input.origin, Origin::Root),
+                input.origin.is_none(),
                 "InitConfig is a top-level genesis transaction"
             );
             assert!(
@@ -138,7 +138,7 @@ fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
     Response::keep().call(
         Actor::new(receiver_config_account_id(program), program),
         &ReceiverMessage::RecordFrom {
-            deliverer: input.origin_program().expect("a delivery has a sender"),
+            deliverer: input.origin.expect("a delivery has a sender"),
             src_zone,
             src_account_id,
             payload,
@@ -234,7 +234,7 @@ mod tests {
 
     fn run(
         receiver: Actor,
-        origin: Origin,
+        origin: Option<AccountId>,
         is_authorized: bool,
         pre: Vec<u8>,
         message: &impl BorshSerialize,
@@ -249,7 +249,11 @@ mod tests {
         receive(&input).into_transition(input)
     }
 
-    fn at_config(origin: Origin, pre: &ReceiverConfig, message: &ReceiverMessage) -> Transition {
+    fn at_config(
+        origin: Option<AccountId>,
+        pre: &ReceiverConfig,
+        message: &ReceiverMessage,
+    ) -> Transition {
         run(config_actor(), origin, false, pre.to_bytes(), message)
     }
 
@@ -269,7 +273,7 @@ mod tests {
     // The authority's actor receives `message` from `origin`; the config then receives what it
     // forwards, as the driver would deliver it.
     fn through_authority(
-        origin: Origin,
+        origin: Option<AccountId>,
         is_authorized: bool,
         message: &ReceiverMessage,
     ) -> Transition {
@@ -285,7 +289,7 @@ mod tests {
         ] = <[Call; 1]>::try_from(entry.response.calls).expect("one forwarded change");
         assert_eq!(to, config_actor());
         at_config(
-            Origin::Program(RECEIVER),
+            Some(RECEIVER),
             &config(),
             &borsh::from_slice(&data).expect("the forwarded change decodes"),
         )
@@ -327,13 +331,7 @@ mod tests {
             })
             .unwrap(),
         };
-        let transition = run(
-            actor(RECEIVER),
-            Origin::Program(INBOX),
-            false,
-            Vec::new(),
-            &delivery,
-        );
+        let transition = run(actor(RECEIVER), Some(INBOX), false, Vec::new(), &delivery);
 
         assert_eq!(transition.response.post_state, None);
         assert_eq!(
@@ -347,7 +345,7 @@ mod tests {
     fn a_record_sent_directly_is_refused() {
         let _transition = run(
             actor(RECEIVER),
-            Origin::Root,
+            None,
             false,
             Vec::new(),
             &ReceiverMessage::Record {
@@ -358,11 +356,7 @@ mod tests {
 
     #[test]
     fn an_authorized_source_delivered_by_the_inbox_is_accepted() {
-        let transition = at_config(
-            Origin::Program(RECEIVER),
-            &config(),
-            &record_from(INBOX, SOURCE),
-        );
+        let transition = at_config(Some(RECEIVER), &config(), &record_from(INBOX, SOURCE));
 
         assert_eq!(transition.response.post_state, None);
         assert_eq!(
@@ -380,14 +374,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "only callable by the authorized deliverer")]
     fn a_record_claimed_from_outside_the_receiver_is_refused() {
-        let _transition = at_config(Origin::Root, &config(), &record_from(INBOX, SOURCE));
+        let _transition = at_config(None, &config(), &record_from(INBOX, SOURCE));
     }
 
     #[test]
     #[should_panic(expected = "only callable by the authorized deliverer")]
     fn a_caller_that_is_not_the_deliverer_is_refused() {
         let _transition = at_config(
-            Origin::Program(RECEIVER),
+            Some(RECEIVER),
             &config(),
             &record_from(AccountId::new([2; 32]), SOURCE),
         );
@@ -397,7 +391,7 @@ mod tests {
     #[should_panic(expected = "only callable for a peer source this receiver authorizes")]
     fn a_marker_for_an_unauthorized_source_is_refused() {
         let _transition = at_config(
-            Origin::Program(RECEIVER),
+            Some(RECEIVER),
             &config(),
             &record_from(INBOX, AccountId::new([4; 32])),
         );
@@ -408,7 +402,7 @@ mod tests {
     fn a_record_write_from_another_program_is_refused() {
         let _transition = run(
             actor(ping_record_pda(RECEIVER)),
-            Origin::Program(AccountId::new([3; 32])),
+            Some(AccountId::new([3; 32])),
             false,
             Vec::new(),
             &ReceiverMessage::WriteRecord(b"ping".to_vec()),
@@ -419,7 +413,7 @@ mod tests {
     fn the_authority_forwards_a_change_naming_itself() {
         let transition = run(
             actor(AUTHORITY),
-            Origin::Root,
+            None,
             true,
             Vec::new(),
             &update(AccountId::new([3; 32]), Some(GOVERNANCE)),
@@ -435,20 +429,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "the authority acts at top level")]
     fn a_change_entered_from_another_program_is_refused() {
-        let _transition = through_authority(
-            Origin::Program(AccountId::new([3; 32])),
-            true,
-            &renounce(None),
-        );
+        let _transition = through_authority(Some(AccountId::new([3; 32])), true, &renounce(None));
     }
 
     #[test]
     fn the_configured_authority_may_replace_the_sources() {
-        let transition = at_config(
-            Origin::Program(RECEIVER),
-            &config(),
-            &update(AUTHORITY, None),
-        );
+        let transition = at_config(Some(RECEIVER), &config(), &update(AUTHORITY, None));
         assert_eq!(written_config(&transition).sources, vec![]);
     }
 
@@ -456,14 +442,14 @@ mod tests {
     #[should_panic(expected = "must be the configured authority")]
     fn another_account_cannot_replace_the_sources() {
         let other = AccountId::new([3; 32]);
-        let _transition = at_config(Origin::Program(RECEIVER), &config(), &update(other, None));
+        let _transition = at_config(Some(RECEIVER), &config(), &update(other, None));
     }
 
     #[test]
     #[should_panic(expected = "through the configured governance program")]
     fn another_program_cannot_act_for_the_authority() {
         let _transition = at_config(
-            Origin::Program(RECEIVER),
+            Some(RECEIVER),
             &config(),
             &update(AUTHORITY, Some(AccountId::new([8; 32]))),
         );
@@ -473,7 +459,7 @@ mod tests {
     #[should_panic(expected = "a change is only forwarded by the authority's own actor")]
     fn the_governance_program_cannot_reach_the_config_past_the_authority() {
         let _transition = at_config(
-            Origin::Program(GOVERNANCE),
+            Some(GOVERNANCE),
             &config(),
             &update(AUTHORITY, Some(GOVERNANCE)),
         );
@@ -483,11 +469,8 @@ mod tests {
     // sends with the seed that derives the authority.
     #[test]
     fn governance_granting_the_authoritys_seed_acts_through_its_actor() {
-        let transition = through_authority(
-            Origin::Program(GOVERNANCE),
-            true,
-            &update(AUTHORITY, Some(GOVERNANCE)),
-        );
+        let transition =
+            through_authority(Some(GOVERNANCE), true, &update(AUTHORITY, Some(GOVERNANCE)));
         assert_eq!(written_config(&transition).sources, vec![]);
     }
 
@@ -495,7 +478,7 @@ mod tests {
     #[should_panic(expected = "the configured authority must authorize a change")]
     fn governance_without_the_authoritys_seed_is_refused() {
         let _transition = through_authority(
-            Origin::Program(GOVERNANCE),
+            Some(GOVERNANCE),
             false,
             &update(AUTHORITY, Some(GOVERNANCE)),
         );
@@ -503,11 +486,7 @@ mod tests {
 
     #[test]
     fn renouncing_clears_the_authority() {
-        let transition = at_config(
-            Origin::Program(RECEIVER),
-            &config(),
-            &renounce(Some(GOVERNANCE)),
-        );
+        let transition = at_config(Some(RECEIVER), &config(), &renounce(Some(GOVERNANCE)));
         let cfg = written_config(&transition);
         assert_eq!(cfg.authority, None);
         assert_eq!(cfg.sources, config().sources);
@@ -518,16 +497,12 @@ mod tests {
     fn a_renounced_authority_cannot_be_renounced_again() {
         let mut cfg = config();
         cfg.authority = None;
-        let _transition = at_config(Origin::Program(RECEIVER), &cfg, &renounce(None));
+        let _transition = at_config(Some(RECEIVER), &cfg, &renounce(None));
     }
 
     #[test]
     fn an_identical_reinit_is_a_no_op_rewrite() {
-        let transition = at_config(
-            Origin::Root,
-            &config(),
-            &ReceiverMessage::InitConfig(config()),
-        );
+        let transition = at_config(None, &config(), &ReceiverMessage::InitConfig(config()));
         assert_eq!(written_config(&transition), config());
     }
 
@@ -535,7 +510,7 @@ mod tests {
     #[should_panic(expected = "InitConfig is a top-level genesis transaction")]
     fn an_init_from_another_program_is_refused() {
         let _transition = at_config(
-            Origin::Program(INBOX),
+            Some(INBOX),
             &config(),
             &ReceiverMessage::InitConfig(config()),
         );
@@ -546,6 +521,6 @@ mod tests {
     fn a_reinit_with_different_contents_is_refused() {
         let mut other = config();
         other.sources = vec![];
-        let _transition = at_config(Origin::Root, &config(), &ReceiverMessage::InitConfig(other));
+        let _transition = at_config(None, &config(), &ReceiverMessage::InitConfig(other));
     }
 }

@@ -1,7 +1,7 @@
 use bridge_core::Message;
 use lee_core::{
     native_token::custody_transfer,
-    program::{Origin, ProgramEvent, ReceiveInput, Response, run_actor},
+    program::{ProgramEvent, ReceiveInput, Response, run_actor},
 };
 
 /// A written receipt is one marker byte; crediting the receipt's balance does not affect this.
@@ -13,7 +13,7 @@ fn main() {
 
 fn receive(input: &ReceiveInput, message: Message) -> Response {
     assert!(
-        matches!(input.origin, Origin::Root),
+        input.origin.is_none(),
         "Bridge cannot be invoked through chain calls"
     );
 
@@ -77,7 +77,7 @@ mod tests {
         }
     }
 
-    fn run(origin: Origin, pre: &[u8]) -> Transition {
+    fn run(origin: Option<AccountId>, pre: &[u8]) -> Transition {
         let receiver = Actor::new(
             bridge_core::deposit_receipt_account_id(BRIDGE, OP_ID),
             BRIDGE,
@@ -94,7 +94,7 @@ mod tests {
 
     #[test]
     fn a_first_deposit_writes_the_receipt() {
-        let transition = run(Origin::Root, &[]);
+        let transition = run(None, &[]);
 
         assert_eq!(
             transition.response.post_state,
@@ -120,12 +120,12 @@ mod tests {
     fn a_replayed_deposit_cannot_claim_to_be_the_first() {
         // The whole point: a second delivery of one `l1_deposit_op_id` would otherwise mint
         // `amount` again out of bridge custody.
-        let _transition = run(Origin::Root, &RECEIPT_MARKER);
+        let _transition = run(None, &RECEIPT_MARKER);
     }
 
     #[test]
     #[should_panic(expected = "Bridge cannot be invoked through chain calls")]
     fn a_deposit_from_another_program_is_refused() {
-        let _transition = run(Origin::Program(AccountId::new([5; 32])), &[]);
+        let _transition = run(Some(AccountId::new([5; 32])), &[]);
     }
 }

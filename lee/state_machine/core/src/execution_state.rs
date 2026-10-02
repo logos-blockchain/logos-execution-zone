@@ -8,7 +8,7 @@ use crate::{
     account::{AccountData, AccountId, Actor, ActorState},
     program::{
         BlockValidityWindow, Call, Cast, ExecutionValidationError, InvalidWindow, MessageBody,
-        MessageData, MessageEnvelope, Origin, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent,
+        MessageData, MessageEnvelope, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent,
         ReceiveInput, StoredMessage, TimestampValidityWindow, Transition, validate_transition,
     },
 };
@@ -98,10 +98,10 @@ pub enum DeliverySource {
 
 impl DeliverySource {
     #[must_use]
-    pub const fn origin(self) -> Origin {
+    pub const fn origin(self) -> Option<AccountId> {
         match self {
-            Self::Root => Origin::Root,
-            Self::Call(program) | Self::Cast(program) => Origin::Program(program),
+            Self::Root => None,
+            Self::Call(program) | Self::Cast(program) => Some(program),
         }
     }
 

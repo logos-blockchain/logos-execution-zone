@@ -7,10 +7,7 @@
 
 use std::collections::HashMap;
 
-use lee_core::{
-    account::{AccountId, Actor},
-    program::Origin,
-};
+use lee_core::account::{AccountId, Actor};
 
 use super::*;
 
@@ -56,7 +53,7 @@ fn input(
     let receiver = Actor::new(target, PROGRAM_LOADER_ACCOUNT_ID);
     ReceiveInput {
         receiver,
-        origin: Origin::Root,
+        origin: None,
         is_authorized,
         pre_state,
         message: borsh::to_vec(message).expect("borsh serialization is infallible"),
