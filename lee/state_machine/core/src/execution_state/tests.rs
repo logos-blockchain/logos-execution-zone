@@ -1413,3 +1413,258 @@ fn a_record_keeps_its_casts_out_of_the_boundary_and_a_check_returns_only_live_ca
         }]
     );
 }
+
+fn call_with(to: Actor, message: &[u8]) -> Call {
+    Call {
+        to,
+        message: message.to_vec(),
+        pda_seeds: Vec::new(),
+    }
+}
+
+// `B(C1)` stages 1 and calls `B(C1a)`, which stages 2; `B(C2)` keeps what it finds.
+fn sibling_receiver(receiver: Actor) -> impl FnMut(&ReceiveInput) -> Transition {
+    move |input| {
+        let response = match input.message.as_slice() {
+            b"c1" => Response::write(b"1".to_vec()).call(call_with(receiver, b"c1a")),
+            b"c1a" => Response::write(b"2".to_vec()),
+            _ => Response::keep(),
+        };
+        echo(input, response)
+    }
+}
+
+fn siblings(receiver: Actor) -> Vec<Call> {
+    vec![call_with(receiver, b"c1"), call_with(receiver, b"c2")]
+}
+
+fn turns_of(script: &Script, receiver: Actor) -> Vec<(MessageData, ActorState)> {
+    script
+        .log
+        .iter()
+        .filter(|input| input.receiver == receiver)
+        .map(|input| (input.message.clone(), input.pre_state.clone()))
+        .collect()
+}
+
+fn completed_c1_then_c2() -> Vec<(MessageData, ActorState)> {
+    vec![
+        (b"c1".to_vec(), ActorState::empty()),
+        (b"c1a".to_vec(), data(b"1")),
+        (b"c2".to_vec(), data(b"2")),
+    ]
+}
+
+fn assumed_from(source: Actor, to: Actor, message: &[u8]) -> Assumption {
+    Assumption {
+        envelope: MessageEnvelope {
+            source,
+            to,
+            message: message.to_vec(),
+        },
+        grants: Vec::new(),
+        pda_seeds: Vec::new(),
+    }
+}
+
+#[test]
+fn a_public_sibling_call_sees_the_state_its_earlier_siblings_subtree_left() {
+    let (sender, receiver) = (actor(1, 9), actor(2, 9));
+    let mut script = Script::default()
+        .on(sender, sending(siblings(receiver)))
+        .on(receiver, sibling_receiver(receiver));
+
+    public_transaction(context(vec![sender, receiver]), sender, &mut script).unwrap();
+
+    assert_eq!(turns_of(&script, receiver), completed_c1_then_c2());
+}
+
+#[test]
+fn a_private_sibling_call_sees_the_state_its_earlier_siblings_subtree_left() {
+    let (sender_keys, receiver_keys) = (Keys::new(1), Keys::new(2));
+    let receiver = holder(&receiver_keys);
+    let mut script = Script::default()
+        .on(holder(&sender_keys), sending(siblings(receiver)))
+        .on(receiver, sibling_receiver(receiver));
+
+    let outcome = private_part(
+        PublicExecutionContext::default(),
+        &[sender_keys.regular(false), receiver_keys.regular(false)],
+        root(holder(&sender_keys)),
+        Vec::new(),
+        &mut script,
+    )
+    .unwrap();
+
+    assert_eq!(turns_of(&script, receiver), completed_c1_then_c2());
+    assert!(outcome.boundary.is_empty());
+}
+
+#[test]
+fn a_public_sibling_called_from_a_private_turn_sees_the_state_its_earlier_siblings_subtree_left() {
+    let keys = Keys::new(1);
+    let receiver = actor(2, 9);
+    let mut recording = Script::default().on(holder(&keys), sending(siblings(receiver)));
+    let boundary = private_part(
+        context(vec![receiver]),
+        &[keys.regular(false)],
+        root(holder(&keys)),
+        vec![Vec::new(), Vec::new()],
+        &mut recording,
+    )
+    .unwrap()
+    .boundary;
+    let mut checking = Script::default().on(receiver, sibling_receiver(receiver));
+
+    public_part(context(vec![receiver]), boundary, &mut checking).unwrap();
+
+    assert_eq!(turns_of(&checking, receiver), completed_c1_then_c2());
+}
+
+#[test]
+fn a_private_sibling_called_from_a_public_turn_sees_the_state_its_earlier_siblings_subtree_left() {
+    let keys = Keys::new(1);
+    let (sender, receiver) = (actor(1, 9), holder(&keys));
+    let mut recording = Script::default().on(receiver, sibling_receiver(receiver));
+    let boundary = private_part(
+        context(vec![sender]),
+        &[keys.regular(false)],
+        root(sender),
+        vec![vec![
+            assumed_from(sender, receiver, b"c1"),
+            assumed_from(sender, receiver, b"c2"),
+        ]],
+        &mut recording,
+    )
+    .unwrap()
+    .boundary;
+    let mut checking = Script::default().on(sender, sending(siblings(receiver)));
+
+    public_part(context(vec![sender]), boundary, &mut checking).unwrap();
+
+    assert_eq!(turns_of(&recording, receiver), completed_c1_then_c2());
+}
+
+#[test]
+fn a_public_subtree_entered_from_c1_finishes_before_c2_in_every_part() {
+    let keys = Keys::new(1);
+    let (sender, receiver) = (actor(1, 9), holder(&keys));
+    let (crossed, descendant) = (actor(3, 9), actor(4, 9));
+    let scripted = || {
+        Script::default()
+            .on(sender, sending(siblings(receiver)))
+            .on(receiver, move |input| {
+                let response = if input.message == b"c1" {
+                    Response::write(b"1".to_vec()).call(send_to(crossed))
+                } else {
+                    Response::keep()
+                };
+                echo(input, response)
+            })
+            .on(crossed, sending(vec![send_to(descendant)]))
+            .on(descendant, sending(Vec::new()))
+    };
+    let actors = vec![sender, crossed, descendant];
+    let mut simulating = scripted();
+
+    let assumptions = whole(
+        context(actors.clone()),
+        &[keys.regular(false)],
+        root(sender),
+        &mut simulating,
+    )
+    .unwrap()
+    .assumptions;
+    let boundary = private_part(
+        context(actors.clone()),
+        &[keys.regular(false)],
+        root(sender),
+        assumptions,
+        &mut scripted(),
+    )
+    .unwrap()
+    .boundary;
+
+    assert_eq!(
+        order(&simulating),
+        vec![
+            (sender, Origin::Root),
+            (receiver, Origin::Program(id(9))),
+            (crossed, Origin::Program(id(8))),
+            (descendant, Origin::Program(id(9))),
+            (receiver, Origin::Program(id(9))),
+        ]
+    );
+    assert!(public_part(context(actors), boundary, &mut scripted()).is_ok());
+}
+
+#[test]
+fn a_failing_descendant_of_c1_stops_the_transaction_before_c2() {
+    let (sender, receiver, stranger) = (actor(1, 9), actor(2, 9), actor(5, 9));
+    let mut script = Script::default()
+        .on(sender, sending(siblings(receiver)))
+        .on(receiver, move |input| {
+            let response = if input.message == b"c1" {
+                Response::write(b"1".to_vec())
+                    .cast(Cast {
+                        to: stranger,
+                        message: b"x".to_vec(),
+                    })
+                    .call(send_to(stranger))
+            } else {
+                Response::keep()
+            };
+            echo(input, response)
+        });
+
+    let result = public_transaction(context(vec![sender, receiver]), sender, &mut script);
+
+    assert!(matches!(
+        result,
+        Err(ExecutionError::UndeclaredActor { actor }) if actor == stranger
+    ));
+    assert_eq!(
+        turns_of(&script, receiver),
+        vec![(b"c1".to_vec(), ActorState::empty())]
+    );
+}
+
+#[test]
+fn a_public_call_without_callbacks_keeps_an_empty_group_before_one_with_callbacks() {
+    let keys = Keys::new(1);
+    let owner = holder(&keys);
+    let (quiet, replying) = (actor(2, 9), actor(3, 9));
+    let scripted = || {
+        Script::default()
+            .on(
+                owner,
+                sending_when(Origin::Root, vec![send_to(quiet), send_to(replying)]),
+            )
+            .on(quiet, sending(Vec::new()))
+            .on(replying, sending(vec![call_with(owner, b"back")]))
+    };
+
+    let assumptions = whole(
+        context(vec![quiet, replying]),
+        &[keys.regular(false)],
+        root(owner),
+        &mut scripted(),
+    )
+    .unwrap()
+    .assumptions;
+
+    assert_eq!(
+        assumptions,
+        vec![Vec::new(), vec![assumed_from(replying, owner, b"back")]]
+    );
+    let boundary = private_part(
+        context(vec![quiet, replying]),
+        &[keys.regular(false)],
+        root(owner),
+        assumptions,
+        &mut scripted(),
+    )
+    .unwrap()
+    .boundary;
+    assert!(public_part(context(vec![quiet, replying]), boundary, &mut scripted()).is_ok());
+}
