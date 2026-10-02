@@ -141,11 +141,11 @@ impl From<ExecutionError> for LeeError {
             | ExecutionError::ExecutionValidation { .. }
             | ExecutionError::PublicAndPrivate { .. }
             | ExecutionError::DuplicatePublicActor { .. }
-            | ExecutionError::MissingAssumedDeliveries { .. }
-            | ExecutionError::UnusedAssumedDeliveries
-            | ExecutionError::UndeclaredAssumedSender { .. }
+            | ExecutionError::MissingPredictedCrossings { .. }
+            | ExecutionError::UnusedPredictedCrossings
+            | ExecutionError::UndeclaredCrossingSender { .. }
             | ExecutionError::BoundaryMismatch { .. }
-            | ExecutionError::AssumptionMismatch { .. }
+            | ExecutionError::CrossingMismatch { .. }
             | ExecutionError::IncompleteBoundary => Self::InvalidProgramBehavior(error.into()),
         }
     }

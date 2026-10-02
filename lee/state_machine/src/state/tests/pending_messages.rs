@@ -554,7 +554,7 @@ fn a_proven_receipt_at_a_public_root_needs_identity_evidence_at_settlement() {
     let mut state = V03State::new().with_test_programs();
     let record = cast(&mut state, receiver());
     let id = record.id();
-    let (output, proof) = execute_and_prove_assuming(
+    let (output, proof) = execute_and_prove_with_crossings(
         ProvingInput {
             context: PublicExecutionContext::new(vec![receiver()], []),
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],

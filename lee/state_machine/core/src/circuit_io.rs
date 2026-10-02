@@ -3,10 +3,10 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
     Nullifier, NullifierPublicKey, NullifierSecretKey,
-    account::{Account, AccountId},
+    account::{Account, AccountId, Actor},
     compute_digest_for_path,
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
-    execution_state::{Boundary, PublicCallAssumptions, PublicExecutionContext, TransactionEntry},
+    execution_state::{Boundary, Delivery, PublicExecutionContext, TransactionEntry},
     program::{
         BlockValidityWindow, MessageBody, MessageId, PdaSeed, ProgramHeader, ProgramId, Response,
         StoredMessage, TimestampValidityWindow, immutable_mirror_commitment,
@@ -146,7 +146,7 @@ pub struct PrivacyPreservingCircuitInput {
     /// Identities of every shadow program invoked in the call graph.
     pub shadow_program_witnesses: Vec<ShadowProgramWitness>,
     pub responses: Vec<Response>,
-    pub assumptions: Vec<PublicCallAssumptions>,
+    pub predicted_crossings: Vec<Vec<Delivery<Actor>>>,
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
@@ -304,12 +304,14 @@ impl PrivacyPreservingCircuitOutput {
 #[cfg(feature = "host")]
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
     use crate::{
         Commitment, Nullifier,
         account::{Account, AccountId, Actor},
         encryption::{Ciphertext, EphemeralPublicKey},
-        execution_state::{Assumption, BoundaryStep, PublicDelivery},
+        execution_state::{BoundaryStep, Delivery},
         program::{MessageBody, MessageEnvelope},
     };
 
@@ -322,26 +324,26 @@ mod tests {
                 authorized_accounts: vec![AccountId::new([7; 32])],
             },
             vec![
-                BoundaryStep::CallPublic(PublicDelivery {
+                BoundaryStep::EnterPublic(Delivery {
                     envelope: MessageEnvelope {
                         source: private.program_account_id,
                         to: public,
                         message: b"o".to_vec(),
                     },
-                    grants: Vec::new(),
+                    grants: BTreeSet::new(),
                     pda_seeds: Vec::new(),
                 }),
-                BoundaryStep::EnterPrivate(Assumption {
+                BoundaryStep::EnterPrivate(Delivery {
                     envelope: MessageEnvelope {
                         source: public,
                         to: private,
                         message: b"a".to_vec(),
                     },
-                    grants: Vec::new(),
+                    grants: BTreeSet::new(),
                     pda_seeds: Vec::new(),
                 }),
-                BoundaryStep::LeavePrivate,
-                BoundaryStep::ReturnPublic,
+                BoundaryStep::ExitPrivate,
+                BoundaryStep::ExitPublic,
             ],
         )
     }
@@ -368,7 +370,7 @@ mod tests {
             &[1, 0, 0, 0], // context.authorized_accounts: one account
             &[7; 32],
             &[4, 0, 0, 0], // boundary: four steps
-            &[0],          // BoundaryStep::CallPublic
+            &[0],          // BoundaryStep::EnterPublic
             &[8; 32],      // source: the calling program
             &[5; 32],      // to
             &[6; 32],
@@ -385,8 +387,8 @@ mod tests {
             b"a",
             &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
-            &[2],          // BoundaryStep::LeavePrivate
-            &[3],          // BoundaryStep::ReturnPublic
+            &[2],          // BoundaryStep::ExitPrivate
+            &[3],          // BoundaryStep::ExitPublic
             &[0, 0, 0, 0], // casts: none
             &[0],          // entry: None
             &[0, 0, 0, 0], // private_actions: none

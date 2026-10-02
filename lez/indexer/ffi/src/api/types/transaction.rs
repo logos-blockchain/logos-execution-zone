@@ -1,10 +1,10 @@
 use indexer_service_protocol::{
-    AccountId, Actor, Assumption, BoundaryStep, Ciphertext, Commitment, CommitmentSetDigest,
+    AccountId, Actor, BoundaryStep, Ciphertext, Commitment, CommitmentSetDigest, Delivery,
     EncryptedAccountData, EphemeralPublicKey, FeeDeclaration, HashType, MessageBody,
     MessageEnvelope, MessageId, Nullifier, PdaSeed, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, Proof, PublicDelivery, PublicExecutionContext,
-    PublicIdentity, PublicKey, PublicMessage, PublicTransaction, Signature, Transaction,
-    TransactionEntry, ValidityWindow, WitnessSet,
+    PrivacyPreservingTransaction, PrivateAction, Proof, PublicExecutionContext, PublicIdentity,
+    PublicKey, PublicMessage, PublicTransaction, Signature, Transaction, TransactionEntry,
+    ValidityWindow, WitnessSet,
 };
 
 use crate::api::types::{
@@ -401,17 +401,17 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
 }
 
 #[repr(C)]
-pub struct FfiPublicDelivery {
-    pub source: FfiAccountId,
+pub struct FfiDelivery<S> {
+    pub source: S,
     pub to: FfiActor,
     pub message: FfiMessageDataList,
     pub grants: FfiAccountIdList,
     pub pda_seeds: FfiPdaSeedList,
 }
 
-impl From<PublicDelivery> for FfiPublicDelivery {
-    fn from(value: PublicDelivery) -> Self {
-        let PublicDelivery {
+impl<S: Into<T>, T> From<Delivery<S>> for FfiDelivery<T> {
+    fn from(value: Delivery<S>) -> Self {
+        let Delivery {
             envelope:
                 MessageEnvelope {
                     source,
@@ -436,63 +436,8 @@ impl From<PublicDelivery> for FfiPublicDelivery {
     }
 }
 
-impl From<FfiPublicDelivery> for PublicDelivery {
-    fn from(value: FfiPublicDelivery) -> Self {
-        Self {
-            envelope: MessageEnvelope {
-                source: AccountId {
-                    value: value.source.data,
-                },
-                to: value.to.into(),
-                message: value.message.into(),
-            },
-            grants: grants_from_ffi(value.grants),
-            pda_seeds: {
-                let std_vec: Vec<_> = value.pda_seeds.into();
-                std_vec.into_iter().map(ffi_to_pda_seed).collect()
-            },
-        }
-    }
-}
-
-#[repr(C)]
-pub struct FfiAssumption {
-    pub source: FfiActor,
-    pub to: FfiActor,
-    pub message: FfiMessageDataList,
-    pub grants: FfiAccountIdList,
-    pub pda_seeds: FfiPdaSeedList,
-}
-
-impl From<Assumption> for FfiAssumption {
-    fn from(value: Assumption) -> Self {
-        let Assumption {
-            envelope:
-                MessageEnvelope {
-                    source,
-                    to,
-                    message,
-                },
-            grants,
-            pda_seeds,
-        } = value;
-
-        Self {
-            source: source.into(),
-            to: to.into(),
-            message: message.into(),
-            grants: grants_to_ffi(grants),
-            pda_seeds: pda_seeds
-                .into_iter()
-                .map(pda_seed_to_ffi)
-                .collect::<Vec<_>>()
-                .into(),
-        }
-    }
-}
-
-impl From<FfiAssumption> for Assumption {
-    fn from(value: FfiAssumption) -> Self {
+impl<S: Into<T>, T> From<FfiDelivery<S>> for Delivery<T> {
+    fn from(value: FfiDelivery<S>) -> Self {
         Self {
             envelope: MessageEnvelope {
                 source: value.source.into(),
@@ -511,43 +456,43 @@ impl From<FfiAssumption> for Assumption {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub enum FfiBoundaryStepKind {
-    CallPublic = 0,
+    EnterPublic = 0,
     EnterPrivate,
-    LeavePrivate,
-    ReturnPublic,
+    ExitPrivate,
+    ExitPublic,
 }
 
-/// One step of a proof's boundary trace (`public_delivery`, meaningful only for `CallPublic`, and
-/// `assumption`, meaningful only for `EnterPrivate`).
+/// One step of a proof's boundary trace (`public_delivery`, meaningful only for `EnterPublic`, and
+/// `private_delivery`, meaningful only for `EnterPrivate`).
 #[repr(C)]
 pub struct FfiBoundaryStep {
     pub kind: FfiBoundaryStepKind,
-    pub public_delivery: FfiPublicDelivery,
-    pub assumption: FfiAssumption,
+    pub public_delivery: FfiDelivery<FfiAccountId>,
+    pub private_delivery: FfiDelivery<FfiActor>,
 }
 
 impl From<BoundaryStep> for FfiBoundaryStep {
     fn from(value: BoundaryStep) -> Self {
         match value {
-            BoundaryStep::CallPublic(delivery) => Self {
-                kind: FfiBoundaryStepKind::CallPublic,
+            BoundaryStep::EnterPublic(delivery) => Self {
+                kind: FfiBoundaryStepKind::EnterPublic,
                 public_delivery: delivery.into(),
-                assumption: empty_assumption(),
+                private_delivery: empty_delivery(),
             },
-            BoundaryStep::EnterPrivate(assumption) => Self {
+            BoundaryStep::EnterPrivate(delivery) => Self {
                 kind: FfiBoundaryStepKind::EnterPrivate,
-                public_delivery: empty_public_delivery(),
-                assumption: assumption.into(),
+                public_delivery: empty_delivery(),
+                private_delivery: delivery.into(),
             },
-            BoundaryStep::LeavePrivate => Self {
-                kind: FfiBoundaryStepKind::LeavePrivate,
-                public_delivery: empty_public_delivery(),
-                assumption: empty_assumption(),
+            BoundaryStep::ExitPrivate => Self {
+                kind: FfiBoundaryStepKind::ExitPrivate,
+                public_delivery: empty_delivery(),
+                private_delivery: empty_delivery(),
             },
-            BoundaryStep::ReturnPublic => Self {
-                kind: FfiBoundaryStepKind::ReturnPublic,
-                public_delivery: empty_public_delivery(),
-                assumption: empty_assumption(),
+            BoundaryStep::ExitPublic => Self {
+                kind: FfiBoundaryStepKind::ExitPublic,
+                public_delivery: empty_delivery(),
+                private_delivery: empty_delivery(),
             },
         }
     }
@@ -556,10 +501,10 @@ impl From<BoundaryStep> for FfiBoundaryStep {
 impl From<FfiBoundaryStep> for BoundaryStep {
     fn from(value: FfiBoundaryStep) -> Self {
         match value.kind {
-            FfiBoundaryStepKind::CallPublic => Self::CallPublic(value.public_delivery.into()),
-            FfiBoundaryStepKind::EnterPrivate => Self::EnterPrivate(value.assumption.into()),
-            FfiBoundaryStepKind::LeavePrivate => Self::LeavePrivate,
-            FfiBoundaryStepKind::ReturnPublic => Self::ReturnPublic,
+            FfiBoundaryStepKind::EnterPublic => Self::EnterPublic(value.public_delivery.into()),
+            FfiBoundaryStepKind::EnterPrivate => Self::EnterPrivate(value.private_delivery.into()),
+            FfiBoundaryStepKind::ExitPrivate => Self::ExitPrivate,
+            FfiBoundaryStepKind::ExitPublic => Self::ExitPublic,
         }
     }
 }
@@ -920,19 +865,9 @@ fn empty_transaction_entry() -> FfiTransactionEntry {
     }
 }
 
-fn empty_public_delivery() -> FfiPublicDelivery {
-    FfiPublicDelivery {
-        source: FfiAccountId::default(),
-        to: FfiActor::default(),
-        message: Vec::new().into(),
-        grants: Vec::new().into(),
-        pda_seeds: Vec::new().into(),
-    }
-}
-
-fn empty_assumption() -> FfiAssumption {
-    FfiAssumption {
-        source: FfiActor::default(),
+fn empty_delivery<S: Default>() -> FfiDelivery<S> {
+    FfiDelivery {
+        source: S::default(),
         to: FfiActor::default(),
         message: Vec::new().into(),
         grants: Vec::new().into(),
@@ -1090,7 +1025,7 @@ mod tests {
     fn private_transaction_boundary_entry_and_identities_roundtrip_over_the_ffi() {
         // A repeated send to one actor, and not a palindrome: a set would collapse the
         // sequence and a reversal would show, and execution replays them in emission order.
-        let repeated = PublicDelivery {
+        let repeated = Delivery {
             envelope: MessageEnvelope {
                 source: account_id(3),
                 to: actor(5, 6),
@@ -1104,8 +1039,8 @@ mod tests {
             message: PrivacyPreservingMessage {
                 context: PublicExecutionContext::default(),
                 boundary: vec![
-                    BoundaryStep::CallPublic(repeated.clone()),
-                    BoundaryStep::CallPublic(PublicDelivery {
+                    BoundaryStep::EnterPublic(repeated.clone()),
+                    BoundaryStep::EnterPublic(Delivery {
                         envelope: MessageEnvelope {
                             source: account_id(12),
                             to: actor(9, 10),
@@ -1114,7 +1049,7 @@ mod tests {
                         grants: vec![account_id(15)],
                         pda_seeds: vec![PdaSeed([16; 32])],
                     }),
-                    BoundaryStep::CallPublic(PublicDelivery {
+                    BoundaryStep::EnterPublic(Delivery {
                         envelope: MessageEnvelope {
                             source: account_id(40),
                             to: actor(41, 42),
@@ -1123,8 +1058,8 @@ mod tests {
                         grants: vec![],
                         pda_seeds: vec![],
                     }),
-                    BoundaryStep::CallPublic(repeated),
-                    BoundaryStep::EnterPrivate(Assumption {
+                    BoundaryStep::EnterPublic(repeated),
+                    BoundaryStep::EnterPrivate(Delivery {
                         envelope: MessageEnvelope {
                             source: actor(17, 18),
                             to: actor(19, 20),
@@ -1133,8 +1068,8 @@ mod tests {
                         grants: vec![],
                         pda_seeds: vec![],
                     }),
-                    BoundaryStep::LeavePrivate,
-                    BoundaryStep::ReturnPublic,
+                    BoundaryStep::ExitPrivate,
+                    BoundaryStep::ExitPublic,
                 ],
                 casts: vec![
                     MessageBody {
@@ -1165,7 +1100,7 @@ mod tests {
 
     #[test]
     fn boundary_steps_decode_only_the_payload_their_kind_selects() {
-        let delivery = PublicDelivery {
+        let delivery = Delivery {
             envelope: MessageEnvelope {
                 source: account_id(1),
                 to: actor(2, 3),
@@ -1174,7 +1109,7 @@ mod tests {
             grants: vec![account_id(5)],
             pda_seeds: vec![PdaSeed([6; 32])],
         };
-        let assumption = Assumption {
+        let crossing = Delivery {
             envelope: MessageEnvelope {
                 source: actor(7, 8),
                 to: actor(9, 10),
@@ -1186,21 +1121,21 @@ mod tests {
         let zeroed = || unsafe { std::mem::zeroed::<FfiBoundaryStep>() };
         let steps = [
             FfiBoundaryStep {
-                kind: FfiBoundaryStepKind::CallPublic,
+                kind: FfiBoundaryStepKind::EnterPublic,
                 public_delivery: delivery.clone().into(),
                 ..zeroed()
             },
             FfiBoundaryStep {
                 kind: FfiBoundaryStepKind::EnterPrivate,
-                assumption: assumption.clone().into(),
+                private_delivery: crossing.clone().into(),
                 ..zeroed()
             },
             FfiBoundaryStep {
-                kind: FfiBoundaryStepKind::LeavePrivate,
+                kind: FfiBoundaryStepKind::ExitPrivate,
                 ..zeroed()
             },
             FfiBoundaryStep {
-                kind: FfiBoundaryStepKind::ReturnPublic,
+                kind: FfiBoundaryStepKind::ExitPublic,
                 ..zeroed()
             },
         ];
@@ -1208,10 +1143,10 @@ mod tests {
         assert_eq!(
             steps.map(BoundaryStep::from),
             [
-                BoundaryStep::CallPublic(delivery),
-                BoundaryStep::EnterPrivate(assumption),
-                BoundaryStep::LeavePrivate,
-                BoundaryStep::ReturnPublic,
+                BoundaryStep::EnterPublic(delivery),
+                BoundaryStep::EnterPrivate(crossing),
+                BoundaryStep::ExitPrivate,
+                BoundaryStep::ExitPublic,
             ]
         );
     }

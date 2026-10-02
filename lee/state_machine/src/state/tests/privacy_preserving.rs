@@ -69,20 +69,20 @@ impl NestedBoundary {
     fn prove(outer_script: &Script) -> Self {
         let keys = test_private_account_keys_1();
         let (outer, inner) = nested_actors();
-        let proven = execute_and_prove_assuming(
+        let proven = execute_and_prove_with_crossings(
             ProvingInput {
                 context: PublicExecutionContext::new(vec![outer, inner], []),
                 private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
                 ..proving_input(root(outer, outer_script))
             },
             vec![
-                vec![Assumption {
+                vec![Delivery {
                     envelope: MessageEnvelope {
                         source: outer,
                         to: nested_private(),
                         message: borsh::to_vec(&inner_turn()).unwrap(),
                     },
-                    grants: Vec::new(),
+                    grants: BTreeSet::new(),
                     pda_seeds: Vec::new(),
                 }],
                 Vec::new(),
@@ -366,7 +366,7 @@ fn a_tampered_boundary_output_is_rejected() {
         "the unmodified transfer must verify"
     );
 
-    let BoundaryStep::CallPublic(delivery) = &mut tx.message.execution.boundary[0] else {
+    let BoundaryStep::EnterPublic(delivery) = &mut tx.message.execution.boundary[0] else {
         panic!("the transfer's boundary opens with its public call");
     };
     delivery.envelope.message[0] ^= 0xFF;
@@ -526,7 +526,7 @@ fn an_unauthorized_public_debit_proves_but_is_refused_at_settlement() {
     let mut state = V03State::new().with_public_account_balances([(sender_id, 100)]);
 
     // An honest prover would refuse the debit; this one assumes its credit without running it.
-    let proven = execute_and_prove_assuming(
+    let proven = execute_and_prove_with_crossings(
         ProvingInput {
             context: PublicExecutionContext::new(vec![sender], []),
             private_witnesses: vec![init_witness(&recipient_keys, Identifier::ZERO)],
@@ -646,7 +646,7 @@ fn assert_forged_field_is_refused(forge_field: ForgeField) {
     let forger = Actor::new(AccountId::new([77; 32]), program_id);
 
     // The prover assumes the forger delivers nothing back, without running it.
-    let proven = execute_and_prove_assuming(
+    let proven = execute_and_prove_with_crossings(
         root.proving_input(&Script::default().call(forger, &forge_field), vec![forger]),
         vec![Vec::new()],
         &synthetic_program(crate::test_methods::scripted()),
@@ -722,9 +722,9 @@ fn a_nested_boundary_settles_both_public_writes() {
         nested.tx.message.execution.boundary.as_slice(),
         [
             BoundaryStep::EnterPrivate(_),
-            BoundaryStep::CallPublic(_),
-            BoundaryStep::ReturnPublic,
-            BoundaryStep::LeavePrivate,
+            BoundaryStep::EnterPublic(_),
+            BoundaryStep::ExitPublic,
+            BoundaryStep::ExitPrivate,
         ]
     ));
 
@@ -747,7 +747,7 @@ fn a_nested_boundary_settles_both_public_writes() {
 }
 
 #[test]
-fn a_tampered_assumption_is_rejected() {
+fn a_tampered_predicted_crossing_is_rejected() {
     use crate::validated_state_diff::ValidatedStateDiff;
 
     let mut nested = NestedBoundary::prove(&outer_turn(&inner_turn()));
@@ -757,11 +757,10 @@ fn a_tampered_assumption_is_rejected() {
         "the unmodified statement must verify"
     );
 
-    let BoundaryStep::EnterPrivate(assumption) = &mut nested.tx.message.execution.boundary[0]
-    else {
+    let BoundaryStep::EnterPrivate(crossing) = &mut nested.tx.message.execution.boundary[0] else {
         panic!("the nested boundary opens by entering the private turn");
     };
-    assumption.envelope.message[0] ^= 0xFF;
+    crossing.envelope.message[0] ^= 0xFF;
 
     assert!(matches!(
         ValidatedStateDiff::from_privacy_preserving_transaction(&nested.tx, &nested.state, 1, 0),
@@ -770,7 +769,7 @@ fn a_tampered_assumption_is_rejected() {
 }
 
 #[test]
-fn a_public_turn_departing_from_its_assumed_delivery_is_rejected_and_applies_nothing() {
+fn a_public_turn_departing_from_its_predicted_crossing_is_rejected_and_applies_nothing() {
     // The outer turn's live script delivers something other than the assumed message.
     let mut nested = NestedBoundary::prove(
         &outer_turn(&Script::default()).cast(nested_actors().1, &Script::default()),
@@ -784,7 +783,7 @@ fn a_public_turn_departing_from_its_assumed_delivery_is_rejected_and_applies_not
     assert!(
         matches!(
             execution_error(result),
-            ExecutionError::AssumptionMismatch { index: 0 }
+            ExecutionError::CrossingMismatch { index: 0 }
         ),
         "the live delivery must be checked against the assumed one"
     );

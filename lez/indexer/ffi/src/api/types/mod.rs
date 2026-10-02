@@ -89,6 +89,12 @@ impl From<AccountId> for FfiAccountId {
     }
 }
 
+impl From<FfiAccountId> for AccountId {
+    fn from(value: FfiAccountId) -> Self {
+        Self { value: value.data }
+    }
+}
+
 impl From<Selector> for FfiSelector {
     fn from(value: Selector) -> Self {
         Self { data: value.0 }

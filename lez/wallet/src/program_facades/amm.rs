@@ -1,11 +1,13 @@
+use std::collections::BTreeSet;
+
 use amm_core::{
     ExactInput, PoolDefinition, SwapOffer, SwapRequest, compute_liquidity_token_pda,
     compute_pool_pda, compute_vault_pda, swap_transfer,
 };
 use common::HashType;
 use lee::{
-    AccountId, Actor, Assumption, MessageEnvelope, PublicCallAssumptions,
-    privacy_preserving_transaction::circuit::ProgramCatalog, program::Program,
+    AccountId, Actor, MessageEnvelope, privacy_preserving_transaction::circuit::ProgramCatalog,
+    program::Program,
 };
 use lee_core::{SharedSecretKey, program::Call};
 use token_core::{Delivery, TokenDescriptor, TokenHolding, TokenKind, expected_sends};
@@ -190,13 +192,13 @@ impl Amm<'_> {
         }
         let message = Program::serialize_message(&transfer).expect("Message should serialize");
         if accounts.iter().any(|mention| mention.identity.is_private()) {
-            let assumed = terms.promised_payout(&accounts)?;
+            let predicted_crossings = terms.promised_payout(&accounts)?;
             self.0
-                .send_privacy_preserving_tx_assuming(
+                .send_privacy_preserving_tx_with_crossings(
                     accounts,
                     0,
                     message,
-                    assumed,
+                    predicted_crossings,
                     &amm_with_token_dependency(),
                 )
                 .await
@@ -408,7 +410,7 @@ impl SwapTerms {
     fn promised_payout(
         &self,
         accounts: &[AccountMention],
-    ) -> Result<Vec<PublicCallAssumptions>, ExecutionFailureKind> {
+    ) -> Result<Vec<Vec<lee::Delivery<Actor>>>, ExecutionFailureKind> {
         let amount_out = match self.request {
             Request::Offer { amount_out } => amount_out,
             Request::ExactInput {
@@ -449,13 +451,13 @@ impl SwapTerms {
                                 mention.identity.is_private()
                                     && mention.identity.account_id() == to.account_id
                             })
-                            .then(|| Assumption {
+                            .then(|| lee::Delivery {
                                 envelope: MessageEnvelope {
                                     source: vault,
                                     to,
                                     message,
                                 },
-                                grants: vec![self.output_vault_id],
+                                grants: BTreeSet::from([self.output_vault_id]),
                                 pda_seeds,
                             })
                     },
@@ -914,13 +916,13 @@ mod tests {
 
         assert_eq!(
             payout_to(AccountIdentity::PrivateOwned(DESTINATION)),
-            vec![vec![Assumption {
+            vec![vec![lee::Delivery {
                 envelope: MessageEnvelope {
                     source: vault,
                     to,
                     message,
                 },
-                grants: vec![terms.output_vault_id],
+                grants: BTreeSet::from([terms.output_vault_id]),
                 pda_seeds: Vec::new(),
             }]]
         );

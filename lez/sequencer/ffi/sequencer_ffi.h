@@ -27,10 +27,10 @@ typedef enum FfiPublicIdentityKind {
 } FfiPublicIdentityKind;
 
 typedef enum FfiBoundaryStepKind {
-  CallPublic = 0,
+  EnterPublic = 0,
   EnterPrivate,
-  LeavePrivate,
-  ReturnPublic,
+  ExitPrivate,
+  ExitPublic,
 } FfiBoundaryStepKind;
 
 typedef enum FfiProgramImageClaimKind {
@@ -276,30 +276,30 @@ typedef struct FfiVec_FfiBytes32 {
 
 typedef struct FfiVec_FfiBytes32 FfiPdaSeedList;
 
-typedef struct FfiPublicDelivery {
+typedef struct FfiDelivery_FfiAccountId {
   FfiAccountId source;
   struct FfiActor to;
   FfiMessageDataList message;
   FfiAccountIdList grants;
   FfiPdaSeedList pda_seeds;
-} FfiPublicDelivery;
+} FfiDelivery_FfiAccountId;
 
-typedef struct FfiAssumption {
+typedef struct FfiDelivery_FfiActor {
   struct FfiActor source;
   struct FfiActor to;
   FfiMessageDataList message;
   FfiAccountIdList grants;
   FfiPdaSeedList pda_seeds;
-} FfiAssumption;
+} FfiDelivery_FfiActor;
 
 /**
- * One step of a proof's boundary trace (`public_delivery`, meaningful only for `CallPublic`, and
- * `assumption`, meaningful only for `EnterPrivate`).
+ * One step of a proof's boundary trace (`public_delivery`, meaningful only for `EnterPublic`, and
+ * `private_delivery`, meaningful only for `EnterPrivate`).
  */
 typedef struct FfiBoundaryStep {
   enum FfiBoundaryStepKind kind;
-  struct FfiPublicDelivery public_delivery;
-  struct FfiAssumption assumption;
+  struct FfiDelivery_FfiAccountId public_delivery;
+  struct FfiDelivery_FfiActor private_delivery;
 } FfiBoundaryStep;
 
 typedef struct FfiVec_FfiBoundaryStep {

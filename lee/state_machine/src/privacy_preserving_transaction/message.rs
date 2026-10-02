@@ -98,15 +98,15 @@ impl Message {
 
 #[cfg(test)]
 pub mod tests {
+    use std::collections::BTreeSet;
+
     use lee_core::{
         Commitment, EncryptionScheme, EphemeralPublicKey, EphemeralSecretKey, Identifier,
         Nullifier, NullifierPublicKey, PrivacyPreservingCircuitOutput, PrivateAccountKind,
         PrivateAction, SharedSecretKey,
         account::{Account, AccountId, Actor, Nonce},
         encryption::{Ciphertext, ViewingPublicKey},
-        execution_state::{
-            Assumption, Boundary, BoundaryStep, PublicDelivery, PublicExecutionContext,
-        },
+        execution_state::{Boundary, BoundaryStep, Delivery, PublicExecutionContext},
         program::{BlockValidityWindow, MessageEnvelope, TimestampValidityWindow},
     };
     use sha2::{Digest as _, Sha256};
@@ -178,26 +178,26 @@ pub mod tests {
                     authorized_accounts: vec![AccountId::new([7; 32])],
                 },
                 boundary: vec![
-                    BoundaryStep::CallPublic(PublicDelivery {
+                    BoundaryStep::EnterPublic(Delivery {
                         envelope: MessageEnvelope {
                             source: private.program_account_id,
                             to: public,
                             message: b"o".to_vec(),
                         },
-                        grants: Vec::new(),
+                        grants: BTreeSet::new(),
                         pda_seeds: Vec::new(),
                     }),
-                    BoundaryStep::EnterPrivate(Assumption {
+                    BoundaryStep::EnterPrivate(Delivery {
                         envelope: MessageEnvelope {
                             source: public,
                             to: private,
                             message: b"a".to_vec(),
                         },
-                        grants: Vec::new(),
+                        grants: BTreeSet::new(),
                         pda_seeds: Vec::new(),
                     }),
-                    BoundaryStep::LeavePrivate,
-                    BoundaryStep::ReturnPublic,
+                    BoundaryStep::ExitPrivate,
+                    BoundaryStep::ExitPublic,
                 ],
                 casts: Vec::new(),
                 entry: None,
@@ -217,7 +217,7 @@ pub mod tests {
             &[1, 0, 0, 0], // context.authorized_accounts: one account
             &[7; 32],
             &[4, 0, 0, 0], // boundary: four steps
-            &[0],          // BoundaryStep::CallPublic
+            &[0],          // BoundaryStep::EnterPublic
             &[8; 32],      // source: the calling program
             &[5; 32],      // to
             &[6; 32],
@@ -234,8 +234,8 @@ pub mod tests {
             b"a",
             &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
-            &[2],          // BoundaryStep::LeavePrivate
-            &[3],          // BoundaryStep::ReturnPublic
+            &[2],          // BoundaryStep::ExitPrivate
+            &[3],          // BoundaryStep::ExitPublic
             &[0, 0, 0, 0], // casts: none
             &[0],          // entry: None
             &[0, 0, 0, 0], // private_actions: none

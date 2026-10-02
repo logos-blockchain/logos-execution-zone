@@ -304,22 +304,18 @@ pub enum PublicIdentity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct BoundaryDelivery<S> {
+pub struct Delivery<S> {
     pub envelope: MessageEnvelope<S>,
     pub grants: Vec<AccountId>,
     pub pda_seeds: Vec<PdaSeed>,
 }
 
-pub type PublicDelivery = BoundaryDelivery<AccountId>;
-
-pub type Assumption = BoundaryDelivery<Actor>;
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum BoundaryStep {
-    CallPublic(PublicDelivery),
-    EnterPrivate(Assumption),
-    LeavePrivate,
-    ReturnPublic,
+    EnterPublic(Delivery<AccountId>),
+    EnterPrivate(Delivery<Actor>),
+    ExitPrivate,
+    ExitPublic,
 }
 
 pub type Boundary = Vec<BoundaryStep>;

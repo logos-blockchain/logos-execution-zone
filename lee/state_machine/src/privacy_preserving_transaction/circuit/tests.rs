@@ -138,7 +138,7 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_accounts() {
                 Actor::native_balance(recipient_account_id),
                 balance_to_move
             )),
-            BoundaryStep::LeavePrivate,
+            BoundaryStep::ExitPrivate,
         ]
     );
     assert_eq!(output.private_actions.len(), 1);
@@ -1005,7 +1005,7 @@ fn direct_input(
         program_image_witnesses: claims_for(claims),
         shadow_program_witnesses: Vec::new(),
         responses,
-        assumptions: Vec::new(),
+        predicted_crossings: Vec::new(),
     }
 }
 

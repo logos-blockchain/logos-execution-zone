@@ -3,6 +3,8 @@
     reason = "We don't care about these in tests"
 )]
 
+use std::collections::BTreeSet;
+
 use amm_core::{SwapOffer, SwapRequest};
 use anyhow::Result;
 use integration_tests::{
@@ -25,7 +27,7 @@ const OFFER_OUT: u128 = 75;
 
 // Vault B's payout into the output note, the one delivery the proof assumes of public execution,
 // made under the pool's grant of vault B: promised whatever the pool's price is at preparation.
-fn payout_assumed(pool: &PoolFixture, trader: &Trader) -> Vec<lee::PublicCallAssumptions> {
+fn predicted_payout(pool: &PoolFixture, trader: &Trader) -> Vec<Vec<lee::Delivery<Actor>>> {
     let vault_b = Actor::new(pool.vault_b, token_program_id());
     let payout = token_core::Message::Transfer {
         to: trader.output,
@@ -48,13 +50,13 @@ fn payout_assumed(pool: &PoolFixture, trader: &Trader) -> Vec<lee::PublicCallAss
                      message,
                      pda_seeds,
                  }| {
-                    lee::Assumption {
+                    lee::Delivery {
                         envelope: lee::MessageEnvelope {
                             source: vault_b,
                             to,
                             message,
                         },
-                        grants: vec![pool.vault_b],
+                        grants: BTreeSet::from([pool.vault_b]),
                         pda_seeds,
                     }
                 },
@@ -95,7 +97,7 @@ async fn prepare_offer(
                 },
             },
         ],
-        payout_assumed(pool, trader),
+        predicted_payout(pool, trader),
     )
 }
 

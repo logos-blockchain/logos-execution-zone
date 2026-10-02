@@ -1,5 +1,5 @@
 use super::{
-    BoundaryStep::{CallPublic, EnterPrivate, LeavePrivate, ReturnPublic},
+    BoundaryStep::{EnterPrivate, EnterPublic, ExitPrivate, ExitPublic},
     *,
 };
 use crate::{
@@ -154,14 +154,14 @@ fn enter(message: &[u8]) -> Call {
     }
 }
 
-fn public(source: AccountId, to: Actor, message: &[u8]) -> PublicDelivery {
-    PublicDelivery {
+fn public(source: AccountId, to: Actor, message: &[u8]) -> Delivery<AccountId> {
+    Delivery {
         envelope: MessageEnvelope {
             source,
             to,
             message: message.to_vec(),
         },
-        grants: Vec::new(),
+        grants: BTreeSet::new(),
         pda_seeds: Vec::new(),
     }
 }
@@ -231,12 +231,12 @@ fn private_part(
     context: PublicExecutionContext,
     witnesses: &[PrivateWitness],
     entry: TransactionEntry<StoredMessage>,
-    assumptions: Vec<PublicCallAssumptions>,
+    predicted_crossings: Vec<Vec<Delivery<Actor>>>,
     script: &mut Script,
 ) -> Result<PrivatePartOutcome, ExecutionError> {
     let runs_publicly = context.actors.contains(&entry.destination());
     let root = (!runs_publicly).then_some(entry);
-    PrivatePart::new(context, root, witnesses, assumptions)?.execute(script)
+    PrivatePart::new(context, root, witnesses, predicted_crossings)?.execute(script)
 }
 
 fn public_part(
@@ -288,26 +288,26 @@ fn stored(source: AccountId, to: Actor, message: &[u8]) -> StoredMessage {
     }
 }
 
-fn public_calls(boundary: &[BoundaryStep]) -> Vec<PublicDelivery> {
+fn public_calls(boundary: &[BoundaryStep]) -> Vec<Delivery<AccountId>> {
     boundary
         .iter()
         .filter_map(|step| match step {
-            CallPublic(delivery) => Some(delivery.clone()),
-            EnterPrivate(_) | LeavePrivate | ReturnPublic => None,
+            EnterPublic(delivery) => Some(delivery.clone()),
+            EnterPrivate(_) | ExitPrivate | ExitPublic => None,
         })
         .collect()
 }
 
 // `ENTRY` enters the private holder, whose turn calls `CALLEE`.
-fn nested_assumed() -> Vec<PublicCallAssumptions> {
+fn nested_crossings() -> Vec<Vec<Delivery<Actor>>> {
     vec![
-        vec![Assumption {
+        vec![Delivery {
             envelope: MessageEnvelope {
                 source: ENTRY,
                 to: holder(&Keys::new(1)),
                 message: ENTER.to_vec(),
             },
-            grants: Vec::new(),
+            grants: BTreeSet::new(),
             pda_seeds: Vec::new(),
         }],
         Vec::new(),
@@ -325,13 +325,13 @@ fn nested_public(script: Script, entry_sends: Vec<Call>) -> Script {
         .on(BYSTANDER, sending(Vec::new()))
 }
 
-fn record_nested(assumptions: Vec<PublicCallAssumptions>) -> (Boundary, Script) {
+fn record_nested(predicted_crossings: Vec<Vec<Delivery<Actor>>>) -> (Boundary, Script) {
     let mut script = nested_private();
     let outcome = private_part(
         context(vec![ENTRY, CALLEE, BYSTANDER]),
         &[Keys::new(1).regular(false)],
         root(ENTRY),
-        assumptions,
+        predicted_crossings,
         &mut script,
     )
     .unwrap();
@@ -624,7 +624,7 @@ fn a_public_shard_is_fetched_once_and_a_cleared_shard_is_reported_empty() {
 }
 
 #[test]
-fn a_private_root_records_its_public_call_and_the_assumed_reply() {
+fn a_private_root_records_its_public_call_and_the_predicted_reply() {
     let keys = Keys::new(1);
     let owner = holder(&keys);
     let vault = actor(2, 9);
@@ -633,13 +633,13 @@ fn a_private_root_records_its_public_call_and_the_assumed_reply() {
         message: b"credit".to_vec(),
         pda_seeds: Vec::new(),
     };
-    let reply = Assumption {
+    let reply = Delivery {
         envelope: MessageEnvelope {
             source: vault,
             to: owner,
             message: b"credit".to_vec(),
         },
-        grants: Vec::new(),
+        grants: BTreeSet::new(),
         pda_seeds: Vec::new(),
     };
     let event = ProgramEvent {
@@ -677,10 +677,10 @@ fn a_private_root_records_its_public_call_and_the_assumed_reply() {
     assert_eq!(
         boundary,
         vec![
-            CallPublic(public(id(8), vault, b"credit")),
+            EnterPublic(public(id(8), vault, b"credit")),
             EnterPrivate(reply),
-            LeavePrivate,
-            ReturnPublic,
+            ExitPrivate,
+            ExitPublic,
         ]
     );
     assert_eq!(
@@ -690,57 +690,57 @@ fn a_private_root_records_its_public_call_and_the_assumed_reply() {
 }
 
 #[test]
-fn a_public_call_made_inside_an_assumed_delivery_is_bracketed_within_it() {
-    let (boundary, script) = record_nested(nested_assumed());
+fn a_public_call_made_inside_a_predicted_crossing_is_bracketed_within_it() {
+    let (boundary, script) = record_nested(nested_crossings());
 
     assert_eq!(
         boundary,
         vec![
-            EnterPrivate(nested_assumed()[0][0].clone()),
-            CallPublic(public(id(8), CALLEE, &[])),
-            ReturnPublic,
-            LeavePrivate,
+            EnterPrivate(nested_crossings()[0][0].clone()),
+            EnterPublic(public(id(8), CALLEE, &[])),
+            ExitPublic,
+            ExitPrivate,
         ]
     );
     assert_eq!(order(&script), vec![(holder(&Keys::new(1)), Some(id(9)))]);
 }
 
 #[test]
-fn assumed_deliveries_must_match_the_recorded_public_deliveries() {
+fn predicted_crossings_must_match_the_recorded_public_deliveries() {
     let keys = Keys::new(1);
     let vault = actor(2, 9);
     let stranger = actor(5, 9);
-    let record = |assumptions: Vec<PublicCallAssumptions>| {
+    let record = |predicted_crossings: Vec<Vec<Delivery<Actor>>>| {
         let mut script = Script::default().on(holder(&keys), sending(vec![send_to(vault)]));
         private_part(
             context(vec![vault]),
             &[keys.regular(false)],
             root(holder(&keys)),
-            assumptions,
+            predicted_crossings,
             &mut script,
         )
     };
-    let reply = Assumption {
+    let reply = Delivery {
         envelope: MessageEnvelope {
             source: stranger,
             to: holder(&keys),
             message: Vec::new(),
         },
-        grants: Vec::new(),
+        grants: BTreeSet::new(),
         pda_seeds: Vec::new(),
     };
 
     assert!(matches!(
         record(Vec::new()),
-        Err(ExecutionError::MissingAssumedDeliveries { index: 0 })
+        Err(ExecutionError::MissingPredictedCrossings { index: 0 })
     ));
     assert!(matches!(
         record(vec![Vec::new(), Vec::new()]),
-        Err(ExecutionError::UnusedAssumedDeliveries)
+        Err(ExecutionError::UnusedPredictedCrossings)
     ));
     assert!(matches!(
         record(vec![vec![reply]]),
-        Err(ExecutionError::UndeclaredAssumedSender { actor: sender }) if sender == stranger
+        Err(ExecutionError::UndeclaredCrossingSender { actor: sender }) if sender == stranger
     ));
 }
 
@@ -754,23 +754,23 @@ fn a_private_credential_holds_from_any_origin_beside_a_seed_grant() {
     let mut script = Script::default()
         .on(owner, sending_when(None, vec![send_to(vault)]))
         .on(custody, sending(Vec::new()));
-    let assumed = vec![vec![
-        Assumption {
+    let predicted = vec![vec![
+        Delivery {
             envelope: MessageEnvelope {
                 source: vault,
                 to: owner,
                 message: Vec::new(),
             },
-            grants: Vec::new(),
+            grants: BTreeSet::new(),
             pda_seeds: Vec::new(),
         },
-        Assumption {
+        Delivery {
             envelope: MessageEnvelope {
                 source: vault,
                 to: custody,
                 message: Vec::new(),
             },
-            grants: Vec::new(),
+            grants: BTreeSet::new(),
             pda_seeds: vec![seed],
         },
     ]];
@@ -779,7 +779,7 @@ fn a_private_credential_holds_from_any_origin_beside_a_seed_grant() {
         context(vec![vault]),
         &[keys.regular(true), keys.pda(vault.program_account_id, seed)],
         root(owner),
-        assumed,
+        predicted,
         &mut script,
     )
     .unwrap();
@@ -792,7 +792,7 @@ fn a_private_credential_holds_from_any_origin_beside_a_seed_grant() {
 
 #[test]
 fn a_check_replays_the_public_side_of_a_recorded_statement() {
-    let (boundary, _) = record_nested(nested_assumed());
+    let (boundary, _) = record_nested(nested_crossings());
 
     let (result, script) = check_nested(boundary, vec![enter(ENTER), send_to(BYSTANDER)]);
 
@@ -809,7 +809,7 @@ fn a_check_replays_the_public_side_of_a_recorded_statement() {
 
 #[test]
 fn a_check_rejects_public_behaviour_that_departs_from_the_statement() {
-    let boundary = record_nested(nested_assumed()).0;
+    let boundary = record_nested(nested_crossings()).0;
     let checked = |sends: Vec<Call>| check_nested(boundary.clone(), sends).0;
     let truncated = boundary[..1].to_vec();
 
@@ -819,7 +819,7 @@ fn a_check_rejects_public_behaviour_that_departs_from_the_statement() {
     ));
     assert!(matches!(
         checked(vec![enter(b"other")]),
-        Err(ExecutionError::AssumptionMismatch { index: 0 })
+        Err(ExecutionError::CrossingMismatch { index: 0 })
     ));
     assert!(matches!(
         checked(vec![enter(ENTER), enter(ENTER)]),
@@ -834,7 +834,7 @@ fn a_check_rejects_public_behaviour_that_departs_from_the_statement() {
 #[test]
 fn a_check_runs_a_privately_originated_call_with_its_private_origin() {
     let origin = Some(id(8));
-    let boundary = vec![CallPublic(public(id(8), ENTRY, &[])), ReturnPublic];
+    let boundary = vec![EnterPublic(public(id(8), ENTRY, &[])), ExitPublic];
     let mut script = Script::default().on(ENTRY, sending(Vec::new()));
 
     let result = public_part(
@@ -911,9 +911,9 @@ fn a_record_refuses_an_explicit_delivery_to_the_loader() {
 }
 
 // The public owner seeds two PDAs; the first enters the private relay, whose call back to it
-// carries its grant. `assumed_grants` is what the proof claims the relay received.
+// carries its grant. `predicted_grants` is what the proof claims the relay received.
 fn relayed_grant(
-    assumed_grants: Vec<AccountId>,
+    predicted_grants: BTreeSet<AccountId>,
 ) -> (Result<PublicOutcome, ExecutionError>, Script) {
     let keys = Keys::new(1);
     let relay = holder(&keys);
@@ -929,13 +929,13 @@ fn relayed_grant(
         &[keys.regular(false)],
         root(owner),
         vec![
-            vec![Assumption {
+            vec![Delivery {
                 envelope: MessageEnvelope {
                     source: vault,
                     to: relay,
                     message: ENTER.to_vec(),
                 },
-                grants: assumed_grants,
+                grants: predicted_grants,
                 pda_seeds: Vec::new(),
             }],
             Vec::new(),
@@ -968,7 +968,7 @@ fn a_public_grant_crosses_a_private_relay_and_authorizes_the_reply() {
     let vault = public_pda(ENTRY.program_account_id, PdaSeed::new([5; 32]));
     let sibling = public_pda(ENTRY.program_account_id, PdaSeed::new([6; 32]));
 
-    let (result, script) = relayed_grant(vec![vault.account_id]);
+    let (result, script) = relayed_grant(BTreeSet::from([vault.account_id]));
 
     assert!(result.is_ok());
     assert_eq!(
@@ -983,13 +983,13 @@ fn a_public_grant_crosses_a_private_relay_and_authorizes_the_reply() {
 }
 
 #[test]
-fn an_assumption_must_claim_exactly_the_delivered_grants() {
+fn a_predicted_crossing_must_claim_exactly_the_delivered_grants() {
     let sibling = public_pda(ENTRY.program_account_id, PdaSeed::new([6; 32]));
 
-    for claimed in [vec![sibling.account_id], Vec::new()] {
+    for claimed in [BTreeSet::from([sibling.account_id]), BTreeSet::new()] {
         assert!(matches!(
             relayed_grant(claimed).0,
-            Err(ExecutionError::AssumptionMismatch { index: 0 })
+            Err(ExecutionError::CrossingMismatch { index: 0 })
         ));
     }
 }
@@ -1013,13 +1013,13 @@ fn a_private_grant_crosses_a_public_actor_and_authorizes_the_return() {
             pda_keys.pda(owner.program_account_id, seed),
         ],
         root(owner),
-        vec![vec![Assumption {
+        vec![vec![Delivery {
             envelope: MessageEnvelope {
                 source: peer,
                 to: custody,
                 message: Vec::new(),
             },
-            grants: vec![custody.account_id],
+            grants: BTreeSet::from([custody.account_id]),
             pda_seeds: Vec::new(),
         }]],
         &mut recording,
@@ -1031,7 +1031,10 @@ fn a_private_grant_crosses_a_public_actor_and_authorizes_the_return() {
         vec![(owner, false), (custody, true), (custody, true)]
     );
     let boundary = recorded.boundary;
-    assert_eq!(public_calls(&boundary)[0].grants, vec![custody.account_id]);
+    assert_eq!(
+        public_calls(&boundary)[0].grants,
+        BTreeSet::from([custody.account_id])
+    );
 
     let mut checking = Script::default()
         .on(
@@ -1115,7 +1118,7 @@ fn a_public_turn_requests_a_private_debit_that_the_private_credential_authorizes
             &[keys.regular(credential)],
             root(requester),
             vec![
-                vec![Assumption {
+                vec![Delivery {
                     envelope: MessageEnvelope {
                         source: requester,
                         to: payer,
@@ -1125,7 +1128,7 @@ fn a_public_turn_requests_a_private_debit_that_the_private_credential_authorizes
                         })
                         .unwrap(),
                     },
-                    grants: Vec::new(),
+                    grants: BTreeSet::new(),
                     pda_seeds: Vec::new(),
                 }],
                 Vec::new(),
@@ -1211,17 +1214,17 @@ fn a_derived_statement_records_and_checks_a_nested_mixed_graph() {
     let entry_sends = vec![enter(ENTER), send_to(BYSTANDER)];
     let mut deriving = nested_public(nested_private(), entry_sends.clone());
 
-    let assumptions = whole(
+    let predicted_crossings = whole(
         context(vec![ENTRY, CALLEE, BYSTANDER]),
         &[Keys::new(1).regular(false)],
         root(ENTRY),
         &mut deriving,
     )
     .unwrap()
-    .assumptions;
+    .predicted_crossings;
 
-    assert_eq!(assumptions, nested_assumed());
-    let (boundary, _) = record_nested(assumptions);
+    assert_eq!(predicted_crossings, nested_crossings());
+    let (boundary, _) = record_nested(predicted_crossings);
     assert!(check_nested(boundary, entry_sends).0.is_ok());
 }
 
@@ -1246,8 +1249,8 @@ fn an_output_from_a_private_sender_carries_only_its_programs_provenance() {
 }
 
 #[test]
-fn a_live_delivery_from_another_actor_of_the_same_program_does_not_satisfy_an_assumption() {
-    let (boundary, _) = record_nested(nested_assumed());
+fn a_live_delivery_from_another_actor_of_the_same_program_does_not_satisfy_a_predicted_crossing() {
+    let (boundary, _) = record_nested(nested_crossings());
     let mut script = nested_public(Script::default(), vec![send_to(BYSTANDER)])
         .on(BYSTANDER, sending(vec![enter(ENTER)]));
     assert_eq!(BYSTANDER.program_account_id, ENTRY.program_account_id);
@@ -1261,7 +1264,7 @@ fn a_live_delivery_from_another_actor_of_the_same_program_does_not_satisfy_an_as
 
     assert!(matches!(
         result,
-        Err(ExecutionError::AssumptionMismatch { index: 0 })
+        Err(ExecutionError::CrossingMismatch { index: 0 })
     ));
 }
 
@@ -1399,7 +1402,7 @@ fn a_record_keeps_its_casts_out_of_the_boundary_and_a_check_returns_only_live_ca
 
     assert_eq!(
         boundary,
-        vec![CallPublic(public(id(8), ENTRY, &[])), ReturnPublic,]
+        vec![EnterPublic(public(id(8), ENTRY, &[])), ExitPublic,]
     );
     assert_eq!(proven_casts, vec![private_cast]);
 
@@ -1472,14 +1475,14 @@ fn completed_c1_then_c2() -> Vec<(MessageData, ActorState)> {
     ]
 }
 
-fn assumed_from(source: Actor, to: Actor, message: &[u8]) -> Assumption {
-    Assumption {
+fn crossing_from(source: Actor, to: Actor, message: &[u8]) -> Delivery<Actor> {
+    Delivery {
         envelope: MessageEnvelope {
             source,
             to,
             message: message.to_vec(),
         },
-        grants: Vec::new(),
+        grants: BTreeSet::new(),
         pda_seeds: Vec::new(),
     }
 }
@@ -1554,8 +1557,8 @@ fn a_private_sibling_called_from_a_public_turn_sees_the_state_its_earlier_siblin
         &[keys.regular(false)],
         root(sender),
         vec![vec![
-            assumed_from(sender, receiver, b"c1"),
-            assumed_from(sender, receiver, b"c2"),
+            crossing_from(sender, receiver, b"c1"),
+            crossing_from(sender, receiver, b"c2"),
         ]],
         &mut recording,
     )
@@ -1590,19 +1593,19 @@ fn a_public_subtree_entered_from_c1_finishes_before_c2_in_every_part() {
     let actors = vec![sender, crossed, descendant];
     let mut simulating = scripted();
 
-    let assumptions = whole(
+    let predicted_crossings = whole(
         context(actors.clone()),
         &[keys.regular(false)],
         root(sender),
         &mut simulating,
     )
     .unwrap()
-    .assumptions;
+    .predicted_crossings;
     let boundary = private_part(
         context(actors.clone()),
         &[keys.regular(false)],
         root(sender),
-        assumptions,
+        predicted_crossings,
         &mut scripted(),
     )
     .unwrap()
@@ -1667,24 +1670,24 @@ fn a_public_call_without_callbacks_keeps_an_empty_group_before_one_with_callback
             .on(replying, sending(vec![call_with(owner, b"back")]))
     };
 
-    let assumptions = whole(
+    let predicted_crossings = whole(
         context(vec![quiet, replying]),
         &[keys.regular(false)],
         root(owner),
         &mut scripted(),
     )
     .unwrap()
-    .assumptions;
+    .predicted_crossings;
 
     assert_eq!(
-        assumptions,
-        vec![Vec::new(), vec![assumed_from(replying, owner, b"back")]]
+        predicted_crossings,
+        vec![Vec::new(), vec![crossing_from(replying, owner, b"back")]]
     );
     let boundary = private_part(
         context(vec![quiet, replying]),
         &[keys.regular(false)],
         root(owner),
-        assumptions,
+        predicted_crossings,
         &mut scripted(),
     )
     .unwrap()

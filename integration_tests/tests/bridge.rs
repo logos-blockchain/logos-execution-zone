@@ -12,7 +12,7 @@ use integration_tests::{
     utils::{account_balance, get_account},
 };
 use lee::{
-    Actor, execute_and_prove_assuming, privacy_preserving_transaction, program::Program,
+    Actor, execute_and_prove_with_crossings, privacy_preserving_transaction, program::Program,
     public_transaction,
 };
 use lee_core::execution_state::TransactionEntry;
@@ -178,7 +178,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 
     // Execute and prove the bridge deposit
     // Proven without running the deposit, which settlement refuses.
-    let (output, proof) = execute_and_prove_assuming(
+    let (output, proof) = execute_and_prove_with_crossings(
         lee::ProvingInput {
             root: TransactionEntry::Call {
                 to: receipt,

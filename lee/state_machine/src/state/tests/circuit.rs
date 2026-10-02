@@ -1,6 +1,6 @@
 use lee_core::{
     EncryptionScheme, Identifier, SharedSecretKey,
-    execution_state::{BoundaryStep, PublicDelivery},
+    execution_state::{BoundaryStep, Delivery},
     program::{PrivateAccountKind, ProgramHeader, immutable_mirror_commitment},
 };
 use program_loader_core::Message as LoaderMessage;
@@ -164,16 +164,16 @@ fn a_private_account_may_act_under_two_shards_in_one_transaction() {
     assert_eq!(
         output.boundary,
         vec![
-            BoundaryStep::CallPublic(PublicDelivery {
+            BoundaryStep::EnterPublic(Delivery {
                 envelope: MessageEnvelope {
                     source: NATIVE_TOKEN_PROGRAM_ID,
                     to: recipient,
                     message: credit,
                 },
-                grants: Vec::new(),
+                grants: BTreeSet::new(),
                 pda_seeds: Vec::new(),
             }),
-            BoundaryStep::ReturnPublic,
+            BoundaryStep::ExitPublic,
         ]
     );
 }
@@ -462,7 +462,7 @@ fn prove_public_outputs(
 ) -> (PrivacyPreservingCircuitOutput, Proof) {
     let keys = test_private_account_keys_1();
     // Assumes each public output delivers nothing back, without running it.
-    execute_and_prove_assuming(
+    execute_and_prove_with_crossings(
         ProvingInput {
             context: PublicExecutionContext::new(public_actors, signers),
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
@@ -492,8 +492,8 @@ fn a_delegated_public_pda_is_authorized_at_settlement_but_not_exported_as_a_gran
     // The statement carries the seed, not a grant: a seed grant is not a signer-backed claim, so
     // settlement re-derives it.
     let [
-        BoundaryStep::CallPublic(delegated),
-        BoundaryStep::ReturnPublic,
+        BoundaryStep::EnterPublic(delegated),
+        BoundaryStep::ExitPublic,
     ] = output.boundary.as_slice()
     else {
         panic!("the statement makes exactly one public call");

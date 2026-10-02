@@ -19,8 +19,8 @@ use common::{HashType, block::Block, transaction::LeeTransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
-    Account, AccountId, PrivacyPreservingTransaction, ProgramId, ProvingInput,
-    PublicCallAssumptions, PublicExecutionContext, PublicIdentity, Simulation,
+    Account, AccountId, Delivery, PrivacyPreservingTransaction, ProgramId, ProvingInput,
+    PublicExecutionContext, PublicIdentity, Simulation,
     privacy_preserving_transaction::{
         circuit::ProgramCatalog,
         message::{EncryptedAccountData, Message},
@@ -902,23 +902,29 @@ impl WalletCore {
             .await
     }
 
-    // Proves under `assumed` instead of deriving it from current public state: a conditional
-    // promise, such as a fixed offer's payout, that settlement checks against live execution.
-    pub async fn send_privacy_preserving_tx_assuming(
+    // Proves under `predicted_crossings` instead of deriving them from current public state: a
+    // conditional promise, such as a fixed offer's payout, that settlement checks against live
+    // execution.
+    pub async fn send_privacy_preserving_tx_with_crossings(
         &self,
         accounts: Vec<AccountMention>,
         root: usize,
         message: MessageData,
-        assumed: Vec<PublicCallAssumptions>,
+        predicted_crossings: Vec<Vec<Delivery<Actor>>>,
         programs: &ProgramCatalog,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let root = TransactionEntry::Call {
             to: root_actor(&accounts, root)?,
             message,
         };
-        self.send_proven(accounts, root, Vec::new(), programs, Some(assumed), |_| {
-            Ok(())
-        })
+        self.send_proven(
+            accounts,
+            root,
+            Vec::new(),
+            programs,
+            Some(predicted_crossings),
+            |_| Ok(()),
+        )
         .await
     }
 
@@ -928,7 +934,7 @@ impl WalletCore {
         root: TransactionEntry<StoredMessage>,
         identities: Vec<PublicIdentity>,
         programs: &ProgramCatalog,
-        assumed: Option<Vec<PublicCallAssumptions>>,
+        predicted_crossings: Option<Vec<Vec<Delivery<Actor>>>>,
         tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
@@ -955,7 +961,7 @@ impl WalletCore {
         };
 
         let programs = programs.clone();
-        let (output, proof) = match assumed {
+        let (output, proof) = match predicted_crossings {
             None => {
                 let simulation = Simulation {
                     public_shards: acc_manager.public_shards(),
@@ -968,8 +974,8 @@ impl WalletCore {
                     lee::execute_and_prove(input, &simulation, &programs)
                 })
             }
-            Some(assumed) => tokio::task::spawn_blocking(move || {
-                lee::execute_and_prove_assuming(input, assumed, &programs)
+            Some(predicted_crossings) => tokio::task::spawn_blocking(move || {
+                lee::execute_and_prove_with_crossings(input, predicted_crossings, &programs)
             }),
         }
         .await??;

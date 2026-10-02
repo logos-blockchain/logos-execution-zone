@@ -19,7 +19,7 @@ fn main() {
         program_image_witnesses,
         shadow_program_witnesses,
         responses,
-        assumptions,
+        predicted_crossings,
     } = borsh::from_slice(&read_input_frame()).expect("circuit input must be valid borsh");
     let entry = input.entry();
     let private_root = input.private_root();
@@ -58,7 +58,7 @@ fn main() {
         context.clone(),
         private_root,
         &private_witnesses,
-        assumptions,
+        predicted_crossings,
     )
     .unwrap_or_else(|e| panic!("{e}"));
     let mut backend = PrivateBackend::new(image_id_by_account_id, responses);

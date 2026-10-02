@@ -5,9 +5,7 @@ use lee_core::{
     MembershipProof, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
     ProgramImageWitness, ProvingInput, ShadowProgramWitness,
     account::{AccountId, Actor, ActorState, Cycles},
-    execution_state::{
-        ExecutionEnvironment, PrivatePart, PublicCallAssumptions, TurnView, WholeTransaction,
-    },
+    execution_state::{Delivery, ExecutionEnvironment, PrivatePart, TurnView, WholeTransaction},
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{ProgramHeader, ReceiveInput, Response, Transition},
@@ -234,7 +232,7 @@ pub fn execute_and_prove(
             simulation.proven_public_accounts.contains(&account_id)
         })?;
     }
-    let assumptions = WholeTransaction::new(
+    let predicted_crossings = WholeTransaction::new(
         input.context.clone(),
         input.root.clone(),
         &input.private_witnesses,
@@ -243,15 +241,16 @@ pub fn execute_and_prove(
         programs: &programs.programs,
         public_shards: &simulation.public_shards,
     })?
-    .assumptions;
-    execute_and_prove_assuming(input, assumptions, programs)
+    .predicted_crossings;
+    execute_and_prove_with_crossings(input, predicted_crossings, programs)
 }
 
-/// Like [`execute_and_prove`], but under the given assumptions, which settlement matches against
-/// live public execution; a prover that did not derive them may produce a proof settlement refuses.
-pub fn execute_and_prove_assuming(
+/// Like [`execute_and_prove`], but under the given predicted crossings, which settlement matches
+/// against live public execution; a prover that did not derive them may produce a proof settlement
+/// refuses.
+pub fn execute_and_prove_with_crossings(
     input: ProvingInput,
-    assumptions: Vec<PublicCallAssumptions>,
+    predicted_crossings: Vec<Vec<Delivery<Actor>>>,
     programs: &ProgramCatalog,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     let ProgramCatalog { programs } = programs;
@@ -265,7 +264,7 @@ pub fn execute_and_prove_assuming(
         input.context.clone(),
         input.private_root(),
         &input.private_witnesses,
-        assumptions.clone(),
+        predicted_crossings.clone(),
     )?
     .execute(&mut backend)?;
     let Prover {
@@ -311,7 +310,7 @@ pub fn execute_and_prove_assuming(
         program_image_witnesses,
         shadow_program_witnesses,
         responses,
-        assumptions,
+        predicted_crossings,
     };
 
     let circuit_input_payload = borsh::to_vec(&circuit_input)?;

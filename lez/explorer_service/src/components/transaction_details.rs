@@ -123,23 +123,21 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
     let steps_str = boundary
         .iter()
         .map(|step| match step {
-            BoundaryStep::CallPublic(_) => "CallPublic",
+            BoundaryStep::EnterPublic(_) => "EnterPublic",
             BoundaryStep::EnterPrivate(_) => "EnterPrivate",
-            BoundaryStep::LeavePrivate => "LeavePrivate",
-            BoundaryStep::ReturnPublic => "ReturnPublic",
+            BoundaryStep::ExitPrivate => "ExitPrivate",
+            BoundaryStep::ExitPublic => "ExitPublic",
         })
         .collect::<Vec<_>>()
         .join(", ");
     // The public actors the private execution called, and those that called into it.
     let mut delivery_receivers = Vec::new();
-    let mut assumption_senders = Vec::new();
+    let mut crossing_senders = Vec::new();
     for step in boundary {
         match step {
-            BoundaryStep::CallPublic(delivery) => delivery_receivers.push(delivery.envelope.to),
-            BoundaryStep::EnterPrivate(assumption) => {
-                assumption_senders.push(assumption.envelope.source);
-            }
-            BoundaryStep::LeavePrivate | BoundaryStep::ReturnPublic => {}
+            BoundaryStep::EnterPublic(delivery) => delivery_receivers.push(delivery.envelope.to),
+            BoundaryStep::EnterPrivate(crossing) => crossing_senders.push(crossing.envelope.source),
+            BoundaryStep::ExitPrivate | BoundaryStep::ExitPublic => {}
         }
     }
     let signer_nonces_str = nonces
@@ -197,8 +195,8 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
             <h3>"Boundary Public Deliveries"</h3>
             <ActorList actors=delivery_receivers />
 
-            <h3>"Boundary Assumptions"</h3>
-            <ActorList actors=assumption_senders />
+            <h3>"Boundary Private Deliveries"</h3>
+            <ActorList actors=crossing_senders />
         </div>
     }
 }

@@ -4,7 +4,7 @@
     reason = "We don't care about it in tests"
 )]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use borsh::BorshSerialize;
 use lee_core::{
@@ -13,7 +13,7 @@ use lee_core::{
     PrivacyPreservingCircuitOutput, PrivateWitness, Timestamp, WitnessKind,
     account::{Account, AccountId, Actor, ActorState, Balance, Nonce},
     encryption::ViewingPublicKey,
-    execution_state::{Assumption, ExecutionError, TransactionEntry},
+    execution_state::{Delivery, ExecutionError, TransactionEntry},
     native_token::{
         Message as NativeMessage, NATIVE_TOKEN_PROGRAM_ID, TransferError, encode_balance,
     },
@@ -28,7 +28,7 @@ use test_guest_core::{ForgeField, Script};
 use crate::{
     ProvingInput, PublicExecutionContext, PublicKey, PublicTransaction, Simulation, V03State,
     error::{InvalidProgramBehaviorError, LeeError},
-    execute_and_prove, execute_and_prove_assuming,
+    execute_and_prove, execute_and_prove_with_crossings,
     privacy_preserving_transaction::{
         PrivacyPreservingTransaction,
         circuit::{ProgramCatalog, Proof},
@@ -148,14 +148,14 @@ pub const fn transfer(to: AccountId, amount: Balance) -> NativeMessage {
     NativeMessage::Transfer { to, amount }
 }
 
-pub fn credit(from: Actor, to: Actor, amount: Balance) -> Assumption {
-    Assumption {
+pub fn credit(from: Actor, to: Actor, amount: Balance) -> Delivery<Actor> {
+    Delivery {
         envelope: MessageEnvelope {
             source: from,
             to,
             message: borsh::to_vec(&NativeMessage::Credit(amount)).unwrap(),
         },
-        grants: Vec::new(),
+        grants: BTreeSet::new(),
         pda_seeds: Vec::new(),
     }
 }

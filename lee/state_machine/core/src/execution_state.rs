@@ -76,7 +76,7 @@ pub struct PublicOutcome {
 
 pub struct WholeTransactionOutcome {
     pub public: PublicOutcome,
-    pub assumptions: Vec<PublicCallAssumptions>,
+    pub predicted_crossings: Vec<Vec<Delivery<Actor>>>,
 }
 
 pub struct PrivatePartOutcome {
@@ -87,51 +87,22 @@ pub struct PrivatePartOutcome {
     pub casts: Vec<MessageBody>,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum DeliverySource {
-    Root,
-    Call(AccountId),
-    Cast(AccountId),
-}
-
-impl DeliverySource {
-    const fn origin(self) -> Option<AccountId> {
-        match self {
-            Self::Root => None,
-            Self::Call(program) | Self::Cast(program) => Some(program),
-        }
-    }
-
-    const fn issuer(self) -> Option<AccountId> {
-        match self {
-            Self::Call(program) => Some(program),
-            Self::Root | Self::Cast(_) => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct BoundaryDelivery<S> {
+pub struct Delivery<S> {
     pub envelope: MessageEnvelope<S>,
-    pub grants: Vec<AccountId>,
+    pub grants: BTreeSet<AccountId>,
     pub pda_seeds: Vec<PdaSeed>,
 }
 
-pub type PublicDelivery = BoundaryDelivery<AccountId>;
-
-pub type Assumption = BoundaryDelivery<Actor>;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub enum BoundaryStep {
-    CallPublic(PublicDelivery),
-    EnterPrivate(Assumption),
-    LeavePrivate,
-    ReturnPublic,
+    EnterPublic(Delivery<AccountId>),
+    EnterPrivate(Delivery<Actor>),
+    ExitPrivate,
+    ExitPublic,
 }
 
 pub type Boundary = Vec<BoundaryStep>;
-
-pub type PublicCallAssumptions = Vec<Assumption>;
 
 pub trait ExecutionEnvironment {
     type Error: From<ExecutionError>;
@@ -229,20 +200,20 @@ pub enum ExecutionError {
     #[error("Public actor {actor:?} is declared twice")]
     DuplicatePublicActor { actor: Actor },
 
-    #[error("No assumed deliveries were supplied for public delivery {index}")]
-    MissingAssumedDeliveries { index: usize },
+    #[error("No predicted crossings were supplied for public delivery {index}")]
+    MissingPredictedCrossings { index: usize },
 
-    #[error("Assumed deliveries were supplied for public deliveries the execution never produced")]
-    UnusedAssumedDeliveries,
+    #[error("Predicted crossings were supplied for public deliveries the execution never produced")]
+    UnusedPredictedCrossings,
 
-    #[error("Assumed delivery sender {actor:?} is not a declared public actor")]
-    UndeclaredAssumedSender { actor: Actor },
+    #[error("Predicted crossing sender {actor:?} is not a declared public actor")]
+    UndeclaredCrossingSender { actor: Actor },
 
     #[error("Boundary step {index} does not match the execution")]
     BoundaryMismatch { index: usize },
 
-    #[error("The assumption at boundary step {index} does not match the executed delivery")]
-    AssumptionMismatch { index: usize },
+    #[error("The crossing at boundary step {index} does not match the executed delivery")]
+    CrossingMismatch { index: usize },
 
     #[error("Boundary was not consumed exactly by the execution")]
     IncompleteBoundary,
@@ -278,26 +249,63 @@ impl AccountEntry {
 }
 
 enum Item {
-    Deliver(Box<Delivery>),
-    ClosePublic,
-    ClosePrivate,
+    Deliver(Box<Delivery<Sender>>),
+    ExitPublic,
+    ExitPrivate,
     Continue { root: bool },
 }
 
-// The sender is the internal sending actor: `None` for the root and for a proven public delivery,
-// whose source publishes only the sending program.
-struct Delivery {
-    envelope: MessageEnvelope<DeliverySource>,
-    sender: Option<Actor>,
-    grants: BTreeSet<AccountId>,
-    pda_seeds: Vec<PdaSeed>,
+#[derive(Clone, Copy)]
+enum Sender {
+    Root,
+    Cast(AccountId),
+    Call(Actor),
+    ProvenCall(AccountId),
 }
 
-impl Delivery {
-    const fn entry(envelope: MessageEnvelope<DeliverySource>) -> Self {
+impl Sender {
+    const fn actor(self) -> Option<Actor> {
+        match self {
+            Self::Call(actor) => Some(actor),
+            Self::Root | Self::Cast(_) | Self::ProvenCall(_) => None,
+        }
+    }
+
+    const fn origin(self) -> Option<AccountId> {
+        match self {
+            Self::Root => None,
+            Self::Call(actor) => Some(actor.program_account_id),
+            Self::Cast(program) | Self::ProvenCall(program) => Some(program),
+        }
+    }
+
+    const fn issuer(self) -> Option<AccountId> {
+        match self {
+            Self::Call(actor) => Some(actor.program_account_id),
+            Self::ProvenCall(program) => Some(program),
+            Self::Root | Self::Cast(_) => None,
+        }
+    }
+}
+
+impl<S> Delivery<S> {
+    fn with_source<T>(&self, source: T) -> Delivery<T> {
+        Delivery {
+            envelope: MessageEnvelope {
+                source,
+                to: self.envelope.to,
+                message: self.envelope.message.clone(),
+            },
+            grants: self.grants.clone(),
+            pda_seeds: self.pda_seeds.clone(),
+        }
+    }
+}
+
+impl Delivery<Sender> {
+    const fn entry(envelope: MessageEnvelope<Sender>) -> Self {
         Self {
             envelope,
-            sender: None,
             grants: BTreeSet::new(),
             pda_seeds: Vec::new(),
         }
@@ -312,11 +320,10 @@ impl Delivery {
     ) -> Self {
         Self {
             envelope: MessageEnvelope {
-                source: DeliverySource::Call(from.program_account_id),
+                source: Sender::Call(from),
                 to,
                 message,
             },
-            sender: Some(from),
             grants,
             pda_seeds,
         }
@@ -325,11 +332,11 @@ impl Delivery {
 
 enum Scope {
     WholeTransaction {
-        groups: Vec<PublicCallAssumptions>,
+        groups: Vec<Vec<Delivery<Actor>>>,
         open: Vec<usize>,
     },
     PrivatePart {
-        assumptions: Vec<PublicCallAssumptions>,
+        predicted_crossings: Vec<Vec<Delivery<Actor>>>,
         next_group: usize,
         trace: Boundary,
     },
@@ -385,7 +392,7 @@ impl<'witnesses> WholeTransaction<'witnesses> {
         };
         Ok(WholeTransactionOutcome {
             public: finished.public(),
-            assumptions: groups,
+            predicted_crossings: groups,
         })
     }
 }
@@ -395,10 +402,10 @@ impl<'witnesses> PrivatePart<'witnesses> {
         context: PublicExecutionContext,
         root: Option<TransactionEntry<StoredMessage>>,
         witnesses: &'witnesses [PrivateWitness],
-        assumptions: Vec<PublicCallAssumptions>,
+        predicted_crossings: Vec<Vec<Delivery<Actor>>>,
     ) -> Result<Self, ExecutionError> {
         let scope = Scope::PrivatePart {
-            assumptions,
+            predicted_crossings,
             next_group: 0,
             trace: Boundary::new(),
         };
@@ -549,7 +556,7 @@ impl<'witnesses> Interpreter<'witnesses> {
                 execution
                     .pending
                     .push(Item::Deliver(Box::new(Delivery::entry(MessageEnvelope {
-                        source: DeliverySource::Root,
+                        source: Sender::Root,
                         to,
                         message,
                     }))));
@@ -566,7 +573,7 @@ impl<'witnesses> Interpreter<'witnesses> {
                 execution
                     .pending
                     .push(Item::Deliver(Box::new(Delivery::entry(MessageEnvelope {
-                        source: DeliverySource::Cast(source),
+                        source: Sender::Cast(source),
                         to,
                         message,
                     }))));
@@ -574,7 +581,7 @@ impl<'witnesses> Interpreter<'witnesses> {
             None if matches!(execution.scope, Scope::PublicPart { .. }) => {
                 execution.pending.push(Item::Continue { root: true });
             }
-            None => execution.assume_public_subtree()?,
+            None => execution.deliver_predicted_crossings()?,
         }
         Ok(execution)
     }
@@ -586,20 +593,20 @@ impl<'witnesses> Interpreter<'witnesses> {
         while let Some(item) = self.pending.pop() {
             match item {
                 Item::Deliver(delivery) => self.deliver(*delivery, environment)?,
-                Item::ClosePublic => self.close(BoundaryStep::ReturnPublic)?,
-                Item::ClosePrivate => self.close(BoundaryStep::LeavePrivate)?,
+                Item::ExitPublic => self.exit(BoundaryStep::ExitPublic)?,
+                Item::ExitPrivate => self.exit(BoundaryStep::ExitPrivate)?,
                 Item::Continue { root } => self.resume(root)?,
             }
         }
         match &self.scope {
             Scope::WholeTransaction { .. } => {}
             Scope::PrivatePart {
-                assumptions,
+                predicted_crossings,
                 next_group,
                 ..
             } => {
-                if assumptions.len() > *next_group {
-                    return Err(ExecutionError::UnusedAssumedDeliveries.into());
+                if predicted_crossings.len() > *next_group {
+                    return Err(ExecutionError::UnusedPredictedCrossings.into());
                 }
             }
             Scope::PublicPart { boundary, cursor } => {
@@ -611,7 +618,7 @@ impl<'witnesses> Interpreter<'witnesses> {
         Ok(self.finish())
     }
 
-    fn close(&mut self, marker: BoundaryStep) -> Result<(), ExecutionError> {
+    fn exit(&mut self, marker: BoundaryStep) -> Result<(), ExecutionError> {
         match &mut self.scope {
             Scope::WholeTransaction { open, .. } => {
                 open.pop();
@@ -636,42 +643,21 @@ impl<'witnesses> Interpreter<'witnesses> {
             unreachable!("only a public part resumes a proven continuation");
         };
         match (boundary.get(*cursor), root) {
-            (
-                Some(BoundaryStep::CallPublic(PublicDelivery {
-                    envelope:
-                        MessageEnvelope {
-                            source,
-                            to,
-                            message,
-                        },
-                    grants,
-                    pda_seeds,
-                })),
-                _,
-            ) => {
-                let delivery = Delivery {
-                    envelope: MessageEnvelope {
-                        source: DeliverySource::Call(*source),
-                        to: *to,
-                        message: message.clone(),
-                    },
-                    sender: None,
-                    grants: grants.iter().copied().collect(),
-                    pda_seeds: pda_seeds.clone(),
-                };
+            (Some(BoundaryStep::EnterPublic(proven)), _) => {
+                let delivery = proven.with_source(Sender::ProvenCall(proven.envelope.source));
                 step_past(cursor);
                 self.pending.push(Item::Continue { root });
-                self.pending.push(Item::ClosePublic);
+                self.pending.push(Item::ExitPublic);
                 self.pending.push(Item::Deliver(Box::new(delivery)));
                 Ok(())
             }
-            (None, true) | (Some(BoundaryStep::LeavePrivate), false) => Ok(()),
+            (None, true) | (Some(BoundaryStep::ExitPrivate), false) => Ok(()),
             (
                 None
                 | Some(
                     BoundaryStep::EnterPrivate(_)
-                    | BoundaryStep::LeavePrivate
-                    | BoundaryStep::ReturnPublic,
+                    | BoundaryStep::ExitPrivate
+                    | BoundaryStep::ExitPublic,
                 ),
                 _,
             ) => Err(ExecutionError::BoundaryMismatch { index: *cursor }),
@@ -679,11 +665,11 @@ impl<'witnesses> Interpreter<'witnesses> {
     }
 
     // Placement is positive: a declared public actor runs publicly, a private witness's account
-    // runs privately, and in a public part any other destination must be the next assumed
-    // delivery.
+    // runs privately, and in a public part any other destination must be the next predicted
+    // crossing.
     fn deliver<E: ExecutionEnvironment>(
         &mut self,
-        delivery: Delivery,
+        delivery: Delivery<Sender>,
         environment: &mut E,
     ) -> Result<(), E::Error> {
         let to = delivery.envelope.to;
@@ -701,42 +687,33 @@ impl<'witnesses> Interpreter<'witnesses> {
                 Scope::WholeTransaction { .. } | Scope::PrivatePart { .. },
                 Some(AccountEntry::Private { .. }),
             ) => self.deliver_private(delivery, environment),
-            (Scope::PublicPart { .. }, None) => Ok(self.check_assumption(&delivery)?),
+            (Scope::PublicPart { .. }, None) => Ok(self.check_crossing(&delivery)?),
             _ => Err(ExecutionError::UndeclaredActor { actor: to }.into()),
         }
     }
 
     // A private delivery from a declared public actor is where the execution crosses into a proven
-    // turn: a whole transaction collects it into the innermost open public Call's assumptions, a
-    // private part records it.
+    // turn: a whole transaction collects it into the innermost open public Call's predicted
+    // crossings, a private part records it.
     fn deliver_private<E: ExecutionEnvironment>(
         &mut self,
-        delivery: Delivery,
+        delivery: Delivery<Sender>,
         environment: &mut E,
     ) -> Result<(), E::Error> {
-        let crossing = delivery
-            .sender
-            .filter(|sender| self.public_actors.contains(sender));
-        if let Some(from) = crossing {
-            let assumption = Assumption {
-                envelope: MessageEnvelope {
-                    source: from,
-                    to: delivery.envelope.to,
-                    message: delivery.envelope.message.clone(),
-                },
-                grants: delivery.grants.iter().copied().collect(),
-                pda_seeds: delivery.pda_seeds.clone(),
-            };
+        if let Some(sender) = delivery.envelope.source.actor()
+            && self.public_actors.contains(&sender)
+        {
+            let crossing = delivery.with_source(sender);
             match &mut self.scope {
                 Scope::WholeTransaction { groups, open } => {
                     let group = *open
                         .last()
                         .expect("a public sender runs within an open call");
-                    groups[group].push(assumption);
+                    groups[group].push(crossing);
                 }
                 Scope::PrivatePart { trace, .. } => {
-                    trace.push(BoundaryStep::EnterPrivate(assumption));
-                    self.pending.push(Item::ClosePrivate);
+                    trace.push(BoundaryStep::EnterPrivate(crossing));
+                    self.pending.push(Item::ExitPrivate);
                 }
                 Scope::PublicPart { .. } => {
                     unreachable!(
@@ -748,96 +725,93 @@ impl<'witnesses> Interpreter<'witnesses> {
         self.execute(delivery, environment)
     }
 
-    fn check_assumption(&mut self, delivery: &Delivery) -> Result<(), ExecutionError> {
+    fn check_crossing(&mut self, delivery: &Delivery<Sender>) -> Result<(), ExecutionError> {
         let Scope::PublicPart { boundary, cursor } = &mut self.scope else {
-            unreachable!("only a public part matches assumed deliveries");
+            unreachable!("only a public part matches predicted crossings");
         };
         let index = *cursor;
-        let Some(BoundaryStep::EnterPrivate(assumed)) = boundary.get(index) else {
+        let Some(BoundaryStep::EnterPrivate(predicted)) = boundary.get(index) else {
             return Err(ExecutionError::BoundaryMismatch { index });
         };
         // A proven turn ran under exactly the authority the live delivery carries.
-        if Some(assumed.envelope.source) != delivery.sender
-            || assumed.envelope.to != delivery.envelope.to
-            || assumed.envelope.message != delivery.envelope.message
-            || assumed.pda_seeds != delivery.pda_seeds
-            || assumed.grants.iter().copied().collect::<BTreeSet<_>>() != delivery.grants
-        {
-            return Err(ExecutionError::AssumptionMismatch { index });
+        let live = delivery
+            .envelope
+            .source
+            .actor()
+            .map(|sender| delivery.with_source(sender));
+        if live.as_ref() != Some(predicted) {
+            return Err(ExecutionError::CrossingMismatch { index });
         }
         step_past(cursor);
-        self.pending.push(Item::ClosePrivate);
+        self.pending.push(Item::ExitPrivate);
         self.pending.push(Item::Continue { root: false });
         Ok(())
     }
 
     fn deliver_public<E: ExecutionEnvironment>(
         &mut self,
-        delivery: Delivery,
+        delivery: Delivery<Sender>,
         environment: &mut E,
     ) -> Result<(), E::Error> {
         match &mut self.scope {
             // The root and each Call from a private turn start a public subtree, whose deliveries
-            // into private actors form one group of assumptions.
+            // into private actors form one group of predicted crossings.
             Scope::WholeTransaction { groups, open } => {
                 if delivery
-                    .sender
+                    .envelope
+                    .source
+                    .actor()
                     .is_none_or(|sender| !self.public_actors.contains(&sender))
                 {
                     open.push(groups.len());
                     groups.push(Vec::new());
-                    self.pending.push(Item::ClosePublic);
+                    self.pending.push(Item::ExitPublic);
                 }
                 self.execute(delivery, environment)
             }
             Scope::PublicPart { .. } => self.execute(delivery, environment),
             Scope::PrivatePart { trace, .. } => {
-                trace.push(BoundaryStep::CallPublic(public_delivery(&delivery)));
-                self.pending.push(Item::ClosePublic);
-                Ok(self.assume_public_subtree()?)
+                let program = delivery
+                    .envelope
+                    .source
+                    .issuer()
+                    .expect("only a Call from a private turn crosses into public execution");
+                trace.push(BoundaryStep::EnterPublic(delivery.with_source(program)));
+                self.pending.push(Item::ExitPublic);
+                Ok(self.deliver_predicted_crossings()?)
             }
         }
     }
 
-    fn assume_public_subtree(&mut self) -> Result<(), ExecutionError> {
+    fn deliver_predicted_crossings(&mut self) -> Result<(), ExecutionError> {
         let Scope::PrivatePart {
-            assumptions,
+            predicted_crossings,
             next_group,
             ..
         } = &mut self.scope
         else {
-            unreachable!("only a private part assumes public subtrees");
+            unreachable!("only a private part predicts crossings");
         };
         let index = *next_group;
-        let deliveries = assumptions
+        let crossings = predicted_crossings
             .get(index)
-            .ok_or(ExecutionError::MissingAssumedDeliveries { index })?;
+            .ok_or(ExecutionError::MissingPredictedCrossings { index })?;
         step_past(next_group);
-        for Assumption {
-            envelope,
-            grants,
-            pda_seeds,
-        } in deliveries.iter().rev()
-        {
-            if !self.public_actors.contains(&envelope.source) {
-                return Err(ExecutionError::UndeclaredAssumedSender {
-                    actor: envelope.source,
-                });
+        for crossing in crossings.iter().rev() {
+            let sender = crossing.envelope.source;
+            if !self.public_actors.contains(&sender) {
+                return Err(ExecutionError::UndeclaredCrossingSender { actor: sender });
             }
-            self.pending.push(Item::Deliver(Box::new(Delivery::sent(
-                envelope.source,
-                envelope.to,
-                envelope.message.clone(),
-                grants.iter().copied().collect(),
-                pda_seeds.clone(),
-            ))));
+            self.pending.push(Item::Deliver(Box::new(
+                crossing.with_source(Sender::Call(sender)),
+            )));
         }
         Ok(())
     }
 
     fn execute<E: ExecutionEnvironment>(
         &mut self,
-        delivery: Delivery,
+        delivery: Delivery<Sender>,
         environment: &mut E,
     ) -> Result<(), E::Error> {
         let actor = delivery.envelope.to;
@@ -867,7 +841,7 @@ impl<'witnesses> Interpreter<'witnesses> {
 
         let view = TurnView {
             accounts: &self.accounts,
-            at_root: !matches!(delivery.envelope.source, DeliverySource::Call(_)),
+            at_root: matches!(delivery.envelope.source, Sender::Root | Sender::Cast(_)),
         };
         let transition = environment.receive(&input, &view)?;
         validate_transition(&input, &transition).map_err(|source| {
@@ -932,7 +906,7 @@ impl<'witnesses> Interpreter<'witnesses> {
 
     fn authorize(
         &mut self,
-        delivery: &Delivery,
+        delivery: &Delivery<Sender>,
         actor: Actor,
     ) -> Result<(bool, BTreeSet<AccountId>), ExecutionError> {
         let account_id = actor.account_id;
@@ -1042,23 +1016,6 @@ const fn step_past(position: &mut usize) {
     *position = position
         .checked_add(1)
         .expect("bounded by the length of what it indexes");
-}
-
-fn public_delivery(delivery: &Delivery) -> PublicDelivery {
-    let program = delivery
-        .envelope
-        .source
-        .issuer()
-        .expect("only a Call from a private turn crosses into public execution");
-    PublicDelivery {
-        envelope: MessageEnvelope {
-            source: program,
-            to: delivery.envelope.to,
-            message: delivery.envelope.message.clone(),
-        },
-        grants: delivery.grants.iter().copied().collect(),
-        pda_seeds: delivery.pda_seeds.clone(),
-    }
 }
 
 fn private_seed_grant(
