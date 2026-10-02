@@ -237,12 +237,10 @@ impl From<TransactionEntry<MessageRef>> for FfiTransactionEntry {
 
 impl From<FfiTransactionEntry> for TransactionEntry<MessageRef> {
     fn from(value: FfiTransactionEntry) -> Self {
-        let message: Vec<u8> = value.message.into();
-
         match value.kind {
             FfiTransactionEntryKind::Call => Self::Call {
                 to: value.to.into(),
-                message,
+                message: value.message.into(),
             },
             FfiTransactionEntryKind::Cast => Self::Cast(value.message_ref.into()),
         }
