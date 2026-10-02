@@ -14,6 +14,10 @@ use crate::{
 /// that runs its `Instruction` variants as Rust rather than interpreting a guest ELF.
 pub const PROGRAM_LOADER_ACCOUNT_ID: AccountId = AccountId::new([0xFE; 32]);
 
+/// The keyless address of the `builtin_loader` program, which owns every system builtin's address
+/// as one of its PDAs (see [`AccountId::from_builtin_program_name`]).
+pub const BUILTIN_LOADER_ACCOUNT_ID: AccountId = AccountId::new([0xFD; 32]);
+
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
 /// Hard cap on a deployed program's segment chain length, bounding a resolution walk.
@@ -33,21 +37,12 @@ impl AccountId {
         Self::new(bytes.try_into().expect("8 u32 words are exactly 32 bytes"))
     }
 
+    /// A system builtin's address: the `builtin_loader` PDA whose seed is [`PdaSeed::for_builtin`]
+    /// of `name`, so `builtin_loader` can authorize its header updates through ordinary PDA
+    /// authorization.
     #[must_use]
     pub fn from_builtin_program_name(name: &[u8]) -> Self {
-        use risc0_zkvm::sha::rust_crypto::{Digest as _, Sha256};
-        const BUILTIN_PROGRAM_NAME_PREFIX: &[u8; 32] = b"/LEE-BuiltinProgram/v1/AccountId";
-
-        let mut hasher = Sha256::new();
-        hasher.update(BUILTIN_PROGRAM_NAME_PREFIX);
-        hasher.update(name);
-        Self::new(
-            hasher
-                .finalize()
-                .as_slice()
-                .try_into()
-                .expect("Hash output must be exactly 32 bytes long"),
-        )
+        Self::for_public_pda(&BUILTIN_LOADER_ACCOUNT_ID, &PdaSeed::for_builtin(name))
     }
 }
 
@@ -171,6 +166,26 @@ impl PdaSeed {
     #[must_use]
     pub const fn new(value: [u8; 32]) -> Self {
         Self(value)
+    }
+
+    /// The seed under which `builtin_loader` owns the builtin called `name`. Hashed with its own
+    /// domain tag so builtin names can't collide with each other or with other loader seeds.
+    #[must_use]
+    pub fn for_builtin(name: &[u8]) -> Self {
+        use risc0_zkvm::sha::rust_crypto::{Digest as _, Sha256};
+        const BUILTIN_SEED_PREFIX: &[u8; 32] =
+            b"/LEE/BuiltinLoader/v1/Name\x00\x00\x00\x00\x00\x00";
+
+        let mut hasher = Sha256::new();
+        hasher.update(BUILTIN_SEED_PREFIX);
+        hasher.update(name);
+        Self(
+            hasher
+                .finalize()
+                .as_slice()
+                .try_into()
+                .expect("Hash output must be exactly 32 bytes long"),
+        )
     }
 
     #[must_use]
@@ -442,6 +457,45 @@ impl ProgramSegment {
             LoaderEntry::Header(_) => None,
         }
     }
+}
+
+/// The `program_loader`'s instructions, here so guests (e.g. `builtin_loader`) can build them.
+///
+/// Variants are append-only. Borsh encodes the variant as a leading tag byte, so inserting one
+/// ahead of `WriteSegment` shifts every existing encoding.
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
+pub enum LoaderInstruction {
+    /// Writes a new segment to the empty loader shard of `accounts[0]`, which must be authorized.
+    ///
+    /// If `next_segment` is `Some`, `accounts[1]` must be that account and contain a valid
+    /// [`ProgramSegment`] in its loader shard. Segments are immutable and linked from tail to head.
+    ///
+    /// Required accounts (1, or 2 if `next_segment` is `Some`).
+    WriteSegment {
+        bytecode: Vec<u8>,
+        next_segment: Option<AccountId>,
+    },
+    /// Creates a header in the empty loader shard of `accounts[0]`, which must be
+    /// `is_authorized`.
+    ///
+    /// `accounts[1..]` supplies the read-only segment chain from `first_segment`, in link order.
+    /// The image ID is computed from that chain.
+    ///
+    /// Required accounts (1 + the segment chain length).
+    CreateHeader {
+        first_segment: AccountId,
+        immutable: bool,
+    },
+    /// Updates the header in `accounts[0]`'s loader shard.
+    ///
+    /// Requires an authorized account and a valid, mutable [`ProgramHeader`].
+    /// Uses the same segment chain and image ID calculation as [`LoaderInstruction::CreateHeader`].
+    ///
+    /// Required accounts (1 + the segment chain length).
+    UpdateHeader {
+        first_segment: AccountId,
+        immutable: bool,
+    },
 }
 
 /// What a `PROGRAM_LOADER_ACCOUNT_ID` shard holds.

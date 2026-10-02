@@ -35,6 +35,11 @@ pub enum BlockIngestError {
         /// Why the fee transaction's reward account is not allowed.
         reason: String,
     },
+    #[error("A scheduled upgrade of builtin {name} was due by this block but not applied")]
+    BuiltinUpgradeNotApplied {
+        /// The builtin's name, lossily decoded for display.
+        name: String,
+    },
     #[error("Transaction {tx_index} failed fee classification: {reason}")]
     InvalidFeeClass {
         /// Index of the failing transaction within the block body.
@@ -95,6 +100,7 @@ impl BlockIngestError {
             | Self::InvalidClockTransaction
             | Self::InvalidFeeTransaction
             | Self::InvalidRewardTarget { .. }
+            | Self::BuiltinUpgradeNotApplied { .. }
             | Self::InvalidFeeClass { .. }
             | Self::MissingFeeDeclaration { .. }
             | Self::GasCapExceeded { .. }

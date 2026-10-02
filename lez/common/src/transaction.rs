@@ -224,9 +224,9 @@ pub fn clock_invocation(block_id: BlockId, timestamp: Timestamp) -> lee::PublicT
 /// Whether `tx` is a sequencer-injected or account-less system transaction.
 ///
 /// Identified by shape: an empty witness set invoking the bridge deposit, the
-/// cross-zone inbox dispatch, or the `ping_sender` cross-zone send. Fee- and
-/// cap-exempt. Shared by the sequencer (build) and the transition (replay) so
-/// the two can never disagree.
+/// cross-zone inbox dispatch, the `ping_sender` cross-zone send, or a
+/// `builtin_loader` schedule or apply. Fee- and cap-exempt. Shared by the sequencer (build) and the
+/// transition (replay) so the two can never disagree.
 ///
 /// Cross-zone traffic is exempt by design, not as a stopgap: an outbound send
 /// is account-less (there is no payer to charge) and an inbound dispatch is
@@ -261,6 +261,10 @@ pub fn is_system_injection(tx: &LeeTransaction) -> bool {
             borsh::from_slice::<ping_core::SenderInstruction>(&message.instruction_data),
             Ok(ping_core::SenderInstruction::Send { .. })
         );
+    }
+    if message.program_account_id == builtin_loader_core::BUILTIN_LOADER_ACCOUNT_ID {
+        return borsh::from_slice::<builtin_loader_core::Instruction>(&message.instruction_data)
+            .is_ok();
     }
     false
 }

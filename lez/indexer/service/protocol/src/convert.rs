@@ -891,6 +891,9 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
             indexer_core::BlockIngestError::InvalidRewardTarget { reason } => {
                 Self::InvalidRewardTarget { reason }
             }
+            indexer_core::BlockIngestError::BuiltinUpgradeNotApplied { name } => {
+                Self::BuiltinUpgradeNotApplied { name }
+            }
             indexer_core::BlockIngestError::InvalidProducerSignature => {
                 Self::InvalidProducerSignature
             }

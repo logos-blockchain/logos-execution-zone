@@ -1,0 +1,10 @@
+[package]
+name = "builtin_loader_program"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[dependencies]
+borsh.workspace = true
+builtin_loader_core.workspace = true
+lee_core.workspace = true

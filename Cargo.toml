@@ -49,6 +49,7 @@ members = [
   "lez/programs/amm",
   "lez/programs/associated_token_account",
   "lez/programs/bridge",
+  "lez/programs/builtin_loader",
   "lez/programs/clock",
   "lez/programs/fee",
   "lez/programs/fee/core",
@@ -121,6 +122,7 @@ programs = { path = "lez/programs", default-features = false, features = [
 ] }
 system_accounts = { path = "lez/system_accounts" }
 clock_core = { path = "lez/programs/clock/core" }
+builtin_loader_core = { path = "lez/programs/builtin_loader/core" }
 cross_zone_marker_core = { path = "lez/programs/cross_zone_marker" }
 fee_core = { path = "lez/programs/fee/core" }
 token_core = { path = "lez/programs/token/core" }

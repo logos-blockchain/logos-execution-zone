@@ -513,6 +513,9 @@ pub enum BlockIngestError {
     InvalidRewardTarget {
         reason: String,
     },
+    BuiltinUpgradeNotApplied {
+        name: String,
+    },
     InvalidFeeClass {
         tx_index: u64,
         reason: String,

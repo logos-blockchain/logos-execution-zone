@@ -247,6 +247,12 @@ pub fn apply_block_to_state(
         clock_events,
     );
 
+    if let Some(name) = common::builtins::overdue_builtin_upgrade(state, block.header.block_id) {
+        return Err(BlockIngestError::BuiltinUpgradeNotApplied {
+            name: String::from_utf8_lossy(name).into_owned(),
+        });
+    }
+
     Ok(block_events)
 }
 
