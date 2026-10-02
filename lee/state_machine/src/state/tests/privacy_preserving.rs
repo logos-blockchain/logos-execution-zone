@@ -824,7 +824,7 @@ fn a_public_turn_departing_from_its_assumed_delivery_is_rejected() {
     assert!(
         matches!(
             execution_error(result),
-            ExecutionError::AssumptionMismatch { index: 0 }
+            ExecutionError::AssumptionMismatch { index: 1 }
         ),
         "the live delivery must be checked against the assumed one"
     );
