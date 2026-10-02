@@ -11,7 +11,7 @@ Prerequisite: a running local Docker daemon. The Bedrock service comes up via th
 RISC0_DEV_MODE=1 cargo run --release -p integration_bench -- --scenario all
 
 # One scenario, real proving (slow)
-cargo run --release -p integration_bench -- --scenario amm
+cargo run --release -p integration_bench -- --scenario private
 ```
 
 Scenarios: `fanout`, `private`, `parallel`, `all`.
