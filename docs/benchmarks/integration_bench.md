@@ -8,8 +8,6 @@ Numbers below are from a single-host docker-compose run on an Apple M2 Pro (CPU 
 
 | Scenario | Description |
 |---|---|
-| token | Sequential public token Send + one shielded recipient setup. |
-| amm | Pool create, add liquidity, swap, remove liquidity. All public. |
 | fanout | One sender → N recipients, sequential. All public. |
 | private | Shielded, deshielded, private→private chained private flow. |
 | parallel | N senders submit concurrently into one block. All public. |
@@ -39,8 +37,6 @@ Per-scenario wall time and Bedrock L1-finality latency for the closing tip.
 
 | Scenario | total_s | bedrock_finality_s |
 |---|---:|---:|
-| token_onboarding | 61.36 | 5.88 |
-| amm_swap_flow | 156.50 | 27.99 |
 | multi_recipient_fanout | 214.40 | 31.71 |
 | private_chained_flow | 109.31 | 8.73 |
 | parallel_fanout | 234.42 | 20.29 |
@@ -51,14 +47,12 @@ Shared TestContext setup: 139.80 s (paid once per run). Total dev-mode wall time
 
 | Scenario | total_s | bedrock_finality_s | Δ vs dev |
 |---|---:|---:|---:|
-| amm_swap_flow | 156.20 | 26.95 | ~0 (all-public) |
 | private_chained_flow | 391.74 | 9.40 | +282.4 s (≈ 94 s per PPE step × 3) |
 
 Per-step breakdown for `private_chained_flow` in real proving:
 
 | Step | submit_s | inclusion_s | total_s |
 |---|---:|---:|---:|
-| token_new_fungible (public) | 0.003 | 10.857 | 11.006 |
 | shielded_transfer (PPE) | 125.416 | 0.001 | 125.469 |
 | deshielded_transfer (PPE) | 126.261 | 0.001 | 126.311 |
 | private_to_private (PPE) | 128.875 | 0.001 | 128.934 |
@@ -71,8 +65,6 @@ Per scenario, every produced block is fetched via `getBlock(BlockId)` and serial
 
 | Scenario | blocks | block_bytes (mean) | block_bytes (min..max) | public_tx (mean / n) | ppe_tx (mean / n) |
 |---|---:|---:|---|---:|---:|
-| token_onboarding | 6 | 881 | 334..2,890 | 206 / 8 | 2,556 / 1 |
-| amm_swap_flow | 16 | 553 | 334..1,011 | 248 / 24 | n/a |
 | multi_recipient_fanout | 22 | 513 | 334..707 | 221 / 33 | n/a |
 | private_chained_flow | 10 | 1,186 | 334..3,565 | 173 / 11 | 2,715 / 3 |
 | parallel_fanout | 24 | 646 | 334..3,904 | 248 / 45 | n/a |
@@ -81,10 +73,9 @@ Per scenario, every produced block is fetched via `getBlock(BlockId)` and serial
 
 | Scenario | blocks | block_bytes (mean) | block_bytes (min..max) | public_tx (mean / n) | ppe_tx (mean / n) |
 |---|---:|---:|---|---:|---:|
-| amm_swap_flow | 16 | 553 | 334..1,011 | 248 / 24 | n/a |
 | private_chained_flow | 39 | 17,707 | 334..226,578 | 158 / 40 | 225,728 / 3 |
 
-`amm_swap_flow` is byte-identical between dev and real (no proof payload). `private_chained_flow`'s `ppe_tx_bytes` matches the cycle_bench `S_agg` measurement (≈ 225 KB borsh InnerReceipt). The `block_bytes` max (226,578) is the block containing the largest PPE transaction.
+`private_chained_flow`'s `ppe_tx_bytes` matches the cycle_bench `S_agg` measurement (≈ 225 KB borsh InnerReceipt). The `block_bytes` max (226,578) is the block containing the largest PPE transaction.
 
 ## Findings
 
@@ -106,7 +97,7 @@ RISC0_DEV_MODE=1 cargo run --release -p integration_bench -- --scenario all
 cargo run --release -p integration_bench -- --scenario private
 
 # Real-proving for representative public flow
-cargo run --release -p integration_bench -- --scenario amm
+cargo run --release -p integration_bench -- --scenario fanout
 ```
 
 JSON output: `target/integration_bench_dev.json` / `target/integration_bench_prove.json` (suffix toggled by `RISC0_DEV_MODE`).

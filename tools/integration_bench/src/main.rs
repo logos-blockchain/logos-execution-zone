@@ -12,7 +12,7 @@
 //!
 //! Run examples:
 //!   `RISC0_DEV_MODE=1 cargo run --release -p integration_bench -- --scenario all`.
-//!   `cargo run --release -p integration_bench -- --scenario amm`.
+//!   `cargo run --release -p integration_bench -- --scenario private`.
 //!
 //! `RISC0_DEV_MODE=1` skips proving and produces latency-only numbers in
 //! ~minutes; omitting it produces realistic proving-inclusive numbers but
@@ -43,8 +43,6 @@ mod scenarios;
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum ScenarioName {
-    Token,
-    Amm,
     Fanout,
     Private,
     Parallel,
@@ -90,8 +88,6 @@ async fn main() -> Result<()> {
 
     let to_run: Vec<ScenarioName> = match cli.scenario {
         ScenarioName::All => vec![
-            ScenarioName::Token,
-            ScenarioName::Amm,
             ScenarioName::Fanout,
             ScenarioName::Private,
             ScenarioName::Parallel,
@@ -157,8 +153,6 @@ async fn main() -> Result<()> {
 
 async fn run_scenario(name: ScenarioName, ctx: &mut TestContext) -> Result<ScenarioOutput> {
     match name {
-        ScenarioName::Token => scenarios::token::run(ctx).await,
-        ScenarioName::Amm => scenarios::amm::run(ctx).await,
         ScenarioName::Fanout => scenarios::fanout::run(ctx).await,
         ScenarioName::Private => scenarios::private::run(ctx).await,
         ScenarioName::Parallel => scenarios::parallel::run(ctx).await,

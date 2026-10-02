@@ -1154,66 +1154,6 @@ enum WalletFfiError wallet_ffi_program_loader_update(struct WalletHandle *handle
                                                      struct FfiTransactionResult *out_result);
 
 /**
- * Writes elf data of authenticated token program into buffer.
- *
- * WARNING: Result is not consisent and change between versions, use for testing purposes only.
- *
- * # Parameters
- * - `ffi_program`: Valid pointer to `FfiProgram`
- *
- * # Returns
- * - `Success` if deployment was submitted successfully
- * - Error code on other failures
- *
- * # Memory
- * - `FfiProgram` can be freed with corresponding `wallet_ffi_free_ffi_program` function
- *
- * # Safety
- * - `ffi_program` must be a non-null pointer
- */
-enum WalletFfiError wallet_ffi_token_elf(struct FfiProgram *ffi_program);
-
-/**
- * Writes elf data of amm into buffer.
- *
- * WARNING: Result is not consisent and change between versions, use for testing purposes only.
- *
- * # Parameters
- * - `ffi_program`: Valid pointer to `FfiProgram`
- *
- * # Returns
- * - `Success` if deployment was submitted successfully
- * - Error code on other failures
- *
- * # Memory
- * - `FfiProgram` can be freed with corresponding `wallet_ffi_free_ffi_program` function
- *
- * # Safety
- * - `ffi_program` must be a non-null pointer
- */
-enum WalletFfiError wallet_ffi_amm_elf(struct FfiProgram *ffi_program);
-
-/**
- * Writes elf data of ata into buffer.
- *
- * WARNING: Result is not consisent and change between versions, use for testing purposes only.
- *
- * # Parameters
- * - `ffi_program`: Valid pointer to `FfiProgram`
- *
- * # Returns
- * - `Success` if deployment was submitted successfully
- * - Error code on other failures
- *
- * # Memory
- * - `FfiProgram` can be freed with corresponding `wallet_ffi_free_ffi_program` function
- *
- * # Safety
- * - `ffi_program` must be a non-null pointer
- */
-enum WalletFfiError wallet_ffi_ata_elf(struct FfiProgram *ffi_program);
-
-/**
  * Free a ffi program returned by functions `wallet_ffi_*_elf`.
  *
  * # Safety
@@ -1517,7 +1457,6 @@ void wallet_ffi_free_transfer_result(struct FfiTransferResult *result);
  * # Parameters
  * - `config_path`: Path to the wallet configuration file (JSON)
  * - `storage_path`: Path where wallet data will be stored
- * - `statistics_path`: Path to the wallet statistics file (JSON)
  * - `password`: Password for encrypting the wallet seed
  *
  * # Returns
@@ -1529,7 +1468,6 @@ void wallet_ffi_free_transfer_result(struct FfiTransferResult *result);
  */
 struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
                                                    const char *storage_path,
-                                                   const char *statistics_path,
                                                    const char *password);
 
 /**
@@ -1540,7 +1478,6 @@ struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
  * # Parameters
  * - `config_path`: Path to the wallet configuration file (JSON)
  * - `storage_path`: Path to the wallet storage (JSON)
- * - `statistics_path`: Path to the wallet statistics file (JSON)
  *
  * # Returns
  * - Opaque wallet handle on success
@@ -1549,9 +1486,7 @@ struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
  * # Safety
  * All string parameters must be valid null-terminated UTF-8 strings.
  */
-struct WalletHandle *wallet_ffi_open(const char *config_path,
-                                     const char *storage_path,
-                                     const char *statistics_path);
+struct WalletHandle *wallet_ffi_open(const char *config_path, const char *storage_path);
 
 /**
  * Destroy a wallet handle and free its resources.
