@@ -29,7 +29,7 @@ impl<'de> Deserialize<'de> for LeeTransaction {
 
 impl LeeTransaction {
     #[must_use]
-    pub fn public_call(&self) -> Option<(Actor, &[u8])> {
+    pub const fn public_call(&self) -> Option<(Actor, &[u8])> {
         let Self::Public(tx) = self else {
             return None;
         };
