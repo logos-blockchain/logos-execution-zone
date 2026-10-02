@@ -325,6 +325,105 @@ fn a_proven_receipt_of_an_unpublished_record_is_rejected_at_settlement() {
 }
 
 #[test]
+fn a_receipt_signed_for_another_body_at_a_pending_sequence_is_rejected() {
+    let mut state = V03State::new().with_test_programs();
+    let record = cast(&mut state, receiver());
+    let substituted = StoredMessage {
+        body: MessageBody {
+            message: borsh::to_vec(&replying()).unwrap(),
+            ..record.body.clone()
+        },
+        ..record.clone()
+    };
+
+    let result = state.transition_from_public_transaction(
+        &receipt(
+            substituted.reference(),
+            receiver(),
+            vec![PublicIdentity::Key(receiver_pk())],
+        ),
+        2,
+        0,
+    );
+
+    assert!(matches!(
+        result,
+        Err(LeeError::InvalidInput(message)) if message == "A consumed message is not pending"
+    ));
+    assert_eq!(state.pending_message(record.reference()), Some(&record));
+}
+
+#[test]
+fn a_proven_receipt_of_another_body_at_a_pending_sequence_is_rejected() {
+    let keys = test_private_account_keys_1();
+    let private_receiver = Actor::new(
+        AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::ZERO),
+        scripted_id(),
+    );
+    let mut state = V03State::new().with_test_programs();
+    let record = cast(&mut state, private_receiver);
+    let forged = StoredMessage {
+        body: MessageBody {
+            message: borsh::to_vec(&Script::write(b"forged".to_vec()).from(scripted_id())).unwrap(),
+            ..record.body.clone()
+        },
+        ..record.clone()
+    };
+    let proven = execute_and_prove(
+        ProvingInput {
+            private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
+            ..proving_input(TransactionEntry::Cast(forged))
+        },
+        &Simulation::default(),
+        &scripted_programs(),
+    )
+    .unwrap();
+
+    let result = state.transition_from_privacy_preserving_transaction(
+        &private_tx(proven, vec![], &[]),
+        2,
+        0,
+    );
+
+    assert!(matches!(
+        result,
+        Err(LeeError::InvalidInput(message)) if message == "A consumed message is not pending"
+    ));
+    assert_eq!(state.pending_message(record.reference()), Some(&record));
+}
+
+#[test]
+fn a_diff_consuming_a_record_does_not_apply_where_another_record_holds_its_sequence() {
+    let mut state = V03State::new().with_test_programs();
+    let mut fork = state.clone();
+    let record = cast(&mut state, receiver());
+    let other = cast_script(&mut fork, receiver(), &replying());
+    assert_eq!(record.sequence, other.sequence);
+    let diff = ValidatedStateDiff::from_public_transaction(
+        &receipt(
+            record.reference(),
+            receiver(),
+            vec![PublicIdentity::Key(receiver_pk())],
+        ),
+        &state,
+        2,
+        0,
+    )
+    .unwrap();
+
+    let result = fork.apply_state_diff(diff);
+
+    assert!(matches!(
+        result,
+        Err(LeeError::InvalidInput(message)) if message == "A consumed message is no longer pending"
+    ));
+    assert_eq!(
+        fork.pending_messages_from(0).cloned().collect::<Vec<_>>(),
+        vec![other]
+    );
+}
+
+#[test]
 fn a_cast_from_a_private_root_is_published_at_settlement() {
     let tx = proven_casting(
         &Script::default().cast(receiver(), &received()),
