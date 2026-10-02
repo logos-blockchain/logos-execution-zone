@@ -1706,6 +1706,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         pending_from_store.extend(pending_dispatches);
         pending_from_store.extend(slash_txs);
         pending_from_store.extend(finalize_unstake_txs);
+        pending_from_store.extend(build_builtin_upgrade_txs(
+            &working_state,
+            new_block_height,
+            &self.sequencer_config.builtin_upgrades,
+        ));
         while let Some((origin, tx, from_store)) = pending_from_store
             .pop_front()
             .map(|tx| (TransactionOrigin::Sequencer, tx, true))
@@ -2756,6 +2761,7 @@ fn bridge_lock_holdings(
 pub fn is_sequencer_only_program(program_account_id: AccountId) -> bool {
     cross_zone::is_sequencer_only_program(program_account_id)
         || program_account_id == programs::fee_account_id()
+        || program_account_id == lee_core::program::BUILTIN_LOADER_ACCOUNT_ID
 }
 
 /// Op id of the `index`-th genesis allocation.
@@ -2844,6 +2850,106 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
 }
 
 /// A `FinalizeUnstake` for every release whose exit delay has passed in `state`.
+/// The `builtin_loader` transactions block `block_id` needs for the configured upgrades:
+/// `Schedule` before an upgrade's height, `Apply` from it while the schedule is pending.
+fn build_builtin_upgrade_txs(
+    state: &lee::V03State,
+    block_id: u64,
+    upgrades: &[config::BuiltinUpgrade],
+) -> Vec<LeeTransaction> {
+    upgrades
+        .iter()
+        .filter_map(|upgrade| {
+            build_builtin_upgrade_tx(state, block_id, upgrade)
+                .map_err(|err| warn!("Skipping builtin upgrade of {}: {:#}", upgrade.name, err))
+                .ok()
+                .flatten()
+        })
+        .collect()
+}
+
+fn build_builtin_upgrade_tx(
+    state: &lee::V03State,
+    block_id: u64,
+    upgrade: &config::BuiltinUpgrade,
+) -> Result<Option<LeeTransaction>> {
+    use lee_core::program::{BUILTIN_LOADER_ACCOUNT_ID, PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader};
+
+    let name = upgrade.name.as_bytes();
+    anyhow::ensure!(
+        common::builtins::UPGRADABLE_BUILTINS.contains(&name),
+        "not an upgradable builtin"
+    );
+    let builtin = AccountId::from_builtin_program_name(name);
+    let loader_shard = |id: AccountId| {
+        state
+            .get_account_by_id(id)
+            .data
+            .shard(PROGRAM_LOADER_ACCOUNT_ID)
+            .clone()
+    };
+
+    let (instruction, mut selectors) = match common::builtins::scheduled_upgrade(state, name) {
+        Some(scheduled) if block_id >= scheduled.from_height => (
+            builtin_loader_core::Instruction::Apply {
+                name: name.to_vec(),
+                from_height: scheduled.from_height,
+            },
+            vec![
+                ProgramShardSelector::new(builtin, BUILTIN_LOADER_ACCOUNT_ID),
+                ProgramShardSelector::new(builtin, PROGRAM_LOADER_ACCOUNT_ID),
+            ],
+        ),
+        Some(_) => return Ok(None),
+        None => {
+            let applied = ProgramHeader::from_loader_shard(&loader_shard(builtin))
+                .is_some_and(|header| header.program_first_segment == upgrade.first_segment);
+            if applied || block_id >= upgrade.from_height {
+                return Ok(None);
+            }
+            (
+                builtin_loader_core::Instruction::Schedule {
+                    name: name.to_vec(),
+                    first_segment: upgrade.first_segment,
+                    from_height: upgrade.from_height,
+                },
+                vec![ProgramShardSelector::new(
+                    builtin,
+                    BUILTIN_LOADER_ACCOUNT_ID,
+                )],
+            )
+        }
+    };
+
+    if let builtin_loader_core::Instruction::Apply { .. } = instruction {
+        let scheduled =
+            common::builtins::scheduled_upgrade(state, name).context("schedule disappeared")?;
+        let mut next = Some(scheduled.first_segment);
+        while let Some(segment_id) = next {
+            anyhow::ensure!(
+                selectors.len() < lee_core::program::MAX_PROGRAM_SEGMENTS.saturating_add(2),
+                "segment chain exceeds the segment cap"
+            );
+            let segment =
+                lee_core::program::ProgramSegment::from_loader_shard(&loader_shard(segment_id))
+                    .context("scheduled chain has a missing or malformed segment")?;
+            selectors.push(ProgramShardSelector::new(
+                segment_id,
+                PROGRAM_LOADER_ACCOUNT_ID,
+            ));
+            next = segment.next_segment;
+        }
+    }
+
+    let message = Message::try_new(BUILTIN_LOADER_ACCOUNT_ID, selectors, vec![], instruction)
+        .context("Failed to build builtin_loader message")?;
+    let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![]);
+    Ok(Some(LeeTransaction::Public(PublicTransaction::new(
+        message,
+        witness_set,
+    ))))
+}
+
 fn build_finalize_unstake_txs(state: &lee::V03State) -> VecDeque<LeeTransaction> {
     let Some(params) = committee_discovery::channel_params(state) else {
         return VecDeque::new();

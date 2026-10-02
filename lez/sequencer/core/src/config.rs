@@ -112,6 +112,19 @@ pub struct SequencerConfig {
     /// Sequencer p2p gossip configuration. `None` disables gossip.
     #[serde(default)]
     pub gossip: Option<GossipConfig>,
+    /// Builtin upgrades this producer schedules and applies through `builtin_loader`. A
+    /// stand-in for the agreement mechanism: whoever produces the block decides.
+    #[serde(default)]
+    pub builtin_upgrades: Vec<BuiltinUpgrade>,
+}
+
+/// Upgrade the system builtin `name` to the segment chain at `first_segment`, from
+/// `from_height`. The segments must already be on chain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuiltinUpgrade {
+    pub name: String,
+    pub first_segment: AccountId,
+    pub from_height: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -20,6 +20,11 @@ path = "bridge/src/main.rs"
 required-features = ["programs"]
 
 [[bin]]
+name = "builtin_loader"
+path = "builtin_loader/src/main.rs"
+required-features = ["programs"]
+
+[[bin]]
 name = "clock"
 path = "clock/src/main.rs"
 required-features = ["programs"]
@@ -79,6 +84,7 @@ artifacts = [
   "dep:build_utils",
   "dep:lee",
   "dep:clock_core",
+  "dep:builtin_loader_core",
   "dep:amm_core",
   "dep:associated_token_account_core",
   "dep:bridge_core",
@@ -103,6 +109,7 @@ programs = [
   "dep:associated_token_account_core",
   "dep:bridge_core",
   "dep:clock_core",
+  "dep:builtin_loader_core",
   "dep:fee_core",
   "dep:token_core",
   "dep:cross_zone_inbox_core",
@@ -122,6 +129,7 @@ amm_core = { workspace = true, optional = true }
 associated_token_account_core = { workspace = true, optional = true }
 bridge_core = { workspace = true, optional = true }
 clock_core = { workspace = true, optional = true }
+builtin_loader_core = { workspace = true, optional = true }
 fee_core = { workspace = true, optional = true }
 token_core = { workspace = true, optional = true }
 cross_zone_inbox_core = { workspace = true, optional = true }
@@ -142,3 +150,5 @@ build_utils = { workspace = true, optional = true }
 [dev-dependencies]
 lee_core = { workspace = true, features = ["test_utils"] }
 bridge_core = { workspace = true }
+program_loader_core = { workspace = true }
+risc0-binfmt = { workspace = true }

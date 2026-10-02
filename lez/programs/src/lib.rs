@@ -10,10 +10,11 @@ mod inner {
 
     use guests::{
         AMM_ELF, AMM_ID, ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID, BRIDGE_ELF,
-        BRIDGE_ID, BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID, CLOCK_ELF, CLOCK_ID, CROSS_ZONE_INBOX_ELF,
-        CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID, FEE_ELF, FEE_ID,
-        PING_RECEIVER_ELF, PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID, SEQUENCER_STAKE_ELF,
-        SEQUENCER_STAKE_ID, TOKEN_ELF, TOKEN_ID, WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
+        BRIDGE_ID, BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID, BUILTIN_LOADER_ELF, BUILTIN_LOADER_ID,
+        CLOCK_ELF, CLOCK_ID, CROSS_ZONE_INBOX_ELF, CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF,
+        CROSS_ZONE_OUTBOX_ID, FEE_ELF, FEE_ID, PING_RECEIVER_ELF, PING_RECEIVER_ID,
+        PING_SENDER_ELF, PING_SENDER_ID, SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID, TOKEN_ELF,
+        TOKEN_ID, WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
     };
     use lee::program::Program;
 
@@ -49,6 +50,14 @@ mod inner {
     }
 
     pub use amm_core::amm_account_id;
+
+    #[must_use]
+    #[inline]
+    pub const fn builtin_loader() -> Program {
+        Program::new_unchecked(BUILTIN_LOADER_ID, Cow::Borrowed(BUILTIN_LOADER_ELF))
+    }
+
+    pub use builtin_loader_core::builtin_loader_account_id;
 
     #[must_use]
     #[inline]
@@ -150,6 +159,170 @@ mod inner {
 
         use super::*;
 
+        mod builtin_upgrade {
+            use builtin_loader_core::{Instruction, ScheduledUpgrade};
+            use lee::{
+                Account, AccountId, ProgramShardSelector, PublicTransaction, V03State,
+                public_transaction,
+            };
+            use lee_core::program::{BUILTIN_LOADER_ACCOUNT_ID, PROGRAM_LOADER_ACCOUNT_ID};
+
+            use super::super::*;
+
+            const FROM_HEIGHT: u64 = 5;
+
+            fn builtin_loader_tx(
+                selectors: Vec<ProgramShardSelector>,
+                instruction: Instruction,
+            ) -> PublicTransaction {
+                let message = public_transaction::Message::try_new(
+                    BUILTIN_LOADER_ACCOUNT_ID,
+                    selectors,
+                    vec![],
+                    instruction,
+                )
+                .unwrap();
+                PublicTransaction::new(
+                    message,
+                    public_transaction::WitnessSet::from_raw_parts(vec![]),
+                )
+            }
+
+            /// `clock` installed as an upgradable builtin, and `ping_receiver`'s code uploaded
+            /// as the new version's segment chain. Returns the chain's account ids.
+            fn staged() -> (V03State, Vec<AccountId>) {
+                let new_code = ping_receiver();
+                let user_elf = risc0_binfmt::ProgramBinary::decode(new_code.elf())
+                    .unwrap()
+                    .user_elf
+                    .to_vec();
+                let ids: Vec<AccountId> = (0..program_loader_core::segment_count(&user_elf))
+                    .map(|i| AccountId::new([0x40_u8.wrapping_add(u8::try_from(i).unwrap()); 32]))
+                    .collect();
+                let segments = program_loader_core::build_segments(&user_elf, &ids).unwrap();
+                let state = V03State::new()
+                    .with_named_programs([(builtin_loader_account_id(), builtin_loader())])
+                    .with_upgradable_programs([(clock_account_id(), clock())])
+                    .with_public_accounts(ids.iter().zip(segments).map(|(id, segment)| {
+                        (
+                            *id,
+                            Account::default().with_shard(
+                                PROGRAM_LOADER_ACCOUNT_ID,
+                                segment.to_loader_shard().try_into().unwrap(),
+                            ),
+                        )
+                    }));
+                (state, ids)
+            }
+
+            fn schedule_tx(first_segment: AccountId) -> PublicTransaction {
+                builtin_loader_tx(
+                    vec![ProgramShardSelector::new(
+                        clock_account_id(),
+                        BUILTIN_LOADER_ACCOUNT_ID,
+                    )],
+                    Instruction::Schedule {
+                        name: CLOCK_NAME.to_vec(),
+                        first_segment,
+                        from_height: FROM_HEIGHT,
+                    },
+                )
+            }
+
+            fn apply_tx(segments: &[AccountId]) -> PublicTransaction {
+                let selectors = [
+                    ProgramShardSelector::new(clock_account_id(), BUILTIN_LOADER_ACCOUNT_ID),
+                    ProgramShardSelector::new(clock_account_id(), PROGRAM_LOADER_ACCOUNT_ID),
+                ]
+                .into_iter()
+                .chain(
+                    segments
+                        .iter()
+                        .map(|id| ProgramShardSelector::new(*id, PROGRAM_LOADER_ACCOUNT_ID)),
+                )
+                .collect();
+                builtin_loader_tx(
+                    selectors,
+                    Instruction::Apply {
+                        name: CLOCK_NAME.to_vec(),
+                        from_height: FROM_HEIGHT,
+                    },
+                )
+            }
+
+            fn schedule(state: &V03State) -> Option<ScheduledUpgrade> {
+                ScheduledUpgrade::from_bytes(
+                    state
+                        .get_account_by_id(clock_account_id())
+                        .data
+                        .shard(BUILTIN_LOADER_ACCOUNT_ID),
+                )
+            }
+
+            #[test]
+            fn a_scheduled_upgrade_applies_from_its_height() {
+                let (mut state, ids) = staged();
+                assert_eq!(
+                    state.get_program_image_id(clock_account_id()),
+                    Some(clock().id())
+                );
+
+                state
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
+                    .expect("scheduling succeeds");
+                assert_eq!(
+                    schedule(&state),
+                    Some(ScheduledUpgrade {
+                        first_segment: ids[0],
+                        from_height: FROM_HEIGHT,
+                    })
+                );
+
+                state
+                    .transition_from_public_transaction(&apply_tx(&ids), FROM_HEIGHT - 1, 0)
+                    .expect_err("an upgrade can't apply before its height");
+
+                state
+                    .transition_from_public_transaction(&apply_tx(&ids), FROM_HEIGHT, 0)
+                    .expect("the upgrade applies at its height");
+                assert_eq!(
+                    state.get_program_image_id(clock_account_id()),
+                    Some(ping_receiver().id())
+                );
+                assert_eq!(schedule(&state), None, "applying clears the schedule");
+            }
+
+            #[test]
+            fn an_unscheduled_upgrade_is_refused() {
+                let (mut state, ids) = staged();
+
+                state
+                    .transition_from_public_transaction(&apply_tx(&ids), FROM_HEIGHT, 0)
+                    .expect_err("nothing was scheduled");
+                assert_eq!(
+                    state.get_program_image_id(clock_account_id()),
+                    Some(clock().id())
+                );
+            }
+
+            #[test]
+            fn an_upgrade_to_another_chain_is_refused() {
+                let (mut state, ids) = staged();
+                state
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
+                    .unwrap();
+
+                let other = AccountId::new([0x77; 32]);
+                state
+                    .transition_from_public_transaction(&apply_tx(&[other]), FROM_HEIGHT, 0)
+                    .expect_err("the chain differs from the scheduled one");
+                assert_eq!(
+                    state.get_program_image_id(clock_account_id()),
+                    Some(clock().id())
+                );
+            }
+        }
+
         fn deposit_tx(op_id: [u8; 32], recipient_id: AccountId, amount: u64) -> PublicTransaction {
             let message = public_transaction::Message::try_new(
                 bridge_account_id(),
@@ -236,6 +409,7 @@ mod inner {
             let cases: &[(&[u8], [u32; 8])] = &[
                 (AMM_ELF, AMM_ID),
                 (ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID),
+                (BUILTIN_LOADER_ELF, BUILTIN_LOADER_ID),
                 (CLOCK_ELF, CLOCK_ID),
                 (FEE_ELF, FEE_ID),
                 (BRIDGE_ELF, BRIDGE_ID),

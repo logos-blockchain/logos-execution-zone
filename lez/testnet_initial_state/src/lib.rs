@@ -202,13 +202,25 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
         .collect()
 }
 
-fn initial_programs(cross_zone: bool) -> Vec<(AccountId, Program)> {
-    let mut programs = vec![
+/// Builtins fixed at genesis: `builtin_loader` (the root of builtin upgrades) and the
+/// application builtins due to leave the builtin set.
+fn fixed_programs() -> Vec<(AccountId, Program)> {
+    vec![
+        (
+            programs::builtin_loader_account_id(),
+            programs::builtin_loader(),
+        ),
         (programs::token_account_id(), programs::token()),
         (programs::amm_account_id(), programs::amm()),
+        (programs::ata_account_id(), programs::ata()),
+    ]
+}
+
+/// System builtins, owned by `builtin_loader` and upgradable through it.
+fn upgradable_programs(cross_zone: bool) -> Vec<(AccountId, Program)> {
+    let mut programs = vec![
         (programs::clock_account_id(), programs::clock()),
         (programs::fee_account_id(), programs::fee()),
-        (programs::ata_account_id(), programs::ata()),
         (programs::bridge_account_id(), programs::bridge()),
         (
             programs::sequencer_stake_account_id(),
@@ -217,8 +229,7 @@ fn initial_programs(cross_zone: bool) -> Vec<(AccountId, Program)> {
     ];
     if cross_zone {
         // Builtins baked into every node (genesis-block ELFs would exceed the
-        // inscription size limit); registered only on cross_zone zones, fixed at
-        // genesis.
+        // inscription size limit); registered only on cross_zone zones.
         programs.extend([
             (
                 programs::cross_zone_inbox_account_id(),
@@ -251,7 +262,8 @@ pub fn initial_state(cross_zone: bool) -> V03State {
     lee::V03State::new()
         .with_public_accounts(initial_public_accounts())
         .with_private_accounts(initial_private_accounts())
-        .with_named_programs(initial_programs(cross_zone))
+        .with_named_programs(fixed_programs())
+        .with_upgradable_programs(upgradable_programs(cross_zone))
 }
 
 #[cfg(test)]

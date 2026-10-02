@@ -189,6 +189,19 @@ impl V03State {
         self
     }
 
+    /// Seeds builtins that `builtin_loader` can upgrade: mutable, so with no immutable mirror
+    /// commitment that would let a superseded version keep being claimed.
+    #[must_use]
+    pub fn with_upgradable_programs(
+        mut self,
+        programs: impl IntoIterator<Item = (AccountId, Program)>,
+    ) -> Self {
+        for (account_id, program) in programs {
+            self.insert_program_at(account_id, &program, false);
+        }
+        self
+    }
+
     #[must_use]
     pub fn with_programs(self, programs: impl IntoIterator<Item = Program>) -> Self {
         self.with_genesis_programs(programs.into_iter().map(|program| (program, true)))

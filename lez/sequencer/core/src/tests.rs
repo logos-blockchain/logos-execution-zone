@@ -305,6 +305,7 @@ fn setup_sequencer_config() -> SequencerConfig {
         cross_zone: None,
         metrics_address: None,
         gossip: None,
+        builtin_upgrades: Vec::new(),
     }
 }
 
@@ -5628,4 +5629,79 @@ async fn the_first_finalized_block_is_not_reported() {
     );
     finalize_signed(&mut sequencer, entry_of(&invalid, MsgId::root())).await;
     assert!(!slash_recorded(&sequencer).await);
+}
+
+#[test]
+fn builtin_upgrades_are_scheduled_then_applied_from_their_height() {
+    use lee_core::program::{BUILTIN_LOADER_ACCOUNT_ID, PROGRAM_LOADER_ACCOUNT_ID, ProgramSegment};
+
+    let first = AccountId::new([0x51; 32]);
+    let second = AccountId::new([0x52; 32]);
+    let segment = |bytecode: Vec<u8>, next_segment| {
+        lee::Account::default().with_shard(
+            PROGRAM_LOADER_ACCOUNT_ID,
+            ProgramSegment {
+                bytecode,
+                next_segment,
+            }
+            .to_loader_shard()
+            .try_into()
+            .unwrap(),
+        )
+    };
+    let mut state = testnet_initial_state::initial_state(false).with_public_accounts([
+        (first, segment(vec![1], Some(second))),
+        (second, segment(vec![2], None)),
+    ]);
+    let upgrades = [config::BuiltinUpgrade {
+        name: "clock".to_owned(),
+        first_segment: first,
+        from_height: 5,
+    }];
+    let instruction = |tx: &LeeTransaction| {
+        let LeeTransaction::Public(tx) = tx else {
+            panic!("builtin_loader transactions are public");
+        };
+        borsh::from_slice::<builtin_loader_core::Instruction>(&tx.message().instruction_data)
+            .unwrap()
+    };
+
+    let txs = super::build_builtin_upgrade_txs(&state, 3, &upgrades);
+    assert!(matches!(
+        txs.as_slice(),
+        [tx] if matches!(instruction(tx), builtin_loader_core::Instruction::Schedule { .. })
+    ));
+    let LeeTransaction::Public(schedule) = &txs[0] else {
+        unreachable!()
+    };
+    state
+        .transition_from_public_transaction(schedule, 3, 0)
+        .expect("the producer's Schedule executes");
+
+    assert!(
+        super::build_builtin_upgrade_txs(&state, 4, &upgrades).is_empty(),
+        "nothing to do between scheduling and the upgrade's height"
+    );
+
+    let txs = super::build_builtin_upgrade_txs(&state, 5, &upgrades);
+    let [apply] = txs.as_slice() else {
+        panic!("expected one Apply, got {txs:?}");
+    };
+    assert!(matches!(
+        instruction(apply),
+        builtin_loader_core::Instruction::Apply { from_height: 5, .. }
+    ));
+    let LeeTransaction::Public(apply) = apply else {
+        unreachable!()
+    };
+    let clock = programs::clock_account_id();
+    assert_eq!(
+        apply.message().shard_selectors,
+        vec![
+            ProgramShardSelector::new(clock, BUILTIN_LOADER_ACCOUNT_ID),
+            ProgramShardSelector::new(clock, PROGRAM_LOADER_ACCOUNT_ID),
+            ProgramShardSelector::new(first, PROGRAM_LOADER_ACCOUNT_ID),
+            ProgramShardSelector::new(second, PROGRAM_LOADER_ACCOUNT_ID),
+        ]
+    );
 }
