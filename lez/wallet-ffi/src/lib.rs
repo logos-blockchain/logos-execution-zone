@@ -55,8 +55,6 @@ pub mod transfer;
 pub mod types;
 pub mod wallet;
 
-pub mod reexports;
-
 static TOKIO_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
 /// Get a reference to the global runtime.

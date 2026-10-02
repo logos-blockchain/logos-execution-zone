@@ -143,7 +143,8 @@ impl TryFrom<FfiAccount> for Account {
 ///
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiAccount` produced by this library and not yet freed.
-pub unsafe fn primitives_ffi_free_ffi_account(val: *mut FfiAccount) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn primitives_ffi_free_ffi_account(val: *mut FfiAccount) {
     if val.is_null() {
         log::error!("Trying to free a null pointer. Exiting");
         return;

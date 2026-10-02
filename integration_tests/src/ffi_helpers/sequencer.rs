@@ -8,7 +8,6 @@ use std::{
 };
 
 use anyhow::{Context as _, Result};
-use integration_tests::{L2_TO_L1_TIMEOUT, account_balance, get_account, new_account};
 use lee::{AccountId, PrivateKey, PublicKey, program::Program};
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, UnsecuredEd25519Key};
 use logos_blockchain_zone_sdk::{
@@ -42,6 +41,11 @@ use test_fixtures::{
     setup::SequencerSetup,
 };
 use wallet::AccountIdentity;
+
+use crate::{
+    L2_TO_L1_TIMEOUT, account_balance, ffi_helpers::primitives::primitives_ffi_free_cstring,
+    get_account, new_account,
+};
 
 unsafe extern "C" {
     pub unsafe fn sequencer_ffi_query_last_block(
@@ -90,13 +94,7 @@ unsafe extern "C" {
         selector: *const FfiSelector,
     ) -> PointerResult<FfiVec<FfiEventRecord>, OperationStatus>;
 
-    pub unsafe fn sequencer_ffi_free_ffi_block(val: FfiBlock);
-    pub unsafe fn sequencer_ffi_free_cstring(block: *mut c_char);
-    pub unsafe fn sequencer_ffi_free_ffi_block_opt(val: *mut FfiBlockOpt);
     pub unsafe fn sequencer_ffi_stop_sequencer(sequencer: *mut SequencerServiceFFI);
-    pub unsafe fn sequencer_ffi_free_ffi_transaction_vec(val: *mut FfiVec<FfiTransaction>);
-    pub unsafe fn sequencer_ffi_free_ffi_block_vec(val: *mut FfiVec<FfiBlock>);
-    pub unsafe fn sequencer_ffi_free_ffi_event_record_vec(val: *mut FfiVec<FfiEventRecord>);
 }
 
 /// Comfortably above `system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE`.
@@ -118,6 +116,7 @@ pub struct JoiningSetup {
 }
 
 /// Short block cadence for the joining.
+#[must_use]
 pub fn fast_blocks() -> SequencerPartialConfig {
     SequencerPartialConfig {
         block_create_timeout: Duration::from_secs(5),
@@ -325,7 +324,7 @@ pub fn joining_setup() -> Result<JoiningSetup> {
 
     // SAFETY: cstring was constructed from valid string.
     unsafe {
-        sequencer_ffi_free_cstring(raw_config_path);
+        primitives_ffi_free_cstring(raw_config_path);
     }
 
     if sequencer_ffi_res.error.is_error() {

@@ -114,7 +114,8 @@ impl From<FfiBedrockStatus> for BedrockStatus {
 ///
 /// The caller must ensure that:
 /// - `val` is a valid instance of `FfiBlock` produced by this library and not yet freed.
-pub unsafe fn primitives_ffi_free_ffi_block(val: FfiBlock) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn primitives_ffi_free_ffi_block(val: FfiBlock) {
     let ffi_tx_ffi_vec = val.body;
 
     primitives_ffi_free_transaction_vec_value(ffi_tx_ffi_vec);
@@ -138,7 +139,8 @@ pub unsafe fn primitives_ffi_free_ffi_block(val: FfiBlock) {
 ///
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiBlockOpt` produced by this library and not yet freed.
-pub unsafe fn primitives_ffi_free_ffi_block_opt(val: *mut FfiBlockOpt) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn primitives_ffi_free_ffi_block_opt(val: *mut FfiBlockOpt) {
     if val.is_null() {
         log::error!("Trying to free a null pointer. Exiting");
         return;
@@ -171,7 +173,8 @@ pub unsafe fn primitives_ffi_free_ffi_block_opt(val: *mut FfiBlockOpt) {
 ///
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiVec<FfiBlock>` produced by this library and not yet freed.
-pub unsafe fn primitives_ffi_free_ffi_block_vec(val: *mut FfiVec<FfiBlock>) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn primitives_ffi_free_ffi_block_vec(val: *mut FfiVec<FfiBlock>) {
     if val.is_null() {
         log::error!("Trying to free a null pointer. Exiting");
         return;

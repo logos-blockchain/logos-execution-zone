@@ -53,7 +53,10 @@ impl From<EventRecord> for FfiEventRecord {
 ///
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiVec<FfiEventRecord>` produced by this library and not yet freed.
-pub unsafe fn primitives_ffi_free_ffi_event_record_vec(val: *mut FfiVec<FfiEventRecord>) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn primitives_ffi_free_ffi_event_record_vec(
+    val: *mut FfiVec<FfiEventRecord>,
+) {
     if val.is_null() {
         log::error!("Trying to free a null pointer. Exiting");
         return;

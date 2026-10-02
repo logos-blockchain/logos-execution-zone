@@ -13,7 +13,7 @@
 
 use std::{
     collections::HashSet,
-    ffi::{CStr, CString, c_char},
+    ffi::{CStr, CString},
     io::Write as _,
     path::Path,
     str::FromStr as _,
@@ -25,6 +25,7 @@ use common::HashType;
 use integration_tests::{
     BlockingTestContext, TIME_TO_WAIT_FOR_BLOCK_SECONDS,
     config::{INITIAL_PRIVATE_BALANCES_FOR_WALLET, INITIAL_PUBLIC_BALANCES_FOR_WALLET},
+    ffi_helpers::{primitives as primitives_ffi_helpers, wallet::*},
 };
 use lee::{Account, AccountId, PrivateKey, PublicKey, program::Program};
 use lee_core::{
@@ -42,232 +43,8 @@ use wallet_ffi::{
         FfiDependency, FfiMembershipProof, FfiProgramHeader, FfiProgramKind,
         FfiProgramWithDependencies, FfiTransactionResult,
     },
-    label::{AccountIdResolvedFromLabel, LabelAvailability, LabelList},
     wallet::FfiCreateWalletOutput,
 };
-
-unsafe extern "C" {
-    fn wallet_ffi_create_new(
-        config_path: *const c_char,
-        storage_path: *const c_char,
-        metrics_path: *const c_char,
-        password: *const c_char,
-    ) -> FfiCreateWalletOutput;
-
-    fn wallet_ffi_open(
-        config_path: *const c_char,
-        storage_path: *const c_char,
-        metrics_path: *const c_char,
-    ) -> *mut WalletHandle;
-
-    fn wallet_ffi_destroy(handle: *mut WalletHandle);
-
-    fn wallet_ffi_create_account_public(
-        handle: *mut WalletHandle,
-        out_account_id: *mut FfiBytes32,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_import_public_account(
-        handle: *mut WalletHandle,
-        private_key_hex: *const c_char,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_create_private_accounts_key(
-        handle: *mut WalletHandle,
-        out_keys: *mut FfiPrivateAccountKeys,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_import_private_account(
-        handle: *mut WalletHandle,
-        key_chain_json: *const c_char,
-        chain_index: *const c_char,
-        identifier: *const FfiIdentifier,
-        account_state_json: *const c_char,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_list_accounts(
-        handle: *mut WalletHandle,
-        out_list: *mut FfiAccountList,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_free_account_list(list: *mut FfiAccountList);
-
-    fn wallet_ffi_get_balance(
-        handle: *mut WalletHandle,
-        account_id: *const FfiBytes32,
-        is_public: bool,
-        out_balance: *mut [u8; 16],
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_get_account_public(
-        handle: *mut WalletHandle,
-        account_id: *const FfiBytes32,
-        out_account: *mut FfiAccount,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_get_account_private(
-        handle: *mut WalletHandle,
-        account_id: *const FfiBytes32,
-        out_account: *mut FfiAccount,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_get_account_view(
-        handle: *mut WalletHandle,
-        account_id: *const FfiBytes32,
-        program_account_id: *const FfiBytes32,
-        out_account: *mut FfiAccount,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_get_public_account_key(
-        handle: *mut WalletHandle,
-        account_id: *const FfiBytes32,
-        out_public_key: *mut FfiPublicAccountKey,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_get_private_account_keys(
-        handle: *mut WalletHandle,
-        account_id: *const FfiBytes32,
-        out_keys: *mut FfiPrivateAccountKeys,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_free_private_account_keys(keys: *mut FfiPrivateAccountKeys);
-
-    fn wallet_ffi_account_id_to_base58(account_id: *const FfiBytes32) -> *mut std::ffi::c_char;
-
-    fn wallet_ffi_free_string(ptr: *mut c_char);
-
-    fn wallet_ffi_account_id_from_base58(
-        base58_str: *const std::ffi::c_char,
-        out_account_id: *mut FfiBytes32,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_transfer_public(
-        handle: *mut WalletHandle,
-        from: *const FfiBytes32,
-        to: *const FfiBytes32,
-        amount: *const [u8; 16],
-        out_result: *mut FfiTransferResult,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_transfer_shielded(
-        handle: *mut WalletHandle,
-        from: *const FfiBytes32,
-        to_keys: *const FfiPrivateAccountKeys,
-        to_identifier: *const FfiIdentifier,
-        amount: *const [u8; 16],
-        key_path: *const c_char,
-        out_result: *mut FfiTransferResult,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_transfer_deshielded(
-        handle: *mut WalletHandle,
-        from: *const FfiBytes32,
-        to: *const FfiBytes32,
-        amount: *const [u8; 16],
-        out_result: *mut FfiTransferResult,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_transfer_private(
-        handle: *mut WalletHandle,
-        from: *const FfiBytes32,
-        to_keys: *const FfiPrivateAccountKeys,
-        to_identifier: *const FfiIdentifier,
-        amount: *const [u8; 16],
-        out_result: *mut FfiTransferResult,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_free_transfer_result(result: *mut FfiTransferResult);
-
-    // fn wallet_ffi_bridge_withdraw(
-    //     handle: *mut WalletHandle,
-    //     from: *const FfiBytes32,
-    //     amount: u64,
-    //     bedrock_account_pk: *const FfiBytes32,
-    //     out_result: *mut FfiTransferResult,
-    // ) -> error::WalletFfiError;
-
-    fn wallet_ffi_save(handle: *mut WalletHandle) -> error::WalletFfiError;
-
-    fn wallet_ffi_sync_to_block(handle: *mut WalletHandle, block_id: u64) -> error::WalletFfiError;
-
-    fn wallet_ffi_get_current_block_height(
-        handle: *mut WalletHandle,
-        out_block_height: *mut u64,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_restore_data(
-        handle: *mut WalletHandle,
-        mnemonic: *const c_char,
-        password: *const c_char,
-        depth: u32,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_resolve_public_account(
-        account_id: FfiBytes32,
-        needs_sign: bool,
-        out_account_identity: *mut FfiAccountIdentity,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_send_generic_public_transaction(
-        handle: *mut WalletHandle,
-        account_mentions: *const FfiAccountMention,
-        account_mentions_size: usize,
-        instruction_data: *const u8,
-        instruction_data_size: usize,
-        program_account_id: FfiBytes32,
-        payer: *const FfiBytes32,
-        out_result: *mut FfiTransactionResult,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_resolve_private_account(
-        handle: *mut WalletHandle,
-        account_id: FfiBytes32,
-        out_account_identity: *mut FfiAccountIdentity,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_send_generic_private_transaction(
-        handle: *mut WalletHandle,
-        account_mentions: *const FfiAccountMention,
-        account_mentions_size: usize,
-        instruction_data: *const u8,
-        instruction_data_size: usize,
-        program_with_dependencies: *const FfiProgramWithDependencies,
-        out_result: *mut FfiTransactionResult,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_free_transaction_result(result: *mut FfiTransactionResult);
-
-    fn wallet_ffi_free_account_identity(account_identity: *mut FfiAccountIdentity);
-
-    fn wallet_ffi_check_label_available(
-        handle: *mut WalletHandle,
-        label: *const c_char,
-    ) -> LabelAvailability;
-
-    fn wallet_ffi_add_label(
-        handle: *mut WalletHandle,
-        label: *const c_char,
-        account_id_with_privacy: FfiAccountIdWithPrivacy,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_resolve_label(
-        handle: *mut WalletHandle,
-        label: *const c_char,
-    ) -> AccountIdResolvedFromLabel;
-
-    fn wallet_ffi_get_all_labels_for_account(
-        handle: *mut WalletHandle,
-        account_id_with_privacy: FfiAccountIdWithPrivacy,
-    ) -> LabelList;
-
-    fn wallet_ffi_free_label_list(label_list: *mut LabelList) -> error::WalletFfiError;
-
-    fn wallet_ffi_poll_transaction_status(
-        handle: *mut WalletHandle,
-        tx_hash: FfiBytes32,
-        transaction_status: *mut bool,
-    ) -> error::WalletFfiError;
-}
 
 /// Blocks until the transfer is in a block, panicking if it never lands.
 fn wait_for_inclusion(handle: *mut WalletHandle, result: &FfiTransferResult) {
@@ -462,7 +239,7 @@ fn wallet_ffi_create_private_accounts() -> Result<()> {
             let mut out_keys = FfiPrivateAccountKeys::default();
             wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys).unwrap();
             npks.push(out_keys.nullifier_public_key.data);
-            wallet_ffi_free_private_account_keys(&raw mut out_keys);
+            primitives_ffi_helpers::primitives_ffi_free_private_account_keys(&raw mut out_keys);
         }
         wallet_ffi_destroy(wallet_ffi_handle);
         npks
@@ -493,7 +270,7 @@ fn wallet_ffi_save_and_load_persistent_storage() -> Result<()> {
         let mut out_keys = FfiPrivateAccountKeys::default();
         wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys).unwrap();
         let npk = out_keys.nullifier_public_key.data;
-        wallet_ffi_free_private_account_keys(&raw mut out_keys);
+        primitives_ffi_helpers::primitives_ffi_free_private_account_keys(&raw mut out_keys);
         wallet_ffi_save(wallet_ffi_handle).unwrap();
         wallet_ffi_destroy(wallet_ffi_handle);
         npk
@@ -505,7 +282,7 @@ fn wallet_ffi_save_and_load_persistent_storage() -> Result<()> {
         let mut out_keys = FfiPrivateAccountKeys::default();
         wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys).unwrap();
         let npk = out_keys.nullifier_public_key.data;
-        wallet_ffi_free_private_account_keys(&raw mut out_keys);
+        primitives_ffi_helpers::primitives_ffi_free_private_account_keys(&raw mut out_keys);
         wallet_ffi_destroy(wallet_ffi_handle);
         npk
     };
@@ -540,7 +317,7 @@ fn test_wallet_ffi_list_accounts() -> Result<()> {
 
             let mut out_keys = FfiPrivateAccountKeys::default();
             wallet_ffi_create_private_accounts_key(handle, &raw mut out_keys).unwrap();
-            wallet_ffi_free_private_account_keys(&raw mut out_keys);
+            primitives_ffi_helpers::primitives_ffi_free_private_account_keys(&raw mut out_keys);
         }
 
         (handle, public_ids)
@@ -850,7 +627,7 @@ fn test_wallet_ffi_get_private_account_keys() -> Result<()> {
     assert_eq!(&keys.vpk().unwrap(), expected_vpk);
 
     unsafe {
-        wallet_ffi_free_private_account_keys(&raw mut keys);
+        primitives_ffi_helpers::primitives_ffi_free_private_account_keys(&raw mut keys);
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 
@@ -872,7 +649,7 @@ fn test_wallet_ffi_account_id_to_base58() -> Result<()> {
     assert_eq!(account_id.to_string(), ffi_result);
 
     unsafe {
-        wallet_ffi_free_string(ptr);
+        primitives_ffi_helpers::primitives_ffi_free_cstring(ptr);
     }
 
     Ok(())
@@ -1930,7 +1707,7 @@ fn test_wallet_ffi_single_label() -> Result<()> {
     assert_eq!(acc_resolved.account_id, acc_1_id_with_privacy);
 
     unsafe {
-        wallet_ffi_free_string(lab_1);
+        primitives_ffi_helpers::primitives_ffi_free_cstring(lab_1);
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 
@@ -2001,9 +1778,9 @@ fn test_wallet_ffi_more_labels() -> Result<()> {
     assert_eq!(err, error::WalletFfiError::Success);
 
     unsafe {
-        wallet_ffi_free_string(lab_1);
-        wallet_ffi_free_string(lab_2);
-        wallet_ffi_free_string(lab_3);
+        primitives_ffi_helpers::primitives_ffi_free_cstring(lab_1);
+        primitives_ffi_helpers::primitives_ffi_free_cstring(lab_2);
+        primitives_ffi_helpers::primitives_ffi_free_cstring(lab_3);
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 

@@ -383,7 +383,10 @@ impl<T> From<FfiOption<T>> for Option<T> {
 ///
 /// # Safety
 /// The keys must be valid.
-pub unsafe fn primitives_ffi_free_private_account_keys_owned(keys: FfiPrivateAccountKeys) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn primitives_ffi_free_private_account_keys_owned(
+    keys: FfiPrivateAccountKeys,
+) {
     if keys.viewing_public_key.entries.is_null() {
         return;
     }
@@ -402,7 +405,10 @@ pub unsafe fn primitives_ffi_free_private_account_keys_owned(keys: FfiPrivateAcc
 ///
 /// # Safety
 /// The keys must be valid. Pointer must not be used again.
-pub unsafe fn primitives_ffi_free_private_account_keys_boxed(keys: *mut FfiPrivateAccountKeys) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn primitives_ffi_free_private_account_keys_boxed(
+    keys: *mut FfiPrivateAccountKeys,
+) {
     if keys.is_null() {
         log::error!("Trying to free a null pointer. Exiting");
         return;
@@ -417,7 +423,10 @@ pub unsafe fn primitives_ffi_free_private_account_keys_boxed(keys: *mut FfiPriva
 ///
 /// # Safety
 /// The keys must be valid. Pointer must not be used again.
-pub unsafe fn primitives_ffi_free_private_account_keys(keys: *mut FfiPrivateAccountKeys) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn primitives_ffi_free_private_account_keys(
+    keys: *mut FfiPrivateAccountKeys,
+) {
     if keys.is_null() {
         log::error!("Trying to free a null pointer. Exiting");
         return;

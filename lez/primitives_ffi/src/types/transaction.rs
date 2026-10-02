@@ -618,11 +618,8 @@ pub enum FfiTransactionKind {
 ///
 /// The caller must ensure that:
 /// - `val` is a valid instance of `FfiTransaction`.
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Not needless, this free invalidates innner pointers inside struct, so it should not be used any more"
-)]
-pub unsafe fn primitives_ffi_free_ffi_transaction(val: FfiTransaction) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn primitives_ffi_free_ffi_transaction(val: FfiTransaction) {
     match val.kind {
         FfiTransactionKind::Public => {
             let body = unsafe { Box::from_raw(val.body.public_body) };
@@ -668,7 +665,10 @@ pub unsafe fn primitives_ffi_free_ffi_transaction(val: FfiTransaction) {
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiOption<FfiTransaction>` produced by this library and not yet
 ///   freed.
-pub unsafe fn primitives_ffi_free_ffi_transaction_opt(val: *mut FfiOption<FfiTransaction>) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn primitives_ffi_free_ffi_transaction_opt(
+    val: *mut FfiOption<FfiTransaction>,
+) {
     if val.is_null() {
         log::error!("Trying to free a null pointer. Exiting");
         return;
@@ -717,7 +717,8 @@ pub(crate) fn primitives_ffi_free_transaction_vec_value(val: FfiVec<FfiTransacti
 ///
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiVec<FfiTransaction>` produced by this library and not yet freed.
-pub unsafe fn primitives_ffi_free_ffi_transaction_vec(val: *mut FfiVec<FfiTransaction>) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn primitives_ffi_free_ffi_transaction_vec(val: *mut FfiVec<FfiTransaction>) {
     if val.is_null() {
         log::error!("Trying to free a null pointer. Exiting");
         return;

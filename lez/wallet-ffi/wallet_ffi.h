@@ -1518,21 +1518,4 @@ enum WalletFfiError wallet_ffi_restore_data(struct WalletHandle *handle,
  */
 char *wallet_ffi_get_sequencer_addr(struct WalletHandle *handle);
 
-/**
- * # Safety
- * It's up to the caller to pass a proper pointer, if somehow from c/c++ side
- * this is called with a type which doesn't come from a returned `CString` it
- * will cause a segfault.
- */
-void wallet_ffi_free_string(char *block);
-
-/**
- * Free private account keys returned by `wallet_ffi_get_private_account_keys`.
- *
- * # Safety
- * The keys must be either null or valid keys returned by
- * `wallet_ffi_get_private_account_keys`.
- */
-void wallet_ffi_free_private_account_keys(FfiPrivateAccountKeys *keys);
-
 #endif  /* WALLET_FFI_H */
