@@ -409,10 +409,7 @@ fn a_prepared_receipt_to_an_unproven_public_receiver_fails_before_proving() {
 
 #[test]
 fn a_pending_record_survives_a_borsh_round_trip_and_enters_the_genesis_fingerprint() {
-    // The seeded sender makes the cast's public diff a no-op, so only the record differs.
-    let mut state = V03State::new()
-        .with_test_programs()
-        .with_public_accounts([(sender().account_id, Account::default())]);
+    let mut state = V03State::new().with_test_programs();
     let fingerprint = state.genesis_fingerprint();
 
     cast(&mut state, receiver());

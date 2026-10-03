@@ -1,4 +1,5 @@
 use super::*;
+use crate::ValidatedStateDiff;
 
 fn native_transfer_tx(
     sender: AccountId,
@@ -243,4 +244,20 @@ fn a_sent_turn_on_another_shard_of_the_root_account_keeps_its_other_shards() {
                 .with_shard(stranger, stranger_data)
         }
     );
+}
+
+#[test]
+fn a_declared_account_no_turn_changes_stays_out_of_the_diff_and_the_state() {
+    let root = Actor::new(AccountId::new([41; 32]), scripted_id());
+    let bystander = Actor::new(AccountId::new([42; 32]), scripted_id());
+    let mut state = V03State::new().with_test_programs();
+    let tx = public_tx(root, vec![root, bystander], vec![], Script::default(), &[]);
+
+    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0).unwrap();
+
+    assert!(diff.public_diff().is_empty());
+    state.apply_state_diff(diff).unwrap();
+    for actor in [root, bystander] {
+        assert!(state.get_account_by_id_ref(actor.account_id).is_none());
+    }
 }
