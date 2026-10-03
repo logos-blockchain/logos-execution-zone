@@ -1047,6 +1047,125 @@ fn a_withheld_private_grant_authorizes_the_return_through_a_public_actor() {
     );
 }
 
+// `peer`'s seed grants the private `custody` from the public side; custody's own detour through
+// `relay` returns to it, and `peer`'s later sibling call arrives without the seed.
+#[test]
+fn a_private_grant_survives_its_own_public_detour_but_not_a_sibling_call() {
+    let (keys, pda_keys) = (Keys::new(1), Keys::new(2));
+    let owner = holder(&keys);
+    let (peer, relay) = (actor(3, 9), actor(4, 7));
+    let seed = PdaSeed::new([5; 32]);
+    let custody = Actor::new(pda_keys.pda_id(peer.program_account_id, seed), id(8));
+    let witnesses = [
+        keys.regular(false),
+        pda_keys.pda(peer.program_account_id, seed),
+    ];
+    let script = || {
+        let mut detoured = false;
+        Script::default()
+            .on(owner, sending(vec![send_to(peer)]))
+            .on(
+                peer,
+                sending(vec![seeded_to(custody, seed), send_to(custody)]),
+            )
+            .on(custody, move |input| {
+                let calls = if std::mem::replace(&mut detoured, true) {
+                    Vec::new()
+                } else {
+                    vec![send_to(relay)]
+                };
+                echo(
+                    input,
+                    Response {
+                        calls,
+                        ..Response::keep_state()
+                    },
+                )
+            })
+            .on(relay, sending(vec![send_to(custody)]))
+    };
+    let expected = vec![
+        (owner, false),
+        (custody, true),
+        (custody, true),
+        (custody, false),
+    ];
+
+    let mut whole_script = script();
+    let predicted_cross_messages = whole(
+        context(vec![peer, relay]),
+        &witnesses,
+        root(owner),
+        &mut whole_script,
+    )
+    .unwrap()
+    .predicted_cross_messages;
+    let private_turns: Vec<_> = authorized(&whole_script)
+        .into_iter()
+        .filter(|(actor, _)| *actor == owner || *actor == custody)
+        .collect();
+    assert_eq!(private_turns, expected);
+
+    let mut private_script = script();
+    let boundary = private_part(
+        context(vec![peer, relay]),
+        &witnesses,
+        root(owner),
+        predicted_cross_messages,
+        &mut private_script,
+    )
+    .unwrap()
+    .boundary;
+    assert_eq!(authorized(&private_script), expected);
+    assert!(boundary.iter().all(|step| match step {
+        EnterPublic(delivery) => !delivery.grants.contains(&custody.account_id),
+        EnterPrivate(delivery) => !delivery.grants.contains(&custody.account_id),
+        ExitPrivate | ExitPublic => true,
+    }));
+
+    public_part(
+        context(vec![peer, relay]),
+        root(owner),
+        boundary,
+        &mut script(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_predicted_grant_over_a_private_account_authorizes_nothing() {
+    let (keys, pda_keys) = (Keys::new(1), Keys::new(2));
+    let owner = holder(&keys);
+    let peer = actor(3, 9);
+    let seed = PdaSeed::new([5; 32]);
+    let custody = Actor::new(pda_keys.pda_id(peer.program_account_id, seed), id(8));
+    let mut script = Script::default()
+        .on(owner, sending(vec![send_to(peer)]))
+        .on(custody, sending(Vec::new()));
+
+    let boundary = private_part(
+        context(vec![peer]),
+        &[
+            keys.regular(false),
+            pda_keys.pda(peer.program_account_id, seed),
+        ],
+        root(owner),
+        vec![vec![Delivery {
+            grants: BTreeSet::from([custody.account_id]),
+            ..delivery(peer, custody, &[])
+        }]],
+        &mut script,
+    )
+    .unwrap()
+    .boundary;
+
+    assert_eq!(authorized(&script), vec![(owner, false), (custody, false)]);
+    assert!(matches!(
+        boundary.as_slice(),
+        [EnterPublic(_), EnterPrivate(forged), ExitPrivate, ExitPublic] if forged.grants.is_empty()
+    ));
+}
+
 #[test]
 fn a_private_pda_family_cannot_declare_its_public_member() {
     let keys = Keys::new(1);
