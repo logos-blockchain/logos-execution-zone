@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use lee_core::{
     Commitment, DUMMY_COMMITMENT_HASH, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
     Identifier, Nullifier, NullifierWitness, PrivacyPreservingCircuitOutput, PrivateWitness,
-    SharedSecretKey, WitnessKind,
+    ProgramImageClaim, SharedSecretKey, WitnessKind,
     account::{Account, AccountId, ActorState, Nonce},
     execution_state::{
         Boundary, BoundaryStep, ExecutionError, PublicExecutionContext, TransactionEntry,
@@ -1154,5 +1154,29 @@ fn surplus_responses_are_rejected_by_the_circuit() {
     assert_circuit_rejects(
         &result,
         "A response was supplied for a turn nothing scheduled",
+    );
+}
+
+#[test]
+fn only_the_programs_the_private_part_runs_are_claimed() {
+    let keys = test_private_account_keys_1();
+    let root_actor = Actor::new(regular_id(&keys, Identifier::ZERO), scripted_id());
+
+    let (output, _) = execute_and_prove(
+        ProvingInput {
+            private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
+            ..proving_input(root(root_actor, &Script::default()))
+        },
+        &Simulation::default(),
+        &scripted_programs(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        output.program_image_claims,
+        vec![ProgramImageClaim::Disclosed {
+            account_id: scripted_id(),
+            image_id: crate::test_methods::scripted().id(),
+        }]
     );
 }
