@@ -118,17 +118,15 @@ impl ProvingInput {
     pub fn entry(&self) -> Option<TransactionEntry<MessageRef>> {
         match &self.root {
             TransactionEntry::Call { to, message } => {
-                self.root_runs_publicly().then(|| TransactionEntry::Call {
-                    to: *to,
-                    message: message.clone(),
-                })
+                self.context
+                    .runs_publicly(*to)
+                    .then(|| TransactionEntry::Call {
+                        to: *to,
+                        message: message.clone(),
+                    })
             }
             TransactionEntry::Cast(record) => Some(TransactionEntry::Cast(record.reference())),
         }
-    }
-
-    fn root_runs_publicly(&self) -> bool {
-        self.context.runs_publicly(self.root.destination())
     }
 }
 
