@@ -27,7 +27,8 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
     };
 
     let bridge = input.receiver.program_account_id;
-    // The receipt shard is the L1-deposit replay guard, so it must be the one this op id derives.
+    // The receipt actor state is the L1-deposit replay guard, so it must be the one this op id
+    // derives.
     assert_eq!(
         input.receiver.account_id,
         bridge_core::deposit_receipt_account_id(bridge, l1_deposit_op_id),

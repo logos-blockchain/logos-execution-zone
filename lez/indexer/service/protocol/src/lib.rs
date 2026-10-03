@@ -103,16 +103,17 @@ pub struct Account {
     pub data: AccountData,
 }
 
-/// An account's balance and program shards.
+/// An account's balance and program actor states.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct AccountData {
-    pub shards: BTreeMap<AccountId, ActorState>,
+    pub actor_states: BTreeMap<AccountId, ActorState>,
 }
 
 impl AccountData {
     #[must_use]
     pub fn balance(&self) -> Option<u128> {
-        let Some(ActorState(data)) = self.shards.get(&AccountId::native_token_program()) else {
+        let Some(ActorState(data)) = self.actor_states.get(&AccountId::native_token_program())
+        else {
             return Some(0);
         };
         if data.is_empty() {
@@ -132,32 +133,32 @@ impl AccountId {
     }
 }
 
-/// An account's balance and nonce with one entry per shard, carrying each shard's
+/// An account's balance and nonce with one entry per actor state, carrying each actor state's
 /// size instead of its bytes.
 ///
-/// Nothing bounds how many shards an account holds or how large each one is, so a
+/// Nothing bounds how many actor states an account holds or how large each one is, so a
 /// whole-account read is not a safe way to enumerate them: any third party can write
-/// its own shard onto any account, and enough of them push the response past the
+/// its own actor state onto any account, and enough of them push the response past the
 /// server's size cap for good. This answers "which programs hold state here, and how
-/// much" in a response whose size follows the shard count alone.
+/// much" in a response whose size follows the actor state count alone.
 ///
-/// `balance` is derived from the native-token shard, so it is `None` exactly when that
-/// shard is encoded non-canonically.
+/// `balance` is derived from the native-token actor state, so it is `None` exactly when that
+/// actor state is encoded non-canonically.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct AccountSummary {
     pub nonce: Nonce,
     pub balance: Option<u128>,
-    pub shards: Vec<ShardSummary>,
+    pub actor_states: Vec<ActorStateSummary>,
 }
 
-/// One program's shard on an account, by size rather than content.
+/// One program's actor state on an account, by size rather than content.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct ShardSummary {
+pub struct ActorStateSummary {
     pub program_account_id: AccountId,
     pub len: u64,
 }
 
-/// Selects one of an account's program shards.
+/// Selects one of an account's program actor states.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct Actor {
     pub account_id: AccountId,

@@ -162,7 +162,7 @@ async fn wait_for_indexer_delivery(
                 indexer_service_rpc::RpcClient::get_account(&**indexer, account_id).await?;
             let data = account
                 .data
-                .shards
+                .actor_states
                 .get(&program_account_id)
                 .map_or_else(Vec::new, |data| data.0.clone());
             if !data.is_empty() {

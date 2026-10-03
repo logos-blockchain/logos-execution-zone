@@ -754,7 +754,7 @@ async fn reconstructed_delivery_settles_its_pending_record() -> Result<()> {
                     .head_state
                     .get_account_by_id(record_id)
                     .data
-                    .shard(receiver_id)
+                    .actor_state(receiver_id)
                     .as_ref()
                     == payload.as_slice()
         })
@@ -878,7 +878,7 @@ async fn reconstruction_reconciles_already_finished_deposit() -> Result<()> {
                     .head_state
                     .get_account_by_id(receipt_id)
                     .data
-                    .shard(bridge_program_id)
+                    .actor_state(bridge_program_id)
                     .is_empty()
         })
         .times(1)

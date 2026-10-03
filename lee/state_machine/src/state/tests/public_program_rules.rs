@@ -74,7 +74,7 @@ fn program_should_transfer_balance_from_an_authorized_account() {
 }
 
 #[test]
-fn a_data_write_on_the_executing_shard_is_accepted_publicly() {
+fn a_data_write_on_the_executing_actor_state_is_accepted_publicly() {
     let target_id = AccountId::new([1; 32]);
     let mut state = V03State::new()
         .with_public_accounts([(target_id, Account::funded(250))])
@@ -94,10 +94,10 @@ fn a_data_write_on_the_executing_shard_is_accepted_publicly() {
     state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
     // Funded beforehand, so the whole-account assertion also pins that an application write
-    // leaves the native balance shard alone.
+    // leaves the native balance actor state alone.
     assert_eq!(
         state.get_account_by_id(target_id),
-        Account::funded(250).with_shard(program_id, written.into())
+        Account::funded(250).with_actor_state(program_id, written.into())
     );
 }
 
@@ -206,7 +206,7 @@ fn insufficient_balance_transfer_leaves_state_untouched() {
 }
 
 #[test]
-fn a_sent_turn_on_another_shard_of_the_root_account_keeps_its_other_shards() {
+fn a_sent_turn_on_another_actor_state_of_the_root_account_keeps_its_other_actor_states() {
     let account_id = AccountId::new([1; 32]);
     let stranger = AccountId::new([9; 32]);
     let on_chain: ActorState = b"on-chain".to_vec().into();
@@ -218,8 +218,8 @@ fn a_sent_turn_on_another_shard_of_the_root_account_keeps_its_other_shards() {
             Account {
                 nonce: Nonce(3),
                 ..Account::funded(5)
-                    .with_shard(TWIN, on_chain)
-                    .with_shard(stranger, stranger_data.clone())
+                    .with_actor_state(TWIN, on_chain)
+                    .with_actor_state(stranger, stranger_data.clone())
             },
         )])
         .with_test_programs();
@@ -241,8 +241,8 @@ fn a_sent_turn_on_another_shard_of_the_root_account_keeps_its_other_shards() {
         Account {
             nonce: Nonce(3),
             ..Account::funded(5)
-                .with_shard(TWIN, written.into())
-                .with_shard(stranger, stranger_data)
+                .with_actor_state(TWIN, written.into())
+                .with_actor_state(stranger, stranger_data)
         }
     );
 }

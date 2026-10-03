@@ -148,7 +148,7 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
         .await
         .context("Failed to read the stake ownership account")?
         .data
-        .shard(stake_id)
+        .actor_state(stake_id)
         .is_empty();
     let stake_message = Program::serialize_message(sequencer_stake_core::Message::Stake {
         sequencer_key: joiner_stake_key,
@@ -157,7 +157,7 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
         funding: funding_id,
     })
     .context("Failed to serialize Stake message")?;
-    let root = AccountIdentity::Public(ownership_id).select_program_shard(stake_id);
+    let root = AccountIdentity::Public(ownership_id).select_program_actor_state(stake_id);
 
     info!(
         "Staking sequencer key {}",
@@ -170,7 +170,7 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
                 AccountIdentity::PublicNoSign(funds_id).balance(),
                 AccountIdentity::Public(funding_id).balance(),
                 AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id())
-                    .select_program_shard(stake_id),
+                    .select_program_actor_state(stake_id),
             ],
             0,
             stake_message,
@@ -182,7 +182,7 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
         Ok(!get_account(&ctx, ownership_id)
             .await?
             .data
-            .shard(stake_id)
+            .actor_state(stake_id)
             .is_empty())
     })
     .await?;

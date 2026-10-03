@@ -111,7 +111,7 @@ pub fn finalize_unstake_candidates(state: &lee::V03State) -> Vec<(lee::AccountId
 pub(crate) fn clock_block_id(state: &lee::V03State) -> Option<u64> {
     let clock = state.get_account_by_id(system_accounts::clock_account_ids()[0]);
     borsh::from_slice::<clock_core::ClockAccountData>(
-        clock.data.shard(programs::clock_account_id()),
+        clock.data.actor_state(programs::clock_account_id()),
     )
     .ok()
     .map(|clock| clock.block_id)
@@ -129,8 +129,12 @@ pub(crate) fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig>
         return None;
     };
     let sequencer_stake_program_id = programs::sequencer_stake_account_id();
-    let config =
-        SequencerStakeConfig::from_bytes(account.data.shard(sequencer_stake_program_id).as_ref());
+    let config = SequencerStakeConfig::from_bytes(
+        account
+            .data
+            .actor_state(sequencer_stake_program_id)
+            .as_ref(),
+    );
     if config.is_none() {
         warn!("sequencer_stake config account did not decode as SequencerStakeConfig");
     }
@@ -188,7 +192,7 @@ mod tests {
 
     /// [`state_with`], with the clock at `block_id`.
     fn state_at(stakes: impl IntoIterator<Item = Staked>, block_id: u64) -> lee::V03State {
-        let clock = Account::default().with_shard(
+        let clock = Account::default().with_actor_state(
             programs::clock_account_id(),
             clock_core::ClockAccountData {
                 block_id,
@@ -205,7 +209,7 @@ mod tests {
         let stakes: Vec<Staked> = stakes.into_iter().collect();
         let sequencer_stake_program_id = programs::sequencer_stake_account_id();
 
-        let config = Account::default().with_shard(
+        let config = Account::default().with_actor_state(
             sequencer_stake_program_id,
             SequencerStakeConfig {
                 channel_params: Some(sequencer_stake_core::ChannelParams {

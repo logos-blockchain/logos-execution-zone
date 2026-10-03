@@ -93,7 +93,7 @@ def program_account_id(pid: list[int]) -> str:
 
 
 def stake_config(repo: str, sequencer: str) -> dict:
-    """Read the stake program's config shard."""
+    """Read the stake program's config actor state."""
     pid = program_id(repo)
     program = program_account_id(pid)
     account = rpc(
@@ -101,7 +101,7 @@ def stake_config(repo: str, sequencer: str) -> dict:
         "getAccountView",
         [{"account_id": pda(pid, CONFIG_SEED), "program_account_id": program}],
     )
-    return decode_stake_config(bytes(account["data"]["shards"][program]))
+    return decode_stake_config(bytes(account["data"]["actor_states"][program]))
 
 
 class Reader:

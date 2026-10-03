@@ -279,7 +279,7 @@ pub fn opening_fee_state(state: &V03State) -> FeeState {
         state
             .get_account_by_id(system_accounts::fee_state_account_id())
             .data
-            .shard(system_accounts::fee_program_id()),
+            .actor_state(system_accounts::fee_program_id()),
     )
 }
 
@@ -677,7 +677,7 @@ mod tests {
             state
                 .get_account_by_id(system_accounts::fee_state_account_id())
                 .data
-                .shard(system_accounts::fee_program_id()),
+                .actor_state(system_accounts::fee_program_id()),
         );
         // Five blocks applied: height tracks the chain; zero load holds the floor.
         assert_eq!(fee_state.height, 5);
@@ -853,7 +853,7 @@ mod tests {
             state
                 .get_account_by_id(system_accounts::fee_state_account_id())
                 .data
-                .shard(system_accounts::fee_program_id()),
+                .actor_state(system_accounts::fee_program_id()),
         );
 
         // Accrue real revenue in the inbox with one legitimate charged transfer.
@@ -926,7 +926,7 @@ mod tests {
             state
                 .get_account_by_id(system_accounts::fee_state_account_id())
                 .data
-                .shard(system_accounts::fee_program_id()),
+                .actor_state(system_accounts::fee_program_id()),
         );
         let sender_before = state
             .get_account_by_id(sender)
@@ -987,7 +987,7 @@ mod tests {
             state
                 .get_account_by_id(system_accounts::fee_state_account_id())
                 .data
-                .shard(system_accounts::fee_program_id()),
+                .actor_state(system_accounts::fee_program_id()),
         );
 
         let payer_before = state

@@ -13,11 +13,11 @@ use std::{
 };
 
 use indexer_service_protocol::{
-    Account, AccountData, AccountId, AccountSummary, Actor, ActorState, BedrockStatus, Block,
-    BlockBody, BlockHeader, BlockId, Commitment, CommitmentSetDigest, EncryptedAccountData,
-    EventRecord, EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus,
-    IndexerSyncState, PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
-    PublicExecutionContext, PublicKey, PublicMessage, PublicTransaction, Selector, ShardSummary,
+    Account, AccountData, AccountId, AccountSummary, Actor, ActorState, ActorStateSummary,
+    BedrockStatus, Block, BlockBody, BlockHeader, BlockId, Commitment, CommitmentSetDigest,
+    EncryptedAccountData, EventRecord, EventSubscriptionFilter, GetEventsFilter, HashType,
+    IndexerStatus, IndexerSyncState, PrivacyPreservingMessage, PrivacyPreservingTransaction,
+    PrivateAction, PublicExecutionContext, PublicKey, PublicMessage, PublicTransaction, Selector,
     Signature, Transaction, TransactionEntry, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
@@ -116,7 +116,7 @@ impl MockIndexerService {
                 Account {
                     nonce: i as u128,
                     data: AccountData {
-                        shards: BTreeMap::from([(
+                        actor_states: BTreeMap::from([(
                             AccountId {
                                 value: [i as u8; 32],
                             },
@@ -287,11 +287,11 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
         Ok(AccountSummary {
             nonce: account.nonce,
             balance: account.data.balance(),
-            shards: account
+            actor_states: account
                 .data
-                .shards
+                .actor_states
                 .iter()
-                .map(|(program, data)| ShardSummary {
+                .map(|(program, data)| ActorStateSummary {
                     program_account_id: *program,
                     len: u64::try_from(data.0.len()).expect("actor-state length fits in u64"),
                 })
@@ -469,23 +469,23 @@ fn project_account(account: Option<&Account>, actor: Actor) -> Account {
         return Account {
             nonce: 0,
             data: AccountData {
-                shards: BTreeMap::new(),
+                actor_states: BTreeMap::new(),
             },
         };
     };
     let program = actor.program_account_id;
-    let shards = BTreeMap::from([(
+    let actor_states = BTreeMap::from([(
         program,
         account
             .data
-            .shards
+            .actor_states
             .get(&program)
             .cloned()
             .unwrap_or(ActorState(Vec::new())),
     )]);
     Account {
         nonce: account.nonce,
-        data: AccountData { shards },
+        data: AccountData { actor_states },
     }
 }
 

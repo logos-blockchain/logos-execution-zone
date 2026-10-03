@@ -209,7 +209,7 @@ pub fn joining_setup() -> Result<JoiningSetup> {
     );
     let config_id = system_accounts::sequencer_stake_config_account_id();
     let stake_id = programs::sequencer_stake_account_id();
-    let root = AccountIdentity::Public(ownership_id).select_program_shard(stake_id);
+    let root = AccountIdentity::Public(ownership_id).select_program_actor_state(stake_id);
     ctx.block_on(|ctx| async {
         ctx.wallet()
             .send_pub_tx(
@@ -217,7 +217,7 @@ pub fn joining_setup() -> Result<JoiningSetup> {
                     root,
                     AccountIdentity::PublicNoSign(funds_id).balance(),
                     AccountIdentity::Public(funding_id).balance(),
-                    AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
+                    AccountIdentity::PublicNoSign(config_id).select_program_actor_state(stake_id),
                 ],
                 0,
                 stake_message,
@@ -233,7 +233,7 @@ pub fn joining_setup() -> Result<JoiningSetup> {
             Ok(!get_account(ctx, ownership_id)
                 .await?
                 .data
-                .shard(stake_id)
+                .actor_state(stake_id)
                 .is_empty())
         })
     })?;
@@ -244,7 +244,7 @@ pub fn joining_setup() -> Result<JoiningSetup> {
             .context("Failed to read the stake ownership account")
     })?;
     assert!(
-        !ownership_account.data.shard(stake_id).is_empty(),
+        !ownership_account.data.actor_state(stake_id).is_empty(),
         "ownership account should now hold a sequencer_stake record"
     );
     let staked_balance = ctx.block_on(|ctx| account_balance(ctx, funds_id))?;
@@ -253,7 +253,7 @@ pub fn joining_setup() -> Result<JoiningSetup> {
         "the funds PDA should hold the staked balance"
     );
     let record = sequencer_stake_core::StakeRecord::from_bytes(
-        ownership_account.data.shard(stake_id).as_ref(),
+        ownership_account.data.actor_state(stake_id).as_ref(),
     )
     .context("ownership account data did not decode as a StakeRecord")?;
     assert_eq!(record.sequencer_key, joining_stake_key);

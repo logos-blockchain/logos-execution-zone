@@ -20,7 +20,7 @@ impl Bridge<'_> {
         let message = Program::serialize_message(message).expect("Message should serialize");
         // The sender's signature authorizes the sender's own actor under the bridge program.
         let root = AccountIdentity::Public(sender_account_id)
-            .select_program_shard(programs::bridge_account_id());
+            .select_program_actor_state(programs::bridge_account_id());
 
         self.0
             .send_pub_tx(

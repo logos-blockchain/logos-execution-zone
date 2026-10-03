@@ -56,10 +56,10 @@ impl From<Account> for lee_core::account::Account {
 
 impl From<lee_core::account::AccountData> for AccountData {
     fn from(value: lee_core::account::AccountData) -> Self {
-        let lee_core::account::AccountData { shards } = value;
+        let lee_core::account::AccountData { actor_states } = value;
 
         Self {
-            shards: shards
+            actor_states: actor_states
                 .into_iter()
                 .map(|(program, data)| (program.into(), data.into()))
                 .collect(),
@@ -69,10 +69,10 @@ impl From<lee_core::account::AccountData> for AccountData {
 
 impl From<AccountData> for lee_core::account::AccountData {
     fn from(value: AccountData) -> Self {
-        let AccountData { shards } = value;
+        let AccountData { actor_states } = value;
 
         Self {
-            shards: shards
+            actor_states: actor_states
                 .into_iter()
                 .map(|(program, data)| (program.into(), data.into()))
                 .collect(),
@@ -1200,7 +1200,7 @@ mod tests {
             nonce: lee_core::account::Nonce(u128::MAX),
             data: lee_core::account::Account::funded(u128::MAX)
                 .data
-                .with_shard(program, b"record".to_vec().into()),
+                .with_actor_state(program, b"record".to_vec().into()),
         };
 
         let mirrored = Account::from(account.clone());

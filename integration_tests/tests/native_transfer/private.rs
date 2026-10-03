@@ -636,7 +636,7 @@ fn prove_init_with_commitment_root(
         &Simulation {
             // The proof is only inspected, never settled, so the snapshot states just enough
             // balance.
-            public_shards: [(sender, native_token::encode_balance(1))].into(),
+            public_actor_states: [(sender, native_token::encode_balance(1))].into(),
         },
         &ProgramCatalog::default(),
     )?;

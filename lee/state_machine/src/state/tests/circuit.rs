@@ -27,7 +27,7 @@ fn authorized() -> Script {
 }
 
 #[test]
-fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
+fn a_private_account_keeps_a_stranger_actor_state_through_an_own_actor_state_write() {
     let program_id = scripted_id();
     let stranger = AccountId::new([9; 32]);
     let stranger_data: ActorState = b"stranger".to_vec().into();
@@ -38,8 +38,8 @@ fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
     let pre_account = Account {
         nonce: Nonce(9),
         ..Account::funded(42)
-            .with_shard(stranger, stranger_data.clone())
-            .with_shard(program_id, replaced)
+            .with_actor_state(stranger, stranger_data.clone())
+            .with_actor_state(program_id, replaced)
     };
     let state = V03State::new().with_private_account(&keys, &pre_account);
     let membership_proof = state
@@ -70,8 +70,8 @@ fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
             .nonce
             .private_account_nonce_increment(&keys.nsk()),
         ..Account::funded(42)
-            .with_shard(stranger, stranger_data)
-            .with_shard(program_id, written.into())
+            .with_actor_state(stranger, stranger_data)
+            .with_actor_state(program_id, written.into())
     };
     let shared_secret =
         SharedSecretKey::decapsulate(&action.encrypted_post_state.epk, &keys.d, &keys.z)
@@ -93,7 +93,7 @@ fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
 }
 
 #[test]
-fn a_private_account_may_act_under_two_shards_in_one_transaction() {
+fn a_private_account_may_act_under_two_actor_states_in_one_transaction() {
     let program_id = scripted_id();
     let stranger = AccountId::new([9; 32]);
     let stranger_data: ActorState = b"stranger".to_vec().into();
@@ -104,7 +104,7 @@ fn a_private_account_may_act_under_two_shards_in_one_transaction() {
     let recipient = Actor::native_balance(AccountId::new([88; 32]));
     let pre_account = Account {
         nonce: Nonce(9),
-        ..Account::funded(100).with_shard(stranger, stranger_data.clone())
+        ..Account::funded(100).with_actor_state(stranger, stranger_data.clone())
     };
     let state = V03State::new().with_private_account(&keys, &pre_account);
     let membership_proof = state
@@ -140,8 +140,8 @@ fn a_private_account_may_act_under_two_shards_in_one_transaction() {
             .nonce
             .private_account_nonce_increment(&keys.nsk()),
         ..Account::funded(100 - amount)
-            .with_shard(stranger, stranger_data)
-            .with_shard(program_id, written.into())
+            .with_actor_state(stranger, stranger_data)
+            .with_actor_state(program_id, written.into())
     };
     let shared_secret =
         SharedSecretKey::decapsulate(&action.encrypted_post_state.epk, &keys.d, &keys.z)
@@ -798,7 +798,7 @@ fn two_private_pda_family_members_receive_and_spend() {
                 ..proving_input(root(from, &transfer(pda_id, amount)))
             },
             &Simulation {
-                public_shards: [(from, encode_balance(amount))].into(),
+                public_actor_states: [(from, encode_balance(amount))].into(),
             },
             &ProgramCatalog::default(),
         )

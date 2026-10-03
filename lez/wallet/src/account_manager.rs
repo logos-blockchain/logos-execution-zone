@@ -185,9 +185,9 @@ impl AccountIdentity {
         }
     }
 
-    /// Selects `program`'s shard on this account.
+    /// Selects `program`'s actor state on this account.
     #[must_use]
-    pub const fn select_program_shard(self, program: AccountId) -> AccountMention {
+    pub const fn select_program_actor_state(self, program: AccountId) -> AccountMention {
         AccountMention {
             identity: self,
             program_account_id: program,
@@ -195,14 +195,14 @@ impl AccountIdentity {
         }
     }
 
-    /// Selects this account's native balance shard.
+    /// Selects this account's native balance actor state.
     #[must_use]
     pub const fn balance(self) -> AccountMention {
-        self.select_program_shard(NATIVE_TOKEN_PROGRAM_ID)
+        self.select_program_actor_state(NATIVE_TOKEN_PROGRAM_ID)
     }
 }
 
-/// An account identity with the program shard it selects.
+/// An account identity with the program actor state it selects.
 #[derive(Clone)]
 pub struct AccountMention {
     pub identity: AccountIdentity,
@@ -223,21 +223,21 @@ impl AccountMention {
     }
 }
 
-/// A shard the wallet read. Execution binds the account handle and applies against live state,
-/// never this copy.
-pub struct SelectedShard {
+/// An actor state the wallet read. Execution binds the account handle and applies against live
+/// state, never this copy.
+pub struct SelectedActorState {
     pub selector: Actor,
     pub is_authorized: bool,
     pub data: ActorState,
 }
 
-impl SelectedShard {
-    /// Returns the shard data. Panics unless this row selects `program`'s shard.
+impl SelectedActorState {
+    /// Returns the actor state data. Panics unless this row selects `program`'s actor state.
     #[must_use]
-    pub fn shard_of(&self, program: AccountId) -> &ActorState {
+    pub fn actor_state_of(&self, program: AccountId) -> &ActorState {
         assert_eq!(
             self.selector.program_account_id, program,
-            "SelectedShard carries another program's shard"
+            "SelectedActorState carries another program's actor state"
         );
         &self.data
     }
@@ -304,15 +304,15 @@ impl State {
         }
     }
 
-    fn selected(&self, selector: Actor) -> SelectedShard {
-        SelectedShard {
+    fn selected(&self, selector: Actor) -> SelectedActorState {
+        SelectedActorState {
             selector,
             is_authorized: self.is_authorized(),
             data: self
                 .account()
                 .account
                 .data
-                .shard(selector.program_account_id)
+                .actor_state(selector.program_account_id)
                 .clone(),
         }
     }
@@ -350,7 +350,7 @@ impl AccountManager {
         } in mentions
         {
             let account_id = identity.account_id();
-            let shard_selector = Actor::new(account_id, program_account_id);
+            let actor_state_selector = Actor::new(account_id, program_account_id);
 
             let known =
                 prepared
@@ -370,7 +370,7 @@ impl AccountManager {
                     if let State::Public { account, .. } | State::PublicKeycard { account, .. } =
                         &mut states[index]
                     {
-                        let view = public_account_view(wallet, shard_selector).await?;
+                        let view = public_account_view(wallet, actor_state_selector).await?;
                         merge_public_view(account, &view)?;
                     }
                     index
@@ -386,7 +386,7 @@ impl AccountManager {
                             identity.clone()
                         };
                     let state =
-                        prepare_account(wallet, prepared_identity, shard_selector, &mut pin)
+                        prepare_account(wallet, prepared_identity, actor_state_selector, &mut pin)
                             .await?;
                     states.push(if authorizes {
                         state
@@ -421,22 +421,22 @@ impl AccountManager {
         )
     }
 
-    /// The selected shards, in declaration order.
-    pub fn selected_shards(&self) -> Vec<SelectedShard> {
+    /// The selected actor states, in declaration order.
+    pub fn selected_actor_states(&self) -> Vec<SelectedActorState> {
         self.rows
             .iter()
             .map(|row| self.states[row.account].selected(self.row_selector(row)))
             .collect()
     }
 
-    // The declared public actors' shards as read, from which the prover derives the boundary.
-    pub fn public_shards(&self) -> HashMap<Actor, ActorState> {
+    // The declared public actors' states as read, from which the prover derives the boundary.
+    pub fn public_actor_states(&self) -> HashMap<Actor, ActorState> {
         self.rows
             .iter()
             .filter(|row| !matches!(self.states[row.account], State::Private(_)))
             .map(|row| {
-                let shard = self.states[row.account].selected(self.row_selector(row));
-                (shard.selector, shard.data)
+                let actor_state = self.states[row.account].selected(self.row_selector(row));
+                (actor_state.selector, actor_state.data)
             })
             .collect()
     }
@@ -550,7 +550,7 @@ impl AccountManager {
         })
     }
 
-    /// Builds a witness for each private account, including all its shards.
+    /// Builds a witness for each private account, including all its actor states.
     pub fn private_witnesses(&self) -> Result<Vec<PrivateWitness>, ExecutionFailureKind> {
         self.private_states()
             .map(|pre| {
@@ -604,8 +604,8 @@ impl AccountManager {
     }
 
     /// [`Self::fee_payer_account_id`] over an injected balance read, so the selection policy is
-    /// exercisable without a wallet. A candidate whose native shard is already materialised is
-    /// never fetched, and the walk stops at the first funded signer.
+    /// exercisable without a wallet. A candidate whose native actor state is already materialised
+    /// is never fetched, and the walk stops at the first funded signer.
     async fn fee_payer_account_id_with<F, Fut>(
         &mut self,
         mut fetch_view: F,
@@ -628,7 +628,7 @@ impl AccountManager {
             if !account
                 .account
                 .data
-                .shards
+                .actor_states
                 .contains_key(&NATIVE_TOKEN_PROGRAM_ID)
             {
                 let view = fetch_view(Actor::native_balance(account.account_id)).await?;
@@ -743,10 +743,10 @@ const fn witness_kind(
 
 async fn public_account_view(
     wallet: &WalletCore,
-    shard_selector: Actor,
+    actor_state_selector: Actor,
 ) -> Result<Account, ExecutionFailureKind> {
     wallet
-        .get_account_view(shard_selector)
+        .get_account_view(actor_state_selector)
         .await
         .map_err(ExecutionFailureKind::SequencerError)
 }
@@ -768,15 +768,15 @@ fn merge_public_view(
 async fn prepare_account(
     wallet: &WalletCore,
     identity: AccountIdentity,
-    shard_selector: Actor,
+    actor_state_selector: Actor,
     pin: &mut Option<String>,
 ) -> Result<State, ExecutionFailureKind> {
-    let account_id = shard_selector.account_id;
+    let account_id = actor_state_selector.account_id;
     let state = match identity {
         AccountIdentity::Public(_) => {
             let account = PreparedAccount {
                 account_id,
-                account: public_account_view(wallet, shard_selector).await?,
+                account: public_account_view(wallet, actor_state_selector).await?,
             };
             let sk = wallet.get_account_public_signing_key(account_id).cloned();
 
@@ -785,7 +785,7 @@ async fn prepare_account(
         AccountIdentity::PublicNoSign(_) => {
             let account = PreparedAccount {
                 account_id,
-                account: public_account_view(wallet, shard_selector).await?,
+                account: public_account_view(wallet, actor_state_selector).await?,
             };
 
             State::Public { account, sk: None }
@@ -793,7 +793,7 @@ async fn prepare_account(
         AccountIdentity::PublicKeycard { key_path, .. } => {
             let account = PreparedAccount {
                 account_id,
-                account: public_account_view(wallet, shard_selector).await?,
+                account: public_account_view(wallet, actor_state_selector).await?,
             };
 
             if pin.is_none() {
@@ -1176,7 +1176,7 @@ mod tests {
         let funded = public_signing_state(5, 1_000);
         let funded_id = funded.account().account_id;
         let mut manager = manager(vec![public_signing_state(4, 0), funded]);
-        // The unfunded candidate carries no native shard, so it is read; the read
+        // The unfunded candidate carries no native actor state, so it is read; the read
         // confirms it is empty and the walk moves on.
         assert_eq!(
             payer(&mut manager, answers(&Account::default())),
@@ -1212,9 +1212,9 @@ mod tests {
 
     #[test]
     fn an_application_scoped_candidate_is_funded_by_the_balance_read() {
-        // Prepared for an application shard alone, so its balance is absent until read.
+        // Prepared for an application actor state alone, so its balance is absent until read.
         let program_id = AccountId::new([9; 32]);
-        let scoped = Account::default().with_shard(program_id, vec![1_u8; 4].into());
+        let scoped = Account::default().with_actor_state(program_id, vec![1_u8; 4].into());
         let candidate = public_signing_state_with(6, scoped);
         let candidate_id = candidate.account().account_id;
         let mut manager = manager(vec![candidate]);
@@ -1230,9 +1230,9 @@ mod tests {
             "the read balance is merged in"
         );
         assert_eq!(
-            merged.data.shard(program_id).as_ref(),
+            merged.data.actor_state(program_id).as_ref(),
             vec![1_u8; 4],
-            "merging a balance read must not drop the application shard"
+            "merging a balance read must not drop the application actor state"
         );
     }
 
@@ -1292,7 +1292,7 @@ mod tests {
         assert!(matches!(pre.kind, WitnessKind::Regular { ask: None }));
 
         let manager = manager(vec![State::Private(Box::new(pre))]);
-        assert!(!manager.selected_shards()[0].is_authorized);
+        assert!(!manager.selected_actor_states()[0].is_authorized);
         assert!(matches!(
             manager.private_witnesses().unwrap()[0].kind,
             WitnessKind::Regular { ask: None }
@@ -1350,7 +1350,7 @@ mod tests {
         assert_eq!(pre.identifier, Identifier::new([9; 32]));
 
         let manager = manager(vec![State::Private(Box::new(pre))]);
-        assert!(!manager.selected_shards()[0].is_authorized);
+        assert!(!manager.selected_actor_states()[0].is_authorized);
         let witnesses = manager.private_witnesses().unwrap();
         assert!(
             matches!(&witnesses[0].kind, WitnessKind::Pda { binding } if *binding == (authority, seed))
@@ -1383,7 +1383,7 @@ mod tests {
         }));
 
         let manager = manager(vec![owned.without_authorization()]);
-        assert!(!manager.selected_shards()[0].is_authorized);
+        assert!(!manager.selected_actor_states()[0].is_authorized);
         let witnesses = manager.private_witnesses().unwrap();
         assert!(matches!(
             witnesses[0].kind,
@@ -1410,12 +1410,12 @@ mod tests {
         };
 
         let signing = manager(vec![keycard()]);
-        assert!(signing.selected_shards()[0].is_authorized);
+        assert!(signing.selected_actor_states()[0].is_authorized);
         assert_eq!(signing.signers(), HashSet::from([account_id]));
         assert_eq!(signing.public_account_nonces(), vec![Nonce(3)]);
 
         let unsigned = manager(vec![keycard().without_authorization()]);
-        assert!(!unsigned.selected_shards()[0].is_authorized);
+        assert!(!unsigned.selected_actor_states()[0].is_authorized);
         assert!(unsigned.signers().is_empty());
         assert!(unsigned.public_account_nonces().is_empty());
     }
@@ -1497,7 +1497,7 @@ mod tests {
         pre.pre_state
             .account
             .data
-            .set_shard(AccountId::new([9_u8; 32]), vec![0_u8; pad].into());
+            .set_actor_state(AccountId::new([9_u8; 32]), vec![0_u8; pad].into());
         let account_id = pre.pre_state.account_id;
 
         assert_eq!(

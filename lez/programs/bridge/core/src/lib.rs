@@ -14,7 +14,7 @@ pub enum Message {
     /// Transfers native tokens from the bridge PDA account to a recipient,
     /// exactly once per `l1_deposit_op_id`.
     ///
-    /// Sent to the deposit-receipt PDA derived from `l1_deposit_op_id`, whose shard of this
+    /// Sent to the deposit-receipt PDA derived from `l1_deposit_op_id`, whose actor state of this
     /// program marks the deposit as already processed once nonempty; a repeat is refused.
     Deposit {
         /// Deposit OP ID from L1, stored here to pin each [`Deposit`](Message::Deposit) to a
@@ -69,7 +69,7 @@ fn deposit_receipt_seed(l1_deposit_op_id: [u8; 32]) -> PdaSeed {
     PdaSeed::new(seed)
 }
 
-/// The deposit-receipt PDA whose bridge shard marks `l1_deposit_op_id` as minted.
+/// The deposit-receipt PDA whose bridge actor state marks `l1_deposit_op_id` as minted.
 #[must_use]
 pub fn deposit_receipt_account_id(
     bridge_program_account_id: AccountId,

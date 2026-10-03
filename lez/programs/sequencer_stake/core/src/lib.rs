@@ -73,7 +73,7 @@ impl borsh::BorshDeserialize for SequencerKey {
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum Message {
     /// Locks `amount` into the stake funds account of `sequencer_key`'s ownership account.
-    /// First use initializes the ownership account's shard for this program.
+    /// First use initializes the ownership account's actor state for this program.
     Stake {
         sequencer_key: SequencerKey,
         amount: u128,
@@ -202,7 +202,7 @@ pub struct ChannelParams {
     pub exit_delay: u64,
 }
 
-/// Minimum stake and per-key standing, stored in this program's config shard.
+/// Minimum stake and per-key standing, stored in this program's config actor state.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct SequencerStakeConfig {
     /// `None` until genesis runs [`Message::InitChannelParams`], which is

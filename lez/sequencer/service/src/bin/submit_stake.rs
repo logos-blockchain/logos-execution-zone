@@ -2,8 +2,8 @@
 //! signed with keys already held by a wallet at the given path.
 //!
 //! For `stake`, the funding account must be able to sign and hold at least `amount`.
-//! The ownership account must have an empty stake shard or already back the same sequencer key.
-//! Both accounts must exist in the wallet (e.g. via `wallet account new public`).
+//! The ownership account must have an empty stake actor state or already back the same sequencer
+//! key. Both accounts must exist in the wallet (e.g. via `wallet account new public`).
 
 use anyhow::{Context as _, Result, anyhow};
 use clap::{Parser, Subcommand};
@@ -84,9 +84,10 @@ async fn main() -> Result<()> {
         } => {
             let sequencer_key = parse_sequencer_key(&sequencer_key)?;
             let funds_account = system_accounts::stake_funds_account_id(&ownership_account);
-            let has_record = !stake_shard(&wallet, ownership_account, sequencer_stake_program_id)
-                .await?
-                .is_empty();
+            let has_record =
+                !stake_actor_state(&wallet, ownership_account, sequencer_stake_program_id)
+                    .await?
+                    .is_empty();
             let message = Program::serialize_message(sequencer_stake_core::Message::Stake {
                 sequencer_key,
                 amount,
@@ -97,7 +98,7 @@ async fn main() -> Result<()> {
             // The ownership signature authorizes the ownership actor, the funding signature
             // the transfer out of the funding balance.
             let root = AccountIdentity::Public(ownership_account)
-                .select_program_shard(sequencer_stake_program_id);
+                .select_program_actor_state(sequencer_stake_program_id);
 
             wallet
                 .send_pub_tx(
@@ -106,7 +107,7 @@ async fn main() -> Result<()> {
                         AccountIdentity::PublicNoSign(funds_account).balance(),
                         AccountIdentity::Public(funding_account).balance(),
                         AccountIdentity::PublicNoSign(config_id)
-                            .select_program_shard(sequencer_stake_program_id),
+                            .select_program_actor_state(sequencer_stake_program_id),
                     ],
                     0,
                     message,
@@ -119,10 +120,10 @@ async fn main() -> Result<()> {
             amount,
             destination,
         } => {
-            let record = stake_shard(&wallet, ownership_account, sequencer_stake_program_id)
+            let record = stake_actor_state(&wallet, ownership_account, sequencer_stake_program_id)
                 .await
-                .and_then(|shard| {
-                    StakeRecord::from_bytes(&shard)
+                .and_then(|actor_state| {
+                    StakeRecord::from_bytes(&actor_state)
                         .context("Stake ownership account holds no decodable stake record")
                 })?;
             let requested_at = wallet
@@ -139,14 +140,14 @@ async fn main() -> Result<()> {
                 })
                 .context("Failed to serialize UnstakeRequest message")?;
             let root = AccountIdentity::Public(ownership_account)
-                .select_program_shard(sequencer_stake_program_id);
+                .select_program_actor_state(sequencer_stake_program_id);
 
             wallet
                 .send_pub_tx(
                     vec![
                         root,
                         AccountIdentity::PublicNoSign(config_id)
-                            .select_program_shard(sequencer_stake_program_id),
+                            .select_program_actor_state(sequencer_stake_program_id),
                     ],
                     0,
                     message,
@@ -160,8 +161,8 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// The stake program's shard of `ownership_account`, empty when the account backs no key yet.
-async fn stake_shard(
+/// The stake program's actor state of `ownership_account`, empty when the account backs no key yet.
+async fn stake_actor_state(
     wallet: &WalletCore,
     ownership_account: AccountId,
     sequencer_stake_program_id: AccountId,
@@ -170,7 +171,7 @@ async fn stake_shard(
         .get_account_view(Actor::new(ownership_account, sequencer_stake_program_id))
         .await
         .context("Failed to read the stake ownership account")?;
-    Ok(account.data.shard(sequencer_stake_program_id).clone())
+    Ok(account.data.actor_state(sequencer_stake_program_id).clone())
 }
 
 fn parse_sequencer_key(hex_key: &str) -> Result<sequencer_stake_core::SequencerKey> {

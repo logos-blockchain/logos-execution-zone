@@ -9,9 +9,9 @@ use arc_swap::ArcSwap;
 use futures::StreamExt as _;
 use indexer_core::{IndexerCore, config::IndexerConfig, event_filter::EventFilter};
 use indexer_service_protocol::{
-    Account, AccountId, AccountSummary, Actor, Block, BlockId, EventRecord,
-    EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus, Selector, ShardSummary,
-    Transaction, resolve_event_block_range,
+    Account, AccountId, AccountSummary, Actor, ActorStateSummary, Block, BlockId, EventRecord,
+    EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus, Selector, Transaction,
+    resolve_event_block_range,
 };
 use jsonrpsee::{
     SubscriptionSink,
@@ -158,11 +158,11 @@ impl indexer_service_rpc::RpcServer for IndexerService {
         Ok(AccountSummary {
             nonce: account.nonce.into(),
             balance: account.data.native_balance().ok(),
-            shards: account
+            actor_states: account
                 .data
-                .shards
+                .actor_states
                 .iter()
-                .map(|(program, data)| ShardSummary {
+                .map(|(program, data)| ActorStateSummary {
                     program_account_id: (*program).into(),
                     len: u64::try_from(data.len()).expect("actor-state length fits in u64"),
                 })

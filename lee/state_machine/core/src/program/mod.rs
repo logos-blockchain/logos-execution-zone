@@ -452,7 +452,8 @@ impl Transition {
     }
 }
 
-/// What a handler returns. `None` keeps the shard, empty data clears it, other data replaces it.
+/// What a handler returns. `None` keeps the actor state, empty data clears it, other data replaces
+/// it.
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 #[must_use]
@@ -758,7 +759,7 @@ pub fn run_actor_with(receive: impl FnOnce(&ReceiveInput) -> Response) -> ! {
 pub fn write_once(pre_state: &[u8], data: Vec<u8>) -> Vec<u8> {
     assert!(
         pre_state.is_empty() || *pre_state == *data,
-        "shard already holds different data"
+        "actor state already holds different data"
     );
     data
 }
@@ -766,9 +767,9 @@ pub fn write_once(pre_state: &[u8], data: Vec<u8>) -> Vec<u8> {
 #[must_use]
 pub fn get_program_via<'state>(
     account_id: AccountId,
-    loader_shard: impl Fn(AccountId) -> Option<&'state ActorState>,
+    loader_actor_state: impl Fn(AccountId) -> Option<&'state ActorState>,
 ) -> Option<(ProgramId, Vec<u8>)> {
-    let header = ProgramHeader::from_bytes(loader_shard(account_id)?)?;
+    let header = ProgramHeader::from_bytes(loader_actor_state(account_id)?)?;
 
     let mut elf = Vec::new();
     let mut next = Some(header.program_first_segment);
@@ -778,7 +779,7 @@ pub fn get_program_via<'state>(
         if segment_count > MAX_PROGRAM_SEGMENTS {
             return None;
         }
-        let segment = ProgramSegment::from_bytes(loader_shard(segment_id)?)?;
+        let segment = ProgramSegment::from_bytes(loader_actor_state(segment_id)?)?;
         elf.extend_from_slice(&segment.bytecode);
         next = segment.next_segment;
     }
@@ -794,7 +795,7 @@ pub fn immutable_mirror_commitment(
     program_header: &ProgramHeader,
 ) -> Commitment {
     let mirror_account_id = AccountId::for_immutable_mirror(header_account_id);
-    let mirrored_account = Account::default().with_shard(
+    let mirrored_account = Account::default().with_actor_state(
         PROGRAM_LOADER_ACCOUNT_ID,
         ActorState::from(program_header.to_bytes()),
     );

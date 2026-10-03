@@ -5,7 +5,7 @@ use lee_core::{
 
 // Tail Call example program.
 //
-// Keeps its own shard unchanged and sends a fixed greeting to the callee actor named in its
+// Keeps its own actor state unchanged and sends a fixed greeting to the callee actor named in its
 // message.
 //
 // The callee is caller-supplied: a deployed program's address isn't known until deploy time, so

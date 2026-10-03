@@ -200,9 +200,14 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             .map_err(map_infallible_error)
     }
 
-    async fn get_account_view(&self, shard_selector: Actor) -> Result<Account, ErrorObjectOwned> {
+    async fn get_account_view(
+        &self,
+        actor_state_selector: Actor,
+    ) -> Result<Account, ErrorObjectOwned> {
         self.executor_ref
-            .ask(sequencer_executor_actor::protocol::GetAccountView { shard_selector })
+            .ask(sequencer_executor_actor::protocol::GetAccountView {
+                actor_state_selector,
+            })
             .await
             .map(|reply| reply.account)
             .map_err(map_infallible_error)

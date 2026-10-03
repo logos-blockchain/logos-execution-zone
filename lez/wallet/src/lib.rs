@@ -12,7 +12,9 @@ use std::{
     path::PathBuf,
 };
 
-pub use account_manager::{AccountIdentity, AccountMention, CIPHERTEXT_PAD_SIZE, SelectedShard};
+pub use account_manager::{
+    AccountIdentity, AccountMention, CIPHERTEXT_PAD_SIZE, SelectedActorState,
+};
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
 use common::{HashType, block::Block, transaction::LeeTransaction};
@@ -597,18 +599,21 @@ impl WalletCore {
             .await?)
     }
 
-    /// Returns the account's nonce and the selected shard; its balance is the shard at the
-    /// native token program.
-    pub async fn get_account_view(&self, shard_selector: Actor) -> Result<Account> {
+    /// Returns the account's nonce and the selected actor state; its balance is the actor state at
+    /// the native token program.
+    pub async fn get_account_view(&self, actor_state_selector: Actor) -> Result<Account> {
         let mut account = self
             .multi_sequencer_client
             .metered_get(async |client: &SequencerClient| {
-                client.get_account_view(shard_selector).await
+                client.get_account_view(actor_state_selector).await
             })
             .await?;
 
-        // RPC projections include empty shards; the wallet omits them.
-        account.data.shards.retain(|_, shard| !shard.is_empty());
+        // RPC projections include empty actor states; the wallet omits them.
+        account
+            .data
+            .actor_states
+            .retain(|_, actor_state| !actor_state.is_empty());
 
         Ok(account)
     }
@@ -888,7 +893,7 @@ impl WalletCore {
         root: usize,
         message: MessageData,
         programs: &ProgramCatalog,
-        tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
+        tx_pre_check: impl FnOnce(&[SelectedActorState]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let root = TransactionEntry::Call {
             to: root_actor(&accounts, root)?,
@@ -931,11 +936,11 @@ impl WalletCore {
         identities: Vec<PublicIdentity>,
         programs: &ProgramCatalog,
         predicted_cross_messages: Option<PredictedCrossMessages>,
-        tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
+        tx_pre_check: impl FnOnce(&[SelectedActorState]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
-        tx_pre_check(&acc_manager.selected_shards())?;
+        tx_pre_check(&acc_manager.selected_actor_states())?;
 
         for account_id in acc_manager.accounts_outgrowing_pad() {
             warn!(
@@ -960,7 +965,7 @@ impl WalletCore {
         let (output, proof) = match predicted_cross_messages {
             None => {
                 let simulation = Simulation {
-                    public_shards: acc_manager.public_shards(),
+                    public_actor_states: acc_manager.public_actor_states(),
                 };
                 tokio::task::spawn_blocking(move || {
                     lee::execute_and_prove(input, &simulation, &programs)
@@ -1047,7 +1052,7 @@ impl WalletCore {
         root: usize,
         message: MessageData,
         payer: Option<AccountId>,
-        tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
+        tx_pre_check: impl FnOnce(&[SelectedActorState]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<HashType, ExecutionFailureKind> {
         let root = TransactionEntry::Call {
             to: root_actor(&accounts, root)?,
@@ -1063,7 +1068,7 @@ impl WalletCore {
         root: TransactionEntry<MessageRef>,
         identities: Vec<PublicIdentity>,
         payer: Option<AccountId>,
-        tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
+        tx_pre_check: impl FnOnce(&[SelectedActorState]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<HashType, ExecutionFailureKind> {
         // Public transaction, all accounts must be public
         if accounts.iter().any(|mention| mention.identity.is_private()) {
@@ -1076,7 +1081,7 @@ impl WalletCore {
 
         let mut acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
-        tx_pre_check(&acc_manager.selected_shards())?;
+        tx_pre_check(&acc_manager.selected_actor_states())?;
 
         let public_actors = acc_manager.public_actors();
         let account_ids = acc_manager.public_account_ids();
@@ -1164,7 +1169,7 @@ impl WalletCore {
         if let Some(identity) = self.resolve_private_account(to.account_id) {
             let accounts = vec![
                 identity
-                    .select_program_shard(to.program_account_id)
+                    .select_program_actor_state(to.program_account_id)
                     .without_authorization(),
             ];
             return self
@@ -1205,7 +1210,7 @@ impl WalletCore {
             }
         };
         self.send_public(
-            vec![identity.select_program_shard(to.program_account_id)],
+            vec![identity.select_program_actor_state(to.program_account_id)],
             TransactionEntry::Cast(record.reference()),
             evidence.into_iter().collect(),
             payer,

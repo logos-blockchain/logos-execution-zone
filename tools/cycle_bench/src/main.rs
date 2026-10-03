@@ -5,8 +5,8 @@
 //! JSON dump for regression comparison.
 //!
 //! An operation is not one guest invocation: its root delivery and every send it triggers are
-//! turns, each a guest run that sees only its receiver's shard. Every turn is measured, one row
-//! each, because a caller pays for all of them.
+//! turns, each a guest run that sees only its receiver's actor state. Every turn is measured, one
+//! row each, because a caller pays for all of them.
 //!
 //! Run with `cargo run --release -p cycle_bench`. `RISC0_DEV_MODE` has no effect on
 //! executor cycle counts.
@@ -266,7 +266,7 @@ impl Case {
         };
         let mut meter = Meter {
             label,
-            shards: fixtures.into_iter().map(|f| (f.actor, f.data)).collect(),
+            actor_states: fixtures.into_iter().map(|f| (f.actor, f.data)).collect(),
             prove,
             exec_iters,
             rows: Vec::new(),
@@ -279,7 +279,7 @@ impl Case {
 
 struct Meter {
     label: &'static str,
-    shards: HashMap<Actor, ActorState>,
+    actor_states: HashMap<Actor, ActorState>,
     prove: bool,
     exec_iters: usize,
     rows: Vec<BenchResult>,
@@ -309,7 +309,7 @@ impl ExecutionEnvironment for Meter {
     }
 
     fn public_actor_state(&mut self, actor: Actor) -> Result<ActorState> {
-        Ok(self.shards.get(&actor).cloned().unwrap_or_default())
+        Ok(self.actor_states.get(&actor).cloned().unwrap_or_default())
     }
 }
 

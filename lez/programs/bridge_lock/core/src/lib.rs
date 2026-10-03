@@ -39,7 +39,7 @@ pub enum Message {
         payload: Vec<u8>,
         ordinal: u32,
     },
-    /// Sets the outbox program and mint target in the config shard at genesis.
+    /// Sets the outbox program and mint target in the config actor state at genesis.
     /// Repeating the same configuration is a no-op; a different one is rejected.
     ///
     /// Sent to the config PDA.

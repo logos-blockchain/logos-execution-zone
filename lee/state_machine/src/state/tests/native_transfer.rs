@@ -85,7 +85,7 @@ fn transition_from_sequence_of_native_transfer_invocations() {
 }
 
 #[test]
-fn a_guest_writes_its_own_shard_and_sends_a_transfer_of_the_same_account() {
+fn a_guest_writes_its_own_actor_state_and_sends_a_transfer_of_the_same_account() {
     let program_id = scripted_id();
     let stranger = AccountId::new([9; 32]);
     let stranger_record: ActorState = b"untouched".to_vec().into();
@@ -99,7 +99,7 @@ fn a_guest_writes_its_own_shard_and_sends_a_transfer_of_the_same_account() {
     let mut state = V03State::new()
         .with_public_accounts([(
             sender,
-            Account::funded(100).with_shard(stranger, stranger_record.clone()),
+            Account::funded(100).with_actor_state(stranger, stranger_record.clone()),
         )])
         .with_programs([crate::test_methods::scripted()]);
 
@@ -121,9 +121,9 @@ fn a_guest_writes_its_own_shard_and_sends_a_transfer_of_the_same_account() {
     state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
     let sender_post = state.get_account_by_id(sender);
-    assert_eq!(sender_post.data.shard(program_id).as_ref(), written);
+    assert_eq!(sender_post.data.actor_state(program_id).as_ref(), written);
     assert_eq!(sender_post.data.native_balance(), Ok(70));
-    assert_eq!(sender_post.data.shard(stranger), &stranger_record);
+    assert_eq!(sender_post.data.actor_state(stranger), &stranger_record);
     assert_eq!(sender_post.nonce, Nonce(1));
     assert_eq!(
         state.get_account_by_id(recipient).data.native_balance(),
@@ -188,7 +188,7 @@ fn a_transfer_from_a_non_canonical_balance_is_rejected() {
     let zero_padded = ActorState::from(vec![0; 16]);
     let mut state = V03State::new().with_public_accounts([(
         from,
-        Account::default().with_shard(NATIVE_TOKEN_PROGRAM_ID, zero_padded),
+        Account::default().with_actor_state(NATIVE_TOKEN_PROGRAM_ID, zero_padded),
     )]);
 
     let tx = transfer_transaction(from, &from_key, 0, to, &to_key, 0, 1);

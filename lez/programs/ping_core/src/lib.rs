@@ -27,7 +27,7 @@ pub enum ReceiverMessage {
         payload: Vec<u8>,
     },
     /// Pins the deliverer and the peer sources it may deliver from, written once
-    /// into an empty config shard at genesis. A re-run holding anything different
+    /// into an empty config actor state at genesis. A re-run holding anything different
     /// is refused; an identical one is a no-op, which is what genesis replay does.
     ///
     /// Sent to the receiver config PDA.
@@ -114,7 +114,7 @@ pub enum SenderMessage {
         payload: Vec<u8>,
         ordinal: u32,
     },
-    /// Pins the outbox program, written once into an empty config shard at
+    /// Pins the outbox program, written once into an empty config actor state at
     /// genesis. A re-run naming a different outbox is refused; an identical one
     /// is a no-op, which is what genesis replay does.
     InitConfig { outbox_account_id: AccountId },

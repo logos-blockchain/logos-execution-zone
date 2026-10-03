@@ -74,7 +74,7 @@ impl Keys {
 #[derive(Default)]
 struct Script {
     handlers: HashMap<Actor, Handler>,
-    shards: HashMap<Actor, ActorState>,
+    actor_states: HashMap<Actor, ActorState>,
     log: Vec<ReceiveInput>,
 }
 
@@ -84,15 +84,15 @@ impl Script {
         receiver: Actor,
         handler: impl FnMut(&ReceiveInput) -> Transition + 'static,
     ) -> Self {
-        self.shards
+        self.actor_states
             .entry(receiver)
             .or_insert_with(ActorState::empty);
         self.handlers.insert(receiver, Box::new(handler));
         self
     }
 
-    fn shard(mut self, receiver: Actor, bytes: &[u8]) -> Self {
-        self.shards.insert(receiver, data(bytes));
+    fn actor_state(mut self, receiver: Actor, bytes: &[u8]) -> Self {
+        self.actor_states.insert(receiver, data(bytes));
         self
     }
 }
@@ -114,10 +114,10 @@ impl ExecutionEnvironment for Script {
     }
 
     fn public_actor_state(&mut self, actor: Actor) -> Result<ActorState, ExecutionError> {
-        self.shards
+        self.actor_states
             .get(&actor)
             .cloned()
-            .ok_or(ExecutionError::PublicShardUnavailable { actor })
+            .ok_or(ExecutionError::PublicActorStateUnavailable { actor })
     }
 }
 
@@ -349,7 +349,7 @@ fn a_root_delivery_stages_its_write_and_reports_its_events() {
     };
     let emitted = event.clone();
     let mut script = Script::default()
-        .shard(receiver, b"old")
+        .actor_state(receiver, b"old")
         .on(receiver, move |input| {
             echo(
                 input,
@@ -367,7 +367,7 @@ fn a_root_delivery_stages_its_write_and_reports_its_events() {
         public,
         vec![(
             receiver.account_id,
-            AccountData::default().with_shard(receiver.program_account_id, data(b"new"))
+            AccountData::default().with_actor_state(receiver.program_account_id, data(b"new"))
         )]
     );
     assert_eq!(events, vec![(receiver, event)]);
@@ -577,10 +577,10 @@ fn a_long_self_send_chain_completes() {
 }
 
 #[test]
-fn a_public_shard_is_fetched_once_and_a_cleared_shard_is_reported_empty() {
+fn a_public_actor_state_is_fetched_once_and_a_cleared_actor_state_is_reported_empty() {
     let clearing = actor(1, 9);
     let mut script = Script::default()
-        .shard(clearing, b"orig")
+        .actor_state(clearing, b"orig")
         .on(clearing, move |input| {
             if input.pre_state.is_empty() {
                 echo(input, Response::keep_state())
@@ -602,13 +602,13 @@ fn a_public_shard_is_fetched_once_and_a_cleared_shard_is_reported_empty() {
         .map(|input| input.pre_state.clone())
         .collect();
     assert_eq!(seen, vec![data(b"orig"), ActorState::empty()]);
-    assert_eq!(script.shards[&clearing], data(b"orig"));
+    assert_eq!(script.actor_states[&clearing], data(b"orig"));
     assert_eq!(
         public,
         vec![(
             clearing.account_id,
             AccountData {
-                shards: [(clearing.program_account_id, ActorState::empty())].into(),
+                actor_states: [(clearing.program_account_id, ActorState::empty())].into(),
             }
         )]
     );
@@ -668,7 +668,7 @@ fn a_private_root_records_its_public_call_and_the_predicted_reply() {
     );
     assert_eq!(
         private_accounts[&owner.account_id],
-        AccountData::default().with_shard(owner.program_account_id, data(b"second"))
+        AccountData::default().with_actor_state(owner.program_account_id, data(b"second"))
     );
 }
 

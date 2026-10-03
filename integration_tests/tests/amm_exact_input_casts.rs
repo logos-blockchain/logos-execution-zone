@@ -142,7 +142,11 @@ async fn exact_inputs_prepared_at_one_price_settle_at_the_live_quote_and_cast_th
         let output = restored_private_account(&ctx, traders[index].output, "trader output");
         if received == 0 {
             assert!(
-                output.account.data.shard(token_program_id()).is_empty(),
+                output
+                    .account
+                    .data
+                    .actor_state(token_program_id())
+                    .is_empty(),
                 "trader {index}: a refused swap casts nothing to its output account"
             );
         } else {

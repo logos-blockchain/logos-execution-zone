@@ -157,7 +157,11 @@ async fn offers_prepared_at_one_price_settle_against_the_live_pool() -> Result<(
         let output = restored_private_account(&ctx, traders[index].output, "trader output");
         if received == 0 {
             assert!(
-                output.account.data.shard(token_program_id()).is_empty(),
+                output
+                    .account
+                    .data
+                    .actor_state(token_program_id())
+                    .is_empty(),
                 "trader {index}: a refused offer opens no output holding"
             );
         } else {

@@ -7,14 +7,14 @@ use lee_core::{
 //
 // This program reads a message and either:
 //
-// - `Write(data)`: appends `data` to this program's own shard on the receiving account.
-// - `MoveData { data, to }`: moves bytes out of the receiving account's shard into the shard of
-//   `to`, the destination account under this same program. The source shard is cleared and the
-//   destination shard receives the appended bytes.
+// - `Write(data)`: appends `data` to this program's own actor state on the receiving account.
+// - `MoveData { data, to }`: moves bytes out of the receiving account's actor state into the actor
+//   state of `to`, the destination account under this same program. The source actor state is
+//   cleared and the destination actor state receives the appended bytes.
 //
-// The caller states the source's contents in `data`; the source refuses unless its shard really
-// holds exactly those bytes, which is what makes the value the destination appends a pinned one
-// rather than a caller's claim. The destination appends only on a message from this program.
+// The caller states the source's contents in `data`; the source refuses unless its actor state
+// really holds exactly those bytes, which is what makes the value the destination appends a pinned
+// one rather than a caller's claim. The destination appends only on a message from this program.
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 enum Message {

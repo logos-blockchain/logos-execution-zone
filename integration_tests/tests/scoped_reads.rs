@@ -30,21 +30,25 @@ use wallet::{
     program_facades::program_loader::ProgramLoader,
 };
 
-const BLOAT_SHARD_BYTES: usize = 96 * 1024;
+const BLOAT_ACTOR_STATE_BYTES: usize = 96 * 1024;
 
 const BLOAT_WRITERS: usize = 30;
 
 // This test only exercises chain *resolution* under a bloated account, never `CreateHeader`,
 // so `bytecode` is never decoded or validated as a real program - arbitrary filler well under
 // `MAX_SEGMENT_DATA_LEN` stands in for "a segment's content", same as `bloat_account`'s own
-// shard writes use plain filler rather than real program data.
+// actor state writes use plain filler rather than real program data.
 const SEGMENT_FILLER_BYTES: usize = 1024;
 
 #[track_caller]
-fn assert_bloat_shard(shard: Option<&[u8]>) {
-    let shard = shard.expect("bloat shard missing from scoped response");
-    assert_eq!(shard.len(), BLOAT_SHARD_BYTES, "bloat shard length");
-    let mismatch = shard
+fn assert_bloat_actor_state(actor_state: Option<&[u8]>) {
+    let actor_state = actor_state.expect("bloat actor state missing from scoped response");
+    assert_eq!(
+        actor_state.len(),
+        BLOAT_ACTOR_STATE_BYTES,
+        "bloat actor state length"
+    );
+    let mismatch = actor_state
         .iter()
         .copied()
         .enumerate()
@@ -83,7 +87,7 @@ async fn submit(
         public_actors,
         nonces,
         message,
-        // A bloat shard write costs far more than `test_fee_declaration`'s 2M cycle cap,
+        // A bloat actor state write costs far more than `test_fee_declaration`'s 2M cycle cap,
         // and an over-cap call is a charged revert: it settles and writes nothing.
         lee::FeeDeclaration::new(
             payer.account_id,
@@ -178,7 +182,7 @@ async fn bloat_account(
         writers.push(header);
     }
 
-    let shard = vec![0xFF_u8; BLOAT_SHARD_BYTES];
+    let actor_state = vec![0xFF_u8; BLOAT_ACTOR_STATE_BYTES];
     for writer_id in &writers {
         let payer_nonce = get_account(ctx, payer.account_id).await?.nonce;
         let bloated = Actor::new(victim, *writer_id);
@@ -187,13 +191,13 @@ async fn bloat_account(
             bloated,
             vec![bloated],
             vec![payer_nonce],
-            Script::write(shard.clone()),
+            Script::write(actor_state.clone()),
             payer,
             &[],
         )
         .await?;
         let view = get_account_view(ctx, Actor::new(victim, *writer_id)).await?;
-        assert_bloat_shard(view.data.shards.get(writer_id).map(AsRef::as_ref));
+        assert_bloat_actor_state(view.data.actor_states.get(writer_id).map(AsRef::as_ref));
     }
 
     writers
@@ -223,14 +227,23 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
             "every bloat writer must be a distinct address"
         );
         let view = get_account_view(&ctx, Actor::new(victim, *writer)).await?;
-        assert_eq!(view.data.shards.len(), 1, "a scoped read carries one shard");
+        assert_eq!(
+            view.data.actor_states.len(),
+            1,
+            "a scoped read carries one actor state"
+        );
     }
 
     let balance_only = get_account_view(&ctx, Actor::native_balance(victim)).await?;
     assert_eq!(
-        balance_only.data.shards.keys().copied().collect::<Vec<_>>(),
+        balance_only
+            .data
+            .actor_states
+            .keys()
+            .copied()
+            .collect::<Vec<_>>(),
         vec![NATIVE_TOKEN_PROGRAM_ID],
-        "a balance view carries exactly the native shard"
+        "a balance view carries exactly the native actor state"
     );
 
     let last_writer = writers[BLOAT_WRITERS - 1];
@@ -245,12 +258,12 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
     execute_subcommand(ctx.wallet_mut(), scoped_get(ReadScope::Balance, false)).await?;
     execute_subcommand(
         ctx.wallet_mut(),
-        scoped_get(ReadScope::Shard(last_writer), false),
+        scoped_get(ReadScope::ActorState(last_writer), false),
     )
     .await?;
     execute_subcommand(
         ctx.wallet_mut(),
-        scoped_get(ReadScope::Shard(last_writer), true),
+        scoped_get(ReadScope::ActorState(last_writer), true),
     )
     .await?;
     let cli_error = execute_subcommand(ctx.wallet_mut(), scoped_get(ReadScope::All, false))
@@ -285,16 +298,16 @@ async fn a_bloated_account_stays_readable_through_the_indexer() -> Result<()> {
 
     let current = indexer_service_rpc::RpcClient::get_account_view(indexer, selector).await?;
     assert_eq!(
-        current.data.shards.len(),
+        current.data.actor_states.len(),
         1,
-        "the indexer view must carry only the selected shard"
+        "the indexer view must carry only the selected actor state"
     );
-    assert_bloat_shard(
+    assert_bloat_actor_state(
         current
             .data
-            .shards
+            .actor_states
             .get(&last_writer_key)
-            .map(|shard| shard.0.as_slice()),
+            .map(|actor_state| actor_state.0.as_slice()),
     );
     assert_eq!(current.nonce, balance_only.nonce.0);
 
@@ -305,8 +318,10 @@ async fn a_bloated_account_stays_readable_through_the_indexer() -> Result<()> {
     )
     .await?;
     assert!(
-        before_population.data.shards[&last_writer_key].0.is_empty(),
-        "the historical view must predate the shard, not mirror current state"
+        before_population.data.actor_states[&last_writer_key]
+            .0
+            .is_empty(),
+        "the historical view must predate the actor state, not mirror current state"
     );
     let native_before = indexer_service_rpc::RpcClient::get_account_view_at_block(
         indexer,
@@ -326,12 +341,12 @@ async fn a_bloated_account_stays_readable_through_the_indexer() -> Result<()> {
         indexer_height,
     )
     .await?;
-    assert_bloat_shard(
+    assert_bloat_actor_state(
         after_population
             .data
-            .shards
+            .actor_states
             .get(&last_writer_key)
-            .map(|shard| shard.0.as_slice()),
+            .map(|actor_state| actor_state.0.as_slice()),
     );
     assert_eq!(after_population.nonce, balance_only.nonce.0);
     let native_after = indexer_service_rpc::RpcClient::get_account_view_at_block(
@@ -345,7 +360,7 @@ async fn a_bloated_account_stays_readable_through_the_indexer() -> Result<()> {
         balance_only.data.native_balance().unwrap()
     );
 
-    // The explorer renders shard counts and sizes, so it needs to enumerate shards on
+    // The explorer renders actor state counts and sizes, so it needs to enumerate actor states on
     // an account a scoped read cannot enumerate and a whole-account read can no longer
     // return. The summary answers that without carrying the bytes.
     let victim_key: indexer_service_protocol::AccountId = victim.into();
@@ -355,22 +370,22 @@ async fn a_bloated_account_stays_readable_through_the_indexer() -> Result<()> {
             .is_err(),
         "the whole-account indexer read must fail on the bloated account"
     );
-    let expected_shard_len =
-        u64::try_from(BLOAT_SHARD_BYTES).expect("the bloat shard size fits in u64");
+    let expected_actor_state_len =
+        u64::try_from(BLOAT_ACTOR_STATE_BYTES).expect("the bloat actor state size fits in u64");
     let summary = indexer_service_rpc::RpcClient::get_account_summary(indexer, victim_key).await?;
     let native_key = indexer_service_protocol::AccountId::native_token_program();
     assert_eq!(
-        summary.shards.len(),
+        summary.actor_states.len(),
         writers.len() + 1,
-        "the summary must list every shard the bloat wrote, plus the native balance shard"
+        "the summary must list every actor state the bloat wrote, plus the native balance actor state"
     );
     assert!(
         summary
-            .shards
+            .actor_states
             .iter()
-            .filter(|shard| shard.program_account_id != native_key)
-            .all(|shard| shard.len == expected_shard_len),
-        "the summary must carry each shard's real size"
+            .filter(|actor_state| actor_state.program_account_id != native_key)
+            .all(|actor_state| actor_state.len == expected_actor_state_len),
+        "the summary must carry each actor state's real size"
     );
     assert_eq!(summary.balance, balance_only.data.native_balance().ok());
     assert_eq!(summary.nonce, balance_only.nonce.0);
@@ -382,7 +397,7 @@ async fn a_bloated_account_stays_readable_through_the_indexer() -> Result<()> {
     .await?;
     assert_eq!(missing.data.balance().unwrap(), 0);
     assert_eq!(missing.nonce, 0);
-    assert!(missing.data.shards.is_empty());
+    assert!(missing.data.actor_states.is_empty());
 
     assert!(
         indexer_service_rpc::RpcClient::get_account_view_at_block(
@@ -466,7 +481,10 @@ async fn an_application_scoped_call_still_finds_its_funded_payer() -> Result<()>
     let token_program_id = programs::token_account_id();
     let definition_view = get_account_view(&ctx, Actor::new(definition, token_program_id)).await?;
     assert!(
-        !definition_view.data.shard(token_program_id).is_empty(),
+        !definition_view
+            .data
+            .actor_state(token_program_id)
+            .is_empty(),
         "the definition must have been written, so the transaction was admitted and settled"
     );
     assert!(

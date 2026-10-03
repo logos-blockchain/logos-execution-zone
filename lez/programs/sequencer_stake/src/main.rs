@@ -78,7 +78,7 @@ fn stake(
         "Stake is only invoked as a top-level user transaction",
     );
     assert!(input.is_authorized, "must sign for the ownership account");
-    // The stake shard remains after a full exit, so presence is what distinguishes a
+    // The stake actor state remains after a full exit, so presence is what distinguishes a
     // new stake from a top-up.
     assert_eq!(
         !input.pre_state.is_empty(),
@@ -328,7 +328,7 @@ fn assert_root_origin(input: &ReceiveInput, message: &str) {
     assert!(input.origin.is_none(), "{message}");
 }
 
-/// Other accounts also hold this program's shards, so the config is pinned by address.
+/// Other accounts also hold this program's actor states, so the config is pinned by address.
 fn assert_config_account(input: &ReceiveInput) {
     assert_eq!(
         input.receiver.account_id,
@@ -567,7 +567,7 @@ mod tests {
             .response
             .post_state
             .as_ref()
-            .expect("the shard is written")
+            .expect("the actor state is written")
             .to_vec()
     }
 

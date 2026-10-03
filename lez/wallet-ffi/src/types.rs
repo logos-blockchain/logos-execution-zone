@@ -86,18 +86,18 @@ impl From<FfiIdentifier> for lee_core::Identifier {
     }
 }
 
-/// One program's shard on an account.
+/// One program's actor state on an account.
 #[repr(C)]
-pub struct FfiShard {
+pub struct FfiActorState {
     /// The program account ID.
     pub program: FfiBytes32,
-    /// Pointer to shard data bytes.
+    /// Pointer to actor state data bytes.
     pub data: *const u8,
-    /// Length of shard data.
+    /// Length of actor state data.
     pub data_len: usize,
 }
 
-impl Default for FfiShard {
+impl Default for FfiActorState {
     fn default() -> Self {
         Self {
             program: FfiBytes32::default(),
@@ -113,11 +113,11 @@ impl Default for FfiShard {
 /// byte arrays since C doesn't have native u128 support.
 #[repr(C)]
 pub struct FfiAccount {
-    /// Pointer to this account's shards, ordered by program address. The native balance is the
-    /// shard of the native token program.
-    pub shards: *const FfiShard,
-    /// Number of shards.
-    pub shards_len: usize,
+    /// Pointer to this account's actor states, ordered by program address. The native balance is
+    /// the actor state of the native token program.
+    pub actor_states: *const FfiActorState,
+    /// Number of actor states.
+    pub actor_states_len: usize,
     /// Nonce as little-endian [u8; 16].
     pub nonce: FfiU128,
 }
@@ -125,8 +125,8 @@ pub struct FfiAccount {
 impl Default for FfiAccount {
     fn default() -> Self {
         Self {
-            shards: std::ptr::null(),
-            shards_len: 0,
+            actor_states: std::ptr::null(),
+            actor_states_len: 0,
             nonce: FfiU128::default(),
         }
     }
@@ -319,7 +319,7 @@ impl Default for FfiAccountIdentity {
     }
 }
 
-/// An account identity with the program shard it selects.
+/// An account identity with the program actor state it selects.
 #[repr(C)]
 pub struct FfiAccountMention {
     pub identity: FfiAccountIdentity,
@@ -331,7 +331,7 @@ impl TryFrom<&FfiAccountMention> for AccountMention {
 
     fn try_from(value: &FfiAccountMention) -> Result<Self, Self::Error> {
         Ok(AccountIdentity::try_from(&value.identity)?
-            .select_program_shard(value.program_account_id.into()))
+            .select_program_actor_state(value.program_account_id.into()))
     }
 }
 
@@ -373,9 +373,9 @@ impl From<lee::Account> for FfiAccount {
         reason = "We need to convert to byte arrays for FFI"
     )]
     fn from(value: lee::Account) -> Self {
-        let shards_vec: Vec<FfiShard> = value
+        let actor_states_vec: Vec<FfiActorState> = value
             .data
-            .shards
+            .actor_states
             .into_iter()
             .map(|(program, record)| {
                 let record: Vec<u8> = record.into();
@@ -385,7 +385,7 @@ impl From<lee::Account> for FfiAccount {
                 } else {
                     ptr::null()
                 };
-                FfiShard {
+                FfiActorState {
                     program: program.into(),
                     data,
                     data_len,
@@ -393,16 +393,16 @@ impl From<lee::Account> for FfiAccount {
             })
             .collect();
 
-        let shards_len = shards_vec.len();
-        let shards = if shards_len > 0 {
-            Box::into_raw(shards_vec.into_boxed_slice()) as *const FfiShard
+        let actor_states_len = actor_states_vec.len();
+        let actor_states = if actor_states_len > 0 {
+            Box::into_raw(actor_states_vec.into_boxed_slice()) as *const FfiActorState
         } else {
             ptr::null()
         };
 
         Self {
-            shards,
-            shards_len,
+            actor_states,
+            actor_states_len,
             nonce: value.nonce.0.into(),
         }
     }
@@ -415,23 +415,27 @@ impl TryFrom<&FfiAccount> for lee::Account {
         let mut account = Self {
             nonce: lee_core::account::Nonce(value.nonce.into()),
             data: lee_core::account::AccountData {
-                shards: std::collections::BTreeMap::new(),
+                actor_states: std::collections::BTreeMap::new(),
             },
         };
 
-        if value.shards_len > 0 {
-            if value.shards.is_null() {
+        if value.actor_states_len > 0 {
+            if value.actor_states.is_null() {
                 return Err(WalletFfiError::NullPointer);
             }
-            let shards = unsafe { slice::from_raw_parts(value.shards, value.shards_len) };
-            for shard in shards {
-                let data = if shard.data_len > 0 {
-                    let bytes = unsafe { slice::from_raw_parts(shard.data, shard.data_len) };
+            let actor_states =
+                unsafe { slice::from_raw_parts(value.actor_states, value.actor_states_len) };
+            for actor_state in actor_states {
+                let data = if actor_state.data_len > 0 {
+                    let bytes =
+                        unsafe { slice::from_raw_parts(actor_state.data, actor_state.data_len) };
                     ActorState::from(bytes.to_vec())
                 } else {
                     ActorState::default()
                 };
-                account.data.set_shard(shard.program.into(), data);
+                account
+                    .data
+                    .set_actor_state(actor_state.program.into(), data);
             }
         }
 

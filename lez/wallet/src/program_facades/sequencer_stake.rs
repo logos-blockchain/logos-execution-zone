@@ -18,7 +18,9 @@ impl SequencerStake<'_> {
         amount: u128,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let program = programs::sequencer_stake_account_id();
-        let has_record = !super::shard(self.0, &ownership, program).await?.is_empty();
+        let has_record = !super::actor_state(self.0, &ownership, program)
+            .await?
+            .is_empty();
         let funds = system_accounts::stake_funds_account_id(&ownership.account_id());
         let message = Program::serialize_message(Message::Stake {
             sequencer_key,
@@ -28,11 +30,11 @@ impl SequencerStake<'_> {
         })
         .expect("Message should serialize");
         let accounts = vec![
-            ownership.select_program_shard(program),
+            ownership.select_program_actor_state(program),
             AccountIdentity::PublicNoSign(funds).balance(),
             funding.balance(),
             AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id())
-                .select_program_shard(program),
+                .select_program_actor_state(program),
         ];
         self.0
             .send_tx(

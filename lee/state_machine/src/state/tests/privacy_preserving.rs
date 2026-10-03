@@ -116,7 +116,7 @@ fn transition_from_privacy_preserving_transaction_shielded() {
         let mut this = state.get_account_by_id(sender_keys.account_id());
         let post_balance = this.data.native_balance().unwrap() - balance_to_move;
         this.data
-            .set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(post_balance));
+            .set_actor_state(NATIVE_TOKEN_PROGRAM_ID, encode_balance(post_balance));
         this.nonce.public_account_nonce_increment();
         this
     };
@@ -404,7 +404,7 @@ fn a_failing_public_turn_leaves_the_state_untouched() {
             ..proving_input(root(own, &script))
         },
         &Simulation {
-            public_shards: [(sender, encode_balance(overdraft))].into(),
+            public_actor_states: [(sender, encode_balance(overdraft))].into(),
         },
         &synthetic_program(crate::test_methods::scripted()),
     )
@@ -459,7 +459,7 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
         let mut this = state.get_account_by_id(recipient_keys.account_id());
         let post_balance = this.data.native_balance().unwrap() + balance_to_move;
         this.data
-            .set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(post_balance));
+            .set_actor_state(NATIVE_TOKEN_PROGRAM_ID, encode_balance(post_balance));
         this
     };
 
@@ -620,12 +620,12 @@ fn a_private_roots_public_outputs_settle_against_live_state() {
         .transition_from_privacy_preserving_transaction(&tx, 1, 0)
         .expect("the public outputs settle");
 
-    // The scripted actor's own shard was written by its live turn at settlement.
+    // The scripted actor's own actor state was written by its live turn at settlement.
     assert_eq!(
         root.state
             .get_account_by_id(written_to.account_id)
             .data
-            .shard(scripted_id())
+            .actor_state(scripted_id())
             .as_ref(),
         &[5_u8; 4]
     );
@@ -736,7 +736,7 @@ fn a_nested_boundary_settles_both_public_writes() {
                 .state
                 .get_account_by_id(actor.account_id)
                 .data
-                .shard(scripted_id())
+                .actor_state(scripted_id())
                 .as_ref(),
             written
         );

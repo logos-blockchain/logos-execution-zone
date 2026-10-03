@@ -91,9 +91,12 @@ async fn fund_private_pda(
             ciphertext_padding: None,
         },
         &Simulation {
-            public_shards: [(
+            public_actor_states: [(
                 sender_actor,
-                sender_account.data.shard(NATIVE_TOKEN_PROGRAM_ID).clone(),
+                sender_account
+                    .data
+                    .actor_state(NATIVE_TOKEN_PROGRAM_ID)
+                    .clone(),
             )]
             .into(),
         },
@@ -130,7 +133,7 @@ async fn spend_private_pda(
     (proxy_id, spend_program): (AccountId, &ProgramCatalog),
 ) -> Result<()> {
     let accounts = vec![
-        AccountIdentity::PrivateOwned(pda_account_id).select_program_shard(proxy_id),
+        AccountIdentity::PrivateOwned(pda_account_id).select_program_actor_state(proxy_id),
         AccountIdentity::PrivateOwned(pda_account_id).balance(),
         AccountIdentity::PrivateForeign {
             npk: recipient_npk,

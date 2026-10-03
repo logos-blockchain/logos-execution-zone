@@ -195,9 +195,9 @@ pub(crate) fn attach_kernel(user_elf: &[u8]) -> Vec<u8> {
 /// then re-attaches the kernel.
 pub(crate) fn resolve_program<'state>(
     account_id: AccountId,
-    loader_shard: impl Fn(AccountId) -> Option<&'state ActorState>,
+    loader_actor_state: impl Fn(AccountId) -> Option<&'state ActorState>,
 ) -> Option<(ProgramId, Vec<u8>)> {
-    let (image_id, user_elf) = get_program_via(account_id, loader_shard)?;
+    let (image_id, user_elf) = get_program_via(account_id, loader_actor_state)?;
     Some((image_id, attach_kernel(&user_elf)))
 }
 

@@ -78,7 +78,7 @@ fn repairing_a_squat_requires_the_owner_and_disturbs_nothing_else() {
     const SQUATTER_DEFINITION_ID: AccountId = AccountId::new([0x11; 32]);
     const THROWAWAY_HOLDING_ID: AccountId = AccountId::new([0x12; 32]);
     const FOREIGN_PROGRAM_ID: AccountId = AccountId::new([0x13; 32]);
-    let foreign_shard = ActorState::from(vec![7u8; 4]);
+    let foreign_actor_state = ActorState::from(vec![7u8; 4]);
 
     let (owner_key, owner_id) = owner_keys();
     let (ata_id, _) = ata_of(
@@ -88,7 +88,8 @@ fn repairing_a_squat_requires_the_owner_and_disturbs_nothing_else() {
         token_program_id(),
     );
 
-    let noisy_ata = Account::funded(500).with_shard(FOREIGN_PROGRAM_ID, foreign_shard.clone());
+    let noisy_ata =
+        Account::funded(500).with_actor_state(FOREIGN_PROGRAM_ID, foreign_actor_state.clone());
 
     let mut state = V03State::new()
         .with_named_programs([
@@ -168,7 +169,7 @@ fn repairing_a_squat_requires_the_owner_and_disturbs_nothing_else() {
 
     let repaired = state.get_account_by_id(ata_id);
     assert_eq!(
-        TokenHolding::try_from(repaired.data.shard(token_program_id())).unwrap(),
+        TokenHolding::try_from(repaired.data.actor_state(token_program_id())).unwrap(),
         TokenHolding::Fungible {
             definition_id: INTENDED_DEFINITION_ID,
             balance: 0,
@@ -178,7 +179,10 @@ fn repairing_a_squat_requires_the_owner_and_disturbs_nothing_else() {
         repaired.data.native_balance().unwrap(),
         native_balance_before_repair
     );
-    assert_eq!(repaired.data.shard(FOREIGN_PROGRAM_ID), &foreign_shard);
+    assert_eq!(
+        repaired.data.actor_state(FOREIGN_PROGRAM_ID),
+        &foreign_actor_state
+    );
     assert_eq!(
         state.get_account_by_id(SQUATTER_DEFINITION_ID),
         squatter_definition_before

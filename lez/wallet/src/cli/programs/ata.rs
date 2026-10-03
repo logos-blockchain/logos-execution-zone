@@ -204,7 +204,7 @@ impl AtaSubcommand {
             let account = wallet_core
                 .get_account_view(Actor::new(ata_id, token_program_id))
                 .await?;
-            let holding = account.data.shard(token_program_id);
+            let holding = account.data.actor_state(token_program_id);
 
             if holding.is_empty() {
                 println!("No ATA for definition {def}");

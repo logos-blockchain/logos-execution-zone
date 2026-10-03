@@ -57,7 +57,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
             assert_eq!(
                 target_accounts, expected_accounts,
                 "target accounts must be the mint's config and the recipient's holding, under the \
-                 wrapped token's own shard"
+                 wrapped token's own actor state"
             );
             assert!(
                 amount <= MAX_MINT_AMOUNT,
@@ -124,7 +124,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
             );
             Response::keep_state()
         }
-        // A written shard must already pin exactly these programs rather than being refused,
+        // A written actor state must already pin exactly these programs rather than being refused,
         // because genesis is replayed onto seeded state during multi-sequencer reconstruction.
         Message::InitConfig {
             outbox_account_id,
@@ -389,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "shard already holds different data")]
+    #[should_panic(expected = "actor state already holds different data")]
     fn a_reinit_with_a_different_route_is_refused() {
         let _transition = init(None, AccountId::new([0xBB; 32]), config());
     }

@@ -2,35 +2,35 @@ use std::collections::BTreeMap;
 
 use crate::api::types::{FfiBytes32, FfiU128};
 
-/// One program's shard on an account.
+/// One program's actor state on an account.
 #[repr(C)]
-pub struct FfiShard {
+pub struct FfiActorState {
     pub program: FfiBytes32,
-    /// Pointer to shard data bytes.
+    /// Pointer to actor state data bytes.
     pub data: *mut u8,
-    /// Length of shard data.
+    /// Length of actor state data.
     pub data_len: usize,
-    /// Capacity of shard data.
+    /// Capacity of actor state data.
     pub data_cap: usize,
 }
 
 /// Account data structure - C-compatible version of lee Account.
 ///
 /// Note: `nonce` is a u128 value represented as a little-endian byte array since C doesn't have
-/// native u128 support. The native balance is the shard of the native token program.
+/// native u128 support. The native balance is the actor state of the native token program.
 #[repr(C)]
 pub struct FfiAccount {
     /// Nonce as little-endian [u8; 16].
     pub nonce: FfiU128,
-    /// Pointer to the account's shards.
-    pub shards: *mut FfiShard,
-    /// Number of shards.
-    pub shards_len: usize,
+    /// Pointer to the account's actor states.
+    pub actor_states: *mut FfiActorState,
+    /// Number of actor states.
+    pub actor_states_len: usize,
 }
 
 // Helper functions to convert between Rust and FFI types
 
-impl From<(lee::AccountId, lee::ActorState)> for FfiShard {
+impl From<(lee::AccountId, lee::ActorState)> for FfiActorState {
     fn from((program, data): (lee::AccountId, lee::ActorState)) -> Self {
         let (data, data_len, data_cap) = data.into_inner().into_raw_parts();
         Self {
@@ -52,15 +52,15 @@ impl From<lee::Account> for FfiAccount {
     fn from(value: lee::Account) -> Self {
         let lee::Account {
             nonce,
-            data: lee::AccountData { shards },
+            data: lee::AccountData { actor_states },
         } = value;
 
-        let (shards, shards_len) = shards_into_raw(shards);
+        let (actor_states, actor_states_len) = actor_states_into_raw(actor_states);
 
         Self {
             nonce: nonce.0.into(),
-            shards,
-            shards_len,
+            actor_states,
+            actor_states_len,
         }
     }
 }
@@ -69,14 +69,14 @@ impl From<FfiAccount> for indexer_service_protocol::Account {
     fn from(value: FfiAccount) -> Self {
         let FfiAccount {
             nonce,
-            shards,
-            shards_len,
+            actor_states,
+            actor_states_len,
         } = value;
 
         Self {
             nonce: nonce.into(),
             data: indexer_service_protocol::AccountData {
-                shards: unsafe { shards_from_raw(shards, shards_len) },
+                actor_states: unsafe { actor_states_from_raw(actor_states, actor_states_len) },
             },
         }
     }
@@ -86,46 +86,48 @@ impl From<&FfiAccount> for indexer_service_protocol::Account {
     fn from(value: &FfiAccount) -> Self {
         let &FfiAccount {
             nonce,
-            shards,
-            shards_len,
+            actor_states,
+            actor_states_len,
         } = value;
 
         Self {
             nonce: nonce.into(),
             data: indexer_service_protocol::AccountData {
-                shards: unsafe { shards_from_raw(shards, shards_len) },
+                actor_states: unsafe { actor_states_from_raw(actor_states, actor_states_len) },
             },
         }
     }
 }
 
-/// Converts shards into a boxed slice and returns its pointer and length.
-fn shards_into_raw(shards: BTreeMap<lee::AccountId, lee::ActorState>) -> (*mut FfiShard, usize) {
-    let boxed: Box<[FfiShard]> = shards.into_iter().map(FfiShard::from).collect();
+/// Converts actor states into a boxed slice and returns its pointer and length.
+fn actor_states_into_raw(
+    actor_states: BTreeMap<lee::AccountId, lee::ActorState>,
+) -> (*mut FfiActorState, usize) {
+    let boxed: Box<[FfiActorState]> = actor_states.into_iter().map(FfiActorState::from).collect();
     let len = boxed.len();
-    (Box::into_raw(boxed).cast::<FfiShard>(), len)
+    (Box::into_raw(boxed).cast::<FfiActorState>(), len)
 }
 
-/// Reclaims a shard buffer produced by [`shards_into_raw`].
+/// Reclaims an actor state buffer produced by [`actor_states_into_raw`].
 ///
 /// # Safety
 ///
-/// `ptr`/`len` must be exactly the pair returned by a prior [`shards_into_raw`] call, not
+/// `ptr`/`len` must be exactly the pair returned by a prior [`actor_states_into_raw`] call, not
 /// already reclaimed.
-unsafe fn shards_from_raw(
-    ptr: *mut FfiShard,
+unsafe fn actor_states_from_raw(
+    ptr: *mut FfiActorState,
     len: usize,
 ) -> BTreeMap<indexer_service_protocol::AccountId, indexer_service_protocol::ActorState> {
     let boxed = unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)) };
     Vec::from(boxed)
         .into_iter()
-        .map(|shard| {
-            let FfiShard {
+        .map(|actor_state| {
+            let FfiActorState {
                 program,
                 data,
                 data_len,
                 data_cap,
-            } = shard;
+            } = actor_state;
             (
                 indexer_service_protocol::AccountId {
                     value: program.data,
@@ -138,19 +140,19 @@ unsafe fn shards_from_raw(
         .collect()
 }
 
-/// Frees an account, its shard array, and each shard's data buffer.
+/// Frees an account, its actor state array, and each actor state's data buffer.
 ///
 /// # Safety
 ///
 /// `val` must be null or an unfreed `PointerResult.value` from an account query.
-/// Its shard array and data buffers must remain valid and owned by the account.
+/// Its actor state array and data buffers must remain valid and owned by the account.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_ffi_account(val: *mut FfiAccount) {
     if val.is_null() {
         log::error!("Trying to free a null pointer. Exiting");
         return;
     }
-    // Reclaim the outer box, then convert to drop the shard array and its buffers.
+    // Reclaim the outer box, then convert to drop the actor state array and its buffers.
     let boxed = unsafe { Box::from_raw(val) };
     let orig_val: indexer_service_protocol::Account = (*boxed).into();
     drop(orig_val);

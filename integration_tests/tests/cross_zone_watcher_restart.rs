@@ -139,7 +139,7 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
     // The delivery itself must survive the restart untouched.
     let account = client_b.get_account(record_id).await?;
     assert_eq!(
-        account.data.shard(receiver_id).to_vec(),
+        account.data.actor_state(receiver_id).to_vec(),
         PING_PAYLOAD,
         "the delivered payload must survive the restart"
     );
@@ -233,7 +233,7 @@ async fn wait_for_delivery(
     let wait = async {
         loop {
             let account = client.get_account(record_id).await?;
-            let data = account.data.shard(receiver_id).to_vec();
+            let data = account.data.actor_state(receiver_id).to_vec();
             if !data.is_empty() {
                 return Ok::<Vec<u8>, anyhow::Error>(data);
             }

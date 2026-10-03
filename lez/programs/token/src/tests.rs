@@ -152,7 +152,7 @@ fn turn(
     crate::receive(&input, message.clone()).into_transition(input)
 }
 
-// Every permission is granted, so only the shard contents can refuse the message.
+// Every permission is granted, so only the actor state contents can refuse the message.
 fn written(message: &Message, pre_state: &ActorState) -> Option<ActorState> {
     // A supply burn runs at the definition it names.
     let receiver = if let Message::BurnSupply { definition_id, .. } = message {
@@ -180,13 +180,17 @@ fn rejection(message: &Message, pre_state: &ActorState) -> String {
 }
 
 fn holding_at(message: &Message, pre_state: &ActorState) -> TokenHolding {
-    TokenHolding::try_from(&written(message, pre_state).expect("the message writes its shard"))
-        .expect("the turn wrote a holding")
+    TokenHolding::try_from(
+        &written(message, pre_state).expect("the message writes its actor state"),
+    )
+    .expect("the turn wrote a holding")
 }
 
 fn definition_at(message: &Message, pre_state: &ActorState) -> TokenDefinition {
-    TokenDefinition::try_from(&written(message, pre_state).expect("the message writes its shard"))
-        .expect("the turn wrote a definition")
+    TokenDefinition::try_from(
+        &written(message, pre_state).expect("the message writes its actor state"),
+    )
+    .expect("the turn wrote a definition")
 }
 
 fn settle(

@@ -50,7 +50,7 @@ async fn stake_config(ctx: &TestContext) -> Result<sequencer_stake_core::Sequenc
     sequencer_stake_core::SequencerStakeConfig::from_bytes(
         account
             .data
-            .shard(programs::sequencer_stake_account_id())
+            .actor_state(programs::sequencer_stake_account_id())
             .as_ref(),
     )
     .context("Config account should decode as SequencerStakeConfig")

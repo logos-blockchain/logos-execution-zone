@@ -140,12 +140,12 @@ impl ProgramCatalog {
 
 #[derive(Default)]
 pub struct Simulation {
-    pub public_shards: HashMap<Actor, ActorState>,
+    pub public_actor_states: HashMap<Actor, ActorState>,
 }
 
 struct Simulator<'input> {
     programs: &'input HashMap<AccountId, Dependency>,
-    public_shards: &'input HashMap<Actor, ActorState>,
+    public_actor_states: &'input HashMap<Actor, ActorState>,
 }
 
 impl ExecutionEnvironment for Simulator<'_> {
@@ -169,7 +169,7 @@ impl ExecutionEnvironment for Simulator<'_> {
 
     fn public_actor_state(&mut self, actor: Actor) -> Result<ActorState, LeeError> {
         Ok(self
-            .public_shards
+            .public_actor_states
             .get(&actor)
             .map_or_else(ActorState::empty, Clone::clone))
     }
@@ -220,7 +220,7 @@ fn receive_with(
 }
 
 /// Generates a proof of the execution of a LEE program inside the privacy preserving execution
-/// circuit, assuming of public execution what running it against `simulation.public_shards`
+/// circuit, assuming of public execution what running it against `simulation.public_actor_states`
 /// delivers.
 pub fn execute_and_prove(
     input: ProvingInput,
@@ -234,7 +234,7 @@ pub fn execute_and_prove(
     )?
     .execute(&mut Simulator {
         programs: &programs.programs,
-        public_shards: &simulation.public_shards,
+        public_actor_states: &simulation.public_actor_states,
     })?
     .predicted_cross_messages;
     execute_and_prove_with_cross_messages(input, predicted_cross_messages, programs)

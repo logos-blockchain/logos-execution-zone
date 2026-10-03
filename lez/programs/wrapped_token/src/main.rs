@@ -73,7 +73,7 @@ fn receive(input: &ReceiveInput) -> Response {
                 at_config(input),
                 "the receiver must be the wrapped-token config PDA"
             );
-            // A written shard must already hold exactly this configuration rather than being
+            // A written actor state must already hold exactly this configuration rather than being
             // refused.
             Response::set_state(write_once(&input.pre_state, config.to_bytes()))
         }
@@ -806,7 +806,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "shard already holds different data")]
+    #[should_panic(expected = "actor state already holds different data")]
     fn a_reinit_with_different_contents_is_refused() {
         let _transition = at_config(
             None,

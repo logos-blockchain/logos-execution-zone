@@ -90,19 +90,21 @@ async fn a_pool_round_trips_through_the_wallet_and_rejects_an_unaffordable_offer
     for signer in signers {
         nonces_before.push(nonce(&ctx, signer).await?);
     }
-    let pool = AccountIdentity::PublicNoSign(pool_id).select_program_shard(amm_program_id());
+    let pool = AccountIdentity::PublicNoSign(pool_id).select_program_actor_state(amm_program_id());
     let mismatched = ctx
         .wallet()
         .send_pub_tx(
             vec![
                 pool,
-                AccountIdentity::PublicNoSign(vault_a).select_program_shard(token_program_id()),
-                AccountIdentity::PublicNoSign(vault_b).select_program_shard(token_program_id()),
+                AccountIdentity::PublicNoSign(vault_a)
+                    .select_program_actor_state(token_program_id()),
+                AccountIdentity::PublicNoSign(vault_b)
+                    .select_program_actor_state(token_program_id()),
                 AccountIdentity::PublicNoSign(lp_definition)
-                    .select_program_shard(token_program_id()),
-                AccountIdentity::Public(holding_b).select_program_shard(token_program_id()),
-                AccountIdentity::Public(holding_a).select_program_shard(token_program_id()),
-                AccountIdentity::Public(holding_lp).select_program_shard(token_program_id()),
+                    .select_program_actor_state(token_program_id()),
+                AccountIdentity::Public(holding_b).select_program_actor_state(token_program_id()),
+                AccountIdentity::Public(holding_a).select_program_actor_state(token_program_id()),
+                AccountIdentity::Public(holding_lp).select_program_actor_state(token_program_id()),
             ],
             0,
             Program::serialize_message(amm_core::Message::NewDefinition {
@@ -129,7 +131,7 @@ async fn a_pool_round_trips_through_the_wallet_and_rejects_an_unaffordable_offer
             get_account(&ctx, account_id)
                 .await?
                 .data
-                .shard(program_id)
+                .actor_state(program_id)
                 .is_empty(),
             "mismatched: {account_id} gained no state"
         );
@@ -265,7 +267,7 @@ async fn a_pool_round_trips_through_the_wallet_and_rejects_an_unaffordable_offer
         get_account(&ctx, receiver)
             .await?
             .data
-            .shard(token_program_id())
+            .actor_state(token_program_id())
             .is_empty(),
         "unfunded: the reverted swap paid nothing out"
     );

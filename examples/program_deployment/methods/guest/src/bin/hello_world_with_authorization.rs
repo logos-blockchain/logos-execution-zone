@@ -3,7 +3,7 @@ use lee_core::program::{ReceiveInput, Response, run_actor};
 // Hello-world with authorization example program.
 //
 // This program reads an arbitrary sequence of bytes as its message
-// and appends those bytes to this program's own shard on the receiving account.
+// and appends those bytes to this program's own actor state on the receiving account.
 //
 // Execution succeeds only if the receiving account **is authorized**.
 

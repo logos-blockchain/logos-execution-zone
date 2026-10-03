@@ -73,7 +73,7 @@ fn pool_base() -> PoolDefinition {
     }
 }
 
-fn pool_shard(pool: &PoolDefinition) -> ActorState {
+fn pool_actor_state(pool: &PoolDefinition) -> ActorState {
     ActorState::from(pool)
 }
 
@@ -133,7 +133,7 @@ fn written(transition: &Transition) -> PoolDefinition {
             .response
             .post_state
             .as_ref()
-            .expect("the pool writes its shard"),
+            .expect("the pool writes its actor state"),
     )
     .expect("the pool wrote a pool definition")
 }
@@ -215,7 +215,7 @@ const fn add_message(
 }
 
 fn add(pool: &PoolDefinition, message: &Message) -> Transition {
-    user_turn(pool_shard(pool), message)
+    user_turn(pool_actor_state(pool), message)
 }
 
 const fn remove_message(remove_liquidity_amount: u128, amount_a: u128, amount_b: u128) -> Message {
@@ -289,7 +289,7 @@ fn swap_turn(
     let (definition_id_in, definition_id_out) = definitions(input_is_token_a);
     let [input_vault, _, _, user_output] = swap_route(input_is_token_a);
     pool_turn(
-        pool_shard(pool),
+        pool_actor_state(pool),
         Some(TOKEN_PROGRAM_ID),
         notification(
             input_vault,
@@ -319,7 +319,7 @@ fn exact_input_turn(
     let (definition_id_in, definition_id_out) = definitions(input_is_token_a);
     let [input_vault, _, _, user_output] = swap_route(input_is_token_a);
     pool_turn(
-        pool_shard(pool),
+        pool_actor_state(pool),
         Some(TOKEN_PROGRAM_ID),
         request_notification(
             input_vault,
@@ -513,7 +513,7 @@ fn call_add_liquidity_successful() {
 #[should_panic(expected = "Remove liquidity amount must be nonzero")]
 #[test]
 fn call_remove_liquidity_amount_zero() {
-    let _transition = user_turn(pool_shard(&pool_base()), &remove_message(0, 0, 0));
+    let _transition = user_turn(pool_actor_state(&pool_base()), &remove_message(0, 0, 0));
 }
 
 #[test]
@@ -522,7 +522,7 @@ fn call_remove_liquidity_withdraw_amount_zero() {
         assert!(
             rejection(|| {
                 let _transition = user_turn(
-                    pool_shard(&pool_base()),
+                    pool_actor_state(&pool_base()),
                     &remove_message(REMOVE_LP, amount_a, amount_b),
                 );
             })
@@ -541,7 +541,7 @@ fn remove_liquidity_worth_nothing_of_one_token_is_refused() {
     let amount_b = amm_core::withdrawal_share(RESERVE_B, 1, LP_SUPPLY).expect("the share fits");
     assert_eq!((amount_a, amount_b), (1, 0));
     let _transition = user_turn(
-        pool_shard(&pool_base()),
+        pool_actor_state(&pool_base()),
         &remove_message(1, amount_a, amount_b),
     );
 }
@@ -554,7 +554,7 @@ fn call_remove_liquidity_inactive() {
         ..pool_base()
     };
     let _transition = user_turn(
-        pool_shard(&pool),
+        pool_actor_state(&pool),
         &remove_message(REMOVE_LP, REMOVE_A, REMOVE_B),
     );
 }
@@ -565,7 +565,7 @@ fn call_remove_liquidity_inactive() {
 #[test]
 fn remove_liquidity_inflated_withdrawal_is_rejected() {
     let _transition = user_turn(
-        pool_shard(&pool_base()),
+        pool_actor_state(&pool_base()),
         &remove_message(REMOVE_LP, RESERVE_A, REMOVE_B),
     );
 }
@@ -576,7 +576,7 @@ fn remove_liquidity_inflated_withdrawal_is_rejected() {
 #[test]
 fn remove_liquidity_refuses_burning_more_lp_than_the_supply() {
     let _transition = user_turn(
-        pool_shard(&pool_base()),
+        pool_actor_state(&pool_base()),
         &remove_message(LP_SUPPLY + 1, 1_001, 500),
     );
 }
@@ -584,7 +584,7 @@ fn remove_liquidity_refuses_burning_more_lp_than_the_supply() {
 #[test]
 fn call_remove_liquidity_successful() {
     let transition = user_turn(
-        pool_shard(&pool_base()),
+        pool_actor_state(&pool_base()),
         &remove_message(REMOVE_LP, REMOVE_A, REMOVE_B),
     );
 
@@ -632,7 +632,7 @@ fn call_remove_liquidity_successful() {
 #[test]
 fn remove_liquidity_full_drain_deactivates_the_pool() {
     let transition = user_turn(
-        pool_shard(&pool_base()),
+        pool_actor_state(&pool_base()),
         &remove_message(LP_SUPPLY, RESERVE_A, RESERVE_B),
     );
 
@@ -707,7 +707,7 @@ fn call_new_definition_wrong_pool_id() {
 #[test]
 fn call_new_definition_cannot_initialize_active_pool() {
     let _transition = user_turn(
-        pool_shard(&pool_base()),
+        pool_actor_state(&pool_base()),
         &new_definition_message(RESERVE_A, RESERVE_B),
     );
 }
@@ -761,7 +761,7 @@ fn new_definition_lp_asymmetric_amounts() {
         ..pool_base()
     };
     let transition = user_turn(
-        pool_shard(&inactive),
+        pool_actor_state(&inactive),
         &new_definition_message(RESERVE_A, RESERVE_B),
     );
 
@@ -905,7 +905,7 @@ fn a_swap_refuses_a_forged_notification() {
         for (field, origin, message, expected) in forgeries {
             assert!(
                 rejection(|| {
-                    let _transition = pool_turn(pool_shard(&pool_base()), origin, message);
+                    let _transition = pool_turn(pool_actor_state(&pool_base()), origin, message);
                 })
                 .contains(expected),
                 "a forged {field} was accepted (input is token A: {input_is_token_a})"
@@ -971,7 +971,7 @@ fn a_swap_is_a_notified_transfer_whose_payout_the_token_program_predicts() {
     assert_eq!(notice_to, pool);
 
     let settled = pool_turn(
-        pool_shard(&pool_base()),
+        pool_actor_state(&pool_base()),
         Some(TOKEN_PROGRAM_ID),
         notice_message,
     );
@@ -1008,7 +1008,7 @@ fn a_swap_refuses_a_trader_holding_that_is_a_vault() {
             assert!(
                 rejection(|| {
                     let _transition = pool_turn(
-                        pool_shard(&pool_base()),
+                        pool_actor_state(&pool_base()),
                         Some(TOKEN_PROGRAM_ID),
                         notification(
                             input_vault,

@@ -428,7 +428,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountView> for Exe
     async fn handle(
         &mut self,
         GetAccountView {
-            shard_selector:
+            actor_state_selector:
                 Actor {
                     account_id,
                     program_account_id,

@@ -17,14 +17,14 @@ pub type ZoneId = [u8; 32];
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Message {
-    /// Writes an outbound cross-zone message to the outbox shard at the slot PDA,
+    /// Writes an outbound cross-zone message to the outbox actor state at the slot PDA,
     /// which is the receiving actor's account.
     ///
     /// Each `(emitter, target_zone, ordinal)` slot can be written only once.
     Emit {
         target_zone: ZoneId,
         target_account_id: AccountId,
-        /// Shard selectors forwarded unchanged to the target program.
+        /// Actor state selectors forwarded unchanged to the target program.
         target_accounts: Vec<Actor>,
         payload: Vec<u8>,
         ordinal: u32,

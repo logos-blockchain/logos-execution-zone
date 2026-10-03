@@ -275,7 +275,7 @@ async fn wait_for_mint(indexer: &IndexerClient, holding_id: AccountId) -> Result
                 indexer_service_rpc::RpcClient::get_account(&**indexer, account_id).await?;
             let balance = account
                 .data
-                .shards
+                .actor_states
                 .get(&wrapped_token_id)
                 .map_or(0, |data| wrapped_token_core::read_balance(&data.0));
             if balance != 0 {

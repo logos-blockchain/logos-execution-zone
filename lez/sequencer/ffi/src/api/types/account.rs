@@ -9,18 +9,23 @@ use crate::{
 
 #[repr(C)]
 pub struct FfiAccountData {
-    /// Account shards keys.
+    /// Account actor state keys.
     pub account_data_keys: FfiVec<FfiAccountId>,
-    /// Account shards values (guaranteed to have same amount of entries as `account_data_keys`).
+    /// Account actor state values (guaranteed to have same amount of entries as
+    /// `account_data_keys`).
     pub account_data_values: FfiVec<FfiVecU8>,
 }
 
 impl From<AccountData> for FfiAccountData {
     fn from(value: AccountData) -> Self {
-        let AccountData { shards } = value;
+        let AccountData { actor_states } = value;
 
-        let acc_data_keys = shards.keys().copied().map(Into::into).collect::<Vec<_>>();
-        let acc_data_values = shards
+        let acc_data_keys = actor_states
+            .keys()
+            .copied()
+            .map(Into::into)
+            .collect::<Vec<_>>();
+        let acc_data_values = actor_states
             .values()
             .cloned()
             .map(ActorState::into_inner)
@@ -52,7 +57,7 @@ impl TryFrom<FfiAccountData> for AccountData {
         }
 
         Ok(Self {
-            shards: keys_std
+            actor_states: keys_std
                 .into_iter()
                 .zip(values_std_raw.into_iter().map(ActorState::from))
                 .collect::<BTreeMap<_, _>>(),
@@ -155,15 +160,15 @@ mod tests {
 
     #[test]
     fn account_roundtrip() {
-        let mut shards = BTreeMap::new();
+        let mut actor_states = BTreeMap::new();
 
-        shards.insert(AccountId::new([42; 32]), ActorState::from(vec![1, 1, 1, 1]));
-        shards.insert(AccountId::new([43; 32]), ActorState::from(vec![2, 2, 2, 2]));
-        shards.insert(AccountId::new([44; 32]), ActorState::from(vec![3, 3, 3, 3]));
+        actor_states.insert(AccountId::new([42; 32]), ActorState::from(vec![1, 1, 1, 1]));
+        actor_states.insert(AccountId::new([43; 32]), ActorState::from(vec![2, 2, 2, 2]));
+        actor_states.insert(AccountId::new([44; 32]), ActorState::from(vec![3, 3, 3, 3]));
 
         let account_std = Account {
             nonce: Nonce::from(5),
-            data: AccountData { shards },
+            data: AccountData { actor_states },
         };
 
         let ffi_account: FfiAccount = account_std.clone().into();

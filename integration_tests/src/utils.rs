@@ -203,11 +203,11 @@ pub async fn get_account(ctx: &TestContext, account_id: AccountId) -> anyhow::Re
 
 pub async fn get_account_view(
     ctx: &TestContext,
-    shard_selector: Actor,
+    actor_state_selector: Actor,
 ) -> anyhow::Result<lee::Account> {
     Ok(ctx
         .sequencer_client()
-        .get_account_view(shard_selector)
+        .get_account_view(actor_state_selector)
         .await?)
 }
 

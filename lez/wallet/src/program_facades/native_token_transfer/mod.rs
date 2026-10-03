@@ -4,7 +4,7 @@ use lee_core::{
     program::{MessageData, SendMode},
 };
 
-use crate::{AccountMention, ExecutionFailureKind, SelectedShard, WalletCore};
+use crate::{AccountMention, ExecutionFailureKind, SelectedActorState, WalletCore};
 
 pub mod deshielded;
 pub mod private;
@@ -23,7 +23,7 @@ fn native_transfer_preparation(
     balance_to_move: u128,
 ) -> (
     MessageData,
-    impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind> + use<>,
+    impl FnOnce(&[SelectedActorState]) -> Result<(), ExecutionFailureKind> + use<>,
 ) {
     let message = Program::serialize_message(Message::Transfer {
         to: accounts[1].identity.account_id(),
@@ -33,9 +33,9 @@ fn native_transfer_preparation(
     .unwrap();
 
     // TODO: handle large Err-variant properly
-    let tx_pre_check = move |accounts: &[SelectedShard]| {
+    let tx_pre_check = move |accounts: &[SelectedActorState]| {
         let from = &accounts[0];
-        let balance = decode_balance(from.shard_of(NATIVE_TOKEN_PROGRAM_ID))
+        let balance = decode_balance(from.actor_state_of(NATIVE_TOKEN_PROGRAM_ID))
             .map_err(|_error| ExecutionFailureKind::AccountDataError(from.selector.account_id))?;
         if balance >= balance_to_move {
             Ok(())

@@ -5,7 +5,7 @@ use crate::{
     program::{Call, PdaSeed, ReadState, ReceiveInput, Response, SendMode, StateReply, Transition},
 };
 
-/// Hardcoded native token shard address.
+/// Hardcoded native token program address.
 pub const NATIVE_TOKEN_PROGRAM_ID: AccountId = AccountId::new([0; 32]);
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -39,7 +39,7 @@ pub enum TransferError {
 }
 
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
-#[error("native balance shard is not a canonical encoding")]
+#[error("native balance actor state is not a canonical encoding")]
 pub struct InvalidBalanceEncoding;
 
 #[must_use]

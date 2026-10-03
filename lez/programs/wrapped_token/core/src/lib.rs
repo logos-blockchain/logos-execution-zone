@@ -40,7 +40,7 @@ pub enum Message {
         amount: u128,
     },
     /// Pins the minter and the peer sources it may mint for, written once into an
-    /// empty config shard at genesis. A re-run holding anything different is
+    /// empty config actor state at genesis. A re-run holding anything different is
     /// refused; an identical one is a no-op, which is what genesis replay does.
     ///
     /// Sent to the wrapped-token config PDA.

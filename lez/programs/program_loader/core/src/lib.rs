@@ -1,12 +1,12 @@
 //! Native program deployment and updates through [`PROGRAM_LOADER_ACCOUNT_ID`].
 //!
-//! Instructions only change loader shards. Writing a fresh segment is permissionless — a
-//! still-empty loader shard has no prior claim to violate — but a header target must always be
-//! `is_authorized`, whether created or updated, so a real header can't be squatted at an address
+//! Instructions only change loader actor states. Writing a fresh segment is permissionless — a
+//! still-empty loader actor state has no prior claim to violate — but a header target must always
+//! be `is_authorized`, whether created or updated, so a real header can't be squatted at an address
 //! some other account id (e.g. a shadow program's) will later resolve to.
 //!
 //! The loader is protocol code that runs only at public settlement: [`receive`] handles each
-//! message against the target's live loader shard.
+//! message against the target's live loader actor state.
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use lee_core::program::{
     MAX_PROGRAM_SEGMENTS, ProgramHeader, ProgramSegment, immutable_mirror_commitment,
@@ -41,7 +41,7 @@ pub enum Message {
 
 pub fn receive<'state>(
     input: &ReceiveInput,
-    shard: impl Fn(AccountId) -> &'state ActorState,
+    actor_state: impl Fn(AccountId) -> &'state ActorState,
 ) -> (Transition, Option<Commitment>) {
     let message: Message = borsh::from_slice(&input.message).expect("a loader message must decode");
     assert_eq!(
@@ -61,7 +61,7 @@ pub fn receive<'state>(
             );
             if let Some(next) = next_segment {
                 assert!(
-                    ProgramSegment::from_bytes(shard(next)).is_some(),
+                    ProgramSegment::from_bytes(actor_state(next)).is_some(),
                     "`next_segment` must already hold a valid segment \u{2014} segments are linked tail-to-head"
                 );
             }
@@ -80,7 +80,7 @@ pub fn receive<'state>(
                 input.is_authorized,
                 "CreateHeader target must be an authorized account"
             );
-            header_write(input, first_segment, immutable, &shard)
+            header_write(input, first_segment, immutable, &actor_state)
         }
         Message::UpdateHeader {
             first_segment,
@@ -97,7 +97,7 @@ pub fn receive<'state>(
                 input.is_authorized,
                 "UpdateHeader target must be authorized by the signer"
             );
-            header_write(input, first_segment, immutable, &shard)
+            header_write(input, first_segment, immutable, &actor_state)
         }
     };
 
@@ -124,9 +124,9 @@ fn header_write<'state>(
     input: &ReceiveInput,
     first_segment: AccountId,
     immutable: bool,
-    shard: impl Fn(AccountId) -> &'state ActorState,
+    actor_state: impl Fn(AccountId) -> &'state ActorState,
 ) -> (Vec<u8>, Option<Commitment>) {
-    let header = build_header(first_segment, immutable, shard);
+    let header = build_header(first_segment, immutable, actor_state);
     let new_commitment =
         immutable.then(|| immutable_mirror_commitment(input.receiver.account_id, &header));
     (header.to_bytes(), new_commitment)
@@ -135,10 +135,10 @@ fn header_write<'state>(
 fn build_header<'state>(
     first_segment: AccountId,
     immutable: bool,
-    shard: impl Fn(AccountId) -> &'state ActorState,
+    actor_state: impl Fn(AccountId) -> &'state ActorState,
 ) -> ProgramHeader {
     ProgramHeader {
-        image_id: compute_image_id(first_segment, shard),
+        image_id: compute_image_id(first_segment, actor_state),
         program_first_segment: first_segment,
         immutable,
     }
@@ -146,7 +146,7 @@ fn build_header<'state>(
 
 fn compute_image_id<'state>(
     first_segment: AccountId,
-    shard: impl Fn(AccountId) -> &'state ActorState,
+    actor_state: impl Fn(AccountId) -> &'state ActorState,
 ) -> ProgramId {
     let mut elf = Vec::new();
     let mut expected_next = Some(first_segment);
@@ -157,7 +157,7 @@ fn compute_image_id<'state>(
             segment_count <= MAX_PROGRAM_SEGMENTS,
             "segment chain exceeds the {MAX_PROGRAM_SEGMENTS}-segment cap"
         );
-        let segment = ProgramSegment::from_bytes(shard(next))
+        let segment = ProgramSegment::from_bytes(actor_state(next))
             .expect("every supplied segment account must decode as a valid ProgramSegment");
         elf.extend_from_slice(&segment.bytecode);
         expected_next = segment.next_segment;

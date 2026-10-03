@@ -153,7 +153,7 @@ typedef struct FfiBlockHeader {
 typedef struct FfiBytes32 FfiAccountId;
 
 /**
- * Identifies one of an account's program shards.
+ * Identifies one of an account's program actor states.
  */
 typedef struct FfiActor {
   FfiAccountId account_id;
@@ -417,29 +417,29 @@ typedef struct PointerResult_FfiBlockOpt__OperationStatus {
 } PointerResult_FfiBlockOpt__OperationStatus;
 
 /**
- * One program's shard on an account.
+ * One program's actor state on an account.
  */
-typedef struct FfiShard {
+typedef struct FfiActorState {
   struct FfiBytes32 program;
   /**
-   * Pointer to shard data bytes.
+   * Pointer to actor state data bytes.
    */
   uint8_t *data;
   /**
-   * Length of shard data.
+   * Length of actor state data.
    */
   uintptr_t data_len;
   /**
-   * Capacity of shard data.
+   * Capacity of actor state data.
    */
   uintptr_t data_cap;
-} FfiShard;
+} FfiActorState;
 
 /**
  * Account data structure - C-compatible version of lee Account.
  *
  * Note: `nonce` is a u128 value represented as a little-endian byte array since C doesn't have
- * native u128 support. The native balance is the shard of the native token program.
+ * native u128 support. The native balance is the actor state of the native token program.
  */
 typedef struct FfiAccount {
   /**
@@ -447,13 +447,13 @@ typedef struct FfiAccount {
    */
   struct FfiU128 nonce;
   /**
-   * Pointer to the account's shards.
+   * Pointer to the account's actor states.
    */
-  struct FfiShard *shards;
+  struct FfiActorState *actor_states;
   /**
-   * Number of shards.
+   * Number of actor states.
    */
-  uintptr_t shards_len;
+  uintptr_t actor_states_len;
 } FfiAccount;
 
 /**
@@ -839,12 +839,12 @@ struct PointerResult_FfiVec_FfiEventRecord_____OperationStatus query_events(cons
                                                                             const FfiSelector *selector);
 
 /**
- * Frees an account, its shard array, and each shard's data buffer.
+ * Frees an account, its actor state array, and each actor state's data buffer.
  *
  * # Safety
  *
  * `val` must be null or an unfreed `PointerResult.value` from an account query.
- * Its shard array and data buffers must remain valid and owned by the account.
+ * Its actor state array and data buffers must remain valid and owned by the account.
  */
 void free_ffi_account(struct FfiAccount *val);
 

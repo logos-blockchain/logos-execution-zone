@@ -111,7 +111,7 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_accounts() {
             ..proving_input(root(sender, &root_transfer))
         },
         &Simulation {
-            public_shards: [(sender, encode_balance(balance_to_move))].into(),
+            public_actor_states: [(sender, encode_balance(balance_to_move))].into(),
         },
         &ProgramCatalog::default(),
     )
@@ -126,7 +126,7 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_accounts() {
         BTreeSet::from([sender_id])
     );
     // The journal carries the public root to settle and the delivery it assumes back, not a
-    // claimed balance: the prover never read the sender's shard.
+    // claimed balance: the prover never read the sender's actor state.
     assert_eq!(
         output.entry,
         Some(TransactionEntry::Call {
@@ -355,7 +355,8 @@ fn note_ciphertext_is_padded_to_the_requested_length() {
     let keys = test_private_account_keys_1();
     let identifier = Identifier::new([7; 32]);
     let account_id = regular_id(&keys, identifier);
-    let account = Account::default().with_shard(scripted_id(), ActorState::from(vec![9_u8; 200]));
+    let account =
+        Account::default().with_actor_state(scripted_id(), ActorState::from(vec![9_u8; 200]));
     let expected_post_state = account.data.clone();
     let commitment = Commitment::new(&account_id, &account);
     let mut commitment_set = CommitmentSet::with_capacity(1);
@@ -545,7 +546,7 @@ fn shared_account_receives_via_simple_transfer() {
             ..proving_input(root(sender, &transfer(shared_account_id, balance_to_move)))
         },
         &Simulation {
-            public_shards: [(sender, encode_balance(balance_to_move))].into(),
+            public_actor_states: [(sender, encode_balance(balance_to_move))].into(),
         },
         &ProgramCatalog::default(),
     );
@@ -905,13 +906,14 @@ fn private_pda_update_identifier_mismatch_fails() {
 }
 
 #[test]
-fn the_prover_never_reads_a_public_shard() {
+fn the_prover_never_reads_a_public_actor_state() {
     let account_id = AccountId::new([7; 32]);
     let root_actor = Actor::new(account_id, scripted_id());
     let callee = Actor::new(account_id, TWIN);
     let script = Script::default().call(callee, &Script::write(vec![3; 16]));
 
-    // `Prover` supplies no public shard, so executing either public turn would fail the proof.
+    // `Prover` supplies no public actor state, so executing either public turn would fail the
+    // proof.
     let (output, proof) = execute_and_prove(
         ProvingInput {
             context: PublicExecutionContext::new(vec![root_actor, callee], []),

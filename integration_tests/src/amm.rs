@@ -165,7 +165,7 @@ pub fn amm_program_id() -> AccountId {
 pub async fn token_holding(ctx: &TestContext, account_id: AccountId) -> Result<TokenHolding> {
     let account = get_account(ctx, account_id).await?;
     Ok(TokenHolding::try_from(
-        account.data.shard(token_program_id()),
+        account.data.actor_state(token_program_id()),
     )?)
 }
 
@@ -196,7 +196,7 @@ pub async fn assert_pool_record(
     (reserve_a, reserve_b, supply): (u128, u128, u128),
 ) -> Result<()> {
     let account = get_account(ctx, pool_id).await?;
-    let pool = PoolDefinition::try_from(account.data.shard(amm_program_id()))?;
+    let pool = PoolDefinition::try_from(account.data.actor_state(amm_program_id()))?;
     assert!(pool.active, "{step}: the pool is inactive");
     assert_eq!(
         (pool.reserve_a, pool.reserve_b, pool.liquidity_pool_supply),
@@ -219,7 +219,7 @@ pub const fn fungible(definition_id: AccountId) -> TokenDescriptor {
 pub fn private_holding(ctx: &TestContext, account_id: AccountId) -> Result<TokenHolding> {
     let account = restored_private_account(ctx, account_id, "trader account").account;
     Ok(TokenHolding::try_from(
-        account.data.shard(token_program_id()),
+        account.data.actor_state(token_program_id()),
     )?)
 }
 

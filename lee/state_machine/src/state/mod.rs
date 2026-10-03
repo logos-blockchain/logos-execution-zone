@@ -255,7 +255,7 @@ impl V03State {
             .collect();
 
         for (i, chunk) in chunks.iter().enumerate() {
-            let segment = Account::default().with_shard(
+            let segment = Account::default().with_actor_state(
                 PROGRAM_LOADER_ACCOUNT_ID,
                 ActorState::from(
                     ProgramSegment {
@@ -273,7 +273,7 @@ impl V03State {
             program_first_segment: segment_account_ids[0],
             immutable,
         };
-        let header = Account::default().with_shard(
+        let header = Account::default().with_actor_state(
             PROGRAM_LOADER_ACCOUNT_ID,
             ActorState::from(program_header.to_bytes()),
         );
@@ -402,7 +402,7 @@ impl V03State {
     /// `account_id` — a program deployed elsewhere via `program_loader` won't be found here.
     #[must_use]
     pub fn get_builtin_program(&self, account_id: AccountId) -> Option<(ProgramId, Vec<u8>)> {
-        crate::program::resolve_program(account_id, |id| self.loader_shard(id))
+        crate::program::resolve_program(account_id, |id| self.loader_actor_state(id))
     }
 
     /// The real `image_id` of whatever program is deployed at `account_id`, or `None` if there
@@ -412,12 +412,12 @@ impl V03State {
     /// [`ProgramImageClaim`]: lee_core::ProgramImageClaim
     #[must_use]
     pub fn get_program_image_id(&self, account_id: AccountId) -> Option<ProgramId> {
-        get_program_via(account_id, |id| self.loader_shard(id)).map(|(image_id, _)| image_id)
+        get_program_via(account_id, |id| self.loader_actor_state(id)).map(|(image_id, _)| image_id)
     }
 
-    pub(crate) fn loader_shard(&self, account_id: AccountId) -> Option<&ActorState> {
+    pub(crate) fn loader_actor_state(&self, account_id: AccountId) -> Option<&ActorState> {
         self.get_account_by_id_ref(account_id)
-            .map(|account| account.data.shard(PROGRAM_LOADER_ACCOUNT_ID))
+            .map(|account| account.data.actor_state(PROGRAM_LOADER_ACCOUNT_ID))
     }
 
     #[must_use]

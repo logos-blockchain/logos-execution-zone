@@ -25,14 +25,15 @@ impl ProgramLoader<'_> {
         message: &Message,
         payer: Option<AccountId>,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let root = AccountIdentity::Public(target).select_program_shard(PROGRAM_LOADER_ACCOUNT_ID);
+        let root =
+            AccountIdentity::Public(target).select_program_actor_state(PROGRAM_LOADER_ACCOUNT_ID);
         let message = Program::serialize_message(message).expect("Message should serialize");
         self.0
             .send_pub_tx_paid_by(vec![root], 0, message, payer)
             .await
     }
 
-    /// Writes one bytecode segment to `target`'s empty loader shard.
+    /// Writes one bytecode segment to `target`'s empty loader actor state.
     /// `next_segment`, if given, must already contain a valid segment.
     /// See [`Self::send`] for `payer`.
     pub async fn write_segment(
@@ -49,7 +50,7 @@ impl ProgramLoader<'_> {
                 .await
                 .map_err(ExecutionFailureKind::SequencerError)?;
             if program_loader_core::ProgramSegment::from_bytes(
-                next_segment_acc.data.shard(PROGRAM_LOADER_ACCOUNT_ID),
+                next_segment_acc.data.actor_state(PROGRAM_LOADER_ACCOUNT_ID),
             )
             .is_none()
             {
@@ -68,8 +69,8 @@ impl ProgramLoader<'_> {
         .await
     }
 
-    /// Creates a program header in `target`'s empty loader shard; the loader walks the chain from
-    /// `first_segment` to compute the image ID. See [`Self::send`] for `payer`.
+    /// Creates a program header in `target`'s empty loader actor state; the loader walks the chain
+    /// from `first_segment` to compute the image ID. See [`Self::send`] for `payer`.
     pub async fn create_header(
         &self,
         target: AccountId,
@@ -225,7 +226,7 @@ impl ProgramLoader<'_> {
                 .await
                 .with_context(|| format!("failed to fetch segment account {id}"))?;
             let segment = program_loader_core::ProgramSegment::from_bytes(
-                account.data.shard(PROGRAM_LOADER_ACCOUNT_ID),
+                account.data.actor_state(PROGRAM_LOADER_ACCOUNT_ID),
             )
             .with_context(|| format!("account {id} does not hold a valid program segment"))?;
             chain.push(id);

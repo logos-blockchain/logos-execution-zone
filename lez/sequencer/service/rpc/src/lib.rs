@@ -81,10 +81,13 @@ pub trait Rpc {
         account_ids: Vec<AccountId>,
     ) -> Result<Vec<Nonce>, ErrorObjectOwned>;
 
-    /// Returns the account's nonce and the selected shard; its balance is the shard at the
-    /// native token program.
+    /// Returns the account's nonce and the selected actor state; its balance is the actor state at
+    /// the native token program.
     #[method(name = "getAccountView")]
-    async fn get_account_view(&self, shard_selector: Actor) -> Result<Account, ErrorObjectOwned>;
+    async fn get_account_view(
+        &self,
+        actor_state_selector: Actor,
+    ) -> Result<Account, ErrorObjectOwned>;
 
     #[method(name = "getPendingMessages")]
     async fn get_pending_messages(

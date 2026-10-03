@@ -52,7 +52,7 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
     for (i, chunk) in chunks.iter().enumerate().rev() {
         state.force_insert_account(
             segment_account_ids[i],
-            Account::default().with_shard(
+            Account::default().with_actor_state(
                 PROGRAM_LOADER_ACCOUNT_ID,
                 ActorState::from(
                     ProgramSegment {
@@ -71,7 +71,7 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
     let header_account_id = AccountId::from_builtin_program(header_program_id);
     state.force_insert_account(
         header_account_id,
-        Account::default().with_shard(
+        Account::default().with_actor_state(
             PROGRAM_LOADER_ACCOUNT_ID,
             ActorState::from(
                 ProgramHeader {
@@ -161,7 +161,7 @@ fn program_with_more_than_max_segments_is_rejected() {
         };
         state.force_insert_account(
             segment_account_ids[i],
-            Account::default().with_shard(
+            Account::default().with_actor_state(
                 PROGRAM_LOADER_ACCOUNT_ID,
                 ActorState::from(
                     ProgramSegment {
@@ -178,7 +178,7 @@ fn program_with_more_than_max_segments_is_rejected() {
     let header_account_id = AccountId::from_builtin_program(header_program_id);
     state.force_insert_account(
         header_account_id,
-        Account::default().with_shard(
+        Account::default().with_actor_state(
             PROGRAM_LOADER_ACCOUNT_ID,
             ActorState::from(
                 ProgramHeader {
@@ -212,7 +212,7 @@ fn program_with_more_than_max_segments_is_rejected_at_deploy_time() {
     for i in (0..segment_account_ids.len()).rev() {
         state.force_insert_account(
             segment_account_ids[i],
-            Account::default().with_shard(
+            Account::default().with_actor_state(
                 PROGRAM_LOADER_ACCOUNT_ID,
                 ActorState::from(
                     ProgramSegment {
@@ -294,7 +294,7 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
     // Deployed at an arbitrary key-derived address rather than its builtin address, so
     // resolution goes through `get_program_via` directly.
     let (image_id, user_elf) =
-        lee_core::program::get_program_via(header_account_id, |id| state.loader_shard(id))
+        lee_core::program::get_program_via(header_account_id, |id| state.loader_actor_state(id))
             .expect("the newly-deployed program must be resolvable by its header address");
     assert_eq!(image_id, program.id());
     assert_eq!(
@@ -552,13 +552,14 @@ fn a_program_deployed_earlier_in_the_transaction_is_dispatchable_by_a_later_call
         .expect("the header written by the first send must dispatch the second");
 
     let (image_id, _) =
-        lee_core::program::get_program_via(header_account_id, |id| state.loader_shard(id)).unwrap();
+        lee_core::program::get_program_via(header_account_id, |id| state.loader_actor_state(id))
+            .unwrap();
     assert_eq!(image_id, program.id());
     assert_eq!(
         state
             .get_account_by_id(deployed.account_id)
             .data
-            .shard(header_account_id)
+            .actor_state(header_account_id)
             .as_ref(),
         [7; 4]
     );

@@ -193,22 +193,22 @@ typedef struct FfiAccountList {
 } FfiAccountList;
 
 /**
- * One program's shard on an account.
+ * One program's actor state on an account.
  */
-typedef struct FfiShard {
+typedef struct FfiActorState {
   /**
    * The program account ID.
    */
   struct FfiBytes32 program;
   /**
-   * Pointer to shard data bytes.
+   * Pointer to actor state data bytes.
    */
   const uint8_t *data;
   /**
-   * Length of shard data.
+   * Length of actor state data.
    */
   uintptr_t data_len;
-} FfiShard;
+} FfiActorState;
 
 /**
  * U128 - 16 bytes little endian.
@@ -225,14 +225,14 @@ typedef struct FfiU128 {
  */
 typedef struct FfiAccount {
   /**
-   * Pointer to this account's shards, ordered by program address. The native balance is the
-   * shard of the native token program.
+   * Pointer to this account's actor states, ordered by program address. The native balance is
+   * the actor state of the native token program.
    */
-  const struct FfiShard *shards;
+  const struct FfiActorState *actor_states;
   /**
-   * Number of shards.
+   * Number of actor states.
    */
-  uintptr_t shards_len;
+  uintptr_t actor_states_len;
   /**
    * Nonce as little-endian [u8; 16].
    */
@@ -284,7 +284,7 @@ typedef struct FfiAccountIdentity {
 } FfiAccountIdentity;
 
 /**
- * An account identity with the program shard it selects.
+ * An account identity with the program actor state it selects.
  */
 typedef struct FfiAccountMention {
   struct FfiAccountIdentity identity;
@@ -1287,7 +1287,8 @@ enum WalletFfiError wallet_ffi_get_current_block_height(struct WalletHandle *han
  *
  * Transfers tokens from one public account to another on the network.
  *
- * Program shards are unchanged. If the wallet holds `to`'s key, it also signs for that account.
+ * Program actor states are unchanged. If the wallet holds `to`'s key, it also signs for that
+ * account.
  *
  * # Parameters
  * - `handle`: Valid wallet handle

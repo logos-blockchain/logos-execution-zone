@@ -156,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "shard already holds different data")]
+    #[should_panic(expected = "actor state already holds different data")]
     fn a_reinit_naming_a_different_outbox_is_refused() {
         let init = SenderMessage::InitConfig {
             outbox_account_id: AccountId::new([1; 32]),

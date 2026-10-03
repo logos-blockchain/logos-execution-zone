@@ -70,7 +70,7 @@ pub fn fee_account_ids() -> [AccountId; 3] {
 /// The fee-state account initialized with the genesis market state.
 #[must_use]
 pub fn fee_state_account() -> Account {
-    Account::default().with_shard(
+    Account::default().with_actor_state(
         programs::fee_account_id(),
         fee_core::state::FeeState::genesis().to_bytes().into(),
     )
@@ -106,7 +106,7 @@ pub fn sequencer_stake_config_account(
     channel_params: Option<sequencer_stake_core::ChannelParams>,
     channel_id: Option<[u8; 32]>,
 ) -> Account {
-    Account::default().with_shard(
+    Account::default().with_actor_state(
         programs::sequencer_stake_account_id(),
         sequencer_stake_core::SequencerStakeConfig {
             channel_params,
@@ -120,7 +120,7 @@ pub fn sequencer_stake_config_account(
 
 #[must_use]
 pub fn clock_account() -> Account {
-    Account::default().with_shard(
+    Account::default().with_actor_state(
         programs::clock_account_id(),
         ClockAccountData {
             block_id: 0,

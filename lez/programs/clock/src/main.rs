@@ -6,7 +6,7 @@
 //!
 //! Only the sequencer may tick this program, as the last transaction in every block; the
 //! every-block account then sends the record to the coarser accounts it is due at.
-//! Each clock account uses this program's shard.
+//! Each clock account uses this program's actor state.
 
 use clock_core::{
     CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,

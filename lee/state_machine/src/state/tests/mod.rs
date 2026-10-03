@@ -305,7 +305,7 @@ fn force_insert_segment_chain(state: &mut V03State, elf: &[u8], key_seed: u8) ->
     for i in (0..chunks.len()).rev() {
         state.force_insert_account(
             segment_ids[i],
-            Account::default().with_shard(
+            Account::default().with_actor_state(
                 PROGRAM_LOADER_ACCOUNT_ID,
                 ActorState::from(
                     ProgramSegment {
@@ -417,7 +417,7 @@ fn shielded_balance_transfer_for_tests(
             ..proving_input(root(sender, &transfer(recipient_id, balance_to_move)))
         },
         &Simulation {
-            public_shards: [(sender, encode_balance(balance_to_move))].into(),
+            public_actor_states: [(sender, encode_balance(balance_to_move))].into(),
         },
         &ProgramCatalog::default(),
     )

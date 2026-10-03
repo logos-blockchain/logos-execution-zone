@@ -135,7 +135,7 @@ fn a_pda_seed_delegated_to_one_sibling_does_not_leak_to_another() {
 }
 
 #[test]
-fn a_credit_leaves_a_stranger_shard_at_the_recipient_untouched() {
+fn a_credit_leaves_a_stranger_actor_state_at_the_recipient_untouched() {
     let from_key = PrivateKey::try_new([1; 32]).unwrap();
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
     let to_key = PrivateKey::try_new([2; 32]).unwrap();
@@ -149,7 +149,7 @@ fn a_credit_leaves_a_stranger_shard_at_the_recipient_untouched() {
             (from, Account::funded(initial_balance)),
             (
                 to,
-                Account::default().with_shard(stranger, stranger_data.clone()),
+                Account::default().with_actor_state(stranger, stranger_data.clone()),
             ),
         ])
         .with_programs([crate::test_methods::scripted()]);
@@ -178,7 +178,7 @@ fn a_credit_leaves_a_stranger_shard_at_the_recipient_untouched() {
         state.get_account_by_id(to),
         Account {
             nonce: Nonce(1),
-            ..Account::funded(amount).with_shard(stranger, stranger_data)
+            ..Account::funded(amount).with_actor_state(stranger, stranger_data)
         }
     );
 }

@@ -143,7 +143,7 @@ fn response_try_with_block_validity_window_empty_range_fails() {
 }
 
 #[test]
-fn get_program_via_reads_the_loader_shard() {
+fn get_program_via_reads_the_loader_actor_state() {
     let program_account = AccountId::new([1; 32]);
     let segment_account = AccountId::new([2; 32]);
     let header = ProgramHeader {
@@ -155,13 +155,13 @@ fn get_program_via_reads_the_loader_shard() {
         bytecode: vec![1, 2, 3],
         next_segment: None,
     };
-    let program_shard: ActorState = header.to_bytes().into();
-    let segment_shard: ActorState = segment.to_bytes().into();
+    let program_actor_state: ActorState = header.to_bytes().into();
+    let segment_actor_state: ActorState = segment.to_bytes().into();
     let lookup = |id| {
         if id == program_account {
-            Some(&program_shard)
+            Some(&program_actor_state)
         } else if id == segment_account {
-            Some(&segment_shard)
+            Some(&segment_actor_state)
         } else {
             None
         }

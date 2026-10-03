@@ -463,9 +463,9 @@ impl ValidatedStateDiff {
 
 fn load_program<'state>(
     account_id: AccountId,
-    loader_shard: impl Fn(AccountId) -> Option<&'state ActorState>,
+    loader_actor_state: impl Fn(AccountId) -> Option<&'state ActorState>,
 ) -> Option<Program> {
-    let (program_id, elf) = crate::program::resolve_program(account_id, loader_shard)?;
+    let (program_id, elf) = crate::program::resolve_program(account_id, loader_actor_state)?;
     Some(Program::new_unchecked(program_id, Cow::Owned(elf)))
 }
 
@@ -481,13 +481,13 @@ const fn charge(used: &mut Cycles, call_cycles: Cycles) {
 
 /// The same lookup `get_program_via` uses, which is what keeps deploy-then-call working within
 /// one transaction.
-fn loader_shard<'state>(
+fn loader_actor_state<'state>(
     view: &'state TurnView<'_>,
     state: &'state V03State,
     account_id: AccountId,
 ) -> Option<&'state ActorState> {
     view.staged_state(Actor::new(account_id, PROGRAM_LOADER_ACCOUNT_ID))
-        .or_else(|| state.loader_shard(account_id))
+        .or_else(|| state.loader_actor_state(account_id))
 }
 
 /// `program_loader_core`'s functions panic on malformed input, mirroring the assert-based style

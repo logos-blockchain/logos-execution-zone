@@ -72,7 +72,7 @@ fn genesis_immutable_program_lands_immutable_mirror_commitment() {
     let program_header = lee_core::program::ProgramHeader::from_bytes(
         state.public_state[&header_account_id]
             .data
-            .shard(PROGRAM_LOADER_ACCOUNT_ID),
+            .actor_state(PROGRAM_LOADER_ACCOUNT_ID),
     )
     .unwrap();
     assert!(program_header.immutable);
@@ -91,7 +91,7 @@ fn genesis_mutable_program_lands_no_immutable_mirror_commitment() {
     let program_header = lee_core::program::ProgramHeader::from_bytes(
         state.public_state[&header_account_id]
             .data
-            .shard(PROGRAM_LOADER_ACCOUNT_ID),
+            .actor_state(PROGRAM_LOADER_ACCOUNT_ID),
     )
     .unwrap();
     assert!(!program_header.immutable);

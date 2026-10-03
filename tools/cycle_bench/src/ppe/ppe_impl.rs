@@ -128,7 +128,8 @@ pub fn prove_native_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircui
             vec![recipient_witness],
         ),
         &Simulation {
-            public_shards: [(sender, native_token::encode_balance(AMOUNT_TO_TRANSFER))].into(),
+            public_actor_states: [(sender, native_token::encode_balance(AMOUNT_TO_TRANSFER))]
+                .into(),
         },
         &ProgramCatalog::default(),
     )?)
@@ -167,7 +168,7 @@ const fn token_transfer_message() -> token_core::Message {
 fn private_sender() -> (AccountId, PrivateWitness) {
     private_account(
         3,
-        Some(Account::default().with_shard(
+        Some(Account::default().with_actor_state(
             token_program_id(),
             ActorState::from(&TokenHolding::Fungible {
                 definition_id: TOKEN_DEFINITION_ID,

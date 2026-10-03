@@ -6,7 +6,7 @@ use lee_core::{
 // Tail Call with PDA example program.
 //
 // Expects to receive at an account whose Account ID is derived from this program's deployed
-// address and the fixed PDA seed below (`AccountId::for_public_pda`). Keeps its own shard
+// address and the fixed PDA seed below (`AccountId::for_public_pda`). Keeps its own actor state
 // unchanged, then sends a fixed greeting to that account's actor under the callee program named
 // in its message, granting the PDA seed so the protocol authorizes the account for the callee.
 //

@@ -295,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "shard already holds different data")]
+    #[should_panic(expected = "actor state already holds different data")]
     fn a_reinit_with_different_contents_is_refused() {
         let _transition = run(
             config_actor(),

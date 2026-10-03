@@ -37,7 +37,7 @@ pub fn compute_circuit_output(
         program_image_claims,
     };
 
-    // Emit one action per private account, covering all its shards.
+    // Emit one action per private account, covering all its actor states.
     for witness in private_witnesses {
         let PrivateWitness {
             vpk,
@@ -229,8 +229,8 @@ mod tests {
 
     use super::*;
 
-    const SHARD_A: AccountId = AccountId::new([10; 32]);
-    const SHARD_B: AccountId = AccountId::new([11; 32]);
+    const ACTOR_STATE_A: AccountId = AccountId::new([10; 32]);
+    const ACTOR_STATE_B: AccountId = AccountId::new([11; 32]);
 
     struct Owner {
         ask: AuthorizationSecretKey,
@@ -319,18 +319,18 @@ mod tests {
     }
 
     #[test]
-    fn one_note_per_private_account_carries_its_touched_shards() {
+    fn one_note_per_private_account_carries_its_touched_actor_states() {
         let owner = Owner::new(3);
         let account = Account {
             nonce: Nonce(7),
             ..Account::funded(100)
-                .with_shard(SHARD_A, data(b"a"))
-                .with_shard(SHARD_B, data(b"b"))
+                .with_actor_state(ACTOR_STATE_A, data(b"a"))
+                .with_actor_state(ACTOR_STATE_B, data(b"b"))
         };
         let rewritten = Account::funded(60)
             .data
-            .with_shard(SHARD_A, data(b"a"))
-            .with_shard(SHARD_B, data(b"b-rewritten"));
+            .with_actor_state(ACTOR_STATE_A, data(b"a"))
+            .with_actor_state(ACTOR_STATE_B, data(b"b-rewritten"));
 
         let output = emit(
             vec![(owner.account_id(), rewritten.clone())],

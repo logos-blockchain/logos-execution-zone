@@ -90,7 +90,7 @@ fn a_cast_publishes_a_pending_record_that_a_later_transaction_receives() {
         state
             .get_account_by_id(receiver().account_id)
             .data
-            .shard(scripted_id()),
+            .actor_state(scripted_id()),
         &ActorState::from(b"received".to_vec())
     );
     assert!(state.pending_messages_from(0).next().is_none());
@@ -548,7 +548,7 @@ fn a_private_receipt_root_that_calls_a_public_actor_needs_no_identity_evidence()
         state
             .get_account_by_id(receiver().account_id)
             .data
-            .shard(scripted_id()),
+            .actor_state(scripted_id()),
         &ActorState::from(b"called".to_vec())
     );
 }

@@ -153,7 +153,7 @@ typedef struct FfiBlockHeader {
 typedef struct FfiBytes32 FfiAccountId;
 
 /**
- * Identifies one of an account's program shards.
+ * Identifies one of an account's program actor states.
  */
 typedef struct FfiActor {
   FfiAccountId account_id;
@@ -440,11 +440,12 @@ typedef struct FfiVec_FfiVecU8 {
 
 typedef struct FfiAccountData {
   /**
-   * Account shards keys.
+   * Account actor state keys.
    */
   struct FfiVec_FfiAccountId account_data_keys;
   /**
-   * Account shards values (guaranteed to have same amount of entries as `account_data_keys`).
+   * Account actor state values (guaranteed to have same amount of entries as
+   * `account_data_keys`).
    */
   struct FfiVec_FfiVecU8 account_data_values;
 } FfiAccountData;

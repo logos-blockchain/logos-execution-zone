@@ -493,7 +493,7 @@ fn validate_bridge_account_modification(
 
 /// Rejects a diff that writes system state a user transaction may not: the
 /// clock and fee accounts never, the bridge only by a deposit's debit, and any
-/// account's inbox shard only by a dispatch.
+/// account's inbox actor state only by a dispatch.
 pub fn validate_user_state_modification(
     tx: &LeeTransaction,
     state: &V03State,
@@ -513,14 +513,19 @@ pub fn validate_user_state_modification(
     Ok(())
 }
 
-/// Rejects a diff that changes any account's cross-zone inbox shard.
+/// Rejects a diff that changes any account's cross-zone inbox actor state.
 fn validate_no_inbox_state_modification(
     state: &V03State,
     diff: &ValidatedStateDiff,
 ) -> Result<(), lee::error::LeeError> {
     let inbox = programs::cross_zone_inbox_account_id();
     let modified = diff.public_diff().iter().any(|(account_id, post)| {
-        state.get_account_by_id(*account_id).data.shards.get(&inbox) != post.data.shards.get(&inbox)
+        state
+            .get_account_by_id(*account_id)
+            .data
+            .actor_states
+            .get(&inbox)
+            != post.data.actor_states.get(&inbox)
     });
     if modified {
         Err(lee::error::LeeError::InvalidInput(
@@ -543,7 +548,7 @@ fn bridge_balance_only_increased(pre: &lee::Account, post: &lee::Account) -> boo
     ) -> impl Iterator<Item = (&lee::AccountId, &lee::ActorState)> {
         account
             .data
-            .shards
+            .actor_states
             .iter()
             .filter(|(program, _)| **program != NATIVE_TOKEN_PROGRAM_ID)
     }
@@ -601,7 +606,7 @@ mod tests {
             nonce: pre.nonce,
             data: {
                 let mut data = pre.data.clone();
-                data.set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(600));
+                data.set_actor_state(NATIVE_TOKEN_PROGRAM_ID, encode_balance(600));
                 data
             },
         };
@@ -626,7 +631,7 @@ mod tests {
             nonce: Nonce(8),
             data: {
                 let mut data = pre.data.clone();
-                data.set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(600));
+                data.set_actor_state(NATIVE_TOKEN_PROGRAM_ID, encode_balance(600));
                 data
             },
         };
@@ -667,7 +672,7 @@ mod tests {
             nonce: pre.nonce,
             data: {
                 let mut data = pre.data.clone();
-                data.set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(600));
+                data.set_actor_state(NATIVE_TOKEN_PROGRAM_ID, encode_balance(600));
                 data
             },
         };
@@ -690,7 +695,7 @@ mod tests {
             nonce: pre.nonce,
             data: {
                 let mut data = pre.data.clone();
-                data.set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(400));
+                data.set_actor_state(NATIVE_TOKEN_PROGRAM_ID, encode_balance(400));
                 data
             },
         };
@@ -813,15 +818,15 @@ mod tests {
         let pre = Account::funded(500);
         let mut post = pre.clone();
         post.data
-            .set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(400));
+            .set_actor_state(NATIVE_TOKEN_PROGRAM_ID, encode_balance(400));
         state_and_diff(system_accounts::bridge_account_id(), pre, post)
     }
 
-    /// An account gaining a cross-zone inbox shard.
+    /// An account gaining a cross-zone inbox actor state.
     fn inbox_state_write() -> (V03State, lee::ValidatedStateDiff) {
         let pre = Account::funded(0);
         let mut post = pre.clone();
-        post.data.set_shard(
+        post.data.set_actor_state(
             programs::cross_zone_inbox_account_id(),
             lee::ActorState::from(vec![1]),
         );

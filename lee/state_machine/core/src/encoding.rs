@@ -109,17 +109,17 @@ impl AccountId {
 mod tests {
     use super::*;
 
-    fn shard_bearing_account() -> Account {
+    fn actor_state_bearing_account() -> Account {
         Account {
             nonce: 42_u128.into(),
             ..Account::funded(123_456_789_012_345_678_901_234_567_890_123_456)
-                .with_shard(AccountId::new([7; 32]), b"hola mundo".to_vec().into())
+                .with_actor_state(AccountId::new([7; 32]), b"hola mundo".to_vec().into())
         }
     }
 
     #[test]
     fn encoding() {
-        let account = shard_bearing_account();
+        let account = actor_state_bearing_account();
 
         let expected_bytes = [
             42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -155,7 +155,7 @@ mod tests {
     #[cfg(feature = "host")]
     #[test]
     fn account_to_bytes_roundtrip() {
-        let account = shard_bearing_account();
+        let account = actor_state_bearing_account();
         let bytes = account.to_bytes();
         let mut cursor = Cursor::new(bytes.as_ref());
         let account_from_cursor = Account::from_cursor(&mut cursor).unwrap();

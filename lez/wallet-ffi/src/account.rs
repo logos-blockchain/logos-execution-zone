@@ -10,8 +10,8 @@ use crate::{
     block_on, c_str_to_string,
     error::{print_error, WalletFfiError},
     types::{
-        FfiAccount, FfiAccountList, FfiAccountListEntry, FfiBytes32, FfiPrivateAccountKeys,
-        FfiShard, WalletHandle,
+        FfiAccount, FfiAccountList, FfiAccountListEntry, FfiActorState, FfiBytes32,
+        FfiPrivateAccountKeys, WalletHandle,
     },
     wallet::get_wallet,
     FfiIdentifier,
@@ -507,18 +507,18 @@ pub unsafe extern "C" fn wallet_ffi_get_account_view(
 
     if program_account_id.is_null() {
         print_error(
-            "A shard selector must name a program account id; pass the native token program's \
-             id for the balance shard"
+            "An actor state selector must name a program account id; pass the native token program's \
+             id for the balance actor state"
                 .to_owned(),
         );
         return WalletFfiError::NullPointer;
     }
-    let shard_selector = Actor::new(
+    let actor_state_selector = Actor::new(
         account_id,
         AccountId::new(unsafe { (*program_account_id).data }),
     );
 
-    let account = match block_on(wallet.get_account_view(shard_selector)) {
+    let account = match block_on(wallet.get_account_view(actor_state_selector)) {
         Ok(a) => a,
         Err(e) => {
             print_error(format!("Failed to get account: {e}"));
@@ -547,17 +547,25 @@ pub unsafe extern "C" fn wallet_ffi_free_account_data(account: *mut FfiAccount) 
 
     unsafe {
         let account = &*account;
-        if account.shards.is_null() || account.shards_len == 0 {
+        if account.actor_states.is_null() || account.actor_states_len == 0 {
             return;
         }
-        let shards = std::slice::from_raw_parts_mut(account.shards.cast_mut(), account.shards_len);
-        for shard in shards.iter() {
-            if !shard.data.is_null() && shard.data_len > 0 {
-                let slice = std::slice::from_raw_parts_mut(shard.data.cast_mut(), shard.data_len);
+        let actor_states = std::slice::from_raw_parts_mut(
+            account.actor_states.cast_mut(),
+            account.actor_states_len,
+        );
+        for actor_state in actor_states.iter() {
+            if !actor_state.data.is_null() && actor_state.data_len > 0 {
+                let slice = std::slice::from_raw_parts_mut(
+                    actor_state.data.cast_mut(),
+                    actor_state.data_len,
+                );
                 drop(Box::from_raw(std::ptr::from_mut::<[u8]>(slice)));
             }
         }
-        drop(Box::from_raw(std::ptr::from_mut::<[FfiShard]>(shards)));
+        drop(Box::from_raw(std::ptr::from_mut::<[FfiActorState]>(
+            actor_states,
+        )));
     }
 }
 

@@ -15,7 +15,7 @@ pub mod program_loader;
 pub mod sequencer_stake;
 pub mod token;
 
-pub(crate) async fn shard(
+pub(crate) async fn actor_state(
     wallet: &WalletCore,
     account: &AccountIdentity,
     program_account_id: AccountId,
@@ -27,14 +27,14 @@ pub(crate) async fn shard(
             .await
             .map_err(ExecutionFailureKind::SequencerError)?
             .data
-            .shard(program_account_id)
+            .actor_state(program_account_id)
             .clone())
     } else {
         Ok(wallet
             .private_account_state(account_id)
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?
             .data
-            .shard(program_account_id)
+            .actor_state(program_account_id)
             .clone())
     }
 }
@@ -44,7 +44,7 @@ pub(crate) async fn token_holding(
     account: &AccountIdentity,
     token_program_id: AccountId,
 ) -> Result<TokenHolding, ExecutionFailureKind> {
-    let data = shard(wallet, account, token_program_id).await?;
+    let data = actor_state(wallet, account, token_program_id).await?;
     TokenHolding::try_from(&data)
         .map_err(|_err| ExecutionFailureKind::AccountDataError(account.account_id()))
 }

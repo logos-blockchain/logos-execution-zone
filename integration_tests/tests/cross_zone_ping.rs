@@ -159,7 +159,7 @@ async fn wait_for_delivery(
     let wait = async {
         loop {
             let account = client.get_account(record_id).await?;
-            let data = account.data.shard(receiver_id).to_vec();
+            let data = account.data.actor_state(receiver_id).to_vec();
             if !data.is_empty() {
                 return Ok::<Vec<u8>, anyhow::Error>(data);
             }

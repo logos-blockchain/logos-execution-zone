@@ -146,7 +146,7 @@ impl From<FfiFeeDeclaration> for FeeDeclaration {
     }
 }
 
-/// Identifies one of an account's program shards.
+/// Identifies one of an account's program actor states.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct FfiActor {

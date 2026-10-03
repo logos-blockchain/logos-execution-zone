@@ -1063,7 +1063,7 @@ async fn recorded_dispatches_are_drained_from_the_store_on_production() {
             .with_state(|state| state
                 .get_account_by_id(record_id)
                 .data
-                .shard(ping_receiver_program_id)
+                .actor_state(ping_receiver_program_id)
                 .clone()
                 .into_inner())
             .await,
@@ -2297,7 +2297,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
 async fn block_production_aborts_when_clock_account_data_is_corrupted() {
     let (mut sequencer, mempool_handle) = common_setup().await;
 
-    // Corrupt the clock 01 account's clock shard so deserialization fails.
+    // Corrupt the clock 01 account's clock actor state so deserialization fails.
     let clock_program_id = programs::clock_account_id();
     let clock_account_id = system_accounts::clock_account_ids()[0];
     let mut corrupted = sequencer
@@ -2305,7 +2305,7 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
         .await;
     corrupted
         .data
-        .set_shard(clock_program_id, vec![0xff; 3].into());
+        .set_actor_state(clock_program_id, vec![0xff; 3].into());
     sequencer
         .chain()
         .lock()
@@ -2517,7 +2517,7 @@ fn cooldown_opens_after_the_cooldown_elapses() {
 
     state.force_insert_account(
         state_id,
-        Account::default().with_shard(
+        Account::default().with_actor_state(
             AccountId::from_builtin_program(test_programs::cooldown().id()),
             cooldown_data(cooldown_ms, last_run_timestamp).into(),
         ),
@@ -2537,7 +2537,7 @@ fn cooldown_opens_after_the_cooldown_elapses() {
         state
             .get_account_by_id(state_id)
             .data
-            .shard(AccountId::from_builtin_program(
+            .actor_state(AccountId::from_builtin_program(
                 test_programs::cooldown().id()
             ))
             .as_ref(),
@@ -2559,7 +2559,7 @@ fn cooldown_rejects_before_the_cooldown_elapses() {
 
     state.force_insert_account(
         state_id,
-        Account::default().with_shard(
+        Account::default().with_actor_state(
             AccountId::from_builtin_program(test_programs::cooldown().id()),
             cooldown_data(cooldown_ms, last_run_timestamp).into(),
         ),
@@ -2581,7 +2581,7 @@ fn cooldown_rejects_before_the_cooldown_elapses() {
         state
             .get_account_by_id(state_id)
             .data
-            .shard(AccountId::from_builtin_program(
+            .actor_state(AccountId::from_builtin_program(
                 test_programs::cooldown().id()
             ))
             .as_ref(),
@@ -3901,7 +3901,7 @@ fn diag_sequencer_stake_writes_the_ownership_account_record() {
     assert!(
         !ownership_account
             .data
-            .shard(programs::sequencer_stake_account_id())
+            .actor_state(programs::sequencer_stake_account_id())
             .is_empty(),
         "ownership account should hold sequencer_stake's record"
     );
@@ -3916,7 +3916,7 @@ fn diag_sequencer_stake_writes_the_ownership_account_record() {
     assert_eq!(
         funds_account
             .data
-            .shards
+            .actor_states
             .keys()
             .copied()
             .collect::<Vec<_>>(),
@@ -3942,7 +3942,7 @@ fn stake_transaction(
     let has_record = !state
         .get_account_by_id(ownership_id)
         .data
-        .shard(sequencer_stake_program_id)
+        .actor_state(sequencer_stake_program_id)
         .is_empty();
     let ownership = Actor::new(ownership_id, sequencer_stake_program_id);
     let message = lee::public_transaction::Message::try_new(
@@ -3982,7 +3982,7 @@ fn stake_entry(
         state
             .get_account_by_id(system_accounts::sequencer_stake_config_account_id())
             .data
-            .shard(sequencer_stake_program_id)
+            .actor_state(sequencer_stake_program_id)
             .as_ref(),
     )
     .expect("config account should decode")
@@ -4241,7 +4241,7 @@ fn dust_credited_before_a_stake_neither_blocks_nor_inflates_it() {
         state
             .get_account_by_id(ownership_id)
             .data
-            .shard(programs::sequencer_stake_account_id())
+            .actor_state(programs::sequencer_stake_account_id())
             .as_ref(),
     )
     .expect("the ownership account holds the stake record");
@@ -4280,7 +4280,7 @@ fn a_stake_whose_funding_fails_records_nothing() {
         state
             .get_account_by_id(ownership_id)
             .data
-            .shard(programs::sequencer_stake_account_id())
+            .actor_state(programs::sequencer_stake_account_id())
             .is_empty(),
         "the ownership record rolls back with the failed transfer"
     );
@@ -4461,7 +4461,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
         !state
             .get_account_by_id(ownership_id)
             .data
-            .shard(programs::sequencer_stake_account_id())
+            .actor_state(programs::sequencer_stake_account_id())
             .is_empty(),
         "the ownership account keeps sequencer_stake's record after a full exit"
     );
@@ -4512,7 +4512,7 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     assert!(
         !stake_account
             .data
-            .shard(programs::sequencer_stake_account_id())
+            .actor_state(programs::sequencer_stake_account_id())
             .is_empty()
     );
     assert_eq!(
@@ -4530,7 +4530,7 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
         state
             .get_account_by_id(system_accounts::sequencer_stake_config_account_id())
             .data
-            .shard(programs::sequencer_stake_account_id())
+            .actor_state(programs::sequencer_stake_account_id())
             .as_ref(),
     )
     .expect("genesis config account should decode");
@@ -4731,21 +4731,24 @@ fn a_slash_burns_the_tracked_stake_to_the_sink() {
     );
 }
 
-fn write_stranger_shard_on_stake_funds(state: &mut V03State, ownership_id: AccountId) -> AccountId {
+fn write_stranger_actor_state_on_stake_funds(
+    state: &mut V03State,
+    ownership_id: AccountId,
+) -> AccountId {
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
     let mut funds = state.get_account_by_id(funds_id);
     funds
         .data
-        .set_shard(AccountId::new([66; 32]), vec![1].into());
+        .set_actor_state(AccountId::new([66; 32]), vec![1].into());
     state.force_insert_account(funds_id, funds);
     funds_id
 }
 
 #[test]
-fn a_slash_burns_from_funds_carrying_a_stranger_shard() {
+fn a_slash_burns_from_funds_carrying_a_stranger_actor_state() {
     let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let (mut state, sequencer_key, ownership_id, _ownership_key) = slashable_state(amount);
-    let funds_id = write_stranger_shard_on_stake_funds(&mut state, ownership_id);
+    let funds_id = write_stranger_actor_state_on_stake_funds(&mut state, ownership_id);
 
     let slash = slash_transaction(
         ownership_id,
@@ -4779,14 +4782,14 @@ fn a_slash_burns_from_funds_carrying_a_stranger_shard() {
         !state
             .get_account_by_id(funds_id)
             .data
-            .shard(AccountId::new([66; 32]))
+            .actor_state(AccountId::new([66; 32]))
             .is_empty(),
         "the stranger record is left untouched"
     );
 }
 
 #[test]
-fn a_finalize_unstake_releases_from_funds_carrying_a_stranger_shard() {
+fn a_finalize_unstake_releases_from_funds_carrying_a_stranger_actor_state() {
     let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let (mut state, sequencer_key, ownership_id, ownership_key) = slashable_state(amount);
     let destination = AccountId::new([67; 32]);
@@ -4801,7 +4804,7 @@ fn a_finalize_unstake_releases_from_funds_carrying_a_stranger_shard() {
     state
         .transition_from_public_transaction(&request, 2, 0)
         .expect("UnstakeRequest should succeed");
-    let funds_id = write_stranger_shard_on_stake_funds(&mut state, ownership_id);
+    let funds_id = write_stranger_actor_state_on_stake_funds(&mut state, ownership_id);
 
     let finalize = build_finalize_unstake_tx(ownership_id, sequencer_key).unwrap();
     let LeeTransaction::Public(finalize) = finalize else {
@@ -5247,7 +5250,7 @@ fn prove_and_settle(
     private_witnesses: Vec<lee_core::PrivateWitness>,
     block_id: u64,
 ) {
-    let public_shards = public_actors
+    let public_actor_states = public_actors
         .iter()
         .map(|actor| {
             (
@@ -5255,7 +5258,7 @@ fn prove_and_settle(
                 state
                     .get_account_by_id(actor.account_id)
                     .data
-                    .shard(actor.program_account_id)
+                    .actor_state(actor.program_account_id)
                     .clone(),
             )
         })
@@ -5268,7 +5271,9 @@ fn prove_and_settle(
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,
         },
-        &lee::Simulation { public_shards },
+        &lee::Simulation {
+            public_actor_states,
+        },
         &lee::privacy_preserving_transaction::circuit::ProgramCatalog::from([(
             programs::sequencer_stake_account_id(),
             programs::sequencer_stake(),
@@ -5379,7 +5384,7 @@ fn a_private_withdrawal_to_a_private_destination_is_received_only_by_proof() {
     // The ownership account as the private Stake committed it.
     let staked_ownership = Account {
         nonce: Nonce::private_account_nonce_init(&ownership.account_id),
-        ..Account::default().with_shard(
+        ..Account::default().with_actor_state(
             program_id,
             sequencer_stake_core::StakeRecord { sequencer_key }
                 .to_bytes()

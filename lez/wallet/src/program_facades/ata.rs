@@ -6,7 +6,7 @@ use token_core::{TokenDefinition, TokenDescriptor, TokenKind};
 
 use crate::{
     AccountIdentity, AccountMention, ExecutionFailureKind, WalletCore,
-    program_facades::{shard, token_holding},
+    program_facades::{actor_state, token_holding},
 };
 
 pub struct Ata<'wallet>(pub &'wallet WalletCore);
@@ -123,7 +123,8 @@ impl Ata<'_> {
             accounts: vec![
                 owner_mention,
                 ata,
-                AccountIdentity::PublicNoSign(definition_id).select_program_shard(token_program_id),
+                AccountIdentity::PublicNoSign(definition_id)
+                    .select_program_actor_state(token_program_id),
             ],
             message: serialize(&Message::Create {
                 token_program_id,
@@ -143,8 +144,8 @@ impl Ata<'_> {
         let token_program_id = programs::token_account_id();
         let (owner_mention, ata) = owner_and_ata(owner, definition_id);
         let kind = holding_kind(self.0, ata.identity.account_id(), token_program_id).await?;
-        let recipient =
-            AccountIdentity::PublicNoSign(recipient_id).select_program_shard(token_program_id);
+        let recipient = AccountIdentity::PublicNoSign(recipient_id)
+            .select_program_actor_state(token_program_id);
         let accounts = vec![owner_mention, ata, recipient];
         let descriptor = TokenDescriptor {
             definition_id,
@@ -175,7 +176,8 @@ impl Ata<'_> {
         let accounts = vec![
             owner_mention,
             ata,
-            AccountIdentity::PublicNoSign(definition_id).select_program_shard(token_program_id),
+            AccountIdentity::PublicNoSign(definition_id)
+                .select_program_actor_state(token_program_id),
         ];
         Ok(AtaCall {
             accounts,
@@ -201,8 +203,8 @@ fn owner_and_ata(
         token_program_id,
     );
     (
-        owner.select_program_shard(programs::ata_account_id()),
-        AccountIdentity::PublicNoSign(ata_id).select_program_shard(token_program_id),
+        owner.select_program_actor_state(programs::ata_account_id()),
+        AccountIdentity::PublicNoSign(ata_id).select_program_actor_state(token_program_id),
     )
 }
 
@@ -229,13 +231,13 @@ async fn definition_kind(
     definition_id: AccountId,
     token_program_id: AccountId,
 ) -> Result<TokenKind, ExecutionFailureKind> {
-    let definition_shard = shard(
+    let definition_actor_state = actor_state(
         wallet,
         &AccountIdentity::PublicNoSign(definition_id),
         token_program_id,
     )
     .await?;
-    let definition = TokenDefinition::try_from(&definition_shard)
+    let definition = TokenDefinition::try_from(&definition_actor_state)
         .map_err(|_err| ExecutionFailureKind::AccountDataError(definition_id))?;
     Ok(TokenKind::from_definition(&definition))
 }

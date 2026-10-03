@@ -72,8 +72,9 @@ async fn main() {
     // The caller's actor on the private account is the root; it sends the greeting to the
     // callee's actor on the same account.
     let caller =
-        AccountIdentity::PrivateOwned(account_id).select_program_shard(simple_tail_call_id);
-    let callee = AccountIdentity::PrivateOwned(account_id).select_program_shard(hello_world_id);
+        AccountIdentity::PrivateOwned(account_id).select_program_actor_state(simple_tail_call_id);
+    let callee =
+        AccountIdentity::PrivateOwned(account_id).select_program_actor_state(hello_world_id);
 
     // The message names the callee actor, which `simple_tail_call`'s guest sends the greeting to.
     let message = callee.actor();

@@ -26,7 +26,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
     // the wrong account rather than as a used slot.
     //
     // A slot can still be denied to its intended writer by a real emission: the
-    // ordinal is caller-chosen in a shard every user of an emitter shares,
+    // ordinal is caller-chosen in an actor state every user of an emitter shares,
     // and an emission needs no signature, so anyone can occupy one. A client must
     // pick an ordinal the chain does not already hold rather than counting from
     // zero.

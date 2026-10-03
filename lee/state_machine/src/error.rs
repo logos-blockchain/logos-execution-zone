@@ -131,7 +131,7 @@ impl From<ExecutionError> for LeeError {
         match error {
             ExecutionError::EmptyBlockWindowIntersection
             | ExecutionError::EmptyTimestampWindowIntersection => Self::OutOfValidityWindow,
-            ExecutionError::PublicShardUnavailable { .. }
+            ExecutionError::PublicActorStateUnavailable { .. }
             | ExecutionError::DuplicateWitness { .. }
             | ExecutionError::InvalidAuthorizationKey { .. }
             | ExecutionError::FamilyBindingConflict { .. }

@@ -267,7 +267,7 @@ impl Token<'_> {
         let token_program_id = programs::token_account_id();
         self.0
             .send_tx(
-                vec![sender.select_program_shard(token_program_id)],
+                vec![sender.select_program_actor_state(token_program_id)],
                 0,
                 serialize(&Message::Transfer {
                     to: recipient,
@@ -482,7 +482,7 @@ fn token_mentions(accounts: [AccountIdentity; 2]) -> Vec<AccountMention> {
     let token_program_id = programs::token_account_id();
     accounts
         .into_iter()
-        .map(|account| account.select_program_shard(token_program_id))
+        .map(|account| account.select_program_actor_state(token_program_id))
         .collect()
 }
 

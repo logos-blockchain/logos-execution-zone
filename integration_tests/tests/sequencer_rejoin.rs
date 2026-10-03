@@ -88,7 +88,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     send_stake_tx(
         &ctx,
         ownership_b,
-        vec![AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id)],
+        vec![AccountIdentity::PublicNoSign(config_id).select_program_actor_state(stake_id)],
         &sequencer_stake_core::Message::UnstakeRequest {
             sequencer_key: stake_key_b,
             amount: STAKE,
@@ -130,7 +130,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         .await
         .context("Failed to read B's stake ownership account")?
         .data
-        .shard(stake_id)
+        .actor_state(stake_id)
         .is_empty();
     send_stake_tx(
         &ctx,
@@ -138,7 +138,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         vec![
             AccountIdentity::PublicNoSign(funds_b).balance(),
             AccountIdentity::Public(settlement).balance(),
-            AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
+            AccountIdentity::PublicNoSign(config_id).select_program_actor_state(stake_id),
         ],
         &sequencer_stake_core::Message::Stake {
             sequencer_key: stake_key_b,
@@ -200,7 +200,7 @@ async fn send_stake_tx(
     let data = Program::serialize_message(message.clone())
         .context("Failed to serialize the sequencer_stake message")?;
     let root = AccountIdentity::Public(ownership)
-        .select_program_shard(programs::sequencer_stake_account_id());
+        .select_program_actor_state(programs::sequencer_stake_account_id());
     let mut accounts = vec![root];
     accounts.extend(others);
     ctx.wallet()
@@ -221,7 +221,7 @@ async fn stake_entry(
     let config = sequencer_stake_core::SequencerStakeConfig::from_bytes(
         account
             .data
-            .shard(programs::sequencer_stake_account_id())
+            .actor_state(programs::sequencer_stake_account_id())
             .as_ref(),
     )
     .context("config account data did not decode as a SequencerStakeConfig")?;

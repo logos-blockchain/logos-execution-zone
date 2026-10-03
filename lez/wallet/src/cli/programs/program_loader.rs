@@ -21,7 +21,8 @@ pub enum ProgramLoaderSubcommand {
     /// Write one bytecode segment. Low-level primitive: `Deploy`/`Update` handle a whole
     /// program's segments in one call.
     WriteSegment {
-        /// The account to write the segment to; its `program_loader` shard must still be empty.
+        /// The account to write the segment to; its `program_loader` actor state must still be
+        /// empty.
         #[arg(long)]
         target: CliAccountMention,
         /// File containing this segment's raw bytecode chunk.
@@ -39,7 +40,8 @@ pub enum ProgramLoaderSubcommand {
     /// Create a new program header pointing at an already-uploaded segment chain. Low-level
     /// primitive: `Deploy` handles segment upload + header creation together.
     CreateHeader {
-        /// The account to write the header to; its `program_loader` shard must still be empty.
+        /// The account to write the header to; its `program_loader` actor state must still be
+        /// empty.
         #[arg(long)]
         target: CliAccountMention,
         /// The first segment of the chain this header should point at. The rest of the chain is
@@ -78,11 +80,12 @@ pub enum ProgramLoaderSubcommand {
         /// Path to the program's compiled ELF binary.
         #[arg(long)]
         elf: PathBuf,
-        /// The account to create the header at; its `program_loader` shard must still be empty.
+        /// The account to create the header at; its `program_loader` actor state must still be
+        /// empty.
         #[arg(long)]
         header: CliAccountMention,
         /// The accounts to write segments to, in chain order (first chunk first); each one's
-        /// `program_loader` shard must still be empty.
+        /// `program_loader` actor state must still be empty.
         #[arg(long, num_args = 1..)]
         segments: Vec<CliAccountMention>,
         /// Whether the deployed program self-declares as immutable (not protocol-enforced).
@@ -105,7 +108,7 @@ pub enum ProgramLoaderSubcommand {
         #[arg(long)]
         header: CliAccountMention,
         /// The accounts to write the new segments to, in chain order; each one's
-        /// `program_loader` shard must still be empty.
+        /// `program_loader` actor state must still be empty.
         #[arg(long, num_args = 1..)]
         segments: Vec<CliAccountMention>,
         /// Whether the deployed program self-declares as immutable (not protocol-enforced).

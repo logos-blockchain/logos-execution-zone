@@ -109,8 +109,8 @@ pub struct Account {
 
 impl Account {
     #[must_use]
-    pub fn with_shard(mut self, program: AccountId, data: ActorState) -> Self {
-        self.data.set_shard(program, data);
+    pub fn with_actor_state(mut self, program: AccountId, data: ActorState) -> Self {
+        self.data.set_actor_state(program, data);
         self
     }
 }
@@ -126,67 +126,67 @@ impl Account {
 
     #[must_use]
     pub fn funded(balance: Balance) -> Self {
-        Self::default().with_shard(
+        Self::default().with_actor_state(
             NATIVE_TOKEN_PROGRAM_ID,
             crate::native_token::encode_balance(balance),
         )
     }
 }
 
-/// An account's program shards, including its native balance at [`NATIVE_TOKEN_PROGRAM_ID`].
+/// An account's program actor states, including its native balance at [`NATIVE_TOKEN_PROGRAM_ID`].
 #[derive(
     Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 #[serde(deny_unknown_fields)]
 pub struct AccountData {
-    pub shards: BTreeMap<AccountId, ActorState>,
+    pub actor_states: BTreeMap<AccountId, ActorState>,
 }
 
 impl AccountData {
     #[must_use]
-    pub fn shard(&self, program: AccountId) -> &ActorState {
+    pub fn actor_state(&self, program: AccountId) -> &ActorState {
         const EMPTY: &ActorState = &ActorState::empty();
-        self.shards.get(&program).unwrap_or(EMPTY)
+        self.actor_states.get(&program).unwrap_or(EMPTY)
     }
 
-    pub fn set_shard(&mut self, program: AccountId, data: ActorState) {
+    pub fn set_actor_state(&mut self, program: AccountId, data: ActorState) {
         if data.is_empty() {
-            self.shards.remove(&program);
+            self.actor_states.remove(&program);
         } else {
-            self.shards.insert(program, data);
+            self.actor_states.insert(program, data);
         }
     }
 
     #[must_use]
-    pub fn with_shard(mut self, program: AccountId, data: ActorState) -> Self {
-        self.set_shard(program, data);
+    pub fn with_actor_state(mut self, program: AccountId, data: ActorState) -> Self {
+        self.set_actor_state(program, data);
         self
     }
 
     pub fn native_balance(&self) -> Result<Balance, InvalidBalanceEncoding> {
-        decode_balance(self.shard(NATIVE_TOKEN_PROGRAM_ID))
+        decode_balance(self.actor_state(NATIVE_TOKEN_PROGRAM_ID))
     }
 
-    /// Returns the requested shards, with empty data for missing shards.
+    /// Returns the requested actor states, with empty data for missing actor states.
     #[must_use]
     pub fn project(&self, program_account_ids: impl IntoIterator<Item = AccountId>) -> Self {
         Self {
-            shards: program_account_ids
+            actor_states: program_account_ids
                 .into_iter()
-                .map(|program| (program, self.shard(program).clone()))
+                .map(|program| (program, self.actor_state(program).clone()))
                 .collect(),
         }
     }
 
-    /// Updates the supplied shards. Empty data removes a shard.
+    /// Updates the supplied actor states. Empty data removes an actor state.
     pub fn update(&mut self, projection: &Self) {
-        for (program, data) in &projection.shards {
-            self.set_shard(*program, data.clone());
+        for (program, data) in &projection.actor_states {
+            self.set_actor_state(*program, data.clone());
         }
     }
 }
 
-/// One account's shard under one program: the state one handler owns.
+/// One account's actor state under one program: the state one handler owns.
 #[derive(
     Debug,
     Copy,
@@ -300,13 +300,14 @@ mod tests {
 
     #[test]
     fn a_persisted_account_with_a_legacy_balance_field_is_refused() {
-        let current = serde_json::from_str::<Account>(r#"{"nonce":7,"data":{"shards":{}}}"#)
+        let current = serde_json::from_str::<Account>(r#"{"nonce":7,"data":{"actor_states":{}}}"#)
             .expect("the stored shape loads");
         assert_eq!(current.nonce, Nonce(7));
         assert_eq!(current.data.native_balance(), Ok(0));
 
-        let legacy =
-            serde_json::from_str::<Account>(r#"{"nonce":7,"data":{"balance":123,"shards":{}}}"#);
+        let legacy = serde_json::from_str::<Account>(
+            r#"{"nonce":7,"data":{"balance":123,"actor_states":{}}}"#,
+        );
 
         assert!(legacy.is_err(), "a legacy balance field was accepted");
     }
@@ -326,10 +327,10 @@ mod tests {
     }
 
     #[test]
-    fn default_account_has_no_shards() {
+    fn default_account_has_no_actor_states() {
         let new_acc = Account::default();
 
-        assert!(new_acc.data.shards.is_empty());
+        assert!(new_acc.data.actor_states.is_empty());
     }
 
     #[cfg(feature = "host")]
@@ -420,56 +421,59 @@ mod tests {
     }
 
     #[test]
-    fn set_shard_prunes_an_emptied_shard() {
+    fn set_actor_state_prunes_an_emptied_actor_state() {
         let program = AccountId::new([3; 32]);
-        let mut account = Account::funded(10).with_shard(program, b"record".to_vec().into());
+        let mut account = Account::funded(10).with_actor_state(program, b"record".to_vec().into());
 
-        account.data.set_shard(program, ActorState::empty());
+        account.data.set_actor_state(program, ActorState::empty());
 
-        assert!(!account.data.shards.contains_key(&program));
+        assert!(!account.data.actor_states.contains_key(&program));
         assert_eq!(account, Account::funded(10));
     }
 
     #[test]
-    fn project_reads_absent_shards_as_empty() {
+    fn project_reads_absent_actor_states_as_empty() {
         let held = AccountId::new([3; 32]);
         let absent = AccountId::new([4; 32]);
         let data = Account::funded(9)
             .data
-            .with_shard(held, b"record".to_vec().into());
+            .with_actor_state(held, b"record".to_vec().into());
 
         let projection = data.project([held, absent]);
 
         assert_eq!(projection.native_balance(), Ok(0));
-        assert_eq!(projection.shards.get(&absent), Some(&ActorState::empty()));
-        assert_eq!(projection.shards.len(), 2);
+        assert_eq!(
+            projection.actor_states.get(&absent),
+            Some(&ActorState::empty())
+        );
+        assert_eq!(projection.actor_states.len(), 2);
     }
 
     #[test]
-    fn update_keeps_the_nonce_and_prunes_emptied_shards() {
+    fn update_keeps_the_nonce_and_prunes_emptied_actor_states() {
         let program = AccountId::new([3; 32]);
         let mut account = Account {
             nonce: Nonce(7),
-            ..Account::funded(9).with_shard(program, b"record".to_vec().into())
+            ..Account::funded(9).with_actor_state(program, b"record".to_vec().into())
         };
 
         account.data.update(&AccountData {
-            shards: [(program, ActorState::empty())].into(),
+            actor_states: [(program, ActorState::empty())].into(),
         });
 
         assert_eq!(account.nonce, Nonce(7));
         assert_eq!(account.data.native_balance(), Ok(9));
-        assert_eq!(account.data.shards.len(), 1);
+        assert_eq!(account.data.actor_states.len(), 1);
     }
 
     #[test]
-    fn project_then_update_is_identity_on_the_touched_shards() {
+    fn project_then_update_is_identity_on_the_touched_actor_states() {
         let touched = AccountId::new([3; 32]);
         let untouched = AccountId::new([4; 32]);
         let data = Account::funded(9)
             .data
-            .with_shard(touched, b"record".to_vec().into())
-            .with_shard(untouched, b"other".to_vec().into());
+            .with_actor_state(touched, b"record".to_vec().into())
+            .with_actor_state(untouched, b"other".to_vec().into());
 
         let mut applied = data.clone();
         applied.update(&data.project([touched]));
@@ -482,7 +486,7 @@ mod tests {
         let account = Account {
             nonce: Nonce(u128::MAX),
             ..Account::funded(u128::MAX)
-                .with_shard(AccountId::new([3; 32]), b"record".to_vec().into())
+                .with_actor_state(AccountId::new([3; 32]), b"record".to_vec().into())
         };
 
         let json = serde_json::to_string(&account).unwrap();
@@ -502,7 +506,7 @@ mod tests {
 
         assert_eq!(
             serde_json::to_string(&account).unwrap(),
-            r#"{"nonce":7,"data":{"shards":{"11111111111111111111111111111111":[9,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}}}"#
+            r#"{"nonce":7,"data":{"actor_states":{"11111111111111111111111111111111":[9,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}}}"#
         );
     }
 }

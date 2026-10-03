@@ -92,7 +92,7 @@ async fn deploy_and_execute_program() -> Result<()> {
 
     assert_eq!(post_state_account.data.native_balance().unwrap(), 0);
     assert_eq!(
-        post_state_account.data.shard(account_id).as_ref(),
+        post_state_account.data.actor_state(account_id).as_ref(),
         written.as_slice()
     );
     assert_eq!(post_state_account.nonce.0, 1);

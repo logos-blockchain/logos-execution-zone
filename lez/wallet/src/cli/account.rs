@@ -17,7 +17,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub enum ReadScope {
     Balance,
-    Shard(AccountId),
+    ActorState(AccountId),
     All,
 }
 
@@ -28,7 +28,7 @@ impl FromStr for ReadScope {
         match s {
             "balance" => Ok(Self::Balance),
             "all" => Ok(Self::All),
-            _ => AccountId::from_str(s).map(Self::Shard),
+            _ => AccountId::from_str(s).map(Self::ActorState),
         }
     }
 }
@@ -371,7 +371,7 @@ impl AccountSubcommand {
                         .get_account_view(Actor::native_balance(id))
                         .await?
                 }
-                ReadScope::Shard(program) => {
+                ReadScope::ActorState(program) => {
                     wallet_core
                         .get_account_view(Actor::new(id, *program))
                         .await?
@@ -384,7 +384,7 @@ impl AccountSubcommand {
                 match &scope {
                     ReadScope::All => found.account.clone(),
                     ReadScope::Balance => found.account.project([NATIVE_TOKEN_PROGRAM_ID]),
-                    ReadScope::Shard(program) => found.account.project([*program]),
+                    ReadScope::ActorState(program) => found.account.project([*program]),
                 }
             }
         };
@@ -438,7 +438,7 @@ impl AccountSubcommand {
 
         let balance_read = match &scope {
             ReadScope::All | ReadScope::Balance => true,
-            ReadScope::Shard(program) => *program == NATIVE_TOKEN_PROGRAM_ID,
+            ReadScope::ActorState(program) => *program == NATIVE_TOKEN_PROGRAM_ID,
         };
         print_account_details(&account, "", balance_read);
 
@@ -708,7 +708,7 @@ fn print_account_details(account: &Account, indent: &str, balance_read: bool) {
     let token_prog_id = programs::token_account_id();
     for (program, data) in account
         .data
-        .shards
+        .actor_states
         .iter()
         .filter(|(program, data)| **program != NATIVE_TOKEN_PROGRAM_ID && !data.is_empty())
     {

@@ -47,7 +47,7 @@ pub fn receive(input: &ReceiveInput, message: Message) -> Response {
         }
         // TODO(cross-zone): nothing here checks the caller, so the cross-zone inbox
         // can deliver into this program on a peer's word, letting the peer drive
-        // writes in token's own shard at addresses it names. That is the same
+        // writes in token's own actor state at addresses it names. That is the same
         // reach any local caller has; a peer just pays no local fee.
         Message::NewDefinition {
             definition,

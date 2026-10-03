@@ -17,7 +17,7 @@ use token_core::{TokenDescriptor, TokenHolding, TokenKind, expected_sends};
 
 use crate::{
     AccountIdentity, AccountMention, ExecutionFailureKind, WalletCore,
-    program_facades::{shard, token_holding},
+    program_facades::{actor_state, token_holding},
 };
 pub struct Amm<'wallet>(pub &'wallet WalletCore);
 
@@ -79,19 +79,20 @@ impl Route {
         user_holding_lp: AccountIdentity,
     ) -> Vec<AccountMention> {
         vec![
-            AccountIdentity::PublicNoSign(self.pool_id).select_program_shard(self.amm_program_id),
+            AccountIdentity::PublicNoSign(self.pool_id)
+                .select_program_actor_state(self.amm_program_id),
             AccountIdentity::PublicNoSign(self.vault_a_id)
-                .select_program_shard(self.token_program_id),
+                .select_program_actor_state(self.token_program_id),
             AccountIdentity::PublicNoSign(self.vault_b_id)
-                .select_program_shard(self.token_program_id),
+                .select_program_actor_state(self.token_program_id),
             AccountIdentity::PublicNoSign(compute_liquidity_token_pda(
                 self.amm_program_id,
                 self.pool_id,
             ))
-            .select_program_shard(self.token_program_id),
-            user_holding_a.select_program_shard(self.token_program_id),
-            user_holding_b.select_program_shard(self.token_program_id),
-            user_holding_lp.select_program_shard(self.token_program_id),
+            .select_program_actor_state(self.token_program_id),
+            user_holding_a.select_program_actor_state(self.token_program_id),
+            user_holding_b.select_program_actor_state(self.token_program_id),
+            user_holding_lp.select_program_actor_state(self.token_program_id),
         ]
     }
 }
@@ -368,14 +369,14 @@ impl SwapTerms {
             .public_account_id()
             .map_or(user_output, AccountIdentity::PublicNoSign);
         vec![
-            user_input.select_program_shard(self.token_program_id),
-            user_output.select_program_shard(self.token_program_id),
+            user_input.select_program_actor_state(self.token_program_id),
+            user_output.select_program_actor_state(self.token_program_id),
             AccountIdentity::PublicNoSign(self.pool_id)
-                .select_program_shard(programs::amm_account_id()),
+                .select_program_actor_state(programs::amm_account_id()),
             AccountIdentity::PublicNoSign(self.input_vault_id)
-                .select_program_shard(self.token_program_id),
+                .select_program_actor_state(self.token_program_id),
             AccountIdentity::PublicNoSign(self.output_vault_id)
-                .select_program_shard(self.token_program_id),
+                .select_program_actor_state(self.token_program_id),
         ]
     }
 
@@ -587,7 +588,7 @@ async fn pool_definition(
     wallet: &WalletCore,
     pool_id: AccountId,
 ) -> Result<PoolDefinition, ExecutionFailureKind> {
-    let data = shard(
+    let data = actor_state(
         wallet,
         &AccountIdentity::PublicNoSign(pool_id),
         programs::amm_account_id(),
@@ -888,7 +889,7 @@ mod tests {
                 assert!(
                     mention.identity == *identity
                         && mention.program_account_id == *program_account_id,
-                    "row {row} names the wrong identity or shard"
+                    "row {row} names the wrong identity or actor state"
                 );
             }
         }

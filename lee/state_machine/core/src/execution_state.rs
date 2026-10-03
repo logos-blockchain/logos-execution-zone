@@ -135,9 +135,9 @@ pub trait ExecutionEnvironment {
         view: &TurnView<'_>,
     ) -> Result<Transition, Self::Error>;
 
-    /// Returns [`ExecutionError::PublicShardUnavailable`] by default.
+    /// Returns [`ExecutionError::PublicActorStateUnavailable`] by default.
     fn public_actor_state(&mut self, actor: Actor) -> Result<ActorState, Self::Error> {
-        Err(ExecutionError::PublicShardUnavailable { actor }.into())
+        Err(ExecutionError::PublicActorStateUnavailable { actor }.into())
     }
 }
 
@@ -170,8 +170,8 @@ impl TurnView<'_> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutionError {
-    #[error("No public shard was supplied for {actor:?}")]
-    PublicShardUnavailable { actor: Actor },
+    #[error("No public actor state was supplied for {actor:?}")]
+    PublicActorStateUnavailable { actor: Actor },
 
     #[error("Two witnesses derive the same private account {account_id}")]
     DuplicateWitness { account_id: AccountId },
@@ -257,7 +257,7 @@ impl AccountEntry {
     fn staged(&self, program_account_id: AccountId) -> Option<&ActorState> {
         match self {
             Self::Public { loaded, .. } => loaded.get(&program_account_id),
-            Self::Private { data, .. } => Some(data.shard(program_account_id)),
+            Self::Private { data, .. } => Some(data.actor_state(program_account_id)),
         }
     }
 
@@ -266,7 +266,7 @@ impl AccountEntry {
             Self::Public { loaded, .. } => {
                 loaded.insert(program_account_id, state);
             }
-            Self::Private { data, .. } => data.set_shard(program_account_id, state),
+            Self::Private { data, .. } => data.set_actor_state(program_account_id, state),
         }
     }
 }
@@ -1174,7 +1174,12 @@ impl Finished {
             else {
                 continue;
             };
-            public.push((actor.account_id, AccountData { shards: loaded }));
+            public.push((
+                actor.account_id,
+                AccountData {
+                    actor_states: loaded,
+                },
+            ));
         }
         PublicOutcome {
             block_validity_window,

@@ -69,9 +69,9 @@ pub trait Rpc {
         block_id: BlockId,
     ) -> Result<Account, ErrorObjectOwned>;
 
-    /// The account's balance, nonce, and one entry per shard carrying its size only.
+    /// The account's balance, nonce, and one entry per actor state carrying its size only.
     /// Safe to call on any account: unlike `getAccount`, the response does not grow
-    /// with shard contents.
+    /// with actor state contents.
     #[method(name = "getAccountSummary")]
     async fn get_account_summary(
         &self,

@@ -56,7 +56,7 @@ fn wrapped_token_config(
         state
             .get_account_by_id(config_id)
             .data
-            .shard(wrapped_token_id)
+            .actor_state(wrapped_token_id)
             .as_ref(),
     )
     .expect("config decodes")
@@ -68,7 +68,7 @@ fn receiver_config(state: &V03State, config_id: AccountId) -> ping_core::Receive
         state
             .get_account_by_id(config_id)
             .data
-            .shard(receiver_id)
+            .actor_state(receiver_id)
             .as_ref(),
     )
     .expect("config decodes")
@@ -104,7 +104,7 @@ fn seed_inbox_config(state: &mut V03State, self_zone: [u8; 32]) {
     let config = InboxConfig { self_zone };
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         inbox_config_account_id(inbox_id),
-        Account::default().with_shard(inbox_id, config.to_bytes().into()),
+        Account::default().with_actor_state(inbox_id, config.to_bytes().into()),
     )]);
 }
 
@@ -167,7 +167,7 @@ fn seed_wrapped_config_entries(
     };
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         wrapped_token_core::config_account_id(wrapped_token_id),
-        Account::default().with_shard(wrapped_token_id, config.to_bytes().into()),
+        Account::default().with_actor_state(wrapped_token_id, config.to_bytes().into()),
     )]);
 }
 
@@ -197,7 +197,7 @@ fn seed_receiver_config_with_governance(
     };
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         receiver_config_account_id(receiver_id),
-        Account::default().with_shard(receiver_id, config.to_bytes().into()),
+        Account::default().with_actor_state(receiver_id, config.to_bytes().into()),
     )]);
 }
 
@@ -207,7 +207,7 @@ fn seed_ping_sender_config(state: &mut V03State) {
     let sender_id = programs::ping_sender_account_id();
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         sender_config_account_id(sender_id),
-        Account::default().with_shard(
+        Account::default().with_actor_state(
             sender_id,
             outbox_bytes(programs::cross_zone_outbox_account_id())
                 .to_vec()
@@ -236,7 +236,7 @@ fn seed_bridge_lock_config(state: &mut V03State) {
     let bridge_lock_id = programs::bridge_lock_account_id();
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         bridge_lock_core::config_account_id(bridge_lock_id),
-        Account::default().with_shard(
+        Account::default().with_actor_state(
             bridge_lock_id,
             bridge_lock_core::config_bytes(
                 programs::cross_zone_outbox_account_id(),
@@ -521,7 +521,7 @@ fn a_mint_at_the_cap_is_accepted() {
     let minted = wrapped_token_core::read_balance(
         diff.public_diff()[&holding_id]
             .data
-            .shard(wrapped_token_id)
+            .actor_state(wrapped_token_id)
             .as_ref(),
     );
     assert_eq!(minted, wrapped_token_core::MAX_MINT_AMOUNT);
@@ -859,7 +859,7 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
         .expect("ping record account must change")
         .clone();
     assert_eq!(
-        record.data.shard(receiver_id).to_vec(),
+        record.data.actor_state(receiver_id).to_vec(),
         inner,
         "ping_receiver must record the delivered payload"
     );
@@ -907,7 +907,7 @@ fn lock_escrows_balance_and_emits_to_outbox() {
     let record = OutboxRecord::from_bytes(
         public_diff[&outbox_record_id]
             .data
-            .shard(outbox_id)
+            .actor_state(outbox_id)
             .as_ref(),
     )
     .expect("outbox PDA holds an OutboxRecord");
@@ -1120,7 +1120,7 @@ fn two_emitters_share_an_ordinal_without_colliding() {
     let record = OutboxRecord::from_bytes(
         send_diff.public_diff()[&send_slot]
             .data
-            .shard(outbox_id)
+            .actor_state(outbox_id)
             .as_ref(),
     )
     .expect("outbox PDA holds an OutboxRecord");
@@ -1132,7 +1132,7 @@ fn two_emitters_share_an_ordinal_without_colliding() {
         state
             .get_account_by_id(lock_slot)
             .data
-            .shard(outbox_id)
+            .actor_state(outbox_id)
             .as_ref(),
     )
     .expect("the lock's record survives");
@@ -1482,7 +1482,7 @@ fn the_bridge_pins_are_written_once_and_replayable() {
             state
                 .get_account_by_id(config_id)
                 .data
-                .shard(bridge_lock_id)
+                .actor_state(bridge_lock_id)
                 .as_ref()
         ),
         Some((outbox_id, wrapped_token_id)),
@@ -1512,7 +1512,7 @@ fn the_bridge_pins_are_written_once_and_replayable() {
             panic!("a re-init naming a different {what} must not execute");
         };
         assert!(
-            format!("{err:?}").contains("shard already holds different data"),
+            format!("{err:?}").contains("actor state already holds different data"),
             "rejected for the wrong reason: {err:?}"
         );
     }
@@ -1611,7 +1611,7 @@ fn the_outbox_pin_is_written_once_and_replayable() {
             state
                 .get_account_by_id(config_id)
                 .data
-                .shard(sender_id)
+                .actor_state(sender_id)
                 .as_ref()
         ),
         Some(outbox_id),
@@ -1630,7 +1630,7 @@ fn the_outbox_pin_is_written_once_and_replayable() {
         panic!("a re-init naming a different outbox must not execute");
     };
     assert!(
-        format!("{err:?}").contains("shard already holds different data"),
+        format!("{err:?}").contains("actor state already holds different data"),
         "rejected for the wrong reason: {err:?}"
     );
 }
@@ -1742,7 +1742,11 @@ fn the_token_authority_path_holds() {
         "the new source is authorized"
     );
     assert!(
-        state.get_account_by_id(authority).data.shards.is_empty(),
+        state
+            .get_account_by_id(authority)
+            .data
+            .actor_states
+            .is_empty(),
         "acting as the authority must not hand the account to wrapped_token"
     );
 
@@ -2082,7 +2086,11 @@ fn the_governance_path_holds() {
         uncapped_entries(&[(src_zone, programs::bridge_lock_account_id())])
     );
     assert!(
-        state.get_account_by_id(authority).data.shards.is_empty(),
+        state
+            .get_account_by_id(authority)
+            .data
+            .actor_states
+            .is_empty(),
         "acting as the authority must not hand the account to wrapped_token"
     );
 
@@ -2260,7 +2268,11 @@ fn the_receiver_governance_path_holds() {
         vec![(src_zone, programs::ping_sender_account_id())]
     );
     assert!(
-        state.get_account_by_id(authority).data.shards.is_empty(),
+        state
+            .get_account_by_id(authority)
+            .data
+            .actor_states
+            .is_empty(),
         "acting as the authority must not hand the account to ping_receiver"
     );
 }
@@ -2302,7 +2314,11 @@ fn a_shared_authority_serves_both_targets() {
         .apply_state_diff(first)
         .expect("the validated diff applies");
     assert!(
-        state.get_account_by_id(authority).data.shards.is_empty(),
+        state
+            .get_account_by_id(authority)
+            .data
+            .actor_states
+            .is_empty(),
         "a data-free authority is owned by nobody, whichever target uses it first"
     );
 
@@ -2329,7 +2345,11 @@ fn a_shared_authority_serves_both_targets() {
         vec![(src_zone, programs::ping_sender_account_id())]
     );
     assert!(
-        state.get_account_by_id(authority).data.shards.is_empty(),
+        state
+            .get_account_by_id(authority)
+            .data
+            .actor_states
+            .is_empty(),
         "the authority holds no record from either target"
     );
 
@@ -2531,7 +2551,7 @@ fn inbox_dispatch_mints_wrapped_token() {
     let minted = wrapped_token_core::read_balance(
         diff.public_diff()[&holding_id]
             .data
-            .shard(wrapped_token_id)
+            .actor_state(wrapped_token_id)
             .as_ref(),
     );
     assert_eq!(
@@ -2659,7 +2679,7 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
     let minted = wrapped_token_core::read_balance(
         diff.public_diff()[&holding_id]
             .data
-            .shard(wrapped_token_id)
+            .actor_state(wrapped_token_id)
             .as_ref(),
     );
     assert_eq!(minted, LOCK_AMOUNT);
@@ -2693,7 +2713,7 @@ fn mint_replay_rejected() {
     shard.insert(SRC_BLOCK_HASH, src_tx_index);
     state = state.with_public_accounts([(
         seen_id,
-        Account::default().with_shard(inbox_id, shard.to_bytes().into()),
+        Account::default().with_actor_state(inbox_id, shard.to_bytes().into()),
     )]);
 
     let msg = CrossZoneMessage {
@@ -2764,7 +2784,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
     shard.insert(SRC_BLOCK_HASH, 0);
     state = state.with_public_accounts([(
         seen_id,
-        Account::default().with_shard(inbox_id, shard.to_bytes().into()),
+        Account::default().with_actor_state(inbox_id, shard.to_bytes().into()),
     )]);
 
     let payload = borsh::to_vec(&ReceiverMessage::Record {
@@ -2845,7 +2865,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
     let seen_after = public_diff
         .get(&seen_id)
         .expect("the shard records the new delivery");
-    let shard_after = SeenShard::from_bytes(seen_after.data.shard(inbox_id).as_ref())
+    let shard_after = SeenShard::from_bytes(seen_after.data.actor_state(inbox_id).as_ref())
         .expect("seen shard decodes");
     assert!(shard_after.contains(0), "the first delivery is still there");
     assert!(shard_after.contains(1), "and the second is recorded");

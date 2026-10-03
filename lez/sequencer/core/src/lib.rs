@@ -1637,7 +1637,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // itself. Draining here also subsumes the old
         // startup replay.
         //
-        // Skip deposits whose receipt has a nonempty bridge shard.
+        // Skip deposits whose receipt has a nonempty bridge actor state.
         // Reverting a block also reverts its receipts, allowing those deposits to be retried.
         let pending_deposits: VecDeque<LeeTransaction> = self
             .storage_ref
@@ -2176,7 +2176,7 @@ fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> boo
     let receipt_id = bridge_core::deposit_receipt_account_id(bridge_program_id, deposit_op_id.0);
     state
         .get_account_by_id_ref(receipt_id)
-        .is_some_and(|receipt| !receipt.data.shard(bridge_program_id).is_empty())
+        .is_some_and(|receipt| !receipt.data.actor_state(bridge_program_id).is_empty())
 }
 
 /// Whether a cross-zone delivery is already on the chain we are building on.
@@ -2197,10 +2197,12 @@ fn dispatch_already_delivered(state: &lee::V03State, message: &CrossZoneMessage)
         message.src_block_id,
     );
     state.get_account_by_id_ref(shard_id).is_some_and(|shard| {
-        cross_zone_inbox_core::SeenShard::from_bytes(shard.data.shard(inbox_program_id).as_ref())
-            .is_ok_and(|seen| {
-                seen.binds(&message.src_block_hash) && seen.contains(message.src_tx_index)
-            })
+        cross_zone_inbox_core::SeenShard::from_bytes(
+            shard.data.actor_state(inbox_program_id).as_ref(),
+        )
+        .is_ok_and(|seen| {
+            seen.binds(&message.src_block_hash) && seen.contains(message.src_tx_index)
+        })
     })
 }
 
@@ -2380,7 +2382,7 @@ fn build_genesis_state(
     // Config txs seed the config accounts by transaction, so every node
     // reconstructs them by replaying the genesis block. Every cross-zone config
     // is initialized: each builtin has a user-callable InitConfig, so an empty
-    // config shard would be left for whoever calls it first. The inbox's is
+    // config actor state would be left for whoever calls it first. The inbox's is
     // receiving-zones-only.
     // The self-stake is appended here, so every index below is an index into
     // this list, not into `config.genesis`.
@@ -2806,7 +2808,7 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
         .context("Failed to decode finalized Bedrock deposit metadata")?;
 
     // The receipt PDA carries the exactly-once check: the deposit is addressed to it,
-    // and its own shard detects a replay.
+    // and its own actor state detects a replay.
     let receipt = bridge_receipt_actor(event.deposit_op_id.0);
     let message = Message::try_new(
         receipt,

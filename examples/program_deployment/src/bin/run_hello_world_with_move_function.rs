@@ -66,7 +66,7 @@ enum Command {
     },
 }
 
-async fn shard_bytes(
+async fn actor_state_bytes(
     wallet_core: &WalletCore,
     account_id: AccountId,
     program_account_id: AccountId,
@@ -76,7 +76,7 @@ async fn shard_bytes(
         .await
         .unwrap()
         .data
-        .shard(program_account_id)
+        .actor_state(program_account_id)
         .as_ref()
         .to_vec()
 }
@@ -124,7 +124,7 @@ async fn main() {
         } => {
             let message = (WRITE_FUNCTION_ID, greeting.into_bytes());
             let account = AccountIdentity::PrivateOwned(account_id.parse().unwrap())
-                .select_program_shard(program_account_id);
+                .select_program_actor_state(program_account_id);
 
             wallet_core
                 .send_privacy_preserving_tx(
@@ -139,7 +139,7 @@ async fn main() {
         Command::MoveDataPublicToPublic { from, to } => {
             let from = from.parse().unwrap();
             let to = to.parse().unwrap();
-            let moved = shard_bytes(&wallet_core, from, program_account_id).await;
+            let moved = actor_state_bytes(&wallet_core, from, program_account_id).await;
             let source = Actor::new(from, program_account_id);
             let destination = Actor::new(to, program_account_id);
             let message = (MOVE_DATA_FUNCTION_ID, moved, to);
@@ -164,10 +164,11 @@ async fn main() {
         Command::MoveDataPublicToPrivate { from, to } => {
             let from = from.parse().unwrap();
             let to = to.parse().unwrap();
-            let moved = shard_bytes(&wallet_core, from, program_account_id).await;
-            let source = AccountIdentity::Public(from).select_program_shard(program_account_id);
+            let moved = actor_state_bytes(&wallet_core, from, program_account_id).await;
+            let source =
+                AccountIdentity::Public(from).select_program_actor_state(program_account_id);
             let destination =
-                AccountIdentity::PrivateOwned(to).select_program_shard(program_account_id);
+                AccountIdentity::PrivateOwned(to).select_program_actor_state(program_account_id);
             let accounts = vec![source, destination];
             let message = (MOVE_DATA_FUNCTION_ID, moved, to);
 

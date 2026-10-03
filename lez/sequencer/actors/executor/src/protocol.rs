@@ -117,7 +117,7 @@ pub struct GetAccount {
 }
 
 pub struct GetAccountView {
-    pub shard_selector: Actor,
+    pub actor_state_selector: Actor,
 }
 
 #[derive(Reply)]

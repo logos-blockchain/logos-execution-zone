@@ -434,7 +434,7 @@ async fn next_free_ordinal(client: &SequencerClient, target_zone: &ZoneId) -> Re
                 }
             }
         };
-        if account.data.shard(outbox_id).is_empty() {
+        if account.data.actor_state(outbox_id).is_empty() {
             return Ok(ordinal);
         }
     }

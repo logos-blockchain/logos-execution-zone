@@ -177,7 +177,7 @@ fn prepare_mock_storage_with_stake(
     // actually settle; only the stake config is layered on, to name this node.
     let mut state = testnet_initial_state::initial_state(false).with_public_accounts([(
         system_accounts::sequencer_stake_config_account_id(),
-        Account::default().with_shard(
+        Account::default().with_actor_state(
             programs::sequencer_stake_account_id(),
             sequencer_stake_core::SequencerStakeConfig {
                 channel_params: Some(sequencer_stake_core::ChannelParams {

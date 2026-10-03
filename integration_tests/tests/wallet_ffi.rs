@@ -685,8 +685,8 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
         .unwrap();
         (&out_program_full).try_into().unwrap()
     };
-    let expected_shard = program_full.data.shards[&PROGRAM_LOADER_ACCOUNT_ID].clone();
-    assert!(!expected_shard.is_empty());
+    let expected_actor_state = program_full.data.actor_states[&PROGRAM_LOADER_ACCOUNT_ID].clone();
+    assert!(!expected_actor_state.is_empty());
 
     let mut out_program_view = FfiAccount::default();
     let program_view: Account = unsafe {
@@ -707,22 +707,22 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
         Account::funded(program_full.data.native_balance().unwrap()).data
     );
 
-    let mut out_named_shard = FfiAccount::default();
-    let named_shard: Account = unsafe {
+    let mut out_named_actor_state = FfiAccount::default();
+    let named_actor_state: Account = unsafe {
         let ffi_program_account = FfiBytes32::from(program_id);
         let ffi_program_id = FfiBytes32::from(PROGRAM_LOADER_ACCOUNT_ID);
         wallet_ffi_get_account_view(
             wallet_ffi_handle,
             &raw const ffi_program_account,
             &raw const ffi_program_id,
-            &raw mut out_named_shard,
+            &raw mut out_named_actor_state,
         )
         .unwrap();
-        (&out_named_shard).try_into().unwrap()
+        (&out_named_actor_state).try_into().unwrap()
     };
 
     assert_eq!(
-        named_shard.data,
+        named_actor_state.data,
         program_full.data.project([PROGRAM_LOADER_ACCOUNT_ID])
     );
 
@@ -730,7 +730,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
         wallet_ffi_free_account_data(&raw mut out_balance_only);
         wallet_ffi_free_account_data(&raw mut out_program_full);
         wallet_ffi_free_account_data(&raw mut out_program_view);
-        wallet_ffi_free_account_data(&raw mut out_named_shard);
+        wallet_ffi_free_account_data(&raw mut out_named_actor_state);
         wallet_ffi_free_account_data(&raw mut out_account);
         wallet_ffi_destroy(wallet_ffi_handle);
     }
@@ -909,7 +909,7 @@ fn wallet_ffi_base58_to_account_id() -> Result<()> {
 }
 
 #[test]
-fn wallet_ffi_public_credit_creates_only_the_native_shard() -> Result<()> {
+fn wallet_ffi_public_credit_creates_only_the_native_actor_state() -> Result<()> {
     let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -933,7 +933,7 @@ fn wallet_ffi_public_credit_creates_only_the_native_shard() -> Result<()> {
         .unwrap();
         (&out_account).try_into().unwrap()
     };
-    assert!(account.data.shards.is_empty());
+    assert!(account.data.actor_states.is_empty());
 
     let from: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
     let amount: [u8; 16] = 100_u128.to_le_bytes();
@@ -1872,7 +1872,7 @@ fn test_wallet_ffi_new_token_definition_generic_private() -> Result<()> {
     };
 
     assert_eq!(
-        TokenDefinition::try_from(definition_account.data.shard(token_program))?,
+        TokenDefinition::try_from(definition_account.data.actor_state(token_program))?,
         TokenDefinition::Fungible {
             name: "FFI".to_owned(),
             total_supply,
@@ -1880,7 +1880,7 @@ fn test_wallet_ffi_new_token_definition_generic_private() -> Result<()> {
         }
     );
     assert_eq!(
-        TokenHolding::try_from(holding_account.data.shard(token_program))?,
+        TokenHolding::try_from(holding_account.data.actor_state(token_program))?,
         TokenHolding::Fungible {
             definition_id,
             balance: total_supply,

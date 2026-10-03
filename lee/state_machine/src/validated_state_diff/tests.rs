@@ -351,7 +351,7 @@ fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
     let diff = result.expect("a reverted action still yields an applicable diff");
     assert!(
         diff.public_diff().is_empty(),
-        "a reverted action writes no shard"
+        "a reverted action writes no actor state"
     );
     state
         .apply_state_diff(diff)

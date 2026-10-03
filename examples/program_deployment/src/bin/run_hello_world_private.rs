@@ -62,7 +62,7 @@ async fn main() {
     // The private account's actor under the program is the root; nothing reaches public state, so
     // the transaction assumes nothing of it.
     let account =
-        AccountIdentity::PrivateOwned(account_id).select_program_shard(program_account_id);
+        AccountIdentity::PrivateOwned(account_id).select_program_actor_state(program_account_id);
 
     // Construct and submit the privacy-preserving transaction
     wallet_core

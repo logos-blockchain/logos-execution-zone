@@ -410,14 +410,20 @@ mod tests {
             state
                 .get_account_by_id(system_accounts::fee_state_account_id())
                 .data
-                .shard(programs::fee_account_id()),
+                .actor_state(programs::fee_account_id()),
         );
         assert_eq!(fee_state, fee_core::state::FeeState::genesis());
         for empty_id in [
             system_accounts::fee_escrow_account_id(),
             system_accounts::fee_inbox_account_id(),
         ] {
-            assert!(state.get_account_by_id(empty_id).data.shards.is_empty());
+            assert!(
+                state
+                    .get_account_by_id(empty_id)
+                    .data
+                    .actor_states
+                    .is_empty()
+            );
         }
     }
 
@@ -440,7 +446,7 @@ mod tests {
             "the bridge holds the whole supply"
         );
         assert_eq!(
-            bridge.data.shards.keys().copied().collect::<Vec<_>>(),
+            bridge.data.actor_states.keys().copied().collect::<Vec<_>>(),
             vec![lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID],
             "the bridge holds balance alone, no program's record"
         );

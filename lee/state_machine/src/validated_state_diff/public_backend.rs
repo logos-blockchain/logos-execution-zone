@@ -7,7 +7,7 @@ use lee_core::{
 };
 use log::debug;
 
-use super::{catch_program_loader_panic, charge, load_program, loader_shard, remaining};
+use super::{catch_program_loader_panic, charge, load_program, loader_actor_state, remaining};
 use crate::{
     V03State,
     error::{InvalidProgramBehaviorError, LeeError},
@@ -55,7 +55,7 @@ impl ExecutionEnvironment for PublicBackend<'_> {
             const ABSENT: &ActorState = &ActorState::empty();
             let (transition, new_commitment) = catch_program_loader_panic(|| {
                 program_loader_core::receive(input, |account_id| {
-                    loader_shard(view, state, account_id).unwrap_or(ABSENT)
+                    loader_actor_state(view, state, account_id).unwrap_or(ABSENT)
                 })
             })?;
             self.program_commitments.extend(new_commitment);
@@ -65,7 +65,7 @@ impl ExecutionEnvironment for PublicBackend<'_> {
                 .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?
         } else {
             let program = load_program(program_account_id, |account_id| {
-                loader_shard(view, state, account_id)
+                loader_actor_state(view, state, account_id)
             })
             .ok_or(LeeError::UnknownProgram {
                 at_root: view.at_root(),
@@ -84,7 +84,7 @@ impl ExecutionEnvironment for PublicBackend<'_> {
             .state
             .get_account_by_id_ref(actor.account_id)
             .map_or_else(ActorState::empty, |account| {
-                account.data.shard(actor.program_account_id).clone()
+                account.data.actor_state(actor.program_account_id).clone()
             }))
     }
 }

@@ -94,7 +94,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .await
         .context("Failed to read the stake ownership account")?
         .data
-        .shard(stake_id)
+        .actor_state(stake_id)
         .is_empty();
     let stake_message = Program::serialize_message(sequencer_stake_core::Message::Stake {
         sequencer_key: demo_stake_key,
@@ -103,7 +103,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         funding: funding_id,
     })
     .context("Failed to serialize Stake message")?;
-    let ownership = AccountIdentity::Public(ownership_id).select_program_shard(stake_id);
+    let ownership = AccountIdentity::Public(ownership_id).select_program_actor_state(stake_id);
 
     info!(
         "Submitting Stake transaction for sequencer key {}",
@@ -115,7 +115,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
                 ownership.clone(),
                 AccountIdentity::PublicNoSign(funds_id).balance(),
                 AccountIdentity::Public(funding_id).balance(),
-                AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
+                AccountIdentity::PublicNoSign(config_id).select_program_actor_state(stake_id),
             ],
             0,
             stake_message,
@@ -128,7 +128,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         Ok(!get_account(&ctx, ownership_id)
             .await?
             .data
-            .shard(stake_id)
+            .actor_state(stake_id)
             .is_empty())
     })
     .await?;
@@ -137,7 +137,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .await
         .context("Failed to read the stake ownership account")?;
     assert!(
-        !ownership_account.data.shard(stake_id).is_empty(),
+        !ownership_account.data.actor_state(stake_id).is_empty(),
         "ownership account should now hold a sequencer_stake record"
     );
     let staked_balance = account_balance(&ctx, funds_id).await?;
@@ -147,7 +147,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         "the funds PDA should hold the staked balance"
     );
     let record = sequencer_stake_core::StakeRecord::from_bytes(
-        ownership_account.data.shard(stake_id).as_ref(),
+        ownership_account.data.actor_state(stake_id).as_ref(),
     )
     .context("ownership account data did not decode as a StakeRecord")?;
     assert_eq!(record.sequencer_key, demo_stake_key);
@@ -262,7 +262,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .send_pub_tx(
             vec![
                 ownership,
-                AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
+                AccountIdentity::PublicNoSign(config_id).select_program_actor_state(stake_id),
             ],
             0,
             unstake_request_message,
@@ -382,7 +382,7 @@ async fn stake_entry(
     let config = sequencer_stake_core::SequencerStakeConfig::from_bytes(
         config_account
             .data
-            .shard(programs::sequencer_stake_account_id())
+            .actor_state(programs::sequencer_stake_account_id())
             .as_ref(),
     )
     .context("config account data did not decode as a SequencerStakeConfig")?;
