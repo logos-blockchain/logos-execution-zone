@@ -590,9 +590,12 @@ impl Scope for WholeScope {
 }
 
 impl PrivateScope {
+    // Each cross message re-enters with the private grants withheld from the public call it
+    // answers; a predicted grant over a private account is never authority.
     fn deliver_predicted_cross_messages(
         &mut self,
         execution: &mut Execution<'_, Self>,
+        withheld: &BTreeSet<AccountId>,
     ) -> Result<(), ExecutionError> {
         let index = self.next_group;
         let cross_messages = self
@@ -605,9 +608,9 @@ impl PrivateScope {
             if !execution.public_actors.contains(&sender) {
                 return Err(ExecutionError::UndeclaredCrossMessageSender { actor: sender });
             }
-            execution.pending.push(Item::Deliver(Box::new(
-                cross_message.with_source(Sender::Call(sender)),
-            )));
+            let mut delivery = execution.disclose(cross_message, Sender::Call(sender));
+            delivery.grants.extend(withheld);
+            execution.pending.push(Item::Deliver(Box::new(delivery)));
         }
         Ok(())
     }
@@ -631,7 +634,7 @@ impl Scope for PrivateScope {
         &mut self,
         execution: &mut Execution<'_, Self>,
     ) -> Result<(), ExecutionError> {
-        self.deliver_predicted_cross_messages(execution)
+        self.deliver_predicted_cross_messages(execution, &BTreeSet::new())
     }
 
     fn deliver_to_public<E: ExecutionEnvironment>(
@@ -645,12 +648,19 @@ impl Scope for PrivateScope {
             .source
             .issuer()
             .expect("only a Call from a private turn crosses into public execution");
-        self.boundary
-            .push(BoundaryStep::EnterPublic(delivery.with_source(program)));
+        self.boundary.push(BoundaryStep::EnterPublic(
+            execution.disclose(&delivery, program),
+        ));
         execution
             .pending
             .push(Item::Resume(PrivateContinuation::ExitPublic));
-        Ok(self.deliver_predicted_cross_messages(execution)?)
+        let withheld = delivery
+            .grants
+            .iter()
+            .copied()
+            .filter(|account_id| execution.is_private(account_id))
+            .collect();
+        Ok(self.deliver_predicted_cross_messages(execution, &withheld)?)
     }
 
     fn deliver_to_private<E: ExecutionEnvironment>(
@@ -981,13 +991,29 @@ impl<'witnesses, S: Scope> Execution<'witnesses, S> {
         }
     }
 
+    fn is_private(&self, account_id: &AccountId) -> bool {
+        matches!(
+            self.accounts.get(account_id),
+            Some(AccountEntry::Private { .. })
+        )
+    }
+
     fn require_private(&self, actor: Actor) -> Result<(), ExecutionError> {
-        match self.accounts.get(&actor.account_id) {
-            Some(AccountEntry::Private { .. }) => Ok(()),
-            Some(AccountEntry::Public { .. }) | None => {
-                Err(ExecutionError::UndeclaredActor { actor })
-            }
+        if self.is_private(&actor.account_id) {
+            Ok(())
+        } else {
+            Err(ExecutionError::UndeclaredActor { actor })
         }
+    }
+
+    // No public handler can observe a grant over a private account, so a boundary or prediction
+    // discloses only the other grants; the private part restores the withheld ones on re-entry.
+    fn disclose<F, T>(&self, delivery: &Delivery<F>, source: T) -> Delivery<T> {
+        let mut disclosed = delivery.with_source(source);
+        disclosed
+            .grants
+            .retain(|account_id| !self.is_private(account_id));
+        disclosed
     }
 
     // A private delivery from a declared public actor is where the execution crosses into a proven
@@ -999,7 +1025,7 @@ impl<'witnesses, S: Scope> Execution<'witnesses, S> {
             .source
             .actor()
             .filter(|sender| self.public_actors.contains(sender))
-            .map(|sender| delivery.with_source(sender))
+            .map(|sender| self.disclose(delivery, sender))
     }
 
     fn process_actor_message<E: ExecutionEnvironment>(

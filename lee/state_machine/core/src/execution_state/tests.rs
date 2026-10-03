@@ -996,7 +996,7 @@ fn a_predicted_cross_message_must_claim_exactly_the_delivered_grants() {
 }
 
 #[test]
-fn a_private_grant_crosses_a_public_actor_and_authorizes_the_return() {
+fn a_withheld_private_grant_authorizes_the_return_through_a_public_actor() {
     let (keys, pda_keys) = (Keys::new(1), Keys::new(2));
     let owner = holder(&keys);
     let seed = PdaSeed::new([5; 32]);
@@ -1014,10 +1014,7 @@ fn a_private_grant_crosses_a_public_actor_and_authorizes_the_return() {
             pda_keys.pda(owner.program_account_id, seed),
         ],
         root(owner),
-        vec![vec![Delivery {
-            grants: BTreeSet::from([custody.account_id]),
-            ..delivery(peer, custody, &[])
-        }]],
+        vec![vec![delivery(peer, custody, &[])]],
         &mut private_script,
     )
     .unwrap();
@@ -1027,10 +1024,7 @@ fn a_private_grant_crosses_a_public_actor_and_authorizes_the_return() {
         vec![(owner, false), (custody, true), (custody, true)]
     );
     let boundary = private_outcome.boundary;
-    assert_eq!(
-        public_calls(&boundary)[0].grants,
-        BTreeSet::from([custody.account_id])
-    );
+    assert!(public_calls(&boundary)[0].grants.is_empty());
 
     let mut public_script = Script::default()
         .on(
