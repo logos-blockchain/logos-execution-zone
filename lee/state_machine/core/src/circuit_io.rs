@@ -100,7 +100,7 @@ pub struct ShadowProgramWitness {
     pub image_id: ProgramId,
 }
 
-/// Inputs for proving an LEE program's execution.
+/// Inputs for proving a transaction's private part.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct ProvingInput {
     pub root: TransactionEntry<StoredMessage>,
