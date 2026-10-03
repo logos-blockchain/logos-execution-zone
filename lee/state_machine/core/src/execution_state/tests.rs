@@ -154,7 +154,7 @@ fn enter(message: &[u8]) -> Call {
     }
 }
 
-fn public(source: AccountId, to: Actor, message: &[u8]) -> Delivery<AccountId> {
+fn delivery<S>(source: S, to: Actor, message: &[u8]) -> Delivery<S> {
     Delivery {
         envelope: MessageEnvelope {
             source,
@@ -297,15 +297,7 @@ fn public_calls(boundary: &[BoundaryStep]) -> Vec<Delivery<AccountId>> {
 // `ENTRY` enters the private holder, whose turn calls `CALLEE`.
 fn nested_cross_messages() -> PredictedCrossMessages {
     vec![
-        vec![Delivery {
-            envelope: MessageEnvelope {
-                source: ENTRY,
-                to: holder(&Keys::new(1)),
-                message: ENTER.to_vec(),
-            },
-            grants: BTreeSet::new(),
-            pda_seeds: Vec::new(),
-        }],
+        vec![delivery(ENTRY, holder(&Keys::new(1)), ENTER)],
         Vec::new(),
     ]
 }
@@ -632,15 +624,7 @@ fn a_private_root_records_its_public_call_and_the_predicted_reply() {
         message: b"credit".to_vec(),
         pda_seeds: Vec::new(),
     };
-    let reply = Delivery {
-        envelope: MessageEnvelope {
-            source: vault,
-            to: owner,
-            message: b"credit".to_vec(),
-        },
-        grants: BTreeSet::new(),
-        pda_seeds: Vec::new(),
-    };
+    let reply = delivery(vault, owner, b"credit");
     let event = ProgramEvent {
         selector: [7; 8],
         data: Vec::new(),
@@ -676,7 +660,7 @@ fn a_private_root_records_its_public_call_and_the_predicted_reply() {
     assert_eq!(
         boundary,
         vec![
-            EnterPublic(public(id(8), vault, b"credit")),
+            EnterPublic(delivery(id(8), vault, b"credit")),
             EnterPrivate(reply),
             ExitPrivate,
             ExitPublic,
@@ -696,7 +680,7 @@ fn a_public_call_made_inside_a_predicted_cross_message_is_bracketed_within_it() 
         boundary,
         vec![
             EnterPrivate(nested_cross_messages()[0][0].clone()),
-            EnterPublic(public(id(8), CALLEE, &[])),
+            EnterPublic(delivery(id(8), CALLEE, &[])),
             ExitPublic,
             ExitPrivate,
         ]
@@ -719,15 +703,7 @@ fn predicted_cross_messages_must_match_the_recorded_public_deliveries() {
             &mut script,
         )
     };
-    let reply = Delivery {
-        envelope: MessageEnvelope {
-            source: stranger,
-            to: holder(&keys),
-            message: Vec::new(),
-        },
-        grants: BTreeSet::new(),
-        pda_seeds: Vec::new(),
-    };
+    let reply = delivery(stranger, holder(&keys), &[]);
 
     assert!(matches!(
         run_private(Vec::new()),
@@ -754,23 +730,10 @@ fn a_private_credential_holds_from_any_origin_beside_a_seed_grant() {
         .on(owner, sending_when(None, vec![send_to(vault)]))
         .on(custody, sending(Vec::new()));
     let predicted = vec![vec![
+        delivery(vault, owner, &[]),
         Delivery {
-            envelope: MessageEnvelope {
-                source: vault,
-                to: owner,
-                message: Vec::new(),
-            },
-            grants: BTreeSet::new(),
-            pda_seeds: Vec::new(),
-        },
-        Delivery {
-            envelope: MessageEnvelope {
-                source: vault,
-                to: custody,
-                message: Vec::new(),
-            },
-            grants: BTreeSet::new(),
             pda_seeds: vec![seed],
+            ..delivery(vault, custody, &[])
         },
     ]];
 
@@ -833,7 +796,7 @@ fn a_public_part_rejects_public_behaviour_that_departs_from_the_boundary() {
 #[test]
 fn a_public_part_runs_a_privately_originated_call_with_its_private_origin() {
     let origin = Some(id(8));
-    let boundary = vec![EnterPublic(public(id(8), ENTRY, &[])), ExitPublic];
+    let boundary = vec![EnterPublic(delivery(id(8), ENTRY, &[])), ExitPublic];
     let mut script = Script::default().on(ENTRY, sending(Vec::new()));
 
     let result = public_part(
@@ -973,13 +936,8 @@ fn relayed_grant(
         root(owner),
         vec![
             vec![Delivery {
-                envelope: MessageEnvelope {
-                    source: vault,
-                    to: relay,
-                    message: ENTER.to_vec(),
-                },
                 grants: predicted_grants,
-                pda_seeds: Vec::new(),
+                ..delivery(vault, relay, ENTER)
             }],
             Vec::new(),
         ],
@@ -1057,13 +1015,8 @@ fn a_private_grant_crosses_a_public_actor_and_authorizes_the_return() {
         ],
         root(owner),
         vec![vec![Delivery {
-            envelope: MessageEnvelope {
-                source: peer,
-                to: custody,
-                message: Vec::new(),
-            },
             grants: BTreeSet::from([custody.account_id]),
-            pda_seeds: Vec::new(),
+            ..delivery(peer, custody, &[])
         }]],
         &mut private_script,
     )
@@ -1161,20 +1114,16 @@ fn a_public_turn_requests_a_private_debit_that_the_private_credential_authorizes
             &[keys.regular(credential)],
             root(requester),
             vec![
-                vec![Delivery {
-                    envelope: MessageEnvelope {
-                        source: requester,
-                        to: payer,
-                        message: borsh::to_vec(&native_token::Message::Transfer {
-                            to: payee.account_id,
-                            amount: 0,
-                            mode: SendMode::Call,
-                        })
-                        .unwrap(),
-                    },
-                    grants: BTreeSet::new(),
-                    pda_seeds: Vec::new(),
-                }],
+                vec![delivery(
+                    requester,
+                    payer,
+                    &borsh::to_vec(&native_token::Message::Transfer {
+                        to: payee.account_id,
+                        amount: 0,
+                        mode: SendMode::Call,
+                    })
+                    .unwrap(),
+                )],
                 Vec::new(),
             ],
             &mut script,
@@ -1183,7 +1132,7 @@ fn a_public_turn_requests_a_private_debit_that_the_private_credential_authorizes
 
     assert_eq!(
         public_calls(&run_private(true).unwrap().boundary)[0],
-        public(
+        delivery(
             native_token::NATIVE_TOKEN_PROGRAM_ID,
             payee,
             &borsh::to_vec(&native_token::Message::Credit(0)).unwrap(),
@@ -1289,7 +1238,7 @@ fn an_output_from_a_private_sender_carries_only_its_programs_provenance() {
 
     assert_eq!(
         public_calls(&private_outcome.boundary),
-        vec![public(holder(&keys).program_account_id, ENTRY, &[])]
+        vec![delivery(holder(&keys).program_account_id, ENTRY, &[])]
     );
 }
 
@@ -1448,7 +1397,7 @@ fn a_private_part_keeps_its_casts_out_of_the_boundary_and_a_public_part_returns_
 
     assert_eq!(
         boundary,
-        vec![EnterPublic(public(id(8), ENTRY, &[])), ExitPublic,]
+        vec![EnterPublic(delivery(id(8), ENTRY, &[])), ExitPublic,]
     );
     assert_eq!(proven_casts, vec![private_cast]);
 
@@ -1521,18 +1470,6 @@ fn completed_c1_then_c2() -> Vec<(MessageData, ActorState)> {
     ]
 }
 
-fn cross_message_from(source: Actor, to: Actor, message: &[u8]) -> Delivery<Actor> {
-    Delivery {
-        envelope: MessageEnvelope {
-            source,
-            to,
-            message: message.to_vec(),
-        },
-        grants: BTreeSet::new(),
-        pda_seeds: Vec::new(),
-    }
-}
-
 #[test]
 fn a_public_sibling_call_sees_the_state_its_earlier_siblings_subtree_left() {
     let (sender, receiver) = (actor(1, 9), actor(2, 9));
@@ -1603,8 +1540,8 @@ fn a_private_sibling_called_from_a_public_turn_sees_the_state_its_earlier_siblin
         &[keys.regular(false)],
         root(sender),
         vec![vec![
-            cross_message_from(sender, receiver, b"c1"),
-            cross_message_from(sender, receiver, b"c2"),
+            delivery(sender, receiver, b"c1"),
+            delivery(sender, receiver, b"c2"),
         ]],
         &mut private_script,
     )
@@ -1733,10 +1670,7 @@ fn a_public_call_without_callbacks_keeps_an_empty_group_before_one_with_callback
 
     assert_eq!(
         predicted_cross_messages,
-        vec![
-            Vec::new(),
-            vec![cross_message_from(replying, owner, b"back")]
-        ]
+        vec![Vec::new(), vec![delivery(replying, owner, b"back")]]
     );
     let boundary = private_part(
         context(vec![quiet, replying]),

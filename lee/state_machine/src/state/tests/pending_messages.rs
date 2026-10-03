@@ -200,11 +200,7 @@ fn a_public_receipt_needs_identity_evidence_for_an_unauthorized_receiver() {
 
 #[test]
 fn a_cast_to_a_private_account_cannot_be_received_publicly() {
-    let keys = test_private_account_keys_1();
-    let private_receiver = Actor::new(
-        AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::ZERO),
-        scripted_id(),
-    );
+    let private_receiver = private_actor();
     let mut state = V03State::new().with_test_programs();
     let record = cast(&mut state, private_receiver);
 
@@ -267,10 +263,7 @@ fn a_designated_public_account_receives_without_identity_evidence() {
 #[test]
 fn a_proven_receipt_settles_only_where_its_record_is_pending() {
     let keys = test_private_account_keys_1();
-    let private_receiver = Actor::new(
-        AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::ZERO),
-        scripted_id(),
-    );
+    let private_receiver = private_actor();
     let empty = V03State::new().with_test_programs();
     let (mut holding, mut replaced) = (empty.clone(), empty.clone());
     let record = cast(&mut holding, private_receiver);
@@ -527,10 +520,7 @@ fn a_proven_receipt_at_a_public_root_needs_identity_evidence_at_settlement() {
 #[test]
 fn a_private_receipt_root_that_calls_a_public_actor_needs_no_identity_evidence() {
     let keys = test_private_account_keys_1();
-    let private_receiver = Actor::new(
-        AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::ZERO),
-        scripted_id(),
-    );
+    let private_receiver = private_actor();
     let mut state = V03State::new().with_test_programs();
     let record = cast_script(
         &mut state,
@@ -609,7 +599,7 @@ fn a_public_receipt_without_identity_evidence_is_rejected_not_charged() {
     assert!(!error.is_chargeable());
 }
 
-fn private_root() -> Actor {
+fn private_actor() -> Actor {
     let keys = test_private_account_keys_1();
     Actor::new(
         AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::ZERO),
@@ -628,7 +618,7 @@ fn proven_casting(
                 &test_private_account_keys_1(),
                 Identifier::ZERO,
             )],
-            ..proving_input(root(private_root(), root_script))
+            ..proving_input(root(private_actor(), root_script))
         },
         &Simulation::default(),
         &scripted_programs(),
