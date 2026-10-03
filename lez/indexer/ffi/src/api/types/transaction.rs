@@ -1132,7 +1132,7 @@ mod tests {
             grants: vec![account_id(5)],
             pda_seeds: vec![PdaSeed([6; 32])],
         };
-        let crossing = Delivery {
+        let cross_message = Delivery {
             envelope: MessageEnvelope {
                 source: actor(7, 8),
                 to: actor(9, 10),
@@ -1150,7 +1150,7 @@ mod tests {
             },
             FfiBoundaryStep {
                 kind: FfiBoundaryStepKind::EnterPrivate,
-                private_delivery: crossing.clone().into(),
+                private_delivery: cross_message.clone().into(),
                 ..zeroed()
             },
             FfiBoundaryStep {
@@ -1167,7 +1167,7 @@ mod tests {
             steps.map(BoundaryStep::from),
             [
                 BoundaryStep::EnterPublic(delivery),
-                BoundaryStep::EnterPrivate(crossing),
+                BoundaryStep::EnterPrivate(cross_message),
                 BoundaryStep::ExitPrivate,
                 BoundaryStep::ExitPublic,
             ]

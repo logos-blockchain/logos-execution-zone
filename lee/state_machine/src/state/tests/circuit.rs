@@ -462,7 +462,7 @@ fn prove_public_outputs(
 ) -> (PrivacyPreservingCircuitOutput, Proof) {
     let keys = test_private_account_keys_1();
     // Assumes each public output delivers nothing back, without running it.
-    execute_and_prove_with_crossings(
+    execute_and_prove_with_cross_messages(
         ProvingInput {
             context: PublicExecutionContext::new(public_actors, signers),
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],

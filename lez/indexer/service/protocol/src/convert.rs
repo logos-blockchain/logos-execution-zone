@@ -511,8 +511,8 @@ impl From<lee_core::execution_state::BoundaryStep> for BoundaryStep {
             lee_core::execution_state::BoundaryStep::EnterPublic(delivery) => {
                 Self::EnterPublic(delivery.into())
             }
-            lee_core::execution_state::BoundaryStep::EnterPrivate(crossing) => {
-                Self::EnterPrivate(crossing.into())
+            lee_core::execution_state::BoundaryStep::EnterPrivate(cross_message) => {
+                Self::EnterPrivate(cross_message.into())
             }
             lee_core::execution_state::BoundaryStep::ExitPrivate => Self::ExitPrivate,
             lee_core::execution_state::BoundaryStep::ExitPublic => Self::ExitPublic,
@@ -524,7 +524,7 @@ impl From<BoundaryStep> for lee_core::execution_state::BoundaryStep {
     fn from(value: BoundaryStep) -> Self {
         match value {
             BoundaryStep::EnterPublic(delivery) => Self::EnterPublic(delivery.into()),
-            BoundaryStep::EnterPrivate(crossing) => Self::EnterPrivate(crossing.into()),
+            BoundaryStep::EnterPrivate(cross_message) => Self::EnterPrivate(cross_message.into()),
             BoundaryStep::ExitPrivate => Self::ExitPrivate,
             BoundaryStep::ExitPublic => Self::ExitPublic,
         }
@@ -571,7 +571,7 @@ impl From<lee_core::PrivateAction> for PrivateAction {
 impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPreservingMessage {
     fn from(value: lee::privacy_preserving_transaction::message::Message) -> Self {
         let lee::privacy_preserving_transaction::message::Message {
-            execution:
+            instance:
                 lee_core::PrivacyPreservingCircuitOutput {
                     context,
                     boundary,
@@ -632,7 +632,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
         let private_actions = private_actions.into_iter().map(Into::into).collect();
 
         Ok(Self {
-            execution: lee_core::PrivacyPreservingCircuitOutput {
+            instance: lee_core::PrivacyPreservingCircuitOutput {
                 context: context.into(),
                 boundary: boundary.into_iter().map(Into::into).collect(),
                 casts: casts.into_iter().map(Into::into).collect(),
@@ -1358,7 +1358,7 @@ mod tests {
             pda_seeds: vec![],
         };
         let message = lee::privacy_preserving_transaction::message::Message {
-            execution: lee_core::PrivacyPreservingCircuitOutput {
+            instance: lee_core::PrivacyPreservingCircuitOutput {
                 context: lee_core::execution_state::PublicExecutionContext::default(),
                 boundary: vec![
                     lee_core::execution_state::BoundaryStep::EnterPublic(repeated.clone()),

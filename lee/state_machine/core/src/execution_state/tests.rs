@@ -231,12 +231,12 @@ fn private_part(
     context: PublicExecutionContext,
     witnesses: &[PrivateWitness],
     entry: TransactionEntry<StoredMessage>,
-    predicted_crossings: Vec<Vec<Delivery<Actor>>>,
+    predicted_cross_messages: PredictedCrossMessages,
     script: &mut Script,
 ) -> Result<PrivatePartOutcome, ExecutionError> {
     let runs_publicly = context.actors.contains(&entry.destination());
     let root = (!runs_publicly).then_some(entry);
-    PrivatePart::new(context, root, witnesses, predicted_crossings)?.execute(script)
+    PrivatePart::new(context, root, witnesses, predicted_cross_messages)?.execute(script)
 }
 
 fn public_part(
@@ -299,7 +299,7 @@ fn public_calls(boundary: &[BoundaryStep]) -> Vec<Delivery<AccountId>> {
 }
 
 // `ENTRY` enters the private holder, whose turn calls `CALLEE`.
-fn nested_crossings() -> Vec<Vec<Delivery<Actor>>> {
+fn nested_cross_messages() -> PredictedCrossMessages {
     vec![
         vec![Delivery {
             envelope: MessageEnvelope {
@@ -325,13 +325,13 @@ fn nested_public(script: Script, entry_sends: Vec<Call>) -> Script {
         .on(BYSTANDER, sending(Vec::new()))
 }
 
-fn record_nested(predicted_crossings: Vec<Vec<Delivery<Actor>>>) -> (Boundary, Script) {
+fn record_nested(predicted_cross_messages: PredictedCrossMessages) -> (Boundary, Script) {
     let mut script = nested_private();
     let outcome = private_part(
         context(vec![ENTRY, CALLEE, BYSTANDER]),
         &[Keys::new(1).regular(false)],
         root(ENTRY),
-        predicted_crossings,
+        predicted_cross_messages,
         &mut script,
     )
     .unwrap();
@@ -690,13 +690,13 @@ fn a_private_root_records_its_public_call_and_the_predicted_reply() {
 }
 
 #[test]
-fn a_public_call_made_inside_a_predicted_crossing_is_bracketed_within_it() {
-    let (boundary, script) = record_nested(nested_crossings());
+fn a_public_call_made_inside_a_predicted_cross_message_is_bracketed_within_it() {
+    let (boundary, script) = record_nested(nested_cross_messages());
 
     assert_eq!(
         boundary,
         vec![
-            EnterPrivate(nested_crossings()[0][0].clone()),
+            EnterPrivate(nested_cross_messages()[0][0].clone()),
             EnterPublic(public(id(8), CALLEE, &[])),
             ExitPublic,
             ExitPrivate,
@@ -706,17 +706,17 @@ fn a_public_call_made_inside_a_predicted_crossing_is_bracketed_within_it() {
 }
 
 #[test]
-fn predicted_crossings_must_match_the_recorded_public_deliveries() {
+fn predicted_cross_messages_must_match_the_recorded_public_deliveries() {
     let keys = Keys::new(1);
     let vault = actor(2, 9);
     let stranger = actor(5, 9);
-    let record = |predicted_crossings: Vec<Vec<Delivery<Actor>>>| {
+    let record = |predicted_cross_messages: PredictedCrossMessages| {
         let mut script = Script::default().on(holder(&keys), sending(vec![send_to(vault)]));
         private_part(
             context(vec![vault]),
             &[keys.regular(false)],
             root(holder(&keys)),
-            predicted_crossings,
+            predicted_cross_messages,
             &mut script,
         )
     };
@@ -732,15 +732,15 @@ fn predicted_crossings_must_match_the_recorded_public_deliveries() {
 
     assert!(matches!(
         record(Vec::new()),
-        Err(ExecutionError::MissingPredictedCrossings { index: 0 })
+        Err(ExecutionError::MissingPredictedCrossMessages { index: 0 })
     ));
     assert!(matches!(
         record(vec![Vec::new(), Vec::new()]),
-        Err(ExecutionError::UnusedPredictedCrossings)
+        Err(ExecutionError::UnusedPredictedCrossMessages)
     ));
     assert!(matches!(
         record(vec![vec![reply]]),
-        Err(ExecutionError::UndeclaredCrossingSender { actor: sender }) if sender == stranger
+        Err(ExecutionError::UndeclaredCrossMessageSender { actor: sender }) if sender == stranger
     ));
 }
 
@@ -792,7 +792,7 @@ fn a_private_credential_holds_from_any_origin_beside_a_seed_grant() {
 
 #[test]
 fn a_check_replays_the_public_side_of_a_recorded_statement() {
-    let (boundary, _) = record_nested(nested_crossings());
+    let (boundary, _) = record_nested(nested_cross_messages());
 
     let (result, script) = check_nested(boundary, vec![enter(ENTER), send_to(BYSTANDER)]);
 
@@ -809,7 +809,7 @@ fn a_check_replays_the_public_side_of_a_recorded_statement() {
 
 #[test]
 fn a_check_rejects_public_behaviour_that_departs_from_the_statement() {
-    let boundary = record_nested(nested_crossings()).0;
+    let boundary = record_nested(nested_cross_messages()).0;
     let checked = |sends: Vec<Call>| check_nested(boundary.clone(), sends).0;
     let truncated = boundary[..1].to_vec();
 
@@ -819,7 +819,7 @@ fn a_check_rejects_public_behaviour_that_departs_from_the_statement() {
     ));
     assert!(matches!(
         checked(vec![enter(b"other")]),
-        Err(ExecutionError::CrossingMismatch { index: 0 })
+        Err(ExecutionError::CrossMessageMismatch { index: 0 })
     ));
     assert!(matches!(
         checked(vec![enter(ENTER), enter(ENTER)]),
@@ -998,13 +998,13 @@ fn a_public_grant_crosses_a_private_relay_and_authorizes_the_reply() {
 }
 
 #[test]
-fn a_predicted_crossing_must_claim_exactly_the_delivered_grants() {
+fn a_predicted_cross_message_must_claim_exactly_the_delivered_grants() {
     let sibling = public_pda(ENTRY.program_account_id, PdaSeed::new([6; 32]));
 
     for claimed in [BTreeSet::from([sibling.account_id]), BTreeSet::new()] {
         assert!(matches!(
             relayed_grant(claimed).0,
-            Err(ExecutionError::CrossingMismatch { index: 0 })
+            Err(ExecutionError::CrossMessageMismatch { index: 0 })
         ));
     }
 }
@@ -1230,17 +1230,17 @@ fn a_derived_statement_records_and_checks_a_nested_mixed_graph() {
     let entry_sends = vec![enter(ENTER), send_to(BYSTANDER)];
     let mut deriving = nested_public(nested_private(), entry_sends.clone());
 
-    let predicted_crossings = whole(
+    let predicted_cross_messages = whole(
         context(vec![ENTRY, CALLEE, BYSTANDER]),
         &[Keys::new(1).regular(false)],
         root(ENTRY),
         &mut deriving,
     )
     .unwrap()
-    .predicted_crossings;
+    .predicted_cross_messages;
 
-    assert_eq!(predicted_crossings, nested_crossings());
-    let (boundary, _) = record_nested(predicted_crossings);
+    assert_eq!(predicted_cross_messages, nested_cross_messages());
+    let (boundary, _) = record_nested(predicted_cross_messages);
     assert!(check_nested(boundary, entry_sends).0.is_ok());
 }
 
@@ -1265,8 +1265,9 @@ fn an_output_from_a_private_sender_carries_only_its_programs_provenance() {
 }
 
 #[test]
-fn a_live_delivery_from_another_actor_of_the_same_program_does_not_satisfy_a_predicted_crossing() {
-    let (boundary, _) = record_nested(nested_crossings());
+fn a_live_delivery_from_another_actor_of_the_same_program_does_not_satisfy_a_predicted_cross_message()
+ {
+    let (boundary, _) = record_nested(nested_cross_messages());
     let mut script = nested_public(Script::default(), vec![send_to(BYSTANDER)])
         .on(BYSTANDER, sending(vec![enter(ENTER)]));
     assert_eq!(BYSTANDER.program_account_id, ENTRY.program_account_id);
@@ -1280,7 +1281,7 @@ fn a_live_delivery_from_another_actor_of_the_same_program_does_not_satisfy_a_pre
 
     assert!(matches!(
         result,
-        Err(ExecutionError::CrossingMismatch { index: 0 })
+        Err(ExecutionError::CrossMessageMismatch { index: 0 })
     ));
 }
 
@@ -1491,7 +1492,7 @@ fn completed_c1_then_c2() -> Vec<(MessageData, ActorState)> {
     ]
 }
 
-fn crossing_from(source: Actor, to: Actor, message: &[u8]) -> Delivery<Actor> {
+fn cross_message_from(source: Actor, to: Actor, message: &[u8]) -> Delivery<Actor> {
     Delivery {
         envelope: MessageEnvelope {
             source,
@@ -1573,8 +1574,8 @@ fn a_private_sibling_called_from_a_public_turn_sees_the_state_its_earlier_siblin
         &[keys.regular(false)],
         root(sender),
         vec![vec![
-            crossing_from(sender, receiver, b"c1"),
-            crossing_from(sender, receiver, b"c2"),
+            cross_message_from(sender, receiver, b"c1"),
+            cross_message_from(sender, receiver, b"c2"),
         ]],
         &mut recording,
     )
@@ -1609,19 +1610,19 @@ fn a_public_subtree_entered_from_c1_finishes_before_c2_in_every_part() {
     let actors = vec![sender, crossed, descendant];
     let mut simulating = scripted();
 
-    let predicted_crossings = whole(
+    let predicted_cross_messages = whole(
         context(actors.clone()),
         &[keys.regular(false)],
         root(sender),
         &mut simulating,
     )
     .unwrap()
-    .predicted_crossings;
+    .predicted_cross_messages;
     let boundary = private_part(
         context(actors.clone()),
         &[keys.regular(false)],
         root(sender),
-        predicted_crossings,
+        predicted_cross_messages,
         &mut scripted(),
     )
     .unwrap()
@@ -1686,24 +1687,27 @@ fn a_public_call_without_callbacks_keeps_an_empty_group_before_one_with_callback
             .on(replying, sending(vec![call_with(owner, b"back")]))
     };
 
-    let predicted_crossings = whole(
+    let predicted_cross_messages = whole(
         context(vec![quiet, replying]),
         &[keys.regular(false)],
         root(owner),
         &mut scripted(),
     )
     .unwrap()
-    .predicted_crossings;
+    .predicted_cross_messages;
 
     assert_eq!(
-        predicted_crossings,
-        vec![Vec::new(), vec![crossing_from(replying, owner, b"back")]]
+        predicted_cross_messages,
+        vec![
+            Vec::new(),
+            vec![cross_message_from(replying, owner, b"back")]
+        ]
     );
     let boundary = private_part(
         context(vec![quiet, replying]),
         &[keys.regular(false)],
         root(owner),
-        predicted_crossings,
+        predicted_cross_messages,
         &mut scripted(),
     )
     .unwrap()

@@ -303,14 +303,14 @@ impl ValidatedStateDiff {
         timestamp: Timestamp,
     ) -> Result<Self, LeeError> {
         let message = &tx.message;
-        let execution = &message.execution;
+        let instance = &message.instance;
         let witness_set = &tx.witness_set;
-        let commitments = execution.commitments();
-        let nullifiers = execution.nullifiers();
+        let commitments = instance.commitments();
+        let nullifiers = instance.nullifiers();
 
         // 1. Commitments or nullifiers are non empty
         ensure!(
-            !execution.private_actions.is_empty(),
+            !instance.private_actions.is_empty(),
             LeeError::InvalidInput(
                 "Empty commitments and empty nullifiers found in message".into(),
             )
@@ -363,19 +363,19 @@ impl ValidatedStateDiff {
 
         ensure!(
             signer_account_ids.iter().copied().collect::<BTreeSet<_>>()
-                == execution.context.authorized_accounts,
+                == instance.context.authorized_accounts,
             LeeError::InvalidInput("Authorized accounts do not match the signers".into())
         );
 
         // Verify validity window
         ensure!(
-            execution.block_validity_window.is_valid_for(block_id)
-                && execution.timestamp_validity_window.is_valid_for(timestamp),
+            instance.block_validity_window.is_valid_for(block_id)
+                && instance.timestamp_validity_window.is_valid_for(timestamp),
             LeeError::OutOfValidityWindow
         );
 
         // 4. Proof verification
-        check_privacy_preserving_circuit_proof_is_valid(state, &witness_set.proof, execution)?;
+        check_privacy_preserving_circuit_proof_is_valid(state, &witness_set.proof, instance)?;
 
         // 5. Commitment freshness
         state.check_commitments_are_new(&commitments)?;
@@ -384,7 +384,7 @@ impl ValidatedStateDiff {
         state.check_nullifiers_are_valid(&nullifiers)?;
 
         // 7. Entry: a public root runs here; a cast entry consumes its pending message either way.
-        let (root, consumed) = match execution.entry.clone() {
+        let (root, consumed) = match instance.entry.clone() {
             None => (None, None),
             Some(TransactionEntry::Call { to, message: data }) => {
                 (Some(TransactionEntry::Call { to, message: data }), None)
@@ -393,10 +393,10 @@ impl ValidatedStateDiff {
                 let record = admit_pending_message(
                     state,
                     reference,
-                    &execution.context,
+                    &instance.context,
                     &identity_account_ids(&message.identities),
                 )?;
-                let runs_publicly = execution.context.actors.contains(&record.body.to);
+                let runs_publicly = instance.context.actors.contains(&record.body.to);
                 (
                     runs_publicly.then(|| TransactionEntry::Cast(record.clone())),
                     Some(reference),
@@ -404,7 +404,7 @@ impl ValidatedStateDiff {
             }
         };
 
-        let request = PublicPart::new(execution.context.clone(), root, execution.boundary.clone())
+        let request = PublicPart::new(instance.context.clone(), root, instance.boundary.clone())
             .map_err(|error| LeeError::InvalidInput(error.to_string()))?;
         let mut cycles_used = 0;
         let mut settled = settle(
@@ -416,7 +416,7 @@ impl ValidatedStateDiff {
             &mut cycles_used,
         )?;
         // The proven private Casts follow the live public ones.
-        settled.published.extend(execution.casts.iter().cloned());
+        settled.published.extend(instance.casts.iter().cloned());
         let new_nullifiers = nullifiers.iter().map(|(nullifier, _)| *nullifier).collect();
 
         Ok(Self(StateDiff {
@@ -620,14 +620,14 @@ fn authenticate_public_transaction_signers(
 fn check_privacy_preserving_circuit_proof_is_valid(
     state: &V03State,
     proof: &Proof,
-    execution: &PrivacyPreservingCircuitOutput,
+    instance: &PrivacyPreservingCircuitOutput,
 ) -> Result<(), LeeError> {
     // Anchor each `Disclosed` claim to real chain state, reconstructing it independently rather
     // than trusting the message's own claim — a wrong claim means the reconstructed journal won't
     // match what the receipt actually committed to, so `proof.is_valid_for` fails below.
     // `Undisclosed`'s membership check already happened in-circuit; the one thing left to check
     // here is that its `root` is one the commitment tree has actually had.
-    let program_image_claims = execution
+    let program_image_claims = instance
         .program_image_claims
         .iter()
         .map(|claim| match claim {
@@ -652,7 +652,7 @@ fn check_privacy_preserving_circuit_proof_is_valid(
 
     let output = PrivacyPreservingCircuitOutput {
         program_image_claims,
-        ..execution.clone()
+        ..instance.clone()
     };
     proof
         .is_valid_for(&output)

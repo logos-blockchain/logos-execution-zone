@@ -3,10 +3,10 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
     Nullifier, NullifierPublicKey, NullifierSecretKey,
-    account::{Account, AccountId, Actor},
+    account::{Account, AccountId},
     compute_digest_for_path,
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
-    execution_state::{Boundary, Delivery, PublicExecutionContext, TransactionEntry},
+    execution_state::{Boundary, PredictedCrossMessages, PublicExecutionContext, TransactionEntry},
     program::{
         BlockValidityWindow, MessageBody, MessageRef, PdaSeed, ProgramHeader, ProgramId, Response,
         StoredMessage, TimestampValidityWindow, immutable_mirror_commitment,
@@ -146,7 +146,7 @@ pub struct PrivacyPreservingCircuitInput {
     /// Identities of every shadow program invoked in the call graph.
     pub shadow_program_witnesses: Vec<ShadowProgramWitness>,
     pub responses: Vec<Response>,
-    pub predicted_crossings: Vec<Vec<Delivery<Actor>>>,
+    pub predicted_cross_messages: PredictedCrossMessages,
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]

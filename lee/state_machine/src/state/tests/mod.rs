@@ -28,7 +28,7 @@ use test_guest_core::{ForgeField, Script};
 use crate::{
     ProvingInput, PublicExecutionContext, PublicKey, PublicTransaction, Simulation, V03State,
     error::{InvalidProgramBehaviorError, LeeError},
-    execute_and_prove, execute_and_prove_with_crossings,
+    execute_and_prove, execute_and_prove_with_cross_messages,
     privacy_preserving_transaction::{
         PrivacyPreservingTransaction,
         circuit::{ProgramCatalog, Proof},

@@ -69,7 +69,7 @@ impl NestedBoundary {
     fn prove(outer_script: &Script) -> Self {
         let keys = test_private_account_keys_1();
         let (outer, inner) = nested_actors();
-        let proven = execute_and_prove_with_crossings(
+        let proven = execute_and_prove_with_cross_messages(
             ProvingInput {
                 context: PublicExecutionContext::new(vec![outer, inner], []),
                 private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
@@ -121,7 +121,7 @@ fn transition_from_privacy_preserving_transaction_shielded() {
         this
     };
 
-    let [expected_new_commitment] = tx.message().execution.commitments().try_into().unwrap();
+    let [expected_new_commitment] = tx.message().instance.commitments().try_into().unwrap();
     assert!(!state.private_state.0.contains(&expected_new_commitment));
 
     state
@@ -257,7 +257,7 @@ fn privacy_tampered_epk_is_rejected() {
     );
 
     // Flip a byte of the first note's epk
-    tx.message.execution.private_actions[0]
+    tx.message.instance.private_actions[0]
         .encrypted_post_state
         .epk
         .0[0] ^= 0xFF;
@@ -286,7 +286,7 @@ fn privacy_tampered_view_tag_is_rejected() {
     );
 
     // Flip the first note's view_tag
-    tx.message.execution.private_actions[0]
+    tx.message.instance.private_actions[0]
         .encrypted_post_state
         .view_tag ^= 0xFF;
 
@@ -329,7 +329,7 @@ fn a_journal_claiming_an_unsigned_account_authorized_is_rejected() {
     ));
 
     // Dropping the claim to match the missing signature detaches the statement from its proof.
-    message.execution.context.authorized_accounts.clear();
+    message.instance.context.authorized_accounts.clear();
     let unclaimed = PrivacyPreservingTransaction::new(
         message.clone(),
         WitnessSet::for_message(&message, witness_set.proof, &[]),
@@ -366,7 +366,7 @@ fn a_tampered_boundary_output_is_rejected() {
         "the unmodified transfer must verify"
     );
 
-    let BoundaryStep::EnterPublic(delivery) = &mut tx.message.execution.boundary[0] else {
+    let BoundaryStep::EnterPublic(delivery) = &mut tx.message.instance.boundary[0] else {
         panic!("the transfer's boundary opens with its public call");
     };
     delivery.envelope.message[0] ^= 0xFF;
@@ -525,7 +525,7 @@ fn an_unauthorized_public_debit_proves_but_is_refused_at_settlement() {
     let mut state = V03State::new().with_public_account_balances([(sender_id, 100)]);
 
     // An honest prover would refuse the debit; this one assumes its credit without running it.
-    let proven = execute_and_prove_with_crossings(
+    let proven = execute_and_prove_with_cross_messages(
         ProvingInput {
             context: PublicExecutionContext::new(vec![sender], []),
             private_witnesses: vec![init_witness(&recipient_keys, Identifier::ZERO)],
@@ -645,7 +645,7 @@ fn assert_forged_field_is_refused(forge_field: ForgeField) {
     let forger = Actor::new(AccountId::new([77; 32]), program_id);
 
     // The prover assumes the forger delivers nothing back, without running it.
-    let proven = execute_and_prove_with_crossings(
+    let proven = execute_and_prove_with_cross_messages(
         root.proving_input(&Script::default().call(forger, &forge_field), vec![forger]),
         vec![Vec::new()],
         &synthetic_program(crate::test_methods::scripted()),
@@ -718,7 +718,7 @@ fn a_nested_boundary_settles_both_public_writes() {
     let mut nested = NestedBoundary::prove(&outer_turn(&inner_turn()));
 
     assert!(matches!(
-        nested.tx.message.execution.boundary.as_slice(),
+        nested.tx.message.instance.boundary.as_slice(),
         [
             BoundaryStep::EnterPrivate(_),
             BoundaryStep::EnterPublic(_),
@@ -746,7 +746,7 @@ fn a_nested_boundary_settles_both_public_writes() {
 }
 
 #[test]
-fn a_tampered_crossing_or_public_root_is_rejected() {
+fn a_tampered_cross_message_or_public_root_is_rejected() {
     use crate::validated_state_diff::ValidatedStateDiff;
 
     let nested = NestedBoundary::prove(&outer_turn(&inner_turn()));
@@ -757,20 +757,21 @@ fn a_tampered_crossing_or_public_root_is_rejected() {
         verify(&nested.tx).is_ok(),
         "the unmodified statement must verify"
     );
-    let mut crossing_tampered = nested.tx.clone();
-    let BoundaryStep::EnterPrivate(crossing) = &mut crossing_tampered.message.execution.boundary[0]
+    let mut cross_message_tampered = nested.tx.clone();
+    let BoundaryStep::EnterPrivate(cross_message) =
+        &mut cross_message_tampered.message.instance.boundary[0]
     else {
         panic!("the nested boundary opens by entering the private turn");
     };
-    crossing.envelope.message[0] ^= 0xFF;
+    cross_message.envelope.message[0] ^= 0xFF;
     let mut root_tampered = nested.tx.clone();
-    let Some(TransactionEntry::Call { message, .. }) = &mut root_tampered.message.execution.entry
+    let Some(TransactionEntry::Call { message, .. }) = &mut root_tampered.message.instance.entry
     else {
         panic!("the nested statement starts with a public call");
     };
     message[0] ^= 0xFF;
 
-    for tampered in [crossing_tampered, root_tampered] {
+    for tampered in [cross_message_tampered, root_tampered] {
         assert!(matches!(
             verify(&tampered),
             Err(LeeError::InvalidPrivacyPreservingProof)
@@ -779,7 +780,7 @@ fn a_tampered_crossing_or_public_root_is_rejected() {
 }
 
 #[test]
-fn a_public_turn_departing_from_its_predicted_crossing_is_rejected_and_applies_nothing() {
+fn a_public_turn_departing_from_its_predicted_cross_message_is_rejected_and_applies_nothing() {
     // The outer turn's live script delivers something other than the assumed message.
     let mut nested = NestedBoundary::prove(
         &outer_turn(&Script::default()).cast(nested_actors().1, &Script::default()),
@@ -793,7 +794,7 @@ fn a_public_turn_departing_from_its_predicted_crossing_is_rejected_and_applies_n
     assert!(
         matches!(
             execution_error(result),
-            ExecutionError::CrossingMismatch { index: 0 }
+            ExecutionError::CrossMessageMismatch { index: 0 }
         ),
         "the live delivery must be checked against the assumed one"
     );
@@ -801,7 +802,7 @@ fn a_public_turn_departing_from_its_predicted_crossing_is_rejected_and_applies_n
     assert!(
         nested
             .state
-            .get_proof_for_commitment(&nested.tx.message.execution.commitments()[0])
+            .get_proof_for_commitment(&nested.tx.message.instance.commitments()[0])
             .is_none()
     );
     assert!(nested.state.pending_messages_from(0).next().is_none());

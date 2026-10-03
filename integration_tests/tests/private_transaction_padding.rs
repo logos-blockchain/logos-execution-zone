@@ -38,12 +38,12 @@ async fn private_transaction_pads_notes_to_max() -> Result<()> {
 
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
 
-    assert_eq!(tx.message.execution.private_actions.len(), 7);
+    assert_eq!(tx.message.instance.private_actions.len(), 7);
 
     let expected = usize::try_from(CIPHERTEXT_PAD_SIZE).expect("pad size fits in usize");
     let lengths: Vec<usize> = tx
         .message
-        .execution
+        .instance
         .private_actions
         .iter()
         .map(|action| action.encrypted_post_state.ciphertext.as_bytes().len())

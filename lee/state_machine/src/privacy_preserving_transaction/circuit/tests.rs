@@ -1008,7 +1008,7 @@ fn direct_input(
         program_image_witnesses: claims_for(claims),
         shadow_program_witnesses: Vec::new(),
         responses,
-        predicted_crossings: Vec::new(),
+        predicted_cross_messages: Vec::new(),
     }
 }
 

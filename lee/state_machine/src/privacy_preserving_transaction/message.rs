@@ -11,7 +11,7 @@ const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 
 #[derive(Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
-    pub execution: PrivacyPreservingCircuitOutput,
+    pub instance: PrivacyPreservingCircuitOutput,
     pub nonces: Vec<Nonce>,
     pub identities: Vec<PublicIdentity>,
 }
@@ -24,8 +24,8 @@ impl std::fmt::Debug for Message {
                 write!(f, "{}", hex::encode(self.0))
             }
         }
-        let execution = &self.execution;
-        let private_actions: Vec<_> = execution
+        let instance = &self.instance;
+        let private_actions: Vec<_> = instance
             .private_actions
             .iter()
             .map(|a| {
@@ -38,17 +38,17 @@ impl std::fmt::Debug for Message {
             })
             .collect();
         f.debug_struct("Message")
-            .field("context", &execution.context)
-            .field("boundary", &execution.boundary)
-            .field("casts", &execution.casts)
-            .field("entry", &execution.entry)
+            .field("context", &instance.context)
+            .field("boundary", &instance.boundary)
+            .field("casts", &instance.casts)
+            .field("entry", &instance.entry)
             .field("private_actions", &private_actions)
-            .field("block_validity_window", &execution.block_validity_window)
+            .field("block_validity_window", &instance.block_validity_window)
             .field(
                 "timestamp_validity_window",
-                &execution.timestamp_validity_window,
+                &instance.timestamp_validity_window,
             )
-            .field("program_image_claims", &execution.program_image_claims)
+            .field("program_image_claims", &instance.program_image_claims)
             .field("nonces", &self.nonces)
             .field("identities", &self.identities)
             .finish()
@@ -59,10 +59,10 @@ impl Message {
     #[must_use]
     pub const fn from_circuit_output(
         nonces: Vec<Nonce>,
-        execution: PrivacyPreservingCircuitOutput,
+        instance: PrivacyPreservingCircuitOutput,
     ) -> Self {
         Self {
-            execution,
+            instance,
             nonces,
             identities: Vec::new(),
         }
@@ -71,7 +71,7 @@ impl Message {
     #[must_use]
     pub fn public_account_ids(&self) -> Vec<AccountId> {
         let mut seen = HashSet::new();
-        self.execution
+        self.instance
             .context
             .actors
             .iter()
@@ -143,7 +143,7 @@ pub mod tests {
         let nullifier = Nullifier::for_account_update(&old_commitment, &nsk1);
 
         Message {
-            execution: PrivacyPreservingCircuitOutput {
+            instance: PrivacyPreservingCircuitOutput {
                 context: PublicExecutionContext::default(),
                 boundary: Boundary::default(),
                 casts: Vec::new(),
@@ -172,7 +172,7 @@ pub mod tests {
         let public = Actor::new(AccountId::new([5; 32]), AccountId::new([6; 32]));
         let private = Actor::new(AccountId::new([9; 32]), AccountId::new([8; 32]));
         let message = Message {
-            execution: PrivacyPreservingCircuitOutput {
+            instance: PrivacyPreservingCircuitOutput {
                 context: PublicExecutionContext {
                     actors: vec![public],
                     authorized_accounts: BTreeSet::from([AccountId::new([7; 32])]),

@@ -195,13 +195,13 @@ impl Amm<'_> {
         }
         let message = Program::serialize_message(&transfer).expect("Message should serialize");
         if accounts.iter().any(|mention| mention.identity.is_private()) {
-            let predicted_crossings = terms.promised_payout(&accounts)?;
+            let predicted_cross_messages = terms.promised_payout(&accounts)?;
             self.0
-                .send_privacy_preserving_tx_with_crossings(
+                .send_privacy_preserving_tx_with_cross_messages(
                     accounts,
                     0,
                     message,
-                    predicted_crossings,
+                    predicted_cross_messages,
                     &amm_with_token_dependency(),
                 )
                 .await
@@ -413,7 +413,7 @@ impl SwapTerms {
     fn promised_payout(
         &self,
         accounts: &[AccountMention],
-    ) -> Result<Vec<Vec<lee::Delivery<Actor>>>, ExecutionFailureKind> {
+    ) -> Result<lee::PredictedCrossMessages, ExecutionFailureKind> {
         let amount_out = match self.request {
             Request::Offer { amount_out } => amount_out,
             Request::ExactInput {

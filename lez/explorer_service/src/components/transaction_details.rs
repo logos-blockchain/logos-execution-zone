@@ -136,11 +136,13 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
         .join(", ");
     // The public actors the private execution called, and those that called into it.
     let mut delivery_receivers = Vec::new();
-    let mut crossing_senders = Vec::new();
+    let mut cross_message_senders = Vec::new();
     for step in boundary {
         match step {
             BoundaryStep::EnterPublic(delivery) => delivery_receivers.push(delivery.envelope.to),
-            BoundaryStep::EnterPrivate(crossing) => crossing_senders.push(crossing.envelope.source),
+            BoundaryStep::EnterPrivate(cross_message) => {
+                cross_message_senders.push(cross_message.envelope.source);
+            }
             BoundaryStep::ExitPrivate | BoundaryStep::ExitPublic => {}
         }
     }
@@ -200,7 +202,7 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
             <ActorList actors=delivery_receivers />
 
             <h3>"Boundary Private Deliveries"</h3>
-            <ActorList actors=crossing_senders />
+            <ActorList actors=cross_message_senders />
         </div>
     }
 }

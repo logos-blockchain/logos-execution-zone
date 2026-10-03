@@ -30,7 +30,7 @@ const OFFER_OUT: u128 = 75;
 
 // Vault B's payout into the output note, the one delivery the proof assumes of public execution,
 // made under the pool's grant of vault B: promised whatever the pool's price is at preparation.
-fn predicted_payout(pool: &PoolFixture, trader: &Trader) -> Vec<Vec<lee::Delivery<Actor>>> {
+fn predicted_payout(pool: &PoolFixture, trader: &Trader) -> lee::PredictedCrossMessages {
     let vault_b = Actor::new(pool.vault_b, token_program_id());
     let payout = token_core::Message::Transfer {
         to: trader.output,

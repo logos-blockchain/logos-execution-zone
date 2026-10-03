@@ -19,8 +19,8 @@ use common::{HashType, block::Block, transaction::LeeTransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
-    Account, AccountId, Delivery, PrivacyPreservingTransaction, ProgramId, ProvingInput,
-    PublicExecutionContext, PublicIdentity, Simulation,
+    Account, AccountId, PredictedCrossMessages, PrivacyPreservingTransaction, ProgramId,
+    ProvingInput, PublicExecutionContext, PublicIdentity, Simulation,
     privacy_preserving_transaction::{
         circuit::ProgramCatalog,
         message::{EncryptedAccountData, Message},
@@ -775,7 +775,7 @@ impl WalletCore {
         tx: &lee::privacy_preserving_transaction::PrivacyPreservingTransaction,
         acc_decode_mask: &[AccDecodeData],
     ) -> Result<()> {
-        let note_count = tx.message.execution.private_actions.len();
+        let note_count = tx.message.instance.private_actions.len();
         anyhow::ensure!(
             note_count >= acc_decode_mask.len(),
             "Decode mask has {} entries but the transaction has {note_count} notes",
@@ -898,15 +898,15 @@ impl WalletCore {
             .await
     }
 
-    // Proves under `predicted_crossings` instead of deriving them from current public state: a
+    // Proves under `predicted_cross_messages` instead of deriving them from current public state: a
     // conditional promise, such as a fixed offer's payout, that settlement checks against live
     // execution.
-    pub async fn send_privacy_preserving_tx_with_crossings(
+    pub async fn send_privacy_preserving_tx_with_cross_messages(
         &self,
         accounts: Vec<AccountMention>,
         root: usize,
         message: MessageData,
-        predicted_crossings: Vec<Vec<Delivery<Actor>>>,
+        predicted_cross_messages: PredictedCrossMessages,
         programs: &ProgramCatalog,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let root = TransactionEntry::Call {
@@ -918,7 +918,7 @@ impl WalletCore {
             root,
             Vec::new(),
             programs,
-            Some(predicted_crossings),
+            Some(predicted_cross_messages),
             |_| Ok(()),
         )
         .await
@@ -930,7 +930,7 @@ impl WalletCore {
         root: TransactionEntry<StoredMessage>,
         identities: Vec<PublicIdentity>,
         programs: &ProgramCatalog,
-        predicted_crossings: Option<Vec<Vec<Delivery<Actor>>>>,
+        predicted_cross_messages: Option<PredictedCrossMessages>,
         tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
@@ -957,7 +957,7 @@ impl WalletCore {
         };
 
         let programs = programs.clone();
-        let (output, proof) = match predicted_crossings {
+        let (output, proof) = match predicted_cross_messages {
             None => {
                 let simulation = Simulation {
                     public_shards: acc_manager.public_shards(),
@@ -966,8 +966,12 @@ impl WalletCore {
                     lee::execute_and_prove(input, &simulation, &programs)
                 })
             }
-            Some(predicted_crossings) => tokio::task::spawn_blocking(move || {
-                lee::execute_and_prove_with_crossings(input, predicted_crossings, &programs)
+            Some(predicted_cross_messages) => tokio::task::spawn_blocking(move || {
+                lee::execute_and_prove_with_cross_messages(
+                    input,
+                    predicted_cross_messages,
+                    &programs,
+                )
             }),
         }
         .await??;
@@ -1284,7 +1288,7 @@ impl WalletCore {
                     &key_chain.viewing_public_key,
                 );
                 message
-                    .execution
+                    .instance
                     .private_actions
                     .iter()
                     .enumerate()
@@ -1354,7 +1358,7 @@ impl WalletCore {
         for (account_id, npk, vpk, vsk, nsk) in shared_keys {
             let view_tag = EncryptedAccountData::compute_view_tag(&npk, &vpk);
 
-            for (ciph_id, action) in message.execution.private_actions.iter().enumerate() {
+            for (ciph_id, action) in message.instance.private_actions.iter().enumerate() {
                 // If already decrypted or the tag does not match, skip.
                 if handled.contains(&ciph_id) || action.encrypted_post_state.view_tag != view_tag {
                     continue;
@@ -1436,11 +1440,11 @@ fn decrypt_note_at(
     secret: &SharedSecretKey,
 ) -> Option<(lee_core::PrivateAccountKind, Account)> {
     lee_core::EncryptionScheme::decrypt(
-        &message.execution.private_actions[i]
+        &message.instance.private_actions[i]
             .encrypted_post_state
             .ciphertext,
         secret,
-        &message.execution.private_actions[i].nullifier,
+        &message.instance.private_actions[i].nullifier,
     )
 }
 

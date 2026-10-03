@@ -78,7 +78,7 @@ fn privacy_garbage_proof_is_rejected() {
     ));
     let commitment = Commitment::new(&account_id, &Account::default());
     let message = Message {
-        execution: PrivacyPreservingCircuitOutput {
+        instance: PrivacyPreservingCircuitOutput {
             context: PublicExecutionContext::default(),
             boundary: Boundary::default(),
             casts: Vec::new(),

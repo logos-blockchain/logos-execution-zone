@@ -390,7 +390,7 @@ impl UserKeyChain {
         index: &mut NullifierIndex,
     ) -> HashSet<usize> {
         let mut handled = HashSet::new();
-        for (i, action) in message.execution.private_actions.iter().enumerate() {
+        for (i, action) in message.instance.private_actions.iter().enumerate() {
             // Get the nullifier information if awaiting the nullifier.
             let Some(account_id) = index.account_for(&action.nullifier) else {
                 continue;
@@ -416,7 +416,7 @@ impl UserKeyChain {
         message: &Message,
         i: usize,
     ) -> Option<Nullifier> {
-        let encrypted = &message.execution.private_actions[i].encrypted_post_state;
+        let encrypted = &message.instance.private_actions[i].encrypted_post_state;
 
         let (nsk, secret, is_shared) = if let Some(entry) = self.shared_private_account(account_id)
         {
@@ -474,7 +474,7 @@ impl UserKeyChain {
     pub fn locate_spend(&self, account_id: AccountId, message: &Message) -> Option<usize> {
         let init = Nullifier::for_account_initialization(&account_id);
         let update = self.next_update_nullifier(account_id);
-        message.execution.private_actions.iter().position(|action| {
+        message.instance.private_actions.iter().position(|action| {
             action.nullifier == init || Some(&action.nullifier) == update.as_ref()
         })
     }
@@ -936,7 +936,7 @@ mod tests {
         );
 
         let message = Message {
-            execution: PrivacyPreservingCircuitOutput {
+            instance: PrivacyPreservingCircuitOutput {
                 private_actions: vec![PrivateAction {
                     nullifier: old_nullifier,
                     commitment: new_commitment,
@@ -1004,7 +1004,7 @@ mod tests {
         );
         let note = EncryptedAccountData::new(ciphertext, &npk, &vpk, epk);
         let message = Message {
-            execution: PrivacyPreservingCircuitOutput {
+            instance: PrivacyPreservingCircuitOutput {
                 private_actions: vec![PrivateAction {
                     nullifier: old_nullifier,
                     commitment: new_commitment,
@@ -1073,7 +1073,7 @@ mod tests {
             );
             let note = EncryptedAccountData::new(ciphertext, &npk, &vpk, epk);
             Message {
-                execution: PrivacyPreservingCircuitOutput {
+                instance: PrivacyPreservingCircuitOutput {
                     private_actions: vec![PrivateAction {
                         nullifier: spent,
                         commitment,
@@ -1136,7 +1136,7 @@ mod tests {
             &[9; 32],
         );
         let message = Message {
-            execution: PrivacyPreservingCircuitOutput {
+            instance: PrivacyPreservingCircuitOutput {
                 private_actions: vec![PrivateAction {
                     nullifier: unindexed,
                     ..Default::default()

@@ -5,8 +5,8 @@ use amm_core::{
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, Actor, Delivery, PrivacyPreservingTransaction, ProvingInput, PublicExecutionContext,
-    execute_and_prove_with_crossings,
+    AccountId, Actor, PredictedCrossMessages, PrivacyPreservingTransaction, ProvingInput,
+    PublicExecutionContext, execute_and_prove_with_cross_messages,
     privacy_preserving_transaction::{
         circuit::ProgramCatalog, message::Message, witness_set::WitnessSet,
     },
@@ -296,10 +296,10 @@ pub fn prove_swap(
     amount_in: u128,
     request: SwapRequest,
     private_witnesses: Vec<PrivateWitness>,
-    predicted_crossings: Vec<Vec<Delivery<Actor>>>,
+    predicted_cross_messages: PredictedCrossMessages,
 ) -> Result<PrivacyPreservingTransaction> {
     let pool_actor = Actor::new(pool.pool_id, amm_program_id());
-    let (output, proof) = execute_and_prove_with_crossings(
+    let (output, proof) = execute_and_prove_with_cross_messages(
         ProvingInput {
             root: TransactionEntry::Call {
                 to: Actor::new(trader.input, token_program_id()),
@@ -323,7 +323,7 @@ pub fn prove_swap(
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,
         },
-        predicted_crossings,
+        predicted_cross_messages,
         &ProgramCatalog::from([
             (amm_program_id(), programs::amm()),
             (token_program_id(), programs::token()),

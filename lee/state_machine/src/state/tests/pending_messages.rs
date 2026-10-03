@@ -301,7 +301,7 @@ fn a_proven_receipt_settles_only_where_its_record_is_pending() {
         .unwrap();
 
     assert_eq!(
-        tx.message.execution.entry,
+        tx.message.instance.entry,
         Some(TransactionEntry::Cast(reference))
     );
     assert!(holding.pending_message(reference).is_none());
@@ -491,7 +491,7 @@ fn a_proven_receipt_at_a_public_root_needs_identity_evidence_at_settlement() {
     let mut state = V03State::new().with_test_programs();
     let record = cast(&mut state, receiver());
     let reference = record.reference();
-    let (output, proof) = execute_and_prove_with_crossings(
+    let (output, proof) = execute_and_prove_with_cross_messages(
         ProvingInput {
             context: PublicExecutionContext::new(vec![receiver()], []),
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
@@ -723,7 +723,7 @@ fn a_tampered_proven_cast_is_rejected() {
         "the unmodified statement must verify"
     );
 
-    tx.message.execution.casts[0].message[0] ^= 0xFF;
+    tx.message.instance.casts[0].message[0] ^= 0xFF;
 
     assert!(matches!(
         ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0),

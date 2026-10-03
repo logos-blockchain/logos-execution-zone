@@ -82,7 +82,7 @@ pub struct PublicOutcome {
 
 pub struct WholeTransactionOutcome {
     pub public: PublicOutcome,
-    pub predicted_crossings: Vec<Vec<Delivery<Actor>>>,
+    pub predicted_cross_messages: Vec<Vec<Delivery<Actor>>>,
 }
 
 pub struct PrivatePartOutcome {
@@ -109,6 +109,8 @@ pub enum BoundaryStep {
 }
 
 pub type Boundary = Vec<BoundaryStep>;
+
+pub type PredictedCrossMessages = Vec<Vec<Delivery<Actor>>>;
 
 pub trait ExecutionEnvironment {
     type Error: From<ExecutionError>;
@@ -206,20 +208,22 @@ pub enum ExecutionError {
     #[error("Public actor {actor:?} is declared twice")]
     DuplicatePublicActor { actor: Actor },
 
-    #[error("No predicted crossings were supplied for public delivery {index}")]
-    MissingPredictedCrossings { index: usize },
+    #[error("No predicted cross messages were supplied for public delivery {index}")]
+    MissingPredictedCrossMessages { index: usize },
 
-    #[error("Predicted crossings were supplied for public deliveries the execution never produced")]
-    UnusedPredictedCrossings,
+    #[error(
+        "Predicted cross messages were supplied for public deliveries the execution never produced"
+    )]
+    UnusedPredictedCrossMessages,
 
-    #[error("Predicted crossing sender {actor:?} is not a declared public actor")]
-    UndeclaredCrossingSender { actor: Actor },
+    #[error("Predicted cross message sender {actor:?} is not a declared public actor")]
+    UndeclaredCrossMessageSender { actor: Actor },
 
     #[error("Boundary step {index} does not match the execution")]
     BoundaryMismatch { index: usize },
 
-    #[error("The crossing at boundary step {index} does not match the executed delivery")]
-    CrossingMismatch { index: usize },
+    #[error("The cross message at boundary step {index} does not match the executed delivery")]
+    CrossMessageMismatch { index: usize },
 
     #[error("Boundary was not consumed exactly by the execution")]
     IncompleteBoundary,
@@ -338,13 +342,13 @@ impl Delivery<Sender> {
 
 enum Scope {
     WholeTransaction {
-        groups: Vec<Vec<Delivery<Actor>>>,
+        predicted_cross_messages: PredictedCrossMessages,
         open: Vec<usize>,
     },
     PrivatePart {
-        predicted_crossings: Vec<Vec<Delivery<Actor>>>,
+        predicted_cross_messages: PredictedCrossMessages,
         next_group: usize,
-        trace: Boundary,
+        boundary: Boundary,
     },
     PublicPart {
         boundary: Boundary,
@@ -382,7 +386,7 @@ impl<'witnesses> WholeTransaction<'witnesses> {
         witnesses: &'witnesses [PrivateWitness],
     ) -> Result<Self, ExecutionError> {
         let scope = Scope::WholeTransaction {
-            groups: Vec::new(),
+            predicted_cross_messages: Vec::new(),
             open: Vec::new(),
         };
         Execution::start(context, witnesses, Some(root), scope).map(Self)
@@ -393,12 +397,16 @@ impl<'witnesses> WholeTransaction<'witnesses> {
         environment: &mut E,
     ) -> Result<WholeTransactionOutcome, E::Error> {
         let (scope, finished) = self.0.run(environment)?;
-        let Scope::WholeTransaction { groups, .. } = scope else {
+        let Scope::WholeTransaction {
+            predicted_cross_messages,
+            ..
+        } = scope
+        else {
             unreachable!("a whole transaction ends in its own scope")
         };
         Ok(WholeTransactionOutcome {
             public: finished.public(),
-            predicted_crossings: groups,
+            predicted_cross_messages,
         })
     }
 }
@@ -408,12 +416,12 @@ impl<'witnesses> PrivatePart<'witnesses> {
         context: PublicExecutionContext,
         root: Option<TransactionEntry<StoredMessage>>,
         witnesses: &'witnesses [PrivateWitness],
-        predicted_crossings: Vec<Vec<Delivery<Actor>>>,
+        predicted_cross_messages: PredictedCrossMessages,
     ) -> Result<Self, ExecutionError> {
         let scope = Scope::PrivatePart {
-            predicted_crossings,
+            predicted_cross_messages,
             next_group: 0,
-            trace: Boundary::new(),
+            boundary: Boundary::new(),
         };
         Execution::start(context, witnesses, root, scope).map(Self)
     }
@@ -423,10 +431,10 @@ impl<'witnesses> PrivatePart<'witnesses> {
         environment: &mut E,
     ) -> Result<PrivatePartOutcome, E::Error> {
         let (scope, finished) = self.0.run(environment)?;
-        let Scope::PrivatePart { trace, .. } = scope else {
+        let Scope::PrivatePart { boundary, .. } = scope else {
             unreachable!("a private part ends in its own scope")
         };
-        Ok(finished.private_part(trace))
+        Ok(finished.private_part(boundary))
     }
 }
 
@@ -587,7 +595,7 @@ impl<'witnesses> Execution<'witnesses> {
             None if matches!(execution.scope, Scope::PublicPart { .. }) => {
                 execution.pending.push(Item::Continue { root: true });
             }
-            None => execution.deliver_predicted_crossings()?,
+            None => execution.deliver_predicted_cross_messages()?,
         }
         Ok(execution)
     }
@@ -607,12 +615,12 @@ impl<'witnesses> Execution<'witnesses> {
         match &self.scope {
             Scope::WholeTransaction { .. } => {}
             Scope::PrivatePart {
-                predicted_crossings,
+                predicted_cross_messages,
                 next_group,
                 ..
             } => {
-                if predicted_crossings.len() > *next_group {
-                    return Err(ExecutionError::UnusedPredictedCrossings.into());
+                if predicted_cross_messages.len() > *next_group {
+                    return Err(ExecutionError::UnusedPredictedCrossMessages.into());
                 }
             }
             Scope::PublicPart { boundary, cursor } => {
@@ -630,8 +638,8 @@ impl<'witnesses> Execution<'witnesses> {
                 open.pop();
                 Ok(())
             }
-            Scope::PrivatePart { trace, .. } => {
-                trace.push(marker);
+            Scope::PrivatePart { boundary, .. } => {
+                boundary.push(marker);
                 Ok(())
             }
             Scope::PublicPart { boundary, cursor } => {
@@ -672,7 +680,7 @@ impl<'witnesses> Execution<'witnesses> {
 
     // Placement is positive: a declared public actor runs publicly, a private witness's account
     // runs privately, and in a public part any other destination must be the next predicted
-    // crossing.
+    // cross message.
     fn deliver<E: ExecutionEnvironment>(
         &mut self,
         delivery: Delivery<Sender>,
@@ -693,14 +701,14 @@ impl<'witnesses> Execution<'witnesses> {
                 Scope::WholeTransaction { .. } | Scope::PrivatePart { .. },
                 Some(AccountEntry::Private { .. }),
             ) => self.deliver_private(delivery, environment),
-            (Scope::PublicPart { .. }, None) => Ok(self.check_crossing(&delivery)?),
+            (Scope::PublicPart { .. }, None) => Ok(self.check_cross_message(&delivery)?),
             _ => Err(ExecutionError::UndeclaredActor { actor: to }.into()),
         }
     }
 
     // A private delivery from a declared public actor is where the execution crosses into a proven
     // turn: a whole transaction collects it into the innermost open public Call's predicted
-    // crossings, a private part records it.
+    // cross messages, a private part records it.
     fn deliver_private<E: ExecutionEnvironment>(
         &mut self,
         delivery: Delivery<Sender>,
@@ -709,16 +717,19 @@ impl<'witnesses> Execution<'witnesses> {
         if let Some(sender) = delivery.envelope.source.actor()
             && self.public_actors.contains(&sender)
         {
-            let crossing = delivery.with_source(sender);
+            let cross_message = delivery.with_source(sender);
             match &mut self.scope {
-                Scope::WholeTransaction { groups, open } => {
+                Scope::WholeTransaction {
+                    predicted_cross_messages,
+                    open,
+                } => {
                     let group = *open
                         .last()
                         .expect("a public sender runs within an open call");
-                    groups[group].push(crossing);
+                    predicted_cross_messages[group].push(cross_message);
                 }
-                Scope::PrivatePart { trace, .. } => {
-                    trace.push(BoundaryStep::EnterPrivate(crossing));
+                Scope::PrivatePart { boundary, .. } => {
+                    boundary.push(BoundaryStep::EnterPrivate(cross_message));
                     self.pending.push(Item::ExitPrivate);
                 }
                 Scope::PublicPart { .. } => {
@@ -731,9 +742,9 @@ impl<'witnesses> Execution<'witnesses> {
         self.execute(delivery, environment)
     }
 
-    fn check_crossing(&mut self, delivery: &Delivery<Sender>) -> Result<(), ExecutionError> {
+    fn check_cross_message(&mut self, delivery: &Delivery<Sender>) -> Result<(), ExecutionError> {
         let Scope::PublicPart { boundary, cursor } = &mut self.scope else {
-            unreachable!("only a public part matches predicted crossings");
+            unreachable!("only a public part matches predicted cross_messages");
         };
         let index = *cursor;
         let Some(BoundaryStep::EnterPrivate(predicted)) = boundary.get(index) else {
@@ -746,7 +757,7 @@ impl<'witnesses> Execution<'witnesses> {
             .actor()
             .map(|sender| delivery.with_source(sender));
         if live.as_ref() != Some(predicted) {
-            return Err(ExecutionError::CrossingMismatch { index });
+            return Err(ExecutionError::CrossMessageMismatch { index });
         }
         step_past(cursor);
         self.pending.push(Item::ExitPrivate);
@@ -761,55 +772,58 @@ impl<'witnesses> Execution<'witnesses> {
     ) -> Result<(), E::Error> {
         match &mut self.scope {
             // The root and each Call from a private turn start a public subtree, whose deliveries
-            // into private actors form one group of predicted crossings.
-            Scope::WholeTransaction { groups, open } => {
+            // into private actors form one group of predicted cross messages.
+            Scope::WholeTransaction {
+                predicted_cross_messages,
+                open,
+            } => {
                 if delivery
                     .envelope
                     .source
                     .actor()
                     .is_none_or(|sender| !self.public_actors.contains(&sender))
                 {
-                    open.push(groups.len());
-                    groups.push(Vec::new());
+                    open.push(predicted_cross_messages.len());
+                    predicted_cross_messages.push(Vec::new());
                     self.pending.push(Item::ExitPublic);
                 }
                 self.execute(delivery, environment)
             }
             Scope::PublicPart { .. } => self.execute(delivery, environment),
-            Scope::PrivatePart { trace, .. } => {
+            Scope::PrivatePart { boundary, .. } => {
                 let program = delivery
                     .envelope
                     .source
                     .issuer()
                     .expect("only a Call from a private turn crosses into public execution");
-                trace.push(BoundaryStep::EnterPublic(delivery.with_source(program)));
+                boundary.push(BoundaryStep::EnterPublic(delivery.with_source(program)));
                 self.pending.push(Item::ExitPublic);
-                Ok(self.deliver_predicted_crossings()?)
+                Ok(self.deliver_predicted_cross_messages()?)
             }
         }
     }
 
-    fn deliver_predicted_crossings(&mut self) -> Result<(), ExecutionError> {
+    fn deliver_predicted_cross_messages(&mut self) -> Result<(), ExecutionError> {
         let Scope::PrivatePart {
-            predicted_crossings,
+            predicted_cross_messages,
             next_group,
             ..
         } = &mut self.scope
         else {
-            unreachable!("only a private part predicts crossings");
+            unreachable!("only a private part predicts cross_messages");
         };
         let index = *next_group;
-        let crossings = predicted_crossings
+        let cross_messages = predicted_cross_messages
             .get(index)
-            .ok_or(ExecutionError::MissingPredictedCrossings { index })?;
+            .ok_or(ExecutionError::MissingPredictedCrossMessages { index })?;
         step_past(next_group);
-        for crossing in crossings.iter().rev() {
-            let sender = crossing.envelope.source;
+        for cross_message in cross_messages.iter().rev() {
+            let sender = cross_message.envelope.source;
             if !self.public_actors.contains(&sender) {
-                return Err(ExecutionError::UndeclaredCrossingSender { actor: sender });
+                return Err(ExecutionError::UndeclaredCrossMessageSender { actor: sender });
             }
             self.pending.push(Item::Deliver(Box::new(
-                crossing.with_source(Sender::Call(sender)),
+                cross_message.with_source(Sender::Call(sender)),
             )));
         }
         Ok(())
