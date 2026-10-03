@@ -420,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_output_prunes_an_emptied_shard() {
+    fn set_shard_prunes_an_emptied_shard() {
         let program = AccountId::new([3; 32]);
         let mut account = Account::funded(10).with_shard(program, b"record".to_vec().into());
 
@@ -446,7 +446,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_keeps_the_nonce_and_prunes_emptied_shards() {
+    fn update_keeps_the_nonce_and_prunes_emptied_shards() {
         let program = AccountId::new([3; 32]);
         let mut account = Account {
             nonce: Nonce(7),
@@ -463,7 +463,7 @@ mod tests {
     }
 
     #[test]
-    fn project_then_apply_is_identity_on_the_touched_shards() {
+    fn project_then_update_is_identity_on_the_touched_shards() {
         let touched = AccountId::new([3; 32]);
         let untouched = AccountId::new([4; 32]);
         let data = Account::funded(9)

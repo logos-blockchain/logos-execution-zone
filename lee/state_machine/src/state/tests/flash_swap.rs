@@ -152,7 +152,7 @@ fn flash_swap_stale_vault_balance_proposal_rejected() {
 }
 
 #[test]
-fn flash_swap_self_call_targets_correct_program() {
+fn a_zero_amount_flash_swap_succeeds() {
     // Zero-amount flash swap: the invariant self-send still runs and succeeds
     // because vault balance doesn't decrease.
     let mut swap = FlashSwap::new();

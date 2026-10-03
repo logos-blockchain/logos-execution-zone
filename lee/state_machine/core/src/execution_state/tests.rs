@@ -321,7 +321,7 @@ fn nested_public(script: Script, entry_sends: Vec<Call>) -> Script {
         .on(BYSTANDER, sending(Vec::new()))
 }
 
-fn record_nested(predicted_cross_messages: PredictedCrossMessages) -> (Boundary, Script) {
+fn run_private_nested(predicted_cross_messages: PredictedCrossMessages) -> (Boundary, Script) {
     let mut script = nested_private();
     let outcome = private_part(
         context(vec![ENTRY, CALLEE, BYSTANDER]),
@@ -334,7 +334,7 @@ fn record_nested(predicted_cross_messages: PredictedCrossMessages) -> (Boundary,
     (outcome.boundary, script)
 }
 
-fn check_nested(
+fn run_public_nested(
     boundary: Boundary,
     entry_sends: Vec<Call>,
 ) -> (Result<PublicOutcome, ExecutionError>, Script) {
@@ -690,7 +690,7 @@ fn a_private_root_records_its_public_call_and_the_predicted_reply() {
 
 #[test]
 fn a_public_call_made_inside_a_predicted_cross_message_is_bracketed_within_it() {
-    let (boundary, script) = record_nested(nested_cross_messages());
+    let (boundary, script) = run_private_nested(nested_cross_messages());
 
     assert_eq!(
         boundary,
@@ -709,7 +709,7 @@ fn predicted_cross_messages_must_match_the_recorded_public_deliveries() {
     let keys = Keys::new(1);
     let vault = actor(2, 9);
     let stranger = actor(5, 9);
-    let record = |predicted_cross_messages: PredictedCrossMessages| {
+    let run_private = |predicted_cross_messages: PredictedCrossMessages| {
         let mut script = Script::default().on(holder(&keys), sending(vec![send_to(vault)]));
         private_part(
             context(vec![vault]),
@@ -730,15 +730,15 @@ fn predicted_cross_messages_must_match_the_recorded_public_deliveries() {
     };
 
     assert!(matches!(
-        record(Vec::new()),
+        run_private(Vec::new()),
         Err(ExecutionError::MissingPredictedCrossMessages { index: 0 })
     ));
     assert!(matches!(
-        record(vec![Vec::new(), Vec::new()]),
+        run_private(vec![Vec::new(), Vec::new()]),
         Err(ExecutionError::UnusedPredictedCrossMessages)
     ));
     assert!(matches!(
-        record(vec![vec![reply]]),
+        run_private(vec![vec![reply]]),
         Err(ExecutionError::UndeclaredCrossMessageSender { actor: sender }) if sender == stranger
     ));
 }
@@ -790,10 +790,10 @@ fn a_private_credential_holds_from_any_origin_beside_a_seed_grant() {
 }
 
 #[test]
-fn a_check_replays_the_public_side_of_a_recorded_statement() {
-    let (boundary, _) = record_nested(nested_cross_messages());
+fn a_public_part_replays_the_boundary_its_private_part_recorded() {
+    let (boundary, _) = run_private_nested(nested_cross_messages());
 
-    let (result, script) = check_nested(boundary, vec![enter(ENTER), send_to(BYSTANDER)]);
+    let (result, script) = run_public_nested(boundary, vec![enter(ENTER), send_to(BYSTANDER)]);
 
     assert!(result.is_ok());
     assert_eq!(
@@ -807,31 +807,31 @@ fn a_check_replays_the_public_side_of_a_recorded_statement() {
 }
 
 #[test]
-fn a_check_rejects_public_behaviour_that_departs_from_the_statement() {
-    let boundary = record_nested(nested_cross_messages()).0;
-    let checked = |sends: Vec<Call>| check_nested(boundary.clone(), sends).0;
+fn a_public_part_rejects_public_behaviour_that_departs_from_the_boundary() {
+    let boundary = run_private_nested(nested_cross_messages()).0;
+    let run_public = |sends: Vec<Call>| run_public_nested(boundary.clone(), sends).0;
     let truncated = boundary[..1].to_vec();
 
     assert!(matches!(
-        checked(vec![send_to(BYSTANDER)]),
+        run_public(vec![send_to(BYSTANDER)]),
         Err(ExecutionError::IncompleteBoundary)
     ));
     assert!(matches!(
-        checked(vec![enter(b"other")]),
+        run_public(vec![enter(b"other")]),
         Err(ExecutionError::CrossMessageMismatch { index: 0 })
     ));
     assert!(matches!(
-        checked(vec![enter(ENTER), enter(ENTER)]),
+        run_public(vec![enter(ENTER), enter(ENTER)]),
         Err(ExecutionError::BoundaryMismatch { index: 4 })
     ));
     assert!(matches!(
-        check_nested(truncated, vec![enter(ENTER), send_to(BYSTANDER)]).0,
+        run_public_nested(truncated, vec![enter(ENTER), send_to(BYSTANDER)]).0,
         Err(ExecutionError::BoundaryMismatch { index: 1 })
     ));
 }
 
 #[test]
-fn a_check_runs_a_privately_originated_call_with_its_private_origin() {
+fn a_public_part_runs_a_privately_originated_call_with_its_private_origin() {
     let origin = Some(id(8));
     let boundary = vec![EnterPublic(public(id(8), ENTRY, &[])), ExitPublic];
     let mut script = Script::default().on(ENTRY, sending(Vec::new()));
@@ -912,7 +912,7 @@ fn each_part_executes_the_root_only_on_its_side() {
 }
 
 #[test]
-fn a_check_whose_live_subtree_reaches_the_loader_fails() {
+fn a_public_part_whose_live_subtree_reaches_the_loader_fails() {
     let loader = Actor::new(id(4), PROGRAM_LOADER_ACCOUNT_ID);
     let mut script = Script::default()
         .on(ENTRY, sending(vec![send_to(loader)]))
@@ -933,7 +933,7 @@ fn a_check_whose_live_subtree_reaches_the_loader_fails() {
 }
 
 #[test]
-fn a_record_refuses_an_explicit_delivery_to_the_loader() {
+fn a_private_part_refuses_an_explicit_delivery_to_the_loader() {
     let keys = Keys::new(1);
     let loader = Actor::new(id(4), PROGRAM_LOADER_ACCOUNT_ID);
     let mut script = Script::default().on(holder(&keys), sending(vec![send_to(loader)]));
@@ -966,8 +966,8 @@ fn relayed_grant(
     let sibling = public_pda(owner.program_account_id, sibling_seed);
     let actors = vec![owner, sibling, vault];
 
-    let mut recording = Script::default().on(relay, sending(vec![send_to(vault)]));
-    let recorded = private_part(
+    let mut private_script = Script::default().on(relay, sending(vec![send_to(vault)]));
+    let private_outcome = private_part(
         context(actors.clone()),
         &[keys.regular(false)],
         root(owner),
@@ -983,11 +983,11 @@ fn relayed_grant(
             }],
             Vec::new(),
         ],
-        &mut recording,
+        &mut private_script,
     )
     .unwrap();
 
-    let mut checking = Script::default()
+    let mut public_script = Script::default()
         .on(
             owner,
             sending(vec![
@@ -1000,10 +1000,10 @@ fn relayed_grant(
     let result = public_part(
         context(actors),
         root(owner),
-        recorded.boundary,
-        &mut checking,
+        private_outcome.boundary,
+        &mut public_script,
     );
-    (result, checking)
+    (result, public_script)
 }
 
 #[test]
@@ -1045,11 +1045,11 @@ fn a_private_grant_crosses_a_public_actor_and_authorizes_the_return() {
     let custody = Actor::new(pda_keys.pda_id(owner.program_account_id, seed), id(8));
     let peer = actor(3, 9);
     let peer_vault = public_pda(peer.program_account_id, seed);
-    let mut recording = Script::default()
+    let mut private_script = Script::default()
         .on(owner, sending(vec![seeded_to(custody, seed)]))
         .on(custody, sending_when(Some(id(8)), vec![send_to(peer)]));
 
-    let recorded = private_part(
+    let private_outcome = private_part(
         context(vec![peer, peer_vault]),
         &[
             keys.regular(false),
@@ -1065,21 +1065,21 @@ fn a_private_grant_crosses_a_public_actor_and_authorizes_the_return() {
             grants: BTreeSet::from([custody.account_id]),
             pda_seeds: Vec::new(),
         }]],
-        &mut recording,
+        &mut private_script,
     )
     .unwrap();
 
     assert_eq!(
-        authorized(&recording),
+        authorized(&private_script),
         vec![(owner, false), (custody, true), (custody, true)]
     );
-    let boundary = recorded.boundary;
+    let boundary = private_outcome.boundary;
     assert_eq!(
         public_calls(&boundary)[0].grants,
         BTreeSet::from([custody.account_id])
     );
 
-    let mut checking = Script::default()
+    let mut public_script = Script::default()
         .on(
             peer,
             sending(vec![send_to(custody), seeded_to(peer_vault, seed)]),
@@ -1090,12 +1090,12 @@ fn a_private_grant_crosses_a_public_actor_and_authorizes_the_return() {
             context(vec![peer, peer_vault]),
             root(owner),
             boundary,
-            &mut checking
+            &mut public_script
         )
         .is_ok()
     );
     assert_eq!(
-        authorized(&checking),
+        authorized(&public_script),
         vec![(peer, false), (peer_vault, true)]
     );
 }
@@ -1123,13 +1123,13 @@ fn a_private_pda_family_cannot_declare_its_public_member() {
 }
 
 #[test]
-fn a_check_publishes_live_events() {
+fn a_public_part_publishes_live_events() {
     let event = ProgramEvent {
         selector: [7; 8],
         data: Vec::new(),
     };
     let emitted = event.clone();
-    let mut checking = Script::default().on(ENTRY, move |input| {
+    let mut public_script = Script::default().on(ENTRY, move |input| {
         echo(input, Response::keep_state().event(emitted.clone()))
     });
 
@@ -1137,7 +1137,7 @@ fn a_check_publishes_live_events() {
         context(vec![ENTRY]),
         root(ENTRY),
         Boundary::new(),
-        &mut checking,
+        &mut public_script,
     )
     .unwrap()
     .events;
@@ -1152,7 +1152,7 @@ fn a_public_turn_requests_a_private_debit_that_the_private_credential_authorizes
     let keys = Keys::new(1);
     let (requester, payee) = (actor(2, 9), Actor::native_balance(id(3)));
     let payer = Actor::native_balance(keys.regular_id());
-    let record = |credential: bool| {
+    let run_private = |credential: bool| {
         let mut script = Script::default().on(payer, |input| {
             native_token::receive(input).unwrap_or_else(|error| panic!("{error}"))
         });
@@ -1182,14 +1182,15 @@ fn a_public_turn_requests_a_private_debit_that_the_private_credential_authorizes
     };
 
     assert_eq!(
-        public_calls(&record(true).unwrap().boundary)[0],
+        public_calls(&run_private(true).unwrap().boundary)[0],
         public(
             native_token::NATIVE_TOKEN_PROGRAM_ID,
             payee,
             &borsh::to_vec(&native_token::Message::Credit(0)).unwrap(),
         )
     );
-    let Err(refused) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| record(false)))
+    let Err(refused) =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_private(false)))
     else {
         panic!("a debit without the payer's credential must not prove");
     };
@@ -1206,23 +1207,23 @@ fn an_undeclared_actor_of_a_declared_public_account_is_refused() {
     let owner = holder(&keys);
     let stray = Actor::new(ENTRY.account_id, id(7));
 
-    let mut recording = Script::default().on(owner, sending(vec![send_to(stray)]));
-    let recorded = private_part(
+    let mut private_script = Script::default().on(owner, sending(vec![send_to(stray)]));
+    let private_result = private_part(
         context(vec![ENTRY]),
         &[keys.regular(false)],
         root(owner),
         Vec::new(),
-        &mut recording,
+        &mut private_script,
     );
-    let mut checking = Script::default().on(ENTRY, sending(vec![send_to(stray)]));
-    let checked = public_part(
+    let mut public_script = Script::default().on(ENTRY, sending(vec![send_to(stray)]));
+    let public_result = public_part(
         context(vec![ENTRY]),
         root(ENTRY),
         Boundary::new(),
-        &mut checking,
+        &mut public_script,
     );
 
-    for error in [recorded.err(), checked.err()] {
+    for error in [private_result.err(), public_result.err()] {
         assert!(matches!(
             error,
             Some(ExecutionError::UndeclaredActor { actor }) if actor == stray
@@ -1231,7 +1232,7 @@ fn an_undeclared_actor_of_a_declared_public_account_is_refused() {
 }
 
 #[test]
-fn a_check_whose_live_subtree_makes_more_than_64_deliveries_succeeds() {
+fn a_public_part_replays_a_long_self_send_chain() {
     let mut remaining = 100_u32;
     let mut script = Script::default().on(ENTRY, move |input| {
         let response = if remaining == 0 {
@@ -1254,22 +1255,22 @@ fn a_check_whose_live_subtree_makes_more_than_64_deliveries_succeeds() {
 }
 
 #[test]
-fn a_derived_statement_records_and_checks_a_nested_mixed_graph() {
+fn predicted_cross_messages_carry_a_nested_mixed_graph_through_both_parts() {
     let entry_sends = vec![enter(ENTER), send_to(BYSTANDER)];
-    let mut deriving = nested_public(nested_private(), entry_sends.clone());
+    let mut whole_script = nested_public(nested_private(), entry_sends.clone());
 
     let predicted_cross_messages = whole(
         context(vec![ENTRY, CALLEE, BYSTANDER]),
         &[Keys::new(1).regular(false)],
         root(ENTRY),
-        &mut deriving,
+        &mut whole_script,
     )
     .unwrap()
     .predicted_cross_messages;
 
     assert_eq!(predicted_cross_messages, nested_cross_messages());
-    let (boundary, _) = record_nested(predicted_cross_messages);
-    assert!(check_nested(boundary, entry_sends).0.is_ok());
+    let (boundary, _) = run_private_nested(predicted_cross_messages);
+    assert!(run_public_nested(boundary, entry_sends).0.is_ok());
 }
 
 #[test]
@@ -1277,7 +1278,7 @@ fn an_output_from_a_private_sender_carries_only_its_programs_provenance() {
     let keys = Keys::new(1);
     let mut script = Script::default().on(holder(&keys), sending(vec![send_to(ENTRY)]));
 
-    let recorded = private_part(
+    let private_outcome = private_part(
         context(vec![ENTRY]),
         &[keys.regular(false)],
         root(holder(&keys)),
@@ -1287,7 +1288,7 @@ fn an_output_from_a_private_sender_carries_only_its_programs_provenance() {
     .unwrap();
 
     assert_eq!(
-        public_calls(&recorded.boundary),
+        public_calls(&private_outcome.boundary),
         vec![public(holder(&keys).program_account_id, ENTRY, &[])]
     );
 }
@@ -1295,7 +1296,7 @@ fn an_output_from_a_private_sender_carries_only_its_programs_provenance() {
 #[test]
 fn a_live_delivery_from_another_actor_of_the_same_program_does_not_satisfy_a_predicted_cross_message()
  {
-    let (boundary, _) = record_nested(nested_cross_messages());
+    let (boundary, _) = run_private_nested(nested_cross_messages());
     let mut script = nested_public(Script::default(), vec![send_to(BYSTANDER)])
         .on(BYSTANDER, sending(vec![enter(ENTER)]));
     assert_eq!(BYSTANDER.program_account_id, ENTRY.program_account_id);
@@ -1396,7 +1397,7 @@ fn a_receipt_root_delivers_its_stored_origin_and_message_and_its_origin_grants_n
 }
 
 #[test]
-fn a_recorded_receipt_root_to_a_private_actor_runs_privately_with_its_stored_origin() {
+fn a_receipt_root_to_a_private_actor_runs_privately_with_its_stored_origin() {
     let keys = Keys::new(1);
     let record = stored(id(5), holder(&keys), b"stored");
     let mut script = Script::default().on(holder(&keys), sending(Vec::new()));
@@ -1415,7 +1416,7 @@ fn a_recorded_receipt_root_to_a_private_actor_runs_privately_with_its_stored_ori
 }
 
 #[test]
-fn a_record_keeps_its_casts_out_of_the_boundary_and_a_check_returns_only_live_casts() {
+fn a_private_part_keeps_its_casts_out_of_the_boundary_and_a_public_part_returns_only_live_casts() {
     let keys = Keys::new(1);
     let (private_target, public_target) = (actor(6, 7), actor(7, 7));
     let private_cast = MessageBody {
@@ -1423,7 +1424,7 @@ fn a_record_keeps_its_casts_out_of_the_boundary_and_a_check_returns_only_live_ca
         to: private_target,
         message: b"x".to_vec(),
     };
-    let mut recording = Script::default().on(holder(&keys), move |input| {
+    let mut private_script = Script::default().on(holder(&keys), move |input| {
         echo(
             input,
             Response::keep_state().send(send_to(ENTRY)).send(Cast {
@@ -1441,7 +1442,7 @@ fn a_record_keeps_its_casts_out_of_the_boundary_and_a_check_returns_only_live_ca
         &[keys.regular(false)],
         root(holder(&keys)),
         vec![Vec::new()],
-        &mut recording,
+        &mut private_script,
     )
     .unwrap();
 
@@ -1451,7 +1452,7 @@ fn a_record_keeps_its_casts_out_of_the_boundary_and_a_check_returns_only_live_ca
     );
     assert_eq!(proven_casts, vec![private_cast]);
 
-    let mut checking = Script::default().on(ENTRY, move |input| {
+    let mut public_script = Script::default().on(ENTRY, move |input| {
         echo(
             input,
             Response::keep_state().send(Cast {
@@ -1464,7 +1465,7 @@ fn a_record_keeps_its_casts_out_of_the_boundary_and_a_check_returns_only_live_ca
         context(vec![ENTRY]),
         root(holder(&keys)),
         boundary,
-        &mut checking,
+        &mut public_script,
     )
     .unwrap()
     .casts;
@@ -1569,34 +1570,34 @@ fn a_private_sibling_call_sees_the_state_its_earlier_siblings_subtree_left() {
 fn a_public_sibling_called_from_a_private_turn_sees_the_state_its_earlier_siblings_subtree_left() {
     let keys = Keys::new(1);
     let receiver = actor(2, 9);
-    let mut recording = Script::default().on(holder(&keys), sending(siblings(receiver)));
+    let mut private_script = Script::default().on(holder(&keys), sending(siblings(receiver)));
     let boundary = private_part(
         context(vec![receiver]),
         &[keys.regular(false)],
         root(holder(&keys)),
         vec![Vec::new(), Vec::new()],
-        &mut recording,
+        &mut private_script,
     )
     .unwrap()
     .boundary;
-    let mut checking = Script::default().on(receiver, sibling_receiver(receiver));
+    let mut public_script = Script::default().on(receiver, sibling_receiver(receiver));
 
     public_part(
         context(vec![receiver]),
         root(holder(&keys)),
         boundary,
-        &mut checking,
+        &mut public_script,
     )
     .unwrap();
 
-    assert_eq!(turns_of(&checking, receiver), completed_c1_then_c2());
+    assert_eq!(turns_of(&public_script, receiver), completed_c1_then_c2());
 }
 
 #[test]
 fn a_private_sibling_called_from_a_public_turn_sees_the_state_its_earlier_siblings_subtree_left() {
     let keys = Keys::new(1);
     let (sender, receiver) = (actor(1, 9), holder(&keys));
-    let mut recording = Script::default().on(receiver, sibling_receiver(receiver));
+    let mut private_script = Script::default().on(receiver, sibling_receiver(receiver));
     let boundary = private_part(
         context(vec![sender]),
         &[keys.regular(false)],
@@ -1605,15 +1606,21 @@ fn a_private_sibling_called_from_a_public_turn_sees_the_state_its_earlier_siblin
             cross_message_from(sender, receiver, b"c1"),
             cross_message_from(sender, receiver, b"c2"),
         ]],
-        &mut recording,
+        &mut private_script,
     )
     .unwrap()
     .boundary;
-    let mut checking = Script::default().on(sender, sending(siblings(receiver)));
+    let mut public_script = Script::default().on(sender, sending(siblings(receiver)));
 
-    public_part(context(vec![sender]), root(sender), boundary, &mut checking).unwrap();
+    public_part(
+        context(vec![sender]),
+        root(sender),
+        boundary,
+        &mut public_script,
+    )
+    .unwrap();
 
-    assert_eq!(turns_of(&recording, receiver), completed_c1_then_c2());
+    assert_eq!(turns_of(&private_script, receiver), completed_c1_then_c2());
 }
 
 #[test]

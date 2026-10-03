@@ -51,7 +51,7 @@ fn self_sends(actor: Actor, depth: usize) -> Script {
 }
 
 #[test]
-fn execution_allows_more_than_sixty_four_turns() {
+fn a_long_self_send_chain_fits_the_public_budget() {
     let revisited = Actor::new(AccountId::new([1; 32]), scripted_id());
     let mut state = V03State::new().with_programs([crate::test_methods::scripted()]);
     let tx = public_tx(
