@@ -546,10 +546,11 @@ fn settle(
     );
     let public_diff = accounts
         .into_iter()
-        .map(|(account_id, data)| {
-            let mut account = state.get_account_by_id(account_id);
-            account.data.update(&data);
-            (account_id, account)
+        .filter_map(|(account_id, data)| {
+            let pre = state.get_account_by_id(account_id);
+            let mut post = pre.clone();
+            post.data.update(&data);
+            (post != pre).then_some((account_id, post))
         })
         .collect();
     let events = events
