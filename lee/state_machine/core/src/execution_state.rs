@@ -545,7 +545,7 @@ impl Scope for WholeScope {
                 .pending
                 .push(Item::Resume(WholeContinuation::ExitPublic));
         }
-        execution.execute(delivery, environment)
+        execution.process_actor_message(delivery, environment)
     }
 
     fn deliver_to_private<E: ExecutionEnvironment>(
@@ -562,7 +562,7 @@ impl Scope for WholeScope {
                 .expect("a public sender runs within an open call");
             self.predicted_cross_messages[group].push(cross_message);
         }
-        execution.execute(delivery, environment)
+        execution.process_actor_message(delivery, environment)
     }
 
     fn resume(
@@ -664,7 +664,7 @@ impl Scope for PrivateScope {
                 .pending
                 .push(Item::Resume(PrivateContinuation::ExitPrivate));
         }
-        execution.execute(delivery, environment)
+        execution.process_actor_message(delivery, environment)
     }
 
     fn resume(
@@ -762,7 +762,7 @@ impl Scope for PublicScope {
         delivery: Delivery<Sender>,
         environment: &mut E,
     ) -> Result<(), E::Error> {
-        execution.execute(delivery, environment)
+        execution.process_actor_message(delivery, environment)
     }
 
     fn deliver_to_private<E: ExecutionEnvironment>(
@@ -1009,7 +1009,7 @@ impl<'witnesses, S: Scope> Execution<'witnesses, S> {
             .map(|sender| delivery.with_source(sender))
     }
 
-    fn execute<E: ExecutionEnvironment>(
+    fn process_actor_message<E: ExecutionEnvironment>(
         &mut self,
         delivery: Delivery<Sender>,
         environment: &mut E,
