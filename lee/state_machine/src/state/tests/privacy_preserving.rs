@@ -142,7 +142,7 @@ fn transition_from_privacy_preserving_transaction_shielded() {
 }
 
 #[test]
-fn privacy_preserving_witness_set_cannot_have_dulicate_signers() {
+fn privacy_preserving_witness_set_cannot_have_duplicate_signers() {
     let sender_keys = test_public_account_keys_1();
     let recipient_keys = test_private_account_keys_1();
 

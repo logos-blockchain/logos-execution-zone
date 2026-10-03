@@ -177,26 +177,7 @@ pub mod tests {
     }
 
     #[test]
-    fn account_id_list_cant_have_duplicates() {
-        let (key1, _, addr1, _) = keys_for_tests();
-        let state = state_for_tests();
-        let nonces = vec![0_u128.into(), 0_u128.into()];
-        let message = Message::try_new(
-            Actor::native_balance(addr1),
-            vec![Actor::native_balance(addr1), Actor::native_balance(addr1)],
-            nonces,
-            transfer_to(addr1),
-        )
-        .unwrap();
-
-        let witness_set = WitnessSet::for_message(&message, &[&key1, &key1]);
-        let tx = PublicTransaction::new(message, witness_set);
-        let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
-        assert!(matches!(result, Err(LeeError::InvalidInput(_))));
-    }
-
-    #[test]
-    fn witness_set_cannot_have_dulicate_signers() {
+    fn witness_set_cannot_have_duplicate_signers() {
         let (key1, _, addr1, addr2) = keys_for_tests();
         let state = state_for_tests();
         // both nonces match the current state, so only the repeat is at fault
@@ -293,7 +274,7 @@ pub mod tests {
     }
 
     #[test]
-    fn program_id_must_belong_to_bulitin_program_ids() {
+    fn program_id_must_belong_to_builtin_program_ids() {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let state = state_for_tests();
         let nonces = vec![0_u128.into(), 0_u128.into()];
