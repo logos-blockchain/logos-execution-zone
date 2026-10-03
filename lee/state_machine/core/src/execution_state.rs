@@ -64,6 +64,11 @@ impl PublicExecutionContext {
             authorized_accounts: authorized_accounts.into_iter().collect(),
         }
     }
+
+    #[must_use]
+    pub fn runs_publicly(&self, actor: Actor) -> bool {
+        self.actors.contains(&actor)
+    }
 }
 
 pub struct WholeTransaction<'witnesses> {
@@ -192,9 +197,6 @@ pub enum ExecutionError {
 
     #[error("A delivery named {actor:?}, which is neither a declared public actor nor private")]
     UndeclaredActor { actor: Actor },
-
-    #[error("The root delivery to {actor:?} does not execute in this part of the transaction")]
-    MisplacedRoot { actor: Actor },
 
     #[error(
         "Program {program_account_id} echoed an input it was not given: expected {expected:?}, actual {actual:?}"
@@ -367,7 +369,7 @@ trait Scope: Sized {
 
     const EMITS_EVENTS: bool;
 
-    fn executes_transaction_root(root_is_public: bool) -> bool;
+    fn executes_transaction_root(runs_publicly: bool) -> bool;
 
     fn admits_loader(execution: &Execution<'_, Self>) -> bool;
 
@@ -462,7 +464,7 @@ impl<'witnesses> WholeTransaction<'witnesses> {
 impl<'witnesses> PrivatePart<'witnesses> {
     pub fn new(
         context: PublicExecutionContext,
-        root: Option<TransactionEntry<StoredMessage>>,
+        root: TransactionEntry<StoredMessage>,
         witnesses: &'witnesses [PrivateWitness],
         predicted_cross_messages: PredictedCrossMessages,
     ) -> Result<Self, ExecutionError> {
@@ -471,7 +473,7 @@ impl<'witnesses> PrivatePart<'witnesses> {
             next_group: 0,
             boundary: Boundary::new(),
         };
-        let execution = Execution::start(context, witnesses, root, &mut scope)?;
+        let execution = Execution::start(context, witnesses, Some(root), &mut scope)?;
         Ok(Self { execution, scope })
     }
 
@@ -511,7 +513,7 @@ impl Scope for WholeScope {
 
     const EMITS_EVENTS: bool = true;
 
-    fn executes_transaction_root(_root_is_public: bool) -> bool {
+    fn executes_transaction_root(_runs_publicly: bool) -> bool {
         true
     }
 
@@ -617,8 +619,8 @@ impl Scope for PrivateScope {
 
     const EMITS_EVENTS: bool = false;
 
-    fn executes_transaction_root(root_is_public: bool) -> bool {
-        !root_is_public
+    fn executes_transaction_root(runs_publicly: bool) -> bool {
+        !runs_publicly
     }
 
     fn admits_loader(_execution: &Execution<'_, Self>) -> bool {
@@ -737,8 +739,8 @@ impl Scope for PublicScope {
 
     const EMITS_EVENTS: bool = true;
 
-    fn executes_transaction_root(root_is_public: bool) -> bool {
-        root_is_public
+    fn executes_transaction_root(runs_publicly: bool) -> bool {
+        runs_publicly
     }
 
     fn admits_loader(_execution: &Execution<'_, Self>) -> bool {
@@ -902,13 +904,8 @@ impl<'witnesses, S: Scope> Execution<'witnesses, S> {
             return Err(ExecutionError::PublicFamilyMemberDeclared { account_id });
         }
 
-        if let Some(root) = &root {
-            let actor = root.destination();
-            let runs_publicly = public_actors.contains(&actor);
-            if !S::executes_transaction_root(runs_publicly) {
-                return Err(ExecutionError::MisplacedRoot { actor });
-            }
-        }
+        let root = root
+            .filter(|root| S::executes_transaction_root(context.runs_publicly(root.destination())));
 
         let mut execution = Self {
             witnesses,

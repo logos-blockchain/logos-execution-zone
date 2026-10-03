@@ -234,9 +234,7 @@ fn private_part(
     predicted_cross_messages: PredictedCrossMessages,
     script: &mut Script,
 ) -> Result<PrivatePartOutcome, ExecutionError> {
-    let runs_publicly = context.actors.contains(&entry.destination());
-    let root = (!runs_publicly).then_some(entry);
-    PrivatePart::new(context, root, witnesses, predicted_cross_messages)?.execute(script)
+    PrivatePart::new(context, entry, witnesses, predicted_cross_messages)?.execute(script)
 }
 
 fn public_part(
@@ -245,9 +243,7 @@ fn public_part(
     boundary: Boundary,
     script: &mut Script,
 ) -> Result<PublicOutcome, ExecutionError> {
-    let runs_publicly = context.actors.contains(&entry.destination());
-    let root = runs_publicly.then_some(entry);
-    PublicPart::new(context, root, boundary)?.execute(script)
+    PublicPart::new(context, Some(entry), boundary)?.execute(script)
 }
 
 fn order(script: &Script) -> Vec<(Actor, Option<AccountId>)> {
@@ -872,21 +868,6 @@ fn initialization_rejects_inconsistent_declarations() {
 }
 
 #[test]
-fn each_part_refuses_to_execute_the_other_sides_root() {
-    let keys = Keys::new(1);
-    let witnesses = [keys.regular(false)];
-
-    assert!(matches!(
-        PrivatePart::new(context(vec![ENTRY]), Some(root(ENTRY)), &witnesses, Vec::new()).err(),
-        Some(ExecutionError::MisplacedRoot { actor }) if actor == ENTRY
-    ));
-    assert!(matches!(
-        PublicPart::new(context(vec![ENTRY]), Some(root(holder(&keys))), Boundary::new()).err(),
-        Some(ExecutionError::MisplacedRoot { actor }) if actor == holder(&keys)
-    ));
-}
-
-#[test]
 fn a_check_whose_live_subtree_reaches_the_loader_fails() {
     let loader = Actor::new(id(4), PROGRAM_LOADER_ACCOUNT_ID);
     let mut script = Script::default()
@@ -1085,7 +1066,7 @@ fn a_private_pda_family_cannot_declare_its_public_member() {
 
     let result = PrivatePart::new(
         context(vec![public_member]),
-        Some(root(custody)),
+        root(custody),
         &witnesses,
         Vec::new(),
     );

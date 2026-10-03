@@ -282,7 +282,7 @@ impl ValidatedStateDiff {
             }
         };
         ensure!(
-            public_actors.contains(&root.destination()),
+            context.runs_publicly(root.destination()),
             LeeError::InvalidInput("Root actor is not declared".into())
         );
         let request = WholeTransaction::new(context, root, &[])
@@ -394,7 +394,8 @@ impl ValidatedStateDiff {
         // 6. Nullifier uniqueness
         state.check_nullifiers_are_valid(&nullifiers)?;
 
-        // 7. Entry: a public root runs here; a cast entry consumes its pending message either way.
+        // 7. Entry: the public part runs a public root; a cast entry is admitted and consumed
+        // wherever it runs.
         let (root, consumed) = match instance.entry.clone() {
             None => (None, None),
             Some(TransactionEntry::Call { to, message: data }) => {
@@ -407,9 +408,8 @@ impl ValidatedStateDiff {
                     &instance.context,
                     &identity_account_ids(&message.identities),
                 )?;
-                let runs_publicly = instance.context.actors.contains(&record.body.to);
                 (
-                    runs_publicly.then(|| TransactionEntry::Cast(record.clone())),
+                    Some(TransactionEntry::Cast(record.clone())),
                     Some(reference),
                 )
             }
@@ -527,7 +527,7 @@ fn admit_public_receiver(
 ) -> Result<(), LeeError> {
     let to = record.body.to;
     ensure!(
-        !context.actors.contains(&to)
+        !context.runs_publicly(to)
             || context.authorized_accounts.contains(&to.account_id)
             || proves_identity(to.account_id),
         LeeError::UnprovenPublicIdentity { actor: to }

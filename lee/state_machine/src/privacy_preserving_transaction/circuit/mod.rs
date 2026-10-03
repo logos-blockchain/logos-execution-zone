@@ -259,7 +259,7 @@ pub fn execute_and_prove_with_cross_messages(
     };
     PrivatePart::new(
         input.context.clone(),
-        input.private_root(),
+        input.root.clone(),
         &input.private_witnesses,
         predicted_cross_messages.clone(),
     )?

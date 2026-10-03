@@ -115,15 +115,10 @@ pub struct ProvingInput {
 
 impl ProvingInput {
     #[must_use]
-    pub fn private_root(&self) -> Option<TransactionEntry<StoredMessage>> {
-        (!self.root_is_public()).then(|| self.root.clone())
-    }
-
-    #[must_use]
     pub fn entry(&self) -> Option<TransactionEntry<MessageRef>> {
         match &self.root {
             TransactionEntry::Call { to, message } => {
-                self.root_is_public().then(|| TransactionEntry::Call {
+                self.root_runs_publicly().then(|| TransactionEntry::Call {
                     to: *to,
                     message: message.clone(),
                 })
@@ -132,8 +127,8 @@ impl ProvingInput {
         }
     }
 
-    fn root_is_public(&self) -> bool {
-        self.context.actors.contains(&self.root.destination())
+    fn root_runs_publicly(&self) -> bool {
+        self.context.runs_publicly(self.root.destination())
     }
 }
 

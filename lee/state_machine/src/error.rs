@@ -138,7 +138,6 @@ impl From<ExecutionError> for LeeError {
             | ExecutionError::PublicFamilyMemberDeclared { .. }
             | ExecutionError::LoaderOutsidePublicExecution { .. }
             | ExecutionError::UndeclaredActor { .. }
-            | ExecutionError::MisplacedRoot { .. }
             | ExecutionError::TransitionInputMismatch { .. }
             | ExecutionError::PublicAndPrivate { .. }
             | ExecutionError::DuplicatePublicActor { .. }

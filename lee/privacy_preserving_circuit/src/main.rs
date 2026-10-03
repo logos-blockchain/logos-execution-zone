@@ -22,13 +22,12 @@ fn main() {
         predicted_cross_messages,
     } = borsh::from_slice(&read_input_frame()).expect("circuit input must be valid borsh");
     let entry = input.entry();
-    let private_root = input.private_root();
     let ProvingInput {
+        root,
         context,
         private_witnesses,
         dummy_inputs,
         ciphertext_padding,
-        ..
     } = input;
 
     // The sequencer checks disclosed images against chain state.
@@ -56,7 +55,7 @@ fn main() {
 
     let private_part = PrivatePart::new(
         context.clone(),
-        private_root,
+        root,
         &private_witnesses,
         predicted_cross_messages,
     )
