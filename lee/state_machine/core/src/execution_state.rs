@@ -276,8 +276,7 @@ enum Item<C> {
 
 #[derive(Clone, Copy)]
 enum Sender {
-    Root,
-    Cast(AccountId),
+    Root { origin: Option<AccountId> },
     Call(Actor),
     ProvenCall(AccountId),
 }
@@ -286,15 +285,15 @@ impl Sender {
     const fn actor(self) -> Option<Actor> {
         match self {
             Self::Call(actor) => Some(actor),
-            Self::Root | Self::Cast(_) | Self::ProvenCall(_) => None,
+            Self::Root { .. } | Self::ProvenCall(_) => None,
         }
     }
 
     const fn origin(self) -> Option<AccountId> {
         match self {
-            Self::Root => None,
+            Self::Root { origin } => origin,
             Self::Call(actor) => Some(actor.program_account_id),
-            Self::Cast(program) | Self::ProvenCall(program) => Some(program),
+            Self::ProvenCall(program) => Some(program),
         }
     }
 
@@ -302,7 +301,7 @@ impl Sender {
         match self {
             Self::Call(actor) => Some(actor.program_account_id),
             Self::ProvenCall(program) => Some(program),
-            Self::Root | Self::Cast(_) => None,
+            Self::Root { .. } => None,
         }
     }
 }
@@ -924,28 +923,23 @@ impl<'witnesses, S: Scope> Execution<'witnesses, S> {
             casts: Vec::new(),
         };
         match root {
-            Some(TransactionEntry::Call { to, message }) => {
+            Some(root) => {
+                let (origin, to, message) = match root {
+                    TransactionEntry::Call { to, message } => (None, to, message),
+                    TransactionEntry::Cast(StoredMessage {
+                        body:
+                            MessageBody {
+                                source,
+                                to,
+                                message,
+                            },
+                        ..
+                    }) => (Some(source), to, message),
+                };
                 execution
                     .pending
                     .push(Item::Deliver(Box::new(Delivery::entry(MessageEnvelope {
-                        source: Sender::Root,
-                        to,
-                        message,
-                    }))));
-            }
-            Some(TransactionEntry::Cast(StoredMessage {
-                body:
-                    MessageBody {
-                        source,
-                        to,
-                        message,
-                    },
-                ..
-            })) => {
-                execution
-                    .pending
-                    .push(Item::Deliver(Box::new(Delivery::entry(MessageEnvelope {
-                        source: Sender::Cast(source),
+                        source: Sender::Root { origin },
                         to,
                         message,
                     }))));
@@ -1017,7 +1011,7 @@ impl<'witnesses, S: Scope> Execution<'witnesses, S> {
         environment: &mut E,
     ) -> Result<(), E::Error> {
         let actor = delivery.envelope.to;
-        let (is_authorized, grants) = self.authorize(&delivery, actor)?;
+        let (is_authorized, grants) = self.authorize(&delivery)?;
         let entry = self
             .accounts
             .get_mut(&actor.account_id)
@@ -1043,7 +1037,7 @@ impl<'witnesses, S: Scope> Execution<'witnesses, S> {
 
         let view = TurnView {
             accounts: &self.accounts,
-            at_root: matches!(delivery.envelope.source, Sender::Root | Sender::Cast(_)),
+            at_root: matches!(delivery.envelope.source, Sender::Root { .. }),
         };
         let transition = environment.receive(&input, &view)?;
         if transition.input != input {
@@ -1111,10 +1105,10 @@ impl<'witnesses, S: Scope> Execution<'witnesses, S> {
     fn authorize(
         &mut self,
         delivery: &Delivery<Sender>,
-        actor: Actor,
     ) -> Result<(bool, BTreeSet<AccountId>), ExecutionError> {
+        let actor = delivery.envelope.to;
         let account_id = actor.account_id;
-        let caller_account_id = delivery.envelope.source.issuer();
+        let issuer = delivery.envelope.source.issuer();
         let entry = self
             .accounts
             .get(&account_id)
@@ -1122,19 +1116,19 @@ impl<'witnesses, S: Scope> Execution<'witnesses, S> {
         let (credential, granted) = match entry {
             AccountEntry::Public { is_authorized, .. } => (
                 *is_authorized,
-                caller_account_id.and_then(|caller| {
+                issuer.and_then(|issuer| {
                     delivery
                         .pda_seeds
                         .iter()
-                        .find(|seed| AccountId::for_public_pda(&caller, seed) == account_id)
-                        .map(|seed| (caller, *seed))
+                        .find(|seed| AccountId::for_public_pda(&issuer, seed) == account_id)
+                        .map(|seed| (issuer, *seed))
                 }),
             ),
             AccountEntry::Private { witness_index, .. } => {
                 let witness = &self.witnesses[*witness_index];
                 (
                     matches!(witness.kind, WitnessKind::Regular { ask: Some(_) }),
-                    private_seed_grant(caller_account_id, &delivery.pda_seeds, witness),
+                    private_seed_grant(issuer, &delivery.pda_seeds, witness),
                 )
             }
         };
@@ -1219,13 +1213,13 @@ const fn step_past(position: &mut usize) {
 }
 
 fn private_seed_grant(
-    caller_account_id: Option<AccountId>,
+    issuer: Option<AccountId>,
     pda_seeds: &[PdaSeed],
     witness: &PrivateWitness,
 ) -> Option<(AccountId, PdaSeed)> {
     witness
         .pda_binding()
-        .filter(|&(program, seed)| Some(program) == caller_account_id && pda_seeds.contains(&seed))
+        .filter(|&(program, seed)| Some(program) == issuer && pda_seeds.contains(&seed))
 }
 
 fn bind_family(
