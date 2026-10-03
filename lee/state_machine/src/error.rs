@@ -89,7 +89,9 @@ pub enum LeeError {
         chained: bool,
     },
 
-    #[error("A receipt reached {actor:?}, whose public identity is neither authorized nor proven")]
+    #[error(
+        "A pending message reached {actor:?}, whose public identity is neither authorized nor proven"
+    )]
     UnprovenPublicIdentity { actor: Actor },
 }
 

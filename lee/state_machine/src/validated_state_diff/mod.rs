@@ -270,7 +270,7 @@ impl ValidatedStateDiff {
                 (TransactionEntry::Call { to, message }, None)
             }
             TransactionEntry::Cast(reference) => {
-                let record = admit_receipt(state, reference, &context, identities)?;
+                let record = admit_pending_message(state, reference, &context, identities)?;
                 (TransactionEntry::Cast(record.clone()), Some(reference))
             }
         };
@@ -383,14 +383,14 @@ impl ValidatedStateDiff {
         // 6. Nullifier uniqueness
         state.check_nullifiers_are_valid(&nullifiers)?;
 
-        // 7. Entry: a public root runs here; a receipt consumes its pending message either way.
+        // 7. Entry: a public root runs here; a cast entry consumes its pending message either way.
         let (root, consumed) = match execution.entry.clone() {
             None => (None, None),
             Some(TransactionEntry::Call { to, message: data }) => {
                 (Some(TransactionEntry::Call { to, message: data }), None)
             }
             Some(TransactionEntry::Cast(reference)) => {
-                let record = admit_receipt(
+                let record = admit_pending_message(
                     state,
                     reference,
                     &execution.context,
@@ -489,7 +489,7 @@ fn catch_program_loader_panic<T>(run: impl FnOnce() -> T) -> Result<T, LeeError>
     })
 }
 
-fn admit_receipt<'state>(
+fn admit_pending_message<'state>(
     state: &'state V03State,
     reference: MessageRef,
     context: &PublicExecutionContext,
@@ -498,13 +498,13 @@ fn admit_receipt<'state>(
     let record = state
         .pending_message(reference)
         .ok_or_else(|| LeeError::InvalidInput("A consumed message is not pending".into()))?;
-    admit_public_receipt(record, context, |account_id| {
+    admit_public_receiver(record, context, |account_id| {
         identities.contains(&account_id) || state.is_designated_public_account(account_id)
     })?;
     Ok(record)
 }
 
-fn admit_public_receipt(
+fn admit_public_receiver(
     record: &StoredMessage,
     context: &PublicExecutionContext,
     proves_identity: impl Fn(AccountId) -> bool,
