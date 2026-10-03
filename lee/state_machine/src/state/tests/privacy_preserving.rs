@@ -676,18 +676,16 @@ fn assert_forged_field_is_refused(forge_field: ForgeField) {
 }
 
 #[test]
-fn a_public_turn_forging_its_receiver_is_refused() {
-    assert_forged_field_is_refused(ForgeField::Receiver);
-}
-
-#[test]
-fn a_public_turn_forging_the_pre_state_it_was_given_is_refused() {
-    assert_forged_field_is_refused(ForgeField::PreState);
-}
-
-#[test]
-fn a_public_turn_forging_the_message_it_was_sent_is_refused() {
-    assert_forged_field_is_refused(ForgeField::Message);
+fn a_public_turn_forging_any_echoed_field_is_refused() {
+    for field in [
+        ForgeField::Receiver,
+        ForgeField::Origin,
+        ForgeField::IsAuthorized,
+        ForgeField::PreState,
+        ForgeField::Message,
+    ] {
+        assert_forged_field_is_refused(field);
+    }
 }
 
 fn nested_actors() -> (Actor, Actor) {
