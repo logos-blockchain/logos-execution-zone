@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
@@ -180,6 +180,7 @@ struct Prover<'programs> {
     programs: &'programs HashMap<AccountId, Dependency>,
     env_builder: ExecutorEnvBuilder<'static>,
     responses: Vec<Response>,
+    invoked: BTreeSet<AccountId>,
 }
 
 impl ExecutionEnvironment for Prover<'_> {
@@ -195,6 +196,7 @@ impl ExecutionEnvironment for Prover<'_> {
             let transition = transition_journal(&receipt.journal.bytes)?;
             self.env_builder.add_assumption(receipt);
             self.responses.push(transition.response.clone());
+            self.invoked.insert(input.receiver.program_account_id);
             Ok(transition)
         })
     }
@@ -261,6 +263,7 @@ pub fn execute_and_prove_with_crossings(
         programs,
         env_builder: ExecutorEnv::builder(),
         responses: Vec::new(),
+        invoked: BTreeSet::new(),
     };
     PrivatePart::new(
         input.context.clone(),
@@ -272,6 +275,7 @@ pub fn execute_and_prove_with_crossings(
     let Prover {
         mut env_builder,
         responses,
+        invoked,
         ..
     } = backend;
 
@@ -281,11 +285,8 @@ pub fn execute_and_prove_with_crossings(
     // in-circuit — unless it's resolved as shadow instead.
     let mut program_image_witnesses = Vec::new();
     let mut shadow_program_witnesses = Vec::new();
-    #[expect(
-        clippy::iter_over_hash_type,
-        reason = "Witness order is not significant; the journal echoes whatever order is supplied"
-    )]
-    for (account_id, Dependency { program, kind }) in programs {
+    for account_id in &invoked {
+        let Dependency { program, kind } = &programs[account_id];
         match kind {
             ProgramKind::Disclosed => {
                 program_image_witnesses.push(ProgramImageWitness::Disclosed {
