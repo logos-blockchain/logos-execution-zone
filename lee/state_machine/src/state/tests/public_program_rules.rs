@@ -206,7 +206,7 @@ fn insufficient_balance_transfer_leaves_state_untouched() {
 }
 
 #[test]
-fn a_sent_turn_on_another_actor_state_of_the_root_account_keeps_its_other_actor_states() {
+fn a_sent_transition_on_another_actor_state_of_the_root_account_keeps_its_other_actor_states() {
     let account_id = AccountId::new([1; 32]);
     let stranger = AccountId::new([9; 32]);
     let on_chain: ActorState = b"on-chain".to_vec().into();
@@ -248,7 +248,7 @@ fn a_sent_turn_on_another_actor_state_of_the_root_account_keeps_its_other_actor_
 }
 
 #[test]
-fn a_declared_account_no_turn_changes_stays_out_of_the_diff_and_the_state() {
+fn a_declared_account_no_transition_changes_stays_out_of_the_diff_and_the_state() {
     let root = Actor::new(AccountId::new([41; 32]), scripted_id());
     let bystander = Actor::new(AccountId::new([42; 32]), scripted_id());
     let mut state = V03State::new().with_test_programs();

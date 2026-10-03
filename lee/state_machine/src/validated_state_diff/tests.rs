@@ -167,9 +167,9 @@ fn exhausted_budget_surfaces_out_of_gas() {
 }
 
 #[test]
-fn turns_share_one_budget() {
-    // A sending tx must exhaust when the budget covers less than all of its turns, even though
-    // each individual turn would fit.
+fn transitions_share_one_budget() {
+    // A sending tx must exhaust when the budget covers less than all of its transitions, even
+    // though each individual transition would fit.
     let (from_key, from) = signer();
     let state = V03State::new()
         .with_public_account_balances([(from, 1_000)])
@@ -196,11 +196,11 @@ fn turns_share_one_budget() {
 
     assert!(
         cycles_under(&one_callee, budget).is_ok(),
-        "the budget must cover the root turn and a whole sent turn"
+        "the budget must cover the root transition and a whole sent transition"
     );
     assert!(
         budget < spent(&chain),
-        "the budget must not cover every turn"
+        "the budget must not cover every transition"
     );
     assert!(matches!(
         cycles_under(&chain, budget),
@@ -272,8 +272,8 @@ fn metered_nonzero_exit_is_charged_its_metered_cycles() {
 }
 
 #[test]
-fn a_sent_turns_nonzero_exit_adds_its_cycles_to_its_senders() {
-    // The accumulation branch only matters once the sender has burned cycles: a sent turn's
+fn a_sent_transitions_nonzero_exit_adds_its_cycles_to_its_senders() {
+    // The accumulation branch only matters once the sender has burned cycles: a sent transition's
     // non-zero exit must charge sender + receiver, not just the receiver.
     let (from_key, from) = signer();
     let exits_id = AccountId::from_builtin_program(crate::test_methods::exits_nonzero().id());
@@ -399,7 +399,7 @@ fn an_undeclared_root_actor_is_invalid_input_and_not_charged() {
 }
 
 #[test]
-fn a_send_to_an_undeclared_actor_from_a_later_turn_is_charged() {
+fn a_send_to_an_undeclared_actor_from_a_later_transition_is_charged() {
     let (from_key, from) = signer();
     let state = V03State::new()
         .with_public_account_balances([(from, 100)])

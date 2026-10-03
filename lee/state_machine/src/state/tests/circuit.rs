@@ -344,7 +344,7 @@ fn prove_delegation(
 }
 
 /// Happy path for the caller-seeds authorization of a private PDA. The delegator sends to the
-/// PDA's callee actor with the account's own seed in `Call.pda_seeds`. In the callee's turn,
+/// PDA's callee actor with the account's own seed in `Call.pda_seeds`. In the callee's transition,
 /// the actor's authorization is established via the private derivation
 /// `AccountId::for_private_pda(delegator, seed, npk) == actor.account_id`.
 #[test]
@@ -361,8 +361,8 @@ fn caller_pda_seeds_authorize_private_pda_for_callee() {
 }
 
 /// The delegator sends a different seed than the one the account was derived under. In the
-/// callee's turn, neither public nor private caller-seeds authorization matches, so the PDA stays
-/// unauthorized and the callee's own guest rejects it.
+/// callee's transition, neither public nor private caller-seeds authorization matches, so the PDA
+/// stays unauthorized and the callee's own guest rejects it.
 #[test]
 fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
     let wrong_delegated_seed = PdaSeed::new([88; 32]);
@@ -452,7 +452,7 @@ fn inherited_scope_passes_through_nested_intermediate_calls() {
         ),
         false,
     )
-    .expect("an account authorized in an ancestor's turn stays authorized two turns below it");
+    .expect("an account authorized in an ancestor's transition stays authorized two transitions below it");
 }
 
 fn prove_public_outputs(
@@ -536,7 +536,7 @@ fn a_wrong_seed_leaves_a_signer_on_its_credential() {
 }
 
 #[test]
-fn a_public_pda_seed_from_a_private_turn_does_not_extend_to_a_sibling_output() {
+fn a_public_pda_seed_from_a_private_transition_does_not_extend_to_a_sibling_output() {
     let account_id = AccountId::for_public_pda(&scripted_id(), &DELEGATED_SEED);
     let callee = Actor::new(account_id, TWIN);
 

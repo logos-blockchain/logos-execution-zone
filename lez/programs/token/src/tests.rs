@@ -135,7 +135,7 @@ const fn credit(descriptor: TokenDescriptor, amount: u128) -> Message {
     }
 }
 
-fn turn(
+fn transition_at(
     account: AccountId,
     is_authorized: bool,
     origin: Option<AccountId>,
@@ -160,7 +160,7 @@ fn written(message: &Message, pre_state: &ActorState) -> Option<ActorState> {
     } else {
         HOLDING_ID
     };
-    turn(receiver, true, TOKEN_ORIGIN, pre_state, message)
+    transition_at(receiver, true, TOKEN_ORIGIN, pre_state, message)
         .response
         .post_state
 }
@@ -183,14 +183,14 @@ fn holding_at(message: &Message, pre_state: &ActorState) -> TokenHolding {
     TokenHolding::try_from(
         &written(message, pre_state).expect("the message writes its actor state"),
     )
-    .expect("the turn wrote a holding")
+    .expect("the transition wrote a holding")
 }
 
 fn definition_at(message: &Message, pre_state: &ActorState) -> TokenDefinition {
     TokenDefinition::try_from(
         &written(message, pre_state).expect("the message writes its actor state"),
     )
-    .expect("the turn wrote a definition")
+    .expect("the transition wrote a definition")
 }
 
 fn settle(
@@ -204,7 +204,7 @@ fn settle(
 
     while let Some((account, origin, message)) = pending.pop_front() {
         let pre_state = state.get(&account).cloned().unwrap_or_default();
-        let transition = turn(
+        let transition = transition_at(
             account,
             authorized.contains(&account),
             origin,
@@ -233,7 +233,7 @@ fn settle(
 
 fn settled_holding(state: &HashMap<AccountId, ActorState>, account_id: AccountId) -> TokenHolding {
     TokenHolding::try_from(state.get(&account_id).expect("the account was settled"))
-        .expect("the turn wrote a holding")
+        .expect("the transition wrote a holding")
 }
 
 fn settled_definition(
@@ -241,7 +241,7 @@ fn settled_definition(
     account_id: AccountId,
 ) -> TokenDefinition {
     TokenDefinition::try_from(state.get(&account_id).expect("the account was settled"))
-        .expect("the turn wrote a definition")
+        .expect("the transition wrote a definition")
 }
 
 // --- new definitions -------------------------------------------------------------------------
@@ -403,7 +403,7 @@ fn every_sent_creation_writes_only_into_an_empty_target() {
 #[should_panic(expected = "Sender authorization is missing")]
 #[test]
 fn transfer_without_sender_authorization_should_fail() {
-    let _transition = turn(
+    let _transition = transition_at(
         HOLDING_ID,
         false,
         None,
@@ -473,7 +473,7 @@ fn transfer_into_an_empty_recipient_uses_the_bound_descriptor() {
 fn transfer_with_master_nft_invalid_balance() {
     // The whole print balance must move, and the message only *claims* how much that is.
     // Every claim other than the master's real print balance is refused by the sender's own
-    // turn, so a forged claim cannot mint print capacity into the recipient.
+    // transition, so a forged claim cannot mint print capacity into the recipient.
     for claimed in [
         0,
         1,
@@ -539,7 +539,7 @@ fn a_transfer_requested_by_another_actor_needs_only_the_senders_authorization() 
     let requester = Some(OTHER_DEFINITION_ID);
     let sender = ActorState::from(&fungible(INIT_SUPPLY));
     let request = |is_authorized| {
-        turn(
+        transition_at(
             HOLDING_ID,
             is_authorized,
             requester,
@@ -563,7 +563,7 @@ fn a_transfer_requested_by_another_actor_needs_only_the_senders_authorization() 
 #[should_panic(expected = "A credit must come from the token program")]
 #[test]
 fn a_credit_from_the_root_is_rejected() {
-    let _transition = turn(
+    let _transition = transition_at(
         HOLDING_ID,
         true,
         None,
@@ -575,7 +575,7 @@ fn a_credit_from_the_root_is_rejected() {
 #[should_panic(expected = "A creation must come from the token program")]
 #[test]
 fn a_creation_from_another_program_is_rejected() {
-    let _transition = turn(
+    let _transition = transition_at(
         HOLDING_ID,
         true,
         Some(OTHER_DEFINITION_ID),
@@ -587,7 +587,7 @@ fn a_creation_from_another_program_is_rejected() {
 #[test]
 fn a_credit_with_notify_sends_one_notification() {
     let listener = Actor::new(HOLDING_ID_2, OTHER_DEFINITION_ID);
-    let transition = turn(
+    let transition = transition_at(
         HOLDING_ID,
         false,
         TOKEN_ORIGIN,
@@ -622,7 +622,7 @@ fn a_credit_with_notify_sends_one_notification() {
 #[should_panic(expected = "A token actor does not accept notifications")]
 #[test]
 fn a_notification_from_a_token_origin_is_refused() {
-    let _transition = turn(
+    let _transition = transition_at(
         HOLDING_ID,
         true,
         TOKEN_ORIGIN,
@@ -656,7 +656,7 @@ fn expected_sends_for_a_transfer_is_one_credit_to_the_recipient() {
 #[test]
 fn a_cast_transfer_writes_the_sender_like_a_call_and_sends_one_cast_credit() {
     let sender = ActorState::from(&fungible(INIT_SUPPLY));
-    let run = |message: &Message| turn(HOLDING_ID, true, None, &sender, message);
+    let run = |message: &Message| transition_at(HOLDING_ID, true, None, &sender, message);
 
     let cast = run(&cast_transfer(FUNGIBLE, TRANSFER_AMOUNT));
 
@@ -681,7 +681,7 @@ fn a_cast_transfer_writes_the_sender_like_a_call_and_sends_one_cast_credit() {
 #[should_panic(expected = "Sender authorization is missing")]
 #[test]
 fn a_cast_transfer_without_sender_authorization_is_rejected() {
-    let _transition = turn(
+    let _transition = transition_at(
         HOLDING_ID,
         false,
         None,
@@ -741,7 +741,7 @@ fn ensure_holding_rejects_a_mismatched_unauthorized_target() {
         definition_id: OTHER_DEFINITION_ID,
         balance: HOLDING_BALANCE,
     };
-    let _transition = turn(
+    let _transition = transition_at(
         HOLDING_ID,
         false,
         None,
@@ -760,7 +760,7 @@ fn another_actor_replaces_a_funded_holding_only_with_authorization() {
         balance: HOLDING_BALANCE,
     });
     let request = |is_authorized| {
-        turn(
+        transition_at(
             HOLDING_ID,
             is_authorized,
             requester,
@@ -787,7 +787,7 @@ fn another_actor_replaces_a_funded_holding_only_with_authorization() {
 fn ensure_holding_keeps_a_matching_funded_holding() {
     for is_authorized in [false, true] {
         assert_eq!(
-            turn(
+            transition_at(
                 HOLDING_ID,
                 is_authorized,
                 None,
@@ -806,7 +806,7 @@ fn ensure_holding_keeps_a_matching_funded_holding() {
 #[test]
 fn ensure_holding_keeps_a_funded_master_for_a_printed_copy_descriptor() {
     assert_eq!(
-        turn(
+        transition_at(
             HOLDING_ID,
             false,
             None,
@@ -845,7 +845,7 @@ fn assert_kind_keeps_the_definition_it_checked() {
 
 #[test]
 fn assert_kind_rejects_a_forged_token_kind() {
-    // The kind a holding is ensured with comes from the message, and the holding's own turn
+    // The kind a holding is ensured with comes from the message, and the holding's own transition
     // never sees the definition. `AssertKind` on the definition is the only thing standing
     // between a claimed kind and a holding that carries it.
     let cases = [
@@ -881,7 +881,7 @@ fn assert_kind_rejects_a_forged_token_kind() {
 #[should_panic(expected = "Definition authorization is missing")]
 #[test]
 fn mint_missing_authorization() {
-    let _transition = turn(
+    let _transition = transition_at(
         DEFINITION_ID,
         false,
         None,
@@ -1007,7 +1007,7 @@ fn mint_into_a_non_fungible_holding_is_rejected() {
 #[should_panic(expected = "Authorization is missing")]
 #[test]
 fn burn_missing_authorization() {
-    let _transition = turn(
+    let _transition = transition_at(
         HOLDING_ID,
         false,
         None,
@@ -1156,7 +1156,7 @@ fn burn_of_an_unowned_printed_copy_is_rejected() {
 #[test]
 fn burn_rejects_a_forged_holding_kind() {
     // The claimed kind picks which of the definition's two supplies is decremented, and the
-    // definition's turn never sees the holding. Both turns check the same claim against
+    // definition's transition never sees the holding. Both transitions check the same claim against
     // their own contents.
     let definitions = [
         (
@@ -1211,7 +1211,7 @@ fn burn_rejects_a_forged_holding_kind() {
 
 #[test]
 fn a_burn_sends_the_supply_burn_to_the_definition_it_names() {
-    let transition = turn(
+    let transition = transition_at(
         HOLDING_ID,
         true,
         None,
@@ -1242,7 +1242,7 @@ fn a_burn_sends_the_supply_burn_to_the_definition_it_names() {
 #[should_panic(expected = "A supply burn names another definition")]
 #[test]
 fn a_supply_burn_received_by_another_definition_is_rejected() {
-    let _transition = turn(
+    let _transition = transition_at(
         OTHER_DEFINITION_ID,
         true,
         TOKEN_ORIGIN,
@@ -1267,7 +1267,7 @@ fn print_nft(definition_id: AccountId) -> Message {
 #[should_panic(expected = "Master NFT Account must be authorized")]
 #[test]
 fn print_nft_master_account_must_be_authorized() {
-    let _transition = turn(
+    let _transition = transition_at(
         HOLDING_ID,
         false,
         None,
@@ -1303,7 +1303,7 @@ fn print_nft_master_nft_insufficient_balance() {
 #[should_panic(expected = "Printed copy does not belong to the master's Token Definition")]
 #[test]
 fn print_nft_rejects_a_forged_definition_id() {
-    // The collection the new copy claims is message data, and the printed account's turn
+    // The collection the new copy claims is message data, and the printed account's transition
     // never sees the master. Without this check a master of any collection could print a copy
     // of a more valuable one.
     let _written = written(
@@ -1328,6 +1328,6 @@ fn print_nft_success() {
     assert_eq!(
         master_holding.definition_id(),
         copy.definition_id(),
-        "the turn printed a copy of a collection the master does not hold"
+        "the transition printed a copy of a collection the master does not hold"
     );
 }

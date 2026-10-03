@@ -43,7 +43,7 @@ fn holding(token_program_id: AccountId) -> (Actor, Vec<PdaSeed>) {
 }
 
 // Drives the real entrypoint as a root delivery to the owner's actor under the ATA program.
-fn turn(is_authorized: bool, message: Message) -> Transition {
+fn owner_transition(is_authorized: bool, message: Message) -> Transition {
     let input = ReceiveInput {
         receiver: Actor::new(owner_id(), ATA_PROGRAM_ID),
         origin: None,
@@ -146,13 +146,13 @@ fn create_grants_the_ata_seed_only_when_the_owner_signed() {
         },
     );
 
-    let unsigned = turn(false, create(TOKEN_PROGRAM_ID));
+    let unsigned = owner_transition(false, create(TOKEN_PROGRAM_ID));
     assert_eq!(unsigned.response.post_state, None);
     assert_eq!(
         (unsigned.response.calls, unsigned.response.casts),
         (vec![assert_kind.clone(), ensure.clone()], Vec::new())
     );
-    let signed = turn(true, create(TOKEN_PROGRAM_ID));
+    let signed = owner_transition(true, create(TOKEN_PROGRAM_ID));
     assert_eq!(
         (signed.response.calls, signed.response.casts),
         (vec![assert_kind, ensure.with_pda_seeds(seeds)], Vec::new())
@@ -169,7 +169,7 @@ fn create_naming_a_stranger_program_cannot_reach_the_real_ata() {
         transfer(STRANGER_PROGRAM_ID),
         burn(STRANGER_PROGRAM_ID),
     ] {
-        let mut response = turn(true, message).response;
+        let mut response = owner_transition(true, message).response;
         assert!(response.casts.is_empty(), "every message sends to the ATA");
         let Some(Call { to: target, .. }) = response.calls.pop() else {
             panic!("every message sends to the ATA");
@@ -183,7 +183,7 @@ fn create_naming_a_stranger_program_cannot_reach_the_real_ata() {
 fn transfer_delegates_the_proposed_descriptor_under_the_ata_seed() {
     let (ata, seeds) = holding(TOKEN_PROGRAM_ID);
 
-    let transition = turn(true, transfer(TOKEN_PROGRAM_ID));
+    let transition = owner_transition(true, transfer(TOKEN_PROGRAM_ID));
     assert_eq!(
         (transition.response.calls, transition.response.casts),
         (
@@ -208,14 +208,14 @@ fn transfer_delegates_the_proposed_descriptor_under_the_ata_seed() {
 #[test]
 #[should_panic(expected = "Owner authorization is missing")]
 fn transfer_rejects_an_unauthorized_owner() {
-    let _transition = turn(false, transfer(TOKEN_PROGRAM_ID));
+    let _transition = owner_transition(false, transfer(TOKEN_PROGRAM_ID));
 }
 
 #[test]
 fn burn_delegates_the_named_definition_under_the_ata_seed() {
     let (ata, seeds) = holding(TOKEN_PROGRAM_ID);
 
-    let transition = turn(true, burn(TOKEN_PROGRAM_ID));
+    let transition = owner_transition(true, burn(TOKEN_PROGRAM_ID));
     assert_eq!(
         (transition.response.calls, transition.response.casts),
         (
@@ -238,5 +238,5 @@ fn burn_delegates_the_named_definition_under_the_ata_seed() {
 #[test]
 #[should_panic(expected = "Owner authorization is missing")]
 fn burn_rejects_an_unauthorized_owner() {
-    let _transition = turn(false, burn(TOKEN_PROGRAM_ID));
+    let _transition = owner_transition(false, burn(TOKEN_PROGRAM_ID));
 }

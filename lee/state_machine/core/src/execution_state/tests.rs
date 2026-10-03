@@ -145,7 +145,7 @@ fn send_to(receiver: Actor) -> Call {
     }
 }
 
-// The private holder of `Keys::new(1)`, entered from a public turn.
+// The private holder of `Keys::new(1)`, entered from a public transition.
 fn enter(message: &[u8]) -> Call {
     Call {
         to: holder(&Keys::new(1)),
@@ -294,7 +294,7 @@ fn public_calls(boundary: &[BoundaryStep]) -> Vec<Delivery<AccountId>> {
         .collect()
 }
 
-// `ENTRY` enters the private holder, whose turn calls `CALLEE`.
+// `ENTRY` enters the private holder, whose transition calls `CALLEE`.
 fn nested_cross_messages() -> PredictedCrossMessages {
     vec![
         vec![delivery(ENTRY, holder(&Keys::new(1)), ENTER)],
@@ -521,7 +521,7 @@ fn a_root_authorized_public_account_is_authorized_from_any_origin() {
 }
 
 #[test]
-fn turn_windows_intersect_and_disjoint_ones_are_rejected() {
+fn transition_windows_intersect_and_disjoint_ones_are_rejected() {
     let (outer, inner) = (actor(1, 9), actor(2, 9));
     let windowed = |inner_window: std::ops::Range<u64>| {
         Script::default()
@@ -1100,11 +1100,11 @@ fn a_private_grant_survives_its_own_public_detour_but_not_a_sibling_call() {
     )
     .unwrap()
     .predicted_cross_messages;
-    let private_turns: Vec<_> = authorized(&whole_script)
+    let private_transitions: Vec<_> = authorized(&whole_script)
         .into_iter()
         .filter(|(actor, _)| *actor == owner || *actor == custody)
         .collect();
-    assert_eq!(private_turns, expected);
+    assert_eq!(private_transitions, expected);
 
     let mut private_script = script();
     let boundary = private_part(
@@ -1211,10 +1211,10 @@ fn a_public_part_publishes_live_events() {
     assert_eq!(events, vec![(ENTRY, event)]);
 }
 
-// A public turn asks a private account's native balance to pay: the private turn runs under the
-// account's own credential, and without it the debit is refused.
+// A public transition asks a private account's native balance to pay: the private transition runs
+// under the account's own credential, and without it the debit is refused.
 #[test]
-fn a_public_turn_requests_a_private_debit_that_the_private_credential_authorizes() {
+fn a_public_transition_requests_a_private_debit_that_the_private_credential_authorizes() {
     let keys = Keys::new(1);
     let (requester, payee) = (actor(2, 9), Actor::native_balance(id(3)));
     let payer = Actor::native_balance(keys.regular_id());
@@ -1566,7 +1566,7 @@ fn siblings(receiver: Actor) -> Vec<Call> {
     vec![call_with(receiver, b"c1"), call_with(receiver, b"c2")]
 }
 
-fn turns_of(script: &Script, receiver: Actor) -> Vec<(MessageData, ActorState)> {
+fn transitions_of(script: &Script, receiver: Actor) -> Vec<(MessageData, ActorState)> {
     script
         .log
         .iter()
@@ -1592,7 +1592,7 @@ fn a_public_sibling_call_sees_the_state_its_earlier_siblings_subtree_left() {
 
     public_transaction(context(vec![sender, receiver]), sender, &mut script).unwrap();
 
-    assert_eq!(turns_of(&script, receiver), completed_c1_then_c2());
+    assert_eq!(transitions_of(&script, receiver), completed_c1_then_c2());
 }
 
 #[test]
@@ -1612,12 +1612,13 @@ fn a_private_sibling_call_sees_the_state_its_earlier_siblings_subtree_left() {
     )
     .unwrap();
 
-    assert_eq!(turns_of(&script, receiver), completed_c1_then_c2());
+    assert_eq!(transitions_of(&script, receiver), completed_c1_then_c2());
     assert!(outcome.boundary.is_empty());
 }
 
 #[test]
-fn a_public_sibling_called_from_a_private_turn_sees_the_state_its_earlier_siblings_subtree_left() {
+fn a_public_sibling_called_from_a_private_transition_sees_the_state_its_earlier_siblings_subtree_left()
+ {
     let keys = Keys::new(1);
     let receiver = actor(2, 9);
     let mut private_script = Script::default().on(holder(&keys), sending(siblings(receiver)));
@@ -1640,11 +1641,15 @@ fn a_public_sibling_called_from_a_private_turn_sees_the_state_its_earlier_siblin
     )
     .unwrap();
 
-    assert_eq!(turns_of(&public_script, receiver), completed_c1_then_c2());
+    assert_eq!(
+        transitions_of(&public_script, receiver),
+        completed_c1_then_c2()
+    );
 }
 
 #[test]
-fn a_private_sibling_called_from_a_public_turn_sees_the_state_its_earlier_siblings_subtree_left() {
+fn a_private_sibling_called_from_a_public_transition_sees_the_state_its_earlier_siblings_subtree_left()
+ {
     let keys = Keys::new(1);
     let (sender, receiver) = (actor(1, 9), holder(&keys));
     let mut private_script = Script::default().on(receiver, sibling_receiver(receiver));
@@ -1670,7 +1675,10 @@ fn a_private_sibling_called_from_a_public_turn_sees_the_state_its_earlier_siblin
     )
     .unwrap();
 
-    assert_eq!(turns_of(&private_script, receiver), completed_c1_then_c2());
+    assert_eq!(
+        transitions_of(&private_script, receiver),
+        completed_c1_then_c2()
+    );
 }
 
 #[test]
@@ -1752,7 +1760,7 @@ fn a_failing_descendant_of_c1_stops_the_transaction_before_c2() {
         Err(ExecutionError::UndeclaredActor { actor }) if actor == stranger
     ));
     assert_eq!(
-        turns_of(&script, receiver),
+        transitions_of(&script, receiver),
         vec![(b"c1".to_vec(), ActorState::empty())]
     );
 }

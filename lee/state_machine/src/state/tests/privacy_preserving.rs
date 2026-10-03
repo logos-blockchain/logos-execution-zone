@@ -56,8 +56,9 @@ impl PrivateRoot {
     }
 }
 
-// A shielded P → A → Q statement: the public root P sends into the private actor A, whose turn
-// sends to the public actor Q. The proof always assumes P delivers `inner_turn` to A.
+// A shielded P → A → Q statement: the public root P sends into the private actor A, whose
+// transition sends to the public actor Q. The proof always assumes P delivers `inner_transition` to
+// A.
 struct NestedBoundary {
     state: V03State,
     outer: Actor,
@@ -80,7 +81,7 @@ impl NestedBoundary {
                     envelope: MessageEnvelope {
                         source: outer,
                         to: nested_private(),
-                        message: borsh::to_vec(&inner_turn()).unwrap(),
+                        message: borsh::to_vec(&inner_transition()).unwrap(),
                     },
                     grants: BTreeSet::new(),
                     pda_seeds: Vec::new(),
@@ -378,7 +379,7 @@ fn a_tampered_boundary_output_is_rejected() {
 }
 
 #[test]
-fn a_failing_public_turn_leaves_the_state_untouched() {
+fn a_failing_public_transition_leaves_the_state_untouched() {
     let program_id = scripted_id();
     let sender_keys = test_public_account_keys_1();
     let sender_id = sender_keys.account_id();
@@ -620,7 +621,7 @@ fn a_private_roots_public_outputs_settle_against_live_state() {
         .transition_from_privacy_preserving_transaction(&tx, 1, 0)
         .expect("the public outputs settle");
 
-    // The scripted actor's own actor state was written by its live turn at settlement.
+    // The scripted actor's own actor state was written by its live transition at settlement.
     assert_eq!(
         root.state
             .get_account_by_id(written_to.account_id)
@@ -676,7 +677,7 @@ fn assert_forged_field_is_refused(forge_field: ForgeField) {
 }
 
 #[test]
-fn a_public_turn_forging_any_echoed_field_is_refused() {
+fn a_public_transition_forging_any_echoed_field_is_refused() {
     for field in [
         ForgeField::Receiver,
         ForgeField::Origin,
@@ -695,7 +696,7 @@ fn nested_actors() -> (Actor, Actor) {
     )
 }
 
-fn inner_turn() -> Script {
+fn inner_transition() -> Script {
     Script::default().call(nested_actors().1, &Script::write(vec![2; 4]))
 }
 
@@ -707,13 +708,13 @@ fn nested_private() -> Actor {
     )
 }
 
-fn outer_turn(delivered: &Script) -> Script {
+fn outer_transition(delivered: &Script) -> Script {
     Script::write(vec![1; 4]).call(nested_private(), delivered)
 }
 
 #[test]
 fn a_nested_boundary_settles_both_public_writes() {
-    let mut nested = NestedBoundary::prove(&outer_turn(&inner_turn()));
+    let mut nested = NestedBoundary::prove(&outer_transition(&inner_transition()));
 
     assert!(matches!(
         nested.tx.message.instance.boundary.as_slice(),
@@ -728,7 +729,7 @@ fn a_nested_boundary_settles_both_public_writes() {
     nested
         .state
         .transition_from_privacy_preserving_transaction(&nested.tx, 1, 0)
-        .expect("the live public turns reproduce the proven boundary");
+        .expect("the live public transitions reproduce the proven boundary");
 
     for (actor, written) in [(nested.outer, [1; 4]), (nested.inner, [2; 4])] {
         assert_eq!(
@@ -747,7 +748,7 @@ fn a_nested_boundary_settles_both_public_writes() {
 fn a_tampered_cross_message_or_public_root_is_rejected() {
     use crate::validated_state_diff::ValidatedStateDiff;
 
-    let nested = NestedBoundary::prove(&outer_turn(&inner_turn()));
+    let nested = NestedBoundary::prove(&outer_transition(&inner_transition()));
     let verify = |tx: &PrivacyPreservingTransaction| {
         ValidatedStateDiff::from_privacy_preserving_transaction(tx, &nested.state, 1, 0)
     };
@@ -759,7 +760,7 @@ fn a_tampered_cross_message_or_public_root_is_rejected() {
     let BoundaryStep::EnterPrivate(cross_message) =
         &mut cross_message_tampered.message.instance.boundary[0]
     else {
-        panic!("the nested boundary opens by entering the private turn");
+        panic!("the nested boundary opens by entering the private transition");
     };
     cross_message.envelope.message[0] ^= 0xFF;
     let mut root_tampered = nested.tx.clone();
@@ -778,10 +779,11 @@ fn a_tampered_cross_message_or_public_root_is_rejected() {
 }
 
 #[test]
-fn a_public_turn_departing_from_its_predicted_cross_message_is_rejected_and_applies_nothing() {
-    // The outer turn's live script delivers something other than the assumed message.
+fn a_public_transition_departing_from_its_predicted_cross_message_is_rejected_and_applies_nothing()
+{
+    // The outer transition's live script delivers something other than the assumed message.
     let mut nested = NestedBoundary::prove(
-        &outer_turn(&Script::default()).cast(nested_actors().1, &Script::default()),
+        &outer_transition(&Script::default()).cast(nested_actors().1, &Script::default()),
     );
     let public_state = nested.state.public_state.clone();
 

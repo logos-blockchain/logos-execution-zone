@@ -76,7 +76,7 @@ fn emitted_events_are_returned_in_order_and_attributed_to_the_emitter() {
 }
 
 #[test]
-fn events_of_sent_turns_follow_depth_first_pre_order() {
+fn events_of_sent_transitions_follow_depth_first_pre_order() {
     let mut state = V03State::new().with_programs([crate::test_methods::scripted()]);
     let to_emitter = emitter();
 
@@ -101,7 +101,7 @@ fn events_of_sent_turns_follow_depth_first_pre_order() {
 }
 
 #[test]
-fn a_sent_turns_events_are_attributed_to_its_program_not_its_sender() {
+fn a_sent_transitions_events_are_attributed_to_its_program_not_its_sender() {
     let initiator = crate::test_methods::flash_swap_initiator();
 
     let vault_id = AccountId::for_public_pda(

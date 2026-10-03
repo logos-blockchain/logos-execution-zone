@@ -37,7 +37,7 @@ fn regular_id(keys: &TestPrivateKeys, identifier: Identifier) -> AccountId {
     AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier)
 }
 
-// Proves `script` as the root turn of the `scripted` actor of the witness's account.
+// Proves `script` as the root transition of the `scripted` actor of the witness's account.
 fn prove_scripted(
     witness: PrivateWitness,
     script: &Script,
@@ -407,7 +407,7 @@ fn note_ciphertext_is_padded_to_the_requested_length() {
 }
 
 #[test]
-fn circuit_fails_when_turn_validity_windows_have_empty_intersection() {
+fn circuit_fails_when_transition_validity_windows_have_empty_intersection() {
     let account_keys = test_private_account_keys_1();
     let later = Script {
         response: Response::keep_state().try_block_window(4..7).unwrap(),
@@ -912,7 +912,7 @@ fn the_prover_never_reads_a_public_actor_state() {
     let callee = Actor::new(account_id, TWIN);
     let script = Script::default().call(callee, &Script::write(vec![3; 16]));
 
-    // `Prover` supplies no public actor state, so executing either public turn would fail the
+    // `Prover` supplies no public actor state, so executing either public transition would fail the
     // proof.
     let (output, proof) = execute_and_prove(
         ProvingInput {
@@ -988,7 +988,7 @@ fn claims_for(programs: &[&Program]) -> Vec<ProgramImageWitness> {
 }
 
 // A circuit input whose root delivers `script` to the `program_account_id` actor of a fresh
-// private account, with the supplied responses standing in for its turns.
+// private account, with the supplied responses standing in for its transitions.
 fn direct_input(
     program_account_id: AccountId,
     script: &Script,
@@ -1021,7 +1021,7 @@ fn assert_circuit_rejects<T: std::fmt::Debug>(result: &Result<T, LeeError>, expe
     );
 }
 
-// The root turn `direct_input` schedules for `script` on a `scripted` actor.
+// The root transition `direct_input` schedules for `script` on a `scripted` actor.
 fn scripted_root_input(script: &Script, is_authorized: bool) -> ReceiveInput {
     let keys = test_private_account_keys_1();
     ReceiveInput {
