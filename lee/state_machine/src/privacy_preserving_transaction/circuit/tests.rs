@@ -112,7 +112,6 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_accounts() {
         },
         &Simulation {
             public_shards: [(sender, encode_balance(balance_to_move))].into(),
-            ..Simulation::default()
         },
         &ProgramCatalog::default(),
     )
@@ -547,7 +546,6 @@ fn shared_account_receives_via_simple_transfer() {
         },
         &Simulation {
             public_shards: [(sender, encode_balance(balance_to_move))].into(),
-            ..Simulation::default()
         },
         &ProgramCatalog::default(),
     );

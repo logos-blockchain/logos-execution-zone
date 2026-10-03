@@ -358,56 +358,6 @@ fn a_private_pda_with_a_nonzero_identifier_receives_a_cast_without_a_grant() {
 }
 
 #[test]
-fn a_prepared_receipt_to_an_unproven_public_receiver_fails_before_proving() {
-    let keys = test_private_account_keys_1();
-    let mut state = V03State::new().with_test_programs();
-    let record = cast(&mut state, receiver());
-    let reference = record.reference();
-    let prove = |identities: Vec<PublicIdentity>| {
-        execute_and_prove(
-            ProvingInput {
-                context: PublicExecutionContext::new(vec![receiver()], []),
-                private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
-                ..proving_input(TransactionEntry::Cast(record.clone()))
-            },
-            &Simulation {
-                identities,
-                ..Simulation::default()
-            },
-            &scripted_programs(),
-        )
-    };
-
-    assert!(matches!(
-        prove(Vec::new()),
-        Err(LeeError::UnprovenPublicIdentity { actor }) if actor == receiver()
-    ));
-    let (output, proof) = prove(vec![PublicIdentity::Key(receiver_pk())]).unwrap();
-    let message = Message {
-        identities: vec![PublicIdentity::Key(receiver_pk())],
-        ..Message::from_circuit_output(vec![], output)
-    };
-    let witness_set = WitnessSet::for_message(&message, proof, &[]);
-
-    state
-        .transition_from_privacy_preserving_transaction(
-            &PrivacyPreservingTransaction::new(message, witness_set),
-            2,
-            0,
-        )
-        .expect("the receiver's key must prove its identity at settlement");
-
-    assert!(state.pending_message(reference).is_none());
-    assert_eq!(
-        state
-            .get_account_by_id(receiver().account_id)
-            .data
-            .shard(scripted_id()),
-        &ActorState::from(b"received".to_vec())
-    );
-}
-
-#[test]
 fn a_pending_record_survives_a_borsh_round_trip_and_enters_the_genesis_fingerprint() {
     let mut state = V03State::new().with_test_programs();
     let fingerprint = state.genesis_fingerprint();

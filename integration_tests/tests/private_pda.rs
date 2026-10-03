@@ -96,7 +96,6 @@ async fn fund_private_pda(
                 sender_account.data.shard(NATIVE_TOKEN_PROGRAM_ID).clone(),
             )]
             .into(),
-            ..Simulation::default()
         },
         &ProgramCatalog::default(),
     )

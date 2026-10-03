@@ -16,10 +16,9 @@ use risc0_zkvm::{
 };
 
 use crate::{
-    PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID, PublicIdentity,
+    PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
     error::{InvalidProgramBehaviorError, LeeError},
     program::{DEFAULT_PUBLIC_CYCLE_BUDGET, Program, check_exit_code, transition_journal},
-    validated_state_diff::admit_public_receipt,
 };
 
 /// Proof of the privacy preserving execution circuit.
@@ -140,8 +139,6 @@ impl ProgramCatalog {
 #[derive(Default)]
 pub struct Simulation {
     pub public_shards: HashMap<Actor, ActorState>,
-    /// The identity evidence the transaction carries.
-    pub identities: Vec<PublicIdentity>,
 }
 
 struct Simulator<'input> {
@@ -228,14 +225,6 @@ pub fn execute_and_prove(
     simulation: &Simulation,
     programs: &ProgramCatalog,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
-    if let Some(record) = input.root.cast() {
-        admit_public_receipt(record, &input.context, |account_id| {
-            simulation
-                .identities
-                .iter()
-                .any(|identity| identity.account_id() == account_id)
-        })?;
-    }
     let predicted_crossings = WholeTransaction::new(
         input.context.clone(),
         input.root.clone(),

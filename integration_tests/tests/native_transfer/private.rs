@@ -642,7 +642,6 @@ fn prove_init_with_commitment_root(
             // The proof is only inspected, never settled, so the snapshot states just enough
             // balance.
             public_shards: [(sender, native_token::encode_balance(1))].into(),
-            ..Simulation::default()
         },
         &ProgramCatalog::default(),
     )?;

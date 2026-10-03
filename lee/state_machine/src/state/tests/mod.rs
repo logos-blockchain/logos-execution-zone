@@ -418,7 +418,6 @@ fn shielded_balance_transfer_for_tests(
         },
         &Simulation {
             public_shards: [(sender, encode_balance(balance_to_move))].into(),
-            ..Simulation::default()
         },
         &ProgramCatalog::default(),
     )

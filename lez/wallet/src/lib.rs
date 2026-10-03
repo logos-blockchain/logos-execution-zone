@@ -961,7 +961,6 @@ impl WalletCore {
             None => {
                 let simulation = Simulation {
                     public_shards: acc_manager.public_shards(),
-                    identities: identities.clone(),
                 };
                 tokio::task::spawn_blocking(move || {
                     lee::execute_and_prove(input, &simulation, &programs)

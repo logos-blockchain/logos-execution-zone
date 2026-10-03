@@ -5268,10 +5268,7 @@ fn prove_and_settle(
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,
         },
-        &lee::Simulation {
-            public_shards,
-            ..lee::Simulation::default()
-        },
+        &lee::Simulation { public_shards },
         &lee::privacy_preserving_transaction::circuit::ProgramCatalog::from([(
             programs::sequencer_stake_account_id(),
             programs::sequencer_stake(),

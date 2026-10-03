@@ -504,7 +504,7 @@ fn admit_receipt<'state>(
     Ok(record)
 }
 
-pub fn admit_public_receipt(
+fn admit_public_receipt(
     record: &StoredMessage,
     context: &PublicExecutionContext,
     proves_identity: impl Fn(AccountId) -> bool,

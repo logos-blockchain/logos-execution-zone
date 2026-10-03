@@ -129,7 +129,6 @@ pub fn prove_native_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircui
         ),
         &Simulation {
             public_shards: [(sender, native_token::encode_balance(AMOUNT_TO_TRANSFER))].into(),
-            ..Simulation::default()
         },
         &ProgramCatalog::default(),
     )?)

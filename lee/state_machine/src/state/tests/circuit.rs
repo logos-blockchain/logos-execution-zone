@@ -799,7 +799,6 @@ fn two_private_pda_family_members_receive_and_spend() {
             },
             &Simulation {
                 public_shards: [(from, encode_balance(amount))].into(),
-                ..Simulation::default()
             },
             &ProgramCatalog::default(),
         )

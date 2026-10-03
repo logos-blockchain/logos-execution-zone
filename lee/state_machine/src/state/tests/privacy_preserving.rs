@@ -405,7 +405,6 @@ fn a_failing_public_turn_leaves_the_state_untouched() {
         },
         &Simulation {
             public_shards: [(sender, encode_balance(overdraft))].into(),
-            ..Simulation::default()
         },
         &synthetic_program(crate::test_methods::scripted()),
     )
