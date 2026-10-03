@@ -792,7 +792,7 @@ impl Scope for PublicScope {
         let Some(BoundaryStep::EnterPrivate(predicted)) = self.boundary.get(index) else {
             return Err(ExecutionError::BoundaryMismatch { index }.into());
         };
-        // The live grants are the disclosed part of the authority the proven turn ran under.
+        // The live grants are the disclosed part of the authority the proven transition ran under.
         let live = delivery
             .envelope
             .source
