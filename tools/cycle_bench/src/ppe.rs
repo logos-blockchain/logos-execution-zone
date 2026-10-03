@@ -3,7 +3,7 @@
 //! Composition cost is the delta between standalone `prover.prove(env, elf)` for
 //! a single program (measured in the main bench) and a full `execute_and_prove`
 //! that wraps the same program in the privacy circuit. The send-depth sweep uses a
-//! `scripted` test actor that sends N=1, 3, 5, 9 token transfers, each a private token turn.
+//! `scripted` test actor that sends N=1, 3, 5, 9 token transfers, each a private token transition.
 //!
 //! `Receipt::verify(PRIVACY_PRESERVING_CIRCUIT_ID)` timings (the `G_verify` fee-model
 //! parameter) are measured by the `verify` criterion bench under `benches/verify.rs`,

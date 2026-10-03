@@ -399,7 +399,7 @@ impl Sendable for Cast {
     }
 }
 
-/// The scheduled input of one turn, echoed whole in the journal.
+/// The scheduled input of one transition, echoed whole in the journal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ReceiveInput {
     pub receiver: Actor,

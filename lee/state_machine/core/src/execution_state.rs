@@ -132,7 +132,7 @@ pub trait ExecutionEnvironment {
     fn receive(
         &mut self,
         input: &ReceiveInput,
-        view: &TurnView<'_>,
+        view: &TransitionView<'_>,
     ) -> Result<Transition, Self::Error>;
 
     /// Returns [`ExecutionError::PublicActorStateUnavailable`] by default.
@@ -141,12 +141,12 @@ pub trait ExecutionEnvironment {
     }
 }
 
-pub struct TurnView<'execution> {
+pub struct TransitionView<'execution> {
     accounts: &'execution HashMap<AccountId, AccountEntry>,
     at_root: bool,
 }
 
-impl TurnView<'_> {
+impl TransitionView<'_> {
     #[must_use]
     pub const fn at_root(&self) -> bool {
         self.at_root
@@ -154,10 +154,9 @@ impl TurnView<'_> {
 
     #[must_use]
     pub fn runs_privately(&self, account_id: AccountId) -> bool {
-        matches!(
-            self.accounts.get(&account_id),
-            Some(AccountEntry::Private { .. })
-        )
+        self.accounts
+            .get(&account_id)
+            .is_some_and(AccountEntry::is_private)
     }
 
     #[must_use]
@@ -254,6 +253,10 @@ enum AccountEntry {
 }
 
 impl AccountEntry {
+    const fn is_private(&self) -> bool {
+        matches!(self, Self::Private { .. })
+    }
+
     fn staged(&self, program_account_id: AccountId) -> Option<&ActorState> {
         match self {
             Self::Public { loaded, .. } => loaded.get(&program_account_id),
@@ -528,8 +531,8 @@ impl Scope for WholeScope {
         Ok(())
     }
 
-    // The root and each Call from a private turn start a public subtree, whose deliveries into
-    // private actors form one group of predicted cross messages.
+    // The root and each Call from a private transition start a public subtree, whose deliveries
+    // into private actors form one group of predicted cross messages.
     fn deliver_to_public<E: ExecutionEnvironment>(
         &mut self,
         execution: &mut Execution<'_, Self>,
@@ -647,7 +650,7 @@ impl Scope for PrivateScope {
             .envelope
             .source
             .issuer()
-            .expect("only a Call from a private turn crosses into public execution");
+            .expect("only a Call from a private transition crosses into public execution");
         self.boundary.push(BoundaryStep::EnterPublic(
             execution.disclose(&delivery, program),
         ));
@@ -980,7 +983,7 @@ impl<'witnesses, S: Scope> Execution<'witnesses, S> {
         environment: &mut E,
     ) -> Result<(), E::Error> {
         let to = delivery.envelope.to;
-        // No code upgrade may land between a proof's image claims and the turns it covers.
+        // No code upgrade may land between a proof's image claims and the transitions it covers.
         if to.program_account_id == PROGRAM_LOADER_ACCOUNT_ID && !S::admits_loader(self) {
             return Err(ExecutionError::LoaderOutsidePublicExecution { actor: to }.into());
         }
@@ -992,10 +995,9 @@ impl<'witnesses, S: Scope> Execution<'witnesses, S> {
     }
 
     fn is_private(&self, account_id: &AccountId) -> bool {
-        matches!(
-            self.accounts.get(account_id),
-            Some(AccountEntry::Private { .. })
-        )
+        self.accounts
+            .get(account_id)
+            .is_some_and(AccountEntry::is_private)
     }
 
     fn require_private(&self, actor: Actor) -> Result<(), ExecutionError> {
@@ -1017,7 +1019,7 @@ impl<'witnesses, S: Scope> Execution<'witnesses, S> {
     }
 
     // A private delivery from a declared public actor is where the execution crosses into a proven
-    // turn: a whole transaction collects it into the innermost open public Call's predicted
+    // transition: a whole transaction collects it into the innermost open public Call's predicted
     // cross messages, a private part records it.
     fn cross_message(&self, delivery: &Delivery<Sender>) -> Option<Delivery<Actor>> {
         delivery
@@ -1058,7 +1060,7 @@ impl<'witnesses, S: Scope> Execution<'witnesses, S> {
             message: delivery.envelope.message,
         };
 
-        let view = TurnView {
+        let view = TransitionView {
             accounts: &self.accounts,
             at_root: matches!(delivery.envelope.source, Sender::Root { .. }),
         };

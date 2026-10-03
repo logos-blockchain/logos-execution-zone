@@ -1,11 +1,11 @@
 //! The privacy preserving circuit's half of the shared traversal: it verifies a receipt for each
-//! private turn.
+//! private transition.
 
 use std::{collections::HashMap, convert::Infallible, vec};
 
 use lee_core::{
     account::AccountId,
-    execution_state::{ExecutionEnvironment, ExecutionError, TurnView},
+    execution_state::{ExecutionEnvironment, ExecutionError, TransitionView},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{ProgramId, ReceiveInput, Response, Transition},
 };
@@ -27,7 +27,7 @@ impl PrivateBackend {
     pub fn finish(mut self) {
         assert!(
             self.responses.next().is_none(),
-            "A response was supplied for a turn nothing scheduled"
+            "A response was supplied for a transition nothing scheduled"
         );
     }
 }
@@ -38,7 +38,7 @@ impl ExecutionEnvironment for PrivateBackend {
     fn receive(
         &mut self,
         input: &ReceiveInput,
-        _execution: &TurnView<'_>,
+        _execution: &TransitionView<'_>,
     ) -> Result<Transition, ExecutionError> {
         let program = input.receiver.program_account_id;
         if program == NATIVE_TOKEN_PROGRAM_ID {
@@ -51,7 +51,7 @@ impl ExecutionEnvironment for PrivateBackend {
         let transition = self
             .responses
             .next()
-            .expect("a scheduled turn must carry its response")
+            .expect("a scheduled transition must carry its response")
             .into_transition(input.clone());
         env::verify(image_id, &lee_core::to_borsh_frame(&transition))
             .unwrap_or_else(|_: Infallible| unreachable!("Infallible error is never constructed"));

@@ -103,7 +103,7 @@ impl ExecutionEnvironment for Script {
     fn receive(
         &mut self,
         input: &ReceiveInput,
-        _view: &TurnView<'_>,
+        _view: &TransitionView<'_>,
     ) -> Result<Transition, ExecutionError> {
         self.log.push(input.clone());
         let handler = self

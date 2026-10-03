@@ -1134,7 +1134,7 @@ fn missing_responses_are_rejected_by_the_circuit() {
 
     let result = prove_circuit_directly(&input, Vec::new());
 
-    assert_circuit_rejects(&result, "a scheduled turn must carry its response");
+    assert_circuit_rejects(&result, "a scheduled transition must carry its response");
 }
 
 #[test]
@@ -1153,7 +1153,7 @@ fn surplus_responses_are_rejected_by_the_circuit() {
 
     assert_circuit_rejects(
         &result,
-        "A response was supplied for a turn nothing scheduled",
+        "A response was supplied for a transition nothing scheduled",
     );
 }
 

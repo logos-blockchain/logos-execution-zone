@@ -1,7 +1,7 @@
 use lee_core::{
     Commitment,
     account::{Actor, ActorState, Cycles},
-    execution_state::{ExecutionEnvironment, TurnView},
+    execution_state::{ExecutionEnvironment, TransitionView},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{PROGRAM_LOADER_ACCOUNT_ID, ReceiveInput, Transition},
 };
@@ -45,7 +45,7 @@ impl ExecutionEnvironment for PublicBackend<'_> {
     fn receive(
         &mut self,
         input: &ReceiveInput,
-        view: &TurnView<'_>,
+        view: &TransitionView<'_>,
     ) -> Result<Transition, LeeError> {
         let state = self.state;
         let program_account_id = input.receiver.program_account_id;

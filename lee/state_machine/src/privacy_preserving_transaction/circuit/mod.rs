@@ -6,7 +6,7 @@ use lee_core::{
     ProgramImageWitness, ProvingInput, ShadowProgramWitness,
     account::{AccountId, Actor, ActorState, Cycles},
     execution_state::{
-        ExecutionEnvironment, PredictedCrossMessages, PrivatePart, TurnView, WholeTransaction,
+        ExecutionEnvironment, PredictedCrossMessages, PrivatePart, TransitionView, WholeTransaction,
     },
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
@@ -154,9 +154,9 @@ impl ExecutionEnvironment for Simulator<'_> {
     fn receive(
         &mut self,
         input: &ReceiveInput,
-        view: &TurnView<'_>,
+        view: &TransitionView<'_>,
     ) -> Result<Transition, LeeError> {
-        // A private turn is bounded only by what its prover can prove, as when it is proven.
+        // A private transition is bounded only by what its prover can prove, as when it is proven.
         let budget = if view.runs_privately(input.receiver.account_id) {
             Cycles::MAX
         } else {
@@ -188,7 +188,7 @@ impl ExecutionEnvironment for Prover<'_> {
     fn receive(
         &mut self,
         input: &ReceiveInput,
-        _view: &TurnView<'_>,
+        _view: &TransitionView<'_>,
     ) -> Result<Transition, LeeError> {
         receive_with(self.programs, input, |program| {
             let receipt = prove_session(program, |env| Program::write_receive_input(input, env))?;

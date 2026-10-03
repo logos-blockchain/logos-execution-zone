@@ -9,7 +9,7 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, ProgramImageClaim, Timestamp,
     account::{Account, AccountId, Actor, ActorState, Cycles, Nonce},
     execution_state::{
-        PublicExecutionContext, PublicOutcome, PublicPart, TransactionEntry, TurnView,
+        PublicExecutionContext, PublicOutcome, PublicPart, TransactionEntry, TransitionView,
         WholeTransaction,
     },
     program::{
@@ -482,7 +482,7 @@ const fn charge(used: &mut Cycles, call_cycles: Cycles) {
 /// The same lookup `get_program_via` uses, which is what keeps deploy-then-call working within
 /// one transaction.
 fn loader_actor_state<'state>(
-    view: &'state TurnView<'_>,
+    view: &'state TransitionView<'_>,
     state: &'state V03State,
     account_id: AccountId,
 ) -> Option<&'state ActorState> {

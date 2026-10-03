@@ -5,8 +5,8 @@
 //! JSON dump for regression comparison.
 //!
 //! An operation is not one guest invocation: its root delivery and every send it triggers are
-//! turns, each a guest run that sees only its receiver's actor state. Every turn is measured, one
-//! row each, because a caller pays for all of them.
+//! transitions, each a guest run that sees only its receiver's actor state. Every transition is
+//! measured, one row each, because a caller pays for all of them.
 //!
 //! Run with `cargo run --release -p cycle_bench`. `RISC0_DEV_MODE` has no effect on
 //! executor cycle counts.
@@ -43,7 +43,8 @@ use lee_core::{
     BlockId, Timestamp,
     account::{AccountId, Actor, ActorState},
     execution_state::{
-        ExecutionEnvironment, PublicExecutionContext, TransactionEntry, TurnView, WholeTransaction,
+        ExecutionEnvironment, PublicExecutionContext, TransactionEntry, TransitionView,
+        WholeTransaction,
     },
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
@@ -288,7 +289,7 @@ struct Meter {
 impl ExecutionEnvironment for Meter {
     type Error = anyhow::Error;
 
-    fn receive(&mut self, input: &ReceiveInput, _: &TurnView<'_>) -> Result<Transition> {
+    fn receive(&mut self, input: &ReceiveInput, _: &TransitionView<'_>) -> Result<Transition> {
         let program_account_id = input.receiver.program_account_id;
         if program_account_id == NATIVE_TOKEN_PROGRAM_ID {
             return Ok(native_token::receive(input)?);

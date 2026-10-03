@@ -9,9 +9,10 @@ pub const fn token_actor(pool: &PoolDefinition, account_id: AccountId) -> Actor 
     Actor::new(account_id, pool.token_program_id)
 }
 
-// A liquidity message's sends, exactly as the pool's turn makes them from `pool`'s token program,
-// vaults and liquidity definition and the message's exact amounts. A new definition creates the
-// liquidity definition when `creates_lp`, and otherwise mints the supply `pool` records.
+// A liquidity message's sends, exactly as the pool's transition makes them from `pool`'s token
+// program, vaults and liquidity definition and the message's exact amounts. A new definition
+// creates the liquidity definition when `creates_lp`, and otherwise mints the supply `pool`
+// records.
 pub fn liquidity_sends(
     pool_id: AccountId,
     pool: &PoolDefinition,

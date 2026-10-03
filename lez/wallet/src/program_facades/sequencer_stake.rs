@@ -9,7 +9,8 @@ pub struct SequencerStake<'wallet>(pub &'wallet WalletCore);
 
 impl SequencerStake<'_> {
     // The signing ownership account's stake actor is the root, and `funding`'s native balance pays,
-    // publicly or privately: the ownership turn requests exactly that transfer into the funds.
+    // publicly or privately: the ownership transition requests exactly that transfer into the
+    // funds.
     pub async fn send_stake(
         &self,
         ownership: AccountIdentity,
