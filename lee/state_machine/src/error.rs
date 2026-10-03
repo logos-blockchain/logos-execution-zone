@@ -185,7 +185,7 @@ mod tests {
         assert!(LeeError::OutOfValidityWindow.is_chargeable());
 
         // An unknown program reached after the root is only discovered once an
-        // earlier turn executed, so it is charged; at the root it is detectable
+        // earlier transition executed, so it is charged; at the root it is detectable
         // before execution and rejects instead.
         assert!(LeeError::UnknownProgram { at_root: false }.is_chargeable());
         assert!(!LeeError::UnknownProgram { at_root: true }.is_chargeable());

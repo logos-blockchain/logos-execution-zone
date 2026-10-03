@@ -66,7 +66,7 @@ impl ValidatedStateDiff {
 }
 
 /// The metered result of a public execution: the cycle count accumulated
-/// across every turn of the transaction.
+/// across every transition of the transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutionCharge {
     pub cycles: Cycles,
@@ -96,9 +96,9 @@ impl ValidatedStateDiff {
         .map(|(diff, _)| diff)
     }
 
-    /// Validates and executes `tx` under `cycle_budget`, shared by every turn
-    /// of the transaction: each turn is limited to the remaining budget, so the
-    /// transaction cannot exceed the budget in aggregate.
+    /// Validates and executes `tx` under `cycle_budget`, shared by every transition
+    /// of the transaction: each transition is limited to the remaining budget, so
+    /// the transaction cannot exceed the budget in aggregate.
     pub fn from_public_transaction_with_cycle_budget(
         tx: &PublicTransaction,
         state: &V03State,
@@ -251,7 +251,7 @@ impl ValidatedStateDiff {
     }
 
     /// Shared execution core: validates and executes one transaction root and
-    /// every turn it leads to, producing a diff. `authorized` is the guest's
+    /// every transition it leads to, producing a diff. `authorized` is the guest's
     /// `is_authorized` set; `nonce_bearers` become the diff's `signer_account_ids`
     /// (their nonces advance on apply).
     #[expect(
