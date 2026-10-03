@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     hash::Hash,
     panic::{AssertUnwindSafe, catch_unwind},
 };
@@ -362,7 +362,8 @@ impl ValidatedStateDiff {
         }
 
         ensure!(
-            sorted(signer_account_ids.iter().copied()) == execution.context.authorized_accounts,
+            signer_account_ids.iter().copied().collect::<BTreeSet<_>>()
+                == execution.context.authorized_accounts,
             LeeError::InvalidInput("Authorized accounts do not match the signers".into())
         );
 
@@ -569,12 +570,6 @@ fn settle(
         consumed: None,
         published: casts,
     })
-}
-
-pub fn sorted(ids: impl IntoIterator<Item = AccountId>) -> Vec<AccountId> {
-    let mut ids: Vec<AccountId> = ids.into_iter().collect();
-    ids.sort_unstable();
-    ids
 }
 
 fn identity_account_ids(identities: &[PublicIdentity]) -> HashSet<AccountId> {

@@ -175,7 +175,7 @@ pub mod tests {
             execution: PrivacyPreservingCircuitOutput {
                 context: PublicExecutionContext {
                     actors: vec![public],
-                    authorized_accounts: vec![AccountId::new([7; 32])],
+                    authorized_accounts: BTreeSet::from([AccountId::new([7; 32])]),
                 },
                 boundary: vec![
                     BoundaryStep::EnterPublic(Delivery {

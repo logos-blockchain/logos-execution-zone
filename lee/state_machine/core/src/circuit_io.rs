@@ -321,7 +321,7 @@ mod tests {
         (
             PublicExecutionContext {
                 actors: vec![public],
-                authorized_accounts: vec![AccountId::new([7; 32])],
+                authorized_accounts: BTreeSet::from([AccountId::new([7; 32])]),
             },
             vec![
                 BoundaryStep::EnterPublic(Delivery {
@@ -407,7 +407,7 @@ mod tests {
         let output = PrivacyPreservingCircuitOutput {
             context: PublicExecutionContext {
                 actors: vec![public],
-                authorized_accounts: Vec::new(),
+                authorized_accounts: BTreeSet::new(),
             },
             boundary: Vec::new(),
             casts: vec![MessageBody {

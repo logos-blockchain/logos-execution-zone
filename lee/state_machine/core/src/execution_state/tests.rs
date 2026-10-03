@@ -206,7 +206,7 @@ fn root(to: Actor) -> TransactionEntry<StoredMessage> {
 fn context(actors: Vec<Actor>) -> PublicExecutionContext {
     PublicExecutionContext {
         actors,
-        authorized_accounts: Vec::new(),
+        authorized_accounts: BTreeSet::new(),
     }
 }
 
@@ -519,7 +519,7 @@ fn a_root_authorized_public_account_is_authorized_from_any_origin() {
     public_transaction(
         PublicExecutionContext {
             actors: vec![signer, peer],
-            authorized_accounts: vec![signer.account_id],
+            authorized_accounts: BTreeSet::from([signer.account_id]),
         },
         signer,
         &mut script,

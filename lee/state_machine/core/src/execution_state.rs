@@ -51,7 +51,7 @@ impl TransactionEntry<StoredMessage> {
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub struct PublicExecutionContext {
     pub actors: Vec<Actor>,
-    pub authorized_accounts: Vec<AccountId>,
+    pub authorized_accounts: BTreeSet<AccountId>,
 }
 
 impl PublicExecutionContext {
@@ -61,11 +61,7 @@ impl PublicExecutionContext {
     ) -> Self {
         Self {
             actors,
-            authorized_accounts: authorized_accounts
-                .into_iter()
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect(),
+            authorized_accounts: authorized_accounts.into_iter().collect(),
         }
     }
 }

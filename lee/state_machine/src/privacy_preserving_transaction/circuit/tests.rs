@@ -1,5 +1,7 @@
 #![allow(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
 
+use std::collections::BTreeSet;
+
 use lee_core::{
     Commitment, DUMMY_COMMITMENT_HASH, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
     Identifier, Nullifier, NullifierWitness, PrivacyPreservingCircuitOutput, PrivateWitness,
@@ -120,7 +122,10 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_accounts() {
     // A native transfer runs no guest, so it claims no program image.
     assert!(output.program_image_claims.is_empty());
 
-    assert_eq!(output.context.authorized_accounts, vec![sender_id]);
+    assert_eq!(
+        output.context.authorized_accounts,
+        BTreeSet::from([sender_id])
+    );
     // The journal carries the public root to settle and the delivery it assumes back, not a
     // claimed balance: the prover never read the sender's shard.
     assert_eq!(
