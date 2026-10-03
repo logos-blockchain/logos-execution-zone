@@ -744,7 +744,7 @@ impl<'witnesses> Execution<'witnesses> {
 
     fn check_cross_message(&mut self, delivery: &Delivery<Sender>) -> Result<(), ExecutionError> {
         let Scope::PublicPart { boundary, cursor } = &mut self.scope else {
-            unreachable!("only a public part matches predicted cross_messages");
+            unreachable!("only a public part matches predicted cross messages");
         };
         let index = *cursor;
         let Some(BoundaryStep::EnterPrivate(predicted)) = boundary.get(index) else {
@@ -810,7 +810,7 @@ impl<'witnesses> Execution<'witnesses> {
             ..
         } = &mut self.scope
         else {
-            unreachable!("only a private part predicts cross_messages");
+            unreachable!("only a private part predicts cross messages");
         };
         let index = *next_group;
         let cross_messages = predicted_cross_messages
