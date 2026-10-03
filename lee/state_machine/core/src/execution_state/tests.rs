@@ -868,6 +868,50 @@ fn initialization_rejects_inconsistent_declarations() {
 }
 
 #[test]
+fn each_part_executes_the_root_only_on_its_side() {
+    let keys = Keys::new(1);
+    let witnesses = [keys.regular(false)];
+    let script = || {
+        Script::default()
+            .on(ENTRY, sending(Vec::new()))
+            .on(holder(&keys), sending(Vec::new()))
+    };
+
+    for (to, runs_publicly) in [(ENTRY, true), (holder(&keys), false)] {
+        let predicted = whole(context(vec![ENTRY]), &witnesses, root(to), &mut script())
+            .unwrap()
+            .predicted_cross_messages;
+        let mut private = script();
+        let boundary = private_part(
+            context(vec![ENTRY]),
+            &witnesses,
+            root(to),
+            predicted,
+            &mut private,
+        )
+        .unwrap()
+        .boundary;
+        let mut public = script();
+        public_part(context(vec![ENTRY]), root(to), boundary, &mut public).unwrap();
+
+        let (ran, skipped) = if runs_publicly {
+            (&public, &private)
+        } else {
+            (&private, &public)
+        };
+        assert_eq!(
+            order(ran),
+            vec![(to, None)],
+            "{to:?} did not run on its side"
+        );
+        assert!(
+            order(skipped).is_empty(),
+            "{to:?} also ran on the other side"
+        );
+    }
+}
+
+#[test]
 fn a_check_whose_live_subtree_reaches_the_loader_fails() {
     let loader = Actor::new(id(4), PROGRAM_LOADER_ACCOUNT_ID);
     let mut script = Script::default()

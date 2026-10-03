@@ -310,6 +310,49 @@ mod tests {
         program::{MessageBody, MessageDigest, MessageEnvelope},
     };
 
+    #[test]
+    fn a_proof_discloses_only_a_public_call_root_and_every_cast_reference() {
+        let public = Actor::new(AccountId::new([5; 32]), AccountId::new([6; 32]));
+        let private = Actor::new(AccountId::new([9; 32]), AccountId::new([8; 32]));
+        let proving = |root| ProvingInput {
+            root,
+            context: PublicExecutionContext {
+                actors: vec![public],
+                authorized_accounts: BTreeSet::new(),
+            },
+            private_witnesses: Vec::new(),
+            dummy_inputs: Vec::new(),
+            ciphertext_padding: None,
+        };
+        let call = |to| TransactionEntry::Call {
+            to,
+            message: b"m".to_vec(),
+        };
+
+        assert_eq!(
+            proving(call(public)).entry(),
+            Some(TransactionEntry::Call {
+                to: public,
+                message: b"m".to_vec(),
+            })
+        );
+        assert_eq!(proving(call(private)).entry(), None);
+        for to in [public, private] {
+            let record = StoredMessage {
+                sequence: 3,
+                body: MessageBody {
+                    source: AccountId::new([4; 32]),
+                    to,
+                    message: b"m".to_vec(),
+                },
+            };
+            assert_eq!(
+                proving(TransactionEntry::Cast(record.clone())).entry(),
+                Some(TransactionEntry::Cast(record.reference()))
+            );
+        }
+    }
+
     fn pinned_statement() -> (PublicExecutionContext, Boundary) {
         let public = Actor::new(AccountId::new([5; 32]), AccountId::new([6; 32]));
         let private = Actor::new(AccountId::new([9; 32]), AccountId::new([8; 32]));
