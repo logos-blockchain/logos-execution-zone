@@ -1136,7 +1136,7 @@ fn a_shadow_programs_public_effect_is_refused_at_settlement() {
 
     let result = V03State::new().transition_from_privacy_preserving_transaction(&tx, 1, 0);
     assert!(
-        matches!(result, Err(LeeError::UnknownProgram { chained: false })),
+        matches!(result, Err(LeeError::UnknownProgram { at_root: true })),
         "expected the shadow program to be unknown at settlement, got {result:?}"
     );
 }

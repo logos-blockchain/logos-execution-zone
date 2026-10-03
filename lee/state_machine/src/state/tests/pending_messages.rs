@@ -479,7 +479,7 @@ fn a_receipt_root_naming_an_unknown_program_is_rejected_not_charged() {
         panic!("a receipt root naming an unknown program must reject the block");
     };
     assert!(
-        matches!(error, LeeError::UnknownProgram { chained: false }),
+        matches!(error, LeeError::UnknownProgram { at_root: true }),
         "expected the unknown root program to be named top-level, got {error:?}"
     );
     assert!(!error.is_chargeable());

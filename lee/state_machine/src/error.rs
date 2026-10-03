@@ -28,7 +28,7 @@ pub enum LeeError {
     InvalidProgramBehavior(#[from] InvalidProgramBehaviorError),
 
     #[error("Serialization error: {0}")]
-    InstructionSerializationError(String),
+    MessageSerializationError(String),
 
     #[error("Invalid private key")]
     InvalidPrivateKey,
@@ -83,10 +83,9 @@ pub enum LeeError {
 
     #[error("Unknown program")]
     UnknownProgram {
-        /// A top-level unknown program is detectable before execution,
-        /// but if it is part of a chain of calls, we can only learn it
-        /// after executing; therefore, the failure is charged.
-        chained: bool,
+        /// An unknown program at the transaction root is detectable before execution, so it is
+        /// not charged; one reached later is learned only by executing, so it is.
+        at_root: bool,
     },
 
     #[error(
@@ -109,7 +108,7 @@ impl LeeError {
         !matches!(
             self,
             Self::InvalidInput(_)
-                | Self::UnknownProgram { chained: false }
+                | Self::UnknownProgram { at_root: true }
                 | Self::UnprovenPublicIdentity { .. }
         )
     }
@@ -186,11 +185,11 @@ mod tests {
         // Post-execution: the validity window is read off the program output.
         assert!(LeeError::OutOfValidityWindow.is_chargeable());
 
-        // An unknown program named by a chained call is only discovered after
-        // the caller already executed, so it is charged; named top-level it is
-        // detectable before execution and rejects instead.
-        assert!(LeeError::UnknownProgram { chained: true }.is_chargeable());
-        assert!(!LeeError::UnknownProgram { chained: false }.is_chargeable());
+        // An unknown program reached after the root is only discovered once an
+        // earlier turn executed, so it is charged; at the root it is detectable
+        // before execution and rejects instead.
+        assert!(LeeError::UnknownProgram { at_root: false }.is_chargeable());
+        assert!(!LeeError::UnknownProgram { at_root: true }.is_chargeable());
 
         // A malformed transaction is caught before execution, so it costs no
         // cycles and rejects the block instead of charging.

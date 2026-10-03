@@ -48,7 +48,7 @@ pub fn compute_circuit_output(
         } = witness;
         let account_id = witness.account_id();
         let post_data = private_accounts.remove(&account_id).expect(
-            "initialize admits only root witnesses and finish emits every root private account",
+            "every witness is declared as a private account and the private part emits each one",
         );
 
         let (new_nullifier, new_nonce, view_tag) = match nullifier {

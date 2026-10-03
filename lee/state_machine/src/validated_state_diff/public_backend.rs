@@ -68,7 +68,7 @@ impl ExecutionEnvironment for PublicBackend<'_> {
                 loader_shard(view, state, account_id)
             })
             .ok_or(LeeError::UnknownProgram {
-                chained: !view.at_root(),
+                at_root: view.at_root(),
             })?;
             let (transition, call_cycles) =
                 program.receive(input, remaining(self.cycle_budget, *self.cycles_used))?;

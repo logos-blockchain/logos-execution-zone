@@ -74,7 +74,7 @@ impl Program {
     }
 
     pub fn serialize_message<T: BorshSerialize>(message: T) -> Result<MessageData, LeeError> {
-        borsh::to_vec(&message).map_err(|e| LeeError::InstructionSerializationError(e.to_string()))
+        borsh::to_vec(&message).map_err(|e| LeeError::MessageSerializationError(e.to_string()))
     }
 
     pub(crate) fn receive(
