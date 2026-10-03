@@ -24,8 +24,6 @@ pub enum Message {
 pub enum TransferError {
     #[error("native transfer message does not decode")]
     InvalidMessage,
-    #[error("native transfer recipient is the sender")]
-    InvalidInputs,
     #[error("native transfer sender {account_id} is not authorized")]
     UnauthorizedSender { account_id: AccountId },
     #[error("native credit to {account_id} was not sent by a native transfer")]
@@ -72,11 +70,9 @@ pub fn receive(input: &ReceiveInput) -> Result<Transition, TransferError> {
     };
     let account_id = input.receiver.account_id;
     let response = match message {
-        Message::Transfer { to, amount, mode } => debit(input, to, amount)?.send_as(
-            mode,
-            Actor::native_balance(to),
-            &Message::Credit(amount),
-        ),
+        Message::Transfer { to, amount, mode } => {
+            debit(input, amount)?.send_as(mode, Actor::native_balance(to), &Message::Credit(amount))
+        }
         Message::Credit(amount) => {
             if !input.from_own_program() {
                 return Err(TransferError::ForeignCredit { account_id });
@@ -93,11 +89,8 @@ pub fn receive(input: &ReceiveInput) -> Result<Transition, TransferError> {
     Ok(response.into_transition(input.clone()))
 }
 
-fn debit(input: &ReceiveInput, to: AccountId, amount: Balance) -> Result<Response, TransferError> {
+fn debit(input: &ReceiveInput, amount: Balance) -> Result<Response, TransferError> {
     let account_id = input.receiver.account_id;
-    if to == account_id {
-        return Err(TransferError::InvalidInputs);
-    }
     if !input.is_authorized {
         return Err(TransferError::UnauthorizedSender { account_id });
     }
@@ -198,20 +191,6 @@ mod tests {
         assert_eq!(
             (transition.response.calls, transition.response.casts),
             (vec![Call::new(native(2), &Message::Credit(30))], Vec::new())
-        );
-    }
-
-    #[test]
-    fn a_transfer_to_the_sender_itself_is_rejected() {
-        let to_self = Message::Transfer {
-            to: AccountId::new([1; 32]),
-            amount: 30,
-            mode: SendMode::Call,
-        };
-
-        assert_eq!(
-            receive(&input(1, true, 100, &to_self)),
-            Err(TransferError::InvalidInputs)
         );
     }
 
