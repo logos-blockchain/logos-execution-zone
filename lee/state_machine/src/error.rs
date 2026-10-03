@@ -140,7 +140,7 @@ impl From<ExecutionError> for LeeError {
             | ExecutionError::LoaderOutsidePublicExecution { .. }
             | ExecutionError::UndeclaredActor { .. }
             | ExecutionError::MisplacedRoot { .. }
-            | ExecutionError::ExecutionValidation { .. }
+            | ExecutionError::TransitionInputMismatch { .. }
             | ExecutionError::PublicAndPrivate { .. }
             | ExecutionError::DuplicatePublicActor { .. }
             | ExecutionError::MissingPredictedCrossMessages { .. }

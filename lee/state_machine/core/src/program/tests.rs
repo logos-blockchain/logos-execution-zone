@@ -143,21 +143,6 @@ fn response_try_with_block_validity_window_empty_range_fails() {
 }
 
 #[test]
-fn a_transition_must_echo_its_input_exactly() {
-    let input = receive_input();
-    let altered = ReceiveInput {
-        is_authorized: true,
-        ..input.clone()
-    };
-
-    assert!(validate_transition(&input, &Response::keep().into_transition(input.clone())).is_ok());
-    assert!(matches!(
-        validate_transition(&input, &Response::keep().into_transition(altered)),
-        Err(ExecutionValidationError::TransitionInputMismatch { .. })
-    ));
-}
-
-#[test]
 fn get_program_via_reads_the_loader_shard() {
     let program_account = AccountId::new([1; 32]);
     let segment_account = AccountId::new([2; 32]);

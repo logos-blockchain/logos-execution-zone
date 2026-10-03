@@ -1029,9 +1029,9 @@ fn a_forged_echo_is_caught_before_proving() {
 
         assert!(matches!(
             execution_error(result),
-            ExecutionError::ExecutionValidation {
+            ExecutionError::TransitionInputMismatch {
                 program_account_id,
-                source: ExecutionValidationError::TransitionInputMismatch { .. },
+                ..
             } if program_account_id == program_id
         ));
     }

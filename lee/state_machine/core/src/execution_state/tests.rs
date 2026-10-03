@@ -440,10 +440,7 @@ fn a_transition_that_forges_its_input_is_rejected() {
 
     assert!(matches!(
         public_transaction(context(vec![receiver]), receiver, &mut script),
-        Err(ExecutionError::ExecutionValidation {
-            source: ExecutionValidationError::TransitionInputMismatch { .. },
-            ..
-        })
+        Err(ExecutionError::TransitionInputMismatch { .. })
     ));
 }
 

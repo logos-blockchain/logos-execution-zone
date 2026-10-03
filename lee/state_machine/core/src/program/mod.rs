@@ -726,17 +726,6 @@ pub struct TransactionEvent {
     pub event: ProgramEvent,
 }
 
-#[derive(thiserror::Error, Debug)]
-pub enum ExecutionValidationError {
-    #[error(
-        "A program's receive echoed an input it was not given: expected {expected:?}, actual {actual:?}"
-    )]
-    TransitionInputMismatch {
-        expected: Box<ReceiveInput>,
-        actual: Box<ReceiveInput>,
-    },
-}
-
 /// Reads first 4 bytes indicating the length in bytes of the program input bytes.
 /// Afterwards, reads exactly that many payload bytes.
 #[must_use]
@@ -810,20 +799,6 @@ pub fn immutable_mirror_commitment(
         ActorState::from(program_header.to_bytes()),
     );
     Commitment::new(&mirror_account_id, &mirrored_account)
-}
-
-pub fn validate_transition(
-    expected: &ReceiveInput,
-    transition: &Transition,
-) -> Result<(), ExecutionValidationError> {
-    if transition.input != *expected {
-        return Err(ExecutionValidationError::TransitionInputMismatch {
-            expected: Box::new(expected.clone()),
-            actual: Box::new(transition.input.clone()),
-        });
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

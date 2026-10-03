@@ -661,9 +661,9 @@ fn assert_forged_field_is_refused(forge_field: ForgeField) {
         matches!(
             &result,
             Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::Execution(ExecutionError::ExecutionValidation {
+                InvalidProgramBehaviorError::Execution(ExecutionError::TransitionInputMismatch {
                     program_account_id,
-                    source: ExecutionValidationError::TransitionInputMismatch { .. },
+                    ..
                 })
             )) if *program_account_id == program_id
         ),

@@ -7,9 +7,9 @@ use crate::{
     NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, WitnessKind,
     account::{AccountData, AccountId, Actor, ActorState},
     program::{
-        BlockValidityWindow, Call, Cast, ExecutionValidationError, InvalidWindow, MessageBody,
-        MessageData, MessageEnvelope, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent,
-        ReceiveInput, StoredMessage, TimestampValidityWindow, Transition, validate_transition,
+        BlockValidityWindow, Call, Cast, InvalidWindow, MessageBody, MessageData, MessageEnvelope,
+        PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ReceiveInput, StoredMessage,
+        TimestampValidityWindow, Transition,
     },
 };
 
@@ -196,11 +196,13 @@ pub enum ExecutionError {
     #[error("The root delivery to {actor:?} does not execute in this part of the transaction")]
     MisplacedRoot { actor: Actor },
 
-    #[error("Invalid program behavior in program {program_account_id}: {source}")]
-    ExecutionValidation {
+    #[error(
+        "Program {program_account_id} echoed an input it was not given: expected {expected:?}, actual {actual:?}"
+    )]
+    TransitionInputMismatch {
         program_account_id: AccountId,
-        #[source]
-        source: ExecutionValidationError,
+        expected: Box<ReceiveInput>,
+        actual: Box<ReceiveInput>,
     },
 
     #[error("There should be non empty intersection in the program output block validity windows")]
@@ -1044,12 +1046,14 @@ impl<'witnesses, S: Scope> Execution<'witnesses, S> {
             at_root: matches!(delivery.envelope.source, Sender::Root | Sender::Cast(_)),
         };
         let transition = environment.receive(&input, &view)?;
-        validate_transition(&input, &transition).map_err(|source| {
-            ExecutionError::ExecutionValidation {
+        if transition.input != input {
+            return Err(ExecutionError::TransitionInputMismatch {
                 program_account_id: actor.program_account_id,
-                source,
+                expected: Box::new(input),
+                actual: Box::new(transition.input),
             }
-        })?;
+            .into());
+        }
         let block = self
             .block_validity_window
             .intersect(transition.response.block_validity_window)

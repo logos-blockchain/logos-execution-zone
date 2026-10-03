@@ -155,9 +155,10 @@ fn program_should_fail_if_it_forges_its_pre_state() {
         matches!(
             &result,
             Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(
-                ExecutionError::ExecutionValidation {
+                ExecutionError::TransitionInputMismatch {
                     program_account_id: err_program_id,
-                    source: ExecutionValidationError::TransitionInputMismatch { expected, actual },
+                    expected,
+                    actual,
                 }
             ))) if *err_program_id == program_id
                 && expected.pre_state.is_empty()

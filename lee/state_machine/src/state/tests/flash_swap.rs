@@ -249,9 +249,9 @@ fn assert_forged_echo_rejected(result: &Result<Vec<TransactionEvent>, LeeError>)
         matches!(
             result,
             Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(
-                ExecutionError::ExecutionValidation {
+                ExecutionError::TransitionInputMismatch {
                     program_account_id,
-                    source: ExecutionValidationError::TransitionInputMismatch { .. },
+                    ..
                 }
             ))) if *program_account_id == program_id
         ),
