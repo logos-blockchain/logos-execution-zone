@@ -17,7 +17,7 @@ pub(super) struct PublicBackend<'state> {
     state: &'state V03State,
     cycle_budget: Cycles,
     cycles_used: &'state mut Cycles,
-    new_commitments: Vec<Commitment>,
+    program_commitments: Vec<Commitment>,
 }
 
 impl<'state> PublicBackend<'state> {
@@ -30,12 +30,12 @@ impl<'state> PublicBackend<'state> {
             state,
             cycle_budget,
             cycles_used,
-            new_commitments: Vec::new(),
+            program_commitments: Vec::new(),
         }
     }
 
-    pub(super) fn into_outputs(self) -> Vec<Commitment> {
-        self.new_commitments
+    pub(super) fn into_program_commitments(self) -> Vec<Commitment> {
+        self.program_commitments
     }
 }
 
@@ -58,7 +58,7 @@ impl ExecutionEnvironment for PublicBackend<'_> {
                     loader_shard(view, state, account_id).unwrap_or(ABSENT)
                 })
             })?;
-            self.new_commitments.extend(new_commitment);
+            self.program_commitments.extend(new_commitment);
             transition
         } else if program_account_id == NATIVE_TOKEN_PROGRAM_ID {
             native_token::receive(input)

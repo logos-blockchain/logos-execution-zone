@@ -38,6 +38,13 @@ pub struct StateDiff {
     pub published: Vec<MessageBody>,
 }
 
+struct SettledPublicPart {
+    public_diff: HashMap<AccountId, Account>,
+    program_commitments: Vec<Commitment>,
+    events: Vec<TransactionEvent>,
+    casts: Vec<MessageBody>,
+}
+
 /// The validated output of executing or verifying a transaction, ready to be applied to the state.
 ///
 /// It can only be constructed by the transaction validation functions inside this crate, ensuring
@@ -291,8 +298,12 @@ impl ValidatedStateDiff {
 
         Ok(Self(StateDiff {
             signer_account_ids: nonce_bearers,
+            public_diff: settled.public_diff,
+            new_commitments: settled.program_commitments,
+            new_nullifiers: Vec::new(),
+            events: settled.events,
             consumed,
-            ..settled
+            published: settled.casts,
         }))
     }
 
@@ -407,7 +418,7 @@ impl ValidatedStateDiff {
         let request = PublicPart::new(instance.context.clone(), root, instance.boundary.clone())
             .map_err(|error| LeeError::InvalidInput(error.to_string()))?;
         let mut cycles_used = 0;
-        let mut settled = settle(
+        let settled = settle(
             state,
             |backend| request.execute(backend),
             block_id,
@@ -415,19 +426,24 @@ impl ValidatedStateDiff {
             crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
             &mut cycles_used,
         )?;
-        // The proven private Casts follow the live public ones.
-        settled.published.extend(instance.casts.iter().cloned());
         let new_nullifiers = nullifiers.iter().map(|(nullifier, _)| *nullifier).collect();
 
         Ok(Self(StateDiff {
             signer_account_ids,
+            public_diff: settled.public_diff,
             new_commitments: commitments
                 .into_iter()
-                .chain(settled.new_commitments)
+                .chain(settled.program_commitments)
                 .collect(),
             new_nullifiers,
+            events: settled.events,
             consumed,
-            ..settled
+            // The proven private Casts follow the live public ones.
+            published: settled
+                .casts
+                .into_iter()
+                .chain(instance.casts.iter().cloned())
+                .collect(),
         }))
     }
 
@@ -526,7 +542,7 @@ fn settle(
     timestamp: Timestamp,
     cycle_budget: Cycles,
     cycles_used: &mut Cycles,
-) -> Result<StateDiff, LeeError> {
+) -> Result<SettledPublicPart, LeeError> {
     let mut backend = PublicBackend::new(state, cycle_budget, cycles_used);
     let PublicOutcome {
         block_validity_window,
@@ -539,11 +555,6 @@ fn settle(
         block_validity_window.is_valid_for(block_id)
             && timestamp_validity_window.is_valid_for(timestamp),
         LeeError::OutOfValidityWindow
-    );
-    ensure!(
-        u128::try_from(casts.len())
-            .is_ok_and(|count| state.next_message_sequence().checked_add(count).is_some()),
-        LeeError::InvalidInput("Message sequence exhausted".into())
     );
     let public_diff = accounts
         .into_iter()
@@ -561,14 +572,11 @@ fn settle(
             event,
         })
         .collect();
-    Ok(StateDiff {
-        signer_account_ids: Vec::new(),
+    Ok(SettledPublicPart {
         public_diff,
-        new_commitments: backend.into_outputs(),
-        new_nullifiers: Vec::new(),
+        program_commitments: backend.into_program_commitments(),
         events,
-        consumed: None,
-        published: casts,
+        casts,
     })
 }
 
