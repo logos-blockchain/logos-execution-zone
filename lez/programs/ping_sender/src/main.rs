@@ -29,7 +29,7 @@ fn receive(input: &ReceiveInput, message: SenderMessage) -> Response {
                 pinned, outbox.program_account_id,
                 "the emission names a program the ping-sender config does not pin as its outbox"
             );
-            Response::keep().call(
+            Response::keep_state().call(
                 outbox,
                 &OutboxMessage::Emit {
                     target_zone,
@@ -42,7 +42,7 @@ fn receive(input: &ReceiveInput, message: SenderMessage) -> Response {
         }
         // Genesis is replayed onto seeded state during multi-sequencer reconstruction, so
         // a written config must already pin exactly this outbox.
-        SenderMessage::InitConfig { outbox_account_id } => Response::write(write_once(
+        SenderMessage::InitConfig { outbox_account_id } => Response::set_state(write_once(
             &input.pre_state,
             outbox_bytes(outbox_account_id).to_vec(),
         )),

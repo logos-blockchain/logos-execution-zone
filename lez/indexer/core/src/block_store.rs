@@ -662,7 +662,7 @@ mod tests {
             test_guest_core::Script {
                 response: Response {
                     events,
-                    ..Response::keep()
+                    ..Response::keep_state()
                 },
                 ..test_guest_core::Script::default()
             },

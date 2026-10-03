@@ -22,7 +22,7 @@ fn receive(
     input: &ReceiveInput,
     (amount, deadline, receiver): (u128, Timestamp, AccountId),
 ) -> Response {
-    Response::keep()
+    Response::keep_state()
         .call(
             Actor::new(CLOCK_01_PROGRAM_ACCOUNT_ID, clock_core::clock_account_id()),
             &clock_core::Message::AssertTimestamp {

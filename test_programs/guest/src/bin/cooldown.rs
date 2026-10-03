@@ -50,7 +50,7 @@ fn receive(input: &ReceiveInput, proposed: Timestamp) -> Response {
         state.cooldown_ms,
     );
 
-    Response::write(
+    Response::set_state(
         CooldownState {
             last_run_timestamp: proposed,
             ..state

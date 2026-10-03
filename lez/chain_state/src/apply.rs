@@ -1096,7 +1096,7 @@ mod tests {
             vec![emitter],
             vec![Nonce(0)],
             Script {
-                response: Response::keep().event(emitted(5)),
+                response: Response::keep_state().event(emitted(5)),
                 ..Script::default()
             },
             test_fee_declaration(from),

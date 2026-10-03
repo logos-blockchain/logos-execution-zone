@@ -409,11 +409,11 @@ fn note_ciphertext_is_padded_to_the_requested_length() {
 fn circuit_fails_when_turn_validity_windows_have_empty_intersection() {
     let account_keys = test_private_account_keys_1();
     let later = Script {
-        response: Response::keep().try_block_window(4..7).unwrap(),
+        response: Response::keep_state().try_block_window(4..7).unwrap(),
         ..Script::default()
     };
     let earlier = Script {
-        response: Response::keep().try_block_window(1..4).unwrap(),
+        response: Response::keep_state().try_block_window(1..4).unwrap(),
         ..Script::default()
     }
     .call(

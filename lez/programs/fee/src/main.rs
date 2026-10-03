@@ -60,14 +60,14 @@ fn receive(input: &ReceiveInput) -> Response {
                 payout,
                 producer,
             });
-            Response::write(fee_state.to_bytes()).call(
+            Response::set_state(fee_state.to_bytes()).call(
                 Actor::native_balance(inbox),
                 &NativeMessage::ReadState(ReadState {
                     reply_to: input.receiver,
                 }),
             )
         }
-        Message::Refund { amount, payer } => Response::keep().send(custody_transfer(
+        Message::Refund { amount, payer } => Response::keep_state().send(custody_transfer(
             inbox,
             fee_inbox_seed(),
             payer,
@@ -113,7 +113,7 @@ fn pay_out(input: &ReceiveInput, reply: &StateReply) -> Response {
     .into_iter()
     .filter(|&(.., amount)| amount > 0)
     .fold(
-        Response::write(fee_state.to_bytes()),
+        Response::set_state(fee_state.to_bytes()),
         |response, (from, seed, to, amount)| {
             response.send(custody_transfer(from, seed, to, amount, SendMode::Call))
         },

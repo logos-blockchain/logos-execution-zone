@@ -100,7 +100,7 @@ pub fn swap(input: &ReceiveInput, pool: &PoolDefinition, notification: &Notifica
         amount_out,
         mode,
     );
-    Response::write(ActorState::from(&PoolDefinition {
+    Response::set_state(ActorState::from(&PoolDefinition {
         reserve_a,
         reserve_b,
         ..pool.clone()

@@ -102,7 +102,7 @@ pub fn receive<'state>(
     };
 
     (
-        Response::write(bytes).into_transition(input.clone()),
+        Response::set_state(bytes).into_transition(input.clone()),
         new_commitment,
     )
 }

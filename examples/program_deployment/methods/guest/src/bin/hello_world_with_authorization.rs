@@ -21,5 +21,5 @@ fn receive(input: &ReceiveInput, greeting: Vec<u8>) -> Response {
 
     let mut bytes = input.pre_state.to_vec();
     bytes.extend(greeting);
-    Response::write(bytes)
+    Response::set_state(bytes)
 }

@@ -22,7 +22,7 @@ fn main() {
 fn receive(input: &ReceiveInput, callee_account_id: AccountId) -> Response {
     let greeting: Vec<u8> = b"Hello from tail call with Program Derived Account ID".to_vec();
 
-    Response::keep().send(
+    Response::keep_state().send(
         Call::new(
             Actor::new(input.receiver.account_id, callee_account_id),
             &greeting,

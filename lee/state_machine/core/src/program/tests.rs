@@ -110,7 +110,7 @@ fn validity_window_from_range_full() {
 
 #[test]
 fn response_try_with_block_validity_window_range() {
-    let transition = Response::keep()
+    let transition = Response::keep_state()
         .try_block_window(10_u64..100)
         .unwrap()
         .into_transition(receive_input());
@@ -120,7 +120,7 @@ fn response_try_with_block_validity_window_range() {
 
 #[test]
 fn response_with_block_validity_window_range_from() {
-    let transition = Response::keep()
+    let transition = Response::keep_state()
         .block_window(10_u64..)
         .into_transition(receive_input());
     assert_eq!(transition.response.block_validity_window.start(), Some(10));
@@ -129,7 +129,7 @@ fn response_with_block_validity_window_range_from() {
 
 #[test]
 fn response_with_block_validity_window_range_to() {
-    let transition = Response::keep()
+    let transition = Response::keep_state()
         .block_window(..100_u64)
         .into_transition(receive_input());
     assert_eq!(transition.response.block_validity_window.start(), None);
@@ -138,7 +138,7 @@ fn response_with_block_validity_window_range_to() {
 
 #[test]
 fn response_try_with_block_validity_window_empty_range_fails() {
-    let result = Response::keep().try_block_window(5_u64..5);
+    let result = Response::keep_state().try_block_window(5_u64..5);
     assert!(result.is_err());
 }
 

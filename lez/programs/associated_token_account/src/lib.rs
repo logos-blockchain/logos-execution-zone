@@ -39,7 +39,7 @@ pub fn receive(input: &ReceiveInput, message: Message) -> Response {
                     },
                 },
             );
-            Response::keep()
+            Response::keep_state()
                 .call(
                     Actor::new(definition_id, token_program_id),
                     &token_core::Message::AssertKind { kind },
@@ -58,7 +58,7 @@ pub fn receive(input: &ReceiveInput, message: Message) -> Response {
         } => {
             assert!(input.is_authorized, "Owner authorization is missing");
             let (ata, seed) = holding(token_program_id, descriptor.definition_id);
-            Response::keep().send(
+            Response::keep_state().send(
                 Call::new(
                     ata,
                     &token_core::Message::Transfer {
@@ -79,7 +79,7 @@ pub fn receive(input: &ReceiveInput, message: Message) -> Response {
         } => {
             assert!(input.is_authorized, "Owner authorization is missing");
             let (ata, seed) = holding(token_program_id, descriptor.definition_id);
-            Response::keep().send(
+            Response::keep_state().send(
                 Call::new(
                     ata,
                     &token_core::Message::Burn {

@@ -44,7 +44,7 @@ fn receive(input: &ReceiveInput) -> Response {
             );
             let mut cfg = decode_config(&input.pre_state);
             mint_source(&mut cfg, deliverer, &src_zone, src_account_id, amount);
-            Response::write(cfg.to_bytes()).call(
+            Response::set_state(cfg.to_bytes()).call(
                 Actor::new(holding_account_id(program, &recipient), program),
                 &Message::Credit(amount),
             )
@@ -55,7 +55,7 @@ fn receive(input: &ReceiveInput) -> Response {
                 input.from_own_program(),
                 "a credit is only sent by this token's config"
             );
-            Response::write(
+            Response::set_state(
                 balance_bytes(
                     read_balance(&input.pre_state)
                         .checked_add(amount)
@@ -75,7 +75,7 @@ fn receive(input: &ReceiveInput) -> Response {
             );
             // A written shard must already hold exactly this configuration rather than being
             // refused.
-            Response::write(write_once(&input.pre_state, config.to_bytes()))
+            Response::set_state(write_once(&input.pre_state, config.to_bytes()))
         }
         Message::RenounceAuthority { authority, via } => {
             if !at_config(input) {
@@ -97,7 +97,7 @@ fn receive(input: &ReceiveInput) -> Response {
                 "wrapped-token authority is already renounced",
             );
             cfg.authority = None;
-            Response::write(cfg.to_bytes())
+            Response::set_state(cfg.to_bytes())
         }
         Message::UpdateSources {
             authority,
@@ -152,7 +152,7 @@ fn receive(input: &ReceiveInput) -> Response {
                     policy,
                 })
                 .collect();
-            Response::write(cfg.to_bytes())
+            Response::set_state(cfg.to_bytes())
         }
     }
 }
@@ -171,7 +171,7 @@ fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
         panic!("a delivery to wrapped_token must carry a Mint");
     };
     let program = input.receiver.program_account_id;
-    Response::keep().call(
+    Response::keep_state().call(
         Actor::new(config_account_id(program), program),
         &Message::MintFrom {
             deliverer: input.origin.expect("a delivery has a sender"),
@@ -189,7 +189,7 @@ fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
 fn forward_as_authority(input: &ReceiveInput, message: &Message, unsigned: &str) -> Response {
     assert!(input.is_authorized, "{unsigned}");
     let program = input.receiver.program_account_id;
-    Response::keep().call(Actor::new(config_account_id(program), program), message)
+    Response::keep_state().call(Actor::new(config_account_id(program), program), message)
 }
 
 fn at_config(input: &ReceiveInput) -> bool {

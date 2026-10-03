@@ -36,7 +36,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
                 data.as_slice(),
                 "the source account does not hold the bytes the instruction moves out of it"
             );
-            Response::write(Vec::new()).call(
+            Response::set_state(Vec::new()).call(
                 Actor::new(to, input.receiver.program_account_id),
                 &Message::Append(data),
             )
@@ -52,5 +52,5 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
 }
 
 fn append(input: &ReceiveInput, data: &[u8]) -> Response {
-    Response::write([input.pre_state.as_ref(), data].concat())
+    Response::set_state([input.pre_state.as_ref(), data].concat())
 }

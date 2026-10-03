@@ -96,6 +96,6 @@ pub fn receive(input: &ReceiveInput, message: Message) -> Response {
     Response {
         calls,
         casts,
-        ..post.map_or_else(Response::keep, Response::write)
+        ..post.map_or_else(Response::keep_state, Response::set_state)
     }
 }

@@ -46,7 +46,7 @@ fn receive(input: &ReceiveInput) -> Response {
                 }),
                 "Record is only callable for a peer source this receiver authorizes"
             );
-            Response::keep().call(
+            Response::keep_state().call(
                 Actor::new(ping_record_pda(program), program),
                 &ReceiverMessage::WriteRecord(payload),
             )
@@ -56,7 +56,7 @@ fn receive(input: &ReceiveInput) -> Response {
                 input.from_own_program(),
                 "the record is only written by this receiver's config"
             );
-            Response::write(payload)
+            Response::set_state(payload)
         }
         ReceiverMessage::RenounceAuthority { authority, via } => {
             if !at_config(input) {
@@ -77,7 +77,7 @@ fn receive(input: &ReceiveInput) -> Response {
                 "receiver authority is already renounced",
             );
             cfg.authority = None;
-            Response::write(cfg.to_bytes())
+            Response::set_state(cfg.to_bytes())
         }
         ReceiverMessage::UpdateSources {
             authority,
@@ -103,7 +103,7 @@ fn receive(input: &ReceiveInput) -> Response {
                 "receiver sources are fixed at genesis: no authority is configured",
             );
             cfg.sources = sources;
-            Response::write(cfg.to_bytes())
+            Response::set_state(cfg.to_bytes())
         }
         ReceiverMessage::InitConfig(config) => {
             assert!(
@@ -116,7 +116,7 @@ fn receive(input: &ReceiveInput) -> Response {
             );
             // Genesis is replayed onto seeded state during multi-sequencer reconstruction, so
             // a written config must already hold exactly this.
-            Response::write(write_once(&input.pre_state, config.to_bytes()))
+            Response::set_state(write_once(&input.pre_state, config.to_bytes()))
         }
     }
 }
@@ -135,7 +135,7 @@ fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
         panic!("a delivery to ping_receiver must carry a Record");
     };
     let program = input.receiver.program_account_id;
-    Response::keep().call(
+    Response::keep_state().call(
         Actor::new(receiver_config_account_id(program), program),
         &ReceiverMessage::RecordFrom {
             deliverer: input.origin.expect("a delivery has a sender"),
@@ -155,7 +155,7 @@ fn forward_as_authority(input: &ReceiveInput, message: &ReceiverMessage) -> Resp
         "the configured authority must authorize a change"
     );
     let program = input.receiver.program_account_id;
-    Response::keep().call(
+    Response::keep_state().call(
         Actor::new(receiver_config_account_id(program), program),
         message,
     )

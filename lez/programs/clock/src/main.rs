@@ -50,7 +50,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
 
             // The schedule below is decided from the block ID just checked to be one past the
             // every-block account's own.
-            let mut response = Response::write(updated_data.to_bytes());
+            let mut response = Response::set_state(updated_data.to_bytes());
             if block_id.is_multiple_of(10) {
                 response = response.send(record(CLOCK_10_PROGRAM_ACCOUNT_ID));
             }
@@ -64,7 +64,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
                 input.from_own_program(),
                 "Clock records are only sent by the every-block clock account"
             );
-            Response::write(data.to_bytes())
+            Response::set_state(data.to_bytes())
         }
         Message::AssertTimestamp { at_least, at_most } => {
             let ClockAccountData { timestamp, .. } = ClockAccountData::from_bytes(&input.pre_state);
@@ -72,7 +72,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
                 at_least <= timestamp && timestamp <= at_most,
                 "Clock timestamp {timestamp} is outside [{at_least}, {at_most}]"
             );
-            Response::keep()
+            Response::keep_state()
         }
     }
 }

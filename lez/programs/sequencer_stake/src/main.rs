@@ -95,7 +95,7 @@ fn stake(
 
     let program = input.receiver.program_account_id;
     let ownership = input.receiver.account_id;
-    Response::write(StakeRecord { sequencer_key }.to_bytes())
+    Response::set_state(StakeRecord { sequencer_key }.to_bytes())
         .send(to_config(
             program,
             &Message::RecordStake {
@@ -134,7 +134,7 @@ fn unstake_request(
     );
 
     // The config holds the request; the transfer happens in FinalizeUnstake.
-    Response::keep()
+    Response::keep_state()
         .block_window(request_window(requested_at))
         .send(to_config(
             input.receiver.program_account_id,
@@ -176,7 +176,7 @@ fn finalize_unstake(input: &ReceiveInput, sequencer_key: SequencerKey) -> Respon
     }
 
     let program = input.receiver.program_account_id;
-    Response::write(config.to_bytes())
+    Response::set_state(config.to_bytes())
         .block_window(pending.releasable_at(exit_delay)..)
         .send(custody_transfer(
             stake_funds_account_id(program, &ownership),
@@ -209,7 +209,7 @@ fn slash(
         .expect("slashed key must have a config entry");
 
     let program = input.receiver.program_account_id;
-    Response::write(config.to_bytes()).send(custody_transfer(
+    Response::set_state(config.to_bytes()).send(custody_transfer(
         stake_funds_account_id(program, &entry.account_id),
         stake_funds_seed(&entry.account_id),
         slash_sink_account_id(program),
@@ -253,7 +253,7 @@ fn init_channel_params(
     );
     config.channel_params = Some(params);
     config.channel_id = Some(channel_id);
-    Response::write(config.to_bytes())
+    Response::set_state(config.to_bytes())
 }
 
 fn record_stake(
@@ -297,7 +297,7 @@ fn record_stake(
             });
         }
     }
-    Response::write(config.to_bytes())
+    Response::set_state(config.to_bytes())
 }
 
 fn track_unstake_request(
@@ -321,7 +321,7 @@ fn track_unstake_request(
         "unstake request must be covered by the staked total and leave the key at zero or at/above the minimum"
     );
     entry.pending_unstake = Some(pending);
-    Response::write(config.to_bytes())
+    Response::set_state(config.to_bytes())
 }
 
 fn assert_root_origin(input: &ReceiveInput, message: &str) {

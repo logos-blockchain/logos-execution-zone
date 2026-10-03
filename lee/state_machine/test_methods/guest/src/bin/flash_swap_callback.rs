@@ -41,7 +41,7 @@ pub struct CallbackMessage {
 fn main() {
     run_actor(|_input: &ReceiveInput, message: CallbackMessage| {
         if message.return_funds {
-            Response::keep().send(custody_transfer(
+            Response::keep_state().send(custody_transfer(
                 message.receiver,
                 PdaSeed::new([1; 32]),
                 message.vault,
@@ -49,7 +49,7 @@ fn main() {
                 SendMode::Call,
             ))
         } else {
-            Response::keep()
+            Response::keep_state()
         }
     })
 }

@@ -440,14 +440,14 @@ impl From<&ReceiveInput> for StateReply {
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-#[must_use = "a Transition does nothing unless written"]
+#[must_use = "a Transition does nothing unless committed"]
 pub struct Transition {
     pub input: ReceiveInput,
     pub response: Response,
 }
 
 impl Transition {
-    pub fn write(&self) {
+    pub fn commit(&self) {
         env::commit_slice(&crate::to_borsh_frame(self));
     }
 }
@@ -466,7 +466,7 @@ pub struct Response {
 }
 
 impl Response {
-    pub const fn keep() -> Self {
+    pub const fn keep_state() -> Self {
         Self {
             post_state: None,
             calls: Vec::new(),
@@ -477,10 +477,10 @@ impl Response {
         }
     }
 
-    pub fn write(data: impl Into<ActorState>) -> Self {
+    pub fn set_state(data: impl Into<ActorState>) -> Self {
         Self {
             post_state: Some(data.into()),
-            ..Self::keep()
+            ..Self::keep_state()
         }
     }
 
@@ -750,7 +750,7 @@ pub fn run_actor<M: BorshDeserialize>(receive: impl FnOnce(&ReceiveInput, M) -> 
 pub fn run_actor_with(receive: impl FnOnce(&ReceiveInput) -> Response) -> ! {
     let input: ReceiveInput =
         borsh::from_slice(&read_input_frame()).expect("receive input must be valid borsh");
-    receive(&input).into_transition(input).write();
+    receive(&input).into_transition(input).commit();
     env::exit(0)
 }
 

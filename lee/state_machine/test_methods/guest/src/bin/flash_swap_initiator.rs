@@ -87,7 +87,7 @@ fn pending(input: &ReceiveInput) -> Vec<Phase> {
 }
 
 fn keep(pending: &[Phase]) -> Response {
-    Response::write(if pending.is_empty() {
+    Response::set_state(if pending.is_empty() {
         Vec::new()
     } else {
         borsh::to_vec(pending).expect("pending swaps encode")

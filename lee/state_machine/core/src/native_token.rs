@@ -84,11 +84,10 @@ pub fn receive(input: &ReceiveInput) -> Result<Transition, TransferError> {
             let post = decode_balance(&input.pre_state)?
                 .checked_add(amount)
                 .ok_or(TransferError::BalanceOverflow { account_id })?;
-            Response::write(encode_balance(post))
+            Response::set_state(encode_balance(post))
         }
-        Message::ReadState(read) => {
-            Response::keep().call(read.reply_to, &Message::StateReply(StateReply::from(input)))
-        }
+        Message::ReadState(read) => Response::keep_state()
+            .call(read.reply_to, &Message::StateReply(StateReply::from(input))),
         Message::StateReply(_) => return Err(TransferError::UnexpectedReply { account_id }),
     };
     Ok(response.into_transition(input.clone()))
@@ -105,7 +104,7 @@ fn debit(input: &ReceiveInput, to: AccountId, amount: Balance) -> Result<Respons
     let post = decode_balance(&input.pre_state)?
         .checked_sub(amount)
         .ok_or(TransferError::InsufficientBalance { account_id })?;
-    Ok(Response::write(encode_balance(post)))
+    Ok(Response::set_state(encode_balance(post)))
 }
 
 /// A transfer out of an account the caller holds under `seed`.

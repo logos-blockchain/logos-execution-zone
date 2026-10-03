@@ -19,7 +19,7 @@ pub struct Script {
 impl Default for Script {
     fn default() -> Self {
         Self {
-            response: Response::keep(),
+            response: Response::keep_state(),
             require_authorized: false,
             require_origin: None,
         }
@@ -30,7 +30,7 @@ impl Script {
     #[must_use]
     pub fn write(data: Vec<u8>) -> Self {
         Self {
-            response: Response::write(data),
+            response: Response::set_state(data),
             ..Self::default()
         }
     }

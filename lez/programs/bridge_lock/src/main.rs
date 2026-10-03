@@ -76,7 +76,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
             // The outbox actor's program, not a new message field, carries the proposed route.
             // The config checks it before the debit and the emission are delivered, as the read
             // it replaces did.
-            Response::keep()
+            Response::keep_state()
                 .call(
                     Actor::new(config_account_id(program), program),
                     &Message::CheckRoute {
@@ -122,7 +122,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
                 target, target_account_id,
                 "bridge_lock only mints through the wrapped token it is pinned to"
             );
-            Response::keep()
+            Response::keep_state()
         }
         // A written shard must already pin exactly these programs rather than being refused,
         // because genesis is replayed onto seeded state during multi-sequencer reconstruction.
@@ -136,7 +136,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
                 config_account_id(program),
                 "the receiver must be the bridge-lock config PDA"
             );
-            Response::write(write_once(
+            Response::set_state(write_once(
                 &input.pre_state,
                 config_bytes(outbox_account_id, target_account_id).to_vec(),
             ))

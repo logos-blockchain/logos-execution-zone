@@ -51,6 +51,6 @@ pub fn forges_echo() -> ! {
             ..input
         },
     };
-    Response::keep().into_transition(forged).write();
+    Response::keep_state().into_transition(forged).commit();
     env::exit(0)
 }

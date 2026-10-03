@@ -89,6 +89,6 @@ pub fn receive(input: &ReceiveInput) -> Response {
     };
     Response {
         calls: liquidity_sends(input.receiver.account_id, &pool, &message, creates_lp),
-        ..Response::write(ActorState::from(&after))
+        ..Response::set_state(ActorState::from(&after))
     }
 }

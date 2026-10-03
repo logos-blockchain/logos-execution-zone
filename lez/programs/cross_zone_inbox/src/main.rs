@@ -22,7 +22,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
         // a written config must already hold exactly this.
         Message::InitConfig(config) => {
             assert_root_origin_at_config(input);
-            Response::write(write_once(&input.pre_state, config.to_bytes()))
+            Response::set_state(write_once(&input.pre_state, config.to_bytes()))
         }
     }
 }
@@ -54,7 +54,7 @@ fn dispatch(input: &ReceiveInput, msg: CrossZoneMessage) -> Response {
         inbox_seen_shard_account_id(inbox, &msg.src_zone, msg.src_block_id),
         inbox,
     );
-    Response::keep().call(seen, &Message::Mark(msg))
+    Response::keep_state().call(seen, &Message::Mark(msg))
 }
 
 fn mark(input: &ReceiveInput, msg: CrossZoneMessage) -> Response {
@@ -86,7 +86,7 @@ fn mark(input: &ReceiveInput, msg: CrossZoneMessage) -> Response {
     shard.insert(msg.src_block_hash, msg.src_tx_index);
 
     let target = Actor::new(msg.target_account_id, msg.target_account_id);
-    Response::write(shard.to_bytes()).call(
+    Response::set_state(shard.to_bytes()).call(
         target,
         &Delivery {
             src_zone: msg.src_zone,

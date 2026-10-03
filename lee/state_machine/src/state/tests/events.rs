@@ -31,7 +31,7 @@ fn emitting(events: Vec<ProgramEvent>) -> Script {
     Script {
         response: Response {
             events,
-            ..Response::keep()
+            ..Response::keep_state()
         },
         ..Script::default()
     }

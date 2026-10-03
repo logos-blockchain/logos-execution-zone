@@ -46,7 +46,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
         "Outbox slot already written: one Emit per (emitter, target_zone, ordinal)"
     );
 
-    Response::write(
+    Response::set_state(
         OutboxRecord {
             emitter,
             target_zone,

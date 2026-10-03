@@ -38,7 +38,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
         "Deposit was already processed: its receipt is written"
     );
 
-    Response::write(RECEIPT_MARKER.to_vec())
+    Response::set_state(RECEIPT_MARKER.to_vec())
         .send(custody_transfer(
             bridge_core::compute_bridge_account_id(bridge),
             bridge_core::compute_bridge_seed(),
