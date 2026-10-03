@@ -201,3 +201,24 @@ fn a_transfer_from_a_non_canonical_balance_is_rejected() {
         panic!("a non-canonical balance was spent: {result:?}");
     };
 }
+
+#[test]
+fn a_native_transfer_to_the_sender_itself_preserves_its_balance() {
+    let key = PrivateKey::try_new([1; 32]).unwrap();
+    let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let sender = Actor::native_balance(account_id);
+    let mut state = V03State::new().with_public_accounts([(account_id, Account::funded(200))]);
+
+    let tx = public_tx(
+        sender,
+        vec![sender],
+        vec![Nonce(0)],
+        transfer(account_id, 30),
+        &[&key],
+    );
+    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+    let account = state.get_account_by_id(account_id);
+    assert_eq!(account.data.native_balance(), Ok(200));
+    assert_eq!(account.nonce, Nonce(1));
+}
