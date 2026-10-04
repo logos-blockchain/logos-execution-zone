@@ -1,4 +1,4 @@
-use std::{io::Write as _, str::FromStr};
+use std::{io::Write as _, path::PathBuf, str::FromStr};
 
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
@@ -73,6 +73,17 @@ pub enum Command {
     /// `program_loader` program interaction subcommand (deploy/update a program).
     #[command(subcommand)]
     ProgramLoader(ProgramLoaderSubcommand),
+    /// Deploy a program binary using program_loader (convenience alias).
+    DeployProgram {
+        /// Path to the program's compiled ELF binary.
+        elf: PathBuf,
+        /// An existing, funded account to pay fees (defaults to first public account).
+        #[arg(long)]
+        payer: Option<CliAccountMention>,
+        /// Whether the deployed program self-declares as immutable.
+        #[arg(long)]
+        immutable: bool,
+    },
     /// Group key management (create, invite, join, derive keys).
     #[command(subcommand)]
     Group(GroupSubcommand),
@@ -268,6 +279,21 @@ pub async fn execute_subcommand(
             program_loader_subcommand
                 .handle_subcommand(wallet_core)
                 .await?
+        }
+        Command::DeployProgram {
+            elf,
+            payer,
+            immutable,
+        } => {
+            programs::program_loader::ProgramLoaderSubcommand::handle_deploy(
+                elf,
+                None,
+                None,
+                immutable,
+                payer,
+                wallet_core,
+            )
+            .await?
         }
         Command::Group(group_subcommand) => group_subcommand.handle_subcommand(wallet_core).await?,
         Command::Keycard(keycard_subcommand) => {

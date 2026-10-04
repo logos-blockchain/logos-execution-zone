@@ -78,13 +78,12 @@ pub enum ProgramLoaderSubcommand {
         /// Path to the program's compiled ELF binary.
         #[arg(long)]
         elf: PathBuf,
-        /// The account to create the header at; its `program_loader` shard must still be empty.
+        /// The account to create the header at; if omitted, automatically created.
         #[arg(long)]
-        header: CliAccountMention,
-        /// The accounts to write segments to, in chain order (first chunk first); each one's
-        /// `program_loader` shard must still be empty.
+        header: Option<CliAccountMention>,
+        /// The accounts to write segments to; if omitted, automatically created.
         #[arg(long, num_args = 1..)]
-        segments: Vec<CliAccountMention>,
+        segments: Option<Vec<CliAccountMention>>,
         /// Whether the deployed program self-declares as immutable (not protocol-enforced).
         #[arg(long)]
         immutable: bool,
@@ -212,25 +211,75 @@ impl ProgramLoaderSubcommand {
             .await
     }
 
-    async fn handle_deploy(
+    pub(crate) async fn handle_deploy(
         elf: PathBuf,
-        header: CliAccountMention,
-        segments: Vec<CliAccountMention>,
+        header: Option<CliAccountMention>,
+        segments: Option<Vec<CliAccountMention>>,
         immutable: bool,
         payer: Option<CliAccountMention>,
-        wallet_core: &WalletCore,
+        wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
-        let header_id = resolve_public(&header, wallet_core)?;
-        let payer_id = payer
-            .as_ref()
-            .map(|p| resolve_public(p, wallet_core))
-            .transpose()?;
-        let segment_ids = segments
-            .iter()
-            .map(|mention| resolve_public(mention, wallet_core))
-            .collect::<Result<Vec<_>>>()?;
         let bytecode = std::fs::read(&elf)
             .with_context(|| format!("failed to read program binary at {}", elf.display()))?;
+
+        let binary = risc0_binfmt::ProgramBinary::decode(&bytecode)
+            .map_err(crate::ExecutionFailureKind::InvalidProgramBinary)?;
+        let chunks: Vec<&[u8]> = binary
+            .user_elf
+            .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+            .collect();
+        let num_segments = chunks.len();
+
+        let mut needs_store = false;
+
+        let header_id = match header {
+            Some(h) => resolve_public(&h, wallet_core)?,
+            None => {
+                let id = wallet_core.create_new_account_public(None).0;
+                needs_store = true;
+                id
+            }
+        };
+
+        let segment_ids = match segments {
+            Some(segs) if !segs.is_empty() => segs
+                .iter()
+                .map(|mention| resolve_public(mention, wallet_core))
+                .collect::<Result<Vec<_>>>()?,
+            _ => {
+                needs_store = true;
+                (0..num_segments)
+                    .map(|_| wallet_core.create_new_account_public(None).0)
+                    .collect()
+            }
+        };
+
+        if needs_store {
+            wallet_core.store_persistent_data()?;
+        }
+
+        let payer_id = match payer {
+            Some(p) => Some(resolve_public(&p, wallet_core)?),
+            None => {
+                let mut funded = None;
+                for (id, _) in wallet_core.storage().key_chain().public_account_ids() {
+                    if let Ok(balance) = wallet_core.get_account_balance(id).await {
+                        if balance > 0 {
+                            funded = Some(id);
+                            break;
+                        }
+                    }
+                }
+                funded.or_else(|| {
+                    wallet_core
+                        .storage()
+                        .key_chain()
+                        .public_account_ids()
+                        .next()
+                        .map(|(id, _)| id)
+                })
+            }
+        };
 
         let account_id = ProgramLoader(wallet_core)
             .deploy(header_id, &segment_ids, bytecode, immutable, payer_id)
