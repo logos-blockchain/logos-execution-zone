@@ -60,7 +60,7 @@ pub unsafe extern "C" fn sequencer_ffi_start_sequencer(
 /// The caller must ensure that:
 /// - `runtime` is either null or a valid pointer to a [`Runtime`] that outlives the sequencer.
 /// - `config_path` is a valid pointer to a null-terminated C string.
-unsafe fn setup_sequencer(
+pub unsafe fn setup_sequencer(
     runtime: *const Runtime,
     config_path: *const c_char,
 ) -> Result<SequencerServiceFFI, OperationStatus> {

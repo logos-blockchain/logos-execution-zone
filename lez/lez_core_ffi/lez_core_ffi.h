@@ -801,6 +801,10 @@ typedef struct FfiCreateWalletOutput {
    * C compatible(null terminated) string.
    */
   char *mnemonic;
+  /**
+   * Read-only sequencer to send queries to.
+   */
+  struct SequencerServiceFFI *sequencer;
 } FfiCreateWalletOutput;
 
 typedef struct FfiBytes32 FfiNullifierPublicKey;
@@ -1944,7 +1948,8 @@ enum WalletFfiError wallet_ffi_free_label_list(struct LabelList *label_list);
 struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
                                                    const char *storage_path,
                                                    const char *statistics_path,
-                                                   const char *password);
+                                                   const char *password,
+                                                   const char *sequencer_config_path);
 
 /**
  * Open an existing wallet from storage.
