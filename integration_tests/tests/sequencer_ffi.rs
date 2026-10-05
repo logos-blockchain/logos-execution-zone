@@ -20,7 +20,7 @@ use integration_tests::{
 use log::info;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use logos_blockchain_zone_sdk::adapter::Node as _;
-use primitives_ffi::types::{
+use lez_core_ffi::primitives::types::{
     FfiOption,
     transaction::{FfiTransaction, FfiTransactionKind},
 };

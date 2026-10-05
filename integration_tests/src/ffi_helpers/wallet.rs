@@ -1,14 +1,14 @@
 use std::ffi::c_char;
 
-use primitives_ffi::types::{
+use lez_core_ffi::primitives::types::{
     FfiBytes32, FfiIdentifier, FfiPrivateAccountKeys, FfiPublicAccountKey, account::FfiAccount,
 };
-use wallet_ffi::{
+use lez_core_ffi::wallet::{
     FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiAccountMention,
     FfiTransferResult, WalletHandle, error,
     generic_transaction::{FfiProgramWithDependencies, FfiTransactionResult},
     label::{AccountIdResolvedFromLabel, LabelAvailability, LabelList},
-    wallet::FfiCreateWalletOutput,
+    lifecycle::FfiCreateWalletOutput,
 };
 
 unsafe extern "C" {

@@ -14,7 +14,7 @@ use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
 };
-use primitives_ffi::{
+use lez_core_ffi::primitives::{
     result::PointerResult,
     runtime::Runtime,
     types::{
@@ -25,7 +25,7 @@ use primitives_ffi::{
         transaction::FfiTransaction,
     },
 };
-use sequencer_ffi::{
+use lez_core_ffi::sequencer::{
     SequencerServiceFFI,
     api::{lifecycle::InitializedSequencerServiceFFIResult, query::LastBlockIdResult},
     error::OperationStatus,

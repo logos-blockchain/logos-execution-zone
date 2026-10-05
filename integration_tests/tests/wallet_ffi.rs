@@ -31,19 +31,19 @@ use lee::{Account, AccountId, PrivateKey, PublicKey, program::Program};
 use lee_core::{
     Identifier, native_token::NATIVE_TOKEN_PROGRAM_ID, program::PROGRAM_LOADER_ACCOUNT_ID,
 };
-use primitives_ffi::types::{
+use lez_core_ffi::primitives::types::{
     FfiBytes32, FfiIdentifier, FfiPrivateAccountKeys, FfiPublicAccountKey, account::FfiAccount,
 };
 use token_core::{TokenDefinition, TokenHolding};
 use wallet::{DEFAULT_MAX_FEE, account::HumanReadableAccount};
-use wallet_ffi::{
+use lez_core_ffi::wallet::{
     FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiAccountMention,
     FfiTransferResult, WalletHandle, error,
     generic_transaction::{
         FfiDependency, FfiMembershipProof, FfiProgramHeader, FfiProgramKind,
         FfiProgramWithDependencies, FfiTransactionResult,
     },
-    wallet::FfiCreateWalletOutput,
+    lifecycle::FfiCreateWalletOutput,
 };
 
 /// Blocks until the transfer is in a block, panicking if it never lands.

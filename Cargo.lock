@@ -4843,18 +4843,17 @@ dependencies = [
  "key_protocol",
  "lee",
  "lee_core",
+ "lez_core_ffi",
  "log",
  "logos-blockchain-core",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-zone-sdk",
  "num-bigint 0.4.6",
  "ping_core",
- "primitives_ffi",
  "program_loader_core",
  "programs",
  "sequencer_bedrock_actor",
  "sequencer_core",
- "sequencer_ffi",
  "sequencer_service",
  "sequencer_service_rpc",
  "sequencer_stake_core",
@@ -4874,7 +4873,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber 0.3.23",
  "wallet",
- "wallet-ffi",
  "wrapped_token_core",
 ]
 
@@ -5927,6 +5925,29 @@ version = "0.1.0"
 dependencies = [
  "indexer_core",
  "sequencer_core",
+]
+
+[[package]]
+name = "lez_core_ffi"
+version = "0.1.0"
+dependencies = [
+ "bip39",
+ "cbindgen",
+ "common",
+ "env_logger",
+ "kameo",
+ "key_protocol",
+ "lee",
+ "lee_core",
+ "log",
+ "programs",
+ "sequencer_executor_actor",
+ "sequencer_service",
+ "sequencer_service_rpc",
+ "sequencer_storage_actor",
+ "serde_json",
+ "tokio",
+ "wallet",
 ]
 
 [[package]]
@@ -9432,19 +9453,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "primitives_ffi"
-version = "0.1.0"
-dependencies = [
- "common",
- "lee",
- "lee_core",
- "log",
- "sequencer_executor_actor",
- "sequencer_storage_actor",
- "tokio",
-]
-
-[[package]]
 name = "privacy_preserving_circuit_program"
 version = "0.1.0"
 dependencies = [
@@ -11277,22 +11285,6 @@ name = "sequencer_executor_actor_metrics"
 version = "0.1.0"
 dependencies = [
  "metrics",
-]
-
-[[package]]
-name = "sequencer_ffi"
-version = "0.1.0"
-dependencies = [
- "cbindgen",
- "env_logger",
- "kameo",
- "lee",
- "log",
- "primitives_ffi",
- "sequencer_executor_actor",
- "sequencer_service",
- "sequencer_storage_actor",
- "serde_json",
 ]
 
 [[package]]
@@ -13854,24 +13846,6 @@ dependencies = [
  "tokio",
  "url",
  "zeroize",
-]
-
-[[package]]
-name = "wallet-ffi"
-version = "0.1.0"
-dependencies = [
- "bip39",
- "cbindgen",
- "common",
- "key_protocol",
- "lee",
- "lee_core",
- "primitives_ffi",
- "programs",
- "sequencer_service_rpc",
- "serde_json",
- "tokio",
- "wallet",
 ]
 
 [[package]]
