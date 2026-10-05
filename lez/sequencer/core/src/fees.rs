@@ -61,7 +61,7 @@ pub fn screen(tx: &LeeTransaction, state: &lee::V03State) -> Result<()> {
 
     validate_static_tx(&view, &fee_state)?;
 
-    let payer = view.payer();
+    let payer = view.payer().expect("a public view names its payer");
     if !lee::is_fee_authorized(public_tx.message(), public_tx.witness_set()) {
         return Err(Error::UnauthorizedPayer { payer });
     }

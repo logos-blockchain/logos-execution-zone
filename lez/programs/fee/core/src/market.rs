@@ -36,6 +36,9 @@ pub const BASE_FEE_STOR_MAX: Fee = u64::MAX / MAX_GAS_STOR;
 
 pub const SMOOTHING_WINDOW: usize = 50;
 
+/// How many blocks back a private transaction may price its fee.
+pub const PRIVATE_FEE_WINDOW: usize = 20;
+
 // FIXME: Provisional: re-pin with the LEZ wire-format numbers (spec Parameters TODO).
 /// Execution gas charged to every private transaction (STARK receipt verification,
 /// RISC Zero 3.0.5). THIS WILL BE WORKED ON WHILE HANDLING PPTX FEES!
