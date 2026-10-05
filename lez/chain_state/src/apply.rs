@@ -407,7 +407,7 @@ fn settle_charged_transaction(
         ));
     }
 
-    let payer = view.payer();
+    let payer = view.payer().expect("a public view names its payer");
 
     // Phase 1: Reserve
     //
