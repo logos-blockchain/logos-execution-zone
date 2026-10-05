@@ -3,9 +3,10 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque, hash_map::Entry};
 use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::{
-    NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, PublicAction,
-    WitnessKind,
+    FeeTransfer, NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness,
+    PublicAction, WitnessKind,
     account::{AccountData, AccountId, ProgramShardSelector, ShardData},
+    native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{
         AccountMeta, ApplyInput, ApplyOutput, BlockValidityWindow, ChainedCall, EffectData,
         ExecutionValidationError, InstructionData, InvalidWindow, MAX_NUMBER_CHAINED_CALLS,
@@ -185,8 +186,12 @@ pub struct ExecutionState<'witnesses> {
 }
 
 impl<'witnesses> ExecutionState<'witnesses> {
+    // Initialize with a root call.
+    /// If `fee` is given, a native transfer is scheduled ahead of the root call.
+    /// Its accounts join the transaction after the root's.
     pub fn initialize(
         root: RootCall,
+        fee: Option<&FeeTransfer>,
         witnesses: &'witnesses [PrivateWitness],
     ) -> Result<Self, ExecutionError> {
         let RootCall {
@@ -225,9 +230,16 @@ impl<'witnesses> ExecutionState<'witnesses> {
             }
         }
 
+        let fee_selectors = fee.map(|fee| {
+            [
+                ProgramShardSelector::native_balance(fee.payer),
+                ProgramShardSelector::native_balance(fee.recipient),
+            ]
+        });
+
         let mut accounts = HashMap::new();
         let mut root_order = Vec::new();
-        for shard_selector in &shard_selectors {
+        for shard_selector in shard_selectors.iter().chain(fee_selectors.iter().flatten()) {
             let account_id = shard_selector.account_id;
             let Entry::Vacant(vacant) = accounts.entry(account_id) else {
                 continue;
@@ -260,21 +272,35 @@ impl<'witnesses> ExecutionState<'witnesses> {
             return Err(ExecutionError::WitnessNotInRoot { account_id });
         }
 
+        let mut pending = VecDeque::with_capacity(2);
+        if let (Some(fee), Some(fee_selectors)) = (fee, fee_selectors) {
+            pending.push_back(PendingCall {
+                call: ChainedCall::new(
+                    NATIVE_TOKEN_PROGRAM_ID,
+                    fee_selectors.to_vec(),
+                    &native_token::Instruction::Transfer { amount: fee.amount },
+                ),
+                caller_account_id: None,
+                grants: HashSet::new(),
+            });
+        }
+        pending.push_back(PendingCall {
+            call: ChainedCall {
+                program_account_id,
+                shard_selectors,
+                instruction_data,
+                pda_seeds: Vec::new(),
+            },
+            caller_account_id: None,
+            grants: HashSet::new(),
+        });
+
         Ok(Self {
             witnesses,
             root_order,
             accounts,
             pda_family_binding,
-            pending: VecDeque::from([PendingCall {
-                call: ChainedCall {
-                    program_account_id,
-                    shard_selectors,
-                    instruction_data,
-                    pda_seeds: Vec::new(),
-                },
-                caller_account_id: None,
-                grants: HashSet::new(),
-            }]),
+            pending,
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
         })

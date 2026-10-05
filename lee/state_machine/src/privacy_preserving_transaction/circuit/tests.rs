@@ -1199,6 +1199,7 @@ fn direct_input(
             instruction_data: instruction,
             authorized_accounts,
         },
+        fee: None,
         private_witnesses: witnesses,
         dummy_inputs: Vec::new(),
         ciphertext_padding: None,

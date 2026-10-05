@@ -292,7 +292,7 @@ pub fn execute_and_prove(
         env_builder: ExecutorEnv::builder(),
         calls: Vec::new(),
     };
-    ExecutionState::initialize(root.clone(), &private_witnesses)?.run(&mut backend)?;
+    ExecutionState::initialize(root.clone(), None, &private_witnesses)?.run(&mut backend)?;
     let Prover {
         mut env_builder,
         calls,
@@ -333,6 +333,7 @@ pub fn execute_and_prove(
 
     let circuit_input = PrivacyPreservingCircuitInput {
         root,
+        fee: None,
         private_witnesses,
         dummy_inputs,
         ciphertext_padding,
