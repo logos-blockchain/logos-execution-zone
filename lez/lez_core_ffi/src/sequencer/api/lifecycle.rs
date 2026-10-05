@@ -4,10 +4,12 @@ use std::{
     path::PathBuf,
 };
 
-use crate::primitives::{result::PointerResult, runtime::Runtime};
 use sequencer_service::SequencerConfig;
 
-use crate::sequencer::{SequencerServiceFFI, error::OperationStatus};
+use crate::{
+    primitives::{result::PointerResult, runtime::Runtime},
+    sequencer::{SequencerServiceFFI, error::OperationStatus},
+};
 
 pub type InitializedSequencerServiceFFIResult = PointerResult<SequencerServiceFFI, OperationStatus>;
 

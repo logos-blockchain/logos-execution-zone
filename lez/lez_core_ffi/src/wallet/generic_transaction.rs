@@ -1,22 +1,21 @@
 use std::{
     collections::HashMap,
-    ffi::{c_char, CString},
+    ffi::{CString, c_char},
 };
 
 use common::HashType;
 use lee::{
+    AccountId, ProgramId,
     privacy_preserving_transaction::circuit::{Dependency, ProgramKind, ProgramWithDependencies},
     program::Program,
-    AccountId, ProgramId,
 };
-use lee_core::{program::ProgramHeader, MembershipProof};
+use lee_core::{MembershipProof, program::ProgramHeader};
 
 use crate::wallet::{
-    block_on,
-    error::{print_error, WalletFfiError},
-    map_execution_error, read_optional_account_id,
+    FfiAccountMention, FfiBytes32, WalletHandle, block_on,
+    error::{WalletFfiError, print_error},
     lifecycle::get_wallet,
-    FfiAccountMention, FfiBytes32, WalletHandle,
+    map_execution_error, read_optional_account_id,
 };
 
 #[repr(C)]
@@ -317,8 +316,10 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
         }
     };
 
-    let accounts_ffi = unsafe{std::slice::from_raw_parts(account_mentions, account_mentions_size)};
-    let instruction_data = unsafe{std::slice::from_raw_parts(instruction_data, instruction_data_size)};
+    let accounts_ffi =
+        unsafe { std::slice::from_raw_parts(account_mentions, account_mentions_size) };
+    let instruction_data =
+        unsafe { std::slice::from_raw_parts(instruction_data, instruction_data_size) };
 
     let mut accounts = Vec::with_capacity(account_mentions_size);
 
@@ -416,8 +417,10 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
         }
     };
 
-    let accounts_ffi = unsafe{std::slice::from_raw_parts(account_mentions, account_mentions_size)};
-    let instruction_data = unsafe{std::slice::from_raw_parts(instruction_data, instruction_data_size)};
+    let accounts_ffi =
+        unsafe { std::slice::from_raw_parts(account_mentions, account_mentions_size) };
+    let instruction_data =
+        unsafe { std::slice::from_raw_parts(instruction_data, instruction_data_size) };
 
     let mut accounts = Vec::with_capacity(account_mentions_size);
 
@@ -501,7 +504,7 @@ pub unsafe extern "C" fn wallet_ffi_poll_transaction_status(
         }
     };
 
-    unsafe{
+    unsafe {
         *transaction_status = block_on(wallet.poll_transaction(HashType(tx_hash.data))).is_ok();
     }
 

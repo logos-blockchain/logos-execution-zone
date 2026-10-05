@@ -1,10 +1,12 @@
 use lee::AccountId;
-use crate::primitives::{
-    errors::PrimitiveOperationStatus,
-    types::{vectors::FfiVecU8, FfiBytes32, FfiIdentifier, FfiNullifierPublicKey, FfiPdaSeed},
-};
 
-use crate::wallet::error::WalletFfiError;
+use crate::{
+    primitives::{
+        errors::PrimitiveOperationStatus,
+        types::{FfiBytes32, FfiIdentifier, FfiNullifierPublicKey, FfiPdaSeed, vectors::FfiVecU8},
+    },
+    wallet::error::WalletFfiError,
+};
 
 /// Produce account id for public PDA.
 ///
@@ -81,12 +83,14 @@ pub unsafe extern "C" fn wallet_ffi_account_id_for_private_pda(
 #[cfg(test)]
 mod tests {
     use lee::AccountId;
-    use lee_core::{encryption::ViewingPublicKey, program::PdaSeed, NullifierPublicKey};
-    use crate::primitives::types::FfiBytes32;
+    use lee_core::{NullifierPublicKey, encryption::ViewingPublicKey, program::PdaSeed};
 
-    use crate::wallet::{
-        error::WalletFfiError,
-        pda::{wallet_ffi_account_id_for_private_pda, wallet_ffi_account_id_for_public_pda},
+    use crate::{
+        primitives::types::FfiBytes32,
+        wallet::{
+            error::WalletFfiError,
+            pda::{wallet_ffi_account_id_for_private_pda, wallet_ffi_account_id_for_public_pda},
+        },
     };
 
     #[test]

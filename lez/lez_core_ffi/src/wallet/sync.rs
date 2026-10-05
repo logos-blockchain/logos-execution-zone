@@ -2,9 +2,9 @@
 
 use crate::wallet::{
     block_on,
-    error::{print_error, WalletFfiError},
-    types::WalletHandle,
+    error::{WalletFfiError, print_error},
     lifecycle::get_wallet,
+    types::WalletHandle,
 };
 
 /// Synchronize private accounts to a specific block.

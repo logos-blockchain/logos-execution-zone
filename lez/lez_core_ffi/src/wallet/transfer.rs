@@ -1,23 +1,25 @@
 //! Token transfer functions.
 
 use std::{
-    ffi::{c_char, CStr, CString},
+    ffi::{CStr, CString, c_char},
     ptr,
 };
 
 use lee::AccountId;
-use crate::primitives::types::{FfiBytes32, FfiIdentifier, FfiPrivateAccountKeys};
 use wallet::{
-    account::AccountIdWithPrivacy, cli::CliAccountMention,
-    program_facades::native_token_transfer::NativeTokenTransfer, AccountIdentity,
+    AccountIdentity, account::AccountIdWithPrivacy, cli::CliAccountMention,
+    program_facades::native_token_transfer::NativeTokenTransfer,
 };
 
-use crate::wallet::{
-    block_on,
-    error::{print_error, WalletFfiError},
-    map_execution_error,
-    types::{FfiTransferResult, WalletHandle},
-    lifecycle::get_wallet,
+use crate::{
+    primitives::types::{FfiBytes32, FfiIdentifier, FfiPrivateAccountKeys},
+    wallet::{
+        block_on,
+        error::{WalletFfiError, print_error},
+        lifecycle::get_wallet,
+        map_execution_error,
+        types::{FfiTransferResult, WalletHandle},
+    },
 };
 
 fn optional_c_str(ptr: *const c_char) -> Option<String> {
@@ -175,8 +177,8 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
     };
 
     let from_id = AccountId::new(unsafe { (*from).data });
-    let to_npk = unsafe{(*to_keys).npk()};
-    let to_vpk = match unsafe{(*to_keys).vpk()} {
+    let to_npk = unsafe { (*to_keys).npk() };
+    let to_vpk = match unsafe { (*to_keys).vpk() } {
         Ok(vpk) => vpk,
         Err(e) => {
             print_error("Invalid viewing key");
@@ -359,8 +361,8 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
     };
 
     let from_id = AccountId::new(unsafe { (*from).data });
-    let to_npk = unsafe{(*to_keys).npk()};
-    let to_vpk = match unsafe{(*to_keys).vpk()} {
+    let to_npk = unsafe { (*to_keys).npk() };
+    let to_vpk = match unsafe { (*to_keys).vpk() } {
         Ok(vpk) => vpk,
         Err(e) => {
             print_error("Invalid viewing key");

@@ -1,7 +1,7 @@
 //! Wallet lifecycle management functions.
 
 use std::{
-    ffi::{c_char, CStr, CString},
+    ffi::{CStr, CString, c_char},
     path::PathBuf,
     ptr,
     str::FromStr as _,
@@ -9,11 +9,11 @@ use std::{
 };
 
 use bip39::Mnemonic;
-use wallet::{cli::execute_keys_restoration, WalletCore};
+use wallet::{WalletCore, cli::execute_keys_restoration};
 
 use crate::wallet::{
     block_on, c_str_to_string,
-    error::{print_error, WalletFfiError},
+    error::{WalletFfiError, print_error},
     types::WalletHandle,
 };
 

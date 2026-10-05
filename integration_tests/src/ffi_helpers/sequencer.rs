@@ -9,26 +9,28 @@ use std::{
 
 use anyhow::{Context as _, Result};
 use lee::{AccountId, PrivateKey, PublicKey, program::Program};
+use lez_core_ffi::{
+    primitives::{
+        result::PointerResult,
+        runtime::Runtime,
+        types::{
+            FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiSelector, FfiVec,
+            account::FfiAccount,
+            block::{FfiBlock, FfiBlockOpt},
+            event::FfiEventRecord,
+            transaction::FfiTransaction,
+        },
+    },
+    sequencer::{
+        SequencerServiceFFI,
+        api::{lifecycle::InitializedSequencerServiceFFIResult, query::LastBlockIdResult},
+        error::OperationStatus,
+    },
+};
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, UnsecuredEd25519Key};
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
-};
-use lez_core_ffi::primitives::{
-    result::PointerResult,
-    runtime::Runtime,
-    types::{
-        FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiSelector, FfiVec,
-        account::FfiAccount,
-        block::{FfiBlock, FfiBlockOpt},
-        event::FfiEventRecord,
-        transaction::FfiTransaction,
-    },
-};
-use lez_core_ffi::sequencer::{
-    SequencerServiceFFI,
-    api::{lifecycle::InitializedSequencerServiceFFIResult, query::LastBlockIdResult},
-    error::OperationStatus,
 };
 use sequencer_service::GenesisAction;
 use tempfile::TempDir;

@@ -28,7 +28,7 @@
 )]
 
 use std::{
-    ffi::{c_char, CStr},
+    ffi::{CStr, c_char},
     sync::OnceLock,
 };
 
@@ -36,11 +36,10 @@ use ::wallet::ExecutionFailureKind;
 use error::WalletFfiError;
 // Re-export public types for cbindgen
 pub use error::WalletFfiError as FfiError;
-use crate::primitives::types::FfiBytes32;
 use tokio::runtime::Handle;
 pub use types::*;
 
-use crate::wallet::error::print_error;
+use crate::{primitives::types::FfiBytes32, wallet::error::print_error};
 
 pub mod account;
 pub mod bridge;
@@ -48,12 +47,12 @@ pub mod error;
 pub mod generic_transaction;
 pub mod keys;
 pub mod label;
+pub mod lifecycle;
 pub mod pda;
 pub mod program_deployment;
 pub mod sync;
 pub mod transfer;
 pub mod types;
-pub mod lifecycle;
 
 static TOKIO_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 

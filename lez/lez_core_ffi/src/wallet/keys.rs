@@ -3,14 +3,16 @@
 use std::{ffi::CString, ptr};
 
 use lee::{AccountId, PublicKey};
-use crate::primitives::types::{FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey};
 use wallet::AccountIdentity;
 
-use crate::wallet::{
-    error::{print_error, WalletFfiError},
-    types::WalletHandle,
-    lifecycle::get_wallet,
-    FfiAccountIdentity,
+use crate::{
+    primitives::types::{FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey},
+    wallet::{
+        FfiAccountIdentity,
+        error::{WalletFfiError, print_error},
+        lifecycle::get_wallet,
+        types::WalletHandle,
+    },
 };
 
 /// Get the public key for a public account.
@@ -360,7 +362,7 @@ mod tests {
     use lee::AccountId;
     use wallet::AccountIdentity;
 
-    use crate::wallet::{keys::wallet_ffi_free_account_identity, FfiAccountIdentity};
+    use crate::wallet::{FfiAccountIdentity, keys::wallet_ffi_free_account_identity};
 
     #[test]
     fn acc_identity_correct_free() {

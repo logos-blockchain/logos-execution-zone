@@ -3,15 +3,17 @@
 use std::{ffi::CString, ptr};
 
 use lee::AccountId;
-use crate::primitives::types::FfiBytes32;
 use wallet::program_facades::bridge::Bridge;
 
-use crate::wallet::{
-    block_on,
-    error::{print_error, WalletFfiError},
-    map_execution_error,
-    types::{FfiTransferResult, WalletHandle},
-    lifecycle::get_wallet,
+use crate::{
+    primitives::types::FfiBytes32,
+    wallet::{
+        block_on,
+        error::{WalletFfiError, print_error},
+        lifecycle::get_wallet,
+        map_execution_error,
+        types::{FfiTransferResult, WalletHandle},
+    },
 };
 
 /// Withdraw native tokens from a public account to Bedrock (L1) through the bridge.

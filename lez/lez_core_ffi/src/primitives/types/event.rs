@@ -1,6 +1,8 @@
 use sequencer_storage_actor::actor::event_filter::EventRecord;
 
-use crate::primitives::types::{FfiAccountId, FfiBlockId, FfiHashType, FfiSelector, FfiVec, vectors::FfiVecU8};
+use crate::primitives::types::{
+    FfiAccountId, FfiBlockId, FfiHashType, FfiSelector, FfiVec, vectors::FfiVecU8,
+};
 
 #[repr(C)]
 #[derive(Debug)]

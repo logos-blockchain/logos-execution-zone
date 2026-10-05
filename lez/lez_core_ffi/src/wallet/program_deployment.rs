@@ -1,16 +1,17 @@
 use std::{ffi::CString, ptr, slice};
 
 use lee::AccountId;
-use crate::primitives::types::FfiBytes32;
 use wallet::program_facades::program_loader::ProgramLoader;
 
-use crate::wallet::{
-    block_on,
-    error::{print_error, WalletFfiError},
-    generic_transaction::{FfiProgram, FfiTransactionResult},
-    read_optional_account_id,
-    lifecycle::get_wallet,
-    WalletHandle,
+use crate::{
+    primitives::types::FfiBytes32,
+    wallet::{
+        WalletHandle, block_on,
+        error::{WalletFfiError, print_error},
+        generic_transaction::{FfiProgram, FfiTransactionResult},
+        lifecycle::get_wallet,
+        read_optional_account_id,
+    },
 };
 
 /// Reads a bytecode buffer from an FFI pointer/length pair.

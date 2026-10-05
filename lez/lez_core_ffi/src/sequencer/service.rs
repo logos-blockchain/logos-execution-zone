@@ -1,9 +1,10 @@
 use std::ffi::c_void;
 
 use kameo::actor::ActorRef;
-use crate::primitives::runtime::Runtime;
 use sequencer_service::{ExecutorActor, SequencerHandle};
 use sequencer_storage_actor::StorageActor;
+
+use crate::primitives::runtime::Runtime;
 
 /// FFI-owned sequencer.
 ///

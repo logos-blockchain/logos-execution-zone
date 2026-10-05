@@ -17,13 +17,13 @@ use integration_tests::{
     ffi_helpers::{primitives as primitives_ffi_helpers, sequencer as sequencer_ffi_helpers},
     get_account,
 };
-use log::info;
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use logos_blockchain_zone_sdk::adapter::Node as _;
 use lez_core_ffi::primitives::types::{
     FfiOption,
     transaction::{FfiTransaction, FfiTransactionKind},
 };
+use log::info;
+use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+use logos_blockchain_zone_sdk::adapter::Node as _;
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::config::bedrock_channel_id;
 

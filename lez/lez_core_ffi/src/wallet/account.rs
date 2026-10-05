@@ -2,18 +2,18 @@
 
 use std::{ffi::c_char, ptr, str::FromStr as _};
 
-use key_protocol::key_management::{key_tree::chain_index::ChainIndex, KeyChain};
+use key_protocol::key_management::{KeyChain, key_tree::chain_index::ChainIndex};
 use lee::{AccountId, ProgramShardSelector};
-use crate::primitives::types::{
-    account::FfiAccount, FfiBytes32, FfiIdentifier, FfiPrivateAccountKeys,
-};
 use wallet::account::{AccountIdWithPrivacy, HumanReadableAccount};
 
-use crate::wallet::{
-    block_on, c_str_to_string,
-    error::{print_error, WalletFfiError},
-    types::{FfiAccountList, FfiAccountListEntry, WalletHandle},
-    lifecycle::get_wallet,
+use crate::{
+    primitives::types::{FfiBytes32, FfiIdentifier, FfiPrivateAccountKeys, account::FfiAccount},
+    wallet::{
+        block_on, c_str_to_string,
+        error::{WalletFfiError, print_error},
+        lifecycle::get_wallet,
+        types::{FfiAccountList, FfiAccountListEntry, WalletHandle},
+    },
 };
 
 /// Create a new public account.

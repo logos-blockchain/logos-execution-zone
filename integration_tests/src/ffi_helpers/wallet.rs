@@ -1,14 +1,16 @@
 use std::ffi::c_char;
 
-use lez_core_ffi::primitives::types::{
-    FfiBytes32, FfiIdentifier, FfiPrivateAccountKeys, FfiPublicAccountKey, account::FfiAccount,
-};
-use lez_core_ffi::wallet::{
-    FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiAccountMention,
-    FfiTransferResult, WalletHandle, error,
-    generic_transaction::{FfiProgramWithDependencies, FfiTransactionResult},
-    label::{AccountIdResolvedFromLabel, LabelAvailability, LabelList},
-    lifecycle::FfiCreateWalletOutput,
+use lez_core_ffi::{
+    primitives::types::{
+        FfiBytes32, FfiIdentifier, FfiPrivateAccountKeys, FfiPublicAccountKey, account::FfiAccount,
+    },
+    wallet::{
+        FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiAccountMention,
+        FfiTransferResult, WalletHandle, error,
+        generic_transaction::{FfiProgramWithDependencies, FfiTransactionResult},
+        label::{AccountIdResolvedFromLabel, LabelAvailability, LabelList},
+        lifecycle::FfiCreateWalletOutput,
+    },
 };
 
 unsafe extern "C" {

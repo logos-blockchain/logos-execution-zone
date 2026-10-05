@@ -1,13 +1,12 @@
 use std::{
-    ffi::{c_char, CString},
+    ffi::{CString, c_char},
     str::FromStr as _,
 };
 
 use crate::wallet::{
-    c_str_to_string,
-    error::{print_error, WalletFfiError},
+    FfiAccountIdWithPrivacy, WalletHandle, c_str_to_string,
+    error::{WalletFfiError, print_error},
     lifecycle::get_wallet,
-    FfiAccountIdWithPrivacy, WalletHandle,
 };
 
 #[repr(C)]
@@ -299,22 +298,20 @@ pub unsafe extern "C" fn wallet_ffi_free_label_list(label_list: *mut LabelList) 
     let labels_raw = unsafe { &*label_list };
 
     if !labels_raw.labels_data.is_null() && labels_raw.labels_size > 0 {
-        let labels_slice =
-            unsafe {
-                std::slice::from_raw_parts_mut(labels_raw.labels_data, labels_raw.labels_size)
-            };
+        let labels_slice = unsafe {
+            std::slice::from_raw_parts_mut(labels_raw.labels_data, labels_raw.labels_size)
+        };
 
         for label_ptr in labels_slice.iter() {
             if !(*label_ptr).is_null() {
-                unsafe{
+                unsafe {
                     drop(CString::from_raw((*label_ptr).cast_mut()));
                 }
             }
         }
 
-        let boxed_slice = unsafe{
-            Box::from_raw(std::ptr::from_mut::<[*const c_char]>(labels_slice))
-        };
+        let boxed_slice =
+            unsafe { Box::from_raw(std::ptr::from_mut::<[*const c_char]>(labels_slice)) };
         drop(boxed_slice);
     }
 

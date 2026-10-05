@@ -2,7 +2,7 @@
 
 use core::slice;
 use std::{
-    ffi::{c_char, CString},
+    ffi::{CString, c_char},
     ptr,
     str::FromStr as _,
 };
@@ -10,13 +10,15 @@ use std::{
 use common::HashType;
 use lee::AccountId;
 use lee_core::{
-    encryption::MlKem768EncapsulationKey, program::PdaSeed, AuthorizationSecretKey,
-    NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
+    AuthorizationSecretKey, NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
+    encryption::MlKem768EncapsulationKey, program::PdaSeed,
 };
-use crate::primitives::types::{FfiBytes32, FfiIdentifier, FfiPdaSeed};
-use wallet::{account::AccountIdWithPrivacy, AccountIdentity, AccountMention};
+use wallet::{AccountIdentity, AccountMention, account::AccountIdWithPrivacy};
 
-use crate::wallet::error::WalletFfiError;
+use crate::{
+    primitives::types::{FfiBytes32, FfiIdentifier, FfiPdaSeed},
+    wallet::error::WalletFfiError,
+};
 
 /// Opaque pointer to the Wallet instance.
 ///
@@ -472,13 +474,15 @@ impl From<FfiAccountIdWithPrivacy> for AccountIdWithPrivacy {
 mod tests {
     use lee::{AccountId, PrivateKey, PublicKey};
     use lee_core::{
-        encryption::ViewingPublicKey, program::PdaSeed, AuthorizationSecretKey, Identifier,
-        NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
+        AuthorizationSecretKey, Identifier, NullifierPublicKey, NullifierSecretKey,
+        PrivateAccountKind, encryption::ViewingPublicKey, program::PdaSeed,
     };
-    use crate::primitives::types::FfiBytes32;
     use wallet::AccountIdentity;
 
-    use crate::wallet::{error::WalletFfiError, FfiAccountIdentity, FfiAccountIdentityKind};
+    use crate::{
+        primitives::types::FfiBytes32,
+        wallet::{FfiAccountIdentity, FfiAccountIdentityKind, error::WalletFfiError},
+    };
 
     #[test]
     fn account_identity_roundtrip() {

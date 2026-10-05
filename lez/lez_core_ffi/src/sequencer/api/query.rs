@@ -1,15 +1,5 @@
 use std::ffi::{CString, c_char};
 
-use crate::primitives::{
-    result::PointerResult,
-    types::{
-        FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiSelector, FfiVec,
-        account::FfiAccount,
-        block::{FfiBlock, FfiBlockOpt},
-        event::FfiEventRecord,
-        transaction::FfiTransaction,
-    },
-};
 use sequencer_executor_actor::protocol::{
     BoundedRangeInclusive, GetAccount, GetAccountTransactions, GetBlock, GetBlockByHash,
     GetBlockRange, GetLastBlockId, GetTransaction, MAX_BLOCK_RANGE_LEN, Transaction,
@@ -20,7 +10,19 @@ use sequencer_storage_actor::{
     protocol::{GetBlockEvents, GetEventFilter, GetTxHashToBlockIdMapItem},
 };
 
-use crate::sequencer::{SequencerServiceFFI, error::OperationStatus};
+use crate::{
+    primitives::{
+        result::PointerResult,
+        types::{
+            FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiSelector, FfiVec,
+            account::FfiAccount,
+            block::{FfiBlock, FfiBlockOpt},
+            event::FfiEventRecord,
+            transaction::FfiTransaction,
+        },
+    },
+    sequencer::{SequencerServiceFFI, error::OperationStatus},
+};
 
 /// Result of [`query_last_block`], returned **inline** (no heap allocation, so
 /// there is no corresponding `free_*` to call).
