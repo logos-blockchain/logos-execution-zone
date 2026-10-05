@@ -112,7 +112,7 @@ indexer_service_protocol = { path = "lez/indexer/service/protocol" }
 indexer_service_rpc = { path = "lez/indexer/service/rpc" }
 wallet = { path = "lez/wallet" }
 indexer_ffi = { path = "lez/indexer/ffi" }
-lez_core_ffi = { path = "lez/lez_core_ffi", default-features = false  }
+lez_core_ffi = { path = "lez/lez_core_ffi", default-features = false }
 lez = { path = "lez" }
 programs = { path = "lez/programs", default-features = false, features = [
   "artifacts",
