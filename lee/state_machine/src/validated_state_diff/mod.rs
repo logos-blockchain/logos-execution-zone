@@ -279,6 +279,7 @@ impl ValidatedStateDiff {
                 instruction_data: instruction_data.to_vec(),
                 authorized_accounts: authorized.iter().copied().collect(),
             },
+            None,
             &[],
         )?;
         let mut backend = PublicBackend::new(state, block_id, timestamp, cycle_budget, cycles_used);
@@ -686,6 +687,7 @@ fn check_privacy_preserving_circuit_proof_is_valid(
         block_validity_window: message.block_validity_window,
         timestamp_validity_window: message.timestamp_validity_window,
         program_image_claims,
+        fee_height: None,
     };
     proof
         .is_valid_for(&output)

@@ -15,6 +15,7 @@ pub fn compute_circuit_output(
     dummy_inputs: Vec<DummyInput>,
     ciphertext_padding: Option<u32>,
     program_image_claims: Vec<ProgramImageClaim>,
+    fee_height: Option<u64>,
 ) -> PrivacyPreservingCircuitOutput {
     let ExecutionOutcome {
         block_validity_window,
@@ -28,6 +29,7 @@ pub fn compute_circuit_output(
         block_validity_window,
         timestamp_validity_window,
         program_image_claims,
+        fee_height,
     };
 
     // Emit one action per private account, covering all its shards.
@@ -301,6 +303,7 @@ mod tests {
             Vec::new(),
             None,
             Vec::new(),
+            None,
         )
     }
 

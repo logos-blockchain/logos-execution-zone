@@ -3,7 +3,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
     Nullifier, NullifierPublicKey, NullifierSecretKey,
-    account::{Account, AccountId},
+    account::{Account, AccountId, Balance},
     compute_digest_for_path,
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
     execution_state::{DeferredPublicEffect, RootCall},
@@ -100,9 +100,26 @@ pub struct ShadowProgramWitness {
     pub image_id: ProgramId,
 }
 
+/// A native transfer the circuit runs ahead of the root call, with an opaque height echoed
+/// into the journal. The protocol attaches no meaning to either; a zone uses them to charge fees.
+///
+/// The proof commits to `recipient`, so a zone should accept only a fixed account there (LEZ: its
+/// fee inbox) and pay the block producer from it afterwards.
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+pub struct FeeTransfer {
+    pub payer: AccountId,
+    pub recipient: AccountId,
+    pub amount: Balance,
+    pub height: u64,
+}
+
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct PrivacyPreservingCircuitInput {
     pub root: RootCall,
+    /// We keep the fee optional here, so that proof can be valid without it,
+    /// and the fee rejection can occur at settlement phase within a zone.
+    pub fee: Option<FeeTransfer>,
     /// One witness for each private account used by the transaction.
     pub private_witnesses: Vec<PrivateWitness>,
     pub dummy_inputs: Vec<DummyInput>,
@@ -255,6 +272,8 @@ pub struct PrivacyPreservingCircuitOutput {
     /// Unchanged echo of [`PrivacyPreservingCircuitInput::program_image_claims`] — what the
     /// receipt actually commits to, so the sequencer can check it against real chain state.
     pub program_image_claims: Vec<ProgramImageClaim>,
+    /// Unchanged echo of [`FeeTransfer::height`].
+    pub fee_height: Option<u64>,
 }
 
 #[cfg(any(feature = "host", test))]
@@ -342,6 +361,7 @@ mod tests {
                 account_id: AccountId::new([3; 32]),
                 image_id: [4; 8],
             }],
+            fee_height: Some(7),
         };
         let bytes = output.to_bytes();
         let decoded: PrivacyPreservingCircuitOutput = borsh::from_slice(
