@@ -629,6 +629,9 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             .await
             .context("Failed to read channel history for reconstruction")?;
         let mut messages = std::pin::pin!(messages);
+        // Hashes of channel blocks this replay dropped. A block chaining on one
+        // of them belongs to a dropped branch, not to a different chain.
+        let mut dropped = HashSet::new();
         while let Some((message, slot)) = messages.next().await {
             if let Some(check) = &mut consistency_check
                 && let Some(ChainConsistency::Inconsistent(mismatch)) =
@@ -662,6 +665,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
                 zone_block.id,
                 &block,
                 slot,
+                &mut dropped,
             )
             .await?;
         }
@@ -684,6 +688,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         this_msg: MsgId,
         block: &Block,
         slot: Slot,
+        dropped: &mut HashSet<HashType>,
     ) -> Result<()> {
         let tip = storage_ref
             .ask(GetLatestBlockMeta)
@@ -732,6 +737,9 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
                 "Ignoring channel block {block_id} with hash {block_hash} conflicting with the \
                  finalized block at this height"
             );
+            // The entry still moved the channel tip, so the pin follows it.
+            dropped.insert(block_hash);
+            chain.skip_channel_entry(this_msg);
             return Ok(());
         }
 
@@ -739,6 +747,24 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         // the head rebases onto what the channel settled. Validation happens inside.
         match chain.apply_reconstructed(block, slot, this_msg) {
             AcceptOutcome::Applied | AcceptOutcome::AlreadyApplied => {}
+            // A block chaining on an entry this replay dropped is part of that
+            // dropped branch (e.g. a sequencer that kept building on its own
+            // duplicate inscription). The channel carries it forever, so aborting
+            // would wedge every restart: drop it too and let the pin follow, so
+            // production resumes from the last valid block on top of the channel
+            // tip. Anything else that does not extend the tip is still fatal.
+            AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err)
+                if dropped.contains(&block.header.prev_block_hash) =>
+            {
+                log::warn!(
+                    "Skipping channel block {block_id} with hash {block_hash}: it extends a \
+                     dropped branch, not local tip {:?}: {err}",
+                    tip.map(|tip| tip.id)
+                );
+                dropped.insert(block_hash);
+                chain.skip_channel_entry(this_msg);
+                return Ok(());
+            }
             AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) => {
                 return Err(anyhow!(
                     "Channel block {block_id} does not extend local tip {:?}: {err}",

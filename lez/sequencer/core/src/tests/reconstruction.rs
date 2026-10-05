@@ -486,6 +486,99 @@ async fn reconstruction_ignores_a_duplicate_height_the_final_tier_settled() {
     assert_eq!(anchor.hash, tip_a.hash);
 }
 
+/// A competitor kept building on its own duplicate inscription: the channel
+/// carries the dropped duplicate followed by blocks chaining on it. They belong
+/// to the dropped branch, so they are skipped too (not fatal), and the pin
+/// follows them to the channel tip so production can resume on top of it.
+#[tokio::test]
+async fn reconstruction_skips_blocks_extending_a_dropped_duplicate() {
+    let config_a = setup_sequencer_config();
+    let (mut seq_a, _mempool_a) = start_sequencer(config_a.clone()).await;
+    seq_a.run_production_turn().await.unwrap();
+    let tip_a = seq_a
+        .block_store()
+        .latest_block_meta()
+        .await
+        .unwrap()
+        .unwrap();
+    let mut messages = channel_from_store(seq_a.block_store(), 10).await;
+    let settled_slot = messages.last().unwrap().1;
+
+    let (seq_b, mempool_b) = start_sequencer(setup_sequencer_config()).await;
+    let mut finalized: Vec<(Block, Slot)> = Vec::new();
+    for id in seq_b.block_store().genesis_id()..=tip_a.id {
+        let block = seq_a.block_store().block_at_id(id).await.unwrap().unwrap();
+        finalized.push((block, Slot::from(0)));
+    }
+    apply_follow_update(
+        seq_b.block_store().storage_ref(),
+        &seq_b.chain(),
+        &mempool_b,
+        FollowUpdate {
+            finalized,
+            ..empty_follow_update()
+        },
+    )
+    .await;
+
+    // The duplicate at the settled height, then two blocks chaining on it.
+    let parent = seq_a
+        .block_store()
+        .block_at_id(tip_a.id - 1)
+        .await
+        .unwrap()
+        .unwrap();
+    let duplicate =
+        common::test_utils::produce_dummy_block(tip_a.id, Some(parent.header.hash), vec![]);
+    let child =
+        common::test_utils::produce_dummy_block(tip_a.id + 1, Some(duplicate.header.hash), vec![]);
+    let grandchild =
+        common::test_utils::produce_dummy_block(tip_a.id + 2, Some(child.header.hash), vec![]);
+    messages.push(block_to_channel_message(&duplicate, 997));
+    messages.push(block_to_channel_message(&child, 998));
+    let channel_tip = MsgId::from([7_u8; 32]);
+    let (ZoneMessage::Block(mut last), slot) = block_to_channel_message(&grandchild, 999) else {
+        unreachable!("block_to_channel_message builds a block message")
+    };
+    last.id = channel_tip;
+    messages.push((ZoneMessage::Block(last), slot));
+
+    let mock_b = MockBlockPublisher::with_canned_channel(
+        config_a.bedrock_config.channel_id,
+        Some(Slot::from(999)),
+        messages,
+    );
+    SequencerCore::<StorageActor, MockBlockPublisher>::verify_and_reconstruct(
+        &mock_b,
+        &seq_b.store,
+        &seq_b.chain,
+        true,
+    )
+    .await
+    .expect("blocks extending a dropped duplicate must not abort startup");
+
+    let tip_b = seq_b
+        .block_store()
+        .latest_block_meta()
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(tip_b.hash, tip_a.hash, "the finalized block stands");
+    assert_eq!(
+        seq_b.chain().lock().await.pin_parent(),
+        Some(channel_tip),
+        "the pin follows the skipped entries to the channel tip"
+    );
+    let anchor = seq_b
+        .block_store()
+        .get_zone_anchor()
+        .await
+        .unwrap()
+        .expect("anchor");
+    assert_eq!(anchor.slot, settled_slot.into_inner());
+    assert_eq!(anchor.hash, tip_a.hash);
+}
+
 /// A block the head tier holds is reorg-able by construction, so finalized
 /// channel history at that height wins and the head rebases onto it.
 #[tokio::test]
