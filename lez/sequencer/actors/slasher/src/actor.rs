@@ -85,7 +85,7 @@ impl<S: StorageActorTrait> SlasherActor<S> {
                 (found, approvals)
             });
         let own_key = SequencerKey::new(approver.public_key().to_bytes())
-            .expect("a Bedrock public key is a valid Ed25519 public key");
+            .expect("a channel signing public key is a valid Ed25519 public key");
 
         Self {
             storage_ref,
@@ -542,6 +542,7 @@ mod tests {
                 posting_timeframe: 300,
                 posting_timeout: 25,
                 exit_delay: 10,
+                max_block_size: 1 << 20,
             }),
             channel_id: Some(CHANNEL),
             entries: keys

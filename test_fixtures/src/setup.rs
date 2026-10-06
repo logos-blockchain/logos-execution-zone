@@ -43,8 +43,9 @@ pub struct SequencerSetup {
     channel_id: ChannelId,
     genesis_transactions: Option<Vec<GenesisAction>>,
     cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
-    bedrock_signing_key: Option<UnsecuredEd25519Key>,
+    channel_signing_key: Option<UnsecuredEd25519Key>,
     gossip: Option<sequencer_core::config::GossipConfig>,
+    joining: bool,
 }
 
 impl SequencerSetup {
@@ -56,8 +57,9 @@ impl SequencerSetup {
             channel_id: config::bedrock_channel_id(),
             genesis_transactions: None,
             cross_zone: None,
-            bedrock_signing_key: None,
+            channel_signing_key: None,
             gossip: None,
+            joining: false,
         }
     }
 
@@ -87,18 +89,21 @@ impl SequencerSetup {
 
     /// Build a sequencer that joins a channel another node already created,
     /// replaying its genesis from the channel instead of the prebuilt dump.
+    /// Its config has no `genesis`, like one `sequencer_service setup` writes without
+    /// `--create-channel`.
     #[must_use]
     pub fn joining_existing_channel(mut self) -> Self {
         self.genesis_transactions = Some(Vec::new());
+        self.joining = true;
         self
     }
 
-    /// Pre-write a bedrock (Ed25519, 32-byte seed) signing key into the home
+    /// Pre-write a channel signing key (Ed25519, 32-byte seed) into the home
     /// before boot, so tests know the sequencer's public key in advance (e.g.
     /// to accredit a committee member that has not started yet).
     #[must_use]
-    pub fn with_bedrock_signing_key(mut self, key: UnsecuredEd25519Key) -> Self {
-        self.bedrock_signing_key = Some(key);
+    pub fn with_channel_signing_key(mut self, key: UnsecuredEd25519Key) -> Self {
+        self.channel_signing_key = Some(key);
         self
     }
 
@@ -150,29 +155,38 @@ impl SequencerSetup {
             channel_id,
             genesis_transactions,
             cross_zone,
-            bedrock_signing_key,
+            channel_signing_key,
             gossip,
+            joining,
         } = self;
 
         debug!("Using sequencer home at {}", home.display());
 
-        let bedrock_signing_key = bedrock_signing_key.or_else(|| {
+        let channel_signing_key = channel_signing_key.or_else(|| {
             genesis_transactions
                 .is_none()
                 .then_some(UnsecuredEd25519Key::from_bytes(
-                    &config::BEDROCK_SIGNING_KEY,
+                    &config::CHANNEL_SIGNING_KEY,
                 ))
         });
-        if let Some(key) = &bedrock_signing_key {
-            std::fs::write(home.join("bedrock_signing_key"), key.as_bytes())
-                .context("Failed to write pre-generated bedrock signing key")?;
+        if let Some(key) = &channel_signing_key {
+            std::fs::write(
+                home.join(sequencer_core::CHANNEL_SIGNING_KEY_FILE),
+                key.as_bytes(),
+            )
+            .context("Failed to write pre-generated channel signing key")?;
         }
-        // Pinned like the bedrock key: the prebuilt dump stakes this account.
+        // Pinned like the channel signing key: the prebuilt dump stakes this account.
         std::fs::write(
             home.join("sequencer_stake_signing_key"),
             config::SEQUENCER_STAKE_KEY,
         )
         .context("Failed to write pre-generated stake signing key")?;
+        std::fs::write(
+            home.join(sequencer_core::BEDROCK_FUNDING_PUBLIC_KEY_FILE),
+            config::bedrock_funding_key_id(),
+        )
+        .context("Failed to write the bedrock funding public key")?;
 
         let genesis_transactions = if let Some(genesis) = genesis_transactions {
             genesis
@@ -190,17 +204,19 @@ impl SequencerSetup {
             Vec::new()
         };
 
-        let config = config::sequencer_config(
+        let mut config = config::sequencer_config(
             partial,
             home,
             bedrock_addr,
             channel_id,
-            config::bedrock_funding_key(),
             genesis_transactions,
             cross_zone,
             gossip,
         )
         .context("Failed to create Sequencer config")?;
+        if joining {
+            config.genesis = None;
+        }
 
         Ok(config)
     }

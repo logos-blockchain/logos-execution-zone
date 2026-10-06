@@ -5,6 +5,8 @@ default:
 
 # ---- Configuration ----
 ARTIFACTS := "artifacts"
+# Funded key of the local Bedrock node, `funding_pk` in bedrock/node-config.yaml.
+BEDROCK_FUNDING_PUBLIC_KEY := "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26"
 
 # On macOS the integration-test binary links pyo3 against the CommandLineTools
 # Python framework with no embedded rpath, so it needs this to launch. Empty on
@@ -114,32 +116,18 @@ run-monitoring:
 
 # ---- Decentralized sequencing tools ----
 
-# Prepare a sequencer home: its own wallet, the Bedrock identity, and the account the stake is paid from, registered so it can move funds. Prints that account to be funded; `just run-sequencer <home>` then stakes from it.
+# Run a Sequencer out of the given home (default lez/sequencer/service/sequencer_home, the one `just clean` wipes), setting it up from the debug config first if needed. Extra args go to `sequencer_service start`. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
 [group('decentralized sequencing')]
-setup-sequencer home *args:
-    @echo "🌱 Setting up {{home}}"
-    tools/setup_sequencer.py {{home}} {{args}}
-
-# Run a Sequencer out of the given home (default lez/sequencer/service/sequencer_home, the one `just clean` wipes), which holds its db, keys, ports and logs. A home on a channel that does not exist yet creates it; a home that has not staked stakes itself in while the node catches up; one that has just runs. Takes the funding account for the stake. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
-[group('decentralized sequencing')]
-run-sequencer home="lez/sequencer/service/sequencer_home" funding="" *args:
-    @echo "🧠 Running sequencer {{home}}"
-    tools/run_sequencer.sh {{home}} "{{funding}}" {{args}}
-
-# Unstake the sequencer in the given home and release its stake to a destination account. Reads the key and wallet from the home; the seat goes a finality later. Pass --dry-run to see the request without submitting.
-[group('decentralized sequencing')]
-sequencer-leave home *args:
-    @echo "👋 Unstaking {{home}}"
-    tools/sequencer_leave.py {{home}} {{args}}
+run-sequencer home="lez/sequencer/service/sequencer_home" *args:
+    @test -f {{home}}/sequencer_config.json || cargo run --release -q -p sequencer_service -- setup {{home}} --config lez/sequencer/service/configs/debug/sequencer_config.json --funding-public-key {{BEDROCK_FUNDING_PUBLIC_KEY}} --create-channel
+    RUST_LOG="${RUST_LOG:-info,kameo=warn}" cargo run --release -p sequencer_service -- start {{home}} {{args}}
 
 # Inscribe a non-block payload signed by the key in the given home, to provoke a slash. That node must be stopped first, and the stake behind its key is burned once the offence finalizes, leaving the key unusable.
 [group('decentralized sequencing')]
 inscribe-garbage home *args:
     @test -d {{home}} || { echo "no such home: {{home}}" >&2; exit 2; }
     @echo "💣 Inscribing garbage as {{home}}"
-    cargo run --release -q -p sequencer_service --features inscribe_garbage --bin inscribe_garbage -- \
-        "${LEZ_CONFIG:-lez/sequencer/service/configs/debug/sequencer_config.json}" \
-        --home {{home}} {{args}}
+    cargo run --release -q -p sequencer_service --features inscribe_garbage --bin inscribe_garbage -- {{home}} {{args}}
 
 # Show the LEZ stake config and the live Bedrock committee side by side, with whose turn it is and the last block each key built. Pass --watch SECONDS to redraw.
 [group('decentralized sequencing')]
@@ -152,10 +140,10 @@ channel-health *args:
     tools/channel_health.py {{args}}
 
 # Run Sequencer with mocked Bedrock clients. Takes the same args as `run-sequencer`.
-[working-directory: 'lez/sequencer/service']
-run-sequencer-standalone *args:
+run-sequencer-standalone home="lez/sequencer/service/sequencer_home" *args:
     @echo "🧪 Running sequencer in standalone mode"
-    RUST_LOG=info,kameo=warn cargo run --features standalone --release -p sequencer_service -- configs/debug/sequencer_config.json {{args}}
+    @test -f {{home}}/sequencer_config.json || cargo run --release -q -p sequencer_service -- setup {{home}} --config lez/sequencer/service/configs/debug/sequencer_config.json --funding-public-key {{BEDROCK_FUNDING_PUBLIC_KEY}} --create-channel
+    RUST_LOG=info,kameo=warn cargo run --features standalone --release -p sequencer_service -- start {{home}} {{args}}
 
 # Run Indexer. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
 [working-directory: 'lez/indexer/service']
@@ -220,7 +208,6 @@ clean:
     rm -rf lez/sequencer/service/sequencer_home
     # Pre-`sequencer_home` layout: still present in existing checkouts, and
     # wiping the store is what the divergence error tells you to do.
-    rm -rf lez/sequencer/service/bedrock_signing_key
     rm -rf lez/sequencer/service/rocksdb*
     rm -rf lez/indexer/service/rocksdb*
     rm -rf lez/wallet/configs/debug/storage.json

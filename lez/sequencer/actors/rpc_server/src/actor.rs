@@ -9,6 +9,7 @@ use kameo::{
     mailbox::{MailboxReceiver, Signal},
 };
 use log::info;
+use sequencer_core::gossip::MaxBlockSizeReceiver;
 use sequencer_executor_actor::ExecutorActorTrait;
 use sequencer_gossip_actor::protocol::PublishTransaction;
 use sequencer_service_rpc::RpcServer as _;
@@ -28,7 +29,7 @@ pub struct RpcServerActor {
 impl RpcServerActor {
     pub async fn new<E: ExecutorActorTrait>(
         listen_addr: SocketAddr,
-        max_block_size: ByteSize,
+        max_block_size_rx: MaxBlockSizeReceiver,
         executor_ref: ActorRef<E>,
         gossip: Option<Recipient<PublishTransaction>>,
     ) -> Result<Self> {
@@ -50,7 +51,7 @@ impl RpcServerActor {
 
         info!("Starting RPC Server on {addr}");
 
-        let service = service::Service::new(executor_ref, max_block_size, gossip);
+        let service = service::Service::new(executor_ref, max_block_size_rx, gossip);
         let server_handle = server.start(service.into_rpc());
 
         Ok(Self {

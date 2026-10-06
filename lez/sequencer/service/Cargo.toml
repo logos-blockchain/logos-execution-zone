@@ -17,13 +17,13 @@ sequencer_executor_actor = { workspace = true, features = ["actor"] }
 sequencer_slasher_actor.workspace = true
 sequencer_storage_actor = { workspace = true, features = ["actor"] }
 sequencer_bedrock_actor = { workspace = true, features = ["actor"] }
-lee = { workspace = true, optional = true }
-common = { workspace = true, optional = true }
+lee.workspace = true
+common.workspace = true
 borsh = { workspace = true, optional = true }
-programs = { workspace = true, optional = true }
-system_accounts = { workspace = true, optional = true }
-wallet = { workspace = true, optional = true }
-sequencer_stake_core = { workspace = true, optional = true }
+programs.workspace = true
+system_accounts.workspace = true
+wallet.workspace = true
+sequencer_stake_core.workspace = true
 
 clap = { workspace = true, features = ["derive", "env"] }
 anyhow.workspace = true
@@ -37,7 +37,7 @@ tokio.workspace = true
 tokio-util.workspace = true
 futures.workspace = true
 glob.workspace = true
-bytesize = { workspace = true, optional = true }
+serde_json.workspace = true
 
 [[bin]]
 name = "sequencer_service"
@@ -49,16 +49,11 @@ name = "inscribe_garbage"
 path = "src/bin/inscribe_garbage.rs"
 required-features = ["inscribe_garbage"]
 
-[[bin]]
-name = "submit_stake"
-path = "src/bin/submit_stake.rs"
-required-features = ["submit_stake"]
-
 [features]
 default = ["rpc"]
 # Serves the sequencer over the JSON-RPC API. Off for embedders that hold a
 # `SequencerHandle` and talk to the executor directly.
-rpc = ["dep:sequencer_rpc_server_actor", "dep:bytesize"]
+rpc = ["dep:sequencer_rpc_server_actor"]
 # In-process guest execution with a memoized memory image, via `lee`.
 prove = ["sequencer_core/prove"]
 # Runs the sequencer in standalone mode without depending on Bedrock.
@@ -69,15 +64,5 @@ mdns = ["sequencer_gossip_actor/mdns"]
 inscribe_garbage = [
   "sequencer_storage_actor/mock",
   "sequencer_bedrock_actor/test-utils",
-  "dep:common",
   "dep:borsh",
-  "dep:lee",
-]
-# Needed only by the submit_stake bin.
-submit_stake = [
-  "dep:lee",
-  "programs",
-  "dep:system_accounts",
-  "dep:wallet",
-  "dep:sequencer_stake_core",
 ]

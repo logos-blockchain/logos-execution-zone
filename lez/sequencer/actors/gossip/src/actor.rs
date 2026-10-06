@@ -26,7 +26,10 @@ use libp2p::{
 };
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
 use sequencer_channel_config_actor::Wire;
-use sequencer_core::{config::GossipConfig, gossip::AccreditedKeysReceiver};
+use sequencer_core::{
+    config::{GossipConfig, MAX_PUBLISHABLE_BLOCK_SIZE},
+    gossip::{AccreditedKeysReceiver, MaxBlockSizeReceiver},
+};
 use sequencer_slasher_actor::Approval;
 use tokio::select;
 
@@ -47,7 +50,7 @@ const SEEN_CACHE_CAPACITY: usize = 4096;
 /// Mailbox depth to spawn the actor with; sized for local-publish bursts,
 /// `try_send` drops on overflow.
 pub const MAILBOX_CAPACITY: usize = 1024;
-/// Headroom over `max_block_size` for `GossipSub` protobuf framing (signature,
+/// Headroom over the largest block for `GossipSub` protobuf framing (signature,
 /// source, seqno, topic) so a maximum-size transaction still fits the transmit
 /// limit instead of being dropped at the transport before validation.
 const GOSSIP_FRAME_MARGIN: u64 = 4096;
@@ -93,7 +96,7 @@ pub struct GossipActor {
     /// keep, since only it knows the candidate a signature belongs to.
     config_sink: Recipient<Wire>,
     seen: SeenCache,
-    max_block_size: u64,
+    max_block_size_rx: MaxBlockSizeReceiver,
     submit: IngestSubmit,
     /// Configured bootstrap peers, re-dialed while the node is isolated.
     bootstrap: Vec<Multiaddr>,
@@ -132,21 +135,21 @@ impl GossipActor {
         channel_id: [u8; 32],
         signing_key: Ed25519Key,
         approval_sink: Recipient<Approval>,
-        max_block_size: u64,
+        max_block_size_rx: MaxBlockSizeReceiver,
         submit: IngestSubmit,
         accredited_keys_rx: AccreditedKeysReceiver,
         staked_keys_rx: AccreditedKeysReceiver,
         config_sink: Recipient<Wire>,
     ) -> Result<Self> {
-        // Reuse the node's L1 bedrock signing key as the libp2p identity. The
+        // Reuse the node's L1 channel signing key as the libp2p identity. The
         // secret stays in a `Zeroizing` buffer that both `ed25519_from_bytes`
         // and drop wipe.
         //
         // FIXME: get rid of `unsecure` here when we introduce accredited key
-        // handling, and a separete `Gossip node key -> Bedrock signing key` mapping.
+        // handling, and a separete `Gossip node key -> channel signing key` mapping.
         let mut secret = signing_key.into_unsecured().to_bytes();
         let keypair = Keypair::ed25519_from_bytes(&mut *secret)
-            .map_err(|err| anyhow!("Invalid bedrock signing key for libp2p identity: {err}"))?;
+            .map_err(|err| anyhow!("Invalid channel signing key for libp2p identity: {err}"))?;
         let local_peer_id = keypair.public().to_peer_id();
 
         let listen_addr = config.listen_addr;
@@ -171,14 +174,10 @@ impl GossipActor {
             );
             gossipsub::MessageId::from(id)
         };
-        // Derived from this node's `max_block_size`, so all nodes on a channel
-        // must agree on it: a node configured smaller would drop a larger frame
-        // its peers send at the codec (an inbound-stream close, not a clean
-        // application-level Reject), i.e. a near-invisible partial partition.
-        // `max_block_size` is already effectively a channel-wide parameter
-        // (block validation depends on it), so this inherits that requirement.
-        let max_transmit_size = usize::try_from(max_block_size.saturating_add(GOSSIP_FRAME_MARGIN))
-            .unwrap_or(usize::MAX);
+        // A constant, so no node drops at the codec a frame its peers send.
+        let max_transmit_size =
+            usize::try_from(MAX_PUBLISHABLE_BLOCK_SIZE.saturating_add(GOSSIP_FRAME_MARGIN))
+                .unwrap_or(usize::MAX);
         let gossipsub_config = gossipsub::ConfigBuilder::default()
             .validation_mode(gossipsub::ValidationMode::Strict)
             .message_id_fn(message_id_fn)
@@ -284,7 +283,7 @@ impl GossipActor {
             config_topic,
             config_sink,
             seen: SeenCache::new(SEEN_CACHE_CAPACITY),
-            max_block_size,
+            max_block_size_rx,
             submit,
             bootstrap,
             pending_publish: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
@@ -455,7 +454,8 @@ impl GossipActor {
     ) {
         use self::validation::{TxEvaluation, evaluate_transaction};
 
-        let acceptance = match evaluate_transaction(data, self.max_block_size) {
+        let max_block_size = *self.max_block_size_rx.borrow();
+        let acceptance = match evaluate_transaction(data, max_block_size) {
             TxEvaluation::Reject(reason) => {
                 log::debug!("Rejecting gossiped tx from {source}: {reason}");
                 gossipsub::MessageAcceptance::Reject

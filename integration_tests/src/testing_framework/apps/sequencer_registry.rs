@@ -333,7 +333,7 @@ async fn deploy_registered_sequencer(
 ) -> Result<LezSequencerClient, DynError> {
     let setup = SequencerSetup::new(config, bedrock_addr)
         .with_genesis(genesis)
-        .with_bedrock_signing_key(UnsecuredEd25519Key::from_bytes(&signing_key));
+        .with_channel_signing_key(UnsecuredEd25519Key::from_bytes(&signing_key));
     let (service, owned_state_dir) = if let Some(state_dir) = state_dir {
         std::fs::create_dir_all(&state_dir)
             .context("failed to create registered sequencer state directory")?;

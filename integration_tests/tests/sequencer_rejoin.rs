@@ -52,7 +52,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
 
     let key_b = config::sequencer_signing_key_from_seed(1).public_key();
     let stake_key_b = sequencer_stake_core::SequencerKey::new(key_b.to_bytes())
-        .context("Sequencer B's Bedrock key is not a valid Ed25519 point")?;
+        .context("Sequencer B's channel signing public key is not a valid Ed25519 point")?;
 
     let observer = spawn_channel_observer(ctx.bedrock_addr(), channel).await?;
 

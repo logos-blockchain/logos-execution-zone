@@ -1,7 +1,6 @@
 use std::{net::SocketAddr, num::NonZeroU32, path::PathBuf, time::Duration};
 
 use anyhow::{Context as _, Result};
-use bytesize::ByteSize;
 use indexer_service::{ChannelId, ClientConfig, EventFilterConfig, IndexerConfig};
 use key_protocol::key_management::{KeyChain, secret_holders::SeedHolder};
 use lee::{AccountId, PrivateKey, PublicKey};
@@ -10,7 +9,8 @@ use logos_blockchain_key_management_system_service::keys::{UnsecuredEd25519Key, 
 use num_bigint::BigUint;
 use sequencer_core::{
     config::{
-        BedrockConfig, ChannelParams, CrossZoneConfig, GenesisAction, GossipConfig, SequencerConfig,
+        BedrockConfig, ChannelParams, CrossZoneConfig, GenesisAction, GenesisConfig, GossipConfig,
+        SequencerConfig,
     },
     sign_genesis_stake,
 };
@@ -45,8 +45,8 @@ pub(crate) const PRIVATE_FUNDER_INDEX: usize = 0;
 /// Key of the account holding the sequencer's genesis stake.
 pub const SEQUENCER_STAKE_KEY: [u8; 32] = [55; 32];
 
-/// Bedrock signing key of the test sequencer, staked in the prebuilt dump.
-pub const BEDROCK_SIGNING_KEY: [u8; 32] = [77; 32];
+/// Channel signing key of the test sequencer, staked in the prebuilt dump.
+pub const CHANNEL_SIGNING_KEY: [u8; 32] = [77; 32];
 
 // Fixed entropy seeds for the default accounts: deterministic so one prebuilt database is reusable,
 // and distinct from the `testnet_initial_state` accounts to avoid depending on / double-funding
@@ -84,7 +84,6 @@ impl InitialPrivateAccountForWallet {
 #[derive(Debug, Clone, Copy)]
 pub struct SequencerPartialConfig {
     pub max_num_tx_in_block: usize,
-    pub max_block_size: ByteSize,
     pub mempool_max_size: usize,
     pub block_create_timeout: Duration,
     pub priority_fee_percent: u64,
@@ -95,7 +94,6 @@ impl Default for SequencerPartialConfig {
     fn default() -> Self {
         Self {
             max_num_tx_in_block: 20,
-            max_block_size: ByteSize::mib(1),
             mempool_max_size: 10_000,
             block_create_timeout: Duration::from_secs(10),
             priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
@@ -140,23 +138,17 @@ impl Default for MultiNodeTestContextConfig {
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "All fields are necessary and better to keep separate"
-)]
 pub fn sequencer_config(
     partial: SequencerPartialConfig,
     home: PathBuf,
     bedrock_addr: SocketAddr,
     channel_id: ChannelId,
-    funding_key: ZkPublicKey,
     genesis_transactions: Vec<GenesisAction>,
     cross_zone: Option<CrossZoneConfig>,
     gossip: Option<GossipConfig>,
 ) -> Result<SequencerConfig> {
     let SequencerPartialConfig {
         max_num_tx_in_block,
-        max_block_size,
         mempool_max_size,
         block_create_timeout,
         priority_fee_percent,
@@ -166,19 +158,19 @@ pub fn sequencer_config(
     Ok(SequencerConfig {
         home,
         max_num_tx_in_block,
-        max_block_size,
         mempool_max_size,
         block_create_timeout,
         retry_pending_blocks_timeout: Duration::from_secs(5),
-        genesis: genesis_transactions,
+        genesis: Some(GenesisConfig {
+            channel_params,
+            actions: genesis_transactions,
+        }),
         bedrock_config: BedrockConfig {
             channel_id,
             node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)
                 .context("Failed to convert bedrock addr to URL")?,
-            funding_key,
             auth: None,
             priority_fee_percent,
-            channel_params,
         },
         cross_zone,
         metrics_address: Some(SequencerConfig::DEFAULT_METRICS_ADDRESS),
@@ -518,7 +510,6 @@ mod tests {
             PathBuf::from("test-sequencer"),
             SocketAddr::from(([127, 0, 0, 1], 1234)),
             bedrock_channel_id(),
-            bedrock_funding_key(),
             Vec::new(),
             None,
             None,
@@ -528,6 +519,14 @@ mod tests {
         assert_eq!(
             config.bedrock_config.priority_fee_percent,
             priority_fee_percent
+        );
+    }
+    #[test]
+    fn funding_public_key_file_parses_to_the_fixture_key() {
+        assert_eq!(
+            sequencer_core::parse_funding_public_key(bedrock_funding_key_id())
+                .expect("the fixture funding public key should parse"),
+            bedrock_funding_key()
         );
     }
 }

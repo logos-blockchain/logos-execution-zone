@@ -54,8 +54,8 @@ RUN apt-get update && apt-get install -y \
 
 # Create non-root user for security
 RUN useradd -m -u 1000 -s /bin/bash sequencer_service_user && \
-    mkdir -p /sequencer_service /etc/sequencer_service /var/lib/sequencer_service && \
-    chown -R sequencer_service_user:sequencer_service_user /sequencer_service /etc/sequencer_service /var/lib/sequencer_service
+    mkdir -p /sequencer_service /var/lib/sequencer_service && \
+    chown -R sequencer_service_user:sequencer_service_user /sequencer_service /var/lib/sequencer_service
 
 # Copy binary from builder
 COPY --from=builder --chown=sequencer_service_user:sequencer_service_user /usr/local/bin/sequencer_service /usr/local/bin/sequencer_service
@@ -89,4 +89,4 @@ ENV RISC0_SERVER_PATH=/usr/local/bin/r0vm
 USER sequencer_service_user
 
 WORKDIR /sequencer_service
-CMD ["sequencer_service", "/etc/sequencer_service/sequencer_config.json"]
+CMD ["sequencer_service", "start", "/var/lib/sequencer_service", "--listen-address", "0.0.0.0"]

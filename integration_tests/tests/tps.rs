@@ -12,7 +12,6 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
-use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use integration_tests::config::SequencerPartialConfig;
 use lee::{
@@ -27,7 +26,7 @@ use lee_core::{
     NullifierSecretKey, NullifierWitness, PrivateWitness, WitnessKind, account::Nonce,
     encryption::ViewingPublicKey,
 };
-use sequencer_core::config::GenesisAction;
+use sequencer_core::config::{ChannelParams, GenesisAction};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
@@ -126,12 +125,14 @@ impl TpsTestManager {
     fn generate_sequencer_partial_config() -> SequencerPartialConfig {
         SequencerPartialConfig {
             max_num_tx_in_block: 300,
-            // The largest block Bedrock can carry as one inscription.
-            max_block_size: ByteSize::b(sequencer_core::config::MAX_PUBLISHABLE_BLOCK_SIZE),
             mempool_max_size: 10_000,
             block_create_timeout: Duration::from_secs(12),
             priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
-            channel_params: test_fixtures::config::SequencerPartialConfig::default().channel_params,
+            channel_params: ChannelParams {
+                // The largest block Bedrock can carry as one inscription.
+                max_block_size: sequencer_core::config::MAX_PUBLISHABLE_BLOCK_SIZE,
+                ..test_fixtures::config::SequencerPartialConfig::default().channel_params
+            },
         }
     }
 }

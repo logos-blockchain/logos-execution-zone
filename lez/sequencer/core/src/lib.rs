@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result, anyhow, ensure};
 use borsh::BorshDeserialize;
 use chain_state::{
     AcceptOutcome, Anchor, AnchorConsistencyCheck, ChainConsistency, ChainMismatch, ChainState,
@@ -27,8 +27,8 @@ use lee_core::GENESIS_BLOCK_ID;
 use log::{debug, error, info, warn};
 use logos_blockchain_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 pub use logos_blockchain_core::mantle::{NoteId, ops::channel::MsgId};
-use logos_blockchain_key_management_system_service::keys::ED25519_SECRET_KEY_SIZE;
 pub use logos_blockchain_key_management_system_service::keys::Ed25519PublicKey;
+use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, ZkPublicKey};
 use logos_blockchain_zone_sdk::{
     Slot, ZoneMessage,
     sequencer::{DepositInfo, SequencerCheckpoint, WithdrawArg},
@@ -59,7 +59,8 @@ use tokio_retry::{Retry, strategy::FixedInterval};
 
 use crate::{
     gossip::{
-        AccreditedKeys, AccreditedKeysReceiver, AccreditedKeysSender, accredited_keys_channel,
+        AccreditedKeys, AccreditedKeysReceiver, AccreditedKeysSender, MaxBlockSizeReceiver,
+        MaxBlockSizeSender, accredited_keys_channel,
     },
     logging::{log_rewind, log_update},
     task_group::TaskGroup,
@@ -89,6 +90,13 @@ const RETIRE_DISPATCH_AFTER_FAILURES: u32 = 3;
 /// since store-drained work is taken before the mempool. The rest wait one
 /// block; nothing is dropped.
 const MAX_DISPATCHES_PER_BLOCK: usize = 16;
+
+/// File in a sequencer home holding the Ed25519 key the node signs its channel inscriptions with,
+/// which is the key its stake accredits.
+pub const CHANNEL_SIGNING_KEY_FILE: &str = "channel_signing_key";
+/// File in a sequencer home holding the public key of the Bedrock wallet key that pays its
+/// inscriptions, in hex.
+pub const BEDROCK_FUNDING_PUBLIC_KEY_FILE: &str = "bedrock_funding_public_key";
 
 /// Fixed, public key behind a genesis-only funding account: the bridge can
 /// only be called top-level, not from `Stake`, so this account is a
@@ -195,8 +203,9 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     /// Keys with stake on record, which the mesh admits channel-config
     /// messages from.
     staked_keys_tx: AccreditedKeysSender,
+    max_block_size_tx: MaxBlockSizeSender,
     /// Signs this node's approval of a slash.
-    bedrock_signing_key: Ed25519Key,
+    channel_signing_key: Ed25519Key,
     /// Collects the accredited signatures a channel config update needs.
     config_manager: ActorRef<ChannelConfigActor>,
     /// The config draft zone-sdk last funded for us, submitted once its
@@ -317,26 +326,21 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     ) -> Result<(Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>)> {
         sequencer_core_metrics::init();
 
-        // A block over Bedrock's inscription cap is unpublishable; fail at
-        // startup rather than stalling at the first oversized block.
-        assert!(
-            config.max_block_size.as_u64() <= config::MAX_PUBLISHABLE_BLOCK_SIZE,
-            "max_block_size {} exceeds Bedrock's inscription limit of {} bytes",
-            config.max_block_size,
-            config::MAX_PUBLISHABLE_BLOCK_SIZE,
-        );
+        if let Some(genesis) = &config.genesis {
+            check_startup_channel_params(&genesis.channel_params, &config)?;
+        }
 
-        let bedrock_signing_key =
-            load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
-                .expect("Failed to load or create bedrock signing key");
+        let channel_signing_key =
+            load_or_create_signing_key(&config.home.join(CHANNEL_SIGNING_KEY_FILE))
+                .expect("Failed to load or create channel signing key");
         log::info!(
-            "Bedrock signing public key: {}",
-            hex::encode(bedrock_signing_key.public_key().to_bytes())
+            "Channel signing public key: {}",
+            hex::encode(channel_signing_key.public_key().to_bytes())
         );
 
         let own_sequencer_key =
-            sequencer_stake_core::SequencerKey::new(bedrock_signing_key.public_key().to_bytes())
-                .expect("our own Bedrock public key is a valid Ed25519 public key");
+            sequencer_stake_core::SequencerKey::new(channel_signing_key.public_key().to_bytes())
+                .expect("our own channel signing public key is a valid Ed25519 public key");
 
         // Only seed our own key into genesis as the bootstrap sequencer if the
         // channel doesn't exist yet. Otherwise it's someone else's channel and
@@ -355,6 +359,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         if channel_already_exists {
             info!("Channel already exists; joining as a non channel creator");
         } else {
+            ensure!(
+                config.genesis.is_some(),
+                "Channel {} does not exist, and creating it needs a `genesis` config",
+                config.bedrock_config.channel_id
+            );
             info!("Channel does not exist yet; starting it as channel creator");
         }
         let bootstrap_sequencer_key = (!channel_already_exists).then_some(own_sequencer_key);
@@ -396,7 +405,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let slasher = SlasherActor::spawn(
             SlasherActor::load(
                 storage_ref.clone(),
-                bedrock_signing_key.clone(),
+                channel_signing_key.clone(),
                 stake_config,
                 *config.bedrock_config.channel_id.as_ref(),
             )
@@ -404,12 +413,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         );
 
         let config_manager = ChannelConfigActor::spawn_with_mailbox(
-            ChannelConfigActor::new(bedrock_signing_key.clone()),
+            ChannelConfigActor::new(channel_signing_key.clone()),
             kameo::mailbox::bounded(channel_config::MAILBOX_CAPACITY),
         );
 
         let (accredited_keys_tx, _) = accredited_keys_channel();
         let (staked_keys_tx, _) = accredited_keys_channel();
+        let (max_block_size_tx, _) =
+            tokio::sync::watch::channel(config::MAX_PUBLISHABLE_BLOCK_SIZE);
 
         // Cross-zone messaging: start a watcher per configured peer. The inbox
         // config account is seeded into genesis state in `build_genesis_state`.
@@ -431,6 +442,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             Self::verify_and_reconstruct(&bedrock_ref, &storage_ref, &chain, is_fresh_start)
                 .await
                 .context("Failed to verify/reconstruct sequencer state from Bedrock")?;
+        // A joining node's config carries no channel params, so check the finalized chain's.
+        let final_params = committee_discovery::channel_params(chain.lock().await.final_state());
+        if let Some(params) = final_params {
+            check_startup_channel_params(&params, &config)
+                .context("This node cannot run on this channel")?;
+        }
 
         // Publish our blocks only when we are bootstrapping a channel that does
         // not exist yet (no channel tip). If the channel already exists (another
@@ -527,7 +544,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
         // The committee the slasher loaded with predates catch-up and the
         // bootstrap publishes.
-        refresh_committee(&slasher, &chain, &accredited_keys_tx, &staked_keys_tx).await;
+        refresh_committee(
+            &slasher,
+            &chain,
+            &accredited_keys_tx,
+            &staked_keys_tx,
+            &max_block_size_tx,
+        )
+        .await;
 
         let finalized_config = zone_checkpoint(&storage_ref)
             .await
@@ -545,8 +569,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             slasher,
             accredited_keys_tx,
             staked_keys_tx,
+            max_block_size_tx,
             config_manager,
-            bedrock_signing_key,
+            channel_signing_key,
             config_draft: None,
             finalized_config,
             applied_seq: None,
@@ -1049,6 +1074,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 &self.chain,
                 &self.accredited_keys_tx,
                 &self.staked_keys_tx,
+                &self.max_block_size_tx,
             )
             .await;
         }
@@ -1665,17 +1691,21 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             })
             .collect();
 
-        let max_block_size = usize::try_from(self.sequencer_config.max_block_size.as_u64())
-            .expect("`max_block_size` should fit into usize");
+        let max_block_size = usize::try_from(
+            committee_discovery::channel_params(&working_state)
+                .context("The chain holds no channel params")?
+                .max_block_size,
+        )
+        .expect("`max_block_size` should fit into usize");
 
         let new_block_timestamp = u64::try_from(chrono::Utc::now().timestamp_millis())
             .expect("Timestamp must be positive");
 
         // Look up this sequencer's stake ownership account as the reward target.
         let own_sequencer_key = sequencer_stake_core::SequencerKey::new(
-            self.bedrock_signing_key.public_key().to_bytes(),
+            self.channel_signing_key.public_key().to_bytes(),
         )
-        .expect("our own Bedrock public key is a valid Ed25519 public key");
+        .expect("our own channel signing public key is a valid Ed25519 public key");
         let producer_account = committee_discovery::read_config(&working_state)
             .and_then(|config| {
                 config
@@ -1736,28 +1766,29 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             if block_size > max_block_size {
                 // Would a block carrying nothing but this still be too big? Then
                 // it does not fit in any block and deferring it defers it for
-                // ever. A store-drained transaction is at the head of the queue
-                // every turn, so breaking here would stop production reaching
-                // anything behind it, including the whole mempool, permanently.
-                // Count it against the delivery instead so it is given up on.
+                // ever. A deferred transaction is at the head of the queue every
+                // turn, so breaking here would stop production reaching anything
+                // behind it, including the whole mempool, permanently. Give up on
+                // it instead.
                 //
                 // Measured on its own rather than from `block_size`, which also
                 // counts whatever this block already holds: a transaction that
                 // merely does not fit *today* is the ordinary deferral below.
-                if from_store
-                    && !self.fits_in_an_empty_block(
-                        &tx,
-                        &[placeholder_fee_lee_tx.clone(), clock_lee_tx.clone()],
-                        new_block_height,
-                        prev_block_hash,
-                        new_block_timestamp,
-                    )?
-                {
+                if !Self::fits_in_an_empty_block(
+                    &tx,
+                    &[placeholder_fee_lee_tx.clone(), clock_lee_tx.clone()],
+                    max_block_size,
+                    new_block_height,
+                    prev_block_hash,
+                    new_block_timestamp,
+                )? {
                     error!(
-                        "Sequencer-drained transaction {tx_hash} cannot fit in any block under the \
+                        "Transaction {tx_hash} cannot fit in any block under the \
                          {max_block_size} byte limit; giving up on it rather than stalling production",
                     );
-                    self.count_dispatch_failure(&tx).await;
+                    if from_store {
+                        self.count_dispatch_failure(&tx).await;
+                    }
                     continue;
                 }
 
@@ -1943,17 +1974,22 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         self.staked_keys_tx.subscribe()
     }
 
+    #[must_use]
+    pub fn max_block_size_watch(&self) -> MaxBlockSizeReceiver {
+        self.max_block_size_tx.subscribe()
+    }
+
     /// Handle to the channel-config actor, for the service to feed gossip into.
     #[must_use]
     pub const fn config_manager_ref(&self) -> &ActorRef<ChannelConfigActor> {
         &self.config_manager
     }
 
-    /// This node's Bedrock public key, hex — the identity the channel's
+    /// This node's channel signing public key, hex — the identity the channel's
     /// accredited keys and round-robin are keyed by.
     #[must_use]
-    pub fn bedrock_public_key_hex(&self) -> String {
-        hex::encode(self.bedrock_signing_key.public_key().to_bytes())
+    pub fn channel_signing_public_key_hex(&self) -> String {
+        hex::encode(self.channel_signing_key.public_key().to_bytes())
     }
 
     /// Returns the list of stored pending blocks.
@@ -1975,9 +2011,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// the store re-feeds every turn, is a permanent stall unless it is given up
     /// on.
     fn fits_in_an_empty_block(
-        &self,
         tx: &LeeTransaction,
         system_txs: &[LeeTransaction],
+        max_block_size: usize,
         block_id: u64,
         prev_block_hash: HashType,
         timestamp: u64,
@@ -1991,9 +2027,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let size = borsh::to_vec(&alone)
             .context("Failed to serialize block for size check")?
             .len();
-        let max = usize::try_from(self.sequencer_config.max_block_size.as_u64())
-            .expect("`max_block_size` should fit into usize");
-        Ok(size <= max)
+        Ok(size <= max_block_size)
     }
 
     /// Counts one failed production attempt against `tx` if it is a cross-zone
@@ -2254,6 +2288,21 @@ fn config_target(
     })
 }
 
+/// Refuses a `max_block_size` no block can use, and warns when this node's blocks are too slow
+/// to hold a turn.
+fn check_startup_channel_params(
+    params: &config::ChannelParams,
+    config: &SequencerConfig,
+) -> Result<()> {
+    if !config::keeps_turn(params, config.block_create_timeout) {
+        warn!(
+            "block_create_timeout ({:?}) is not under posting_timeout ({}s): this node loses its turn between its own blocks",
+            config.block_create_timeout, params.posting_timeout
+        );
+    }
+    config::check_max_block_size(params)
+}
+
 /// Hands the slasher and the gossip mesh the committee the head now holds. The
 /// produce path also refreshes it, but only a producing node takes turns.
 async fn refresh_committee<S: StorageActorTrait>(
@@ -2261,11 +2310,19 @@ async fn refresh_committee<S: StorageActorTrait>(
     chain: &Mutex<ChainState>,
     accredited_keys_tx: &AccreditedKeysSender,
     staked_keys_tx: &AccreditedKeysSender,
+    max_block_size_tx: &MaxBlockSizeSender,
 ) {
     let config = committee_discovery::read_config(chain.lock().await.head_state());
     let Some(config) = config else {
         return;
     };
+    if let Some(params) = config.channel_params {
+        max_block_size_tx.send_if_modified(|current| {
+            let changed = *current != params.max_block_size;
+            *current = params.max_block_size;
+            changed
+        });
+    }
     // The mesh screens against the same committee the slasher gates on.
     let keys: AccreditedKeys = config
         .accredited_committee_members()
@@ -2387,6 +2444,14 @@ fn build_genesis_state(
     // The self-stake is appended here, so every index below is an index into
     // this list, not into `config.genesis`.
     let genesis_actions = effective_genesis_actions(config, bootstrap_sequencer_key);
+    // A node joining an existing channel builds a placeholder genesis, which the channel's
+    // replaces.
+    let channel_params = config
+        .genesis
+        .as_ref()
+        .map_or_else(config::default_channel_params, |genesis| {
+            genesis.channel_params
+        });
 
     let cross_zone_declared = config.cross_zone.as_ref();
     assert!(
@@ -2435,10 +2500,8 @@ fn build_genesis_state(
         });
 
     let staked = founding_stakes(&genesis_actions);
-    let bootstrap_stake_txs = build_stake_genesis_transactions(
-        &staked,
-        config.bedrock_config.channel_params.minimum_sequencer_stake,
-    );
+    let bootstrap_stake_txs =
+        build_stake_genesis_transactions(&staked, channel_params.minimum_sequencer_stake);
 
     // The genesis fee transaction credits the first staked sequencer's ownership account.
     //
@@ -2456,7 +2519,7 @@ fn build_genesis_state(
     let genesis_summary = fee_core::BlockFeeSummary::default();
     let genesis_payout = chain_state::apply::block_payout(&genesis_opening, &genesis_summary);
     let genesis_txs: Vec<_> = std::iter::once(build_init_channel_params_transaction(
-        config.bedrock_config.channel_params,
+        channel_params,
         *config.bedrock_config.channel_id.as_ref(),
     ))
     .chain(cross_zone_config_txs)
@@ -2523,7 +2586,10 @@ fn effective_genesis_actions(
     config: &SequencerConfig,
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
 ) -> Vec<GenesisAction> {
-    let mut actions = config.genesis.clone();
+    let Some(genesis) = &config.genesis else {
+        return Vec::new();
+    };
+    let mut actions = genesis.actions.clone();
     if actions
         .iter()
         .any(|action| matches!(action, GenesisAction::StakeSequencer { .. }))
@@ -2543,7 +2609,7 @@ fn effective_genesis_actions(
                 0,
                 key,
                 &owner,
-                config.bedrock_config.channel_params.minimum_sequencer_stake,
+                genesis.channel_params.minimum_sequencer_stake,
             ),
         }
     }));
@@ -2557,7 +2623,7 @@ fn founding_committee(
     config: &SequencerConfig,
     own_key: sequencer_stake_core::SequencerKey,
 ) -> Option<Vec<Ed25519PublicKey>> {
-    let mut keys: Vec<_> = founding_stakes(&config.genesis)
+    let mut keys: Vec<_> = founding_stakes(&effective_genesis_actions(config, None))
         .into_iter()
         .map(|stake| stake.key)
         .collect();
@@ -3053,9 +3119,7 @@ fn extract_bridge_withdraw_data(tx: &LeeTransaction) -> Option<WithdrawArg> {
         return None;
     };
 
-    let recipient_pk = logos_blockchain_key_management_system_service::keys::ZkPublicKey::from(
-        BigUint::from_bytes_le(&bedrock_account_pk),
-    );
+    let recipient_pk = ZkPublicKey::from(BigUint::from_bytes_le(&bedrock_account_pk));
 
     Some(WithdrawArg {
         outputs: logos_blockchain_core::mantle::ledger::Outputs::new(
@@ -3081,8 +3145,24 @@ fn withdrawal_reconciliation_key(note_id: &NoteId) -> WithdrawalReconciliationKe
     WithdrawalReconciliationKey { released_note_id }
 }
 
+/// Parses a Bedrock wallet public key from hex.
+pub fn parse_funding_public_key(hex_key: &str) -> Result<ZkPublicKey> {
+    serde_json::from_value(serde_json::Value::String(hex_key.trim().to_owned()))
+        .context("not a Bedrock public key in hex")
+}
+
+/// Loads the home's [`BEDROCK_FUNDING_PUBLIC_KEY_FILE`].
+pub fn load_funding_public_key(home: &Path) -> Result<ZkPublicKey> {
+    let path = home.join(BEDROCK_FUNDING_PUBLIC_KEY_FILE);
+    let hex_key = std::fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+    parse_funding_public_key(&hex_key).with_context(|| format!("Invalid key in {}", path.display()))
+}
+
 /// Load key bytes from file or generate a new set if it doesn't exist.
 fn load_or_create_key_bytes(path: &Path) -> Result<[u8; ED25519_SECRET_KEY_SIZE]> {
+    use std::{io::Write as _, os::unix::fs::OpenOptionsExt as _};
+
     if path.exists() {
         let key_bytes = std::fs::read(path)?;
 
@@ -3096,7 +3176,13 @@ fn load_or_create_key_bytes(path: &Path) -> Result<[u8; ED25519_SECRET_KEY_SIZE]
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(path, key_bytes)?;
+        // Readable by the owner only.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)?
+            .write_all(&key_bytes)?;
         Ok(key_bytes)
     }
 }

@@ -36,7 +36,7 @@ use wallet::AccountIdentity;
 /// Comfortably above `system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE`.
 const FUNDING_BALANCE: u128 = 2 * system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
 
-/// Bedrock signing key of the sequencer that stakes its way in.
+/// Channel signing key of the sequencer that stakes its way in.
 const JOINER_SIGNING_KEY: [u8; 32] = [0x42; 32];
 
 /// The committee update is its own transaction and needs peer signatures, so
@@ -85,7 +85,7 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
 
     let joiner_key = Ed25519Key::from_bytes(&JOINER_SIGNING_KEY).public_key();
     let joiner_stake_key = sequencer_stake_core::SequencerKey::new(joiner_key.to_bytes())
-        .expect("a Bedrock key is a valid Ed25519 public key");
+        .expect("a channel signing public key is a valid Ed25519 public key");
 
     let funding_private_key = PrivateKey::new_os_random();
     let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_private_key));
@@ -142,8 +142,8 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
 
     let stake_id = programs::sequencer_stake_account_id();
-    // An untrusted claim about the ownership account this stake targets, read from live state
-    // the same way `submit_stake` builds it: it is checked against the account it describes.
+    // An untrusted claim about the ownership account this stake targets, read from live state:
+    // it is checked against the account it describes.
     let has_record = !get_account(&ctx, ownership_id)
         .await
         .context("Failed to read the stake ownership account")?

@@ -24,9 +24,7 @@ use logos_blockchain_core::{
         ops::channel::{ChannelId, MsgId, deposit::Metadata},
     },
 };
-use logos_blockchain_key_management_system_service::keys::{
-    Ed25519Key, Ed25519PublicKey, ZkPublicKey,
-};
+use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
 use logos_blockchain_zone_sdk::{Slot, sequencer::DepositInfo};
 use mempool::MemPoolHandle;
 use ping_core::{ReceiverInstruction, ping_record_pda, receiver_config_account_id};
@@ -105,18 +103,19 @@ fn mock_checkpoint() -> Checkpoint {
 /// rather than a fixed constant, so it always matches what's actually on
 /// disk.
 fn test_bootstrap_sequencer_key(config: &SequencerConfig) -> sequencer_stake_core::SequencerKey {
-    let bytes = crate::load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
-        .expect("Failed to load or create bedrock signing key")
-        .public_key()
-        .to_bytes();
+    let bytes =
+        crate::load_or_create_signing_key(&config.home.join(crate::CHANNEL_SIGNING_KEY_FILE))
+            .expect("Failed to load or create channel signing key")
+            .public_key()
+            .to_bytes();
     sequencer_stake_core::SequencerKey::new(bytes)
-        .expect("a Bedrock public key is a valid Ed25519 public key")
+        .expect("a channel signing public key is a valid Ed25519 public key")
 }
 
 fn test_sequencer_key(seed: u8) -> sequencer_stake_core::SequencerKey {
     let bytes = Ed25519Key::from_bytes(&[seed; 32]).public_key().to_bytes();
     sequencer_stake_core::SequencerKey::new(bytes)
-        .expect("a Bedrock public key is a valid Ed25519 public key")
+        .expect("a channel signing public key is a valid Ed25519 public key")
 }
 
 async fn start_sequencer(
@@ -287,19 +286,19 @@ fn setup_sequencer_config() -> SequencerConfig {
     SequencerConfig {
         home,
         max_num_tx_in_block: 10,
-        max_block_size: bytesize::ByteSize::mib(1),
         mempool_max_size: 10000,
         block_create_timeout: Duration::from_secs(1),
         bedrock_config: BedrockConfig {
             channel_id: ChannelId::from([0; 32]),
             node_url: "http://not-used-in-unit-tests".parse().unwrap(),
             auth: None,
-            funding_key: ZkPublicKey::zero(),
             priority_fee_percent: config::default_priority_fee_percent(),
-            channel_params: crate::config::default_channel_params(),
         },
         retry_pending_blocks_timeout: Duration::from_mins(4),
-        genesis: vec![],
+        genesis: Some(config::GenesisConfig {
+            channel_params: config::default_channel_params(),
+            actions: vec![],
+        }),
         cross_zone: None,
         metrics_address: None,
         gossip: None,
@@ -1392,6 +1391,76 @@ fn a_settled_delivery_that_is_not_the_one_we_recorded_is_reported() {
 }
 
 #[tokio::test]
+async fn creating_a_channel_needs_a_genesis_config() {
+    let config = SequencerConfig {
+        genesis: None,
+        ..setup_sequencer_config()
+    };
+    let storage_ref =
+        StorageActor::spawn(StorageActor::new(&config.db_path()).expect("Failed to open database"));
+    let bedrock_ref = MockBedrockActor::spawn(CannedChannel::absent().into_mock());
+
+    let Err(err) = SequencerCore::start_from_config(config, storage_ref, bedrock_ref).await else {
+        panic!("a node without a genesis config created the channel");
+    };
+    assert!(
+        format!("{err:#}").contains("needs a `genesis` config"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[tokio::test]
+async fn a_mempool_transaction_too_large_for_any_block_is_dropped() {
+    // Pushed straight into the mempool, past the admission check that would refuse it.
+    let mut config = setup_sequencer_config();
+    config
+        .genesis
+        .as_mut()
+        .unwrap()
+        .channel_params
+        .max_block_size = 4 * 1024;
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    let message = lee::public_transaction::Message::try_new(
+        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+        vec![],
+        vec![],
+        program_loader_core::Instruction::WriteSegment {
+            bytecode: vec![0; 8192],
+            next_segment: None,
+        },
+    )
+    .unwrap();
+    let oversized = LeeTransaction::Public(lee::PublicTransaction::new(
+        message,
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+    ));
+    let user_tx = common::test_utils::create_transaction_native_token_transfer(
+        initial_public_user_accounts()[0].account_id,
+        0,
+        initial_public_user_accounts()[1].account_id,
+        10,
+        &create_signing_key_for_account1(),
+    );
+    for tx in [oversized.clone(), user_tx.clone()] {
+        mempool_handle
+            .push((TransactionOrigin::User, tx))
+            .await
+            .unwrap();
+    }
+
+    let block_id = sequencer.run_production_turn().await.unwrap();
+    let block = sequencer
+        .storage_ref
+        .ask(GetBlock { block_id })
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(block.body.transactions.contains(&user_tx));
+    assert!(!block.body.transactions.contains(&oversized));
+}
+
+#[tokio::test]
 async fn a_delivery_too_large_for_any_block_does_not_stall_production() {
     // A store-drained transaction is at the head of the queue every turn, so one
     // that cannot fit in any block would defer itself for ever and, because the
@@ -1400,7 +1469,12 @@ async fn a_delivery_too_large_for_any_block_does_not_stall_production() {
     let record = dispatch_record(41, ping_payload(&[7_u8; 8192]));
 
     let mut config = cross_zone_test_config();
-    config.max_block_size = bytesize::ByteSize::kib(4);
+    config
+        .genesis
+        .as_mut()
+        .unwrap()
+        .channel_params
+        .max_block_size = 4 * 1024;
     let (mut sequencer, mempool_handle) = start_sequencer(config).await;
     sequencer
         .storage_ref
@@ -4647,7 +4721,7 @@ fn slashable_state(
     (state, sequencer_key, ownership_id, ownership_key)
 }
 
-/// An approval signed by `seed`'s Bedrock key.
+/// An approval signed by `seed`'s channel signing key.
 fn test_approval(
     seed: u8,
     sequencer_key: sequencer_stake_core::SequencerKey,
@@ -4666,7 +4740,7 @@ fn test_approval_on(
         sequencer_stake_core::slash_approval_message(channel_id, sequencer_key, TEST_INSCRIPTION);
     sequencer_stake_core::SlashApproval {
         signer: sequencer_stake_core::SequencerKey::new(key.public_key().to_bytes())
-            .expect("a Bedrock public key is a valid Ed25519 public key"),
+            .expect("a channel signing public key is a valid Ed25519 public key"),
         signature: key.sign_payload(&message).to_bytes().to_vec(),
     }
 }
@@ -5050,7 +5124,12 @@ fn a_slash_claws_back_a_pending_unstake() {
 async fn a_slash_lands_over_a_pending_partial_unstake() {
     // The release falls due in the block the slash is proposed for; it must not pre-empt it.
     let mut sequencer_config = setup_sequencer_config();
-    sequencer_config.bedrock_config.channel_params.exit_delay = 1;
+    sequencer_config
+        .genesis
+        .as_mut()
+        .unwrap()
+        .channel_params
+        .exit_delay = 1;
     let (mut sequencer, _mempool_handle) = common_setup_with_config(sequencer_config).await;
     let amount = 2 * system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let offender = test_sequencer_key(0x44);
