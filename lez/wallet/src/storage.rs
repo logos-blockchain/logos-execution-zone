@@ -264,6 +264,15 @@ mod tests {
             program_account,
             participant,
         ));
+        storage
+            .referral_mut()
+            .record_operation(referral::PendingOperation {
+                operation: referral::OperationKind::CashOut {
+                    participant,
+                    index: 3,
+                },
+                ..register_operation([8; 32], program_account, participant)
+            });
 
         let temp_dir = tempfile::tempdir().unwrap();
         let storage_path = temp_dir.path().join("storage.json");

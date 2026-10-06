@@ -995,4 +995,116 @@ mod tests {
 
         assert!(is_superseded(&recorded, &registry).expect("registry decodes"));
     }
+
+    #[test]
+    fn a_cash_out_settles_on_its_receipt_and_otherwise_follows_its_input() {
+        let receipt = State::CashOut { points: 7 }.to_data();
+        let note = State::Credit {
+            recipient_node: NodeId::new([1; 32]),
+            amount: 1,
+        }
+        .to_data();
+        let empty = ShardData::empty();
+
+        assert_eq!(
+            cash_out_transition(SubmissionStatus::Pending, &receipt, false),
+            Some(SubmissionStatus::Settled)
+        );
+        assert_eq!(
+            cash_out_transition(SubmissionStatus::Rejected, &receipt, true),
+            Some(SubmissionStatus::Settled),
+            "another attempt at the same index created the receipt"
+        );
+        assert_eq!(
+            cash_out_transition(SubmissionStatus::Pending, &note, false),
+            Some(SubmissionStatus::Rejected)
+        );
+        assert_eq!(
+            cash_out_transition(SubmissionStatus::Pending, &empty, true),
+            Some(SubmissionStatus::Rejected)
+        );
+        assert_eq!(
+            cash_out_transition(SubmissionStatus::Pending, &empty, false),
+            None
+        );
+        assert_eq!(
+            cash_out_transition(SubmissionStatus::Rejected, &empty, true),
+            None
+        );
+    }
+
+    #[test]
+    fn a_participant_is_read_from_its_own_deployment() {
+        let (ours, other) = (AccountId::new([1; 32]), AccountId::new([2; 32]));
+        let (our_node, other_node) = (NodeId::new([5; 32]), NodeId::new([6; 32]));
+        let account = Account::default()
+            .with_shard(
+                ours,
+                State::Participant(Participant::new(our_node, None)).to_data(),
+            )
+            .with_shard(
+                other,
+                State::Participant(Participant::new(other_node, None)).to_data(),
+            );
+
+        assert_eq!(
+            decode_participant(&account, other)
+                .expect("the other deployment registered the participant")
+                .node,
+            other_node
+        );
+        assert!(
+            decode_participant(&Account::default(), other).is_err(),
+            "a deployment that never registered the participant holds no participant"
+        );
+    }
+
+    fn keys(nsk: u8, program_account: u8, participant: u8) -> ReceiptKeys {
+        ReceiptKeys {
+            program_account: AccountId::new([program_account; 32]),
+            participant: AccountId::new([participant; 32]),
+            node: NodeId::new([7; 32]),
+            nsk: [nsk; 32],
+        }
+    }
+
+    #[test]
+    fn blinding_factors_expand_the_nullifier_key_per_deployment_participant_and_index() {
+        assert_eq!(
+            keys(1, 2, 3).opening(0).blinding_factor,
+            [
+                0x54, 0x10, 0xab, 0x83, 0x00, 0xd8, 0x55, 0x91, 0x80, 0x35, 0x91, 0xd3, 0x63, 0x92,
+                0x8f, 0x68, 0xbf, 0xe5, 0x33, 0x91, 0x4a, 0x2a, 0x92, 0x85, 0x45, 0xe3, 0xa5, 0xc4,
+                0x84, 0xae, 0x3d, 0x91,
+            ]
+        );
+        assert_eq!(
+            keys(1, 2, 3).opening(1).blinding_factor,
+            [
+                0x43, 0xf5, 0xae, 0x83, 0xb9, 0x5a, 0x50, 0x56, 0x90, 0x52, 0x64, 0x0d, 0xaf, 0x83,
+                0x2f, 0xd8, 0xf0, 0xff, 0x23, 0xea, 0x55, 0x5c, 0x94, 0xdf, 0xc4, 0xd6, 0xfa, 0xda,
+                0x06, 0x16, 0xb6, 0xe5,
+            ]
+        );
+        assert_eq!(
+            keys(1, 2, 6).opening(0).blinding_factor,
+            [
+                0x2b, 0x25, 0x4b, 0xc3, 0x61, 0x68, 0x41, 0x91, 0x7f, 0xcf, 0xf0, 0x0b, 0x9b, 0x6b,
+                0x40, 0xce, 0x8c, 0x17, 0x68, 0xe5, 0x8b, 0xba, 0xce, 0x7c, 0xcf, 0xa6, 0xd3, 0x9c,
+                0x7f, 0x9c, 0x17, 0xc9,
+            ]
+        );
+        assert_eq!(
+            keys(1, 5, 3).opening(0).blinding_factor,
+            [
+                0x28, 0x10, 0x70, 0x87, 0x4b, 0x39, 0x57, 0x21, 0x9d, 0x83, 0x8d, 0xc3, 0x06, 0xba,
+                0xd8, 0x7f, 0x07, 0x43, 0xab, 0x2f, 0xf0, 0x5d, 0xc8, 0xd3, 0x69, 0x35, 0x34, 0xad,
+                0x67, 0xe3, 0xcf, 0xec,
+            ]
+        );
+        assert_ne!(
+            keys(4, 2, 3).opening(0).blinding_factor,
+            keys(1, 2, 3).opening(0).blinding_factor
+        );
+    }
 }
