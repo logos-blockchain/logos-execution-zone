@@ -33,11 +33,13 @@ use clock_core::{
     ClockAccountData,
 };
 use cycle_bench::{ppe, stats::Stats};
+use fee_core::{BlockFeeSummary, state::FeeState};
 use lee::program::Program;
 use lee_core::{
     BlockId, Timestamp,
     account::{AccountId, ProgramShardSelector, ShardData},
     from_frame,
+    native_token::encode_balance,
     program::{AccountMeta, ApplyInput, GuestOutput, InstructionData, PlanInput, PlanOutput},
 };
 use risc0_zkvm::{ExecutorEnv, default_executor, default_prover};
@@ -189,6 +191,8 @@ impl Calibration {
     }
 }
 
+const FEE_REFUND_AMOUNT: u128 = 5_000;
+
 struct Fixture {
     account: AccountMeta,
     data: ShardData,
@@ -204,6 +208,13 @@ impl Fixture {
         Self {
             account: AccountMeta::new(account_id, is_authorized, program_account_id),
             data,
+        }
+    }
+
+    fn balance(account_id: AccountId, is_authorized: bool, balance: u128) -> Self {
+        Self {
+            account: AccountMeta::native_balance(account_id, is_authorized),
+            data: encode_balance(balance),
         }
     }
 }
@@ -392,6 +403,60 @@ fn apply_journal(journal: &[u8]) -> Result<lee_core::program::ApplyOutput> {
     }
 }
 
+/// Fee's plan derives its PDAs from this, so fixtures must use the same value.
+fn fee_self_account_id() -> AccountId {
+    AccountId::from_builtin_program(programs::fee().id())
+}
+
+fn fee_distribute_summary() -> BlockFeeSummary {
+    BlockFeeSummary {
+        gas_used_exec: 1_000_000,
+        gas_used_stor: 100_000,
+        revenue_base: 8_000_000,
+        revenue_tip: 64,
+    }
+}
+
+fn fee_distribute_payout() -> u128 {
+    FeeState::genesis().apply_block(&fee_distribute_summary())
+}
+
+fn fee_distribute_accounts() -> Vec<Fixture> {
+    let fee_id = fee_self_account_id();
+    let summary = fee_distribute_summary();
+    // The inspect effect refuses an inbox holding anything but the block's revenue.
+    let collected = summary.revenue_base.saturating_add(summary.revenue_tip);
+    vec![
+        Fixture::new(
+            fee_core::compute_fee_state_account_id(fee_id),
+            true,
+            fee_id,
+            FeeState::genesis()
+                .to_bytes()
+                .try_into()
+                .expect("FeeState should fit in account data"),
+        ),
+        Fixture::balance(fee_core::compute_fee_escrow_account_id(fee_id), true, 0),
+        Fixture::balance(
+            fee_core::compute_fee_inbox_account_id(fee_id),
+            true,
+            collected,
+        ),
+        Fixture::balance(AccountId::new([71; 32]), true, 0),
+    ]
+}
+
+fn fee_refund_accounts() -> Vec<Fixture> {
+    vec![
+        Fixture::balance(
+            fee_core::compute_fee_inbox_account_id(fee_self_account_id()),
+            true,
+            FEE_REFUND_AMOUNT,
+        ),
+        Fixture::balance(AccountId::new([72; 32]), true, 0),
+    ]
+}
+
 fn clock_account(account_id: AccountId, block_id: BlockId) -> Fixture {
     Fixture::new(
         account_id,
@@ -423,16 +488,58 @@ fn main() -> Result<()> {
         eprintln!("cycle_bench: prove mode ON, this will be slow (~minutes per program)");
     }
 
-    let cases = [Case::new(
-        "clock",
-        "Tick (block_id+1, no multiples)",
-        programs::clock(),
-        clock_accounts_tick_at(0),
-        &clock_core::Instruction {
-            timestamp: Timestamp::from(1_700_000_000_u64),
-            block_id: 1,
-        },
-    )?];
+    // `Advance` requires each clock account's pre-state one block below the instruction's.
+    let cases = [
+        Case::new(
+            "clock",
+            "Tick (block_id+1, no multiples)",
+            programs::clock(),
+            clock_accounts_tick_at(0),
+            &clock_core::Instruction {
+                timestamp: Timestamp::from(1_700_000_000_u64),
+                block_id: 1,
+            },
+        )?,
+        Case::new(
+            "clock",
+            "Tick (10-block rollup)",
+            programs::clock(),
+            clock_accounts_tick_at(9),
+            &clock_core::Instruction {
+                timestamp: Timestamp::from(1_700_000_000_u64),
+                block_id: 10,
+            },
+        )?,
+        Case::new(
+            "clock",
+            "Tick (10 and 50-block rollups)",
+            programs::clock(),
+            clock_accounts_tick_at(49),
+            &clock_core::Instruction {
+                timestamp: Timestamp::from(1_700_000_000_u64),
+                block_id: 50,
+            },
+        )?,
+        Case::new(
+            "fee",
+            "Distribute",
+            programs::fee(),
+            fee_distribute_accounts(),
+            &fee_core::Instruction::Distribute {
+                summary: fee_distribute_summary(),
+                payout: fee_distribute_payout(),
+            },
+        )?,
+        Case::new(
+            "fee",
+            "Refund",
+            programs::fee(),
+            fee_refund_accounts(),
+            &fee_core::Instruction::Refund {
+                amount: FEE_REFUND_AMOUNT,
+            },
+        )?,
+    ];
 
     let mut results: Vec<BenchResult> = cases
         .into_iter()
