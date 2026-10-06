@@ -2380,6 +2380,7 @@ dependencies = [
  "lee",
  "lee_core",
  "programs",
+ "rand 0.8.6",
  "risc0-zkvm",
  "serde",
  "serde_json",
