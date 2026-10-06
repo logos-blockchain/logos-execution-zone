@@ -346,6 +346,10 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                     let std_vec: Vec<_> = value.message.program_image_claims.into();
                     std_vec.into_iter().map(Into::into).collect()
                 },
+                fee_height: value
+                    .message
+                    .has_fee_height
+                    .then_some(value.message.fee_height),
             },
             witness_set: lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(
                 {
@@ -462,6 +466,9 @@ pub struct FfiPrivacyPreservingMessage {
     pub block_validity_window: [u64; 2],
     pub timestamp_validity_window: [u64; 2],
     pub program_image_claims: FfiProgramImageClaims,
+    /// `fee_height` is meaningful only when `has_fee_height` is true.
+    pub has_fee_height: bool,
+    pub fee_height: u64,
 }
 
 impl From<lee::privacy_preserving_transaction::Message> for FfiPrivacyPreservingMessage {
@@ -473,6 +480,7 @@ impl From<lee::privacy_preserving_transaction::Message> for FfiPrivacyPreserving
             block_validity_window,
             timestamp_validity_window,
             program_image_claims,
+            fee_height,
         } = value;
 
         Self {
@@ -498,6 +506,8 @@ impl From<lee::privacy_preserving_transaction::Message> for FfiPrivacyPreserving
                 .map(Into::into)
                 .collect::<Vec<_>>()
                 .into(),
+            has_fee_height: fee_height.is_some(),
+            fee_height: fee_height.unwrap_or_default(),
         }
     }
 }

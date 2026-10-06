@@ -310,6 +310,24 @@ impl ValidatedStateDiff {
         block_id: BlockId,
         timestamp: Timestamp,
     ) -> Result<Self, LeeError> {
+        Self::from_privacy_preserving_transaction_metered(
+            tx,
+            state,
+            block_id,
+            timestamp,
+            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+        )
+        .map(|(diff, _cycles)| diff)
+    }
+
+    /// Also returns the cycles the deferred public effects used, bounded by `cycle_budget`.
+    pub fn from_privacy_preserving_transaction_metered(
+        tx: &PrivacyPreservingTransaction,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+        cycle_budget: Cycles,
+    ) -> Result<(Self, Cycles), LeeError> {
         let message = &tx.message;
         let witness_set = &tx.witness_set;
         let commitments = message.commitments();
@@ -409,20 +427,20 @@ impl ValidatedStateDiff {
         // 6. Nullifier uniqueness
         state.check_nullifiers_are_valid(&nullifiers)?;
 
-        let public_diff = apply_public_effects(
-            state,
-            &message.public_actions,
-            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
-        )?;
+        let (public_diff, cycles_used) =
+            apply_public_effects(state, &message.public_actions, cycle_budget)?;
         let new_nullifiers = nullifiers.iter().map(|(nullifier, _)| *nullifier).collect();
 
-        Ok(Self(StateDiff {
-            signer_account_ids,
-            public_diff,
-            new_commitments: commitments,
-            new_nullifiers,
-            events: vec![],
-        }))
+        Ok((
+            Self(StateDiff {
+                signer_account_ids,
+                public_diff,
+                new_commitments: commitments,
+                new_nullifiers,
+                events: vec![],
+            }),
+            cycles_used,
+        ))
     }
 
     /// Returns the public account changes produced by this transaction.
@@ -551,14 +569,12 @@ fn plan_program_loader<'state>(
     ))
 }
 
-/// Applies public effects to live state under one shared cycle budget.
-/// Private transactions are currently fee-exempt, so failed settlement attempts
-/// can be repeated without paying a fee.
+/// Applies public effects to live state under one shared cycle budget, returning the cycles used.
 fn apply_public_effects(
     state: &V03State,
     actions: &[PublicActionWithID],
     cycle_budget: Cycles,
-) -> Result<HashMap<AccountId, Account>, LeeError> {
+) -> Result<(HashMap<AccountId, Account>, Cycles), LeeError> {
     let mut pending: HashMap<AccountId, Account> = HashMap::new();
     let mut cycles_used: Cycles = 0;
     let mut appliers: HashMap<AccountId, Applier> = HashMap::new();
@@ -603,7 +619,7 @@ fn apply_public_effects(
             account.data.apply_output(&output);
         }
     }
-    Ok(pending)
+    Ok((pending, cycles_used))
 }
 
 /// Validates the witness set and replay nonces of a public transaction against
@@ -687,7 +703,7 @@ fn check_privacy_preserving_circuit_proof_is_valid(
         block_validity_window: message.block_validity_window,
         timestamp_validity_window: message.timestamp_validity_window,
         program_image_claims,
-        fee_height: None,
+        fee_height: message.fee_height,
     };
     proof
         .is_valid_for(&output)
