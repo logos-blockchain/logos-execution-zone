@@ -2376,6 +2376,7 @@ dependencies = [
  "clap",
  "clock_core",
  "criterion",
+ "fee_core",
  "lee",
  "lee_core",
  "programs",

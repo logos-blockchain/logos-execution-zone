@@ -24,7 +24,11 @@
     reason = "Bench tool: matches test-style fixture code"
 )]
 
-use std::{collections::HashMap, path::PathBuf, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    time::Instant,
+};
 
 use anyhow::{Result, bail};
 use clap::Parser;
@@ -44,6 +48,11 @@ use lee_core::{
 };
 use risc0_zkvm::{ExecutorEnv, default_executor, default_prover};
 use serde::Serialize;
+
+/// Two points fit a line exactly, making R² 1.0 by construction and the slope pure noise.
+const MIN_CALIBRATION_POINTS: usize = 3;
+
+const FEE_REFUND_AMOUNT: u128 = 5_000;
 
 #[derive(Parser, Debug)]
 #[command(about = "Per-program executor and (optionally) prover cycle measurements")]
@@ -137,10 +146,10 @@ impl Calibration {
     /// The fit uses best-of-N rather than the mean so a single OS scheduling spike in one
     /// case cannot tilt the slope; best-of-N is the per-case noise floor and reproduces
     /// run-to-run, which is what a pinned-hardware throughput constant needs.
-    /// Returns `None` when there are fewer than two distinct cycle counts to fit a line.
+    /// Returns `None` unless the rows clear [`MIN_CALIBRATION_POINTS`] over two or more programs.
     fn fit(results: &[BenchResult]) -> Option<Self> {
         let n = results.len();
-        if n < 2 {
+        if n < MIN_CALIBRATION_POINTS || Self::programs(results).len() < 2 {
             return None;
         }
         let xs: Vec<f64> = results.iter().map(|r| r.user_cycles as f64).collect();
@@ -189,9 +198,11 @@ impl Calibration {
     fn calibrated_ms(&self, user_cycles: u64) -> f64 {
         self.slope_ms_per_cycle * user_cycles as f64
     }
-}
 
-const FEE_REFUND_AMOUNT: u128 = 5_000;
+    fn programs(results: &[BenchResult]) -> HashSet<&'static str> {
+        results.iter().map(|r| r.program_name).collect()
+    }
+}
 
 struct Fixture {
     account: AccountMeta,
@@ -555,6 +566,12 @@ fn main() -> Result<()> {
             r.calibrated_ms = Some(cal.calibrated_ms(r.user_cycles));
             r.net_compute_ms = Some(r.exec_stats.best_ms - cal.intercept_ms);
         }
+    } else {
+        eprintln!(
+            "cycle_bench: NO CALIBRATION. {} row(s) over {} program(s); needs {MIN_CALIBRATION_POINTS}+ rows over 2+ programs. calib_ms and net_ms are omitted.",
+            results.len(),
+            Calibration::programs(&results).len(),
+        );
     }
 
     print_table(&results, prove);
@@ -714,8 +731,12 @@ mod tests {
     /// Minimal `BenchResult` carrying only the fields the calibration fit reads:
     /// `user_cycles` (x) and `exec_stats.best_ms` (y).
     fn point(user_cycles: u64, best_ms: f64) -> BenchResult {
+        point_in("test", user_cycles, best_ms)
+    }
+
+    fn point_in(program_name: &'static str, user_cycles: u64, best_ms: f64) -> BenchResult {
         BenchResult {
-            program_name: "test",
+            program_name,
             instruction: "test".to_owned(),
             phase: Phase::Plan,
             user_cycles,
@@ -738,7 +759,11 @@ mod tests {
     #[test]
     fn fit_recovers_a_known_line() {
         // best_ms = 10 + 0.001 * user_cycles  ->  slope 1e-3, intercept 10, throughput 1000.
-        let results = [point(1000, 11.0), point(2000, 12.0), point(3000, 13.0)];
+        let results = [
+            point(1000, 11.0),
+            point(2000, 12.0),
+            point_in("other", 3000, 13.0),
+        ];
         let cal = Calibration::fit(&results).expect("fit over three points");
 
         assert!(
@@ -767,16 +792,27 @@ mod tests {
     }
 
     #[test]
-    fn fit_needs_at_least_two_points() {
+    fn fit_needs_at_least_three_points() {
         assert!(Calibration::fit(&[]).is_none());
         assert!(Calibration::fit(&[point(1000, 11.0)]).is_none());
+        assert!(Calibration::fit(&[point(1000, 11.0), point_in("other", 2000, 12.0)]).is_none());
+    }
+
+    #[test]
+    fn fit_refuses_rows_from_a_single_program() {
+        let results = [point(1000, 11.0), point(2000, 12.0), point(3000, 13.0)];
+        assert!(Calibration::fit(&results).is_none());
     }
 
     #[test]
     fn fit_with_identical_cycle_counts_returns_none() {
         // Zero spread in x leaves the slope undetermined; the fit must decline rather than divide
         // by zero.
-        let results = [point(1000, 11.0), point(1000, 12.0)];
+        let results = [
+            point(1000, 11.0),
+            point(1000, 12.0),
+            point_in("other", 1000, 13.0),
+        ];
         assert!(Calibration::fit(&results).is_none());
     }
 }
