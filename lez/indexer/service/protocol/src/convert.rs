@@ -405,9 +405,7 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
             // `lee::privacy_preserving_transaction::message::Message`. FFI/wallet plumbing for
             // address-flexible program dispatch is tracked separately.
             program_image_claims: _,
-            // TODO: dropped like `program_image_claims` above;
-            // carry it once the display types gain the field.
-            fee_height: _,
+            fee_height,
         } = value;
         Self {
             public_actions: public_actions.into_iter().map(Into::into).collect(),
@@ -415,6 +413,7 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
             private_actions: private_actions.into_iter().map(Into::into).collect(),
             block_validity_window: block_validity_window.into(),
             timestamp_validity_window: timestamp_validity_window.into(),
+            fee_height,
         }
     }
 }
@@ -449,6 +448,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             private_actions,
             block_validity_window,
             timestamp_validity_window,
+            fee_height,
         } = value;
 
         let public_actions = public_actions.into_iter().map(Into::into).collect();
@@ -471,7 +471,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             // A privacy-preserving tx submitted through this protocol will fail proof
             // verification for any program not at its bijection address until this is wired.
             program_image_claims: Vec::new(),
-            fee_height: None,
+            fee_height,
         })
     }
 }

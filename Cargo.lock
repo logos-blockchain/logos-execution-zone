@@ -13741,6 +13741,7 @@ dependencies = [
  "common",
  "derive_more",
  "env_logger",
+ "fee_core",
  "futures",
  "hex",
  "humantime",

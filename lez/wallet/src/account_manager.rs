@@ -579,6 +579,37 @@ impl AccountManager {
         Ok(first_signer)
     }
 
+    /// The account that pays a privacy-preserving transaction's in-proof fee:
+    /// the first authorized private account holding a native balance, else the
+    /// first public signing account. `None` if nothing can pay.
+    pub fn private_fee_payer_account_id(&self) -> Option<AccountId> {
+        let funded_private = self.states.iter().find_map(|state| match state {
+            State::Private(pre)
+                if state.is_authorized()
+                    && pre
+                        .pre_state
+                        .account
+                        .data
+                        .native_balance()
+                        .is_ok_and(|balance| balance > 0) =>
+            {
+                Some(pre.pre_state.account_id)
+            }
+            State::Private(_) | State::Public { .. } | State::PublicKeycard { .. } => None,
+        });
+        funded_private.or_else(|| {
+            self.states
+                .iter()
+                .find(|state| {
+                    matches!(
+                        state,
+                        State::Public { sk: Some(_), .. } | State::PublicKeycard { .. }
+                    )
+                })
+                .map(State::account_id)
+        })
+    }
+
     /// Whether `account_id` is a public account whose signature [`Self::sign_message`] produces.
     pub fn signs_for(&self, account_id: AccountId) -> bool {
         self.states.iter().any(|state| match state {
