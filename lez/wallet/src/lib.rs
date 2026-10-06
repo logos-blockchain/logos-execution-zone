@@ -811,7 +811,7 @@ impl WalletCore {
         program: &ProgramWithDependencies,
         tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
-        let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
+        let mut acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
         tx_pre_check(&acc_manager.selected_shards())?;
 
@@ -831,13 +831,18 @@ impl WalletCore {
             dummy_inputs: acc_manager.dummy_inputs_default(),
             ciphertext_padding: Some(CIPHERTEXT_PAD_SIZE),
         };
-        let fee = self
-            .private_fee_transfer(acc_manager.private_fee_payer_account_id().ok_or_else(|| {
-                ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
-                    "Privacy-preserving transaction has no account to pay its fee".to_owned(),
-                ))
-            })?)
-            .await?;
+        let payer = match acc_manager.private_fee_payer_account_id() {
+            Some(payer) => payer,
+            None => acc_manager
+                .fee_payer_account_id(self)
+                .await?
+                .ok_or_else(|| {
+                    ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
+                        "Privacy-preserving transaction has no account to pay its fee".to_owned(),
+                    ))
+                })?,
+        };
+        let fee = self.private_fee_transfer(payer).await?;
 
         let program = program.clone();
         let (output, proof) = tokio::task::spawn_blocking(move || {

@@ -26,15 +26,6 @@ pub enum FeeTxView {
 }
 
 impl FeeTxView {
-    /// The account settlement debits; a private transaction has none.
-    #[must_use]
-    pub const fn payer(&self) -> Option<AccountId> {
-        match self {
-            Self::Public { payer, .. } => Some(*payer),
-            Self::Private { .. } => None,
-        }
-    }
-
     /// Storage gas: serialized bytes for public, the canonical constant size
     /// for private.
     #[must_use]

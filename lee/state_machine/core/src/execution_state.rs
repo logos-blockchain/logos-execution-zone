@@ -186,7 +186,6 @@ pub struct ExecutionState<'witnesses> {
 }
 
 impl<'witnesses> ExecutionState<'witnesses> {
-    // Initialize with a root call.
     /// If `fee` is given, a native transfer is scheduled ahead of the root call.
     /// Its accounts join the transaction after the root's.
     pub fn initialize(
@@ -230,16 +229,23 @@ impl<'witnesses> ExecutionState<'witnesses> {
             }
         }
 
-        let fee_selectors = fee.map(|fee| {
-            [
-                ProgramShardSelector::native_balance(fee.payer),
-                ProgramShardSelector::native_balance(fee.recipient),
-            ]
+        let fee_call = fee.map(|fee| {
+            ChainedCall::new(
+                NATIVE_TOKEN_PROGRAM_ID,
+                vec![
+                    ProgramShardSelector::native_balance(fee.payer),
+                    ProgramShardSelector::native_balance(fee.recipient),
+                ],
+                &native_token::Instruction::Transfer { amount: fee.amount },
+            )
         });
 
         let mut accounts = HashMap::new();
         let mut root_order = Vec::new();
-        for shard_selector in shard_selectors.iter().chain(fee_selectors.iter().flatten()) {
+        for shard_selector in shard_selectors
+            .iter()
+            .chain(fee_call.iter().flat_map(|call| &call.shard_selectors))
+        {
             let account_id = shard_selector.account_id;
             let Entry::Vacant(vacant) = accounts.entry(account_id) else {
                 continue;
@@ -272,28 +278,21 @@ impl<'witnesses> ExecutionState<'witnesses> {
             return Err(ExecutionError::WitnessNotInRoot { account_id });
         }
 
-        let mut pending = VecDeque::with_capacity(2);
-        if let (Some(fee), Some(fee_selectors)) = (fee, fee_selectors) {
-            pending.push_back(PendingCall {
-                call: ChainedCall::new(
-                    NATIVE_TOKEN_PROGRAM_ID,
-                    fee_selectors.to_vec(),
-                    &native_token::Instruction::Transfer { amount: fee.amount },
-                ),
+        let root_call = ChainedCall {
+            program_account_id,
+            shard_selectors,
+            instruction_data,
+            pda_seeds: Vec::new(),
+        };
+        let pending = fee_call
+            .into_iter()
+            .chain([root_call])
+            .map(|call| PendingCall {
+                call,
                 caller_account_id: None,
                 grants: HashSet::new(),
-            });
-        }
-        pending.push_back(PendingCall {
-            call: ChainedCall {
-                program_account_id,
-                shard_selectors,
-                instruction_data,
-                pda_seeds: Vec::new(),
-            },
-            caller_account_id: None,
-            grants: HashSet::new(),
-        });
+            })
+            .collect();
 
         Ok(Self {
             witnesses,

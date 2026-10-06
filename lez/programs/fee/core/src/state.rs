@@ -20,9 +20,9 @@ pub struct FeeState {
     pub payout_carry: u128,
     /// Block height; an increment at 2^64 - 1 is a consensus fault.
     pub height: u64,
-    /// `(base_fee_exec, base_fee_stor)` of the last [`market::PRIVATE_FEE_WINDOW`]
-    /// heights; slot `h % PRIVATE_FEE_WINDOW` holds the pair of height `h`.
-    pub base_fee_history: [(Fee, Fee); market::PRIVATE_FEE_WINDOW],
+    /// `(base_fee_exec, base_fee_stor)` of the current height and the
+    /// [`market::PRIVATE_FEE_WINDOW`] before it; slot `h % len` holds height `h`.
+    pub base_fee_history: [(Fee, Fee); market::PRIVATE_FEE_WINDOW + 1],
 }
 
 impl FeeState {
@@ -36,28 +36,30 @@ impl FeeState {
             window: [0; market::SMOOTHING_WINDOW],
             payout_carry: 0,
             height: 0,
-            base_fee_history: [(0, 0); market::PRIVATE_FEE_WINDOW],
+            base_fee_history: [(market::BASE_FEE_EXEC_MIN, market::BASE_FEE_STOR_MIN);
+                market::PRIVATE_FEE_WINDOW + 1],
         }
     }
 
     /// The base fees of the state at `height`, if it is the current height or
     /// at most [`market::PRIVATE_FEE_WINDOW`] blocks behind it.
-    #[expect(
-        clippy::arithmetic_side_effects,
-        clippy::integer_division_remainder_used,
-        reason = "ring index over a constant non-zero window length"
-    )]
     #[must_use]
     pub fn base_fees_at(&self, height: u64) -> Option<(Fee, Fee)> {
         let window = u64::try_from(market::PRIVATE_FEE_WINDOW).expect("window length fits u64");
         if height > self.height || height < self.height.saturating_sub(window) {
             return None;
         }
-        if height == self.height {
-            return Some((self.base_fee_exec, self.base_fee_stor));
-        }
-        let slot = usize::try_from(height % window).expect("slot index fits usize");
-        Some(self.base_fee_history[slot])
+        Some(self.base_fee_history[Self::history_slot(height)])
+    }
+
+    #[expect(
+        clippy::arithmetic_side_effects,
+        clippy::integer_division_remainder_used,
+        reason = "ring index over a constant non-zero length"
+    )]
+    fn history_slot(height: u64) -> usize {
+        let len = u64::try_from(market::PRIVATE_FEE_WINDOW + 1).expect("ring length fits u64");
+        usize::try_from(height % len).expect("slot index fits usize")
     }
 
     /// Applies one block's summary: pushes the block's base revenue into the
@@ -72,12 +74,6 @@ impl FeeState {
                   explicit carry, and additions are checked"
     )]
     pub fn apply_block(&mut self, summary: &BlockFeeSummary) -> u128 {
-        let history_len =
-            u64::try_from(market::PRIVATE_FEE_WINDOW).expect("window length fits u64");
-        let history_slot =
-            usize::try_from(self.height % history_len).expect("slot index fits usize");
-        self.base_fee_history[history_slot] = (self.base_fee_exec, self.base_fee_stor);
-
         self.height = self
             .height
             .checked_add(1)
@@ -111,6 +107,8 @@ impl FeeState {
             market::BASE_FEE_STOR_MIN,
             market::BASE_FEE_STOR_MAX,
         );
+        self.base_fee_history[Self::history_slot(self.height)] =
+            (self.base_fee_exec, self.base_fee_stor);
 
         payout
     }
@@ -150,7 +148,11 @@ mod tests {
         assert_eq!(state.window, [0; market::SMOOTHING_WINDOW]);
         assert_eq!(state.payout_carry, 0);
         assert_eq!(state.height, 0);
-        assert_eq!(state.base_fee_history, [(0, 0); market::PRIVATE_FEE_WINDOW]);
+        assert_eq!(
+            state.base_fee_history,
+            [(market::BASE_FEE_EXEC_MIN, market::BASE_FEE_STOR_MIN);
+                market::PRIVATE_FEE_WINDOW + 1]
+        );
     }
 
     #[test]
@@ -164,7 +166,7 @@ mod tests {
     fn serialized_layout_is_pinned() {
         // The state lives in consensus account data, so its byte layout is part
         // of the protocol: 8 (base_fee_exec) + 8 (base_fee_stor) + 50·16
-        // (window) + 16 (payout_carry) + 8 (height) + 20·16 (base_fee_history),
+        // (window) + 16 (payout_carry) + 8 (height) + 21·16 (base_fee_history),
         // Borsh LE, no length prefix on the fixed arrays. A field reorder, a
         // type change, or a window-length bump would change this and must be a
         // deliberate format change (genesis restart), not a silent one.
@@ -173,15 +175,20 @@ mod tests {
             + market::SMOOTHING_WINDOW * size_of::<u128>() // window
             + size_of::<u128>() // payout_carry
             + size_of::<u64>() // height
-            + market::PRIVATE_FEE_WINDOW * 2 * size_of::<u64>(); // base_fee_history
-        assert_eq!(EXPECTED_LEN, 1160);
+            + (market::PRIVATE_FEE_WINDOW + 1) * 2 * size_of::<u64>(); // base_fee_history
+        assert_eq!(EXPECTED_LEN, 1176);
 
         let bytes = FeeState::genesis().to_bytes();
         assert_eq!(bytes.len(), EXPECTED_LEN);
-        // Genesis is the two minimum base fees (8, 8) followed by all zeros.
+        // Genesis is the two minimum base fees (8, 8), zeros, then the history
+        // ring holding that same pair in every slot.
         let mut expected = vec![0_u8; EXPECTED_LEN];
         expected[0] = u8::try_from(market::BASE_FEE_EXEC_MIN).expect("min fits u8");
         expected[8] = u8::try_from(market::BASE_FEE_STOR_MIN).expect("min fits u8");
+        for slot in 0..=market::PRIVATE_FEE_WINDOW {
+            expected[840 + slot * 16] = expected[0];
+            expected[848 + slot * 16] = expected[8];
+        }
         assert_eq!(bytes, expected);
     }
 

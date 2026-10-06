@@ -421,10 +421,15 @@ fn settle_private_transaction(
         unreachable!("only private transactions classify as a private fee view");
     };
 
-    validate_static_tx(view, opening).map_err(|err| fee_validity(err.to_string()))?;
-    let (base_fee_exec, base_fee_stor) = opening
-        .base_fees_at(*fee_height)
-        .expect("validate_static_tx checked the window");
+    let (base_fee_exec, base_fee_stor) = opening.base_fees_at(*fee_height).ok_or_else(|| {
+        fee_validity(
+            FeeError::FeeHeightOutOfWindow {
+                fee_height: *fee_height,
+                height: opening.height,
+            }
+            .to_string(),
+        )
+    })?;
 
     // The verification cost is charged up front; the effects may use what is
     // left of the block's execution gas.
@@ -498,9 +503,11 @@ fn settle_charged_transaction(
     summary: &mut BlockFeeSummary,
 ) -> Result<Vec<TransactionEvent>, BlockIngestError> {
     let fee_validity = |reason: String| BlockIngestError::InvalidFeeClass { tx_index, reason };
-    let LeeTransaction::Public(public_tx) = transaction else {
-        unreachable!("only public transactions classify as charged");
+    let (LeeTransaction::Public(public_tx), FeeTxView::Public { payer, .. }) = (transaction, view)
+    else {
+        unreachable!("only public transactions classify as a public fee view");
     };
+    let payer = *payer;
 
     validate_static_tx(view, opening).map_err(|err| fee_validity(err.to_string()))?;
     if !lee::is_fee_authorized(public_tx.message(), public_tx.witness_set()) {
@@ -508,8 +515,6 @@ fn settle_charged_transaction(
             "designated payer's authorization is missing".into(),
         ));
     }
-
-    let payer = view.payer().expect("a public view names its payer");
 
     // Phase 1: Reserve
     //
