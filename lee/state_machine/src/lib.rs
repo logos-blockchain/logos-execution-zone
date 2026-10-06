@@ -18,7 +18,7 @@ pub use privacy_preserving_circuit::{
 };
 pub use privacy_preserving_transaction::{
     PrivacyPreservingTransaction,
-    circuit::{ProvingInput, execute_and_prove},
+    circuit::{ProvingInput, execute_and_prove, execute_and_prove_with_fee},
 };
 pub use public_transaction::PublicTransaction;
 pub use signature::{PrivateKey, PublicKey, Signature};

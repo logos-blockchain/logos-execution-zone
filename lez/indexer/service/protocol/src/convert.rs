@@ -401,10 +401,13 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
             private_actions,
             block_validity_window,
             timestamp_validity_window,
-            // Not yet part of this wire protocol; see the `program_image_claims` field doc on
+            // TODO: Not yet part of this wire protocol; see the `program_image_claims` field doc on
             // `lee::privacy_preserving_transaction::message::Message`. FFI/wallet plumbing for
             // address-flexible program dispatch is tracked separately.
             program_image_claims: _,
+            // TODO: dropped like `program_image_claims` above;
+            // carry it once the display types gain the field.
+            fee_height: _,
         } = value;
         Self {
             public_actions: public_actions.into_iter().map(Into::into).collect(),
@@ -468,6 +471,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             // A privacy-preserving tx submitted through this protocol will fail proof
             // verification for any program not at its bijection address until this is wired.
             program_image_claims: Vec::new(),
+            fee_height: None,
         })
     }
 }

@@ -2,8 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    DummyInput, MembershipProof, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
-    PrivateWitness, ProgramImageWitness, ProvenCall, ShadowProgramWitness,
+    DummyInput, FeeTransfer, MembershipProof, PrivacyPreservingCircuitInput,
+    PrivacyPreservingCircuitOutput, PrivateWitness, ProgramImageWitness, ProvenCall,
+    ShadowProgramWitness,
     account::{AccountId, ProgramShardSelector},
     execution_state::{Backend, DeferPublicEffects, ExecutionState, RootCall},
     from_frame,
@@ -268,6 +269,15 @@ pub fn execute_and_prove(
     input: ProvingInput,
     program_with_dependencies: &ProgramWithDependencies,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
+    execute_and_prove_with_fee(input, program_with_dependencies, None)
+}
+
+/// [`execute_and_prove`] with a native transfer run ahead of the root call, see [`FeeTransfer`].
+pub fn execute_and_prove_with_fee(
+    input: ProvingInput,
+    program_with_dependencies: &ProgramWithDependencies,
+    fee: Option<FeeTransfer>,
+) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     let ProvingInput {
         shard_selectors,
         signers,
@@ -292,7 +302,8 @@ pub fn execute_and_prove(
         env_builder: ExecutorEnv::builder(),
         calls: Vec::new(),
     };
-    ExecutionState::initialize(root.clone(), None, &private_witnesses)?.run(&mut backend)?;
+    ExecutionState::initialize(root.clone(), fee.as_ref(), &private_witnesses)?
+        .run(&mut backend)?;
     let Prover {
         mut env_builder,
         calls,
@@ -333,7 +344,7 @@ pub fn execute_and_prove(
 
     let circuit_input = PrivacyPreservingCircuitInput {
         root,
-        fee: None,
+        fee,
         private_witnesses,
         dummy_inputs,
         ciphertext_padding,
