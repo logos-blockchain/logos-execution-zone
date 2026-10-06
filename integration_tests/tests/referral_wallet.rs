@@ -6,19 +6,22 @@
 use std::time::Duration;
 
 use anyhow::Result;
+use common::transaction::LeeTransaction;
 use integration_tests::{
     TestContext, public_mention,
     utils::{new_account, send, sync_private},
 };
+use key_protocol::key_management::secret_holders::SeedHolder;
 use lee::{AccountId, PrivateKey};
 use program_loader_core::MAX_SEGMENT_DATA_LEN;
 use referral_core::{
-    Invitation, NodeId, ORACLE_ACCOUNT_ID, PROTOTYPE_ORACLE_SIGNING_KEY, State,
+    Invitation, NodeId, ORACLE_ACCOUNT_ID, PROTOTYPE_ORACLE_SIGNING_KEY, State, cash_out_receipt,
     ed25519_dalek::{Signer as _, SigningKey},
 };
 use testnet_initial_state::{PublicAccountPrivateInitialData, initial_pub_accounts_private_keys};
 use tokio::test;
 use wallet::{
+    cli::execute_keys_restoration,
     program_facades::{program_loader::ProgramLoader, referral::Referral},
     storage::referral::{OperationKind, SubmissionStatus},
 };
@@ -26,6 +29,8 @@ use wallet::{
 const ORACLE_FUNDING: u128 = 100_000_000_000;
 
 const SETTLE_ATTEMPTS: usize = 30;
+
+const RESTORE_DEPTH: u32 = 5;
 
 fn genesis_payer(ctx: &mut TestContext) -> PublicAccountPrivateInitialData {
     let payer = initial_pub_accounts_private_keys().swap_remove(0);
@@ -58,6 +63,10 @@ async fn fund_oracle(ctx: &mut TestContext, payer: AccountId) -> Result<()> {
         ORACLE_FUNDING,
     )
     .await?;
+    import_oracle(ctx)
+}
+
+fn import_oracle(ctx: &mut TestContext) -> Result<()> {
     ctx.wallet_mut()
         .storage_mut()
         .key_chain_mut()
@@ -130,6 +139,34 @@ async fn claim(
 
     sync_private(ctx).await?;
     reward_balance(ctx, program, participant)
+}
+
+async fn cash_out(
+    ctx: &mut TestContext,
+    program: AccountId,
+    participant: AccountId,
+    reference: [u8; 32],
+) -> Result<AccountId> {
+    let (hash, _broadcast) = facade(ctx, program)
+        .cash_out(reference, participant)
+        .await?;
+    ctx.wallet().poll_transaction(hash).await?;
+    settle(ctx, program, reference).await?;
+    sync_private(ctx).await?;
+
+    let recorded = ctx
+        .wallet()
+        .storage()
+        .referral()
+        .operation(reference)
+        .ok_or_else(|| anyhow::anyhow!("a submitted cash out is recorded"))?;
+    let LeeTransaction::PrivacyPreserving(sent) = &recorded.transaction else {
+        anyhow::bail!("a cash out is a privacy-preserving transaction");
+    };
+    let [receipt] = sent.message().public_actions.as_slice() else {
+        anyhow::bail!("a cash out mentions exactly one public account");
+    };
+    Ok(receipt.account_id)
 }
 
 async fn publish(
@@ -451,6 +488,102 @@ async fn registration_bookkeeping_resumes_and_refuses_conflicts() -> Result<()> 
         facade(&mut ctx, program).operation_status([0x77; 32]),
         None,
         "the refused registration is never recorded"
+    );
+
+    Ok(())
+}
+
+#[test]
+async fn cash_out_receipts_survive_a_mnemonic_only_restore() -> Result<()> {
+    let mut ctx = TestContext::new().await?;
+    let (_, mnemonic) = SeedHolder::new_mnemonic("");
+    let password = ctx.wallet_password().to_owned();
+    ctx.wallet_mut().restore_storage(&mnemonic, &password)?;
+    let payer = genesis_payer(&mut ctx);
+    let program = deploy_referral(&mut ctx, payer.account_id).await?;
+    fund_oracle(&mut ctx, payer.account_id).await?;
+
+    let (carol_key, carol_node) = node(3);
+    let (alice_key, alice_node) = node(2);
+    let carol = facade(&mut ctx, program).create_participant()?;
+    let alice = facade(&mut ctx, program).create_participant()?;
+    register(&mut ctx, program, carol, &carol_key, None, None).await?;
+    let carol_invites_alice = facade(&mut ctx, program).invitation(carol, carol_node)?;
+    register(
+        &mut ctx,
+        program,
+        alice,
+        &alice_key,
+        Some(carol_node),
+        Some(carol_invites_alice),
+    )
+    .await?;
+
+    let mut sent = Vec::new();
+    for (epoch, claimed, cashed_out) in [(1, [1; 32], [2; 32]), (2, [3; 32], [4; 32])] {
+        publish(&mut ctx, program, epoch, &[alice_node]).await?;
+        assert_eq!(
+            claim(&mut ctx, program, carol, claimed).await?,
+            1,
+            "Carol's active child pays one per epoch"
+        );
+        sent.push(cash_out(&mut ctx, program, carol, cashed_out).await?);
+        assert_eq!(
+            reward_balance(&mut ctx, program, carol)?,
+            0,
+            "a cash out burns the whole balance"
+        );
+    }
+
+    let receipts = facade(&mut ctx, program).receipts(carol).await?;
+    assert_eq!(
+        receipts
+            .iter()
+            .map(|receipt| (receipt.index, receipt.account_id, receipt.points))
+            .collect::<Vec<_>>(),
+        vec![(0, sent[0], 1), (1, sent[1], 1)],
+        "each cash out took the next index for the receipt it sent"
+    );
+
+    ctx.wallet_mut().restore_storage(&mnemonic, &password)?;
+    execute_keys_restoration(ctx.wallet_mut(), RESTORE_DEPTH).await?;
+
+    assert_eq!(
+        facade(&mut ctx, program).operation_status([2; 32]),
+        None,
+        "restoring from the mnemonic forgets every recorded operation"
+    );
+    assert_eq!(
+        facade(&mut ctx, program).receipts(carol).await?,
+        receipts,
+        "the mnemonic and the chain recover every receipt"
+    );
+    for (index, sent_to) in (0..).zip(&sent) {
+        let opening = facade(&mut ctx, program).opening(carol, index)?;
+        assert_eq!(
+            cash_out_receipt(opening.program_account, carol_node, opening.blinding_factor),
+            *sent_to,
+            "the recovered opening recomputes the receipt its cash out sent"
+        );
+    }
+
+    import_oracle(&mut ctx)?;
+    publish(&mut ctx, program, 3, &[alice_node]).await?;
+    assert_eq!(
+        claim(&mut ctx, program, carol, [5; 32]).await?,
+        1,
+        "the restored participant keeps earning"
+    );
+    let third = cash_out(&mut ctx, program, carol, [6; 32]).await?;
+    assert_eq!(
+        facade(&mut ctx, program)
+            .receipts(carol)
+            .await?
+            .iter()
+            .map(|receipt| (receipt.index, receipt.account_id))
+            .collect::<Vec<_>>(),
+        vec![(0, sent[0]), (1, sent[1]), (2, third)],
+        "the restored wallet cashes out after its last receipt"
     );
 
     Ok(())
