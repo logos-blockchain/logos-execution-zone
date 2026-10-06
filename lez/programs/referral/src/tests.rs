@@ -8,7 +8,7 @@ use lee_core::{
 };
 use referral_core::{
     Claim, Effect, Instruction, NodeId, ORACLE_ACCOUNT_ID, Participant, ParticipantAuthorizationV1,
-    Registry, State, active_digest,
+    Registry, State, active_digest, cash_out_receipt,
     ed25519_dalek::{Signer as _, SigningKey},
 };
 
@@ -484,5 +484,161 @@ fn check_epoch_rejects_another_active_set() {
             epoch: 2,
             ..Registry::default()
         }),
+    );
+}
+
+fn cash_out(node: NodeId, points: u128) -> Instruction {
+    Instruction::CashOut {
+        node,
+        points,
+        blinding_factor: [5; 32],
+    }
+}
+
+fn holding(node: NodeId, reward_balance: u128) -> ShardData {
+    State::Participant(Participant {
+        reward_balance,
+        ..Participant::new(node, None)
+    })
+    .to_data()
+}
+
+#[test]
+fn a_cash_out_burns_the_full_balance_into_its_receipt() {
+    let (_, me) = node(1);
+    let (_, parent) = node(2);
+    let (_, c) = node(3);
+    let participant_account = account(20);
+    let receipt = cash_out_receipt(PROGRAM, me, [5; 32]);
+
+    let plan = plan_for(
+        vec![meta(participant_account, true), meta(receipt, false)],
+        cash_out(me, 7),
+    );
+
+    assert_eq!(
+        plan.output().effects,
+        vec![
+            ShardEffect::new(
+                &meta(participant_account, true),
+                &Effect::CashOutBurn {
+                    node: me,
+                    points: 7
+                },
+            ),
+            ShardEffect::new(
+                &meta(receipt, false),
+                &Effect::Create(State::CashOut { points: 7 }),
+            ),
+        ]
+    );
+
+    let earned = Participant {
+        node: me,
+        referrer: Some(parent),
+        children: BTreeMap::from([(c, 2)]),
+        reward_balance: 7,
+    };
+    let burned = crate::apply(
+        Effect::CashOutBurn {
+            node: me,
+            points: 7,
+        },
+        &State::Participant(earned.clone()).to_data(),
+    )
+    .expect("the burn writes the participant");
+    assert_eq!(
+        State::decode(&burned),
+        Some(State::Participant(Participant {
+            reward_balance: 0,
+            ..earned
+        }))
+    );
+    assert_eq!(
+        crate::apply(
+            Effect::Create(State::CashOut { points: 7 }),
+            &ShardData::empty()
+        ),
+        Some(State::CashOut { points: 7 }.to_data())
+    );
+}
+
+#[test]
+#[should_panic(expected = "the receipt account does not match the node and blinding factor")]
+fn a_cash_out_rejects_a_receipt_for_another_factor() {
+    let (_, me) = node(1);
+
+    let _plan = plan_for(
+        vec![
+            meta(account(20), true),
+            meta(cash_out_receipt(PROGRAM, me, [6; 32]), false),
+        ],
+        cash_out(me, 7),
+    );
+}
+
+#[test]
+#[should_panic(expected = "participant authorization is missing")]
+fn an_unauthorized_participant_cannot_cash_out() {
+    let (_, me) = node(1);
+
+    let _plan = plan_for(
+        vec![
+            meta(account(20), false),
+            meta(cash_out_receipt(PROGRAM, me, [5; 32]), false),
+        ],
+        cash_out(me, 7),
+    );
+}
+
+#[test]
+#[should_panic(expected = "nothing to cash out")]
+fn a_cash_out_requires_points() {
+    let (_, me) = node(1);
+
+    let _plan = plan_for(
+        vec![
+            meta(account(20), true),
+            meta(cash_out_receipt(PROGRAM, me, [5; 32]), false),
+        ],
+        cash_out(me, 0),
+    );
+}
+
+#[test]
+#[should_panic(expected = "the cash out names another node")]
+fn the_burn_rejects_another_node() {
+    let (_, me) = node(1);
+    let (_, other) = node(2);
+
+    let _written = crate::apply(
+        Effect::CashOutBurn {
+            node: other,
+            points: 7,
+        },
+        &holding(me, 7),
+    );
+}
+
+#[test]
+#[should_panic(expected = "a cash out takes the full reward balance")]
+fn the_burn_takes_the_full_balance() {
+    let (_, me) = node(1);
+
+    let _written = crate::apply(
+        Effect::CashOutBurn {
+            node: me,
+            points: 6,
+        },
+        &holding(me, 7),
+    );
+}
+
+#[test]
+#[should_panic(expected = "account already holds referral state")]
+fn a_receipt_is_never_written_twice() {
+    let _written = crate::apply(
+        Effect::Create(State::CashOut { points: 7 }),
+        &State::CashOut { points: 7 }.to_data(),
     );
 }

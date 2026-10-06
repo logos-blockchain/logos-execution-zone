@@ -428,6 +428,37 @@ mod tests {
     }
 
     #[test]
+    fn the_cash_out_receipt_is_the_program_pda_of_the_prefixed_node_and_factor() {
+        let factor = [5; 32];
+        let receipt = cash_out_receipt(PROGRAM, NODE, factor);
+
+        assert_eq!(
+            receipt,
+            AccountId::new([
+                0xc7, 0xb1, 0x6c, 0x9d, 0xe5, 0x40, 0xb3, 0x22, 0x17, 0xe2, 0x03, 0xd5, 0x6c, 0xd9,
+                0xc7, 0x63, 0x74, 0x63, 0x71, 0x26, 0xcb, 0x8f, 0x66, 0x30, 0x38, 0x11, 0x3f, 0xca,
+                0x19, 0x08, 0x01, 0xff,
+            ])
+        );
+        assert_ne!(
+            cash_out_receipt(AccountId::new([10; 32]), NODE, factor),
+            receipt
+        );
+        assert_ne!(
+            cash_out_receipt(PROGRAM, NodeId::new([8; 32]), factor),
+            receipt
+        );
+        assert_ne!(cash_out_receipt(PROGRAM, NODE, [6; 32]), receipt);
+    }
+
+    #[test]
+    #[should_panic(expected = "note does not hold a child or a credit")]
+    fn claim_rejects_a_cash_out_receipt_as_a_note() {
+        let mut participant = Participant::new(NODE, None);
+        let _total = participant.claim(1, &BTreeSet::new(), &[State::CashOut { points: 3 }]);
+    }
+
+    #[test]
     #[should_panic(expected = "credit is addressed to another node")]
     fn claim_rejects_a_credit_for_another_node() {
         let other = NodeId::new([1; 32]);
