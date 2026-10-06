@@ -12,10 +12,7 @@ use chain_state::{ChainState, ChannelEntry, Tip};
 use common::{
     HashType,
     block::{Block, BlockMeta, HashableBlockData},
-    test_utils::{
-        produce_dummy_block, producer_account_for_testing, producer_seed,
-        sequencer_sign_key_for_testing,
-    },
+    test_utils::{produce_dummy_block, producer_account_for_testing, producer_seed},
     transaction::{LeeTransaction, clock_invocation, fee_invocation},
 };
 use kameo::actor::{ActorRef, Spawn as _};
@@ -343,7 +340,7 @@ fn block_at(id: u64, prev: HashType, timestamp: u64) -> Block {
             LeeTransaction::Public(clock_invocation(id, timestamp)),
         ],
     }
-    .into_pending_block(&sequencer_sign_key_for_testing())
+    .into_pending_block()
 }
 
 fn applied(state: &V03State, block: &Block) -> V03State {
