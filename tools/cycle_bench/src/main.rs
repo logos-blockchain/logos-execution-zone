@@ -234,6 +234,9 @@ struct Case {
     program_name: &'static str,
     instruction_label: &'static str,
     program: Program,
+    /// Where the program is registered on chain. Effects name this as their shard owner, so
+    /// deriving it from the image id instead would make every plan panic.
+    program_account_id: AccountId,
     fixtures: Vec<Fixture>,
     instruction_data: InstructionData,
 }
@@ -243,6 +246,7 @@ impl Case {
         program_name: &'static str,
         instruction_label: &'static str,
         program: Program,
+        program_account_id: AccountId,
         fixtures: Vec<Fixture>,
         instruction: &I,
     ) -> Result<Self> {
@@ -250,6 +254,7 @@ impl Case {
             program_name,
             instruction_label,
             program,
+            program_account_id,
             fixtures,
             instruction_data: borsh::to_vec(instruction)?,
         })
@@ -260,10 +265,10 @@ impl Case {
             program_name,
             instruction_label,
             program,
+            program_account_id: self_account_id,
             fixtures,
             instruction_data,
         } = self;
-        let self_account_id = AccountId::from_builtin_program(program.id());
 
         let mut shards: HashMap<ProgramShardSelector, ShardData> = fixtures
             .iter()
@@ -414,9 +419,9 @@ fn apply_journal(journal: &[u8]) -> Result<lee_core::program::ApplyOutput> {
     }
 }
 
-/// Fee's plan derives its PDAs from this, so fixtures must use the same value.
+/// Fee's plan derives its PDAs from its own address, so fixtures must use the same value.
 fn fee_self_account_id() -> AccountId {
-    AccountId::from_builtin_program(programs::fee().id())
+    programs::fee_account_id()
 }
 
 fn fee_distribute_summary() -> BlockFeeSummary {
@@ -505,6 +510,7 @@ fn main() -> Result<()> {
             "clock",
             "Tick (block_id+1, no multiples)",
             programs::clock(),
+            programs::clock_account_id(),
             clock_accounts_tick_at(0),
             &clock_core::Instruction {
                 timestamp: Timestamp::from(1_700_000_000_u64),
@@ -515,6 +521,7 @@ fn main() -> Result<()> {
             "clock",
             "Tick (10-block rollup)",
             programs::clock(),
+            programs::clock_account_id(),
             clock_accounts_tick_at(9),
             &clock_core::Instruction {
                 timestamp: Timestamp::from(1_700_000_000_u64),
@@ -525,6 +532,7 @@ fn main() -> Result<()> {
             "clock",
             "Tick (10 and 50-block rollups)",
             programs::clock(),
+            programs::clock_account_id(),
             clock_accounts_tick_at(49),
             &clock_core::Instruction {
                 timestamp: Timestamp::from(1_700_000_000_u64),
@@ -535,6 +543,7 @@ fn main() -> Result<()> {
             "fee",
             "Distribute",
             programs::fee(),
+            programs::fee_account_id(),
             fee_distribute_accounts(),
             &fee_core::Instruction::Distribute {
                 summary: fee_distribute_summary(),
@@ -545,6 +554,7 @@ fn main() -> Result<()> {
             "fee",
             "Refund",
             programs::fee(),
+            programs::fee_account_id(),
             fee_refund_accounts(),
             &fee_core::Instruction::Refund {
                 amount: FEE_REFUND_AMOUNT,
