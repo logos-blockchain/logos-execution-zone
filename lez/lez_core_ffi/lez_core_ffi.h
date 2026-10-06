@@ -618,6 +618,26 @@ typedef struct PointerResult_FfiVec_FfiEventRecord_____OperationStatus {
 } PointerResult_FfiVec_FfiEventRecord_____OperationStatus;
 
 /**
+ * FFI-owned sequencer setup process.
+ *
+ * - `task`: a [`JoinHandle`] owning sequencer setup process.
+ */
+typedef struct FfiSequencerSetupNonBlocking {
+  void *task;
+} FfiSequencerSetupNonBlocking;
+
+/**
+ * Simple wrapper around a pointer to a value or an error.
+ *
+ * Pointer is not guaranteed. You should check the error field before
+ * dereferencing the pointer.
+ */
+typedef struct PointerResult_FfiSequencerSetupNonBlocking__OperationStatus {
+  struct FfiSequencerSetupNonBlocking *value;
+  enum OperationStatus error;
+} PointerResult_FfiSequencerSetupNonBlocking__OperationStatus;
+
+/**
  * Opaque pointer to the Wallet instance.
  *
  * This type is never instantiated directly - it's used as an opaque handle
@@ -802,9 +822,9 @@ typedef struct FfiCreateWalletOutput {
    */
   char *mnemonic;
   /**
-   * Read-only sequencer to send queries to.
+   * Sequencer setup, can be polled untill completion.
    */
-  struct SequencerServiceFFI *sequencer;
+  struct FfiSequencerSetupNonBlocking *sequencer_setup;
 } FfiCreateWalletOutput;
 
 typedef struct FfiBytes32 FfiNullifierPublicKey;
@@ -1353,6 +1373,14 @@ struct PointerResult_FfiVec_FfiEventRecord_____OperationStatus sequencer_ffi_que
                                                                                           const FfiHashType *tx_hash,
                                                                                           const FfiAccountId *program_account_id,
                                                                                           const FfiSelector *selector);
+
+struct PointerResult_FfiSequencerSetupNonBlocking__OperationStatus sequencer_ffi_spawn_sequencer_setup(const struct Runtime *runtime,
+                                                                                                       const char *config_path);
+
+bool sequencer_ffi_check_sequencer_task(struct FfiSequencerSetupNonBlocking *setup);
+
+struct PointerResult_SequencerServiceFFI__OperationStatus sequencer_ffi_fetch_sequencer_handle(struct FfiSequencerSetupNonBlocking *setup,
+                                                                                               const struct Runtime *runtime);
 
 /**
  * Create a new public account.

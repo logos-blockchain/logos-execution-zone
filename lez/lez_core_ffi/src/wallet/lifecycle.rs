@@ -12,8 +12,7 @@ use bip39::Mnemonic;
 use wallet::{WalletCore, cli::execute_keys_restoration};
 
 use crate::{
-    sequencer::{SequencerServiceFFI, api::lifecycle::setup_sequencer},
-    wallet::{
+    sequencer::api::lifecycle::setup_sequencer, sequencer_non_blocking::{FfiSequencerSetupNonBlocking, sequencer_ffi_spawn_sequencer_setup}, wallet::{
         block_on, c_str_to_string,
         error::{WalletFfiError, print_error},
         get_runtime,
@@ -31,8 +30,8 @@ pub struct FfiCreateWalletOutput {
     pub wallet: *mut WalletHandle,
     /// C compatible(null terminated) string.
     pub mnemonic: *mut c_char,
-    /// Read-only sequencer to send queries to.
-    pub sequencer: *mut SequencerServiceFFI,
+    /// Sequencer setup, can be polled untill completion.
+    pub sequencer_setup: *mut FfiSequencerSetupNonBlocking,
 }
 
 impl Default for FfiCreateWalletOutput {
@@ -40,7 +39,7 @@ impl Default for FfiCreateWalletOutput {
         Self {
             wallet: std::ptr::null_mut(),
             mnemonic: std::ptr::null_mut(),
-            sequencer: std::ptr::null_mut(),
+            sequencer_setup: std::ptr::null_mut(),
         }
     }
 }
@@ -147,7 +146,7 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
 
             let raw_pointer = CString::into_raw(c_mnemonic_string);
 
-            let res = match unsafe { setup_sequencer(runtime, sequencer_config_path) } {
+            let res = match unsafe { sequencer_ffi_spawn_sequencer_setup(runtime, sequencer_config_path) } {
                 Ok(res) => res,
                 Err(err) => {
                     print_error(format!("Failed to create read-only sequencer: {err:?}"));
@@ -158,7 +157,7 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
             FfiCreateWalletOutput {
                 wallet: handle,
                 mnemonic: raw_pointer,
-                sequencer: &raw mut res,
+                sequencer_setup: &raw mut res,
             }
         }
         Err(e) => {
