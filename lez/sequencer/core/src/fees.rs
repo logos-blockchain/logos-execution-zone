@@ -4,7 +4,7 @@ use chain_state::{
 };
 use common::transaction::LeeTransaction;
 use fee_core::{
-    assess::fee_reserve,
+    assess::{FeeTxView, fee_reserve},
     market,
     validity::{FeeError, validate_static_tx},
 };
@@ -54,14 +54,17 @@ pub fn screen(tx: &LeeTransaction, state: &lee::V03State) -> Result<()> {
     let FeeClass::Charged(view) = class else {
         return Ok(());
     };
-    let LeeTransaction::Public(public_tx) = tx else {
-        unreachable!("only public transactions classify as charged");
-    };
     let fee_state = opening_fee_state(state);
 
     validate_static_tx(&view, &fee_state)?;
 
-    let payer = view.payer().expect("a public view names its payer");
+    let (public_tx, payer) = match (tx, &view) {
+        // A private transaction's fee is paid inside its proof,
+        // so nothing is left to check against the payer.
+        (LeeTransaction::PrivacyPreserving(_), FeeTxView::Private { .. }) => return Ok(()),
+        (LeeTransaction::Public(public_tx), FeeTxView::Public { payer, .. }) => (public_tx, *payer),
+        _ => unreachable!("classify pairs each transaction kind with its own fee view"),
+    };
     if !lee::is_fee_authorized(public_tx.message(), public_tx.witness_set()) {
         return Err(Error::UnauthorizedPayer { payer });
     }
@@ -310,22 +313,52 @@ mod tests {
         assert!(settle_verdict(&tx, &state).is_err());
     }
 
-    /// Private transactions are fee-exempt under the interim policy, so
-    /// admission has nothing to check against one.
+    /// A private transaction is screened on its in-proof fee alone: the height
+    /// it priced at and the flat part of the fee. The proof covers the debit.
     #[test]
-    fn a_private_transaction_is_admitted_unscreened() {
+    fn a_private_transaction_is_screened_on_its_in_proof_fee() {
         use lee::privacy_preserving_transaction::{
             Message as PrivateMessage, PrivacyPreservingTransaction,
-            WitnessSet as PrivateWitnessSet, circuit::Proof,
+            WitnessSet as PrivateWitnessSet, circuit::Proof, message::PublicActionWithID,
+        };
+        use lee_core::{
+            execution_state::DeferredPublicEffect,
+            native_token::{Effect, NATIVE_TOKEN_PROGRAM_ID},
         };
 
         let state = initial_state(true);
-        let tx = LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
-            PrivateMessage::default(),
-            PrivateWitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![])),
-        ));
+        let flat = fee_core::assess::private_fee_required(0, 8, 8);
+        let private_tx = |paid: u128, fee_height: Option<u64>| {
+            LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+                PrivateMessage {
+                    public_actions: vec![PublicActionWithID {
+                        account_id: system_accounts::fee_inbox_account_id(),
+                        effects: vec![DeferredPublicEffect {
+                            program_account_id: NATIVE_TOKEN_PROGRAM_ID,
+                            shard_program_account_id: NATIVE_TOKEN_PROGRAM_ID,
+                            data: borsh::to_vec(&Effect::Credit(paid)).expect("serializes"),
+                        }],
+                    }],
+                    fee_height,
+                    ..PrivateMessage::default()
+                },
+                PrivateWitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![])),
+            ))
+        };
 
-        screen(&tx, &state).expect("private transactions are uncharged and unscreened");
+        screen(&private_tx(flat, Some(0)), &state).expect("a well-priced fee is admitted");
+        assert!(matches!(
+            screen(&private_tx(flat, None), &state),
+            Err(Error::Classification(ClassifyError::MissingPrivateFee))
+        ));
+        assert!(matches!(
+            screen(&private_tx(flat, Some(1)), &state),
+            Err(Error::FeeCore(FeeError::FeeHeightOutOfWindow { .. }))
+        ));
+        assert!(matches!(
+            screen(&private_tx(flat - 1, Some(0)), &state),
+            Err(Error::FeeCore(FeeError::PrivateFeeBelowRequired { .. }))
+        ));
     }
 
     /// SPECS §Overview worked example: at the genesis base fees of 8/8 the
