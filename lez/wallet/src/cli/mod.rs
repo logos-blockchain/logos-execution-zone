@@ -73,7 +73,7 @@ pub enum Command {
     /// `program_loader` program interaction subcommand (deploy/update a program).
     #[command(subcommand)]
     ProgramLoader(ProgramLoaderSubcommand),
-    /// Deploy a program binary using program_loader (convenience alias).
+    /// Deploy a program binary using `program_loader` (convenience alias).
     DeployProgram {
         /// Path to the program's compiled ELF binary.
         elf: PathBuf,

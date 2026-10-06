@@ -224,21 +224,19 @@ impl ProgramLoaderSubcommand {
 
         let binary = risc0_binfmt::ProgramBinary::decode(&bytecode)
             .map_err(crate::ExecutionFailureKind::InvalidProgramBinary)?;
-        let chunks: Vec<&[u8]> = binary
+        let num_segments = binary
             .user_elf
             .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
-            .collect();
-        let num_segments = chunks.len();
+            .count();
 
         let mut needs_store = false;
 
-        let header_id = match header {
-            Some(h) => resolve_public(&h, wallet_core)?,
-            None => {
-                let id = wallet_core.create_new_account_public(None).0;
-                needs_store = true;
-                id
-            }
+        let header_id = if let Some(h) = header {
+            resolve_public(&h, wallet_core)?
+        } else {
+            let id = wallet_core.create_new_account_public(None).0;
+            needs_store = true;
+            id
         };
 
         let segment_ids = match segments {
@@ -248,8 +246,8 @@ impl ProgramLoaderSubcommand {
                 .collect::<Result<Vec<_>>>()?,
             _ => {
                 needs_store = true;
-                (0..num_segments)
-                    .map(|_| wallet_core.create_new_account_public(None).0)
+                std::iter::repeat_with(|| wallet_core.create_new_account_public(None).0)
+                    .take(num_segments)
                     .collect()
             }
         };
@@ -258,27 +256,28 @@ impl ProgramLoaderSubcommand {
             wallet_core.store_persistent_data()?;
         }
 
-        let payer_id = match payer {
-            Some(p) => Some(resolve_public(&p, wallet_core)?),
-            None => {
-                let mut funded = None;
-                for (id, _) in wallet_core.storage().key_chain().public_account_ids() {
-                    if let Ok(balance) = wallet_core.get_account_balance(id).await {
-                        if balance > 0 {
-                            funded = Some(id);
-                            break;
-                        }
-                    }
+        let payer_id = if let Some(p) = payer {
+            Some(resolve_public(&p, wallet_core)?)
+        } else {
+            let mut funded = None;
+            for (id, _) in wallet_core.storage().key_chain().public_account_ids() {
+                if wallet_core
+                    .get_account_balance(id)
+                    .await
+                    .is_ok_and(|balance| balance > 0)
+                {
+                    funded = Some(id);
+                    break;
                 }
-                funded.or_else(|| {
-                    wallet_core
-                        .storage()
-                        .key_chain()
-                        .public_account_ids()
-                        .next()
-                        .map(|(id, _)| id)
-                })
             }
+            funded.or_else(|| {
+                wallet_core
+                    .storage()
+                    .key_chain()
+                    .public_account_ids()
+                    .next()
+                    .map(|(id, _)| id)
+            })
         };
 
         let account_id = ProgramLoader(wallet_core)
