@@ -11,10 +11,12 @@ use lee::{
     privacy_preserving_transaction::circuit::{ProgramWithDependencies, Proof, ProvingInput},
 };
 use lee_core::{
-    PrivacyPreservingCircuitOutput,
+    CommitmentSetDigest, DummyInput, PrivacyPreservingCircuitOutput, SharedSecretKey,
     account::{AccountId, ProgramShardSelector},
+    encryption::{Ciphertext, EncryptedAccountData, MlKem768EncapsulationKey, ViewTag},
     native_token::NATIVE_TOKEN_PROGRAM_ID,
 };
+use rand::{RngCore as _, rngs::OsRng};
 use test_guest_core::ChainCall;
 
 use super::PpeBenchResult;
@@ -22,6 +24,8 @@ use super::PpeBenchResult;
 const SENDER_ID: AccountId = AccountId::new([17; 32]);
 const RECIPIENT_ID: AccountId = AccountId::new([42; 32]);
 const AMOUNT_TO_TRANSFER: u128 = 5_000;
+/// Mirrors `wallet::CIPHERTEXT_PAD_SIZE`, so the padding cost here matches what a wallet pays.
+const CIPHERTEXT_PAD: u32 = 512;
 
 fn timed(
     label: String,
@@ -47,31 +51,68 @@ fn timed(
     }
 }
 
-pub fn run_native_transfer_in_ppe() -> PpeBenchResult {
+pub fn prove_native_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
+    prove_native_transfer_with_dummies(0)
+}
+
+fn random_bytes() -> [u8; 32] {
+    let mut bytes = [0; 32];
+    OsRng.fill_bytes(&mut bytes);
+    bytes
+}
+
+/// Dummy inputs as the wallet builds them: random seeds, a real ML-KEM epk toward a throwaway
+/// key, and a padded random ciphertext.
+fn dummy_inputs(count: usize) -> Vec<DummyInput> {
+    let ciphertext_len = usize::try_from(CIPHERTEXT_PAD).expect("pad size fits in usize");
+    std::iter::repeat_with(|| {
+        let throwaway_ek = MlKem768EncapsulationKey::from_seed(&random_bytes(), &random_bytes());
+        let (_, epk) = SharedSecretKey::encapsulate(&throwaway_ek);
+        let mut ciphertext = vec![0_u8; ciphertext_len];
+        OsRng.fill_bytes(&mut ciphertext);
+        let mut tag = [0_u8; 1];
+        OsRng.fill_bytes(&mut tag);
+        DummyInput {
+            nullifier_seed: random_bytes(),
+            commitment_seed: random_bytes(),
+            note: EncryptedAccountData {
+                ciphertext: Ciphertext::from_inner(ciphertext),
+                epk,
+                view_tag: ViewTag::from(tag[0]),
+            },
+            commitment_root: CommitmentSetDigest::default(),
+        }
+    })
+    .take(count)
+    .collect()
+}
+
+pub fn run_native_transfer_with_dummies(count: usize) -> PpeBenchResult {
     timed(
-        "native Transfer in PPE".to_owned(),
+        format!("native Transfer in PPE, {count} dummy inputs"),
         0,
-        prove_native_transfer_in_ppe,
+        || prove_native_transfer_with_dummies(count),
     )
 }
 
-pub fn prove_native_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
+fn prove_native_transfer_with_dummies(
+    count: usize,
+) -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
     let pwd = ProgramWithDependencies::native();
-
-    let sender_id = AccountId::new([1; 32]);
-    let recipient_id = AccountId::new([2; 32]);
-
-    let instruction = lee_core::native_token::Instruction::Transfer { amount: 5_000 };
-    let instruction_data = to_vec(&instruction)?;
+    let instruction = lee_core::native_token::Instruction::Transfer {
+        amount: AMOUNT_TO_TRANSFER,
+    };
 
     Ok(execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(recipient_id),
+                ProgramShardSelector::native_balance(SENDER_ID),
+                ProgramShardSelector::native_balance(RECIPIENT_ID),
             ],
-            signers: [sender_id, recipient_id].into(),
-            instruction_data,
+            signers: [SENDER_ID, RECIPIENT_ID].into(),
+            instruction_data: to_vec(&instruction)?,
+            dummy_inputs: dummy_inputs(count),
+            ciphertext_padding: Some(CIPHERTEXT_PAD),
             ..Default::default()
         },
         &pwd,

@@ -87,17 +87,23 @@ Proving time tracks the po2 bucket, not the raw cycle count: every 65,536 bucket
 
 ## PPE composition + chain-call sweep (`--ppe`)
 
-A native Transfer wrapped in the privacy circuit, then the `chain_caller` test program issuing N chained native Transfers. `proof_bytes` is the borsh-serialized `InnerReceipt` (`S_agg` in the fee model).
+A native Transfer wrapped in the privacy circuit, swept over the dummy-input count the wallet pads with, then the `chain_caller` test program issuing N chained native Transfers. `proof_bytes` is the borsh-serialized `InnerReceipt` (`S_agg` in the fee model).
 
 | Case | prove_ms | prove_s | proof_bytes |
 |---|---:|---:|---:|
-| native Transfer in PPE | 17,066 | 17.1 | 223,403 |
-| chain_caller depth=1 | 46,212 | 46.2 | 223,468 |
-| chain_caller depth=3 | 46,393 | 46.4 | 223,808 |
-| chain_caller depth=5 | 63,681 | 63.7 | 224,148 |
-| chain_caller depth=9 | 63,057 | 63.1 | 224,828 |
+| native Transfer in PPE, 0 dummy inputs | 18,020 | 18.0 | 223,403 |
+| native Transfer in PPE, 2 dummy inputs | 25,375 | 25.4 | 226,813 |
+| native Transfer in PPE, 3 dummy inputs | 25,222 | 25.2 | 228,518 |
+| native Transfer in PPE, 5 dummy inputs | 25,869 | 25.9 | 231,928 |
+| native Transfer in PPE, 7 dummy inputs | 25,299 | 25.3 | 235,338 |
+| chain_caller depth=1 | 45,871 | 45.9 | 223,468 |
+| chain_caller depth=3 | 44,805 | 44.8 | 223,808 |
+| chain_caller depth=5 | 64,017 | 64.0 | 224,148 |
+| chain_caller depth=9 | 65,390 | 65.4 | 224,828 |
 
-The callee here is the native token program, which has no guest to prove, so each additional hop adds only the circuit's own bookkeeping. Cost therefore steps with segment boundaries rather than rising per call: depths 1 and 3 cost the same, as do depths 5 and 9. A sweep against a guest-program callee would scale per hop instead; the repo no longer ships a non-native program this harness can chain into.
+`AccountManager::MAX_PRIVATE_ACCOUNTS` pads every privacy-preserving transaction to 7 private slots, so a real wallet transaction pays the padded cost, not the unpadded 18.0 s. Prove time steps once at the first occupied slot and is then flat: 2 and 7 slots cost the same within noise, because the step is a po2 boundary rather than per-slot work. `proof_bytes` is linear at 1,705 bytes per slot, a 1,088-byte ML-KEM epk plus the 512-byte padded ciphertext. Lowering the pad from 7 to 3 would therefore save no measurable proving time and about 3% of the payload.
+
+The chain-sweep callee here is the native token program, which has no guest to prove, so each additional hop adds only the circuit's own bookkeeping. Cost therefore steps with segment boundaries rather than rising per call: depths 1 and 3 cost the same, as do depths 5 and 9. A sweep against a guest-program callee would scale per hop instead; the repo no longer ships a non-native program this harness can chain into.
 
 `proof_bytes` grows by 85 bytes per chained call and is otherwise fixed: the outer succinct proof has constant size, and the journal carried alongside it scales with public state.
 
