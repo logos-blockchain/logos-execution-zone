@@ -5,7 +5,7 @@ use lee_core::{
 pub use referral_core as core;
 use referral_core::{
     Effect, Instruction, ORACLE_ACCOUNT_ID, Participant, ParticipantAuthorizationV1, Registry,
-    State, active_digest,
+    State, active_digest, cash_out_receipt,
 };
 
 pub fn plan(input: &PlanInput, instruction: Instruction) -> Plan {
@@ -117,6 +117,25 @@ pub fn plan(input: &PlanInput, instruction: Instruction) -> Plan {
             }
             plan.effect(participant, &Effect::Claim(claim));
         }
+        Instruction::CashOut {
+            node,
+            points,
+            blinding_factor,
+        } => {
+            let [participant, receipt] = input.accounts.as_slice() else {
+                panic!("CashOut requires the participant and its receipt account")
+            };
+            assert_authorized(participant);
+            assert!(points > 0, "nothing to cash out");
+            assert_eq!(
+                receipt.account_id,
+                cash_out_receipt(input.self_account_id, node, blinding_factor),
+                "the receipt account does not match the node and blinding factor"
+            );
+
+            plan.effect(participant, &Effect::CashOutBurn { node, points });
+            plan.effect(receipt, &Effect::Create(State::CashOut { points }));
+        }
     }
     plan
 }
@@ -160,9 +179,7 @@ pub fn apply(effect: Effect, pre_data: &ShardData) -> Option<ShardData> {
             Some(state.to_data())
         }
         Effect::Claim(claim) => {
-            let State::Participant(mut participant) = decode(pre_data) else {
-                panic!("participant state must be a participant")
-            };
+            let mut participant = decode_participant(pre_data);
             assert_eq!(
                 participant.referrer, claim.referrer,
                 "the claim names another referrer"
@@ -182,11 +199,28 @@ pub fn apply(effect: Effect, pre_data: &ShardData) -> Option<ShardData> {
             );
             Some(ShardData::empty())
         }
+        Effect::CashOutBurn { node, points } => {
+            let mut participant = decode_participant(pre_data);
+            assert_eq!(participant.node, node, "the cash out names another node");
+            assert_eq!(
+                participant.reward_balance, points,
+                "a cash out takes the full reward balance"
+            );
+            participant.reward_balance = 0;
+            Some(State::Participant(participant).to_data())
+        }
     }
 }
 
 fn decode(pre_data: &ShardData) -> State {
     State::decode(pre_data).expect("account holds a decodable referral state")
+}
+
+fn decode_participant(pre_data: &ShardData) -> Participant {
+    let State::Participant(participant) = decode(pre_data) else {
+        panic!("participant state must be a participant")
+    };
+    participant
 }
 
 fn decode_registry(pre_data: &ShardData) -> Registry {

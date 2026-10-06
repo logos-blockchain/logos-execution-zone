@@ -246,7 +246,7 @@ impl<'wallet> Referral<'wallet> {
                 let addressed = match state {
                     State::Child { referrer, .. } => referrer == me.node,
                     State::Credit { recipient_node, .. } => recipient_node == me.node,
-                    State::Registry(_) | State::Participant(_) => false,
+                    State::Registry(_) | State::Participant(_) | State::CashOut { .. } => false,
                 };
                 addressed.then_some((id, state))
             })
@@ -640,9 +640,12 @@ fn decode_registry(
     match State::decode(account.data.shard(program_account)) {
         None => Ok(Registry::default()),
         Some(State::Registry(registry)) => Ok(registry),
-        Some(State::Participant(_) | State::Child { .. } | State::Credit { .. }) => {
-            Err(ExecutionFailureKind::AccountDataError(ORACLE_ACCOUNT_ID))
-        }
+        Some(
+            State::Participant(_)
+            | State::Child { .. }
+            | State::Credit { .. }
+            | State::CashOut { .. },
+        ) => Err(ExecutionFailureKind::AccountDataError(ORACLE_ACCOUNT_ID)),
     }
 }
 
@@ -677,7 +680,8 @@ fn is_superseded(
                 Effect::Publish { .. }
                 | Effect::Create(_)
                 | Effect::Claim(_)
-                | Effect::Consume(_) => false,
+                | Effect::Consume(_)
+                | Effect::CashOutBurn { .. } => false,
             }
         }))
 }

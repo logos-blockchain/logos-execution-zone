@@ -6,6 +6,7 @@ use lee_core::{
     NullifierPublicKey,
     account::{AccountId, ShardData},
     encryption::ViewingPublicKey,
+    program::PdaSeed,
 };
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +18,8 @@ pub const ORACLE_ACCOUNT_ID: AccountId = AccountId::new([
 pub const PROTOTYPE_ORACLE_SIGNING_KEY: [u8; 32] = [11; 32];
 
 const AUTHORIZATION_DOMAIN: &[u8; 37] = b"LEZ/Referral/AuthorizeParticipant/v1\0";
+
+const CASH_OUT_DOMAIN: &[u8; 24] = b"LEZ/Referral/CashOut/v1\0";
 
 #[derive(
     Clone,
@@ -116,7 +119,7 @@ impl Participant {
                         .checked_add(amount)
                         .expect("credit total fits in u128");
                 }
-                State::Registry(_) | State::Participant(_) => {
+                State::Registry(_) | State::Participant(_) | State::CashOut { .. } => {
                     panic!("note does not hold a child or a credit")
                 }
             }
@@ -146,6 +149,9 @@ pub enum State {
     Credit {
         recipient_node: NodeId,
         amount: u128,
+    },
+    CashOut {
+        points: u128,
     },
 }
 
@@ -231,6 +237,11 @@ pub enum Instruction {
         active: BTreeSet<NodeId>,
     },
     Claim(Claim),
+    CashOut {
+        node: NodeId,
+        points: u128,
+        blinding_factor: [u8; 32],
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -250,6 +261,10 @@ pub enum Effect {
     Create(State),
     Claim(Claim),
     Consume(State),
+    CashOutBurn {
+        node: NodeId,
+        points: u128,
+    },
 }
 
 fn sha256(bytes: &[u8]) -> [u8; 32] {
@@ -264,6 +279,19 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
 #[must_use]
 pub fn active_digest(active: &BTreeSet<NodeId>) -> [u8; 32] {
     sha256(&borsh::to_vec(active).expect("borsh serialization is infallible"))
+}
+
+#[must_use]
+pub fn cash_out_receipt(
+    program_account: AccountId,
+    node: NodeId,
+    blinding_factor: [u8; 32],
+) -> AccountId {
+    let mut preimage = [0; 24 + 32 + 32];
+    preimage[..24].copy_from_slice(CASH_OUT_DOMAIN);
+    preimage[24..56].copy_from_slice(&node.to_bytes());
+    preimage[56..].copy_from_slice(&blinding_factor);
+    AccountId::for_public_pda(&program_account, &PdaSeed::new(sha256(&preimage)))
 }
 
 #[cfg(test)]
