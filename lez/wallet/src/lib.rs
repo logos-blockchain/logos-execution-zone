@@ -31,7 +31,7 @@ use lee_core::{
     program::InstructionData,
 };
 use log::warn;
-use sequencer_service_rpc::{RpcClient as _, SequencerClient};
+use sequencer_service_rpc::{ClientError, RpcClient as _, SequencerClient};
 use storage::Storage;
 use tokio::io::AsyncWriteExt as _;
 use url::Url;
@@ -119,6 +119,17 @@ pub enum ExecutionFailureKind {
     MultiSequencerTransactionSendError,
     #[error("Failed to join a task: {0}")]
     JoinError(#[from] tokio::task::JoinError),
+}
+
+pub struct BuiltPrivateTransaction {
+    pub transaction: PrivacyPreservingTransaction,
+    pub shared_secrets: Vec<SharedSecretKey>,
+    pub input_commitments: Vec<(AccountId, Commitment)>,
+}
+
+pub struct ChainView {
+    pub views: Vec<Account>,
+    pub effect_settled: bool,
 }
 
 pub struct WalletCore {
@@ -647,6 +658,31 @@ impl WalletCore {
             .await?)
     }
 
+    pub async fn observe_transaction(
+        &self,
+        views: &[ProgramShardSelector],
+        effects: &[Commitment],
+    ) -> Result<ChainView> {
+        Ok(self
+            .multi_sequencer_client
+            .metered_get(
+                async |client: &SequencerClient| -> Result<ChainView, ClientError> {
+                    let mut fetched = Vec::with_capacity(views.len());
+                    for selector in views {
+                        let mut account = client.get_account_view(*selector).await?;
+                        account.data.shards.retain(|_, shard| !shard.is_empty());
+                        fetched.push(account);
+                    }
+
+                    Ok(ChainView {
+                        views: fetched,
+                        effect_settled: effect_settled(client, effects).await?,
+                    })
+                },
+            )
+            .await?)
+    }
+
     /// Get public account.
     pub async fn get_account_public(&self, account_id: AccountId) -> Result<Account> {
         Ok(self
@@ -811,6 +847,29 @@ impl WalletCore {
         program: &ProgramWithDependencies,
         tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
+        let built = self
+            .build_privacy_preserving_tx_with_pre_check(
+                accounts,
+                instruction_data,
+                program,
+                tx_pre_check,
+            )
+            .await?;
+
+        Ok((
+            self.submit_privacy_preserving_transaction(built.transaction)
+                .await?,
+            built.shared_secrets,
+        ))
+    }
+
+    pub async fn build_privacy_preserving_tx_with_pre_check(
+        &self,
+        accounts: Vec<AccountMention>,
+        instruction_data: InstructionData,
+        program: &ProgramWithDependencies,
+        tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
+    ) -> Result<BuiltPrivateTransaction, ExecutionFailureKind> {
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
         tx_pre_check(&acc_manager.selected_shards())?;
@@ -822,6 +881,7 @@ impl WalletCore {
             );
         }
 
+        let input_commitments = acc_manager.private_input_commitments();
         let private_account_keys = acc_manager.private_account_keys();
         let input = ProvingInput {
             shard_selectors: acc_manager.shard_selectors(),
@@ -854,20 +914,27 @@ impl WalletCore {
                 proof,
             );
 
-        let tx = PrivacyPreservingTransaction::new(message, witness_set);
-
         let shared_secrets: Vec<_> = private_account_keys
             .into_iter()
             .map(|keys| keys.ssk)
             .collect();
 
-        let call_res = first_success_or_error(
+        Ok(BuiltPrivateTransaction {
+            transaction: PrivacyPreservingTransaction::new(message, witness_set),
+            shared_secrets,
+            input_commitments,
+        })
+    }
+
+    pub async fn submit_privacy_preserving_transaction(
+        &self,
+        tx: PrivacyPreservingTransaction,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        first_success_or_error(
             self.multi_sequencer_client
                 .metered_send_transaction(LeeTransaction::PrivacyPreserving(tx))
                 .await,
-        );
-
-        Ok((call_res?, shared_secrets))
+        )
     }
 
     pub async fn send_pub_tx(
@@ -1220,6 +1287,17 @@ fn first_success_or_error(
         }
     }
     Err(first_error.unwrap_or(ExecutionFailureKind::MultiSequencerTransactionSendError))
+}
+
+async fn effect_settled(
+    client: &SequencerClient,
+    effects: &[Commitment],
+) -> Result<bool, ClientError> {
+    if effects.is_empty() {
+        return Ok(false);
+    }
+    let (proofs, _root) = client.get_proofs_and_root(effects.to_vec()).await?;
+    Ok(proofs.len() == effects.len() && proofs.iter().all(Option::is_some))
 }
 
 fn decrypt_note_at(
