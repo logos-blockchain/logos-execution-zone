@@ -16,16 +16,11 @@ use crate::{
 
 // Helpers
 
-#[must_use]
-pub fn sequencer_sign_key_for_testing() -> lee::PrivateKey {
-    lee::PrivateKey::try_new([37; 32]).unwrap()
-}
-
 /// The test block-producer's reward account.
 #[must_use]
 pub fn producer_account_for_testing() -> AccountId {
     AccountId::from(&lee::PublicKey::new_from_private_key(
-        &sequencer_sign_key_for_testing(),
+        &lee::PrivateKey::try_new([37; 32]).unwrap(),
     ))
 }
 
@@ -84,9 +79,7 @@ pub fn produce_dummy_block(
     transactions.push(LeeTransaction::Public(fee_invocation(
         fee_core::BlockFeeSummary::default(),
         0,
-        lee::AccountId::from(&lee::PublicKey::new_from_private_key(
-            &sequencer_sign_key_for_testing(),
-        )),
+        producer_account_for_testing(),
     )));
     transactions.push(LeeTransaction::Public(clock_invocation(
         id,
@@ -100,7 +93,7 @@ pub fn produce_dummy_block(
         transactions,
     };
 
-    block_data.into_pending_block(&sequencer_sign_key_for_testing())
+    block_data.into_pending_block()
 }
 
 #[must_use]

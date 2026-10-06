@@ -365,10 +365,6 @@ body {
   word-break: break-all;
 }
 
-.signature {
-  font-size: 0.75rem;
-}
-
 /* Transactions list */
 .block-transactions,
 .account-transactions {
