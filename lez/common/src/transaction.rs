@@ -424,32 +424,16 @@ fn validate_no_restricted_account_modification(
         .into_iter()
         .chain(system_accounts::fee_account_ids());
     for account_id in restricted_modification_accounts {
-        if account_id == fee_inbox && matches!(tx, LeeTransaction::PrivacyPreserving(_)) {
-            validate_only_credits_account(state, diff, account_id)?;
-        } else {
+        let in_proof_fee = account_id == fee_inbox
+            && matches!(tx, LeeTransaction::PrivacyPreserving(_))
+            && diff.public_diff().get(&account_id).is_some_and(|post| {
+                native_balance_only_increased(&state.get_account_by_id(account_id), post)
+            });
+        if !in_proof_fee {
             validate_doesnt_modify_account(state, diff, account_id)?;
         }
     }
     Ok(())
-}
-
-fn validate_only_credits_account(
-    state: &V03State,
-    diff: &ValidatedStateDiff,
-    account_id: AccountId,
-) -> Result<(), lee::error::LeeError> {
-    let pre = state.get_account_by_id(account_id);
-    if diff
-        .public_diff()
-        .get(&account_id)
-        .is_some_and(|post| *post != pre && !native_balance_only_increased(&pre, post))
-    {
-        Err(lee::error::LeeError::InvalidInput(format!(
-            "Transaction modifies restricted system account {account_id} beyond a credit"
-        )))
-    } else {
-        Ok(())
-    }
 }
 
 fn validate_doesnt_modify_account(
