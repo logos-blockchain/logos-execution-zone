@@ -36,6 +36,10 @@ pub enum OperationKind {
         participant: AccountId,
         notes: Vec<AccountId>,
     },
+    CashOut {
+        participant: AccountId,
+        index: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,7 +97,9 @@ impl OperationKind {
     #[must_use]
     pub const fn participant(&self) -> AccountId {
         match self {
-            Self::Register { participant } | Self::Claim { participant, .. } => *participant,
+            Self::Register { participant }
+            | Self::Claim { participant, .. }
+            | Self::CashOut { participant, .. } => *participant,
         }
     }
 }

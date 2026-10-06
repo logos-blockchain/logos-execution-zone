@@ -29,6 +29,8 @@ risc0-zkos-v1compat.workspace = true
 bip39.workspace = true
 rpassword = "7"
 zeroize.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
 
 anyhow.workspace = true
 borsh.workspace = true

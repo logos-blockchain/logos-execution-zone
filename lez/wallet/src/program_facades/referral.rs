@@ -1,17 +1,22 @@
 use std::collections::{BTreeSet, HashMap};
 
 use common::{HashType, transaction::LeeTransaction};
+use hkdf::Hkdf;
 use lee::{
     Account, AccountId, PrivacyPreservingTransaction,
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
 use lee_core::{
-    Commitment, PrivateAccountKind, account::ProgramShardSelector, program::InstructionData,
+    Commitment, NullifierSecretKey, PrivateAccountKind,
+    account::{ProgramShardSelector, ShardData},
+    program::InstructionData,
 };
 use referral_core::{
     Claim, Effect, Instruction, Invitation, NodeId, ORACLE_ACCOUNT_ID, Participant,
-    ParticipantAuthorizationV1, Registry, State, active_digest, ed25519_dalek::Signature,
+    ParticipantAuthorizationV1, Registry, State, active_digest, cash_out_receipt,
+    ed25519_dalek::Signature,
 };
+use sha2::Sha256;
 
 use crate::{
     AccountIdentity, ExecutionFailureKind, WalletCore,
@@ -25,9 +30,55 @@ use crate::{
     },
 };
 
+const BLINDING_FACTOR_SALT: &[u8; 31] = b"LEZ/Referral/CashOutFactors/v1\0";
+
 pub struct Referral<'wallet> {
     wallet: &'wallet mut WalletCore,
     program: ProgramWithDependencies,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Opening {
+    pub program_account: AccountId,
+    pub node: NodeId,
+    pub blinding_factor: [u8; 32],
+    pub account_id: AccountId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Receipt {
+    pub index: u64,
+    pub account_id: AccountId,
+    pub points: u128,
+}
+
+struct ReceiptKeys {
+    program_account: AccountId,
+    participant: AccountId,
+    node: NodeId,
+    nsk: NullifierSecretKey,
+}
+
+impl ReceiptKeys {
+    fn opening(&self, index: u64) -> Opening {
+        let mut blinding_factor = [0; 32];
+        Hkdf::<Sha256>::new(Some(BLINDING_FACTOR_SALT), &self.nsk)
+            .expand_multi_info(
+                &[
+                    self.program_account.as_ref(),
+                    self.participant.as_ref(),
+                    &index.to_le_bytes(),
+                ],
+                &mut blinding_factor,
+            )
+            .expect("32 bytes is a valid HKDF-SHA256 output length");
+        Opening {
+            program_account: self.program_account,
+            node: self.node,
+            blinding_factor,
+            account_id: cash_out_receipt(self.program_account, self.node, blinding_factor),
+        }
+    }
 }
 
 impl<'wallet> Referral<'wallet> {
@@ -292,6 +343,49 @@ impl<'wallet> Referral<'wallet> {
             .await
     }
 
+    pub fn opening(
+        &self,
+        participant: AccountId,
+        index: u64,
+    ) -> Result<Opening, ExecutionFailureKind> {
+        Ok(self
+            .receipt_keys(self.program_account(), participant)?
+            .opening(index))
+    }
+
+    pub async fn receipts(
+        &self,
+        participant: AccountId,
+    ) -> Result<Vec<Receipt>, ExecutionFailureKind> {
+        let keys = self.receipt_keys(self.program_account(), participant)?;
+        Ok(self.scan(&keys).await?.0)
+    }
+
+    pub async fn cash_out(
+        &mut self,
+        reference: [u8; 32],
+        participant: AccountId,
+    ) -> Result<(HashType, SubmissionStatus), ExecutionFailureKind> {
+        let recorded = self
+            .wallet
+            .storage()
+            .referral()
+            .operation(reference)
+            .map(|recorded| recorded.operation.clone());
+        let index = match recorded {
+            Some(OperationKind::CashOut {
+                participant: holder,
+                index,
+            }) if holder == participant => index,
+            _ => {
+                let keys = self.receipt_keys(self.program_account(), participant)?;
+                self.scan(&keys).await?.1
+            }
+        };
+        self.submit(reference, OperationKind::CashOut { participant, index })
+            .await
+    }
+
     pub async fn submit(
         &mut self,
         reference: [u8; 32],
@@ -365,6 +459,21 @@ impl<'wallet> Referral<'wallet> {
         else {
             return Ok(SubmissionStatus::Rejected);
         };
+        if recorded.status != SubmissionStatus::Settled
+            && let OperationKind::CashOut { participant, index } = recorded.operation
+        {
+            let receipt = self
+                .receipt_keys(recorded.program_account, participant)?
+                .opening(index)
+                .account_id;
+            let shard = self
+                .receipt_shard(recorded.program_account, receipt)
+                .await?;
+            return match cash_out_transition(recorded.status, &shard, self.is_outspent(&recorded)) {
+                Some(status) => self.set_status(reference, status),
+                None => Ok(recorded.status),
+            };
+        }
         if recorded.status.is_conclusive() {
             return Ok(recorded.status);
         }
@@ -401,6 +510,9 @@ impl<'wallet> Referral<'wallet> {
             OperationKind::Register { participant } => self.register_request(*participant).await?,
             OperationKind::Claim { participant, notes } => {
                 self.claim_request(*participant, notes).await?
+            }
+            OperationKind::CashOut { participant, index } => {
+                self.cash_out_request(*participant, *index).await?
             }
         };
 
@@ -517,6 +629,86 @@ impl<'wallet> Referral<'wallet> {
         ))
     }
 
+    async fn cash_out_request(
+        &self,
+        participant: AccountId,
+        index: u64,
+    ) -> Result<(Vec<AccountMention>, InstructionData), ExecutionFailureKind> {
+        let program_account = self.program_account();
+        let points = self.participant(participant)?.reward_balance;
+        if points == 0 {
+            return Err(conflict("nothing to cash out"));
+        }
+        let keys = self.receipt_keys(program_account, participant)?;
+        if self.scan(&keys).await?.1 != index {
+            return Err(conflict(
+                "a cash out takes the participant's first free receipt index",
+            ));
+        }
+        let opening = keys.opening(index);
+
+        Ok((
+            vec![
+                self.own_private(participant)?
+                    .select_program_shard(program_account),
+                AccountIdentity::PublicNoSign(opening.account_id)
+                    .select_program_shard(program_account),
+            ],
+            instruction_data(Instruction::CashOut {
+                node: opening.node,
+                points,
+                blinding_factor: opening.blinding_factor,
+            }),
+        ))
+    }
+
+    async fn scan(&self, keys: &ReceiptKeys) -> Result<(Vec<Receipt>, u64), ExecutionFailureKind> {
+        let mut receipts = Vec::new();
+        let mut index = 0;
+        loop {
+            let account_id = keys.opening(index).account_id;
+            let shard = self.receipt_shard(keys.program_account, account_id).await?;
+            if shard.is_empty() {
+                return Ok((receipts, index));
+            }
+            if let Some(State::CashOut { points }) = State::decode(&shard) {
+                receipts.push(Receipt {
+                    index,
+                    account_id,
+                    points,
+                });
+            }
+            index = index.checked_add(1).expect("cash-out index fits in u64");
+        }
+    }
+
+    fn receipt_keys(
+        &self,
+        program_account: AccountId,
+        participant: AccountId,
+    ) -> Result<ReceiptKeys, ExecutionFailureKind> {
+        let found = self.found(participant)?;
+        Ok(ReceiptKeys {
+            program_account,
+            participant,
+            node: decode_participant(found.account, program_account)?.node,
+            nsk: found.key_chain.private_key_holder.nullifier_secret_key(),
+        })
+    }
+
+    async fn receipt_shard(
+        &self,
+        program_account: AccountId,
+        receipt: AccountId,
+    ) -> Result<ShardData, ExecutionFailureKind> {
+        let account = self
+            .wallet
+            .get_account_view(ProgramShardSelector::new(receipt, program_account))
+            .await
+            .map_err(ExecutionFailureKind::SequencerError)?;
+        Ok(account.data.shard(program_account).clone())
+    }
+
     fn deliver(
         &self,
         participant: AccountId,
@@ -612,10 +804,7 @@ impl<'wallet> Referral<'wallet> {
     }
 
     fn participant(&self, account: AccountId) -> Result<Participant, ExecutionFailureKind> {
-        let Ok(State::Participant(participant)) = self.state(account) else {
-            return Err(conflict("this participant is not registered yet"));
-        };
-        Ok(participant)
+        decode_participant(self.found(account)?.account, self.program_account())
     }
 
     fn own_private(&self, account: AccountId) -> Result<AccountIdentity, ExecutionFailureKind> {
@@ -631,6 +820,17 @@ impl<'wallet> Referral<'wallet> {
             .private_account(account)
             .ok_or(ExecutionFailureKind::KeyNotFoundError)
     }
+}
+
+fn decode_participant(
+    account: &Account,
+    program_account: AccountId,
+) -> Result<Participant, ExecutionFailureKind> {
+    let Some(State::Participant(participant)) = State::decode(account.data.shard(program_account))
+    else {
+        return Err(conflict("this participant is not registered yet"));
+    };
+    Ok(participant)
 }
 
 fn decode_registry(
@@ -684,6 +884,21 @@ fn is_superseded(
                 | Effect::CashOutBurn { .. } => false,
             }
         }))
+}
+
+fn cash_out_transition(
+    recorded: SubmissionStatus,
+    receipt: &ShardData,
+    outspent: bool,
+) -> Option<SubmissionStatus> {
+    let status = if matches!(State::decode(receipt), Some(State::CashOut { .. })) {
+        SubmissionStatus::Settled
+    } else if outspent || !receipt.is_empty() {
+        SubmissionStatus::Rejected
+    } else {
+        SubmissionStatus::Pending
+    };
+    (status != recorded).then_some(status)
 }
 
 fn effect_commitments(transaction: &LeeTransaction) -> Vec<Commitment> {
