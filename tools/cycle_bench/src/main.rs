@@ -473,6 +473,27 @@ fn fee_refund_accounts() -> Vec<Fixture> {
     ]
 }
 
+/// A shard-write of `bytes` bytes. The payload is the cycle dial: the built-in programs left in
+/// the repo all sit under 30k cycles, too narrow a range to condition the calibration fit.
+fn data_writer_case(label: &'static str, bytes: usize) -> Result<Case> {
+    let program = test_programs::data_writer();
+    let program_account_id = AccountId::from_builtin_program(program.id());
+    let fixtures = vec![Fixture::new(
+        AccountId::new([83; 32]),
+        true,
+        program_account_id,
+        ShardData::default(),
+    )];
+    Case::new(
+        "data_writer",
+        label,
+        program,
+        program_account_id,
+        fixtures,
+        &vec![7_u8; bytes],
+    )
+}
+
 fn clock_account(account_id: AccountId, block_id: BlockId) -> Fixture {
     Fixture::new(
         account_id,
@@ -560,6 +581,8 @@ fn main() -> Result<()> {
                 amount: FEE_REFUND_AMOUNT,
             },
         )?,
+        data_writer_case("Write 4 KiB", 4 * 1024)?,
+        data_writer_case("Write 64 KiB", 64 * 1024)?,
     ];
 
     let mut results: Vec<BenchResult> = cases
