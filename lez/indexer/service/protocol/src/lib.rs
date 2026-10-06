@@ -296,6 +296,8 @@ pub struct PrivacyPreservingMessage {
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: ValidityWindow,
     pub timestamp_validity_window: ValidityWindow,
+    /// The fee-state height the in-proof fee was priced at.
+    pub fee_height: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

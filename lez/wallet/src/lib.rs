@@ -831,10 +831,21 @@ impl WalletCore {
             dummy_inputs: acc_manager.dummy_inputs_default(),
             ciphertext_padding: Some(CIPHERTEXT_PAD_SIZE),
         };
+        let fee = self
+            .private_fee_transfer(acc_manager.private_fee_payer_account_id().ok_or_else(|| {
+                ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
+                    "Privacy-preserving transaction has no account to pay its fee".to_owned(),
+                ))
+            })?)
+            .await?;
 
         let program = program.clone();
         let (output, proof) = tokio::task::spawn_blocking(move || {
-            lee::privacy_preserving_transaction::circuit::execute_and_prove(input, &program)
+            lee::privacy_preserving_transaction::circuit::execute_and_prove_with_fee(
+                input,
+                &program,
+                Some(fee),
+            )
         })
         .await??;
 
@@ -868,6 +879,30 @@ impl WalletCore {
         );
 
         Ok((call_res?, shared_secrets))
+    }
+
+    /// The in-proof fee `payer` pays for a privacy-preserving transaction, priced at the head
+    /// fee state. Guest-evaluated public effects are assumed to cost no cycles until a dry-run
+    /// estimate exists; a transaction with such effects needs a higher amount.
+    async fn private_fee_transfer(
+        &self,
+        payer: AccountId,
+    ) -> Result<lee_core::FeeTransfer, ExecutionFailureKind> {
+        let quote = self
+            .multi_sequencer_client
+            .metered_get(async |client: &SequencerClient| client.get_fee_state().await)
+            .await
+            .map_err(|err| ExecutionFailureKind::SequencerError(err.into()))?;
+        Ok(lee_core::FeeTransfer {
+            payer,
+            recipient: system_accounts::fee_inbox_account_id(),
+            amount: fee_core::assess::private_fee_required(
+                0,
+                quote.base_fee_exec,
+                quote.base_fee_stor,
+            ),
+            height: quote.height,
+        })
     }
 
     pub async fn send_pub_tx(

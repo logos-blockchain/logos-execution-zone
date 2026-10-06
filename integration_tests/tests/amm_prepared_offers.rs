@@ -12,11 +12,13 @@ use integration_tests::{
     TestContext,
     amm::{PoolFixture, amm_program_id, assert_holdings, assert_pool_record, token_program_id},
     fetch_privacy_preserving_tx, new_account, private_mention, public_mention,
-    restored_private_account, sync_private, token_send, verify_commitment_is_in_state,
-    wait_for_inclusion, wait_until,
+    restored_private_account, sync_private, token_send,
+    utils::{private_fee_transfer, send},
+    verify_commitment_is_in_state, wait_for_inclusion, wait_until,
 };
 use lee::{
-    AccountId, PrivacyPreservingTransaction, ProgramShardSelector, ProvingInput, execute_and_prove,
+    AccountId, PrivacyPreservingTransaction, ProgramShardSelector, ProvingInput,
+    execute_and_prove_with_fee,
     privacy_preserving_transaction::{
         circuit::ProgramWithDependencies, message::Message, witness_set::WitnessSet,
     },
@@ -31,6 +33,8 @@ use wallet::{AccountIdentity, program_facades::amm::Amm};
 const SUPPLY: u128 = 10_000;
 const OFFER_IN: u128 = 100;
 const OFFER_OUT: u128 = 75;
+/// Native funds per trader, enough for one in-proof fee at the genesis base fees.
+const FEE_FUNDS: u128 = 10_000_000;
 
 struct Trader {
     input: AccountId,
@@ -96,7 +100,7 @@ async fn prepare_offer(
         .context("the trader's input note is not on chain")?;
     let spent_keys = &spent.key_chain.private_key_holder;
 
-    let (output, proof) = execute_and_prove(
+    let (output, proof) = execute_and_prove_with_fee(
         ProvingInput {
             shard_selectors: vec![
                 ProgramShardSelector::new(pool.pool_id, amm_program_id()),
@@ -139,6 +143,8 @@ async fn prepare_offer(
             amm_program_id(),
             HashMap::from([(token_program_id(), programs::token())]),
         ),
+        // The spent note also carries the native balance that pays the fee.
+        Some(private_fee_transfer(ctx.sequencer_client(), trader.input).await?),
     )?;
     let message = Message::from_circuit_output(vec![], output);
     let witness_set = WitnessSet::for_message(&message, proof, &[]);
@@ -171,6 +177,15 @@ async fn settle(
 async fn fund_trader(ctx: &mut TestContext, from: AccountId) -> Result<Trader> {
     let input = new_account(ctx, true, None).await?;
     let output = new_account(ctx, true, None).await?;
+    // Native funds for the offer's in-proof fee, from a genesis account.
+    let funder = ctx.existing_public_accounts()[0];
+    send(
+        ctx,
+        public_mention(funder),
+        private_mention(input),
+        FEE_FUNDS,
+    )
+    .await?;
     token_send(ctx, public_mention(from), private_mention(input), OFFER_IN).await?;
     let commitment = ctx
         .wallet()

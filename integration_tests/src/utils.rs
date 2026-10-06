@@ -44,6 +44,22 @@ where
         .with_context(|| format!("Timed out waiting for {what}"))?
 }
 
+/// The in-proof fee `payer` pays for a hand-built privacy-preserving transaction.
+///
+/// Priced at the head fee state with no guest-evaluated public effects.
+pub async fn private_fee_transfer(
+    client: &SequencerClient,
+    payer: AccountId,
+) -> Result<lee_core::FeeTransfer> {
+    let quote = client.get_fee_state().await?;
+    Ok(lee_core::FeeTransfer {
+        payer,
+        recipient: system_accounts::fee_inbox_account_id(),
+        amount: fee_core::assess::private_fee_required(0, quote.base_fee_exec, quote.base_fee_stor),
+        height: quote.height,
+    })
+}
+
 /// Waits until the sequencer reports `tx_hash` in a block.
 pub async fn wait_for_inclusion(ctx: &TestContext, tx_hash: HashType) -> Result<()> {
     wait_until(&format!("transaction {tx_hash} to be included"), || async {

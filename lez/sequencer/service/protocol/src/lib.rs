@@ -11,26 +11,32 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr)]
 pub struct ChannelId(pub [u8; 32]);
 
-/// The fee market priced off the head state, for wallets sizing `max_fee`.
-///
-/// TODO: Move slop struct description into by-field descriptions.
-/// The next-block figures are a band rather than an estimate: the block being
-/// filled is not observable at query time, so the quote steps the market once
-/// at an empty block (floor) and once at a block filled to its caps (ceiling);
-/// every possible next-block base fee lies between them. Fee-exempt classes
-/// (private transactions, deployments) pay nothing under the interim policy
-/// and are not quoted.
+/// The fee market priced off the head state: what a public transaction sizes
+/// its `max_fee` against, and what a private transaction prices its in-proof
+/// fee at.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FeeStateQuote {
-    /// The block height the quoted state settled at, for staleness checks.
+    /// The height of the quoted fee state. A private transaction commits to it
+    /// as its `fee_height`; a public one uses it for staleness checks.
     pub height: u64,
+    /// Execution base fee at `height`, per cycle.
     pub base_fee_exec: u64,
+    /// Storage base fee at `height`, per byte.
     pub base_fee_stor: u64,
+    /// Lowest possible execution base fee of the next block: the market stepped
+    /// once at an empty block. The block being filled is not observable at
+    /// query time, so the next-block figures are a band, not an estimate.
     pub next_base_fee_exec_floor: u64,
+    /// Highest possible execution base fee of the next block: the market
+    /// stepped once at a block filled to its caps.
     pub next_base_fee_exec_ceiling: u64,
+    /// Lowest possible storage base fee of the next block.
     pub next_base_fee_stor_floor: u64,
+    /// Highest possible storage base fee of the next block.
     pub next_base_fee_stor_ceiling: u64,
+    /// Per-block execution gas cap; no transaction may declare more.
     pub max_gas_exec: u64,
+    /// Per-block storage gas cap; no transaction may carry more bytes.
     pub max_gas_stor: u64,
 }
 

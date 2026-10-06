@@ -8,14 +8,15 @@ use std::{collections::HashMap, time::Duration};
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, get_account, utils::sync_private,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, get_account,
+    utils::{private_fee_transfer, sync_private},
     verify_commitment_is_in_state,
 };
 use lee::{
     AccountId, PrivacyPreservingTransaction, PrivateKey, ProgramShardSelector, ProvingInput,
     PublicKey,
     privacy_preserving_transaction::{
-        circuit::{ProgramWithDependencies, execute_and_prove},
+        circuit::{ProgramWithDependencies, execute_and_prove_with_fee},
         message::Message,
         witness_set::WitnessSet,
     },
@@ -59,7 +60,7 @@ async fn fund_private_pda(
     let instruction = Program::serialize_instruction(NativeInstruction::Transfer { amount })
         .context("failed to serialize the native transfer instruction")?;
 
-    let (output, proof) = execute_and_prove(
+    let (output, proof) = execute_and_prove_with_fee(
         ProvingInput {
             shard_selectors: vec![
                 ProgramShardSelector::native_balance(sender),
@@ -82,6 +83,7 @@ async fn fund_private_pda(
             ..Default::default()
         },
         &ProgramWithDependencies::native(),
+        Some(private_fee_transfer(&wallet.helm_owned(), sender).await?),
     )
     .map_err(|e| anyhow::anyhow!("circuit proving failed: {e}"))?;
 
