@@ -8,21 +8,63 @@ use kameo::{
     actor::ActorRef,
     message::{Context, Message},
 };
-pub use sequencer_actors_common::mock::{Checkpoint, Replace, ReplaceReply};
+pub use sequencer_actors_common::mock::ReplaceReply;
+use sharding_pool_actor::ShardingKey;
 
+pub use self::canned_channel::{CannedChannel, SharedChannel, checkpoint_at, mock_msg_of};
 use crate::{
     BedrockActorTrait, Result,
     error::Error,
     protocol::{
-        AccreditedKeys, BoxStream, ChangeChannelConfig, CheckChannelExists, CheckIsOurTurn,
-        CreateChannel, GetAccreditedKeys, GetChannelId, GetChannelIdReply, GetChannelTipMessageId,
-        GetChannelTipSlot, MsgId, PrepareConfig, PreparedChannelConfig, PublishBlock,
-        PublishOutcome, ReadChannel, Slot, ZoneMessage,
+        AccreditedKeys, BoxStream, ChangeChannelConfig, ChannelId, CheckChannelExists,
+        CheckIsOurTurn, CreateChannel, GetAccreditedKeys, GetChannelTipMessageId,
+        GetChannelTipSlot, InitializeChannelPublisher, MsgId, PrepareConfig, PreparedConfig,
+        PublishBlock, PublishOutcome, ReadChannel, Slot, ZoneMessage,
     },
 };
 
+mod canned_channel;
+
+/// Special message to trigger mockall's checkpoint mechanism.
+///
+/// Carries `channel_id` to be routable through [`sharding_pool_actor::ShardingPoolActor`].
+pub struct Checkpoint {
+    pub channel_id: ChannelId,
+}
+
+impl ShardingKey for Checkpoint {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
+
+/// Special message to [`std::mem::replace()`] the mock serving `channel_id` with a new one,
+/// returning the old one.
+///
+/// Carries `channel_id` to be routable through [`sharding_pool_actor::ShardingPoolActor`].
+pub struct Replace {
+    pub channel_id: ChannelId,
+    pub mock: MockBedrockActor,
+}
+
+impl ShardingKey for Replace {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
+
 mockall::mock! {
     pub BedrockActor {
+        pub fn handle_initialize_channel_publisher(
+            &mut self,
+            msg: InitializeChannelPublisher,
+            ctx: &mut Context<Self, Result<bool>>
+        ) -> Result<bool>;
+
         pub fn handle_create_channel(
             &mut self,
             msg: CreateChannel,
@@ -38,8 +80,8 @@ mockall::mock! {
         pub fn handle_prepare_config(
             &mut self,
             msg: PrepareConfig,
-            ctx: &mut Context<Self, Result<PreparedChannelConfig>>
-        ) -> Result<PreparedChannelConfig>;
+            ctx: &mut Context<Self, Result<PreparedConfig>>
+        ) -> Result<PreparedConfig>;
 
         pub fn handle_change_channel_config(
             &mut self,
@@ -53,17 +95,11 @@ mockall::mock! {
             ctx: &mut Context<Self, Result<bool>>
         ) -> Result<bool>;
 
-        pub fn handle_get_channel_id(
-            &mut self,
-            msg: GetChannelId,
-            ctx: &mut Context<Self, GetChannelIdReply>
-        ) -> GetChannelIdReply;
-
         pub fn handle_check_is_our_turn(
             &mut self,
             msg: CheckIsOurTurn,
-            ctx: &mut Context<Self, bool>
-        ) -> bool;
+            ctx: &mut Context<Self, Result<bool>>
+        ) -> Result<bool>;
 
         pub fn handle_get_accredited_keys(
             &mut self,
@@ -107,23 +143,38 @@ impl Message<Checkpoint> for MockBedrockActor {
 
     async fn handle(
         &mut self,
-        Checkpoint: Checkpoint,
+        Checkpoint { channel_id: _ }: Checkpoint,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.checkpoint();
     }
 }
 
-impl Message<Replace<Self>> for MockBedrockActor {
+impl Message<Replace> for MockBedrockActor {
     type Reply = ReplaceReply<Self>;
 
     async fn handle(
         &mut self,
-        Replace { mock }: Replace<Self>,
+        Replace {
+            channel_id: _,
+            mock,
+        }: Replace,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let old_mock = std::mem::replace(self, mock);
         ReplaceReply { old_mock }
+    }
+}
+
+impl Message<InitializeChannelPublisher> for MockBedrockActor {
+    type Reply = Result<bool>;
+
+    async fn handle(
+        &mut self,
+        msg: InitializeChannelPublisher,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_initialize_channel_publisher(msg, ctx)
     }
 }
 
@@ -152,7 +203,7 @@ impl Message<PublishBlock> for MockBedrockActor {
 }
 
 impl Message<PrepareConfig> for MockBedrockActor {
-    type Reply = Result<PreparedChannelConfig>;
+    type Reply = Result<PreparedConfig>;
 
     async fn handle(
         &mut self,
@@ -187,20 +238,8 @@ impl Message<CheckChannelExists> for MockBedrockActor {
     }
 }
 
-impl Message<GetChannelId> for MockBedrockActor {
-    type Reply = GetChannelIdReply;
-
-    async fn handle(
-        &mut self,
-        msg: GetChannelId,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_get_channel_id(msg, ctx)
-    }
-}
-
 impl Message<CheckIsOurTurn> for MockBedrockActor {
-    type Reply = bool;
+    type Reply = Result<bool>;
 
     async fn handle(
         &mut self,
