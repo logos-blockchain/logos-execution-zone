@@ -385,7 +385,7 @@ mod tests {
                 channel_id: [2; 32],
                 allowed_routes: vec![cross_zone_inbox_core::CrossZoneRoute {
                     src_account_id: programs::bridge_lock_account_id(),
-                    target_account_id: programs::amm_account_id(),
+                    target_account_id: programs::fee_account_id(),
                     mint_cap: None,
                 }],
                 min_committee_size: 0,

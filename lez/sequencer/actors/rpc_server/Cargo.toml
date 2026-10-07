@@ -10,7 +10,6 @@ workspace = true
 [dependencies]
 lee.workspace = true
 common.workspace = true
-programs.workspace = true
 sequencer_core.workspace = true
 sequencer_service_protocol.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["server"] }

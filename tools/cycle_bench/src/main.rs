@@ -16,8 +16,6 @@
     clippy::as_conversions,
     clippy::cast_precision_loss,
     clippy::float_arithmetic,
-    clippy::integer_division,
-    clippy::integer_division_remainder_used,
     clippy::missing_const_for_fn,
     clippy::non_ascii_literal,
     clippy::print_stderr,
@@ -26,19 +24,20 @@
     reason = "Bench tool: matches test-style fixture code"
 )]
 
-use std::{collections::HashMap, path::PathBuf, time::Instant};
-
-use amm_core::{PoolDefinition, compute_liquidity_token_pda, compute_pool_pda, compute_vault_pda};
-use anyhow::{Result, bail};
-use associated_token_account_core::{
-    AtaContents, compute_ata_seed, get_associated_token_account_id,
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    time::Instant,
 };
+
+use anyhow::{Result, bail};
 use clap::Parser;
 use clock_core::{
     CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
     ClockAccountData,
 };
 use cycle_bench::{ppe, stats::Stats};
+use fee_core::{BlockFeeSummary, state::FeeState};
 use lee::program::Program;
 use lee_core::{
     BlockId, Timestamp,
@@ -49,11 +48,11 @@ use lee_core::{
 };
 use risc0_zkvm::{ExecutorEnv, default_executor, default_prover};
 use serde::Serialize;
-use token_core::{TokenDefinition, TokenDescriptor, TokenHolding, TokenKind};
 
-/// The AMM pool fixture's reserves: lp supply is `sqrt(1000*500) = 707`.
-const AMM_RESERVE_A: u128 = 1_000;
-const AMM_RESERVE_B: u128 = 500;
+/// Two points fit a line exactly, making R² 1.0 by construction and the slope pure noise.
+const MIN_CALIBRATION_POINTS: usize = 3;
+
+const FEE_REFUND_AMOUNT: u128 = 5_000;
 
 #[derive(Parser, Debug)]
 #[command(about = "Per-program executor and (optionally) prover cycle measurements")]
@@ -147,10 +146,10 @@ impl Calibration {
     /// The fit uses best-of-N rather than the mean so a single OS scheduling spike in one
     /// case cannot tilt the slope; best-of-N is the per-case noise floor and reproduces
     /// run-to-run, which is what a pinned-hardware throughput constant needs.
-    /// Returns `None` when there are fewer than two distinct cycle counts to fit a line.
+    /// Returns `None` unless the rows clear [`MIN_CALIBRATION_POINTS`] over two or more programs.
     fn fit(results: &[BenchResult]) -> Option<Self> {
         let n = results.len();
-        if n < 2 {
+        if n < MIN_CALIBRATION_POINTS || Self::programs(results).len() < 2 {
             return None;
         }
         let xs: Vec<f64> = results.iter().map(|r| r.user_cycles as f64).collect();
@@ -199,6 +198,10 @@ impl Calibration {
     fn calibrated_ms(&self, user_cycles: u64) -> f64 {
         self.slope_ms_per_cycle * user_cycles as f64
     }
+
+    fn programs(results: &[BenchResult]) -> HashSet<&'static str> {
+        results.iter().map(|r| r.program_name).collect()
+    }
 }
 
 struct Fixture {
@@ -231,6 +234,9 @@ struct Case {
     program_name: &'static str,
     instruction_label: &'static str,
     program: Program,
+    /// Where the program is registered on chain. Effects name this as their shard owner, so
+    /// deriving it from the image id instead would make every plan panic.
+    program_account_id: AccountId,
     fixtures: Vec<Fixture>,
     instruction_data: InstructionData,
 }
@@ -240,6 +246,7 @@ impl Case {
         program_name: &'static str,
         instruction_label: &'static str,
         program: Program,
+        program_account_id: AccountId,
         fixtures: Vec<Fixture>,
         instruction: &I,
     ) -> Result<Self> {
@@ -247,6 +254,7 @@ impl Case {
             program_name,
             instruction_label,
             program,
+            program_account_id,
             fixtures,
             instruction_data: borsh::to_vec(instruction)?,
         })
@@ -257,10 +265,10 @@ impl Case {
             program_name,
             instruction_label,
             program,
+            program_account_id: self_account_id,
             fixtures,
             instruction_data,
         } = self;
-        let self_account_id = AccountId::from_builtin_program(program.id());
 
         let mut shards: HashMap<ProgramShardSelector, ShardData> = fixtures
             .iter()
@@ -411,59 +419,79 @@ fn apply_journal(journal: &[u8]) -> Result<lee_core::program::ApplyOutput> {
     }
 }
 
-fn token_holding(
-    definition_id: AccountId,
-    account_id: AccountId,
-    balance: u128,
-    is_authorized: bool,
-) -> Fixture {
-    Fixture::new(
-        account_id,
-        is_authorized,
-        programs::token_account_id(),
-        ShardData::from(&TokenHolding::Fungible {
-            definition_id,
-            balance,
-        }),
-    )
+/// Fee's plan derives its PDAs from its own address, so fixtures must use the same value.
+fn fee_self_account_id() -> AccountId {
+    programs::fee_account_id()
 }
 
-fn token_definition(account_id: AccountId, total_supply: u128, is_authorized: bool) -> Fixture {
-    Fixture::new(
-        account_id,
-        is_authorized,
-        programs::token_account_id(),
-        ShardData::from(&TokenDefinition::Fungible {
-            name: String::from("test"),
-            total_supply,
-            metadata_id: None,
-        }),
-    )
-}
-
-fn token_definition_id() -> AccountId {
-    AccountId::new([15; 32])
-}
-
-fn fungible(definition_id: AccountId) -> TokenDescriptor {
-    TokenDescriptor {
-        definition_id,
-        kind: TokenKind::Fungible,
+fn fee_distribute_summary() -> BlockFeeSummary {
+    BlockFeeSummary {
+        gas_used_exec: 1_000_000,
+        gas_used_stor: 100_000,
+        revenue_base: 8_000_000,
+        revenue_tip: 64,
     }
 }
 
-fn token_transfer_accounts() -> Vec<Fixture> {
-    let def = token_definition_id();
-    let sender = token_holding(def, AccountId::new([17; 32]), 100_000, true);
-    let recipient = token_holding(def, AccountId::new([42; 32]), 50_000, true);
-    vec![sender, recipient]
+fn fee_distribute_payout() -> u128 {
+    FeeState::genesis().apply_block(&fee_distribute_summary())
 }
 
-fn token_definition_and_holding_accounts() -> Vec<Fixture> {
-    let def_id = token_definition_id();
-    let def = token_definition(def_id, 100_000, true);
-    let holding = token_holding(def_id, AccountId::new([17; 32]), 1_000, true);
-    vec![def, holding]
+fn fee_distribute_accounts() -> Vec<Fixture> {
+    let fee_id = fee_self_account_id();
+    let summary = fee_distribute_summary();
+    // The inspect effect refuses an inbox holding anything but the block's revenue.
+    let collected = summary.revenue_base.saturating_add(summary.revenue_tip);
+    vec![
+        Fixture::new(
+            fee_core::compute_fee_state_account_id(fee_id),
+            true,
+            fee_id,
+            FeeState::genesis()
+                .to_bytes()
+                .try_into()
+                .expect("FeeState should fit in account data"),
+        ),
+        Fixture::balance(fee_core::compute_fee_escrow_account_id(fee_id), true, 0),
+        Fixture::balance(
+            fee_core::compute_fee_inbox_account_id(fee_id),
+            true,
+            collected,
+        ),
+        Fixture::balance(AccountId::new([71; 32]), true, 0),
+    ]
+}
+
+fn fee_refund_accounts() -> Vec<Fixture> {
+    vec![
+        Fixture::balance(
+            fee_core::compute_fee_inbox_account_id(fee_self_account_id()),
+            true,
+            FEE_REFUND_AMOUNT,
+        ),
+        Fixture::balance(AccountId::new([72; 32]), true, 0),
+    ]
+}
+
+/// A shard-write of `bytes` bytes. The payload is the cycle dial: the built-in programs left in
+/// the repo all sit under 30k cycles, too narrow a range to condition the calibration fit.
+fn data_writer_case(label: &'static str, bytes: usize) -> Result<Case> {
+    let program = test_programs::data_writer();
+    let program_account_id = AccountId::from_builtin_program(program.id());
+    let fixtures = vec![Fixture::new(
+        AccountId::new([83; 32]),
+        true,
+        program_account_id,
+        ShardData::default(),
+    )];
+    Case::new(
+        "data_writer",
+        label,
+        program,
+        program_account_id,
+        fixtures,
+        &vec![7_u8; bytes],
+    )
 }
 
 fn clock_account(account_id: AccountId, block_id: BlockId) -> Fixture {
@@ -489,106 +517,6 @@ fn clock_accounts_tick_at(block_id: BlockId) -> Vec<Fixture> {
     ]
 }
 
-fn amm_lp_supply() -> u128 {
-    (AMM_RESERVE_A * AMM_RESERVE_B).isqrt()
-}
-
-fn amm_token_a_def_id() -> AccountId {
-    AccountId::new([42; 32])
-}
-fn amm_token_b_def_id() -> AccountId {
-    AccountId::new([43; 32])
-}
-fn amm_pool_id() -> AccountId {
-    compute_pool_pda(
-        programs::amm_account_id(),
-        amm_token_a_def_id(),
-        amm_token_b_def_id(),
-        programs::token_account_id(),
-    )
-}
-fn amm_vault_a_id() -> AccountId {
-    compute_vault_pda(
-        programs::amm_account_id(),
-        amm_pool_id(),
-        amm_token_a_def_id(),
-    )
-}
-fn amm_vault_b_id() -> AccountId {
-    compute_vault_pda(
-        programs::amm_account_id(),
-        amm_pool_id(),
-        amm_token_b_def_id(),
-    )
-}
-fn amm_lp_def_id() -> AccountId {
-    compute_liquidity_token_pda(programs::amm_account_id(), amm_pool_id())
-}
-
-fn amm_pool_account() -> Fixture {
-    Fixture::new(
-        amm_pool_id(),
-        true,
-        programs::amm_account_id(),
-        ShardData::from(&PoolDefinition {
-            token_program_id: programs::token_account_id(),
-            definition_token_a_id: amm_token_a_def_id(),
-            definition_token_b_id: amm_token_b_def_id(),
-            vault_a_id: amm_vault_a_id(),
-            vault_b_id: amm_vault_b_id(),
-            liquidity_pool_id: amm_lp_def_id(),
-            liquidity_pool_supply: amm_lp_supply(),
-            reserve_a: AMM_RESERVE_A,
-            reserve_b: AMM_RESERVE_B,
-            fees: 0,
-            active: true,
-        }),
-    )
-}
-
-fn amm_swap_accounts() -> Vec<Fixture> {
-    vec![
-        amm_pool_account(),
-        token_holding(amm_token_a_def_id(), amm_vault_a_id(), AMM_RESERVE_A, true),
-        token_holding(amm_token_b_def_id(), amm_vault_b_id(), AMM_RESERVE_B, true),
-        token_holding(amm_token_a_def_id(), AccountId::new([45; 32]), 1_000, true),
-        token_holding(amm_token_b_def_id(), AccountId::new([46; 32]), 500, false),
-    ]
-}
-
-fn amm_add_liquidity_accounts() -> Vec<Fixture> {
-    vec![
-        amm_pool_account(),
-        token_holding(amm_token_a_def_id(), amm_vault_a_id(), AMM_RESERVE_A, true),
-        token_holding(amm_token_b_def_id(), amm_vault_b_id(), AMM_RESERVE_B, true),
-        token_definition(amm_lp_def_id(), amm_lp_supply(), true),
-        token_holding(amm_token_a_def_id(), AccountId::new([45; 32]), 1_000, true),
-        token_holding(amm_token_b_def_id(), AccountId::new([46; 32]), 500, true),
-        token_holding(amm_lp_def_id(), AccountId::new([47; 32]), 0, true),
-    ]
-}
-
-fn ata_create_accounts() -> Vec<Fixture> {
-    let owner_id = AccountId::new([91; 32]);
-    let definition_id = token_definition_id();
-    let seed = compute_ata_seed(owner_id, definition_id, programs::token_account_id());
-    let ata_id = get_associated_token_account_id(&programs::ata_account_id(), &seed);
-    vec![
-        Fixture::balance(owner_id, true, 0),
-        token_definition(definition_id, 100_000, false),
-        Fixture::new(
-            ata_id,
-            false,
-            programs::token_account_id(),
-            ShardData::empty(),
-        ),
-    ]
-}
-
-fn mul_div(factor: u128, multiplier: u128, divisor: u128) -> u128 {
-    factor * multiplier / divisor
-}
-
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let prove = cli.prove;
@@ -597,60 +525,13 @@ fn main() -> Result<()> {
         eprintln!("cycle_bench: prove mode ON, this will be slow (~minutes per program)");
     }
 
-    // Priced off the pool fixture exactly as `wallet::program_facades::amm` prices a real
-    // swap off the pool it observed, because the pool's `apply` recomputes both and refuses
-    // anything else.
-    let swap_amount_in: u128 = 200;
-    let swap_amount_out = mul_div(
-        AMM_RESERVE_B,
-        swap_amount_in,
-        AMM_RESERVE_A + swap_amount_in,
-    );
-
-    let max_amount_to_add_token_a: u128 = 400;
-    let max_amount_to_add_token_b: u128 = 200;
-    let amount_to_add_token_a = mul_div(AMM_RESERVE_A, max_amount_to_add_token_b, AMM_RESERVE_B)
-        .min(max_amount_to_add_token_a);
-    let amount_to_add_token_b = mul_div(AMM_RESERVE_B, max_amount_to_add_token_a, AMM_RESERVE_A)
-        .min(max_amount_to_add_token_b);
-    let amount_liquidity = mul_div(amm_lp_supply(), amount_to_add_token_a, AMM_RESERVE_A).min(
-        mul_div(amm_lp_supply(), amount_to_add_token_b, AMM_RESERVE_B),
-    );
-
+    // `Advance` requires each clock account's pre-state one block below the instruction's.
     let cases = [
-        Case::new(
-            "token",
-            "Transfer",
-            programs::token(),
-            token_transfer_accounts(),
-            &token_core::Instruction::Transfer {
-                amount_to_transfer: 5_000,
-                descriptor: fungible(token_definition_id()),
-            },
-        )?,
-        Case::new(
-            "token",
-            "Mint",
-            programs::token(),
-            token_definition_and_holding_accounts(),
-            &token_core::Instruction::Mint {
-                amount_to_mint: 5_000,
-            },
-        )?,
-        Case::new(
-            "token",
-            "Burn",
-            programs::token(),
-            token_definition_and_holding_accounts(),
-            &token_core::Instruction::Burn {
-                amount_to_burn: 500,
-                kind: TokenKind::Fungible,
-            },
-        )?,
         Case::new(
             "clock",
             "Tick (block_id+1, no multiples)",
             programs::clock(),
+            programs::clock_account_id(),
             clock_accounts_tick_at(0),
             &clock_core::Instruction {
                 timestamp: Timestamp::from(1_700_000_000_u64),
@@ -658,45 +539,50 @@ fn main() -> Result<()> {
             },
         )?,
         Case::new(
-            "amm",
-            "Swap",
-            programs::amm(),
-            amm_swap_accounts(),
-            &amm_core::Instruction::Swap {
-                token_program_id: programs::token_account_id(),
-                definition_id_in: amm_token_a_def_id(),
-                definition_id_out: amm_token_b_def_id(),
-                amount_in: swap_amount_in,
-                amount_out: swap_amount_out,
+            "clock",
+            "Tick (10-block rollup)",
+            programs::clock(),
+            programs::clock_account_id(),
+            clock_accounts_tick_at(9),
+            &clock_core::Instruction {
+                timestamp: Timestamp::from(1_700_000_000_u64),
+                block_id: 10,
             },
         )?,
         Case::new(
-            "amm",
-            "AddLiquidity",
-            programs::amm(),
-            amm_add_liquidity_accounts(),
-            &amm_core::Instruction::AddLiquidity {
-                max_amount_to_add_token_a,
-                max_amount_to_add_token_b,
-                token_program_id: programs::token_account_id(),
-                definition_token_a_id: amm_token_a_def_id(),
-                definition_token_b_id: amm_token_b_def_id(),
-                amount_to_add_token_a,
-                amount_to_add_token_b,
-                amount_liquidity,
+            "clock",
+            "Tick (10 and 50-block rollups)",
+            programs::clock(),
+            programs::clock_account_id(),
+            clock_accounts_tick_at(49),
+            &clock_core::Instruction {
+                timestamp: Timestamp::from(1_700_000_000_u64),
+                block_id: 50,
             },
         )?,
         Case::new(
-            "ata",
-            "Create",
-            programs::ata(),
-            ata_create_accounts(),
-            &associated_token_account_core::Instruction::Create {
-                token_program_id: programs::token_account_id(),
-                kind: TokenKind::Fungible,
-                contents: AtaContents::Empty,
+            "fee",
+            "Distribute",
+            programs::fee(),
+            programs::fee_account_id(),
+            fee_distribute_accounts(),
+            &fee_core::Instruction::Distribute {
+                summary: fee_distribute_summary(),
+                payout: fee_distribute_payout(),
             },
         )?,
+        Case::new(
+            "fee",
+            "Refund",
+            programs::fee(),
+            programs::fee_account_id(),
+            fee_refund_accounts(),
+            &fee_core::Instruction::Refund {
+                amount: FEE_REFUND_AMOUNT,
+            },
+        )?,
+        data_writer_case("Write 4 KiB", 4 * 1024)?,
+        data_writer_case("Write 64 KiB", 64 * 1024)?,
     ];
 
     let mut results: Vec<BenchResult> = cases
@@ -713,6 +599,12 @@ fn main() -> Result<()> {
             r.calibrated_ms = Some(cal.calibrated_ms(r.user_cycles));
             r.net_compute_ms = Some(r.exec_stats.best_ms - cal.intercept_ms);
         }
+    } else {
+        eprintln!(
+            "cycle_bench: NO CALIBRATION. {} row(s) over {} program(s); needs {MIN_CALIBRATION_POINTS}+ rows over 2+ programs. calib_ms and net_ms are omitted.",
+            results.len(),
+            Calibration::programs(&results).len(),
+        );
     }
 
     print_table(&results, prove);
@@ -872,8 +764,12 @@ mod tests {
     /// Minimal `BenchResult` carrying only the fields the calibration fit reads:
     /// `user_cycles` (x) and `exec_stats.best_ms` (y).
     fn point(user_cycles: u64, best_ms: f64) -> BenchResult {
+        point_in("test", user_cycles, best_ms)
+    }
+
+    fn point_in(program_name: &'static str, user_cycles: u64, best_ms: f64) -> BenchResult {
         BenchResult {
-            program_name: "test",
+            program_name,
             instruction: "test".to_owned(),
             phase: Phase::Plan,
             user_cycles,
@@ -896,7 +792,11 @@ mod tests {
     #[test]
     fn fit_recovers_a_known_line() {
         // best_ms = 10 + 0.001 * user_cycles  ->  slope 1e-3, intercept 10, throughput 1000.
-        let results = [point(1000, 11.0), point(2000, 12.0), point(3000, 13.0)];
+        let results = [
+            point(1000, 11.0),
+            point(2000, 12.0),
+            point_in("other", 3000, 13.0),
+        ];
         let cal = Calibration::fit(&results).expect("fit over three points");
 
         assert!(
@@ -925,16 +825,27 @@ mod tests {
     }
 
     #[test]
-    fn fit_needs_at_least_two_points() {
+    fn fit_needs_at_least_three_points() {
         assert!(Calibration::fit(&[]).is_none());
         assert!(Calibration::fit(&[point(1000, 11.0)]).is_none());
+        assert!(Calibration::fit(&[point(1000, 11.0), point_in("other", 2000, 12.0)]).is_none());
+    }
+
+    #[test]
+    fn fit_refuses_rows_from_a_single_program() {
+        let results = [point(1000, 11.0), point(2000, 12.0), point(3000, 13.0)];
+        assert!(Calibration::fit(&results).is_none());
     }
 
     #[test]
     fn fit_with_identical_cycle_counts_returns_none() {
         // Zero spread in x leaves the slope undetermined; the fit must decline rather than divide
         // by zero.
-        let results = [point(1000, 11.0), point(1000, 12.0)];
+        let results = [
+            point(1000, 11.0),
+            point(1000, 12.0),
+            point_in("other", 1000, 13.0),
+        ];
         assert!(Calibration::fit(&results).is_none());
     }
 }

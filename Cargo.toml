@@ -46,13 +46,10 @@ members = [
   "lez/wallet-ffi",
   "lez/common",
   "lez/programs",
-  "lez/programs/amm",
-  "lez/programs/associated_token_account",
   "lez/programs/bridge",
   "lez/programs/clock",
   "lez/programs/fee",
   "lez/programs/fee/core",
-  "lez/programs/token",
   "lez/programs/cross_zone_marker",
   "lez/programs/cross_zone_inbox",
   "lez/programs/cross_zone_outbox",
@@ -123,12 +120,6 @@ system_accounts = { path = "lez/system_accounts" }
 clock_core = { path = "lez/programs/clock/core" }
 cross_zone_marker_core = { path = "lez/programs/cross_zone_marker" }
 fee_core = { path = "lez/programs/fee/core" }
-token_core = { path = "lez/programs/token/core" }
-token_program = { path = "lez/programs/token" }
-amm_core = { path = "lez/programs/amm/core" }
-amm_program = { path = "lez/programs/amm" }
-associated_token_account_core = { path = "lez/programs/associated_token_account/core" }
-ata_program = { path = "lez/programs/associated_token_account" }
 bridge_core = { path = "lez/programs/bridge/core" }
 cross_zone_inbox_core = { path = "lez/programs/cross_zone_inbox/core" }
 cross_zone_outbox_core = { path = "lez/programs/cross_zone_outbox/core" }
