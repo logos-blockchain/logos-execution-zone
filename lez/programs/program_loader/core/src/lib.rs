@@ -65,6 +65,54 @@ pub enum Effect {
     Write(Vec<u8>),
 }
 
+/// Why [`build_segments`] refused a program before any segment was uploaded.
+#[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
+pub enum SegmentChainError {
+    #[error("Program bytecode splits into {expected} segment(s) but {actual} were supplied")]
+    CountMismatch { expected: usize, actual: usize },
+    #[error("Program needs {count} segments, over the {MAX_PROGRAM_SEGMENTS}-segment cap")]
+    TooManySegments { count: usize },
+    #[error("Segment {index} encodes to more than DATA_MAX_LENGTH")]
+    SegmentTooLarge { index: usize },
+}
+
+/// How many segments [`build_segments`] splits `user_elf` into.
+#[must_use]
+pub const fn segment_count(user_elf: &[u8]) -> usize {
+    user_elf.len().div_ceil(MAX_SEGMENT_DATA_LEN)
+}
+
+/// Splits `user_elf` into a segment chain written to `segment_ids`, each linking to the next.
+/// A deployer's pre-check.
+pub fn build_segments(
+    user_elf: &[u8],
+    segment_ids: &[AccountId],
+) -> Result<Vec<ProgramSegment>, SegmentChainError> {
+    let count = segment_count(user_elf);
+    if count != segment_ids.len() {
+        return Err(SegmentChainError::CountMismatch {
+            expected: count,
+            actual: segment_ids.len(),
+        });
+    }
+    if count > MAX_PROGRAM_SEGMENTS {
+        return Err(SegmentChainError::TooManySegments { count });
+    }
+    user_elf
+        .chunks(MAX_SEGMENT_DATA_LEN)
+        .enumerate()
+        .map(|(index, chunk)| {
+            let segment = ProgramSegment {
+                bytecode: chunk.to_vec(),
+                next_segment: segment_ids.get(index.saturating_add(1)).copied(),
+            };
+            ShardData::try_from(segment.clone().to_loader_shard())
+                .map(|_| segment)
+                .map_err(|_too_big| SegmentChainError::SegmentTooLarge { index })
+        })
+        .collect()
+}
+
 /// Every handle a loader instruction takes selects the loader's own shard. The planner reads
 /// through that shard and writes only through it, so a handle naming another program's shard is
 /// a malformed invocation rather than something to silently read past.

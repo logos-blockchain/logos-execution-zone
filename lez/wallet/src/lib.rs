@@ -100,8 +100,8 @@ pub enum ExecutionFailureKind {
     ConflictingAccountIdentity(AccountId),
     #[error("Account {0} holds state but has no membership proof to update it")]
     MissingMembershipProof(AccountId),
-    #[error("Program bytecode splits into {expected} segment(s) but {actual} were supplied")]
-    SegmentCountMismatch { expected: usize, actual: usize },
+    #[error(transparent)]
+    SegmentChain(#[from] program_loader_core::SegmentChainError),
     #[error("Program bytecode is not a valid RISC0 program binary")]
     InvalidProgramBinary(#[source] anyhow::Error),
     #[error(

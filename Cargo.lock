@@ -9481,6 +9481,7 @@ dependencies = [
  "lee_core",
  "risc0-binfmt",
  "risc0-zkos-v1compat",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
