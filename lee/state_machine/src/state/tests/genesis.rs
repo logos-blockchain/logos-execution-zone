@@ -146,3 +146,11 @@ fn state_serialization_roundtrip() {
     let state_from_bytes: V03State = borsh::from_slice(&bytes).unwrap();
     assert_eq!(state, state_from_bytes);
 }
+
+#[test]
+#[should_panic(expected = "builtin program must be built with the protocol's default kernel")]
+fn genesis_rejects_a_builtin_with_a_non_default_kernel() {
+    let elf = risc0_binfmt::ProgramBinary::new(b"user elf", b"some other kernel").encode();
+    let program = Program::new_unchecked([1; 8], elf.into());
+    let _state = V03State::new().with_programs([program]);
+}
