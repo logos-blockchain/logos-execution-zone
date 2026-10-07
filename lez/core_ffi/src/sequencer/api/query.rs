@@ -1,8 +1,7 @@
 use std::ffi::{CString, c_char};
 
 use sequencer_executor_actor::protocol::{
-    ExecutorStatus, GetAccount, GetAccountTransactions, GetBlock, GetBlockByHash, GetStatus,
-    MAX_BLOCK_RANGE_LEN, Transaction,
+    ExecutorStatus, GetAccountTransactions, GetBlockByHash, GetStatus, MAX_BLOCK_RANGE_LEN,
 };
 use sequencer_storage_actor::{
     actor::event_filter::{EventRecord, MAX_EVENT_QUERY_RESPONSE_BYTES, Selector, record_charge},

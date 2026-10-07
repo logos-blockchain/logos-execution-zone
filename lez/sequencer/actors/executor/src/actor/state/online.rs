@@ -115,7 +115,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                 sequencer_bedrock_actor::protocol::InitializeChannelPublisher {
                     channel_id: config.bedrock_config.channel_id,
                     channel_signing_key: channel_signing_key.clone(),
-                    funding_pk: sequencer_core::load_funding_public_key(&config.home)
+                    funding_pk: config
+                        .load_funding_public_key()
                         .map_err(Error::FundingKeyUnavailable)?,
                     priority_fee_percent: config.bedrock_config.priority_fee_percent,
                     resubmit_interval: config.retry_pending_blocks_timeout,
