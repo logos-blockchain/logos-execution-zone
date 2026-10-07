@@ -115,6 +115,9 @@ pub struct Args {
     /// Continious run flag.
     #[arg(short, long)]
     pub continuous_run: bool,
+    /// Simulate the transaction a command would send and report its cost instead of sending it.
+    #[arg(long, global = true)]
+    pub dry_run: bool,
     /// Wallet command.
     #[command(subcommand)]
     pub command: Option<Command>,

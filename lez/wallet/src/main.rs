@@ -6,7 +6,7 @@
 use anyhow::{Context as _, Result};
 use clap::{CommandFactory as _, Parser as _};
 use wallet::{
-    WalletCore,
+    ExecutionFailureKind, WalletCore,
     cli::{Args, execute_continuous_run, execute_subcommand, read_password_from_stdin},
     helperfunctions::{fetch_config_path, fetch_persistent_storage_path, fetch_statistics_path},
 };
@@ -20,6 +20,7 @@ use wallet::{
 async fn main() -> Result<()> {
     let Args {
         continuous_run,
+        dry_run,
         command,
     } = Args::parse();
 
@@ -59,8 +60,21 @@ async fn main() -> Result<()> {
             wallet.store_persistent_data()?;
             wallet
         };
-        let _output = execute_subcommand(&mut wallet, command).await?;
-        Ok(())
+        wallet.set_dry_run(dry_run);
+        match execute_subcommand(&mut wallet, command).await {
+            // A dry run stops the command once it has reported; that is its success.
+            Err(err)
+                if err.chain().any(|cause| {
+                    matches!(
+                        cause.downcast_ref::<ExecutionFailureKind>(),
+                        Some(ExecutionFailureKind::DryRun)
+                    )
+                }) =>
+            {
+                Ok(())
+            }
+            result => result.map(drop),
+        }
     } else if continuous_run {
         let mut wallet =
             WalletCore::new_update_chain(config_path, storage_path, statistics_path, None).await?;

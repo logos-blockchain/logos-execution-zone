@@ -32,6 +32,7 @@ use lee::{
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey,
     account::{Nonce, ProgramShardSelector},
+    native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::InstructionData,
 };
 use log::warn;
@@ -119,6 +120,10 @@ pub enum ExecutionFailureKind {
     TransactionBuildError(#[from] lee::error::LeeError),
     #[error("Failed to sign transaction: {0}")]
     SignError(anyhow::Error),
+    #[error("Dry run: the transaction was simulated and not sent")]
+    DryRun,
+    #[error("Dry run is not available for public transactions yet")]
+    DryRunUnsupported,
     #[error("Sending transaction failed for each client")]
     MultiSequencerTransactionSendError,
     #[error("Failed to join a task: {0}")]
@@ -137,6 +142,9 @@ pub struct WalletCore {
     statistics: HashMap<Url, Statistics>,
 
     multi_sequencer_client: MultiSequencerClient,
+
+    /// Simulate transactions and report their cost instead of sending them.
+    dry_run: bool,
 }
 
 impl WalletCore {
@@ -224,7 +232,14 @@ impl WalletCore {
             statistics_path,
             statistics,
             multi_sequencer_client,
+            dry_run: false,
         })
+    }
+
+    /// Simulate transactions and report their cost instead of sending them; a send then ends
+    /// with [`ExecutionFailureKind::DryRun`].
+    pub const fn set_dry_run(&mut self, dry_run: bool) {
+        self.dry_run = dry_run;
     }
 
     /// Get configuration with applied overrides.
@@ -864,6 +879,21 @@ impl WalletCore {
                 })?,
         };
         let fee = self.private_fee_transfer(payer, effect_cycles).await?;
+        if self.dry_run {
+            let guest_effects = actions
+                .iter()
+                .flat_map(|action| &action.effects)
+                .filter(|effect| effect.program_account_id != NATIVE_TOKEN_PROGRAM_ID)
+                .count();
+            println!("Dry run: nothing proven or sent");
+            println!("  public accounts touched: {}", actions.len());
+            println!("  guest-evaluated effects: {guest_effects}");
+            println!("  effect cycles:           {effect_cycles}");
+            println!("  fee payer:               {}", fee.payer);
+            println!("  fee height:              {}", fee.height);
+            println!("  required fee:            {}", fee.amount);
+            return Err(ExecutionFailureKind::DryRun);
+        }
 
         let program = program.clone();
         let (output, proof) = tokio::task::spawn_blocking(move || {
@@ -985,6 +1015,10 @@ impl WalletCore {
                     "Private accounts are not allowed in public transactions".to_owned(),
                 ),
             ));
+        }
+
+        if self.dry_run {
+            return Err(ExecutionFailureKind::DryRunUnsupported);
         }
 
         let mut acc_manager = account_manager::AccountManager::new(self, accounts).await?;
