@@ -1,7 +1,7 @@
 //! Slashable faults in a channel update.
 
 use chain_state::AcceptOutcome;
-use sequencer_slasher_actor::{Fault, ReportedOffence};
+use sequencer_slasher_actor::protocol::{Fault, ReportedOffence};
 
 use crate::{Ed25519PublicKey, MsgId};
 

@@ -25,12 +25,12 @@ use libp2p::{
     swarm::{NetworkBehaviour, Swarm, SwarmEvent},
 };
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
-use sequencer_channel_signing_actor::Wire;
+use sequencer_channel_signing_actor::protocol::Wire;
 use sequencer_core::{
     config::{GossipConfig, MAX_BEDROCK_TX_SIZE, MAX_PUBLISHABLE_BLOCK_SIZE},
     gossip::{AccreditedKeysReceiver, MaxBlockSizeReceiver},
 };
-use sequencer_slasher_actor::Approval;
+use sequencer_slasher_actor::protocol::Approval;
 use tokio::select;
 
 use self::seen_cache::SeenCache;

@@ -209,7 +209,7 @@ pub struct ChannelParams {
 }
 
 /// Minimum stake and per-key standing, stored in this program's config actor state.
-#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct SequencerStakeConfig {
     /// `None` until genesis runs [`Message::InitChannelParams`], which is
     /// the only state that message accepts.
