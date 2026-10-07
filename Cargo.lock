@@ -11337,6 +11337,7 @@ dependencies = [
  "sequencer_storage_actor",
  "serde",
  "serde_json",
+ "sharding_pool_actor",
  "system_accounts",
  "tempfile",
  "test_guest_core",
