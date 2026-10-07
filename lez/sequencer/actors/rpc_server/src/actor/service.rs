@@ -16,7 +16,7 @@ use sequencer_gossip_actor::protocol::PublishTransaction;
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
     CrossZoneDeadLetter, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, FeeStateQuote,
-    HashType, MembershipProof, Nonce, ProgramId, ProgramShardSelector,
+    HashType, MembershipProof, MsgId, Nonce, ProgramId, ProgramShardSelector, SequencerStatus,
 };
 
 pub struct Service<E: ExecutorActorTrait> {
@@ -244,6 +244,34 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             .await
             .map(|reply| ChannelId(*reply.0.as_ref()))
             .map_err(map_infallible_error)
+    }
+
+    async fn get_sequencer_status(&self) -> Result<SequencerStatus, ErrorObjectOwned> {
+        let status = self
+            .executor_ref
+            .ask(sequencer_executor_actor::protocol::GetStatus)
+            .await
+            .map_err(map_infallible_error)?;
+        let msg_id = |msg: sequencer_executor_actor::protocol::MsgId| MsgId(*msg.as_ref());
+
+        Ok(match status {
+            sequencer_executor_actor::protocol::ExecutorStatus::Bootstrapping {
+                target,
+                replayed_to,
+                height,
+            } => SequencerStatus::Bootstrapping {
+                target: msg_id(target),
+                replayed_to: replayed_to.map(msg_id),
+                height,
+            },
+            sequencer_executor_actor::protocol::ExecutorStatus::Online {
+                height,
+                is_our_turn,
+            } => SequencerStatus::Online {
+                height,
+                is_our_turn,
+            },
+        })
     }
 
     async fn get_cross_zone_dead_letters(

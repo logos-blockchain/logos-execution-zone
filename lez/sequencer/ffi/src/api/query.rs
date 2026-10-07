@@ -1,9 +1,9 @@
 use std::ffi::{CString, c_char};
 
 use sequencer_executor_actor::protocol::{
-    BoundedRangeInclusive, GetAccount, GetAccountTransactions, GetBlock, GetBlockByHash,
-    GetBlockRange, GetLastBlockId, GetTransaction, MAX_BLOCK_RANGE_LEN, Transaction,
-    TransactionOrigin,
+    BoundedRangeInclusive, ExecutorStatus, GetAccount, GetAccountTransactions, GetBlock,
+    GetBlockByHash, GetBlockRange, GetLastBlockId, GetStatus, GetTransaction, MAX_BLOCK_RANGE_LEN,
+    Transaction, TransactionOrigin,
 };
 use sequencer_storage_actor::{
     actor::event_filter::{EventRecord, MAX_EVENT_QUERY_RESPONSE_BYTES, Selector, record_charge},
@@ -15,7 +15,7 @@ use crate::{
     api::{
         PointerResult,
         types::{
-            FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiSelector, FfiVec,
+            FfiAccountId, FfiBlockId, FfiBytes32, FfiHashType, FfiOption, FfiSelector, FfiVec,
             account::FfiAccount,
             block::{FfiBlock, FfiBlockOpt},
             event::FfiEventRecord,
@@ -64,6 +64,94 @@ impl LastBlockIdResult {
     }
 }
 
+/// The state the executor is in.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiExecutorState {
+    /// Replaying the channel's finalized history up to the tip it had at startup.
+    /// State queries fail until it is done.
+    Bootstrapping = 0x0,
+    /// Following the channel and producing blocks on its turns.
+    Online,
+}
+
+/// Result of [`sequencer_ffi_query_executor_status`], returned **inline** (no
+/// heap allocation, so there is no corresponding `free_*` to call).
+///
+/// The other fields are only meaningful when `error` is `Ok`.
+#[repr(C)]
+pub struct ExecutorStatusResult {
+    pub state: FfiExecutorState,
+    /// Height of the chain so far. Only meaningful when `has_height` is `true`,
+    /// which it always is when `Online`.
+    pub height: FfiBlockId,
+    pub has_height: bool,
+    /// `Bootstrapping` only: the channel entry bootstrapping completes at.
+    pub target: FfiBytes32,
+    /// `Bootstrapping` only: the last channel entry replayed. Only meaningful
+    /// when `has_replayed_to` is `true`.
+    pub replayed_to: FfiBytes32,
+    pub has_replayed_to: bool,
+    /// `Online` only: whether it is this sequencer's turn to produce blocks.
+    pub is_our_turn: bool,
+    pub error: OperationStatus,
+}
+
+impl ExecutorStatusResult {
+    fn error(error: OperationStatus) -> Self {
+        Self {
+            state: FfiExecutorState::Bootstrapping,
+            height: 0,
+            has_height: false,
+            target: FfiBytes32::default(),
+            replayed_to: FfiBytes32::default(),
+            has_replayed_to: false,
+            is_our_turn: false,
+            error,
+        }
+    }
+}
+
+impl From<ExecutorStatus> for ExecutorStatusResult {
+    fn from(status: ExecutorStatus) -> Self {
+        match status {
+            ExecutorStatus::Bootstrapping {
+                target,
+                replayed_to,
+                height,
+            } => Self {
+                state: FfiExecutorState::Bootstrapping,
+                height: height.unwrap_or_default(),
+                has_height: height.is_some(),
+                target: FfiBytes32 {
+                    data: *target.as_ref(),
+                },
+                replayed_to: replayed_to
+                    .map(|msg| FfiBytes32 {
+                        data: *msg.as_ref(),
+                    })
+                    .unwrap_or_default(),
+                has_replayed_to: replayed_to.is_some(),
+                is_our_turn: false,
+                error: OperationStatus::Ok,
+            },
+            ExecutorStatus::Online {
+                height,
+                is_our_turn,
+            } => Self {
+                state: FfiExecutorState::Online,
+                height,
+                has_height: true,
+                target: FfiBytes32::default(),
+                replayed_to: FfiBytes32::default(),
+                has_replayed_to: false,
+                is_our_turn,
+                error: OperationStatus::Ok,
+            },
+        }
+    }
+}
+
 /// Query the last block id from sequencer.
 ///
 /// # Arguments
@@ -107,6 +195,44 @@ pub unsafe extern "C" fn sequencer_ffi_query_last_block(
             }
         },
     )
+}
+
+/// Query the state the executor is in: bootstrapping from the channel or online.
+///
+/// # Arguments
+///
+/// - `sequencer`: A pointer to the [`SequencerServiceFFI`] instance to be queried.
+///
+/// # Returns
+///
+/// An [`ExecutorStatusResult`] indicating success or failure. It is returned
+/// inline; nothing needs to be freed.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+/// - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sequencer_ffi_query_executor_status(
+    sequencer: *const SequencerServiceFFI,
+) -> ExecutorStatusResult {
+    if sequencer.is_null() {
+        log::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
+        return ExecutorStatusResult::error(OperationStatus::NullPointer);
+    }
+
+    let sequencer = unsafe { &*sequencer };
+
+    sequencer
+        .runtime()
+        .block_on(sequencer.executor_ref().ask(GetStatus).send())
+        .map_or_else(
+            |e| {
+                log::error!("Failed to query executor status: {e:#}");
+                ExecutorStatusResult::error(OperationStatus::ClientError)
+            },
+            ExecutorStatusResult::from,
+        )
 }
 
 /// Query the sequencer's current sync status as a JSON C-string.

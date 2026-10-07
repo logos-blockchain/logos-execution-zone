@@ -131,6 +131,24 @@ pub struct GetAccountView {
 
 pub struct GetChannelId;
 
+pub struct GetStatus;
+
+/// What the executor is doing.
+#[derive(Debug, Clone, Reply)]
+pub enum ExecutorStatus {
+    /// Replaying the channel's finalized history up to the tip it had at startup.
+    Bootstrapping {
+        /// The channel entry bootstrapping completes at.
+        target: MsgId,
+        /// The last channel entry replayed, [`None`] before the first.
+        replayed_to: Option<MsgId>,
+        /// Height of the chain replayed so far, [`None`] while it is empty.
+        height: Option<BlockId>,
+    },
+    /// Following the channel and producing blocks on its turns.
+    Online { height: BlockId, is_our_turn: bool },
+}
+
 pub struct GetCrossZoneDeadLetters;
 
 #[derive(Reply)]

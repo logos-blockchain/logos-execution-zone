@@ -16,6 +16,21 @@ typedef enum OperationStatus {
   ResponseTooBig = 7,
 } OperationStatus;
 
+/**
+ * The state the executor is in.
+ */
+typedef enum FfiExecutorState {
+  /**
+   * Replaying the channel's finalized history up to the tip it had at startup.
+   * State queries fail until it is done.
+   */
+  Bootstrapping = 0,
+  /**
+   * Following the channel and producing blocks on its turns.
+   */
+  Online,
+} FfiExecutorState;
+
 typedef enum FfiProgramImageClaimKind {
   Disclosed = 0,
   Undisclosed,
@@ -108,6 +123,37 @@ typedef uint64_t FfiBlockId;
 typedef struct FfiBytes32 {
   uint8_t data[32];
 } FfiBytes32;
+
+/**
+ * Result of [`sequencer_ffi_query_executor_status`], returned **inline** (no
+ * heap allocation, so there is no corresponding `free_*` to call).
+ *
+ * The other fields are only meaningful when `error` is `Ok`.
+ */
+typedef struct ExecutorStatusResult {
+  enum FfiExecutorState state;
+  /**
+   * Height of the chain so far. Only meaningful when `has_height` is `true`,
+   * which it always is when `Online`.
+   */
+  FfiBlockId height;
+  bool has_height;
+  /**
+   * `Bootstrapping` only: the channel entry bootstrapping completes at.
+   */
+  struct FfiBytes32 target;
+  /**
+   * `Bootstrapping` only: the last channel entry replayed. Only meaningful
+   * when `has_replayed_to` is `true`.
+   */
+  struct FfiBytes32 replayed_to;
+  bool has_replayed_to;
+  /**
+   * `Online` only: whether it is this sequencer's turn to produce blocks.
+   */
+  bool is_our_turn;
+  enum OperationStatus error;
+} ExecutorStatusResult;
 
 typedef struct FfiBytes32 FfiHashType;
 
@@ -580,6 +626,25 @@ void sequencer_ffi_free_cstring(char *block);
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
 struct LastBlockIdResult sequencer_ffi_query_last_block(const struct SequencerServiceFFI *sequencer);
+
+/**
+ * Query the state the executor is in: bootstrapping from the channel or online.
+ *
+ * # Arguments
+ *
+ * - `sequencer`: A pointer to the [`SequencerServiceFFI`] instance to be queried.
+ *
+ * # Returns
+ *
+ * An [`ExecutorStatusResult`] indicating success or failure. It is returned
+ * inline; nothing needs to be freed.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
+ */
+struct ExecutorStatusResult sequencer_ffi_query_executor_status(const struct SequencerServiceFFI *sequencer);
 
 /**
  * Query the sequencer's current sync status as a JSON C-string.

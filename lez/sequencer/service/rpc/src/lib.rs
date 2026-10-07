@@ -7,7 +7,7 @@ pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as Sequenc
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
     CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, FeeStateQuote, HashType, LeeTransaction,
-    MembershipProof, Nonce, ProgramId, ProgramShardSelector,
+    MembershipProof, Nonce, ProgramId, ProgramShardSelector, SequencerStatus,
 };
 
 /// Error code the sequencer replies with when its mempool is full.
@@ -109,6 +109,10 @@ pub trait Rpc {
 
     #[method(name = "getChannelId")]
     async fn get_channel_id(&self) -> Result<ChannelId, ErrorObjectOwned>;
+
+    /// What the sequencer is doing: bootstrapping from the channel, or online.
+    #[method(name = "getSequencerStatus")]
+    async fn get_sequencer_status(&self) -> Result<SequencerStatus, ErrorObjectOwned>;
 
     /// The cross-zone deliveries this sequencer has given up on.
     ///

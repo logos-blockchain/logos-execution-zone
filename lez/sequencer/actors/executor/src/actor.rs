@@ -35,11 +35,11 @@ use crate::{
     actor::state::State,
     error::Error,
     protocol::{
-        ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces,
+        ChannelId, ExecutorStatus, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces,
         GetAccountTransactions, GetAccountView, GetBlock, GetBlockByHash, GetBlockRange,
         GetChannelId, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply, GetFeeQuote,
-        GetLastBlockId, GetProofsAndRoot, GetProofsAndRootReply, GetTransaction, ProduceBlock,
-        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, Transaction,
+        GetLastBlockId, GetProofsAndRoot, GetProofsAndRootReply, GetStatus, GetTransaction,
+        ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, Transaction,
     },
 };
 
@@ -472,6 +472,29 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetChannelId> for Execu
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         Reply(self.channel_id)
+    }
+}
+
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetStatus> for ExecutorActor<S, B> {
+    type Reply = ExecutorStatus;
+
+    async fn handle(
+        &mut self,
+        GetStatus: GetStatus,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        match &self.state {
+            State::Error(details) => panic!("Actor has encountered an error state: {details}"),
+            State::Bootstrapping(bootstrapping) => ExecutorStatus::Bootstrapping {
+                target: bootstrapping.bootstrap_to(),
+                replayed_to: bootstrapping.replayed_to(),
+                height: bootstrapping.chain().head_tip().map(|tip| tip.block_id),
+            },
+            State::Online(online) => ExecutorStatus::Online {
+                height: online.sequencer().chain_height().await,
+                is_our_turn: online.is_our_turn(),
+            },
+        }
     }
 }
 
