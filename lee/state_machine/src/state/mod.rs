@@ -227,6 +227,15 @@ impl V03State {
             binary.kernel_elf == risc0_zkos_v1compat::V1COMPAT_ELF,
             "builtin program must be built with the protocol's default kernel"
         );
+        let image_id: ProgramId = binary
+            .compute_image_id()
+            .expect("builtin program must have a computable image id")
+            .into();
+        assert_eq!(
+            image_id,
+            program.id(),
+            "builtin program's image id does not match its bytecode"
+        );
         let user_elf = binary.user_elf.to_vec();
 
         let segment_account_ids: Vec<AccountId> =

@@ -154,3 +154,11 @@ fn genesis_rejects_a_builtin_with_a_non_default_kernel() {
     let program = Program::new_unchecked([1; 8], elf.into());
     let _state = V03State::new().with_programs([program]);
 }
+
+#[test]
+#[should_panic(expected = "builtin program's image id does not match its bytecode")]
+fn genesis_rejects_a_builtin_whose_id_does_not_match_its_bytecode() {
+    let elf = crate::test_methods::noop().elf().to_vec();
+    let program = Program::new_unchecked([1; 8], elf.into());
+    let _state = V03State::new().with_programs([program]);
+}
