@@ -13809,6 +13809,7 @@ dependencies = [
  "async-stream",
  "bincode",
  "bip39",
+ "borsh",
  "bridge_core",
  "clap",
  "common",
