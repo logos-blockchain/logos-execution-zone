@@ -273,7 +273,7 @@ fn force_insert_segment_chain(state: &mut V03State, elf: &[u8], key_seed: u8) ->
                         bytecode: chunks[i].to_vec(),
                         next_segment: segment_ids.get(i + 1).copied(),
                     }
-                    .to_bytes(),
+                    .to_loader_shard(),
                 )
                 .expect("segment must fit under DATA_MAX_LENGTH"),
             ),

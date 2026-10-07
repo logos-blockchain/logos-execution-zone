@@ -434,8 +434,8 @@ fn get_program_via_reads_the_loader_shard() {
         bytecode: vec![1, 2, 3],
         next_segment: None,
     };
-    let program_shard: ShardData = header.to_bytes().try_into().unwrap();
-    let segment_shard: ShardData = segment.to_bytes().try_into().unwrap();
+    let program_shard: ShardData = header.to_loader_shard().try_into().unwrap();
+    let segment_shard: ShardData = segment.to_loader_shard().try_into().unwrap();
     let lookup = |id| {
         if id == program_account {
             Some(&program_shard)
@@ -453,6 +453,65 @@ fn get_program_via_reads_the_loader_shard() {
     let deleted = ShardData::empty();
     let deleted_header = |id| (id == program_account).then_some(&deleted);
     assert_eq!(get_program_via(program_account, deleted_header), None);
+}
+
+/// Untagged, the linked header's bytes would parse as a segment.
+#[test]
+fn get_program_via_does_not_follow_a_link_to_a_header() {
+    let program_account = AccountId::new([1; 32]);
+    let linked_header_account = AccountId::new([2; 32]);
+    let program_shard: ShardData = ProgramHeader {
+        image_id: [7; 8],
+        program_first_segment: linked_header_account,
+        immutable: true,
+    }
+    .to_loader_shard()
+    .try_into()
+    .unwrap();
+    let linked_shard: ShardData = ProgramHeader {
+        image_id: [60, 0, 0, 0, 0, 0, 0, 0],
+        program_first_segment: AccountId::new([3; 32]),
+        immutable: false,
+    }
+    .to_loader_shard()
+    .try_into()
+    .unwrap();
+    let lookup = |id| {
+        if id == program_account {
+            Some(&program_shard)
+        } else if id == linked_header_account {
+            Some(&linked_shard)
+        } else {
+            None
+        }
+    };
+    assert_eq!(get_program_via(program_account, lookup), None);
+}
+
+#[test]
+fn loader_entry_decoders_reject_the_other_variant() {
+    let header = ProgramHeader {
+        image_id: [7; 8],
+        program_first_segment: AccountId::new([2; 32]),
+        immutable: false,
+    };
+    let segment = ProgramSegment {
+        bytecode: vec![1, 2, 3],
+        next_segment: None,
+    };
+    let header_bytes = header.to_loader_shard();
+    let segment_bytes = segment.clone().to_loader_shard();
+
+    assert_eq!(
+        ProgramHeader::from_loader_shard(&header_bytes),
+        Some(header)
+    );
+    assert_eq!(ProgramSegment::from_loader_shard(&header_bytes), None);
+    assert_eq!(
+        ProgramSegment::from_loader_shard(&segment_bytes),
+        Some(segment)
+    );
+    assert_eq!(ProgramHeader::from_loader_shard(&segment_bytes), None);
 }
 
 // ---- AccountId::for_private_pda tests ----

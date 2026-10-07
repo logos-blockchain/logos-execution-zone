@@ -50,7 +50,7 @@ impl ProgramLoader<'_> {
                 ))
                 .await
                 .map_err(ExecutionFailureKind::SequencerError)?;
-            if program_loader_core::ProgramSegment::from_bytes(
+            if program_loader_core::ProgramSegment::from_loader_shard(
                 next_segment_acc.data.shard(PROGRAM_LOADER_ACCOUNT_ID),
             )
             .is_none()
@@ -245,7 +245,7 @@ impl ProgramLoader<'_> {
                 .get_account_view(ProgramShardSelector::new(id, PROGRAM_LOADER_ACCOUNT_ID))
                 .await
                 .with_context(|| format!("failed to fetch segment account {id}"))?;
-            let segment = program_loader_core::ProgramSegment::from_bytes(
+            let segment = program_loader_core::ProgramSegment::from_loader_shard(
                 account.data.shard(PROGRAM_LOADER_ACCOUNT_ID),
             )
             .with_context(|| format!("account {id} does not hold a valid program segment"))?;

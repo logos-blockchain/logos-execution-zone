@@ -241,7 +241,7 @@ impl V03State {
                         bytecode: chunk.to_vec(),
                         next_segment: segment_account_ids.get(i.saturating_add(1)).copied(),
                     }
-                    .to_bytes(),
+                    .to_loader_shard(),
                 )
                 .expect("segment fits under DATA_MAX_LENGTH"),
             );
@@ -255,7 +255,7 @@ impl V03State {
         };
         let header = Account::default().with_shard(
             PROGRAM_LOADER_ACCOUNT_ID,
-            ShardData::try_from(program_header.to_bytes())
+            ShardData::try_from(program_header.to_loader_shard())
                 .expect("program header fits under DATA_MAX_LENGTH"),
         );
         self.public_state.insert(header_account_id, header);

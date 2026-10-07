@@ -71,7 +71,7 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
                         bytecode: chunk.to_vec(),
                         next_segment: segment_account_ids.get(i + 1).copied(),
                     }
-                    .to_bytes(),
+                    .to_loader_shard(),
                 )
                 .unwrap(),
             ),
@@ -92,7 +92,7 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
                     program_first_segment: segment_account_ids[0],
                     immutable: true,
                 }
-                .to_bytes(),
+                .to_loader_shard(),
             )
             .unwrap(),
         ),
@@ -180,7 +180,7 @@ fn program_with_more_than_max_segments_is_rejected() {
                         bytecode: vec![],
                         next_segment,
                     }
-                    .to_bytes(),
+                    .to_loader_shard(),
                 )
                 .unwrap(),
             ),
@@ -199,7 +199,7 @@ fn program_with_more_than_max_segments_is_rejected() {
                     program_first_segment: segment_account_ids[0],
                     immutable: true,
                 }
-                .to_bytes(),
+                .to_loader_shard(),
             )
             .unwrap(),
         ),
@@ -233,7 +233,7 @@ fn program_with_more_than_max_segments_is_rejected_at_deploy_time() {
                         bytecode: vec![],
                         next_segment: segment_account_ids.get(i + 1).copied(),
                     }
-                    .to_bytes(),
+                    .to_loader_shard(),
                 )
                 .unwrap(),
             ),
@@ -408,6 +408,51 @@ fn create_header_rejects_a_shadow_derived_target_the_signer_does_not_control() {
         state.get_account_by_id(shadow_addr),
         Account::default(),
         "the shadow-derived account must remain unclaimed after a rejected deploy"
+    );
+}
+
+#[test]
+fn a_header_sized_segment_is_stored_as_a_segment_not_a_header() {
+    let mut state = V03State::new();
+    let program = crate::test_methods::noop();
+    let segments = force_insert_segment_chain(&mut state, program.elf(), 0x31);
+
+    let key = PrivateKey::try_new([0x78; 32]).unwrap();
+    let target = AccountId::from(&PublicKey::new_from_private_key(&key));
+
+    let mut bytecode = vec![0_u8; 28];
+    bytecode.extend_from_slice(segments[0].value());
+    let untagged = borsh::to_vec(&ProgramSegment {
+        bytecode: bytecode.clone(),
+        next_segment: None,
+    })
+    .unwrap();
+    let spoofed: ProgramHeader =
+        borsh::from_slice(&untagged).expect("untagged, this segment parses as a header");
+    assert_eq!(spoofed.program_first_segment, segments[0]);
+
+    let tx = loader_tx(
+        vec![target],
+        vec![Nonce(0)],
+        Instruction::WriteSegment {
+            bytecode: bytecode.clone(),
+            next_segment: None,
+        },
+        &[&key],
+    );
+
+    state
+        .transition_from_public_transaction(&tx, 1, 0)
+        .expect("an authorized segment write succeeds");
+
+    let stored = state.loader_shard(target).expect("the segment was written");
+    assert_eq!(
+        ProgramSegment::from_loader_shard(stored).map(|segment| segment.bytecode),
+        Some(bytecode)
+    );
+    assert!(
+        lee_core::program::get_program_via(target, |id| state.loader_shard(id)).is_none(),
+        "no program may resolve at the target"
     );
 }
 
