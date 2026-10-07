@@ -5,7 +5,7 @@ use test_fixtures::{TestContext, public_mention};
 use wallet::cli::{
     Command, SubcommandReturnValue,
     account::{AccountSubcommand, NewSubcommand},
-    programs::token::TokenProgramAgnosticSubcommand,
+    programs::native_token_transfer::AuthTransferSubcommand,
 };
 
 use crate::harness::ScenarioOutput;
@@ -16,23 +16,11 @@ const AMOUNT_PER_TRANSFER: u128 = 100;
 pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
     let mut output = ScenarioOutput::new("multi_recipient_fanout");
 
-    let def_id = new_public_account(ctx, &mut output, "create_acc_def").await?;
-    let supply_id = new_public_account(ctx, &mut output, "create_acc_supply").await?;
-
-    output
-        .step(ctx, "token_new_fungible", async |ctx| {
-            wallet::cli::execute_subcommand(
-                ctx.wallet_mut(),
-                Command::Token(TokenProgramAgnosticSubcommand::New {
-                    definition_account_id: public_mention(def_id),
-                    supply_account_id: public_mention(supply_id),
-                    name: "FanoutToken".to_owned(),
-                    total_supply: 10_000_000,
-                }),
-            )
-            .await
-        })
-        .await?;
+    // Preconfigured account with a lot of native tokens.
+    let supply_id = *ctx
+        .existing_public_accounts()
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("At least one public account must exist"))?;
 
     let mut recipients = Vec::with_capacity(FANOUT_COUNT);
     for i in 0..FANOUT_COUNT {
@@ -45,7 +33,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
             .step(ctx, format!("transfer_{i:02}"), async |ctx| {
                 wallet::cli::execute_subcommand(
                     ctx.wallet_mut(),
-                    Command::Token(TokenProgramAgnosticSubcommand::Send {
+                    Command::AuthTransfer(AuthTransferSubcommand::Send {
                         from: public_mention(supply_id),
                         to: Some(public_mention(recipient_id)),
                         to_npk: None,

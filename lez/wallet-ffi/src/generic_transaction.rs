@@ -537,7 +537,7 @@ mod tests {
 
     #[test]
     fn program_cast_consistency() {
-        let prog = programs::amm();
+        let prog = programs::clock();
 
         let first_5_bytes = prog.elf()[..5].to_vec();
 

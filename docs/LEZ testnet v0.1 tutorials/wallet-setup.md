@@ -13,8 +13,6 @@ To check that everythin is working, run `wallet help`.
 | `wallet auth-transfer` | Authenticated transfer (send)                               |
 | `wallet chain-info`    | Chain info queries (current-block-id, block, transaction)   |
 | `wallet account`       | Account management (get, list, new, sync-private)           |
-| `wallet token`         | Token operations (new, send)                                |
-| `wallet amm`           | AMM operations (new, swap, add-liquidity, remove-liquidity) |
 | `wallet check-health`  | Health checks that the wallet is connected to the node      |
 | `wallet config`        | Config Setup (get, set)                                     |
 | `wallet restore-keys ` | Keys restore from a given password at given `depth`         |
