@@ -21,6 +21,10 @@ pub const MEMPOOL_IS_FULL_ERROR_CODE: i32 = -31900;
 /// the fee at the head: priced again off a fresh quote, it may pass.
 pub const PRIVATE_FEE_BELOW_HEAD_ERROR_CODE: i32 = -31901;
 
+/// Error code the sequencer replies with while it is not online yet, e.g. still bootstrapping
+/// from the channel.
+pub const SEQUENCER_IS_NOT_ONLINE_ERROR_CODE: i32 = -31902;
+
 /// Type alias for RPC client. Only available when `client` feature is enabled.
 ///
 /// It's cheap to clone this client, so it can be cloned and shared across the application.
