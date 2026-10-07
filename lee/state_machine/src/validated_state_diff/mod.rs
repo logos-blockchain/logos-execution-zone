@@ -569,6 +569,16 @@ fn plan_program_loader<'state>(
     ))
 }
 
+/// The cycles `actions` cost to apply on `state`, for pricing a private transaction's fee
+/// before it is proven.
+pub fn meter_public_effects(
+    state: &V03State,
+    actions: &[PublicActionWithID],
+    cycle_budget: Cycles,
+) -> Result<Cycles, LeeError> {
+    apply_public_effects(state, actions, cycle_budget).map(|(_, cycles)| cycles)
+}
+
 /// Applies public effects to live state under one shared cycle budget, returning the cycles used.
 fn apply_public_effects(
     state: &V03State,

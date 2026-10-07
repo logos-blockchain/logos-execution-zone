@@ -86,6 +86,20 @@ pub fn screen(tx: &LeeTransaction, state: &lee::V03State) -> Result<()> {
     Ok(())
 }
 
+/// The cycles a private transaction's deferred public effects cost on the head
+/// state, for the wallet to price its fee with. Metered under the gas a block
+/// can give one private transaction's effects.
+pub fn estimate_private_effect_cycles(
+    state: &lee::V03State,
+    actions: &[lee::privacy_preserving_transaction::message::PublicActionWithID],
+) -> std::result::Result<u64, lee::error::LeeError> {
+    lee::meter_public_effects(
+        state,
+        actions,
+        market::MAX_GAS_EXEC.saturating_sub(market::PRIVATE_VERIFY_GAS),
+    )
+}
+
 /// Prices the next block off the head state's fee market.
 #[must_use]
 pub fn fee_quote(state: &lee::V03State) -> FeeStateQuote {
@@ -359,6 +373,34 @@ mod tests {
             screen(&private_tx(flat - 1, Some(0)), &state),
             Err(Error::FeeCore(FeeError::PrivateFeeBelowRequired { .. }))
         ));
+    }
+
+    #[test]
+    fn native_effects_meter_zero_and_undecodable_ones_are_refused() {
+        use lee::privacy_preserving_transaction::message::PublicActionWithID;
+        use lee_core::{
+            execution_state::DeferredPublicEffect,
+            native_token::{Effect, NATIVE_TOKEN_PROGRAM_ID},
+        };
+
+        let state = initial_state(true);
+        let effect = |data: Vec<u8>| {
+            vec![PublicActionWithID {
+                account_id: recipient(),
+                effects: vec![DeferredPublicEffect {
+                    program_account_id: NATIVE_TOKEN_PROGRAM_ID,
+                    shard_program_account_id: NATIVE_TOKEN_PROGRAM_ID,
+                    data,
+                }],
+            }]
+        };
+
+        let credit = borsh::to_vec(&Effect::Credit(1)).expect("serializes");
+        assert_eq!(
+            estimate_private_effect_cycles(&state, &effect(credit)).unwrap(),
+            0
+        );
+        assert!(estimate_private_effect_cycles(&state, &effect(vec![0xFF])).is_err());
     }
 
     /// SPECS §Overview worked example: at the genesis base fees of 8/8 the

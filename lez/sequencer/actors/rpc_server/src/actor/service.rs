@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use bytesize::ByteSize;
-use common::transaction::LeeTransaction;
+use common::transaction::{DeferredPublicActions, LeeTransaction};
 use jsonrpsee::{
     core::async_trait,
     types::{ErrorCode, ErrorObjectOwned},
@@ -134,6 +134,16 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             .await
             .map(map_fee_state_quote)
             .map_err(map_infallible_error)
+    }
+
+    async fn estimate_private_effect_cycles(
+        &self,
+        actions: DeferredPublicActions,
+    ) -> Result<u64, ErrorObjectOwned> {
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::EstimatePrivateEffectCycles { actions })
+            .await
+            .map_err(map_executor_error)
     }
 
     async fn check_health(&self) -> Result<(), ErrorObjectOwned> {
@@ -324,10 +334,11 @@ fn map_executor_error<M>(
 
     match err {
         SendError::HandlerError(handle_err) => match handle_err {
-            incorrect_fee @ sequencer_executor_actor::error::Error::IncorrectFee(_) => {
+            invalid @ (sequencer_executor_actor::error::Error::IncorrectFee(_)
+            | sequencer_executor_actor::error::Error::PrivateEffectsFailed(_)) => {
                 ErrorObjectOwned::owned(
                     ErrorCode::InvalidParams.code(),
-                    format!("{incorrect_fee:#}"),
+                    format!("{invalid:#}"),
                     None::<()>,
                 )
             }

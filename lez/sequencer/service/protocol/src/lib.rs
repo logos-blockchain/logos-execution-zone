@@ -2,7 +2,11 @@
 
 use std::{fmt::Display, str::FromStr};
 
-pub use common::{HashType, block::Block, transaction::LeeTransaction};
+pub use common::{
+    HashType,
+    block::Block,
+    transaction::{DeferredPublicActions, LeeTransaction},
+};
 pub use lee::{Account, AccountData, AccountId, ProgramId, ProgramShardSelector};
 pub use lee_core::{BlockId, Commitment, CommitmentSetDigest, MembershipProof, account::Nonce};
 use serde::{Deserialize, Serialize};

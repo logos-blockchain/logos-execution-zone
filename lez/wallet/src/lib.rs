@@ -15,7 +15,11 @@ use std::{
 pub use account_manager::{AccountIdentity, AccountMention, CIPHERTEXT_PAD_SIZE, SelectedShard};
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
-use common::{HashType, block::Block, transaction::LeeTransaction};
+use common::{
+    HashType,
+    block::Block,
+    transaction::{DeferredPublicActions, LeeTransaction},
+};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
@@ -747,6 +751,23 @@ impl WalletCore {
             dummy_inputs: acc_manager.dummy_inputs_default(),
             ciphertext_padding: Some(CIPHERTEXT_PAD_SIZE),
         };
+
+        // Dry run first: the fee must cover the metered cost of the public effects, and the
+        // sequencer meters them on its head state.
+        let dry_run_input = input.clone();
+        let dry_run_program = program.clone();
+        let actions =
+            tokio::task::spawn_blocking(move || lee::dry_run(dry_run_input, &dry_run_program))
+                .await??;
+        let effect_cycles = self
+            .multi_sequencer_client
+            .metered_get(async |client: &SequencerClient| {
+                client
+                    .estimate_private_effect_cycles(DeferredPublicActions(actions.clone()))
+                    .await
+            })
+            .await
+            .map_err(|err| ExecutionFailureKind::SequencerError(err.into()))?;
         let payer = match acc_manager.private_fee_payer_account_id() {
             Some(payer) => payer,
             None => acc_manager
@@ -758,7 +779,7 @@ impl WalletCore {
                     ))
                 })?,
         };
-        let fee = self.private_fee_transfer(payer).await?;
+        let fee = self.private_fee_transfer(payer, effect_cycles).await?;
 
         let program = program.clone();
         let (output, proof) = tokio::task::spawn_blocking(move || {
@@ -801,12 +822,12 @@ impl WalletCore {
         Ok((call_res?, shared_secrets))
     }
 
-    /// The in-proof fee `payer` pays for a privacy-preserving transaction, priced at the head
-    /// fee state. Guest-evaluated public effects are assumed to cost no cycles until a dry-run
-    /// estimate exists; a transaction with such effects needs a higher amount.
+    /// The in-proof fee `payer` pays for a privacy-preserving transaction whose public effects
+    /// meter `effect_cycles`, priced at the head fee state.
     async fn private_fee_transfer(
         &self,
         payer: AccountId,
+        effect_cycles: u64,
     ) -> Result<lee_core::FeeTransfer, ExecutionFailureKind> {
         let quote = self
             .multi_sequencer_client
@@ -817,7 +838,7 @@ impl WalletCore {
             payer,
             recipient: system_accounts::fee_inbox_account_id(),
             amount: fee_core::assess::private_fee_required(
-                0,
+                effect_cycles,
                 quote.base_fee_exec,
                 quote.base_fee_stor,
             ),

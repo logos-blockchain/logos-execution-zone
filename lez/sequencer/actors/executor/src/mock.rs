@@ -20,11 +20,11 @@ use crate::{
     ExecutorActorTrait, Result,
     error::Error,
     protocol::{
-        ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
-        GetAccountView, GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
-        GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetProofsAndRoot,
-        GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
-        Transaction,
+        ChannelId, EstimatePrivateEffectCycles, FeeStateQuote, GetAccount, GetAccountBalance,
+        GetAccountNonces, GetAccountReply, GetAccountView, GetBlock, GetBlockRange, GetChannelId,
+        GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId,
+        GetProofsAndRoot, GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter,
+        RequeueCrossZoneDeadLetterReply, Transaction,
     },
 };
 
@@ -119,6 +119,12 @@ mockall::mock! {
             msg: GetFeeQuote,
             ctx: &mut Context<Self, FeeStateQuote>
         ) -> FeeStateQuote;
+
+        pub fn handle_estimate_private_effect_cycles(
+            &mut self,
+            msg: EstimatePrivateEffectCycles,
+            ctx: &mut Context<Self, Result<u64>>
+        ) -> Result<u64>;
     }
 }
 
@@ -319,6 +325,18 @@ impl Message<RequeueCrossZoneDeadLetter> for MockExecutorActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_requeue_cross_zone_dead_letter(msg, ctx)
+    }
+}
+
+impl Message<EstimatePrivateEffectCycles> for MockExecutorActor {
+    type Reply = Result<u64>;
+
+    async fn handle(
+        &mut self,
+        msg: EstimatePrivateEffectCycles,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_estimate_private_effect_cycles(msg, ctx)
     }
 }
 

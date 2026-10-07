@@ -83,7 +83,7 @@ async fn fund_private_pda(
             ..Default::default()
         },
         &ProgramWithDependencies::native(),
-        Some(private_fee_transfer(&wallet.helm_owned(), sender).await?),
+        Some(private_fee_transfer(&wallet.helm_owned(), sender, 0).await?),
     )
     .map_err(|e| anyhow::anyhow!("circuit proving failed: {e}"))?;
 
