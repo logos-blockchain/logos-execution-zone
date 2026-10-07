@@ -187,6 +187,13 @@ impl SharedStore {
             .returning(|_msg, _ctx| Ok(None));
         mock.expect_handle_get_dead_letter_dispatches()
             .returning(|_msg, _ctx| Ok(Vec::new()));
+        mock.expect_handle_get_dead_letter_dispatch_retained_count()
+            .returning(|_msg, _ctx| Ok(0));
+        mock.expect_handle_get_pending_cross_zone_dispatch_count()
+            .returning({
+                let store = self.clone();
+                move |_msg, _ctx| Ok(store.lock().pending_dispatches.len())
+            });
         mock
     }
 
