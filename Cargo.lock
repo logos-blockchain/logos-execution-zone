@@ -2794,6 +2794,7 @@ dependencies = [
  "lee",
  "logos-blockchain-key-management-system-service",
  "sequencer_core",
+ "sequencer_genesis",
  "sequencer_stake_core",
  "serde_json",
 ]
@@ -11310,6 +11311,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sequencer_bridge"
+version = "0.1.0"
+dependencies = [
+ "bridge_core",
+ "lee",
+ "programs",
+ "system_accounts",
+]
+
+[[package]]
 name = "sequencer_channel_signing_actor"
 version = "0.1.0"
 dependencies = [
@@ -11358,8 +11369,10 @@ dependencies = [
  "programs",
  "rand 0.8.6",
  "sequencer_bedrock_actor",
+ "sequencer_bridge",
  "sequencer_channel_signing_actor",
  "sequencer_core_metrics",
+ "sequencer_genesis",
  "sequencer_slasher_actor",
  "sequencer_stake_core",
  "sequencer_storage_actor",
@@ -11430,6 +11443,28 @@ name = "sequencer_executor_actor_metrics"
 version = "0.1.0"
 dependencies = [
  "metrics",
+]
+
+[[package]]
+name = "sequencer_genesis"
+version = "0.1.0"
+dependencies = [
+ "bridge_core",
+ "bridge_lock_core",
+ "chain_state",
+ "common",
+ "cross_zone",
+ "fee_core",
+ "hex",
+ "lee",
+ "lee_core",
+ "log",
+ "programs",
+ "sequencer_bridge",
+ "sequencer_stake_core",
+ "serde",
+ "system_accounts",
+ "testnet_initial_state",
 ]
 
 [[package]]
@@ -12643,6 +12678,7 @@ dependencies = [
  "programs",
  "sequencer_bedrock_actor",
  "sequencer_core",
+ "sequencer_genesis",
  "sequencer_service",
  "sequencer_service_rpc",
  "sequencer_stake_core",
