@@ -11534,7 +11534,6 @@ name = "sequencer_service_protocol"
 version = "0.1.0"
 dependencies = [
  "common",
- "hex",
  "lee",
  "lee_core",
  "serde",
