@@ -1,5 +1,5 @@
 use kameo::error::Infallible;
-use sequencer_actors_common::{EraseMessage as _, ErasedMessage};
+use sequencer_actors_common::{ErasedMessage, SendErrorExt as _};
 
 use crate::protocol::ChannelSeq;
 

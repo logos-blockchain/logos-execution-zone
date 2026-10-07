@@ -18,7 +18,7 @@ use lee_core::{
 };
 use log::{info, warn};
 use mempool::MemPoolHandle;
-use sequencer_actors_common::EraseMessage as _;
+use sequencer_actors_common::SendErrorExt as _;
 use sequencer_bedrock_actor::BedrockActorTrait;
 use sequencer_core::{
     ChannelConfigActor, SequencerCore, SubmitConfig, TransactionOrigin, config::SequencerConfig,

@@ -33,7 +33,7 @@ use logos_blockchain_zone_sdk::{
         WithdrawInputs, ZoneSequencer,
     },
 };
-use sequencer_actors_common::EraseMessage as _;
+use sequencer_actors_common::SendErrorExt as _;
 use sequencer_storage_actor::{StorageActorTrait, protocol::GetZoneCheckpoint};
 use tokio::{select, sync::watch};
 
