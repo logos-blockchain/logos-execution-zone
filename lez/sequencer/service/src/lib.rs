@@ -1,31 +1,35 @@
-use std::{future::Future, net::SocketAddr, path::Path};
+use std::{future::Future, net::SocketAddr, path::Path, time::Duration};
 
 use anyhow::{Context as _, Result};
 use futures::never::Never;
 use glob::Pattern;
-use kameo::actor::{ActorRef, Recipient, Spawn as _};
+use kameo::{
+    actor::{ActorRef, PreparedActor, Recipient, Spawn as _},
+    supervision::RestartPolicy,
+};
 use kameo_actors::{
     DeliveryStrategy,
     broker::Broker,
+    pubsub::PubSub,
     scheduler::{Scheduler, SetInterval},
 };
 use log::info;
+#[cfg(feature = "rpc")]
+use sequencer_bedrock_actor::{BasicAuthCredentials, Url, protocol::ChannelId};
 use sequencer_channel_signing_actor::{
-    ChannelSigningActor, SetPublisher, SetSubmitter, SubmitConfig,
+    ChannelSigningActor,
+    protocol::{SetPublisher, SetSubmitter, SubmitConfig},
 };
 pub use sequencer_core::config::*;
-use sequencer_core::{
-    gossip::{AccreditedKeysReceiver, MaxBlockSizeReceiver},
-    load_or_create_signing_key,
-};
+use sequencer_core::load_or_create_signing_key;
 use sequencer_gossip_actor::{
     GossipActor,
     protocol::{PublishConfig, PublishTransaction},
 };
-#[cfg(feature = "rpc")]
 use sequencer_rpc_server_actor::RpcServerActor;
-use sequencer_slasher_actor::{SetApprovalPublisher, SlasherActor};
+use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActor;
+use sharding_pool_actor::ShardingPoolActor;
 use tokio::select;
 
 use crate::actor_handle::ActorHandle;
@@ -38,7 +42,7 @@ const OUTBOUND_APPROVAL_CHANNEL_CAPACITY: usize = 256;
 const OUTBOUND_CONFIG_CHANNEL_CAPACITY: usize = 64;
 
 #[cfg(not(feature = "standalone"))]
-pub type BedrockActor = sequencer_bedrock_actor::BedrockActor;
+pub type BedrockActor = sequencer_bedrock_actor::BedrockActor<StorageActor>;
 
 #[cfg(feature = "standalone")]
 pub type BedrockActor = sequencer_bedrock_actor::mock::MockBedrockActor;
@@ -79,8 +83,8 @@ pub struct SequencerHandle {
     /// `None` when gossip is unconfigured.
     gossip: Option<Gossip>,
     executor: ActorHandle<ExecutorActor>,
-    slasher: ActorHandle<SlasherActor>,
-    bedrock: ActorHandle<BedrockActor>,
+    slasher: ActorHandle<SlasherActor<StorageActor>>,
+    bedrock_pool: ActorHandle<ShardingPoolActor<BedrockActor, ChannelId>>,
     storage: ActorHandle<StorageActor>,
 }
 
@@ -104,7 +108,7 @@ impl SequencerHandle {
             gossip,
             executor,
             slasher,
-            bedrock,
+            bedrock_pool: bedrock,
             storage,
         } = self;
 
@@ -139,7 +143,7 @@ impl SequencerHandle {
             #[cfg(feature = "rpc")]
             rpc_server,
             executor,
-            bedrock,
+            bedrock_pool: bedrock,
             storage,
             gossip: _,
         } = self;
@@ -192,7 +196,7 @@ impl SequencerHandle {
             #[cfg(feature = "rpc")]
             rpc_server,
             executor,
-            bedrock,
+            bedrock_pool: bedrock,
             storage,
             gossip: _,
         } = self;
@@ -276,7 +280,7 @@ pub fn run(
 
         let bedrock_broker = Broker::new(DeliveryStrategy::Guaranteed);
         let bedrock_broker_ref = Broker::spawn(bedrock_broker);
-        let topic = Pattern::new(&format!("channel/{}/*", config.bedrock_config.channel_id))
+        let topic = Pattern::new(&format!("channel/{}/**", config.bedrock_config.channel_id))
             .expect("Valid pattern");
         bedrock_broker_ref
             .tell(kameo_actors::broker::Subscribe {
@@ -286,27 +290,91 @@ pub fn run(
             .await?;
         info!("Bedrock Broker Actor spawned");
 
-        let bedrock = setup_bedrock_actor(&config, storage_ref.clone(), bedrock_broker_ref.clone())
-            .await
-            .context("Failed to set up Bedrock Actor")?;
-        let bedrock_ref = BedrockActor::spawn(bedrock);
-        info!("Bedrock Actor spawned");
+        let config_clone = config.clone();
+        let storage_ref_clone = storage_ref.clone();
+        let bedrock_broker_ref_clone = bedrock_broker_ref.clone();
+        let bedrock_pool = ShardingPoolActor::<BedrockActor, ChannelId>::new(
+            sharding_pool_actor::RestartConfig {
+                policy: RestartPolicy::Permanent,
+                limit: 10,
+                within: Duration::from_mins(2),
+            },
+            move |channel_id| {
+                bedrock_actor_args(
+                    config_clone.bedrock_config.node_url.clone(),
+                    config_clone.bedrock_config.auth.clone().map(Into::into),
+                    channel_id,
+                    storage_ref_clone.clone(),
+                    bedrock_broker_ref_clone.clone(),
+                )
+            },
+        );
+        let bedrock_pool_ref = ShardingPoolActor::spawn(bedrock_pool);
+        info!("Bedrock Sharding Pool Actor spawned");
 
-        let executor = ExecutorActor::new(config, storage_ref.clone(), bedrock_ref.clone())
-            .await
-            .context("Failed to set up Executor Actor")?;
-        let slasher_ref = executor.slasher_ref();
-        let channel_signer_ref = executor.channel_signer_ref();
-        // The core has already read a committee by the time this returns.
-        let accredited_keys_rx = executor.accredited_keys_watch();
-        let staked_keys_rx = executor.staked_keys_watch();
-        let max_block_size_rx = executor.max_block_size_watch();
+        let channel_signing_key = load_or_create_signing_key(&channel_signing_key_path)
+            .context("Failed to load or create the channel signing key")?;
+        log::info!(
+            "Channel signing public key: {}",
+            hex::encode(channel_signing_key.public_key().to_bytes())
+        );
+
+        let stake_config_pubsub_ref = PubSub::spawn(PubSub::new(DeliveryStrategy::Guaranteed));
+        let gossip_actor_prepared_opt = if gossip_config.is_some() {
+            let gossip_actor_prepared = GossipActor::prepare_with_mailbox(kameo::mailbox::bounded(
+                sequencer_gossip_actor::MAILBOX_CAPACITY,
+            ));
+            stake_config_pubsub_ref
+                .ask(kameo_actors::pubsub::Subscribe(
+                    gossip_actor_prepared.actor_ref().clone(),
+                ))
+                .await?;
+            Some(gossip_actor_prepared)
+        } else {
+            None
+        };
+        info!("Stake Config PubSub Actor spawned");
+
+        // Starts without a committee: the executor hands it one once it has a
+        // chain.
+        let slasher_ref = SlasherActor::spawn(
+            SlasherActor::load(
+                storage_ref.clone(),
+                channel_signing_key.clone(),
+                sequencer_slasher_actor::protocol::SequencerStakeConfig::default(),
+                *bedrock_config.channel_id.as_ref(),
+            )
+            .await,
+        );
+        info!("Slasher Actor spawned");
+
+        let channel_signer_ref = ChannelSigningActor::spawn_with_mailbox(
+            ChannelSigningActor::new(
+                channel_signing_key.clone(),
+                bedrock_config.channel_id,
+                sequencer_core::inscribed_block_deposits,
+            ),
+            kameo::mailbox::bounded(sequencer_channel_signing_actor::MAILBOX_CAPACITY),
+        );
+        info!("Channel Signing Actor spawned");
+
+        let executor = ExecutorActor::new(
+            config,
+            channel_signing_key,
+            storage_ref.clone(),
+            bedrock_pool_ref.clone(),
+            stake_config_pubsub_ref,
+            slasher_ref.clone(),
+            channel_signer_ref.clone(),
+        )
+        .await
+        .context("Failed to set up Executor Actor")?;
         let executor_ref = executor_prepared.actor_ref().clone();
         executor_prepared.spawn(executor);
         info!("Executor Actor spawned");
 
         // A config needs no turn, so the actor tells the executor to submit it
-        // the moment the signatures are in. Weak, because the executor owns
+        // the moment the signatures are in. Weak, because the executor holds
         // the actor that holds this.
         channel_signer_ref
             .tell(SetSubmitter(
@@ -316,16 +384,14 @@ pub fn run(
 
         let scheduler_ref = Scheduler::spawn(Scheduler::new());
 
-        let (gossip, gossip_publisher) = match gossip_config {
+        let (gossip, gossip_publisher) = match gossip_config.zip(gossip_actor_prepared_opt) {
             None => None,
-            Some(gossip_config) => Some(
+            Some((gossip_config, gossip_actor_prepared)) => Some(
                 setup_gossip(
                     gossip_config,
+                    gossip_actor_prepared,
                     *bedrock_config.channel_id.as_ref(),
                     &channel_signing_key_path,
-                    max_block_size_rx.clone(),
-                    accredited_keys_rx,
-                    staked_keys_rx,
                     &executor_ref,
                     &slasher_ref,
                     &channel_signer_ref,
@@ -337,13 +403,8 @@ pub fn run(
         .unzip();
 
         #[cfg(feature = "rpc")]
-        let rpc_server = setup_rpc_server(
-            listen_addr,
-            max_block_size_rx,
-            executor_ref.clone(),
-            gossip_publisher,
-        )
-        .await?;
+        let rpc_server =
+            setup_rpc_server(listen_addr, executor_ref.clone(), gossip_publisher).await?;
         // Nothing binds the address in this build, and with no RPC server there
         // is nobody left to publish the transactions it would have accepted.
         #[cfg(not(feature = "rpc"))]
@@ -368,7 +429,7 @@ pub fn run(
             #[cfg(feature = "rpc")]
             rpc_server,
             executor: ActorHandle::new(executor_ref),
-            bedrock: ActorHandle::new(bedrock_ref),
+            bedrock_pool: ActorHandle::new(bedrock_pool_ref),
             slasher: ActorHandle::new(slasher_ref),
             storage: ActorHandle::new(storage_ref),
             gossip,
@@ -387,13 +448,11 @@ pub fn run(
 )]
 pub async fn setup_gossip(
     gossip_config: GossipConfig,
+    gossip_actor_prepared: PreparedActor<GossipActor>,
     channel_id: [u8; 32],
     channel_signing_key_path: &Path,
-    max_block_size_rx: MaxBlockSizeReceiver,
-    accredited_keys_rx: AccreditedKeysReceiver,
-    staked_keys_rx: AccreditedKeysReceiver,
     executor_ref: &ActorRef<ExecutorActor>,
-    slasher_ref: &ActorRef<SlasherActor>,
+    slasher_ref: &ActorRef<SlasherActor<StorageActor>>,
     channel_signer_ref: &ActorRef<ChannelSigningActor>,
     scheduler_ref: &ActorRef<Scheduler>,
 ) -> Result<(Gossip, Recipient<PublishTransaction>)> {
@@ -426,10 +485,7 @@ pub async fn setup_gossip(
         signing_key,
         // Verified inbound approvals go straight to the slasher.
         slasher_ref.clone().recipient(),
-        max_block_size_rx,
         submit,
-        accredited_keys_rx,
-        staked_keys_rx,
         // Screened inbound channel-config messages go straight to the actor.
         channel_signer_ref.clone().recipient(),
     ))
@@ -438,10 +494,8 @@ pub async fn setup_gossip(
     info!("Gossip network started as {}", gossip_actor.local_peer_id());
     let bootstrap_addrs = gossip_actor.bootstrap_addrs();
 
-    let gossip_ref = GossipActor::spawn_with_mailbox(
-        gossip_actor,
-        kameo::mailbox::bounded(sequencer_gossip_actor::MAILBOX_CAPACITY),
-    );
+    let gossip_ref = gossip_actor_prepared.actor_ref().clone();
+    gossip_actor_prepared.spawn(gossip_actor);
     info!("Gossip Actor spawned");
     let watchdog = sequencer_gossip_actor::spawn_gossip_outage_watchdog(gossip_ref.clone());
 
@@ -449,8 +503,13 @@ pub async fn setup_gossip(
     // mailbox; the channel bridges its `SetApprovalPublisher` API.
     let (approval_tx, mut approval_rx) =
         tokio::sync::mpsc::channel(OUTBOUND_APPROVAL_CHANNEL_CAPACITY);
-    slasher_ref.tell(SetApprovalPublisher(approval_tx)).await?;
+    slasher_ref
+        .tell(sequencer_slasher_actor::protocol::SetApprovalPublisher(
+            approval_tx,
+        ))
+        .await?;
     let approval_gossip_ref = gossip_ref.clone();
+    // TODO: wtf
     tokio::spawn(async move {
         while let Some(approval) = approval_rx.recv().await {
             if approval_gossip_ref.tell(approval).send().await.is_err() {
@@ -507,18 +566,12 @@ pub async fn setup_gossip(
 #[cfg(feature = "rpc")]
 async fn setup_rpc_server(
     listen_addr: SocketAddr,
-    max_block_size_rx: MaxBlockSizeReceiver,
     executor_ref: ActorRef<ExecutorActor>,
     gossip_publisher: Option<Recipient<PublishTransaction>>,
 ) -> Result<RpcServer> {
-    let rpc_server = RpcServerActor::new(
-        listen_addr,
-        max_block_size_rx,
-        executor_ref,
-        gossip_publisher,
-    )
-    .await
-    .context("Failed to initialize RPC Server Actor")?;
+    let rpc_server = RpcServerActor::new(listen_addr, executor_ref, gossip_publisher)
+        .await
+        .context("Failed to initialize RPC Server Actor")?;
     let addr = rpc_server.addr();
     let rpc_server_ref = RpcServerActor::spawn(rpc_server);
     info!("RPC Server Actor spawned");
@@ -530,71 +583,52 @@ async fn setup_rpc_server(
 }
 
 #[cfg(not(feature = "standalone"))]
-async fn setup_bedrock_actor(
-    config: &SequencerConfig,
+const fn bedrock_actor_args(
+    node_url: Url,
+    basic_auth: Option<BasicAuthCredentials>,
+    channel_id: ChannelId,
     storage_ref: ActorRef<StorageActor>,
-    bedrock_broker_ref: ActorRef<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
-) -> Result<BedrockActor> {
-    let channel_signing_key = load_or_create_signing_key(&config.channel_signing_key_path())?;
-    log::info!(
-        "Channel signing public key: {}",
-        hex::encode(channel_signing_key.public_key().to_bytes())
-    );
-
-    let bedrock_actor_config = sequencer_bedrock_actor::config::Config {
-        node_url: config.bedrock_config.node_url.clone(),
-        basic_auth: config.bedrock_config.auth.clone().map(Into::into),
-        channel_id: config.bedrock_config.channel_id,
-        channel_signing_key,
-        funding_pk: config.load_funding_public_key()?,
-        priority_fee_percent: config.bedrock_config.priority_fee_percent,
-        resubmit_interval: config.retry_pending_blocks_timeout,
-        stale_refund_slots: config.bedrock_config.stale_refund_slots,
-    };
-
-    Ok(BedrockActor::new(bedrock_actor_config, storage_ref, bedrock_broker_ref).await?)
+    broker_ref: ActorRef<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
+) -> sequencer_bedrock_actor::actor::Args<StorageActor> {
+    sequencer_bedrock_actor::actor::Args {
+        node_url,
+        basic_auth,
+        channel_id,
+        storage_ref,
+        broker_ref,
+    }
 }
 
 #[cfg(feature = "standalone")]
-async fn setup_bedrock_actor(
-    config: &SequencerConfig,
-    storage_ref: ActorRef<StorageActor>,
-    _bedrock_broker_ref: ActorRef<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
-) -> sequencer_bedrock_actor::Result<BedrockActor> {
+fn bedrock_actor_args(
+    _node_url: Url,
+    _basic_auth: Option<BasicAuthCredentials>,
+    _channel_id: ChannelId,
+    _storage_ref: ActorRef<StorageActor>,
+    _broker_ref: ActorRef<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
+) -> BedrockActor {
     use std::sync::{Arc, Mutex};
 
     use sequencer_bedrock_actor::protocol::{
         AccreditedKeys, ChannelSeq, Checkpoint, HeaderId, MsgId, PublishOutcome, Slot,
     };
-    use sequencer_storage_actor::protocol::GetZoneCheckpoint;
-
-    // The channel exists once a previous run stored a checkpoint, so a fresh
-    // store bootstraps it by publishing genesis.
-    let stored_seq = storage_ref
-        .ask(GetZoneCheckpoint)
-        .await
-        .expect("Failed to read the zone checkpoint")
-        .map(|record| record.seq);
-    let channel_exists = stored_seq.is_some();
 
     let mut mock = BedrockActor::default();
 
+    mock.expect_handle_initialize_channel_publisher()
+        .returning(|_msg, _ctx| Ok(true));
+
     mock.expect_handle_check_channel_exists()
-        .returning(move |_msg, _ctx| Ok(channel_exists));
+        .returning(|_msg, _ctx| Ok(false));
 
     mock.expect_handle_get_channel_tip_slot()
-        .returning(move |_msg, _ctx| Ok(channel_exists.then(|| Slot::from(0))));
+        .returning(|_msg, _ctx| Ok(Some(Slot::from(0))));
 
     mock.expect_handle_read_channel()
         .returning(|_msg, _ctx| Ok(Box::pin(futures::stream::empty())));
 
-    mock.expect_handle_check_is_our_turn().return_const(true);
-
-    let channel_id = config.bedrock_config.channel_id;
-    mock.expect_handle_get_channel_id()
-        .returning(
-            move |_msg, _ctx| sequencer_bedrock_actor::protocol::GetChannelIdReply { channel_id },
-        );
+    mock.expect_handle_check_is_our_turn()
+        .returning(|_msg, _ctx| Ok(true));
 
     mock.expect_handle_get_accredited_keys()
         .returning(|_msg, _ctx| {
@@ -602,13 +636,18 @@ async fn setup_bedrock_actor(
                 keys: Vec::new(),
                 config_tip: MsgId::root(),
                 tip_sequencer: 0,
+                tip_slot: Slot::from(0),
             }))
         });
 
-    // Continues the stored sequence so the store keeps each new checkpoint.
-    let seq = Arc::new(std::sync::atomic::AtomicU64::new(stored_seq.unwrap_or(0)));
+    mock.expect_handle_get_channel_tip_message_id()
+        .returning(|_msg, _ctx| Ok(None));
+
+    mock.expect_handle_change_channel_config()
+        .returning(|_msg, _ctx| Ok(()));
+
     let tip = Arc::new(Mutex::new(MsgId::root()));
-    let outcome = move |hash: [u8; 32], parent: Option<MsgId>| {
+    let outcome = move |hash: [u8; 32], block_id: u64, parent: Option<MsgId>| {
         let msg_id = MsgId::from(hash);
         let mut tip = tip.lock().expect("mock channel tip lock");
         let parent = parent.unwrap_or(*tip);
@@ -625,10 +664,9 @@ async fn setup_bedrock_actor(
                 finalized_config: MsgId::root(),
                 funding: Vec::new(),
             },
-            seq: ChannelSeq::mocked(
-                seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                    .saturating_add(1),
-            ),
+            // Block ids only grow, so a sequence derived from them continues the
+            // stored one across restarts and the store keeps each new checkpoint.
+            seq: ChannelSeq::mocked(block_id.saturating_add(1)),
             released_notes: Vec::new(),
         }
     };
@@ -637,11 +675,18 @@ async fn setup_bedrock_actor(
         .returning(move |msg, _ctx| {
             Ok(create_outcome(
                 msg.genesis.header.hash.0,
+                msg.genesis.header.block_id,
                 Some(MsgId::root()),
             ))
         });
     mock.expect_handle_publish_block()
-        .returning(move |msg, _ctx| Ok(outcome(msg.block.header.hash.0, msg.parent)));
+        .returning(move |msg, _ctx| {
+            Ok(outcome(
+                msg.block.header.hash.0,
+                msg.block.header.block_id,
+                msg.parent,
+            ))
+        });
 
-    Ok(mock)
+    mock
 }

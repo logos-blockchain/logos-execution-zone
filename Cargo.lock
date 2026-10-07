@@ -11519,6 +11519,7 @@ dependencies = [
  "sequencer_stake_core",
  "sequencer_storage_actor",
  "serde_json",
+ "sharding_pool_actor",
  "system_accounts",
  "tokio",
  "tokio-util",
