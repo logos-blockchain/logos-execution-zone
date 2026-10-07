@@ -59,6 +59,11 @@ struct Cli {
     /// Optional JSON output path. Defaults to `<workspace>/target/integration_bench.json`.
     #[arg(long)]
     json_out: Option<PathBuf>,
+
+    /// How long to wait for the indexer to reach the sequencer tip before recording the
+    /// scenario's finality as unmeasured.
+    #[arg(long, default_value_t = 300)]
+    finality_timeout_s: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -78,6 +83,7 @@ async fn main() -> Result<()> {
     // setup to it. Set RUST_LOG=info before running to see logs.
 
     let cli = Cli::parse();
+    let finality_timeout = Duration::from_secs(cli.finality_timeout_s);
     let risc0_dev_mode = std::env::var("RISC0_DEV_MODE").is_ok_and(|v| !v.is_empty() && v != "0");
 
     eprintln!(
@@ -115,7 +121,7 @@ async fn main() -> Result<()> {
         let mut output = run_scenario(name, &mut ctx).await?;
         output.disk_before = Some(disk_before);
         output.disk_after = Some(ctx.disk_sizes());
-        output.bedrock_finality = Some(measure_bedrock_finality(&ctx).await?);
+        output.bedrock_finality = measure_bedrock_finality(&ctx, finality_timeout).await?;
         harness::print_table(&output);
         all_outputs.push(output);
     }
@@ -163,7 +169,10 @@ async fn run_scenario(name: ScenarioName, ctx: &mut TestContext) -> Result<Scena
 /// Poll the indexer's L1-finalised block id until it catches up with the
 /// sequencer's last block id. This is effectively the sequencer→Bedrock posting
 /// plus Bedrock finalisation plus indexer ingest latency.
-async fn measure_bedrock_finality(ctx: &TestContext) -> Result<Duration> {
+async fn measure_bedrock_finality(
+    ctx: &TestContext,
+    timeout: Duration,
+) -> Result<Option<Duration>> {
     use indexer_service_rpc::RpcClient as _;
     use jsonrpsee::ws_client::WsClientBuilder;
     use sequencer_service_rpc::RpcClient as _;
@@ -175,7 +184,6 @@ async fn measure_bedrock_finality(ctx: &TestContext) -> Result<Duration> {
         .context("connect indexer WS")?;
     let sequencer_tip = ctx.sequencer_client().get_last_block_id().await?;
 
-    let timeout = Duration::from_mins(1);
     let started = std::time::Instant::now();
     let poll = async {
         loop {
@@ -187,8 +195,11 @@ async fn measure_bedrock_finality(ctx: &TestContext) -> Result<Duration> {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
     };
+    // A timeout is not a latency: recording it would publish the deadline as if it were a
+    // measurement.
     if tokio::time::timeout(timeout, poll).await.is_err() {
         eprintln!("indexer did not catch up to {sequencer_tip} within {timeout:?}");
+        return Ok(None);
     }
-    Ok(started.elapsed())
+    Ok(Some(started.elapsed()))
 }

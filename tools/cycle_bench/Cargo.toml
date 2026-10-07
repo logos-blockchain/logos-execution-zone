@@ -17,6 +17,10 @@ ppe = ["prove"]
 lee = { workspace = true }
 lee_core = { workspace = true, features = ["host"] }
 clock_core.workspace = true
+fee_core.workspace = true
+rand.workspace = true
+test_guest_core.workspace = true
+test_programs.workspace = true
 programs.workspace = true
 
 risc0-zkvm.workspace = true

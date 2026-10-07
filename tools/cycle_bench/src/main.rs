@@ -24,7 +24,11 @@
     reason = "Bench tool: matches test-style fixture code"
 )]
 
-use std::{collections::HashMap, path::PathBuf, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    time::Instant,
+};
 
 use anyhow::{Result, bail};
 use clap::Parser;
@@ -33,15 +37,22 @@ use clock_core::{
     ClockAccountData,
 };
 use cycle_bench::{ppe, stats::Stats};
+use fee_core::{BlockFeeSummary, state::FeeState};
 use lee::program::Program;
 use lee_core::{
     BlockId, Timestamp,
     account::{AccountId, ProgramShardSelector, ShardData},
     from_frame,
+    native_token::encode_balance,
     program::{AccountMeta, ApplyInput, GuestOutput, InstructionData, PlanInput, PlanOutput},
 };
 use risc0_zkvm::{ExecutorEnv, default_executor, default_prover};
 use serde::Serialize;
+
+/// Two points fit a line exactly, making R² 1.0 by construction and the slope pure noise.
+const MIN_CALIBRATION_POINTS: usize = 3;
+
+const FEE_REFUND_AMOUNT: u128 = 5_000;
 
 #[derive(Parser, Debug)]
 #[command(about = "Per-program executor and (optionally) prover cycle measurements")]
@@ -135,10 +146,10 @@ impl Calibration {
     /// The fit uses best-of-N rather than the mean so a single OS scheduling spike in one
     /// case cannot tilt the slope; best-of-N is the per-case noise floor and reproduces
     /// run-to-run, which is what a pinned-hardware throughput constant needs.
-    /// Returns `None` when there are fewer than two distinct cycle counts to fit a line.
+    /// Returns `None` unless the rows clear [`MIN_CALIBRATION_POINTS`] over two or more programs.
     fn fit(results: &[BenchResult]) -> Option<Self> {
         let n = results.len();
-        if n < 2 {
+        if n < MIN_CALIBRATION_POINTS || Self::programs(results).len() < 2 {
             return None;
         }
         let xs: Vec<f64> = results.iter().map(|r| r.user_cycles as f64).collect();
@@ -187,6 +198,10 @@ impl Calibration {
     fn calibrated_ms(&self, user_cycles: u64) -> f64 {
         self.slope_ms_per_cycle * user_cycles as f64
     }
+
+    fn programs(results: &[BenchResult]) -> HashSet<&'static str> {
+        results.iter().map(|r| r.program_name).collect()
+    }
 }
 
 struct Fixture {
@@ -206,12 +221,22 @@ impl Fixture {
             data,
         }
     }
+
+    fn balance(account_id: AccountId, is_authorized: bool, balance: u128) -> Self {
+        Self {
+            account: AccountMeta::native_balance(account_id, is_authorized),
+            data: encode_balance(balance),
+        }
+    }
 }
 
 struct Case {
     program_name: &'static str,
     instruction_label: &'static str,
     program: Program,
+    /// Where the program is registered on chain. Effects name this as their shard owner, so
+    /// deriving it from the image id instead would make every plan panic.
+    program_account_id: AccountId,
     fixtures: Vec<Fixture>,
     instruction_data: InstructionData,
 }
@@ -221,6 +246,7 @@ impl Case {
         program_name: &'static str,
         instruction_label: &'static str,
         program: Program,
+        program_account_id: AccountId,
         fixtures: Vec<Fixture>,
         instruction: &I,
     ) -> Result<Self> {
@@ -228,6 +254,7 @@ impl Case {
             program_name,
             instruction_label,
             program,
+            program_account_id,
             fixtures,
             instruction_data: borsh::to_vec(instruction)?,
         })
@@ -238,10 +265,10 @@ impl Case {
             program_name,
             instruction_label,
             program,
+            program_account_id: self_account_id,
             fixtures,
             instruction_data,
         } = self;
-        let self_account_id = AccountId::from_builtin_program(program.id());
 
         let mut shards: HashMap<ProgramShardSelector, ShardData> = fixtures
             .iter()
@@ -392,6 +419,81 @@ fn apply_journal(journal: &[u8]) -> Result<lee_core::program::ApplyOutput> {
     }
 }
 
+/// Fee's plan derives its PDAs from its own address, so fixtures must use the same value.
+fn fee_self_account_id() -> AccountId {
+    programs::fee_account_id()
+}
+
+fn fee_distribute_summary() -> BlockFeeSummary {
+    BlockFeeSummary {
+        gas_used_exec: 1_000_000,
+        gas_used_stor: 100_000,
+        revenue_base: 8_000_000,
+        revenue_tip: 64,
+    }
+}
+
+fn fee_distribute_payout() -> u128 {
+    FeeState::genesis().apply_block(&fee_distribute_summary())
+}
+
+fn fee_distribute_accounts() -> Vec<Fixture> {
+    let fee_id = fee_self_account_id();
+    let summary = fee_distribute_summary();
+    // The inspect effect refuses an inbox holding anything but the block's revenue.
+    let collected = summary.revenue_base.saturating_add(summary.revenue_tip);
+    vec![
+        Fixture::new(
+            fee_core::compute_fee_state_account_id(fee_id),
+            true,
+            fee_id,
+            FeeState::genesis()
+                .to_bytes()
+                .try_into()
+                .expect("FeeState should fit in account data"),
+        ),
+        Fixture::balance(fee_core::compute_fee_escrow_account_id(fee_id), true, 0),
+        Fixture::balance(
+            fee_core::compute_fee_inbox_account_id(fee_id),
+            true,
+            collected,
+        ),
+        Fixture::balance(AccountId::new([71; 32]), true, 0),
+    ]
+}
+
+fn fee_refund_accounts() -> Vec<Fixture> {
+    vec![
+        Fixture::balance(
+            fee_core::compute_fee_inbox_account_id(fee_self_account_id()),
+            true,
+            FEE_REFUND_AMOUNT,
+        ),
+        Fixture::balance(AccountId::new([72; 32]), true, 0),
+    ]
+}
+
+/// A shard-write of `bytes` bytes. The payload is the cycle dial: the built-in programs left in
+/// the repo all sit under 30k cycles, too narrow a range to condition the calibration fit.
+fn data_writer_case(label: &'static str, bytes: usize) -> Result<Case> {
+    let program = test_programs::data_writer();
+    let program_account_id = AccountId::from_builtin_program(program.id());
+    let fixtures = vec![Fixture::new(
+        AccountId::new([83; 32]),
+        true,
+        program_account_id,
+        ShardData::default(),
+    )];
+    Case::new(
+        "data_writer",
+        label,
+        program,
+        program_account_id,
+        fixtures,
+        &vec![7_u8; bytes],
+    )
+}
+
 fn clock_account(account_id: AccountId, block_id: BlockId) -> Fixture {
     Fixture::new(
         account_id,
@@ -423,16 +525,65 @@ fn main() -> Result<()> {
         eprintln!("cycle_bench: prove mode ON, this will be slow (~minutes per program)");
     }
 
-    let cases = [Case::new(
-        "clock",
-        "Tick (block_id+1, no multiples)",
-        programs::clock(),
-        clock_accounts_tick_at(0),
-        &clock_core::Instruction {
-            timestamp: Timestamp::from(1_700_000_000_u64),
-            block_id: 1,
-        },
-    )?];
+    // `Advance` requires each clock account's pre-state one block below the instruction's.
+    let cases = [
+        Case::new(
+            "clock",
+            "Tick (block_id+1, no multiples)",
+            programs::clock(),
+            programs::clock_account_id(),
+            clock_accounts_tick_at(0),
+            &clock_core::Instruction {
+                timestamp: Timestamp::from(1_700_000_000_u64),
+                block_id: 1,
+            },
+        )?,
+        Case::new(
+            "clock",
+            "Tick (10-block rollup)",
+            programs::clock(),
+            programs::clock_account_id(),
+            clock_accounts_tick_at(9),
+            &clock_core::Instruction {
+                timestamp: Timestamp::from(1_700_000_000_u64),
+                block_id: 10,
+            },
+        )?,
+        Case::new(
+            "clock",
+            "Tick (10 and 50-block rollups)",
+            programs::clock(),
+            programs::clock_account_id(),
+            clock_accounts_tick_at(49),
+            &clock_core::Instruction {
+                timestamp: Timestamp::from(1_700_000_000_u64),
+                block_id: 50,
+            },
+        )?,
+        Case::new(
+            "fee",
+            "Distribute",
+            programs::fee(),
+            programs::fee_account_id(),
+            fee_distribute_accounts(),
+            &fee_core::Instruction::Distribute {
+                summary: fee_distribute_summary(),
+                payout: fee_distribute_payout(),
+            },
+        )?,
+        Case::new(
+            "fee",
+            "Refund",
+            programs::fee(),
+            programs::fee_account_id(),
+            fee_refund_accounts(),
+            &fee_core::Instruction::Refund {
+                amount: FEE_REFUND_AMOUNT,
+            },
+        )?,
+        data_writer_case("Write 4 KiB", 4 * 1024)?,
+        data_writer_case("Write 64 KiB", 64 * 1024)?,
+    ];
 
     let mut results: Vec<BenchResult> = cases
         .into_iter()
@@ -448,6 +599,12 @@ fn main() -> Result<()> {
             r.calibrated_ms = Some(cal.calibrated_ms(r.user_cycles));
             r.net_compute_ms = Some(r.exec_stats.best_ms - cal.intercept_ms);
         }
+    } else {
+        eprintln!(
+            "cycle_bench: NO CALIBRATION. {} row(s) over {} program(s); needs {MIN_CALIBRATION_POINTS}+ rows over 2+ programs. calib_ms and net_ms are omitted.",
+            results.len(),
+            Calibration::programs(&results).len(),
+        );
     }
 
     print_table(&results, prove);
@@ -607,8 +764,12 @@ mod tests {
     /// Minimal `BenchResult` carrying only the fields the calibration fit reads:
     /// `user_cycles` (x) and `exec_stats.best_ms` (y).
     fn point(user_cycles: u64, best_ms: f64) -> BenchResult {
+        point_in("test", user_cycles, best_ms)
+    }
+
+    fn point_in(program_name: &'static str, user_cycles: u64, best_ms: f64) -> BenchResult {
         BenchResult {
-            program_name: "test",
+            program_name,
             instruction: "test".to_owned(),
             phase: Phase::Plan,
             user_cycles,
@@ -631,7 +792,11 @@ mod tests {
     #[test]
     fn fit_recovers_a_known_line() {
         // best_ms = 10 + 0.001 * user_cycles  ->  slope 1e-3, intercept 10, throughput 1000.
-        let results = [point(1000, 11.0), point(2000, 12.0), point(3000, 13.0)];
+        let results = [
+            point(1000, 11.0),
+            point(2000, 12.0),
+            point_in("other", 3000, 13.0),
+        ];
         let cal = Calibration::fit(&results).expect("fit over three points");
 
         assert!(
@@ -660,16 +825,27 @@ mod tests {
     }
 
     #[test]
-    fn fit_needs_at_least_two_points() {
+    fn fit_needs_at_least_three_points() {
         assert!(Calibration::fit(&[]).is_none());
         assert!(Calibration::fit(&[point(1000, 11.0)]).is_none());
+        assert!(Calibration::fit(&[point(1000, 11.0), point_in("other", 2000, 12.0)]).is_none());
+    }
+
+    #[test]
+    fn fit_refuses_rows_from_a_single_program() {
+        let results = [point(1000, 11.0), point(2000, 12.0), point(3000, 13.0)];
+        assert!(Calibration::fit(&results).is_none());
     }
 
     #[test]
     fn fit_with_identical_cycle_counts_returns_none() {
         // Zero spread in x leaves the slope undetermined; the fit must decline rather than divide
         // by zero.
-        let results = [point(1000, 11.0), point(1000, 12.0)];
+        let results = [
+            point(1000, 11.0),
+            point(1000, 12.0),
+            point_in("other", 1000, 13.0),
+        ];
         assert!(Calibration::fit(&results).is_none());
     }
 }
