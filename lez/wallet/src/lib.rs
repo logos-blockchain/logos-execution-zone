@@ -120,8 +120,6 @@ pub enum ExecutionFailureKind {
     SignError(anyhow::Error),
     #[error("Dry run: the transaction was simulated and not sent")]
     DryRun,
-    #[error("Dry run is not available for public transactions yet")]
-    DryRunUnsupported,
     #[error("Sending transaction failed for each client")]
     MultiSequencerTransactionSendError,
     #[error("Failed to join a task: {0}")]
@@ -923,10 +921,6 @@ impl WalletCore {
             ));
         }
 
-        if self.dry_run {
-            return Err(ExecutionFailureKind::DryRunUnsupported);
-        }
-
         let mut acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
         tx_pre_check(&acc_manager.selected_shards())?;
@@ -997,11 +991,64 @@ impl WalletCore {
             lee::public_transaction::WitnessSet::from_raw_parts(signatures_public_keys);
 
         let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
+        if self.dry_run {
+            self.report_public_dry_run(tx).await?;
+            return Err(ExecutionFailureKind::DryRun);
+        }
 
         Ok(self
             .sequencer_client
             .send_transaction(LeeTransaction::Public(tx))
             .await?)
+    }
+
+    /// Simulates `tx` on the sequencer and prints what it would cost at the head fee state.
+    async fn report_public_dry_run(
+        &self,
+        tx: lee::PublicTransaction,
+    ) -> Result<(), ExecutionFailureKind> {
+        let fee = tx.message().fee.expect("the wallet always declares a fee");
+        // Storage gas is the wire size settlement sees: the whole `LeeTransaction`.
+        let data_bytes = u128::try_from(
+            borsh::to_vec(&LeeTransaction::Public(tx.clone()))
+                .map_err(|err| ExecutionFailureKind::SignError(err.into()))?
+                .len(),
+        )
+        .expect("transaction size fits u128");
+        let run = self
+            .multi_sequencer_client
+            .metered_get(async |client: &SequencerClient| {
+                client
+                    .dry_run_public_transaction(LeeTransaction::Public(tx.clone()))
+                    .await
+            })
+            .await
+            .map_err(|err| ExecutionFailureKind::SequencerError(err.into()))?;
+        let quote = self
+            .multi_sequencer_client
+            .metered_get(async |client: &SequencerClient| client.get_fee_state().await)
+            .await
+            .map_err(|err| ExecutionFailureKind::SequencerError(err.into()))?;
+        let actual_fee = u128::from(run.cycles)
+            .saturating_mul(u128::from(quote.base_fee_exec))
+            .saturating_add(data_bytes.saturating_mul(u128::from(quote.base_fee_stor)))
+            .saturating_add(u128::from(fee.tip));
+
+        println!("Dry run: nothing sent");
+        println!("  fee payer:        {}", fee.payer);
+        println!("  declared gas:     {}", fee.gas_limit);
+        println!("  metered cycles:   {}", run.cycles);
+        println!("  wire bytes:       {data_bytes}");
+        println!(
+            "  base fees:        exec {} / stor {} (height {})",
+            quote.base_fee_exec, quote.base_fee_stor, quote.height
+        );
+        println!("  fee at head:      {actual_fee} (tip {})", fee.tip);
+        match run.revert {
+            Some(reason) => println!("  action REVERTS:   {reason} (fee is still charged)"),
+            None => println!("  action:           applies"),
+        }
+        Ok(())
     }
 
     pub async fn sync_to_latest_block(&mut self) -> Result<u64> {
