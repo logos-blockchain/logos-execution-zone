@@ -11923,6 +11923,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sharding_pool_actor"
+version = "0.1.0"
+dependencies = [
+ "env_logger",
+ "kameo",
+ "log",
+ "sequencer_actors_common",
+ "tokio",
+]
+
+[[package]]
 name = "shlex"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

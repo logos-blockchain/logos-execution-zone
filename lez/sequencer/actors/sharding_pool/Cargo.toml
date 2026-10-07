@@ -1,0 +1,22 @@
+[package]
+name = "sharding_pool_actor"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+actor = ["dep:log"]
+
+[dependencies]
+tokio.workspace = true
+kameo.workspace = true
+log = { workspace = true, optional = true }
+
+[dev-dependencies]
+sequencer_actors_common.workspace = true
+
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+env_logger.workspace = true
