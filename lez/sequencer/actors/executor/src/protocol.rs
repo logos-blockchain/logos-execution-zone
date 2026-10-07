@@ -32,6 +32,11 @@ pub struct Transaction {
 
 pub struct GetFeeQuote;
 
+/// Meters a private transaction's deferred public effects on the head state.
+pub struct EstimatePrivateEffectCycles {
+    pub actions: common::transaction::DeferredPublicActions,
+}
+
 /// The fee market priced off the head state, for wallets sizing `max_fee`.
 #[derive(Reply)]
 pub struct FeeStateQuote {

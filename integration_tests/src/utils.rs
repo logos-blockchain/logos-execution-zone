@@ -44,18 +44,22 @@ where
         .with_context(|| format!("Timed out waiting for {what}"))?
 }
 
-/// The in-proof fee `payer` pays for a hand-built privacy-preserving transaction.
-///
-/// Priced at the head fee state with no guest-evaluated public effects.
+/// The in-proof fee `payer` pays for a hand-built privacy-preserving transaction whose
+/// public effects meter `effect_cycles`, priced at the head fee state.
 pub async fn private_fee_transfer(
     client: &SequencerClient,
     payer: AccountId,
+    effect_cycles: u64,
 ) -> Result<lee_core::FeeTransfer> {
     let quote = client.get_fee_state().await?;
     Ok(lee_core::FeeTransfer {
         payer,
         recipient: system_accounts::fee_inbox_account_id(),
-        amount: fee_core::assess::private_fee_required(0, quote.base_fee_exec, quote.base_fee_stor),
+        amount: fee_core::assess::private_fee_required(
+            effect_cycles,
+            quote.base_fee_exec,
+            quote.base_fee_stor,
+        ),
         height: quote.height,
     })
 }

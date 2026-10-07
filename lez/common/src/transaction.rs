@@ -27,6 +27,25 @@ impl<'de> Deserialize<'de> for LeeTransaction {
     }
 }
 
+/// The public effects a privacy-preserving transaction defers to settlement, as a
+/// [`lee::dry_run`] reports them, for metering over RPC before the fee is priced.
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct DeferredPublicActions(
+    pub Vec<lee::privacy_preserving_transaction::message::PublicActionWithID>,
+);
+
+impl Serialize for DeferredPublicActions {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        crate::borsh_base64::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for DeferredPublicActions {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        crate::borsh_base64::deserialize(deserializer)
+    }
+}
+
 impl LeeTransaction {
     #[must_use]
     pub fn hash(&self) -> HashType {

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use amm_core::Instruction;
 use anyhow::{Context as _, Result};
-use common::transaction::LeeTransaction;
+use common::transaction::{DeferredPublicActions, LeeTransaction};
 use integration_tests::{
     TestContext,
     amm::{PoolFixture, amm_program_id, assert_holdings, assert_pool_record, token_program_id},
@@ -17,7 +17,7 @@ use integration_tests::{
     verify_commitment_is_in_state, wait_for_inclusion, wait_until,
 };
 use lee::{
-    AccountId, PrivacyPreservingTransaction, ProgramShardSelector, ProvingInput,
+    AccountId, PrivacyPreservingTransaction, ProgramShardSelector, ProvingInput, dry_run,
     execute_and_prove_with_fee,
     privacy_preserving_transaction::{
         circuit::ProgramWithDependencies, message::Message, witness_set::WitnessSet,
@@ -100,51 +100,60 @@ async fn prepare_offer(
         .context("the trader's input note is not on chain")?;
     let spent_keys = &spent.key_chain.private_key_holder;
 
+    let program = ProgramWithDependencies::new(
+        programs::amm(),
+        amm_program_id(),
+        HashMap::from([(token_program_id(), programs::token())]),
+    );
+    let proving_input = ProvingInput {
+        shard_selectors: vec![
+            ProgramShardSelector::new(pool.pool_id, amm_program_id()),
+            ProgramShardSelector::new(pool.vault_a, token_program_id()),
+            ProgramShardSelector::new(pool.vault_b, token_program_id()),
+            ProgramShardSelector::new(trader.input, token_program_id()),
+            ProgramShardSelector::new(trader.output, token_program_id()),
+        ],
+        private_witnesses: vec![
+            PrivateWitness {
+                vpk: spent.key_chain.viewing_public_key.clone(),
+                random_seed: [seed; 32],
+                identifier: spent.kind.identifier(),
+                kind: WitnessKind::Regular {
+                    ask: Some(spent_keys.authorization_secret_key),
+                },
+                nullifier: NullifierWitness::Update {
+                    account: spent.account.clone(),
+                    view_tag: 0,
+                    nsk: spent_keys.nullifier_secret_key(),
+                    membership_proof,
+                },
+            },
+            PrivateWitness {
+                vpk: received.key_chain.viewing_public_key.clone(),
+                random_seed: [seed.wrapping_add(128); 32],
+                identifier: received.kind.identifier(),
+                kind: WitnessKind::Regular { ask: None },
+                nullifier: NullifierWitness::Init {
+                    npk: received.key_chain.nullifier_public_key,
+                    commitment_root: root,
+                },
+            },
+        ],
+        instruction_data: swap_instruction(pool)?,
+        ..Default::default()
+    };
+
+    // The swap writes guest-owned shards, so its effects meter real cycles the fee must cover.
+    let actions = dry_run(proving_input.clone(), &program)?;
+    let effect_cycles = ctx
+        .sequencer_client()
+        .estimate_private_effect_cycles(DeferredPublicActions(actions))
+        .await?;
     let (output, proof) = execute_and_prove_with_fee(
-        ProvingInput {
-            shard_selectors: vec![
-                ProgramShardSelector::new(pool.pool_id, amm_program_id()),
-                ProgramShardSelector::new(pool.vault_a, token_program_id()),
-                ProgramShardSelector::new(pool.vault_b, token_program_id()),
-                ProgramShardSelector::new(trader.input, token_program_id()),
-                ProgramShardSelector::new(trader.output, token_program_id()),
-            ],
-            private_witnesses: vec![
-                PrivateWitness {
-                    vpk: spent.key_chain.viewing_public_key.clone(),
-                    random_seed: [seed; 32],
-                    identifier: spent.kind.identifier(),
-                    kind: WitnessKind::Regular {
-                        ask: Some(spent_keys.authorization_secret_key),
-                    },
-                    nullifier: NullifierWitness::Update {
-                        account: spent.account.clone(),
-                        view_tag: 0,
-                        nsk: spent_keys.nullifier_secret_key(),
-                        membership_proof,
-                    },
-                },
-                PrivateWitness {
-                    vpk: received.key_chain.viewing_public_key.clone(),
-                    random_seed: [seed.wrapping_add(128); 32],
-                    identifier: received.kind.identifier(),
-                    kind: WitnessKind::Regular { ask: None },
-                    nullifier: NullifierWitness::Init {
-                        npk: received.key_chain.nullifier_public_key,
-                        commitment_root: root,
-                    },
-                },
-            ],
-            instruction_data: swap_instruction(pool)?,
-            ..Default::default()
-        },
-        &ProgramWithDependencies::new(
-            programs::amm(),
-            amm_program_id(),
-            HashMap::from([(token_program_id(), programs::token())]),
-        ),
+        proving_input,
+        &program,
         // The spent note also carries the native balance that pays the fee.
-        Some(private_fee_transfer(ctx.sequencer_client(), trader.input).await?),
+        Some(private_fee_transfer(ctx.sequencer_client(), trader.input, effect_cycles).await?),
     )?;
     let message = Message::from_circuit_output(vec![], output);
     let witness_set = WitnessSet::for_message(&message, proof, &[]);

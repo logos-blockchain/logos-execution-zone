@@ -9,11 +9,11 @@ use crate::{
     Result,
     error::Error,
     protocol::{
-        ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
-        GetAccountView, GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
-        GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetProofsAndRoot,
-        GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
-        Transaction,
+        ChannelId, EstimatePrivateEffectCycles, FeeStateQuote, GetAccount, GetAccountBalance,
+        GetAccountNonces, GetAccountReply, GetAccountView, GetBlock, GetBlockRange, GetChannelId,
+        GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId,
+        GetProofsAndRoot, GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter,
+        RequeueCrossZoneDeadLetterReply, Transaction,
     },
 };
 
@@ -34,5 +34,6 @@ pub trait ExecutorActorTrait:
     + Message<GetCrossZoneDeadLetters, Reply = Result<GetCrossZoneDeadLettersReply>>
     + Message<RequeueCrossZoneDeadLetter, Reply = Result<RequeueCrossZoneDeadLetterReply>>
     + Message<GetFeeQuote, Reply = FeeStateQuote>
+    + Message<EstimatePrivateEffectCycles, Reply = Result<u64>>
 {
 }

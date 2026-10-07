@@ -6,8 +6,8 @@ pub use jsonrpsee::types::ErrorObjectOwned;
 pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
-    CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, FeeStateQuote, HashType, LeeTransaction,
-    MembershipProof, Nonce, ProgramId, ProgramShardSelector,
+    CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, DeferredPublicActions, FeeStateQuote,
+    HashType, LeeTransaction, MembershipProof, Nonce, ProgramId, ProgramShardSelector,
 };
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
@@ -43,6 +43,14 @@ pub trait Rpc {
     /// can move within, for sizing `max_fee` at submission time.
     #[method(name = "getFeeState")]
     async fn get_fee_state(&self) -> Result<FeeStateQuote, ErrorObjectOwned>;
+
+    /// The cycles a privacy-preserving transaction's deferred public effects
+    /// (from `lee::dry_run`) cost on the head state, for pricing its fee.
+    #[method(name = "estimatePrivateEffectCycles")]
+    async fn estimate_private_effect_cycles(
+        &self,
+        actions: DeferredPublicActions,
+    ) -> Result<u64, ErrorObjectOwned>;
 
     // TODO: expand healthcheck response into some kind of report
     #[method(name = "checkHealth")]

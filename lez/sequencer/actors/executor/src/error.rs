@@ -29,6 +29,13 @@ pub enum Error {
 
     #[error("Incorrect fee")]
     IncorrectFee(#[source] anyhow::Error),
+
+    /// Metering is a full apply on the head state, so this is the failure
+    /// settlement would hit: an effect the state cannot absorb (insufficient
+    /// balance, a program refusing the write, the gas budget), a shard that
+    /// changed since the wallet planned, or an unknown program.
+    #[error("The private transaction's public effects fail on the head state")]
+    PrivateEffectsFailed(#[source] anyhow::Error),
 }
 
 impl<M> From<kameo::error::SendError<M, sequencer_storage_actor::error::Error>> for Error {

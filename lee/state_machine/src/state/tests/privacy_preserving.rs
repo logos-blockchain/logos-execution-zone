@@ -594,27 +594,25 @@ fn a_guest_evaluated_public_effect_settles_against_live_state() {
         .get_proof_for_commitment(&Commitment::new(&sender_id, &pre_account))
         .expect("the account's commitment must be in state");
 
-    let (output, proof) = execute_and_prove(
-        ProvingInput {
-            shard_selectors: vec![
-                // A public account whose shard belongs to the guest, so the guest evaluates the
-                // effect on it.
-                ProgramShardSelector::new(written_to, program_id),
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(recipient_id),
-            ],
-            private_witnesses: vec![update_witness(
-                &sender_keys,
-                Identifier::ZERO,
-                pre_account,
-                membership_proof,
-            )],
-            instruction_data: Program::serialize_instruction((vec![5_u8; 4], amount)).unwrap(),
-            ..Default::default()
-        },
-        &synthetic_program(program),
-    )
-    .unwrap();
+    let program = synthetic_program(program);
+    let proving_input = ProvingInput {
+        shard_selectors: vec![
+            // A public account whose shard belongs to the guest, so the guest evaluates the
+            // effect on it.
+            ProgramShardSelector::new(written_to, program_id),
+            ProgramShardSelector::native_balance(sender_id),
+            ProgramShardSelector::native_balance(recipient_id),
+        ],
+        private_witnesses: vec![update_witness(
+            &sender_keys,
+            Identifier::ZERO,
+            pre_account,
+            membership_proof,
+        )],
+        instruction_data: Program::serialize_instruction((vec![5_u8; 4], amount)).unwrap(),
+        ..Default::default()
+    };
+    let (output, proof) = execute_and_prove(proving_input.clone(), &program).unwrap();
 
     let message = Message::from_circuit_output(vec![], output);
     let witness_set = WitnessSet::for_message(&message, proof, &[]);
@@ -629,6 +627,20 @@ fn a_guest_evaluated_public_effect_settles_against_live_state() {
     )
     .unwrap();
     assert!(cycles > 0, "a guest-evaluated effect is metered");
+
+    // A dry run yields the same effects without a proof, and metering them on the state gives
+    // the cycles settlement will charge.
+    let actions = crate::dry_run(proving_input, &program).unwrap();
+    assert_eq!(actions, tx.message.public_actions);
+    assert_eq!(
+        crate::meter_public_effects(
+            &state,
+            &actions,
+            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET
+        )
+        .unwrap(),
+        cycles
+    );
 
     state
         .transition_from_privacy_preserving_transaction(&tx, 1, 0)

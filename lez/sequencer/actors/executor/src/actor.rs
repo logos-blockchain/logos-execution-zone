@@ -31,11 +31,12 @@ use crate::{
     ExecutorActorTrait, Result,
     error::Error,
     protocol::{
-        ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
-        GetAccountTransactions, GetAccountView, GetBlock, GetBlockByHash, GetBlockRange,
-        GetChannelId, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply, GetFeeQuote,
-        GetLastBlockId, GetProofsAndRoot, GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter,
-        RequeueCrossZoneDeadLetterReply, Transaction,
+        ChannelId, EstimatePrivateEffectCycles, FeeStateQuote, GetAccount, GetAccountBalance,
+        GetAccountNonces, GetAccountReply, GetAccountTransactions, GetAccountView, GetBlock,
+        GetBlockByHash, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
+        GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetProofsAndRoot,
+        GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
+        Transaction,
     },
 };
 
@@ -325,6 +326,25 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountBalance>
                     })
             })
             .await
+    }
+}
+
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<EstimatePrivateEffectCycles>
+    for ExecutorActor<S, B>
+{
+    type Reply = Result<u64>;
+
+    async fn handle(
+        &mut self,
+        EstimatePrivateEffectCycles { actions }: EstimatePrivateEffectCycles,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.sequencer
+            .with_state(|state| {
+                sequencer_core::fees::estimate_private_effect_cycles(state, &actions.0)
+            })
+            .await
+            .map_err(|err| Error::PrivateEffectsFailed(err.into()))
     }
 }
 

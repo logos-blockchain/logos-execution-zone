@@ -186,7 +186,7 @@ pub enum NullifierWitness {
 
 /// A struct containing necessary data for dummy nullifier and
 /// commitment generation.
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub struct DummyInput {
     /// The seed used for generating the dummy nullifier.
     pub nullifier_seed: [u8; 32],
