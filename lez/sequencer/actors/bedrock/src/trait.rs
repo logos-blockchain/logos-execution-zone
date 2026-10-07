@@ -5,21 +5,21 @@ use crate::{
     error::Error,
     protocol::{
         AccreditedKeys, BoxStream, ChangeChannelConfig, CheckChannelExists, CheckIsOurTurn,
-        CreateChannel, GetAccreditedKeys, GetChannelId, GetChannelIdReply, GetChannelTipMessageId,
-        GetChannelTipSlot, MsgId, PrepareConfig, PreparedChannelConfig, PublishBlock,
+        CreateChannel, GetAccreditedKeys, GetChannelTipMessageId, GetChannelTipSlot,
+        InitializeChannelPublisher, MsgId, PrepareConfig, PreparedConfig, PublishBlock,
         PublishOutcome, ReadChannel, Slot, ZoneMessage,
     },
 };
 
 pub trait BedrockActorTrait:
-    Actor<Args = Self, Error = Error>
+    Actor<Error = Error>
+    + Message<InitializeChannelPublisher, Reply = Result<bool>>
     + Message<CreateChannel, Reply = Result<PublishOutcome>>
     + Message<PublishBlock, Reply = Result<PublishOutcome>>
-    + Message<PrepareConfig, Reply = Result<PreparedChannelConfig>>
+    + Message<PrepareConfig, Reply = Result<PreparedConfig>>
     + Message<ChangeChannelConfig, Reply = Result<()>>
     + Message<CheckChannelExists, Reply = Result<bool>>
-    + Message<GetChannelId, Reply = GetChannelIdReply>
-    + Message<CheckIsOurTurn, Reply = bool>
+    + Message<CheckIsOurTurn, Reply = Result<bool>>
     + Message<GetAccreditedKeys, Reply = Result<Option<AccreditedKeys>>>
     + Message<GetChannelTipSlot, Reply = Result<Option<Slot>>>
     + Message<GetChannelTipMessageId, Reply = Result<Option<MsgId>>>

@@ -1,20 +1,12 @@
-use kameo::error::Infallible;
+use kameo::error::{Infallible, SendError};
 use sequencer_actors_common::{ErasedMessage, SendErrorExt as _};
 
 use crate::protocol::ChannelSeq;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Storage request failed")]
-    StorageRequestFailed(
-        #[source] kameo::error::SendError<ErasedMessage, sequencer_storage_actor::error::Error>,
-    ),
-
     #[error("Broker publish failed")]
     BrokerPublishFailed(#[source] kameo::error::SendError<ErasedMessage, Infallible>),
-
-    #[error("Checkpoint (de-)serialization failed")]
-    CheckpointSerializationFailed(#[from] logos_blockchain_binary_codec::bincode::Error),
 
     #[error(
         "Stored checkpoint has channel activity but the channel does not exist on the \
@@ -23,16 +15,22 @@ pub enum Error {
     )]
     CheckpointChannelMissing,
 
+    #[error("Checkpoint (de-)serialization failed")]
+    CheckpointSerializationFailed(#[from] logos_blockchain_binary_codec::bincode::Error),
+
     #[error("Zone-sdk readiness channel closed before becoming ready")]
     ReadinessChannelClosed,
+
+    #[error("Storage request failed")]
+    StorageRequestFailed(
+        #[source] kameo::error::SendError<ErasedMessage, sequencer_storage_actor::error::Error>,
+    ),
 
     #[error("Node request failed")]
     NodeRequestFailed(#[source] anyhow::Error),
 
-    #[error("Transaction assemble failed")]
-    TransactionAssembleFailed(
-        #[from] logos_blockchain_core::mantle::transactions::tx_list::signed_ops::Error,
-    ),
+    #[error("Channel publisher is not initialized, send `InitializeChannelPublisher` first")]
+    ChannelPublisherIsNotInitialized,
 
     #[error("Creating the channel requires our own key first; creation gives the turn to index 0")]
     ChannelCreationRequiresOurKey,
@@ -52,6 +50,11 @@ pub enum Error {
     #[error("Failed to assemble channel multi-sig proof")]
     ChannelMultiSigProofAssemblyFailed(
         #[from] logos_blockchain_core::proofs::channel_multi_sig_proof::Error,
+    ),
+
+    #[error("Transaction assemble failed")]
+    TransactionAssembleFailed(
+        #[from] logos_blockchain_core::mantle::transactions::tx_list::signed_ops::Error,
     ),
 
     #[error("Too many operation proofs")]
@@ -79,8 +82,8 @@ pub enum Error {
     ZoneSdkError(#[from] logos_blockchain_zone_sdk::sequencer::Error),
 }
 
-impl<M> From<kameo::error::SendError<M, sequencer_storage_actor::error::Error>> for Error {
-    fn from(err: kameo::error::SendError<M, sequencer_storage_actor::error::Error>) -> Self {
+impl<M> From<SendError<M, sequencer_storage_actor::error::Error>> for Error {
+    fn from(err: SendError<M, sequencer_storage_actor::error::Error>) -> Self {
         Self::StorageRequestFailed(err.erase_message())
     }
 }
