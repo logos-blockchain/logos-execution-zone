@@ -17,7 +17,9 @@ use sharding_pool_actor::ShardingPoolActor;
 
 use self::turn::Turn;
 use crate::{
-    Result, actor::state::{ActorsBundle, bootstrapping, check_startup_channel_params, checkpoint_record}, error::Error,
+    Result,
+    actor::state::{ActorsBundle, bootstrapping, check_startup_channel_params, checkpoint_record},
+    error::Error,
 };
 
 #[cfg(test)]
