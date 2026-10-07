@@ -38,6 +38,7 @@ mempool = { workspace = true, optional = true }
 
 kameo.workspace = true
 anyhow.workspace = true
+chrono.workspace = true
 thiserror.workspace = true
 num-traits.workspace = true
 tokio = { workspace = true, optional = true }

@@ -62,15 +62,21 @@ impl ValidatedStateDiff {
 }
 
 /// The metered result of a public execution: the cycle count accumulated
-/// across every call in the chain.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// across every call in the chain, and why the action reverted if it did.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionCharge {
     pub cycles: Cycles,
+    /// The action failed in a chargeable way: the fee is kept and the effects
+    /// are dropped. Carries the failure's message.
+    pub revert: Option<String>,
 }
 
 impl ExecutionCharge {
     /// The charge of transaction kinds that meter nothing.
-    pub const FREE: Self = Self { cycles: 0 };
+    pub const FREE: Self = Self {
+        cycles: 0,
+        revert: None,
+    };
 }
 
 impl ValidatedStateDiff {
@@ -115,6 +121,7 @@ impl ValidatedStateDiff {
             diff,
             ExecutionCharge {
                 cycles: cycles_used,
+                revert: None,
             },
         ))
     }
@@ -165,23 +172,34 @@ impl ValidatedStateDiff {
             }
             Err(_) => cycle_budget,
         };
-        let diff = match result {
-            Ok(diff) => diff,
+        let (diff, revert) = match result {
+            Ok(diff) => (diff, None),
             // A chargeable action failure keeps no effects but still advances the
             // signers' nonces, so what `apply_state_diff` receives is the nonce
             // bumps alone: the fee stays committed and the tx cannot be replayed.
-            Err(err) if err.is_chargeable() => Self(StateDiff {
-                signer_account_ids: signers,
-                public_diff: HashMap::new(),
-                new_commitments: Vec::new(),
-                new_nullifiers: Vec::new(),
-                events: Vec::new(),
-            }),
+            Err(err) if err.is_chargeable() => (
+                Self(StateDiff {
+                    signer_account_ids: signers,
+                    public_diff: HashMap::new(),
+                    new_commitments: Vec::new(),
+                    new_nullifiers: Vec::new(),
+                    events: Vec::new(),
+                }),
+                Some(err.to_string()),
+            ),
             // A non-chargeable failure is a structural defect a correct proposer
             // would never include; reject the whole block.
-            Err(err) => return (ExecutionCharge { cycles }, Err(err)),
+            Err(err) => {
+                return (
+                    ExecutionCharge {
+                        cycles,
+                        revert: None,
+                    },
+                    Err(err),
+                );
+            }
         };
-        (ExecutionCharge { cycles }, Ok(diff))
+        (ExecutionCharge { cycles, revert }, Ok(diff))
     }
 
     /// Executes a fee-settlement invocation (reserve or refund), authorized by

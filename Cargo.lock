@@ -11225,6 +11225,7 @@ dependencies = [
  "bridge_core",
  "bytesize",
  "chain_state",
+ "chrono",
  "common",
  "cross_zone",
  "cross_zone_inbox_core",

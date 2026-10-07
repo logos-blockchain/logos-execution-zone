@@ -16,7 +16,7 @@ use sequencer_gossip_actor::protocol::PublishTransaction;
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
     CrossZoneDeadLetter, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, FeeStateQuote,
-    HashType, MembershipProof, Nonce, ProgramId, ProgramShardSelector,
+    HashType, MembershipProof, Nonce, ProgramId, ProgramShardSelector, PublicDryRun,
 };
 
 pub struct Service<E: ExecutorActorTrait> {
@@ -143,6 +143,20 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::EstimatePrivateEffectCycles { actions })
             .await
+            .map_err(map_executor_error)
+    }
+
+    async fn dry_run_public_transaction(
+        &self,
+        tx: LeeTransaction,
+    ) -> Result<PublicDryRun, ErrorObjectOwned> {
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::DryRunPublicTransaction { transaction: tx })
+            .await
+            .map(|run| PublicDryRun {
+                cycles: run.cycles,
+                revert: run.revert,
+            })
             .map_err(map_executor_error)
     }
 
@@ -337,7 +351,9 @@ fn map_executor_error<M>(
     match err {
         SendError::HandlerError(handle_err) => match handle_err {
             invalid @ (sequencer_executor_actor::error::Error::IncorrectFee(_)
-            | sequencer_executor_actor::error::Error::PrivateEffectsFailed(_)) => {
+            | sequencer_executor_actor::error::Error::PrivateEffectsFailed(_)
+            | sequencer_executor_actor::error::Error::PublicDryRunFailed(_)
+            | sequencer_executor_actor::error::Error::DryRunNotPublic) => {
                 ErrorObjectOwned::owned(
                     ErrorCode::InvalidParams.code(),
                     format!("{invalid:#}"),

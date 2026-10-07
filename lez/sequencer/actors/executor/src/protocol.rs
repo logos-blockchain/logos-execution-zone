@@ -37,6 +37,17 @@ pub struct EstimatePrivateEffectCycles {
     pub actions: common::transaction::DeferredPublicActions,
 }
 
+/// Executes a public transaction's action on the head state without settling it.
+pub struct DryRunPublicTransaction {
+    pub transaction: LeeTransaction,
+}
+
+#[derive(Reply)]
+pub struct PublicDryRun {
+    pub cycles: u64,
+    pub revert: Option<String>,
+}
+
 /// The fee market priced off the head state, for wallets sizing `max_fee`.
 #[derive(Reply)]
 pub struct FeeStateQuote {

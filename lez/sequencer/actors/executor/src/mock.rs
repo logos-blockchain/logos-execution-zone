@@ -20,11 +20,11 @@ use crate::{
     ExecutorActorTrait, Result,
     error::Error,
     protocol::{
-        ChannelId, EstimatePrivateEffectCycles, FeeStateQuote, GetAccount, GetAccountBalance,
-        GetAccountNonces, GetAccountReply, GetAccountView, GetBlock, GetBlockRange, GetChannelId,
-        GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId,
-        GetProofsAndRoot, GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter,
-        RequeueCrossZoneDeadLetterReply, Transaction,
+        ChannelId, DryRunPublicTransaction, EstimatePrivateEffectCycles, FeeStateQuote, GetAccount,
+        GetAccountBalance, GetAccountNonces, GetAccountReply, GetAccountView, GetBlock,
+        GetBlockRange, GetChannelId, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply,
+        GetFeeQuote, GetLastBlockId, GetProofsAndRoot, GetTransaction, ProduceBlock, PublicDryRun,
+        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, Transaction,
     },
 };
 
@@ -125,6 +125,12 @@ mockall::mock! {
             msg: EstimatePrivateEffectCycles,
             ctx: &mut Context<Self, Result<u64>>
         ) -> Result<u64>;
+
+        pub fn handle_dry_run_public_transaction(
+            &mut self,
+            msg: DryRunPublicTransaction,
+            ctx: &mut Context<Self, Result<PublicDryRun>>
+        ) -> Result<PublicDryRun>;
     }
 }
 
@@ -337,6 +343,18 @@ impl Message<EstimatePrivateEffectCycles> for MockExecutorActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_estimate_private_effect_cycles(msg, ctx)
+    }
+}
+
+impl Message<DryRunPublicTransaction> for MockExecutorActor {
+    type Reply = Result<PublicDryRun>;
+
+    async fn handle(
+        &mut self,
+        msg: DryRunPublicTransaction,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_dry_run_public_transaction(msg, ctx)
     }
 }
 
