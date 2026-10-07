@@ -25,9 +25,9 @@ use libp2p::{
     swarm::{NetworkBehaviour, Swarm, SwarmEvent},
 };
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
-use sequencer_channel_config_actor::Wire;
+use sequencer_channel_config_actor::protocol::Wire;
 use sequencer_core::{config::GossipConfig, gossip::AccreditedKeysReceiver};
-use sequencer_slasher_actor::Approval;
+use sequencer_slasher_actor::protocol::Approval;
 use tokio::select;
 
 use self::seen_cache::SeenCache;
