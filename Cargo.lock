@@ -12641,6 +12641,7 @@ dependencies = [
  "sequencer_core",
  "sequencer_genesis",
  "sequencer_service",
+ "sequencer_service_protocol",
  "sequencer_service_rpc",
  "sequencer_stake_core",
  "sequencer_storage_actor",

@@ -256,15 +256,11 @@ impl SequencerHandle {
 ///
 /// `listen_addr` goes unused without the `rpc` feature, since there is then no
 /// RPC server to bind it.
-#[expect(
-    clippy::manual_async_fn,
-    reason = "Explicit Send future works around rust-lang/rust#100013"
-)]
 pub fn run(
     config: SequencerConfig,
     listen_addr: SocketAddr,
 ) -> impl Future<Output = Result<SequencerHandle>> + Send + 'static {
-    async move {
+    Box::pin(async move {
         let block_timeout = config.block_create_timeout;
 
         let gossip_config = config.gossip.clone();
@@ -434,7 +430,7 @@ pub fn run(
             storage: ActorHandle::new(storage_ref),
             gossip,
         })
-    }
+    })
 }
 
 /// Starts the gossip actor together with its outage watchdog and its
