@@ -721,29 +721,34 @@ impl AppDeployment<AppHostEnv> for WalletApp {
                     .build()
                     .context("failed to create LEZ wallet setup runtime")?;
                 runtime.block_on(async move {
-                    let (wallet, initialized_state_dir, password) = match configured_state_dir {
-                        Some(setup_home) => crate::setup::setup_wallet_at(
-                            std::slice::from_ref(&sequencer_addr),
-                            &public_accounts,
-                            &private_accounts,
-                            WalletConfigOverrides::default(),
-                            &setup_home,
-                        )
-                        .await
-                        .context("failed to set up LEZ wallet")
-                        .map(|(wallet, _, password)| (wallet, None, password)),
-                        None => setup_wallet(
-                            std::slice::from_ref(&sequencer_addr),
-                            &public_accounts,
-                            &private_accounts,
-                            WalletConfigOverrides::default(),
-                        )
-                        .await
-                        .context("failed to set up LEZ wallet")
-                        .map(|(wallet, wallet_state_dir, password)| {
-                            (wallet, Some(wallet_state_dir), password)
-                        }),
-                    }?;
+                    let (wallet, initialized_state_dir, password) = configured_state_dir
+                        .map_or_else(
+                            || {
+                                setup_wallet(
+                                    &sequencer_addr,
+                                    &public_accounts,
+                                    &private_accounts,
+                                    WalletConfigOverrides::default(),
+                                )
+                                .context("failed to set up LEZ wallet")
+                                .map(
+                                    |(wallet, wallet_state_dir, password)| {
+                                        (wallet, Some(wallet_state_dir), password)
+                                    },
+                                )
+                            },
+                            |setup_home| {
+                                crate::setup::setup_wallet_at(
+                                    &sequencer_addr,
+                                    &public_accounts,
+                                    &private_accounts,
+                                    WalletConfigOverrides::default(),
+                                    &setup_home,
+                                )
+                                .context("failed to set up LEZ wallet")
+                                .map(|(wallet, _, password)| (wallet, None, password))
+                            },
+                        )?;
                     let mut wallet = wallet;
                     if initialize_private_account_funding {
                         fund_private_accounts(&mut wallet, &public_accounts, &private_accounts)

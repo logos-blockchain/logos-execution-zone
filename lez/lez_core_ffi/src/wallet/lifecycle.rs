@@ -86,7 +86,6 @@ fn c_str_to_path(ptr: *const c_char, name: &str) -> Result<PathBuf, WalletFfiErr
 /// # Parameters
 /// - `config_path`: Path to the wallet configuration file (JSON)
 /// - `storage_path`: Path where wallet data will be stored
-/// - `statistics_path`: Path to the wallet statistics file (JSON)
 /// - `password`: Password for encrypting the wallet seed
 ///
 /// # Returns
@@ -99,7 +98,6 @@ fn c_str_to_path(ptr: *const c_char, name: &str) -> Result<PathBuf, WalletFfiErr
 pub unsafe extern "C" fn wallet_ffi_create_new(
     config_path: *const c_char,
     storage_path: *const c_char,
-    statistics_path: *const c_char,
     password: *const c_char,
 ) -> FfiCreateWalletOutput {
     let Ok(config_path) = c_str_to_path(config_path, "config_path") else {
@@ -114,17 +112,7 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
         return FfiCreateWalletOutput::default();
     };
 
-    let Ok(statistics_path) = c_str_to_path(statistics_path, "statistics_path") else {
-        return FfiCreateWalletOutput::default();
-    };
-
-    match block_on(WalletCore::new_init_storage(
-        config_path,
-        storage_path,
-        statistics_path,
-        None,
-        &password,
-    )) {
+    match WalletCore::new_init_storage(config_path, storage_path, None, &password) {
         Ok((core, mnemonic)) => {
             let wrapper = Box::new(WalletWrapper {
                 core: Mutex::new(core),
@@ -156,7 +144,6 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
 /// # Parameters
 /// - `config_path`: Path to the wallet configuration file (JSON)
 /// - `storage_path`: Path to the wallet storage (JSON)
-/// - `statistics_path`: Path to the wallet statistics file (JSON)
 ///
 /// # Returns
 /// - Opaque wallet handle on success
@@ -168,7 +155,6 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
 pub unsafe extern "C" fn wallet_ffi_open(
     config_path: *const c_char,
     storage_path: *const c_char,
-    statistics_path: *const c_char,
 ) -> *mut WalletHandle {
     let Ok(config_path) = c_str_to_path(config_path, "config_path") else {
         return ptr::null_mut();
@@ -178,16 +164,7 @@ pub unsafe extern "C" fn wallet_ffi_open(
         return ptr::null_mut();
     };
 
-    let Ok(statistics_path) = c_str_to_path(statistics_path, "statistics_path") else {
-        return ptr::null_mut();
-    };
-
-    match block_on(WalletCore::new_update_chain(
-        config_path,
-        storage_path,
-        statistics_path,
-        None,
-    )) {
+    match WalletCore::new_update_chain(config_path, storage_path, None) {
         Ok(core) => {
             let wrapper = Box::new(WalletWrapper {
                 core: Mutex::new(core),
@@ -239,7 +216,7 @@ pub unsafe extern "C" fn wallet_ffi_save(handle: *mut WalletHandle) -> WalletFfi
         Err(e) => return e,
     };
 
-    let mut wallet = match wrapper.core.lock() {
+    let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
@@ -247,10 +224,7 @@ pub unsafe extern "C" fn wallet_ffi_save(handle: *mut WalletHandle) -> WalletFfi
         }
     };
 
-    match wallet
-        .store_persistent_data()
-        .and_then(|()| block_on(wallet.client_rotation()))
-    {
+    match wallet.store_persistent_data() {
         Ok(()) => WalletFfiError::Success,
         Err(e) => {
             print_error(format!("Failed to save wallet: {e}"));
@@ -360,7 +334,7 @@ pub unsafe extern "C" fn wallet_ffi_get_sequencer_addr(handle: *mut WalletHandle
         }
     };
 
-    let addr = wallet.helm_url().to_string();
+    let addr = wallet.client_url().to_string();
 
     match std::ffi::CString::new(addr) {
         Ok(s) => s.into_raw(),

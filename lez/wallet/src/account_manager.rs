@@ -299,8 +299,8 @@ impl AccountManager {
     /// The private-account count that every privacy-preserving transaction is padded up to with
     /// dummy inputs via the default interface.
     ///
-    /// The value is selected based on the largest account number per-tx currently supported
-    /// (it is 7 for AMM). It is recommended to reassess this value per new actively supported
+    /// The value is selected based on the largest account number per-tx currently supported.
+    /// It is recommended to reassess this value per new actively supported
     /// application and that all users share the value for a larger anonymity set.
     const MAX_PRIVATE_ACCOUNTS: usize = 7;
 
@@ -1098,8 +1098,8 @@ mod tests {
 
     #[test]
     fn fee_payer_skips_a_non_signing_public_account() {
-        // A tracked but unsignable public account (sk: None, e.g. an AMM pool
-        // or definition PDA passed as a non-signing input) must not be
+        // A tracked but unsignable public account (sk: None, e.g.
+        // definition PDA passed as a non-signing input) must not be
         // designated payer -- the first funded signing account is chosen instead.
         let signing = public_signing_state(3, 1_000);
         let signing_id = signing.account().account_id;

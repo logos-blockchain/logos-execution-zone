@@ -91,7 +91,7 @@ async fn fund_private_pda(
     let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
     wallet
-        .helm_owned()
+        .client_owned()
         .send_transaction(LeeTransaction::PrivacyPreserving(tx))
         .await
         .map_err(|e| anyhow::anyhow!("send transaction failed: {e}"))?;

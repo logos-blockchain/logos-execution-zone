@@ -138,25 +138,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
-name = "amm_core"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "lee_core",
- "risc0-zkvm",
-]
-
-[[package]]
-name = "amm_program"
-version = "0.1.0"
-dependencies = [
- "amm_core",
- "borsh",
- "lee_core",
- "token_core",
-]
-
-[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -548,28 +529,6 @@ name = "asn1_der"
 version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4858a9d740c5007a9069007c3b4e91152d0506f13c1b31dd49051fd537656156"
-
-[[package]]
-name = "associated_token_account_core"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "lee_core",
- "risc0-zkvm",
- "token_core",
-]
-
-[[package]]
-name = "associated_token_account_program"
-version = "0.1.0"
-dependencies = [
- "associated_token_account_core",
- "borsh",
- "lee",
- "lee_core",
- "programs",
- "token_core",
-]
 
 [[package]]
 name = "astral-tokio-tar"
@@ -2412,22 +2371,21 @@ dependencies = [
 name = "cycle_bench"
 version = "0.1.0"
 dependencies = [
- "amm_core",
  "anyhow",
- "associated_token_account_core",
  "borsh",
  "clap",
  "clock_core",
  "criterion",
+ "fee_core",
  "lee",
  "lee_core",
  "programs",
+ "rand 0.8.6",
  "risc0-zkvm",
  "serde",
  "serde_json",
  "test_guest_core",
  "test_programs",
- "token_core",
 ]
 
 [[package]]
@@ -4798,7 +4756,6 @@ dependencies = [
 name = "integration_bench"
 version = "0.1.0"
 dependencies = [
- "amm_core",
  "anyhow",
  "borsh",
  "clap",
@@ -4820,7 +4777,6 @@ dependencies = [
 name = "integration_tests"
 version = "0.1.0"
 dependencies = [
- "amm_core",
  "anyhow",
  "async-trait",
  "borsh",
@@ -4868,7 +4824,6 @@ dependencies = [
  "testing-framework-core",
  "testnet_initial_state",
  "thiserror 2.0.18",
- "token_core",
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.23",
@@ -9554,10 +9509,6 @@ dependencies = [
 name = "programs"
 version = "0.1.0"
 dependencies = [
- "amm_core",
- "amm_program",
- "associated_token_account_core",
- "associated_token_account_program",
  "borsh",
  "bridge_core",
  "bridge_lock_core",
@@ -9571,8 +9522,6 @@ dependencies = [
  "lee_core",
  "ping_core",
  "sequencer_stake_core",
- "token_core",
- "token_program",
  "wrapped_token_core",
 ]
 
@@ -11223,7 +11172,6 @@ dependencies = [
  "test_programs",
  "testnet_initial_state",
  "thiserror 2.0.18",
- "token_core",
  "tokio",
  "tokio-retry",
  "url",
@@ -11322,7 +11270,6 @@ dependencies = [
  "kameo",
  "lee",
  "log",
- "programs",
  "sequencer_core",
  "sequencer_executor_actor",
  "sequencer_gossip_actor",
@@ -12882,24 +12829,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
-name = "token_core"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "lee_core",
- "serde",
-]
-
-[[package]]
-name = "token_program"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "lee_core",
- "token_core",
-]
-
-[[package]]
 name = "tokio"
 version = "1.52.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13806,9 +13735,7 @@ dependencies = [
 name = "wallet"
 version = "0.1.0"
 dependencies = [
- "amm_core",
  "anyhow",
- "associated_token_account_core",
  "async-stream",
  "bincode",
  "bip39",
@@ -13842,7 +13769,6 @@ dependencies = [
  "tempfile",
  "testnet_initial_state",
  "thiserror 2.0.18",
- "token_core",
  "tokio",
  "url",
  "zeroize",

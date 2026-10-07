@@ -16,7 +16,7 @@ use sequencer_core::{
 };
 use sequencer_stake_core::SequencerKey;
 use url::Url;
-use wallet::config::{MultiSequencerClientConfig, SequencerConnectionData, WalletConfig};
+use wallet::config::{SequencerConnectionData, WalletConfig};
 
 /// Turn length the integration-test channels are created with.
 ///
@@ -289,27 +289,17 @@ pub fn genesis_from_accounts(
         .collect()
 }
 
-pub fn wallet_config(sequencer_addrs: &[SocketAddr]) -> Result<WalletConfig> {
-    let mut sequencers = vec![];
-
-    for addr in sequencer_addrs {
-        sequencers.push(SequencerConnectionData {
-            sequencer_addr: addr_to_url(UrlProtocol::Http, *addr)
+pub fn wallet_config(sequencer_addr: &SocketAddr) -> Result<WalletConfig> {
+    Ok(WalletConfig {
+        sequencer: SequencerConnectionData {
+            sequencer_addr: addr_to_url(UrlProtocol::Http, *sequencer_addr)
                 .context("Failed to convert sequencer addr to URL")?,
             basic_auth: None,
-        });
-    }
-
-    Ok(WalletConfig {
-        sequencers,
+        },
         seq_poll_timeout: Duration::from_secs(30),
         seq_tx_poll_max_blocks: 15,
         seq_poll_max_retries: 10,
         seq_block_poll_max_amount: 100,
-        multi_sequencer_client_config: MultiSequencerClientConfig {
-            distribution_limit: 1,
-            calibration_limit: 5,
-        },
         gas_limit: wallet::DEFAULT_GAS_LIMIT,
     })
 }

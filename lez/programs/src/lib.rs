@@ -9,11 +9,10 @@ mod inner {
     use std::borrow::Cow;
 
     use guests::{
-        AMM_ELF, AMM_ID, ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID, BRIDGE_ELF,
-        BRIDGE_ID, BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID, CLOCK_ELF, CLOCK_ID, CROSS_ZONE_INBOX_ELF,
-        CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID, FEE_ELF, FEE_ID,
-        PING_RECEIVER_ELF, PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID, SEQUENCER_STAKE_ELF,
-        SEQUENCER_STAKE_ID, TOKEN_ELF, TOKEN_ID, WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
+        BRIDGE_ELF, BRIDGE_ID, BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID, CLOCK_ELF, CLOCK_ID,
+        CROSS_ZONE_INBOX_ELF, CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID,
+        FEE_ELF, FEE_ID, PING_RECEIVER_ELF, PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID,
+        SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID, WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
     };
     use lee::program::Program;
 
@@ -21,8 +20,6 @@ mod inner {
         include!(concat!(env!("OUT_DIR"), "/lez/programs/mod.rs"));
     }
 
-    pub use amm_core::AMM_NAME;
-    pub use associated_token_account_core::ASSOCIATED_TOKEN_ACCOUNT_NAME;
     pub use bridge_core::BRIDGE_NAME;
     pub use bridge_lock_core::BRIDGE_LOCK_NAME;
     pub use clock_core::CLOCK_NAME;
@@ -31,24 +28,7 @@ mod inner {
     pub use fee_core::FEE_NAME;
     pub use ping_core::{PING_RECEIVER_NAME, PING_SENDER_NAME};
     pub use sequencer_stake_core::SEQUENCER_STAKE_NAME;
-    pub use token_core::TOKEN_NAME;
     pub use wrapped_token_core::WRAPPED_TOKEN_NAME;
-
-    #[must_use]
-    #[inline]
-    pub const fn token() -> Program {
-        Program::new_unchecked(TOKEN_ID, Cow::Borrowed(TOKEN_ELF))
-    }
-
-    pub use token_core::token_account_id;
-
-    #[must_use]
-    #[inline]
-    pub const fn amm() -> Program {
-        Program::new_unchecked(AMM_ID, Cow::Borrowed(AMM_ELF))
-    }
-
-    pub use amm_core::amm_account_id;
 
     #[must_use]
     #[inline]
@@ -65,17 +45,6 @@ mod inner {
     }
 
     pub use fee_core::fee_account_id;
-
-    #[must_use]
-    #[inline]
-    pub const fn ata() -> Program {
-        Program::new_unchecked(
-            ASSOCIATED_TOKEN_ACCOUNT_ID,
-            Cow::Borrowed(ASSOCIATED_TOKEN_ACCOUNT_ELF),
-        )
-    }
-
-    pub use associated_token_account_core::ata_account_id;
 
     #[must_use]
     #[inline]
@@ -219,12 +188,9 @@ mod inner {
 
         #[test]
         fn builtin_programs() {
-            let token_program = token();
             let bridge_program = bridge();
             let sequencer_stake_program = sequencer_stake();
 
-            assert_eq!(token_program.id(), TOKEN_ID);
-            assert_eq!(token_program.elf(), TOKEN_ELF);
             assert_eq!(bridge_program.id(), BRIDGE_ID);
             assert_eq!(bridge_program.elf(), BRIDGE_ELF);
             assert_eq!(sequencer_stake_program.id(), SEQUENCER_STAKE_ID);
@@ -234,12 +200,9 @@ mod inner {
         #[test]
         fn builtin_program_ids_match_elfs() {
             let cases: &[(&[u8], [u32; 8])] = &[
-                (AMM_ELF, AMM_ID),
-                (ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID),
                 (CLOCK_ELF, CLOCK_ID),
                 (FEE_ELF, FEE_ID),
                 (BRIDGE_ELF, BRIDGE_ID),
-                (TOKEN_ELF, TOKEN_ID),
                 (CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID),
                 (CROSS_ZONE_INBOX_ELF, CROSS_ZONE_INBOX_ID),
                 (PING_SENDER_ELF, PING_SENDER_ID),

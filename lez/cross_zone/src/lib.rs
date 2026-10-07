@@ -12,7 +12,7 @@
 pub use acceptance::{
     CommitteeFloorState, FloorVerdict, KEPT_FLOOR_READ_FAILURES, Link, OffChain,
     STUCK_SLOT_ALERT_PASSES, ScreenRefusal, StallState, alerts_at, equivocation_report,
-    link_to_tip, pinned_keys, screen_peer_block, signed_by_any,
+    link_to_tip, screen_peer_block,
 };
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer};
 use cross_zone_inbox_core::{
@@ -385,10 +385,9 @@ mod tests {
                 channel_id: [2; 32],
                 allowed_routes: vec![cross_zone_inbox_core::CrossZoneRoute {
                     src_account_id: programs::bridge_lock_account_id(),
-                    target_account_id: programs::amm_account_id(),
+                    target_account_id: programs::fee_account_id(),
                     mint_cap: None,
                 }],
-                expected_block_signing_pubkeys: Vec::new(),
                 min_committee_size: 0,
             }],
             source_authority: None,
@@ -411,7 +410,6 @@ mod tests {
                     target_account_id: programs::wrapped_token_account_id(),
                     mint_cap: Some(1_000),
                 }],
-                expected_block_signing_pubkeys: Vec::new(),
                 min_committee_size: 0,
             }],
             source_authority: None,
@@ -434,7 +432,6 @@ mod tests {
             peers: vec![CrossZonePeer {
                 channel_id: [2; 32],
                 allowed_routes: vec![route.clone(), route],
-                expected_block_signing_pubkeys: Vec::new(),
                 min_committee_size: 0,
             }],
             source_authority: None,
