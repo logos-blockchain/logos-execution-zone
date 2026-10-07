@@ -25,7 +25,7 @@ use sequencer_bedrock_actor::{
         HeaderId, PublishOutcome, Slot,
     },
 };
-use sequencer_channel_config_actor::ChannelConfigActor;
+use sequencer_channel_signing_actor::ChannelSigningActor;
 use sequencer_core::{
     MsgId,
     config::{BedrockConfig, SequencerConfig},
@@ -323,7 +323,7 @@ async fn new_executor<S: StorageActorTrait>(
     .expect("Failed to load or create channel signing key");
 
     let slasher_ref = spawn_slasher(&config, &storage_ref, &channel_signing_key).await;
-    let config_manager_ref = spawn_config_manager(&channel_signing_key);
+    let channel_signer_ref = spawn_channel_signer(&config, &channel_signing_key);
 
     ExecutorActor::new(
         config,
@@ -332,7 +332,7 @@ async fn new_executor<S: StorageActorTrait>(
         bedrock_pool_ref,
         PubSub::spawn(PubSub::new(DeliveryStrategy::Guaranteed)),
         slasher_ref,
-        config_manager_ref,
+        channel_signer_ref,
     )
     .await
 }
@@ -354,11 +354,16 @@ async fn spawn_slasher<S: StorageActorTrait>(
     )
 }
 
-/// A channel-config actor signing with `channel_signing_key`.
-fn spawn_config_manager(
+/// A channel-signing actor signing with `channel_signing_key`.
+fn spawn_channel_signer(
+    config: &SequencerConfig,
     channel_signing_key: &sequencer_bedrock_actor::protocol::Ed25519Key,
-) -> ActorRef<ChannelConfigActor> {
-    ChannelConfigActor::spawn(ChannelConfigActor::new(channel_signing_key.clone()))
+) -> ActorRef<ChannelSigningActor> {
+    ChannelSigningActor::spawn(ChannelSigningActor::new(
+        channel_signing_key.clone(),
+        config.bedrock_config.channel_id,
+        sequencer_core::inscribed_block_deposits,
+    ))
 }
 
 /// Initializes the executor state over `store`, against a Bedrock serving `channel`.
@@ -374,7 +379,7 @@ pub(super) async fn initialize_state(
     let channel = channel.clone();
     let storage_ref = MockStorageActor::spawn(store.mock());
     let slasher_ref = spawn_slasher(&config, &storage_ref, &channel_signing_key).await;
-    let config_manager_ref = spawn_config_manager(&channel_signing_key);
+    let channel_signer_ref = spawn_channel_signer(&config, &channel_signing_key);
 
     Box::pin(State::initialize(
         config,
@@ -383,7 +388,7 @@ pub(super) async fn initialize_state(
         spawn_bedrock_pool(move |_channel_id| channel.mock()),
         PubSub::spawn(PubSub::new(DeliveryStrategy::Guaranteed)),
         slasher_ref,
-        config_manager_ref,
+        channel_signer_ref,
     ))
     .await
 }
