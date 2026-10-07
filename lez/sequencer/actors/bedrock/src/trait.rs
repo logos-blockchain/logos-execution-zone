@@ -7,26 +7,25 @@ use crate::{
     error::Error,
     protocol::{
         AccreditedKeys, ChangeChannelConfig, ChannelReadStream, CheckChannelExists, CheckIsOurTurn,
-        CreateChannel, GetAccreditedKeys, GetChannelId, GetChannelIdReply, GetChannelNotes,
-        GetChannelTipMessageId, GetChannelTipSlot, MsgId, NoteId, PrepareConfig, PreparePin,
-        PreparedChannelConfig, PreparedPin, PublishBlock, PublishOutcome, PublishPin, ReadChannel,
-        Slot,
+        CreateChannel, GetAccreditedKeys, GetChannelNotes, GetChannelTipMessageId,
+        GetChannelTipSlot, InitializeChannelPublisher, MsgId, NoteId, PrepareConfig, PreparePin,
+        PreparedConfig, PreparedPin, PublishBlock, PublishOutcome, PublishPin, ReadChannel, Slot,
     },
 };
 
 pub trait BedrockActorTrait:
-    Actor<Args = Self, Error = Error>
+    Actor<Error = Error>
+    + Message<InitializeChannelPublisher, Reply = Result<bool>>
     + Message<CreateChannel, Reply = Result<PublishOutcome>>
     + Message<PublishBlock, Reply = Result<PublishOutcome>>
     + Message<PreparePin, Reply = Result<PreparedPin>>
     + Message<PublishPin, Reply = Result<PublishOutcome>>
-    + Message<PrepareConfig, Reply = Result<PreparedChannelConfig>>
+    + Message<PrepareConfig, Reply = Result<PreparedConfig>>
     + Message<ChangeChannelConfig, Reply = Result<()>>
     + Message<CheckChannelExists, Reply = Result<bool>>
-    + Message<GetChannelId, Reply = GetChannelIdReply>
-    + Message<CheckIsOurTurn, Reply = bool>
+    + Message<CheckIsOurTurn, Reply = Result<bool>>
     + Message<GetAccreditedKeys, Reply = Result<Option<AccreditedKeys>>>
-    + Message<GetChannelNotes, Reply = HashSet<NoteId>>
+    + Message<GetChannelNotes, Reply = Result<HashSet<NoteId>>>
     + Message<GetChannelTipSlot, Reply = Result<Option<Slot>>>
     + Message<GetChannelTipMessageId, Reply = Result<Option<MsgId>>>
     + Message<ReadChannel, Reply = Result<ChannelReadStream>>
