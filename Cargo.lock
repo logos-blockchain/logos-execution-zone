@@ -2652,6 +2652,7 @@ dependencies = [
  "lee",
  "logos-blockchain-key-management-system-service",
  "sequencer_core",
+ "sequencer_genesis",
  "sequencer_stake_core",
  "serde_json",
 ]
@@ -11073,6 +11074,7 @@ dependencies = [
  "futures",
  "kameo",
  "kameo_actors",
+ "lee_core",
  "log",
  "logos-blockchain-binary-codec",
  "logos-blockchain-common-http-client",
@@ -11082,9 +11084,9 @@ dependencies = [
  "mockall",
  "rand 0.8.6",
  "sequencer_actors_common",
- "sequencer_channel_config_actor",
  "sequencer_stake_core",
  "sequencer_storage_actor",
+ "sharding_pool_actor",
  "system_accounts",
  "thiserror 2.0.18",
  "tokio",
@@ -11123,6 +11125,7 @@ dependencies = [
  "hex",
  "humantime-serde",
  "kameo",
+ "kameo_actors",
  "key_protocol",
  "lee",
  "lee_core",
@@ -11141,18 +11144,19 @@ dependencies = [
  "sequencer_bedrock_actor",
  "sequencer_channel_config_actor",
  "sequencer_core_metrics",
+ "sequencer_genesis",
  "sequencer_slasher_actor",
  "sequencer_stake_core",
  "sequencer_storage_actor",
  "serde",
  "serde_json",
+ "sharding_pool_actor",
  "system_accounts",
  "tempfile",
  "test_programs",
  "testnet_initial_state",
  "thiserror 2.0.18",
  "tokio",
- "tokio-retry",
  "url",
 ]
 
@@ -11181,12 +11185,12 @@ dependencies = [
  "fee_core",
  "futures",
  "kameo",
+ "kameo_actors",
  "lee",
  "lee_core",
  "log",
  "logos-blockchain-binary-codec",
  "logos-blockchain-core",
- "logos-blockchain-zone-sdk",
  "mempool",
  "mockall",
  "num-bigint 0.4.6",
@@ -11195,11 +11199,15 @@ dependencies = [
  "programs",
  "sequencer_actors_common",
  "sequencer_bedrock_actor",
+ "sequencer_channel_config_actor",
  "sequencer_core",
+ "sequencer_core_metrics",
  "sequencer_executor_actor_metrics",
+ "sequencer_genesis",
  "sequencer_slasher_actor",
  "sequencer_stake_core",
  "sequencer_storage_actor",
+ "sharding_pool_actor",
  "system_accounts",
  "tempfile",
  "testnet_initial_state",
@@ -11230,6 +11238,27 @@ dependencies = [
  "sequencer_storage_actor",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "sequencer_genesis"
+version = "0.1.0"
+dependencies = [
+ "bridge_core",
+ "chain_state",
+ "common",
+ "cross_zone",
+ "cross_zone_inbox_core",
+ "fee_core",
+ "hex",
+ "lee",
+ "lee_core",
+ "log",
+ "programs",
+ "sequencer_stake_core",
+ "serde",
+ "system_accounts",
+ "testnet_initial_state",
 ]
 
 [[package]]
@@ -11312,6 +11341,7 @@ dependencies = [
  "sequencer_slasher_actor",
  "sequencer_stake_core",
  "sequencer_storage_actor",
+ "sharding_pool_actor",
  "system_accounts",
  "tokio",
  "tokio-util",
@@ -11323,7 +11353,6 @@ name = "sequencer_service_protocol"
 version = "0.1.0"
 dependencies = [
  "common",
- "hex",
  "lee",
  "lee_core",
  "serde",
@@ -11758,6 +11787,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
+]
+
+[[package]]
+name = "sharding_pool_actor"
+version = "0.1.0"
+dependencies = [
+ "env_logger",
+ "kameo",
+ "log",
+ "sequencer_actors_common",
+ "tokio",
 ]
 
 [[package]]
@@ -12424,7 +12464,9 @@ dependencies = [
  "programs",
  "sequencer_bedrock_actor",
  "sequencer_core",
+ "sequencer_genesis",
  "sequencer_service",
+ "sequencer_service_protocol",
  "sequencer_service_rpc",
  "sequencer_stake_core",
  "sequencer_storage_actor",
