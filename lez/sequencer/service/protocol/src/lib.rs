@@ -44,6 +44,15 @@ pub struct FeeStateQuote {
     pub max_gas_stor: u64,
 }
 
+/// What a public transaction's action would cost if it settled on the head state now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicDryRun {
+    /// Cycles the action metered, bounded by its declared gas limit.
+    pub cycles: u64,
+    /// Why the action reverted, if it did: it would be charged and its effects dropped.
+    pub revert: Option<String>,
+}
+
 /// A cross-zone delivery a sequencer gave up on after repeated failures.
 ///
 /// Identifies the message rather than carrying it: zone, block id and tx index

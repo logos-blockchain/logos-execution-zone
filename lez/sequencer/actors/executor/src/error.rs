@@ -36,6 +36,15 @@ pub enum Error {
     /// changed since the wallet planned, or an unknown program.
     #[error("The private transaction's public effects fail on the head state")]
     PrivateEffectsFailed(#[source] anyhow::Error),
+
+    #[error("The public transaction would be rejected at settlement")]
+    PublicDryRunFailed(#[source] anyhow::Error),
+
+    /// `dryRunPublicTransaction` was given a privacy-preserving transaction.
+    /// Those are priced by `estimatePrivateEffectCycles` on their deferred
+    /// public effects, before the proof exists.
+    #[error("Only a public transaction can be dry-run; a privacy-preserving one was given")]
+    DryRunNotPublic,
 }
 
 impl<M> From<kameo::error::SendError<M, sequencer_storage_actor::error::Error>> for Error {

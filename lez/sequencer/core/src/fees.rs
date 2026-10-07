@@ -48,6 +48,17 @@ pub struct FeeStateQuote {
     pub max_gas_stor: u64,
 }
 
+/// What a public transaction's action would cost if it settled on the head
+/// state now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicDryRun {
+    /// Cycles the action metered, bounded by its declared gas limit.
+    pub cycles: u64,
+    /// Why the action reverted, if it did: it would be charged and its
+    /// effects dropped.
+    pub revert: Option<String>,
+}
+
 /// Screens a submitted transaction against the head state.
 pub fn screen(tx: &LeeTransaction, state: &lee::V03State) -> Result<()> {
     let class = classify(tx, false)?;
@@ -98,6 +109,34 @@ pub fn estimate_private_effect_cycles(
         actions,
         market::MAX_GAS_EXEC.saturating_sub(market::PRIVATE_VERIFY_GAS),
     )
+}
+
+/// Executes a public transaction's action against the head state without
+/// settling it, so a wallet can size its gas limit and tip.
+///
+/// `Err` is a transaction settlement would reject outright (bad signature,
+/// nonce, window).
+pub fn dry_run_public_transaction(
+    state: &lee::V03State,
+    tx: &lee::PublicTransaction,
+    block_id: u64,
+    timestamp: u64,
+) -> std::result::Result<PublicDryRun, lee::error::LeeError> {
+    let cycle_budget = tx.message().fee.map_or(market::MAX_GAS_EXEC, |fee| {
+        fee.gas_limit.min(market::MAX_GAS_EXEC)
+    });
+    let (charge, result) = lee::ValidatedStateDiff::from_public_transaction_metered(
+        tx,
+        state,
+        block_id,
+        timestamp,
+        cycle_budget,
+    );
+    result?;
+    Ok(PublicDryRun {
+        cycles: charge.cycles,
+        revert: charge.revert,
+    })
 }
 
 /// Prices the next block off the head state's fee market.
@@ -401,6 +440,45 @@ mod tests {
             0
         );
         assert!(estimate_private_effect_cycles(&state, &effect(vec![0xFF])).is_err());
+    }
+
+    #[test]
+    fn a_public_dry_run_meters_the_action_without_settling_it() {
+        let state = initial_state(true);
+        let (from, sign_key) = funded();
+        let tx = create_transaction_native_token_transfer(from, 0, recipient(), 10, &sign_key);
+        let LeeTransaction::Public(public_tx) = &tx else {
+            unreachable!("the test transfer is public");
+        };
+
+        let run = dry_run_public_transaction(&state, public_tx, 2, 200).unwrap();
+        assert!(run.cycles > 0, "a guest-run transfer meters cycles");
+        assert_eq!(run.revert, None);
+        assert_eq!(
+            state.get_account_by_id(from).nonce,
+            lee_core::account::Nonce::default(),
+            "a dry run leaves the state untouched"
+        );
+
+        // A nonce settlement would reject is an error, not a revert.
+        let stale = create_transaction_native_token_transfer(from, 7, recipient(), 10, &sign_key);
+        let LeeTransaction::Public(stale_tx) = &stale else {
+            unreachable!("the test transfer is public");
+        };
+        assert!(dry_run_public_transaction(&state, stale_tx, 2, 200).is_err());
+
+        // A transfer over the sender's balance reverts: charged, effects dropped.
+        let over =
+            create_transaction_native_token_transfer(from, 0, recipient(), u128::MAX, &sign_key);
+        let LeeTransaction::Public(over_tx) = &over else {
+            unreachable!("the test transfer is public");
+        };
+        assert!(
+            dry_run_public_transaction(&state, over_tx, 2, 200)
+                .unwrap()
+                .revert
+                .is_some()
+        );
     }
 
     /// SPECS §Overview worked example: at the genesis base fees of 8/8 the

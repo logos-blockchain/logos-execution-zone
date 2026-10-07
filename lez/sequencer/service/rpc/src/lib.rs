@@ -8,6 +8,7 @@ use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
     CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, DeferredPublicActions, FeeStateQuote,
     HashType, LeeTransaction, MembershipProof, Nonce, ProgramId, ProgramShardSelector,
+    PublicDryRun,
 };
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
@@ -51,6 +52,17 @@ pub trait Rpc {
         &self,
         actions: DeferredPublicActions,
     ) -> Result<u64, ErrorObjectOwned>;
+
+    /// Executes a public transaction's action on the head state without
+    /// settling it: the cycles it meters and why it reverts if it does, for sizing
+    /// its gas limit and tip. Signatures and nonces must already be valid.
+    /// Simulated at the next height; validity windows are re-checked at the
+    /// real one when the transaction settles.
+    #[method(name = "dryRunPublicTransaction")]
+    async fn dry_run_public_transaction(
+        &self,
+        tx: LeeTransaction,
+    ) -> Result<PublicDryRun, ErrorObjectOwned>;
 
     // TODO: expand healthcheck response into some kind of report
     #[method(name = "checkHealth")]
