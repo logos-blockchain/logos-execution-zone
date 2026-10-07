@@ -67,11 +67,13 @@ impl Backend for PublicBackend<'_> {
             input.accounts, input.instruction_data
         );
         let (plan, applier) = if self_account_id == PROGRAM_LOADER_ACCOUNT_ID {
-            // `program_loader` runs as Rust, not a guest ELF, so there is no session to charge.
             const ABSENT: &ShardData = &ShardData::empty();
-            let (plan, new_commitment) = plan_program_loader(input, |account_id| {
+            let (plan, new_commitment, call_cycles) = plan_program_loader(input, |account_id| {
                 loader_shard(execution, state, account_id).unwrap_or(ABSENT)
             })?;
+            let budget = remaining(self.cycle_budget, *self.cycles_used);
+            ensure!(call_cycles <= budget, LeeError::OutOfGas { budget });
+            charge(self.cycles_used, call_cycles);
             self.new_commitments.extend(new_commitment);
             (plan, Applier::Loader)
         } else if self_account_id == NATIVE_TOKEN_PROGRAM_ID {
