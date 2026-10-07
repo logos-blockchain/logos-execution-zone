@@ -15,7 +15,7 @@ use logos_blockchain_core::proofs::channel_multi_sig_proof::IndexedSignature;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
 use mempool::{MemPool, MemPoolHandle};
 use sequencer_channel_config_actor::protocol::{Signature, Wire};
-use sequencer_core::{TransactionOrigin, config::GossipConfig, gossip::accredited_keys_channel};
+use sequencer_core::{TransactionOrigin, config::GossipConfig};
 use sequencer_slasher_actor::protocol::{Approval, Offence};
 use sequencer_stake_core::SequencerKey;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
@@ -222,8 +222,6 @@ async fn start_node(secret: [u8; 32], bootstrap: Vec<libp2p::Multiaddr>) -> (Tes
         sink_ref.recipient(),
         TEST_MAX_BLOCK_SIZE,
         unscreened_mempool_submit(mempool_handle),
-        accredited_keys_channel().1,
-        accredited_keys_channel().1,
         config_sink_ref.recipient(),
     )
     .await
@@ -296,8 +294,6 @@ async fn new_binds_and_reports_listen_addr() {
         test_approval_sink(),
         TEST_MAX_BLOCK_SIZE,
         unscreened_mempool_submit(test_mempool_handle()),
-        accredited_keys_channel().1,
-        accredited_keys_channel().1,
         test_config_sink(),
     )
     .await
@@ -317,8 +313,6 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         test_approval_sink(),
         TEST_MAX_BLOCK_SIZE,
         unscreened_mempool_submit(test_mempool_handle()),
-        accredited_keys_channel().1,
-        accredited_keys_channel().1,
         test_config_sink(),
     )
     .await
@@ -344,8 +338,6 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         test_approval_sink(),
         TEST_MAX_BLOCK_SIZE,
         unscreened_mempool_submit(test_mempool_handle()),
-        accredited_keys_channel().1,
-        accredited_keys_channel().1,
         test_config_sink(),
     )
     .await
