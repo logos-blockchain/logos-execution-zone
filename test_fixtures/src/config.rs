@@ -6,13 +6,11 @@ use key_protocol::key_management::{KeyChain, secret_holders::SeedHolder};
 use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey};
 use logos_blockchain_key_management_system_service::keys::{UnsecuredEd25519Key, ZkPublicKey};
 use num_bigint::BigUint;
-use sequencer_core::{
-    config::{
-        BedrockConfig, ChannelParams, CrossZoneConfig, DepositRecipient, GenesisAction,
-        GenesisConfig, GossipConfig, SequencerConfig,
-    },
-    sign_genesis_stake,
+use sequencer_core::config::{
+    BedrockConfig, ChannelParams, CrossZoneConfig, DepositRecipient, GenesisAction, GenesisConfig,
+    GossipConfig, SequencerConfig,
 };
+use sequencer_genesis::sign_genesis_stake;
 use sequencer_stake_core::SequencerKey;
 use url::Url;
 use wallet::config::{SequencerConnectionData, WalletConfig};
