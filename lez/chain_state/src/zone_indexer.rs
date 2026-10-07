@@ -104,19 +104,20 @@ where
 
 /// Ends the pass at the first read failure, naming `what` failed. For callers that retry
 /// the pass; wrong for one that reads the stream ending as a complete scan.
-pub fn stop_at_read_error<'stream, S>(
+pub fn stop_at_read_error<'stream, S, E>(
     stream: S,
     what: String,
 ) -> impl Stream<Item = (ZoneMessage, Slot)> + 'stream
 where
-    S: Stream<Item = Result<(ZoneMessage, Slot), Error>> + 'stream,
+    S: Stream<Item = Result<(ZoneMessage, Slot), E>> + 'stream,
+    E: std::fmt::Display + 'stream,
 {
     stream
         .take_while(move |item| {
             let keep = match item {
                 Ok(_) => true,
                 Err(err) => {
-                    log::warn!("{what}: {err}");
+                    log::warn!("{what}: {err:#}");
                     false
                 }
             };
