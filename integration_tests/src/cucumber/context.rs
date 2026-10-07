@@ -1,9 +1,12 @@
+use std::time::Duration;
+
 use common::HashType;
 use lee::AccountId;
 use sequencer_service_rpc::SequencerClient;
 use testing_framework_app::{AppHostEnv, DeployContext};
 
 use crate::{
+    config::SequencerPartialConfig,
     cucumber::error::StepError,
     indexer_client::IndexerClient,
     testing_framework::{
@@ -22,6 +25,7 @@ use crate::{
 /// and scenario state only.
 pub struct LezScenarioContext {
     stack: LezStackHandle,
+    sequencer_config: SequencerPartialConfig,
 }
 
 /// Cucumber's view of the TF-owned multi-sequencer registry deployment.
@@ -83,10 +87,23 @@ impl LezSequencerRegistryScenarioContext {
 
 impl LezScenarioContext {
     /// Creates the Cucumber view from the complete-stack capability returned
-    /// by `LezLocalApp::deploy`.
+    /// by `LezLocalApp::deploy` and the sequencer configuration the stack was
+    /// deployed with.
     #[must_use]
-    pub const fn from_stack(stack: LezStackHandle) -> Self {
-        Self { stack }
+    pub const fn from_stack(
+        stack: LezStackHandle,
+        sequencer_config: SequencerPartialConfig,
+    ) -> Self {
+        Self {
+            stack,
+            sequencer_config,
+        }
+    }
+
+    /// Returns the block cadence the deployed sequencer was configured with.
+    #[must_use]
+    pub const fn block_create_timeout(&self) -> Duration {
+        self.sequencer_config.block_create_timeout
     }
 
     /// Returns the deployed Bedrock cluster handle.
@@ -237,6 +254,20 @@ impl LezScenarioContext {
     ) -> Result<(), StepError> {
         self.wallet()
             .set_public_account_label(account_id, label)
+            .await
+            .map_err(StepError::query_failed_boxed)
+    }
+
+    /// Signs and submits a public transaction against an arbitrary program
+    /// through the scenario wallet.
+    pub async fn send_program_transaction(
+        &self,
+        accounts: Vec<wallet::AccountIdentity>,
+        instruction_data: lee_core::program::InstructionData,
+        program_id: lee_core::program::ProgramId,
+    ) -> Result<HashType, StepError> {
+        self.wallet()
+            .send_program_transaction(accounts, instruction_data, program_id)
             .await
             .map_err(StepError::query_failed_boxed)
     }
