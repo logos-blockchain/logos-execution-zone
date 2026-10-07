@@ -306,7 +306,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_account(
             log::error!("Failed to query account: {e:#}");
             PointerResult::from_error(OperationStatus::ClientError)
         },
-        |account| PointerResult::from_value(account.account.into()),
+        |account| PointerResult::from_value(account.into()),
     )
 }
 

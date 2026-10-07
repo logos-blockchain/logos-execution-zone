@@ -169,6 +169,8 @@ pub enum SelectorFilter {
 pub struct DumpDb;
 
 /// Update everything in the store at once, atomically.
+// TODO: Process orphaned blocks
+// TODO: Experiment with per-actor data types and agnostic storage.
 pub struct AtomicUpdate {
     /// Zone-sdk checkpoint for this event, kept only if it is newer than the
     /// stored one. The rest of the update lands either way.

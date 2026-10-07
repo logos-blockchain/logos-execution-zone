@@ -10,6 +10,12 @@ use sequencer_service_protocol::{
     MembershipProof, Nonce, ProgramId, ProgramShardSelector,
 };
 
+/// Error code the sequencer replies with when its mempool is full.
+pub const MEMPOOL_IS_FULL_ERROR_CODE: i32 = -31900;
+/// Error code the sequencer replies with while it is not online yet, e.g. still bootstrapping
+/// from the channel.
+pub const SEQUENCER_IS_NOT_ONLINE_ERROR_CODE: i32 = -31901;
+
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
 compile_error!("At least one of `server` or `client` features must be enabled.");
 

@@ -123,11 +123,14 @@ pub(crate) fn clock_block_id(state: &lee::V03State) -> Option<u64> {
     .map(|clock| clock.block_id)
 }
 
-/// Reads the `sequencer_stake` config account — a single account read, not a
-/// scan, since every `Stake`/`UnstakeRequest`/`FinalizeUnstake` keeps its
-/// `entries` map current as it executes. `None` only if the account is absent
-/// or undecodable, which genesis rules out.
-pub(crate) fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig> {
+/// Reads the `sequencer_stake` config account.
+///
+/// A single account read, not a scan, since every
+/// `Stake`/`UnstakeRequest`/`FinalizeUnstake` keeps its `entries` map current
+/// as it executes. `None` only if the account is absent or undecodable, which
+/// genesis rules out.
+#[must_use]
+pub fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig> {
     let Some(account) =
         state.get_account_by_id_ref(system_accounts::sequencer_stake_config_account_id())
     else {
@@ -145,7 +148,8 @@ pub(crate) fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig>
 
 /// Channel posting params from the config account. `None` before genesis set
 /// them, which a live chain rules out.
-pub(crate) fn channel_params(state: &lee::V03State) -> Option<crate::config::ChannelParams> {
+#[must_use]
+pub fn channel_params(state: &lee::V03State) -> Option<crate::config::ChannelParams> {
     read_config(state)?.channel_params
 }
 

@@ -9,19 +9,16 @@ use std::{
 
 use anyhow::{Context as _, Result, anyhow};
 use borsh::BorshDeserialize;
-use chain_state::{
-    AcceptOutcome, Anchor, AnchorConsistencyCheck, ChainConsistency, ChainMismatch, ChainState,
-    ChannelEntry, PublishRecord, Tip,
-};
+use chain_state::{AcceptOutcome, ChainState, ChannelEntry, PublishRecord};
 use common::{
     HashType,
     block::{BedrockStatus, Block, BlockMeta, HashableBlockData},
-    transaction::{LeeTransaction, TxEvents, clock_invocation, fee_invocation},
+    transaction::{LeeTransaction, clock_invocation, fee_invocation},
 };
 use config::SequencerConfig;
 use cross_zone_inbox_core::CrossZoneMessage;
-use futures::StreamExt as _;
-use kameo::actor::{ActorRef, Spawn as _};
+use kameo::actor::ActorRef;
+use kameo_actors::pubsub::PubSub;
 use lee::{AccountId, ProgramShardSelector, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
 use log::{debug, error, info, warn};
@@ -30,37 +27,35 @@ pub use logos_blockchain_core::mantle::{NoteId, ops::channel::MsgId};
 use logos_blockchain_key_management_system_service::keys::ED25519_SECRET_KEY_SIZE;
 pub use logos_blockchain_key_management_system_service::keys::Ed25519PublicKey;
 use logos_blockchain_zone_sdk::{
-    Slot, ZoneMessage,
+    Slot,
     sequencer::{DepositInfo, SequencerCheckpoint, WithdrawArg},
 };
-use mempool::{MemPool, MemPoolHandle};
+use mempool::MemPool;
 use num_bigint::BigUint;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
-    protocol::{Ed25519Key, LiveChannelConfig, ViewChange},
+    protocol::{ChannelId, Ed25519Key, LiveChannelConfig, ViewChange},
 };
-use sequencer_channel_config_actor as channel_config;
-pub use sequencer_channel_config_actor::{ChannelConfigActor, SubmitConfig};
-use sequencer_slasher_actor::{Propose, Report, ReportedOffence, SetCommittee, SlasherActor};
+use sequencer_channel_config_actor::{ChannelConfigActor, protocol as channel_config};
+use sequencer_slasher_actor::{
+    SlasherActor,
+    protocol::{Propose, Report, ReportedOffence, SetCommittee},
+};
 use sequencer_storage_actor::{
     StorageActorTrait,
     protocol::{
         AtomicUpdate, CrossZoneMessageKey, DeadLetterDispatch, DeadLetterRequeue, DispatchFailure,
-        DispatchOrigin, DropSettledCrossZoneDispatches, GetAllBlocks, GetBlock,
-        GetChannelViewBytes, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
-        GetFirstBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
-        GetPendingDepositEvents, GetZoneAnchor, GetZoneCheckpoint, PendingCrossZoneDispatchRecord,
+        DispatchOrigin, DropSettledCrossZoneDispatches, GetAllBlocks, GetDeadLetterDispatchCount,
+        GetDeadLetterDispatches, GetLeeState, GetPendingCrossZoneDispatches,
+        GetPendingDepositEvents, GetZoneCheckpoint, PendingCrossZoneDispatchRecord,
         PendingDepositEventRecord, RecordDispatchFailure, RequeueDeadLetterDispatch,
-        WithdrawalReconciliationKey, ZoneAnchorRecord, ZoneCheckpointRecord,
+        WithdrawalReconciliationKey, ZoneCheckpointRecord,
     },
 };
+use sharding_pool_actor::ShardingPoolActor;
 use tokio::sync::Mutex;
-use tokio_retry::{Retry, strategy::FixedInterval};
 
 use crate::{
-    gossip::{
-        AccreditedKeys, AccreditedKeysReceiver, AccreditedKeysSender, accredited_keys_channel,
-    },
     logging::{log_rewind, log_update},
     task_group::TaskGroup,
 };
@@ -70,7 +65,6 @@ pub mod config;
 pub mod cross_zone_watcher;
 mod faults;
 pub mod fees;
-pub mod gossip;
 pub mod logging;
 pub mod task_group;
 
@@ -92,6 +86,17 @@ const MAX_DISPATCHES_PER_BLOCK: usize = 16;
 
 /// A number of Bedrock slots, as opposed to a [`Slot`] position.
 type SlotCount = u64;
+
+/// Keys the gossip mesh accepts messages from, fed from the `sequencer_stake`
+/// config by `refresh_committee`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StakeConfigKeys {
+    /// The committee, which slash approvals are accepted from.
+    pub accredited: HashSet<[u8; 32]>,
+    /// Every key with stake on record, which channel-config messages are
+    /// accepted from.
+    pub staked: HashSet<[u8; 32]>,
+}
 
 /// The block's gas budget: the gas the included transactions were actually
 /// charged (read off the settlement summary).
@@ -156,25 +161,17 @@ struct DepositMetadata {
 }
 
 pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
+    // TODO: Remove in favor of `sequencer_config` field
+    channel_id: ChannelId,
     /// Two-tier chain state: production builds on its head; the publisher's
     /// `on_follow` sink feeds adopted/orphaned/finalized peer blocks into it.
     chain: Arc<Mutex<ChainState>>,
     mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
-    mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     sequencer_config: SequencerConfig,
-    storage_ref: ActorRef<S>,
-    bedrock_ref: ActorRef<B>,
     /// Cross-zone watchers, stopped when this sequencer is dropped. They hold a
     /// store handle, so leaving them running would keep the `RocksDB` lock held
     /// and make the home directory unopenable by a restarting sequencer.
     watchers: TaskGroup,
-    /// Records offending inscriptions and proposes the slashes for them.
-    slasher: ActorRef<SlasherActor<S>>,
-    /// The committee the gossip mesh screens inbound slash approvals against.
-    accredited_keys_tx: AccreditedKeysSender,
-    /// Keys with stake on record, which the mesh admits channel-config
-    /// messages from.
-    staked_keys_tx: AccreditedKeysSender,
     block_signing_key: lee::PrivateKey,
     /// Signs this node's approval of a slash.
     bedrock_signing_key: Ed25519Key,
@@ -186,6 +183,14 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     finalized_config: MsgId,
     /// Channel sequence of the last thing `BedrockActor` handed us.
     applied_seq: Option<sequencer_bedrock_actor::protocol::ChannelSeq>,
+    /// The keys last published to the gossip mesh.
+    stake_config_keys: StakeConfigKeys,
+
+    storage_ref: ActorRef<S>,
+    bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+    stake_config_keys_pubsub_ref: ActorRef<PubSub<StakeConfigKeys>>,
+    /// Records offending inscriptions and proposes the slashes for them.
+    slasher_ref: ActorRef<SlasherActor<S>>,
 }
 
 /// A funded channel config, from the moment zone-sdk funds it to the moment it
@@ -194,7 +199,7 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
 /// The fee note funding it is reserved only for a while, so a draft is
 /// disposable.
 struct ConfigDraft {
-    prepared: logos_blockchain_zone_sdk::sequencer::PreparedChannelConfig,
+    prepared: sequencer_bedrock_actor::protocol::PreparedConfig,
     /// Submitted once; zone-sdk re-posts it from there on.
     submitted: bool,
     /// Channel slot the submission went out at, which starts the clock on
@@ -209,605 +214,86 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// another; a margin over observed Bedrock confirmation lag.
     const CONFIG_LANDING_DEADLINE: SlotCount = 30;
 
-    /// Rebuilds the two-tier [`ChainState`]: the final tier from the persisted
-    /// final snapshot (pre-genesis state when absent), the head by folding the
-    /// persisted channel view over it.
-    async fn restore_chain_state(
-        config: &SequencerConfig,
-        storage_ref: &ActorRef<S>,
-        stored_head_state: &lee::V03State,
-    ) -> ChainState {
-        let final_snapshot = storage_ref
-            .ask(GetFinalSnapshot)
-            .await
-            .expect("Failed to read final snapshot from store");
-        let (final_state, final_tip) = match final_snapshot {
-            Some((state, meta)) => (state, Some(Tip::from(meta))),
-            // Nothing finalized yet: the pre-genesis state.
-            None => (
-                sequencer_genesis::build_initial_state(config.cross_zone.is_some()),
-                None,
-            ),
-        };
-        let mut chain = ChainState::from_final(final_state, final_tip);
-        let view = storage_ref
-            .ask(GetChannelViewBytes)
-            .await
-            .unwrap_or_else(|err| {
-                panic!("Failed to read the stored channel view: {:#}", anyhow!(err))
-            });
-        let restored = view.is_some_and(|bytes| {
-            chain
-                .restore_view(&bytes)
-                .inspect_err(|err| warn!("Stored channel view does not decode: {err}"))
-                .is_ok()
-        });
-        if !restored {
-            // Nothing the channel reported yet: the view fills from the
-            // channel, or from our bootstrap publishes.
-            info!("No stored channel view; starting on the final tier");
-            return chain;
-        }
-
-        // The replayed head must reproduce the persisted state, else store
-        // and config disagree (e.g. edited genesis actions). Skipped only when
-        // nothing is anchored yet: no final tip and no folded block.
-        assert!(
-            chain.head_tip().is_none() || chain.head_state() == stored_head_state,
-            "Persisted state does not match the replayed chain; reset the store or restore the original config (cross_zone presence included)"
-        );
-
-        chain
-    }
-
-    /// Seeds the storage actor's database with this zone's genesis when it
-    /// holds no chain yet.
-    async fn seed_genesis_if_absent(
-        storage_ref: &ActorRef<S>,
-        signing_key: &lee::PrivateKey,
-        bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
-        config: &SequencerConfig,
-    ) {
-        let first_block_id = storage_ref
-            .ask(GetFirstBlockId)
-            .await
-            .expect("Failed to read the first block id");
-        if first_block_id.is_some() {
-            return;
-        }
-
-        let genesis_config = config
-            .genesis_config(bootstrap_sequencer_key)
-            .expect("Failed to build the genesis config");
-        let (block, state, events) =
-            sequencer_genesis::genesis_block_and_state(signing_key, &genesis_config);
-        let genesis_events = vec![(block.header.block_id, events)];
-
-        storage_ref
-            // No need for events on first block
-            .ask(AtomicUpdate::from_block(block, Arc::new(state), genesis_events))
-            .await
-            .expect("Failed to seed the database with the genesis block");
-
-        sequencer_core_metrics::increment_blocks_produced_total();
-    }
-
-    /// # Errors
-    ///
-    /// Fails when the local store diverges from the chain the Bedrock channel serves.
     #[expect(
-        clippy::cognitive_complexity,
-        reason = "Slop has won the battle, but our war is not over"
+        clippy::too_many_arguments,
+        reason = "TODO: Refactor when SequencerCore will be implementation detail of ExecutorActor"
     )]
-    pub async fn start_from_config(
+    pub async fn new(
         config: SequencerConfig,
+        mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
+        chain: ChainState,
+        bedrock_signing_key: Ed25519Key,
         storage_ref: ActorRef<S>,
-        bedrock_ref: ActorRef<B>,
-    ) -> Result<(Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>)> {
-        sequencer_core_metrics::init();
+        bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+        stake_config_keys_pubsub_ref: ActorRef<PubSub<StakeConfigKeys>>,
+        slasher_ref: ActorRef<SlasherActor<S>>,
+        config_manager: ActorRef<ChannelConfigActor>,
+    ) -> Result<Self> {
+        let channel_id = config.bedrock_config.channel_id;
 
-        let bedrock_signing_key =
-            load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
-                .expect("Failed to load or create bedrock signing key");
-        log::info!(
-            "Bedrock signing public key: {}",
-            hex::encode(bedrock_signing_key.public_key().to_bytes())
-        );
-
-        let own_sequencer_key =
-            sequencer_stake_core::SequencerKey::new(bedrock_signing_key.public_key().to_bytes())
-                .expect("our own Bedrock public key is a valid Ed25519 public key");
-
-        // Only seed our own key into genesis as the bootstrap sequencer if the
-        // channel doesn't exist yet. Otherwise it's someone else's channel and
-        // we join later, the normal self-join way.
-        let channel_probe_retry_strategy =
-            FixedInterval::new(Self::CHANNEL_PROBE_RETRY_DELAY).take(Self::CHANNEL_PROBE_RETRIES);
-        let channel_already_exists = Retry::start(channel_probe_retry_strategy, || async {
-            bedrock_ref
-                .ask(sequencer_bedrock_actor::protocol::CheckChannelExists)
-                .await
-                .map_err(|err| anyhow!(err))
-                .inspect_err(|err| warn!("Failed to probe Bedrock channel: {err:#}"))
-        })
-        .await
-        .expect("Failed to probe Bedrock channel");
-        if channel_already_exists {
-            info!("Channel already exists; joining as a non channel creator");
-        } else {
-            info!("Channel does not exist yet; starting it as channel creator");
-        }
-        let bootstrap_sequencer_key = (!channel_already_exists).then_some(own_sequencer_key);
-        let signing_key = config
-            .block_signing_key()
-            .expect("Failed to load the block signing key");
-        Self::seed_genesis_if_absent(&storage_ref, &signing_key, bootstrap_sequencer_key, &config)
-            .await;
-
-        let state = storage_ref
-            .ask(GetLeeState)
-            .await
-            .expect("Failed to read state from store")
-            .expect("Store holds a chain but no state");
-
-        let stake_config = committee_discovery::read_config(&state).expect(
-            "sequencer_stake config account is absent or undecodable; this chain's state is not \
-             one this sequencer can operate on",
-        );
-
-        // print your own sequencer entry,
-        // allowing to see that fees land to your account on explorer
-        if let Some(reward_account) = stake_config
-            .entries
-            .get(&own_sequencer_key)
-            .map(|entry| entry.account_id)
-        {
-            log::info!("Producer reward account (stake ownership): {reward_account}");
-        }
-
-        let chain = Arc::new(Mutex::new(
-            Self::restore_chain_state(&config, &storage_ref, &state).await,
-        ));
-
-        let initial_checkpoint = zone_checkpoint(&storage_ref)
-            .await
-            .expect("Failed to load zone-sdk checkpoint");
-        let is_fresh_start = initial_checkpoint.is_none();
-
-        let (mempool, mempool_handle) = MemPool::new(config.mempool_max_size);
-        sequencer_core_metrics::record_mempool_max_size(config.mempool_max_size);
-
-        let slasher = SlasherActor::spawn(
-            SlasherActor::load(
-                storage_ref.clone(),
-                bedrock_signing_key.clone(),
-                stake_config,
-                *config.bedrock_config.channel_id.as_ref(),
-            )
-            .await,
-        );
-
-        let config_manager = ChannelConfigActor::spawn_with_mailbox(
-            ChannelConfigActor::new(bedrock_signing_key.clone()),
-            kameo::mailbox::bounded(channel_config::MAILBOX_CAPACITY),
-        );
-
-        let (accredited_keys_tx, _) = accredited_keys_channel();
-        let (staked_keys_tx, _) = accredited_keys_channel();
-
-        // Cross-zone messaging: start a watcher per configured peer. The inbox
-        // config account is seeded into genesis state in `build_genesis_state`.
         let watchers = config
             .cross_zone
             .as_ref()
             .map_or_else(TaskGroup::default, |cross_zone| {
                 cross_zone_watcher::spawn_watchers(
-                    &config.bedrock_config,
+                    channel_id,
                     cross_zone,
                     config.block_create_timeout,
                     &storage_ref,
+                    &bedrock_pool_ref,
                 )
             });
-        // Before producing, verify our local state still belongs to the chain
-        // the channel serves and replay any channel blocks we are missing
-        // (e.g. from other sequencers).
-        let channel_absent =
-            Self::verify_and_reconstruct(&bedrock_ref, &storage_ref, &chain, is_fresh_start)
-                .await
-                .context("Failed to verify/reconstruct sequencer state from Bedrock")?;
 
-        // Publish our blocks only when we are bootstrapping a channel that does
-        // not exist yet (no channel tip). If the channel already exists (another
-        // sequencer created it), we adopted its blocks during reconstruction
-        // instead; republishing then would fork the channel with our own copies.
-        if is_fresh_start && channel_absent {
-            let mut pending_blocks = storage_ref
-                .ask(GetAllBlocks)
-                .await
-                .expect("Failed to read blocks from store while republishing on fresh start")
-                .into_iter()
-                .filter(|block| matches!(block.bedrock_status, BedrockStatus::Pending))
-                .collect::<Vec<_>>();
-            pending_blocks.sort_unstable_by_key(|block| block.header.block_id);
+        let state = storage_ref
+            .ask(GetLeeState)
+            .await
+            .context("Failed to read state from store")?
+            .context("Store holds a chain but no state")?;
 
-            assert!(
-                pending_blocks
-                    .first()
-                    .is_none_or(|block| block.header.block_id == GENESIS_BLOCK_ID),
-                "First pending block on fresh start should be the genesis block"
-            );
-
-            // The channel is born holding only its creator's key, so a configured
-            // founding set is applied by the same tx that writes genesis; the
-            // committee is never observable without it.
-            let founding_committee =
-                sequencer_genesis::founding_committee(&config.genesis, own_sequencer_key).map(
-                    |keys| {
-                        keys.into_iter()
-                            .map(|key| {
-                                Ed25519PublicKey::from_bytes(&key.to_bytes()).expect(
-                                    "sequencer key was decoded from a valid Ed25519 public key",
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                    },
-                );
-            // The account, not the config: the genesis tx above already wrote
-            // the configured values there, and the account is what every later
-            // update reads, so creation must not have a second source.
-            let channel_params = committee_discovery::channel_params(&state)
-                .expect("genesis sets the channel posting params in the stake config account");
-
-            let mut last_checkpoint = None;
-            let mut published = Vec::new();
-            for block in &pending_blocks {
-                let outcome = match &founding_committee {
-                    Some(keys) if block.header.block_id == GENESIS_BLOCK_ID => bedrock_ref
-                        .ask(sequencer_bedrock_actor::protocol::CreateChannel {
-                            genesis: block.clone(),
-                            keys: keys.clone(),
-                            channel_params,
-                            configuration_threshold: committee_discovery::channel_config_threshold(
-                                keys.len(),
-                            ),
-                        })
-                        .await
-                        .unwrap_or_else(|err| {
-                            panic!("Failed to create channel with genesis: {:#}", anyhow!(err))
-                        }),
-                    _ => bedrock_ref
-                        .ask(sequencer_bedrock_actor::protocol::PublishBlock {
-                            block: block.clone(),
-                            withdrawals: vec![],
-                            parent: None,
-                            expected_seq: None,
-                        })
-                        .await
-                        .unwrap_or_else(|err| {
-                            panic!(
-                                "Failed to publish block {} on fresh start: {:#}",
-                                block.header.block_id,
-                                anyhow!(err)
-                            )
-                        }),
-                };
-                published.push(ChannelEntry {
-                    msg: outcome.this_msg,
-                    parent: outcome.parent,
-                    block: Some(block.clone()),
-                });
-                last_checkpoint = Some((outcome.checkpoint, outcome.seq));
-            }
-
-            // These blocks are already stored, so only the view and the sdk's
-            // pending set moved. Checkpoints are cumulative, so the last one
-            // covers every publish above.
-            if let Some((checkpoint, seq)) = last_checkpoint {
-                let bytes =
-                    checkpoint_bytes(&checkpoint).expect("Failed to serialize zone-sdk checkpoint");
-                let mut chain = chain.lock().await;
-                chain.apply_conflict(published);
-                storage_ref
-                    .ask(AtomicUpdate {
-                        checkpoint: Some(ZoneCheckpointRecord {
-                            bytes,
-                            seq: seq.into_inner(),
-                        }),
-                        ..chain_update(&chain)
-                    })
-                    .await
-                    .expect("Failed to persist the bootstrap publishes");
-            }
-        }
-
-        // The committee the slasher loaded with predates catch-up and the
-        // bootstrap publishes.
-        refresh_committee(&slasher, &chain, &accredited_keys_tx, &staked_keys_tx).await;
+        let stake_config = committee_discovery::read_config(&state).context(
+            "sequencer_stake config account is absent or undecodable; this chain's state is not \
+             one this sequencer can operate on",
+        )?;
+        slasher_ref
+            .tell(SetCommittee(stake_config))
+            .await
+            .context("Failed to hand the slasher its committee")?;
 
         let finalized_config = zone_checkpoint(&storage_ref)
-            .await
-            .expect("Failed to get zone checkpoint")
+            .await?
             .map_or_else(MsgId::root, |checkpoint| checkpoint.finalized_config);
 
-        let sequencer_core = Self {
-            chain,
-            storage_ref,
+        let mut sequencer = Self {
+            channel_id,
+            chain: Arc::new(Mutex::new(chain)),
             mempool,
-            mempool_handle: mempool_handle.clone(),
-            sequencer_config: config,
-            bedrock_ref,
+            stake_config_keys: StakeConfigKeys::default(),
+            storage_ref,
+            bedrock_pool_ref,
+            stake_config_keys_pubsub_ref,
+            slasher_ref,
             watchers,
-            slasher,
-            accredited_keys_tx,
-            staked_keys_tx,
             config_manager,
-            bedrock_signing_key,
-            block_signing_key: signing_key,
             config_draft: None,
             finalized_config,
             applied_seq: None,
+            block_signing_key: config
+                .block_signing_key()
+                .context("Failed to load block signing key")?,
+            bedrock_signing_key,
+            sequencer_config: config,
         };
-
-        sequencer_core_metrics::record_chain_height(sequencer_core.chain_height().await);
-        sequencer_core.record_dead_letter_gauge().await;
-
-        Ok((sequencer_core, mempool_handle))
-    }
-
-    /// Verifies the local store still belongs to the chain the connected channel
-    /// serves and replays any finalized channel blocks missing locally into
-    /// `state`/`store`, recording each block's L1 inscription slot as the new
-    /// anchor. Fails when the channel proves a different chain: the anchor
-    /// consistency check, or a first finalized block that does not apply.
-    ///
-    /// Returns whether the channel does not exist yet (has no tip), i.e. whether
-    /// this sequencer is the one that must bootstrap-publish its own blocks.
-    async fn verify_and_reconstruct(
-        bedrock_ref: &ActorRef<B>,
-        storage_ref: &ActorRef<S>,
-        chain: &Mutex<ChainState>,
-        is_fresh_start: bool,
-    ) -> Result<bool> {
-        let anchor_record = storage_ref
-            .ask(GetZoneAnchor)
+        sequencer_core_metrics::record_mempool_max_size(
+            sequencer.sequencer_config.mempool_max_size,
+        );
+        sequencer_core_metrics::record_chain_height(sequencer.chain_height().await);
+        sequencer.record_dead_letter_gauge().await;
+        sequencer
+            .refresh_committee()
             .await
-            .context("Failed to read zone anchor")?;
+            .expect("Failed to refresh committee");
 
-        let after_slot = anchor_record
-            .and_then(|record| record.slot.checked_sub(1))
-            .map(Slot::from);
-        let channel_tip_slot = bedrock_ref
-            .ask(sequencer_bedrock_actor::protocol::GetChannelTipSlot)
-            .await
-            .context("Failed to read channel tip slot")?;
-
-        // If this sequencer has already committed blocks to the channel, that
-        // channel must still exist. A missing channel then means a wiped/rewound
-        // Bedrock or a node pointing at a different chain, so refuse to resume
-        // onto a foreign channel.
-        //
-        // "Committed" requires *both* a non-genesis tip and a checkpoint that was
-        // persisted before this startup: the tip alone is set the moment we produce
-        // (before the channel confirms it), while a checkpoint alone is written by
-        // zone-sdk's cold-start backfill even on a brand-new empty channel before we
-        // publish genesis. We must read the checkpoint presence from before `BP::new`
-        // ran (`!is_fresh_start`), because its cold-start backfill re-persists a
-        // checkpoint by the time we reach here — reading the store now would always
-        // see one. Together they mean we produced blocks and zone-sdk processed
-        // channel activity in a prior run.
-        let local_tip = storage_ref
-            .ask(GetLatestBlockMeta)
-            .await
-            .context("Failed to read latest block meta")?
-            .map(|meta| meta.id);
-        let had_checkpoint_before_start = !is_fresh_start;
-        if let Some(local_tip) = local_tip
-            && had_checkpoint_before_start
-            && channel_tip_slot.is_none()
-        {
-            return Err(anyhow!(
-                "Sequencer holds committed blocks (tip {local_tip}) but the Bedrock channel \
-                    no longer exists on the connected chain — the channel was wiped or the node \
-                    points at a different chain. Refusing to resume onto a foreign channel."
-            ));
-        }
-
-        let divergence_error = |mismatch: &ChainMismatch| {
-            anyhow!(
-                "Sequencer store diverges from the Bedrock channel ({mismatch}). \
-                 Delete the sequencer storage directory or point at the correct channel."
-            )
-        };
-
-        // With a recorded anchor, probe the channel for positive evidence of a
-        // different chain: the frontier upfront (a missing/behind channel serves
-        // no messages to scan), then the anchor block as messages stream in.
-        let mut consistency_check = anchor_record.map(|record| {
-            let anchor = Anchor::new(
-                Slot::from(record.slot),
-                Some((record.block_id, record.hash)),
-            );
-            let mut check = AnchorConsistencyCheck::new(anchor);
-            check.check_frontier(channel_tip_slot);
-            check
-        });
-        if let Some(ChainConsistency::Inconsistent(mismatch)) = consistency_check
-            .as_ref()
-            .and_then(AnchorConsistencyCheck::verdict)
-        {
-            return Err(divergence_error(mismatch));
-        }
-
-        // Verify each message against the anchor and replay the
-        // blocks (applying the ones we miss, checking the ones we hold).
-        let mut messages = bedrock_ref
-            .ask(sequencer_bedrock_actor::protocol::ReadChannel { after: after_slot })
-            .await
-            .context("Failed to read channel history for reconstruction")?;
-        // Finalized history is read in lineage order, but a warm start re-reads
-        // what the final tier holds, so the lineage resumes past the stored final entry.
-        let stored_final = chain.lock().await.final_msg();
-        let mut on_lineage = stored_final == MsgId::root();
-        let mut read_any = false;
-        while let Some((message, slot)) = messages.next().await {
-            if let Some(check) = &mut consistency_check
-                && let Some(ChainConsistency::Inconsistent(mismatch)) =
-                    check.observe(&message, slot)
-            {
-                return Err(divergence_error(mismatch));
-            }
-
-            let ZoneMessage::Block(zone_block) = message else {
-                continue;
-            };
-            // An offence the channel already carries, so replaying it must not
-            // be fatal: the entry carries no block, and the lineage moves past it.
-            let block = borsh::from_slice::<Block>(&zone_block.data)
-                .inspect_err(|_| {
-                    warn!(
-                        "Skipping an undecodable inscription {:?} at slot {}",
-                        zone_block.id,
-                        slot.into_inner(),
-                    );
-                })
-                .ok();
-            // Locked per message, not across the stream `await`.
-            let mut chain = chain.lock().await;
-            Self::apply_reconstructed_entry(
-                storage_ref,
-                &mut chain,
-                zone_block.id,
-                block,
-                on_lineage,
-                slot,
-            )
-            .await?;
-            on_lineage = on_lineage || zone_block.id == stored_final;
-            read_any = true;
-        }
-        if read_any && !on_lineage {
-            warn!(
-                "Reconstruction never re-read the stored final entry {stored_final}, so it left \
-                 the lineage untouched; the Bedrock node's finality may lag behind it"
-            );
-        }
-
-        // The channel exists once it has a tip; only when it has none is this
-        // sequencer the one bootstrapping it. This is deliberately not the
-        // reconstruction scan's view above, which reads only finalized history
-        // (up to LIB) and so reports "empty" while finality lags even though the
-        // channel already holds unfinalized blocks from another sequencer.
-        Ok(channel_tip_slot.is_none())
-    }
-
-    /// Applies one finalized channel entry during reconstruction, moving the
-    /// final entry to it only `on_lineage`. A block the store already holds
-    /// only settles its deliveries, a block that does not apply is skipped,
-    /// like the follow path does. Advances the persisted anchor to a block the
-    /// store holds after this.
-    async fn apply_reconstructed_entry(
-        storage_ref: &ActorRef<S>,
-        chain: &mut ChainState,
-        msg: MsgId,
-        entry_block: Option<Block>,
-        on_lineage: bool,
-        slot: Slot,
-    ) -> Result<()> {
-        let head_before: HashSet<HashType> = chain
-            .head_blocks()
-            .iter()
-            .map(|block| block.header.hash)
-            .collect();
-        let was_empty = chain.final_tip().is_none();
-        let outcome = if on_lineage {
-            chain.apply_reconstructed(msg, entry_block.as_ref())
-        } else {
-            chain.apply_finalized_redelivery(msg, entry_block.as_ref())
-        };
-        // The channel's first finalized block is its genesis: one that is not
-        // ours means a different chain, not an offence to step over.
-        if was_empty
-            && let Some(AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err)) =
-                &outcome
-        {
-            return Err(anyhow!(
-                "The channel's first finalized block does not apply on our genesis state: {:#}",
-                anyhow!(err.clone())
-            ));
-        }
-        let newly_final = chain.take_newly_final();
-        let mut update = chain_update(chain);
-        update.blocks = new_head_blocks(chain, &head_before);
-        if !newly_final.is_empty() {
-            // A reconstructed block is finalized, so any deposit it mints is
-            // permanently reflected in state (its receipt PDA); drop the
-            // pending record backfill may have re-delivered, so the drain
-            // stops re-minting. The same for the deliveries it carries.
-            update.finalized_deposit_records = newly_final
-                .iter()
-                .flat_map(|block| block.body.transactions.iter())
-                .filter_map(extract_bridge_deposit_id)
-                .collect();
-            for block in &newly_final {
-                update
-                    .finalized_dispatch_records
-                    .extend(settled_dispatch_keys(storage_ref, block).await);
-            }
-            update.blocks.extend(newly_final.iter().cloned());
-            update.final_snapshot = chain
-                .final_tip()
-                .map(|tip| (chain.share_final_state(), BlockMeta::from(&tip)));
-            update.finalized_up_to = chain.final_tip().map(|tip| tip.block_id);
-        }
-
-        if let Some(block) = &entry_block {
-            let block_id = block.header.block_id;
-            let record = ZoneAnchorRecord {
-                slot: slot.into_inner(),
-                block_id,
-                hash: block.header.hash,
-            };
-            let held_final = if chain
-                .final_tip()
-                .is_some_and(|tip| tip.block_id >= block_id)
-            {
-                storage_ref
-                    .ask(GetBlock { block_id })
-                    .await
-                    .context("Failed to read stored block")?
-                    .filter(|stored| stored.header.hash == block.header.hash)
-            } else {
-                None
-            };
-            match outcome {
-                Some(AcceptOutcome::Applied(events)) => {
-                    update.zone_anchor = Some(record);
-                    update.events = events;
-                }
-                // A block we already hold verbatim needs no replay, but the
-                // channel serving it is what makes it irreversible, so its
-                // deliveries are settled and their records are owed nothing.
-                Some(AcceptOutcome::AlreadyApplied | AcceptOutcome::Parked(_))
-                    if let Some(stored) = held_final =>
-                {
-                    settle_reconstructed_deliveries(storage_ref, &stored).await;
-                    update.zone_anchor = Some(record);
-                }
-                Some(AcceptOutcome::AlreadyApplied) | None => {}
-                Some(AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err)) => {
-                    warn!(
-                        "Finalized channel block {block_id} does not apply, skipping it: {:#}",
-                        anyhow!(err)
-                    );
-                }
-            }
-        }
-
-        storage_ref
-            .ask(update)
-            .await
-            .context("Failed to persist reconstructed entry")?;
-        Ok(())
+        Ok(sequencer)
     }
 
     /// Feeds one channel update into the chain state and mirrors it to the
@@ -815,7 +301,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// on this same head.
     pub async fn on_channel_update(
         &mut self,
-        update: Arc<sequencer_bedrock_actor::protocol::ChannelUpdate>,
+        update: sequencer_bedrock_actor::protocol::ChannelUpdate,
     ) {
         let sequencer_bedrock_actor::protocol::ChannelUpdate {
             checkpoint,
@@ -826,7 +312,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             withdrawals,
             undecodable,
             finalized_signers,
-        } = &*update;
+        } = &update;
 
         let moved_head = !finalized.is_empty()
             || match view {
@@ -1029,7 +515,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // queue is a follow-up.
         for tx in resubmit_txs {
             let tx_hash = tx.hash();
-            if let Err(err) = self.mempool_handle.try_push((TransactionOrigin::User, tx)) {
+            if let Err(err) = self
+                .mempool
+                .handle()
+                .try_push((TransactionOrigin::User, tx))
+            {
                 warn!(
                     "Dropping orphaned transaction {tx_hash} on resubmit: {:#}",
                     anyhow!(err)
@@ -1040,13 +530,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         self.finalized_config = checkpoint.finalized_config;
 
         if moved_head {
-            refresh_committee(
-                &self.slasher,
-                &self.chain,
-                &self.accredited_keys_tx,
-                &self.staked_keys_tx,
-            )
-            .await;
+            self.refresh_committee()
+                .await
+                .expect("Failed to refresh committee");
         }
     }
 
@@ -1102,8 +588,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         info!("Publishing block {} on pin {parent}", block.header.block_id);
 
         let publish_res = self
-            .bedrock_ref
+            .bedrock_pool_ref
             .ask(sequencer_bedrock_actor::protocol::PublishBlock {
+                channel_id: self.channel_id,
                 block: block.clone(),
                 withdrawals: withdrawals.clone(),
                 parent: withdrawals.is_empty().then_some(parent),
@@ -1113,12 +600,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
         let outcome = match publish_res {
             Ok(outcome) => outcome,
-            Err(kameo::error::SendError::HandlerError(
+            Err(kameo::error::SendError::HandlerError(kameo::error::SendError::HandlerError(
                 sequencer_bedrock_actor::error::Error::ChannelMoved {
                     provided: expected,
                     current,
                 },
-            )) => {
+            ))) => {
                 for (origin, tx) in mempool_transactions.into_iter().rev() {
                     self.mempool.push_front((origin, tx));
                 }
@@ -1178,9 +665,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // Funding is a node round trip, which is why the actor asks for it
         // instead of doing it: the signatures are over the funded transaction.
         let prepared = match self
-            .bedrock_ref
+            .bedrock_pool_ref
             .ask(sequencer_bedrock_actor::protocol::PrepareConfig {
-                target: *target.clone(),
+                channel_id: self.channel_id,
+                keys: target.keys.clone(),
+                posting_timeframe: target.posting_timeframe,
+                posting_timeout: target.posting_timeout,
+                configuration_threshold: target.configuration_threshold,
+                transfer_threshold: target.transfer_threshold,
             })
             .await
         {
@@ -1190,22 +682,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 return;
             }
         };
-        let accredited_keys =
-            match sequencer_bedrock_actor::protocol::verified_keys(&prepared.accredited_keys) {
-                Ok(keys) => keys,
-                Err(err) => {
-                    warn!(
-                        "Channel-config draft names an invalid key: {:#}",
-                        anyhow!(err)
-                    );
-                    return;
-                }
-            };
         let message = channel_config::FundedTx {
             target,
             tx: Box::new(prepared.tx().clone()),
-            accredited_keys,
-            signing_threshold: prepared.signing_threshold,
+            accredited_keys: prepared.accredited_keys().to_vec(),
+            signing_threshold: prepared.signing_threshold(),
         };
         self.config_draft = Some(ConfigDraft {
             prepared,
@@ -1248,8 +729,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // Only the deadline needs the slot, so an unreadable tip delays that
         // rather than the submission.
         let tip_slot = match self
-            .bedrock_ref
-            .ask(sequencer_bedrock_actor::protocol::GetChannelTipSlot)
+            .bedrock_pool_ref
+            .ask(sequencer_bedrock_actor::protocol::GetChannelTipSlot {
+                channel_id: self.channel_id,
+            })
             .await
         {
             Ok(tip_slot) => tip_slot,
@@ -1278,8 +761,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
 
         if let Err(err) = self
-            .bedrock_ref
+            .bedrock_pool_ref
             .ask(sequencer_bedrock_actor::protocol::ChangeChannelConfig {
+                channel_id: self.channel_id,
                 prepared,
                 signatures: submission.signatures,
             })
@@ -1600,7 +1084,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // A Slash executes against the head config, so it is proposed from it.
         let slash_txs = match committee_discovery::read_config(&working_state) {
             Some(config) => self
-                .slasher
+                .slasher_ref
                 .ask(Propose { config })
                 .await
                 .unwrap_or_else(|err| {
@@ -1924,29 +1408,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         &self.sequencer_config
     }
 
-    #[must_use]
-    pub const fn slasher_ref(&self) -> &ActorRef<SlasherActor<S>> {
-        &self.slasher
-    }
-
-    /// The gossip mesh's view of the committee, as of the last head move.
-    #[must_use]
-    pub fn accredited_keys_watch(&self) -> AccreditedKeysReceiver {
-        self.accredited_keys_tx.subscribe()
-    }
-
-    /// Keys with stake on record, as of the last head move.
-    #[must_use]
-    pub fn staked_keys_watch(&self) -> AccreditedKeysReceiver {
-        self.staked_keys_tx.subscribe()
-    }
-
-    /// Handle to the channel-config actor, for the service to feed gossip into.
-    #[must_use]
-    pub const fn config_manager_ref(&self) -> &ActorRef<ChannelConfigActor> {
-        &self.config_manager
-    }
-
     /// This node's Bedrock public key, hex — the identity the channel's
     /// accredited keys and round-robin are keyed by.
     #[must_use]
@@ -2117,10 +1578,51 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             return;
         }
 
-        self.slasher
+        self.slasher_ref
             .ask(Report { offences })
             .await
             .unwrap_or_else(|err| panic!("Failed to persist the slash record: {:#}", anyhow!(err)));
+    }
+
+    /// Hands the slasher and the gossip mesh the committee the head now holds. The
+    /// produce path also refreshes it, but only a producing node takes turns.
+    async fn refresh_committee(&mut self) -> Result<()> {
+        let config = committee_discovery::read_config(self.chain.lock().await.head_state());
+        let Some(config) = config else {
+            return Ok(());
+        };
+        let keys = StakeConfigKeys {
+            // The mesh screens against the same committee the slasher gates on.
+            accredited: config
+                .accredited_committee_members()
+                .copied()
+                .map(sequencer_stake_core::SequencerKey::to_bytes)
+                .collect(),
+            // A slash drops the key's entry, so it is muted from the head that
+            // holds the slash; an unstake keeps the entry until the key has left
+            // the channel.
+            staked: config
+                .entries
+                .keys()
+                .copied()
+                .map(sequencer_stake_core::SequencerKey::to_bytes)
+                .collect(),
+        };
+        // Every head move lands here, but the keys change on almost none.
+        if self.stake_config_keys != keys {
+            self.stake_config_keys_pubsub_ref
+                .tell(kameo_actors::pubsub::Publish(keys.clone()))
+                .await
+                .context("Failed to publish stake config keys")?;
+
+            self.stake_config_keys = keys;
+        }
+        self.slasher_ref
+            .tell(SetCommittee(config))
+            .await
+            .context("Failed to refresh the slasher committee")?;
+
+        Ok(())
     }
 }
 
@@ -2252,58 +1754,9 @@ fn config_target(
     })
 }
 
-/// Hands the slasher and the gossip mesh the committee the head now holds. The
-/// produce path also refreshes it, but only a producing node takes turns.
-async fn refresh_committee<S: StorageActorTrait>(
-    slasher: &ActorRef<SlasherActor<S>>,
-    chain: &Mutex<ChainState>,
-    accredited_keys_tx: &AccreditedKeysSender,
-    staked_keys_tx: &AccreditedKeysSender,
-) {
-    let config = committee_discovery::read_config(chain.lock().await.head_state());
-    let Some(config) = config else {
-        return;
-    };
-    // The mesh screens against the same committee the slasher gates on.
-    let keys: AccreditedKeys = config
-        .accredited_committee_members()
-        .copied()
-        .map(sequencer_stake_core::SequencerKey::to_bytes)
-        .collect();
-    set_keys(accredited_keys_tx, keys);
-    // A slash drops the key's entry, so it is muted from the head that holds
-    // the slash; an unstake keeps the entry until the key has left the channel.
-    set_keys(
-        staked_keys_tx,
-        config
-            .entries
-            .keys()
-            .copied()
-            .map(sequencer_stake_core::SequencerKey::to_bytes)
-            .collect(),
-    );
-    if let Err(err) = slasher.tell(SetCommittee(config)).await {
-        warn!(
-            "Failed to refresh the slasher committee: {:#}",
-            anyhow!(err)
-        );
-    }
-}
-
-/// Publishes a key set the mesh screens against. Every follow update lands
-/// here, but the set changes on almost none, so only a change wakes readers.
-fn set_keys(tx: &AccreditedKeysSender, keys: AccreditedKeys) {
-    tx.send_if_modified(|current| {
-        let changed = current.as_ref() != Some(&keys);
-        if changed {
-            *current = Some(keys);
-        }
-        changed
-    });
-}
-
 /// Head blocks `chain` holds that are not in `held_before`, to be stored.
-fn new_head_blocks(chain: &ChainState, held_before: &HashSet<HashType>) -> Vec<Block> {
+#[must_use]
+pub fn new_head_blocks(chain: &ChainState, held_before: &HashSet<HashType>) -> Vec<Block> {
     chain
         .head_blocks()
         .iter()
@@ -2313,7 +1766,8 @@ fn new_head_blocks(chain: &ChainState, held_before: &HashSet<HashType>) -> Vec<B
 }
 
 /// An update carrying the head and the view `chain` holds, and nothing else.
-fn chain_update(chain: &ChainState) -> AtomicUpdate {
+#[must_use]
+pub fn chain_update(chain: &ChainState) -> AtomicUpdate {
     AtomicUpdate {
         checkpoint: None,
         blocks: Vec::new(),
@@ -2500,7 +1954,7 @@ fn extract_cross_zone_dispatch_key(tx: &LeeTransaction) -> Option<CrossZoneMessa
 /// indexer, which re-derives every delivery and halts, but the local record is
 /// the last copy of what we believed and it is about to be dropped either way.
 /// Saying so in the log is what makes the halt diagnosable.
-async fn settled_dispatch_keys<S: StorageActorTrait>(
+pub async fn settled_dispatch_keys<S: StorageActorTrait>(
     storage_ref: &ActorRef<S>,
     block: &Block,
 ) -> HashSet<CrossZoneMessageKey> {
@@ -2548,31 +2002,8 @@ fn classify_settled_deliveries(
     (keys, forged)
 }
 
-/// Drops the records of deliveries carried by a reconstructed block.
-///
-/// A persist failure is only logged: the deliveries are already irreversible, so
-/// the worst case is a record the next drain drops instead.
-async fn settle_reconstructed_deliveries<S: StorageActorTrait>(
-    storage_ref: &ActorRef<S>,
-    block: &Block,
-) {
-    let keys = settled_dispatch_keys(storage_ref, block).await;
-    if keys.is_empty() {
-        return;
-    }
-    if let Err(err) = storage_ref
-        .ask(DropSettledCrossZoneDispatches { message_keys: keys })
-        .await
-    {
-        warn!(
-            "Failed to settle reconstructed delivery records: {:#}",
-            anyhow!(err)
-        );
-    }
-}
-
 #[must_use]
-fn extract_bridge_deposit_id(tx: &LeeTransaction) -> Option<HashType> {
+pub fn extract_bridge_deposit_id(tx: &LeeTransaction) -> Option<HashType> {
     let LeeTransaction::Public(tx) = tx else {
         return None;
     };

@@ -2110,3 +2110,13 @@ async fn an_oversized_dead_letter_is_listed_but_not_requeueable() {
     );
     assert!(pending_dispatch_keys(&storage_ref).await.is_empty());
 }
+
+#[test]
+fn opening_fails_when_the_db_path_is_a_file() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db_path = temp_dir.path().join("db");
+    // Force RocksDB open to fail with an IO error by placing a file at DB path.
+    std::fs::write(&db_path, b"not-a-directory").unwrap();
+
+    assert!(StorageActor::new(&db_path).is_err());
+}
