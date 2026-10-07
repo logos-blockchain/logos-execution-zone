@@ -24,7 +24,6 @@ use crate::{
             bridge::BridgeSubcommand, native_token_transfer::AuthTransferSubcommand,
             program_loader::ProgramLoaderSubcommand,
         },
-        statistics::StatisticsSubcommand,
     },
     config::SequencerConnectionData,
     storage::Storage,
@@ -37,7 +36,6 @@ pub mod group;
 pub mod keycard;
 pub mod network;
 pub mod programs;
-pub mod statistics;
 
 pub(crate) trait WalletSubcommand {
     async fn handle_subcommand(self, wallet_core: &mut WalletCore)
@@ -88,9 +86,6 @@ pub enum Command {
     /// Keycard hardware wallet management.
     #[command(subcommand)]
     Keycard(KeycardSubcommand),
-    /// Metrics management.
-    #[command(subcommand)]
-    Statistics(StatisticsSubcommand),
 }
 
 /// To execute commands, env var `LEE_WALLET_HOME_DIR` must be set into directory with config.
@@ -253,10 +248,10 @@ pub async fn execute_subcommand(
             let sequencer_addr: url::Url = network.try_into().context("Invalid sequencer URL")?;
 
             let mut config = wallet_core.config().clone();
-            config.sequencers = vec![SequencerConnectionData {
+            config.sequencer = SequencerConnectionData {
                 sequencer_addr,
                 basic_auth: None,
-            }];
+            };
 
             wallet_core.set_config(config);
             wallet_core.store_config_changes().await?;
@@ -271,17 +266,7 @@ pub async fn execute_subcommand(
 
             SubcommandReturnValue::Empty
         }
-        Command::Statistics(statistics_subcommand) => {
-            statistics_subcommand.handle_subcommand(wallet_core).await?
-        }
     };
-
-    // Kind of a sledgehammer solution, but it is not clear if there is the case to not store
-    // statistics
-    wallet_core
-        .client_rotation()
-        .await
-        .context("Failed to rotate wallet")?;
 
     Ok(subcommand_ret)
 }
@@ -376,13 +361,13 @@ pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) 
 
     wallet_core.sync_to_latest_block().await?;
 
-    let leader_client = wallet_core.helm_owned();
+    let client = wallet_core.client_owned();
 
     wallet_core
         .storage
         .key_chain_mut()
         .cleanup_trees_remove_uninit_layered(depth, |account_id| {
-            leader_client.get_account(account_id).map_err(Into::into)
+            client.get_account(account_id).map_err(Into::into)
         })
         .await?;
 
