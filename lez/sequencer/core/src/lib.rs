@@ -306,15 +306,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     ) -> Result<(Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>)> {
         sequencer_core_metrics::init();
 
-        // A block over Bedrock's inscription cap is unpublishable; fail at
-        // startup rather than stalling at the first oversized block.
-        assert!(
-            config.max_block_size.as_u64() <= config::MAX_PUBLISHABLE_BLOCK_SIZE,
-            "max_block_size {} exceeds Bedrock's inscription limit of {} bytes",
-            config.max_block_size,
-            config::MAX_PUBLISHABLE_BLOCK_SIZE,
-        );
-
         let bedrock_signing_key =
             load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
                 .expect("Failed to load or create bedrock signing key");
