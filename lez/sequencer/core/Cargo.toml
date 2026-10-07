@@ -18,6 +18,7 @@ sequencer_genesis.workspace = true
 sequencer_slasher_actor.workspace = true
 sequencer_storage_actor.workspace = true
 sequencer_bedrock_actor.workspace = true
+sharding_pool_actor = { workspace = true, features = ["actor"] }
 mempool.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 testnet_initial_state.workspace = true
