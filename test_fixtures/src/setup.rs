@@ -490,8 +490,8 @@ pub async fn setup_indexer_at(
     .context("Failed to run Indexer Service")
 }
 
-pub async fn setup_wallet(
-    sequencer_addrs: &[SocketAddr],
+pub fn setup_wallet(
+    sequencer_addr: &SocketAddr,
     initial_public_accounts: &[(PrivateKey, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     config_overrides: WalletConfigOverrides,
@@ -499,27 +499,25 @@ pub async fn setup_wallet(
     let temp_wallet_dir =
         tempfile::tempdir().context("Failed to create temp dir for wallet home")?;
     let (wallet, _state_dir, password) = setup_wallet_at(
-        sequencer_addrs,
+        sequencer_addr,
         initial_public_accounts,
         initial_private_accounts,
         config_overrides,
         temp_wallet_dir.path(),
-    )
-    .await?;
+    )?;
 
     Ok((wallet, temp_wallet_dir, password))
 }
 
 /// Set up the wallet in an explicit home directory owned by the caller.
-pub async fn setup_wallet_at(
-    sequencer_addrs: &[SocketAddr],
+pub fn setup_wallet_at(
+    sequencer_addr: &SocketAddr,
     initial_public_accounts: &[(PrivateKey, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     config_overrides: WalletConfigOverrides,
     home: &Path,
 ) -> Result<(WalletCore, PathBuf, String)> {
-    let config =
-        config::wallet_config(sequencer_addrs).context("Failed to create Wallet config")?;
+    let config = config::wallet_config(sequencer_addr).context("Failed to create Wallet config")?;
     let config_serialized =
         serde_json::to_string_pretty(&config).context("Failed to serialize Wallet config")?;
 
@@ -529,17 +527,14 @@ pub async fn setup_wallet_at(
     std::fs::write(&config_path, config_serialized).context("Failed to write wallet config")?;
 
     let storage_path = home.join("storage.json");
-    let metrics_path = home.join("metrics.json");
 
     let wallet_password = "test_pass".to_owned();
     let (mut wallet, _mnemonic) = WalletCore::new_init_storage(
         config_path,
         storage_path,
-        metrics_path,
         Some(config_overrides),
         &wallet_password,
     )
-    .await
     .context("Failed to init wallet")?;
 
     for (private_key, _balance) in initial_public_accounts {
