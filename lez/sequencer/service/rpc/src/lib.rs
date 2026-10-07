@@ -9,6 +9,7 @@ use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
     CommitmentSetDigest, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, EncryptedNote,
     HashType, LeeTransaction, MembershipProof, Nonce, PageLimit, ProgramId, Publication,
+    SequencerStatus,
 };
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
@@ -145,6 +146,10 @@ pub trait Rpc {
 
     #[method(name = "getChannelId")]
     async fn get_channel_id(&self) -> Result<ChannelId, ErrorObjectOwned>;
+
+    /// What the sequencer is doing: bootstrapping from the channel, or online.
+    #[method(name = "getSequencerStatus")]
+    async fn get_sequencer_status(&self) -> Result<SequencerStatus, ErrorObjectOwned>;
 
     /// The cross-zone deliveries this sequencer has given up on.
     ///

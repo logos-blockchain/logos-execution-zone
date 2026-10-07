@@ -12,10 +12,10 @@ use crate::{
     Result,
     error::Error,
     protocol::{
-        ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountView,
-        GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
+        ChannelId, ExecutorStatus, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces,
+        GetAccountView, GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
         GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetMessagePath,
-        GetProofsAndRoot, GetProofsAndRootReply, GetPublications, GetRecoveryBinding,
+        GetProofsAndRoot, GetProofsAndRootReply, GetPublications, GetRecoveryBinding, GetStatus,
         GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
         Transaction,
     },
@@ -38,6 +38,7 @@ pub trait ExecutorActorTrait:
     + Message<GetMessagePath, Reply = Result<Option<MembershipProof>>>
     + Message<GetRecoveryBinding, Reply = Result<Option<EncryptedNote>>>
     + Message<GetChannelId, Reply = Reply<ChannelId>>
+    + Message<GetStatus, Reply = ExecutorStatus>
     + Message<GetCrossZoneDeadLetters, Reply = Result<GetCrossZoneDeadLettersReply>>
     + Message<RequeueCrossZoneDeadLetter, Reply = Result<RequeueCrossZoneDeadLetterReply>>
     + Message<GetFeeQuote, Reply = Result<FeeStateQuote>>
