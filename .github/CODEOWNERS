@@ -91,7 +91,6 @@
 /lez/sequencer/core/src/cross_zone_watcher.rs @moudyellaz @schouhy
 
 ## Sequencer gossip
-/lez/sequencer/core/src/gossip/               @erhant @schouhy
 /lez/sequencer/actors/gossip/                 @erhant @schouhy
 
 ## Sequencer actors
