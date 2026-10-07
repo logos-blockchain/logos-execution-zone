@@ -2376,12 +2376,16 @@ dependencies = [
  "clap",
  "clock_core",
  "criterion",
+ "fee_core",
  "lee",
  "lee_core",
  "programs",
+ "rand 0.8.6",
  "risc0-zkvm",
  "serde",
  "serde_json",
+ "test_guest_core",
+ "test_programs",
 ]
 
 [[package]]
