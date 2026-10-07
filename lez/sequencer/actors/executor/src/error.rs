@@ -1,4 +1,4 @@
-use sequencer_actors_common::{EraseMessage as _, ErasedMessage};
+use sequencer_actors_common::{ErasedMessage, SendErrorExt as _};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
