@@ -15,7 +15,7 @@ use logos_blockchain_core::proofs::channel_multi_sig_proof::IndexedSignature;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
 use mempool::{MemPool, MemPoolHandle};
 use sequencer_channel_signing_actor::protocol::{Signature, Wire};
-use sequencer_core::{TransactionOrigin, config::GossipConfig, gossip::accredited_keys_channel};
+use sequencer_core::{TransactionOrigin, config::GossipConfig};
 use sequencer_slasher_actor::protocol::{Approval, Offence};
 use sequencer_stake_core::SequencerKey;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
@@ -25,7 +25,6 @@ use super::{GossipActor, IngestSubmit, MAILBOX_CAPACITY, peer_id_from_ed25519};
 use crate::protocol::{GetConnectedPeers, PublishConfig, PublishTransaction};
 
 const CHANNEL: [u8; 32] = [1; 32];
-const TEST_MAX_BLOCK_SIZE: u64 = 1 << 20;
 
 /// A spawned gossip actor plus the identity captured before spawning.
 struct TestNode {
@@ -220,10 +219,7 @@ async fn start_node(secret: [u8; 32], bootstrap: Vec<libp2p::Multiaddr>) -> (Tes
         CHANNEL,
         Ed25519Key::from_bytes(&secret),
         sink_ref.recipient(),
-        tokio::sync::watch::channel(TEST_MAX_BLOCK_SIZE).1,
         unscreened_mempool_submit(mempool_handle),
-        accredited_keys_channel().1,
-        accredited_keys_channel().1,
         config_sink_ref.recipient(),
     )
     .await
@@ -294,10 +290,7 @@ async fn new_binds_and_reports_listen_addr() {
         [1; 32],
         Ed25519Key::from_bytes(&[9; 32]),
         test_approval_sink(),
-        tokio::sync::watch::channel(TEST_MAX_BLOCK_SIZE).1,
         unscreened_mempool_submit(test_mempool_handle()),
-        accredited_keys_channel().1,
-        accredited_keys_channel().1,
         test_config_sink(),
     )
     .await
@@ -315,10 +308,7 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         [1; 32],
         Ed25519Key::from_bytes(&[9; 32]),
         test_approval_sink(),
-        tokio::sync::watch::channel(TEST_MAX_BLOCK_SIZE).1,
         unscreened_mempool_submit(test_mempool_handle()),
-        accredited_keys_channel().1,
-        accredited_keys_channel().1,
         test_config_sink(),
     )
     .await
@@ -342,10 +332,7 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         [1; 32],
         Ed25519Key::from_bytes(&[10; 32]),
         test_approval_sink(),
-        tokio::sync::watch::channel(TEST_MAX_BLOCK_SIZE).1,
         unscreened_mempool_submit(test_mempool_handle()),
-        accredited_keys_channel().1,
-        accredited_keys_channel().1,
         test_config_sink(),
     )
     .await

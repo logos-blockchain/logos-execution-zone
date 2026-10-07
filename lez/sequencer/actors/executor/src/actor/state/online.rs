@@ -16,7 +16,9 @@ use sequencer_storage_actor::{StorageActorTrait, protocol::AtomicUpdate};
 use sharding_pool_actor::ShardingPoolActor;
 
 use crate::{
-    Result, actor::state::{ActorsBundle, bootstrapping, check_startup_channel_params, checkpoint_record}, error::Error,
+    Result,
+    actor::state::{ActorsBundle, bootstrapping, check_startup_channel_params, checkpoint_record},
+    error::Error,
 };
 
 #[cfg(test)]
