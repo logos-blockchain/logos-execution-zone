@@ -7,63 +7,57 @@ use futures::{
 };
 use kameo::{
     actor::{ActorRef, WeakActorRef},
-    error::{ActorStopReason, Infallible},
+    error::ActorStopReason,
     mailbox::{MailboxReceiver, Signal},
     message::{Context, Message},
     reply::DelegatedReply,
 };
+use kameo_actors::pubsub::PubSub;
+use lee::Account;
 use lee_core::{
     BlockId, CommitmentPosition, EncryptedNote, MembershipProof,
     account::{Actor, Balance, Nonce},
     program::Publication,
 };
 use log::{debug, warn};
-use mempool::MemPoolHandle;
-use sequencer_actors_common::SendErrorExt as _;
-use sequencer_bedrock_actor::BedrockActorTrait;
-use sequencer_core::{
-    ChannelSigningActor, SequencerCore, SubmitConfig, TransactionOrigin,
-    config::SequencerConfig,
-    gossip::{AccreditedKeysReceiver, MaxBlockSizeReceiver},
-    task_group::TaskGroup,
+use sequencer_actors_common::Reply;
+use sequencer_bedrock_actor::{
+    BedrockActorTrait,
+    protocol::{ChannelEvent, ChannelEventKind, Ed25519Key, PublisherEvent},
 };
+use sequencer_channel_signing_actor::{ChannelSigningActor, protocol as channel_signing_protocol};
+use sequencer_core::{StakeConfigUpdate, config::SequencerConfig};
 use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActorTrait;
+use sharding_pool_actor::ShardingPoolActor;
 
 use crate::{
     ExecutorActorTrait, Result,
-    actor::turn::Turn,
+    actor::state::State,
     error::Error,
     protocol::{
-        ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
+        ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces,
         GetAccountTransactions, GetAccountView, GetBlock, GetBlockByHash, GetBlockRange,
         GetChannelId, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply, GetFeeQuote,
-        GetLastBlockId, GetMessagePath, GetProofsAndRoot, GetPublications, GetRecoveryBinding,
-        GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
-        Transaction,
+        GetLastBlockId, GetMessagePath, GetProofsAndRoot, GetProofsAndRootReply, GetPublications,
+        GetRecoveryBinding, GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter,
+        RequeueCrossZoneDeadLetterReply, Transaction,
     },
 };
 
 mod conversions;
+mod state;
 #[cfg(test)]
 mod tests;
-mod turn;
 
 /// How many block lookups a single [`GetBlockRange`] keeps in flight.
 const BLOCK_RANGE_CONCURRENCY: usize = 16;
 const MAX_PUBLICATIONS_PER_REQUEST: PageLimit = 256;
 
 pub struct ExecutorActor<S: StorageActorTrait, B: BedrockActorTrait> {
-    mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
-    sequencer: SequencerCore<S, B>,
+    state: State<S, B>,
+    channel_id: ChannelId,
     storage_ref: ActorRef<S>,
-    bedrock_ref: ActorRef<B>,
-
-    /// Whose turn it is to write: blocks are only produced in ours.
-    turn: Turn,
-
-    // TODO: Remove this field
-    background_task: TaskGroup,
 
     /// Consecutive production turns that failed outright. A run of these looks
     /// exactly like an idle node in every other signal, so it gets its own.
@@ -73,77 +67,35 @@ pub struct ExecutorActor<S: StorageActorTrait, B: BedrockActorTrait> {
 impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
     pub fn new(
         config: SequencerConfig,
+        channel_signing_key: Ed25519Key,
         storage_ref: ActorRef<S>,
-        bedrock_ref: ActorRef<B>,
+        bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+        stake_config_pubsub_ref: ActorRef<PubSub<StakeConfigUpdate>>,
+        slasher_ref: ActorRef<SlasherActor<S>>,
+        channel_signer_ref: ActorRef<ChannelSigningActor>,
     ) -> impl Future<Output = Result<Self>> + Send + 'static {
         sequencer_executor_actor_metrics::init();
 
         async move {
-            // TODO: Leave storage_ref as a top-level field only in `ExecutorActor`,
-            // while moving `SequencerCore` code into this actor.
-            let (sequencer, mempool_handle) = SequencerCore::<S, B>::start_from_config(
+            let channel_id = config.bedrock_config.channel_id;
+            let state = State::initialize(
                 config,
+                channel_signing_key,
                 storage_ref.clone(),
-                bedrock_ref.clone(),
+                bedrock_pool_ref,
+                stake_config_pubsub_ref,
+                slasher_ref,
+                channel_signer_ref,
             )
-            .await
-            .map_err(Error::SequencerStartFailed)?;
-
-            let is_our_turn = bedrock_ref
-                .ask(sequencer_bedrock_actor::protocol::CheckIsOurTurn)
-                .await
-                .map_err(|err| {
-                    let err = err.map_err(|_: Infallible| unreachable!());
-                    Error::BedrockRequestFailed(err.erase_message())
-                })?;
-
-            sequencer_executor_actor_metrics::record_turn_to_write(is_our_turn);
-            if is_our_turn {
-                sequencer_executor_actor_metrics::increment_turns_to_write_total();
-            }
-
-            let background_task = sequencer.background_task();
+            .await?;
 
             Ok(Self {
-                mempool_handle,
-                sequencer,
+                state,
+                channel_id,
                 storage_ref,
-                bedrock_ref,
-                turn: Turn::new(is_our_turn),
-                background_task,
                 failed_attempts: 0,
             })
         }
-    }
-
-    /// Handle to the slasher, for the service to supervise.
-    #[must_use]
-    pub fn slasher_ref(&self) -> ActorRef<SlasherActor<S>> {
-        self.sequencer.slasher_ref().clone()
-    }
-
-    /// Handle to the channel-signing actor, for the service to feed gossip into.
-    #[must_use]
-    pub fn channel_signer_ref(&self) -> ActorRef<ChannelSigningActor> {
-        self.sequencer.channel_signer_ref().clone()
-    }
-
-    /// The committee the gossip mesh screens slash approvals against.
-    #[must_use]
-    pub fn accredited_keys_watch(&self) -> AccreditedKeysReceiver {
-        self.sequencer.accredited_keys_watch()
-    }
-
-    /// The staked keys the gossip mesh admits channel-config messages from.
-    #[must_use]
-    pub fn staked_keys_watch(&self) -> AccreditedKeysReceiver {
-        self.sequencer.staked_keys_watch()
-    }
-
-    /// The chain's `max_block_size`, which admission caps transactions at.
-    #[must_use]
-    pub fn max_block_size_watch(&self) -> MaxBlockSizeReceiver {
-        self.sequencer.max_block_size_watch()
     }
 }
 
@@ -163,7 +115,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> kameo::Actor for ExecutorActor<
         mailbox_rx: &mut MailboxReceiver<Self>,
     ) -> Result<Option<Signal<Self>>> {
         // TODO: Remove this please
-        if self.background_task.any_finished() {
+        if let State::Online(online) = &self.state
+            && online.background_tasks().any_finished()
+        {
             return Err(Error::BackgroundTaskFinishedUnexpectedly);
         }
 
@@ -175,7 +129,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> kameo::Actor for ExecutorActor<
         _actor_ref: WeakActorRef<Self>,
         _reason: ActorStopReason,
     ) -> Result<()> {
-        self.background_task.shutdown().await;
+        if let State::Online(online) = &self.state {
+            online.background_tasks().shutdown().await;
+        }
 
         Ok(())
     }
@@ -189,7 +145,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
         ProduceBlock: ProduceBlock,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        if !self.turn.is_ours() {
+        let online = match &mut self.state {
+            State::Error(details) => {
+                panic!("Actor has encountered an error state: {details}");
+            }
+            State::Online(online) => online,
+            State::Bootstrapping(_) => {
+                debug!("Not online yet, skipping the production turn");
+                return Ok(());
+            }
+        };
+        if !online.is_our_turn() {
             debug!("Not our turn to produce a block, skipping");
             return Ok(());
         }
@@ -199,7 +165,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
         // this actor, and the scheduler's interval task gives up for good the
         // first time it finds us not running — the node then looks healthy and
         // never produces again.
-        match self.sequencer.run_production_turn().await {
+        match online.sequencer_mut().run_production_turn().await {
             Ok(id) => {
                 // The count is how many turns failed in a row, so a success
                 // clears it and the gauge drops to zero, unless it was zero
@@ -209,7 +175,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
                 }
                 log::info!(
                     "Block with id {id} created by {}",
-                    self.sequencer.channel_signing_public_key_hex()
+                    online.sequencer().channel_signing_public_key_hex()
                 );
             }
             Err(err) if err.is::<sequencer_core::ChannelMovedWhileBuilding>() => {
@@ -232,15 +198,31 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<SubmitConfig> for ExecutorActor<S, B> {
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<channel_signing_protocol::SubmitConfig>
+    for ExecutorActor<S, B>
+{
     type Reply = ();
 
     async fn handle(
         &mut self,
-        SubmitConfig(submission): SubmitConfig,
+        channel_signing_protocol::SubmitConfig(submission): channel_signing_protocol::SubmitConfig,
         _ctx: &mut Context<Self, Self::Reply>,
     ) {
-        self.sequencer.submit_signed_config(*submission).await;
+        // Told, not asked, so an error here would only stop this actor.
+        let online = match &mut self.state {
+            State::Error(details) => {
+                panic!("Actor has encountered an error state: {details}");
+            }
+            State::Online(online) => online,
+            State::Bootstrapping(_) => {
+                warn!("Dropping a signed channel config: not online yet");
+                return;
+            }
+        };
+        online
+            .sequencer_mut()
+            .submit_signed_config(*submission)
+            .await;
     }
 }
 
@@ -255,10 +237,27 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
         }: Transaction,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        let online = self.state.online()?;
+
+        let size = u64::try_from(
+            borsh::object_length(&transaction)
+                .expect("Transaction borsh serialization should not fail"),
+        )
+        .expect("Transaction size should fit in u64");
+        if let Some(max) = online
+            .sequencer()
+            .with_state(sequencer_core::max_transaction_size)
+            .await
+            && size > max
+        {
+            return Err(Error::TransactionTooLarge { size, max });
+        }
+
         // Fee admission against the head state, before the mempool sees it.
         // Advisory (base fees and balances move), but everything it turns
         // away would have been refused by the block builder anyway.
-        self.sequencer
+        online
+            .sequencer()
             .with_state(|state| sequencer_core::fees::screen(&transaction, state))
             .await
             .map_err(|err| {
@@ -273,7 +272,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
                 }
             })?;
 
-        self.mempool_handle
+        online
+            .mempool_handle()
             .try_push((origin.into(), transaction))
             .map_err(|_err| Error::MempoolIsFull)?;
         Ok(())
@@ -330,21 +330,24 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetLastBlockId> for Exe
         GetLastBlockId: GetLastBlockId,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        Ok(self.sequencer.chain_height().await)
+        Ok(self.state.online()?.sequencer().chain_height().await)
     }
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountBalance>
     for ExecutorActor<S, B>
 {
-    type Reply = Balance;
+    type Reply = Result<Balance>;
 
     async fn handle(
         &mut self,
         GetAccountBalance { account_id }: GetAccountBalance,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.sequencer
+        Ok(self
+            .state
+            .online()?
+            .sequencer()
             .with_state(|state| {
                 state
                     .get_account_by_id_ref(account_id)
@@ -352,22 +355,25 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountBalance>
                         account.data.native_balance().unwrap_or_default()
                     })
             })
-            .await
+            .await)
     }
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetFeeQuote> for ExecutorActor<S, B> {
-    type Reply = FeeStateQuote;
+    type Reply = Result<FeeStateQuote>;
 
     async fn handle(
         &mut self,
         GetFeeQuote: GetFeeQuote,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.sequencer
+        Ok(self
+            .state
+            .online()?
+            .sequencer()
             .with_state(sequencer_core::fees::fee_quote)
             .map(Into::into)
-            .await
+            .await)
     }
 }
 
@@ -387,14 +393,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetTransaction> for Exe
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountNonces> for ExecutorActor<S, B> {
-    type Reply = Vec<Nonce>;
+    type Reply = Result<Vec<Nonce>>;
 
     async fn handle(
         &mut self,
         GetAccountNonces { account_ids }: GetAccountNonces,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.sequencer
+        Ok(self
+            .state
+            .online()?
+            .sequencer()
             .with_state(|state| {
                 account_ids
                     .into_iter()
@@ -405,12 +414,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountNonces> for E
                     })
                     .collect()
             })
-            .await
+            .await)
     }
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetProofsAndRoot> for ExecutorActor<S, B> {
-    type Reply = crate::protocol::ProofsAndRoot;
+    type Reply = Result<GetProofsAndRootReply>;
 
     async fn handle(
         &mut self,
@@ -420,7 +429,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetProofsAndRoot> for E
         }: GetProofsAndRoot,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.sequencer
+        Ok(self
+            .state
+            .online()?
+            .sequencer()
             .with_state(|state| {
                 let proofs = commitments
                     .iter()
@@ -430,31 +442,35 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetProofsAndRoot> for E
                     .iter()
                     .map(|position| state.get_proof_for_position(*position))
                     .collect();
-                (proofs, message_paths, state.commitment_root())
+                GetProofsAndRootReply {
+                    proofs,
+                    message_paths,
+                    root: state.commitment_root(),
+                }
             })
-            .await
+            .await)
     }
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccount> for ExecutorActor<S, B> {
-    type Reply = GetAccountReply;
+    type Reply = Result<Option<Account>>;
 
     async fn handle(
         &mut self,
         GetAccount { account_id }: GetAccount,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        GetAccountReply {
-            account: self
-                .sequencer
-                .with_state(|state| state.get_account_by_id_ref(account_id).cloned())
-                .await,
-        }
+        Ok(self
+            .state
+            .online()?
+            .sequencer()
+            .with_state(|state| state.get_account_by_id_ref(account_id).cloned())
+            .await)
     }
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountView> for ExecutorActor<S, B> {
-    type Reply = GetAccountReply;
+    type Reply = Result<Option<Account>>;
 
     async fn handle(
         &mut self,
@@ -467,20 +483,21 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountView> for Exe
         }: GetAccountView,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let account = self
-            .sequencer
+        Ok(self
+            .state
+            .online()?
+            .sequencer()
             .with_state(|state| {
                 state
                     .get_account_by_id_ref(account_id)
                     .map(|account| account.project([program_account_id]))
             })
-            .await;
-        GetAccountReply { account }
+            .await)
     }
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetPublications> for ExecutorActor<S, B> {
-    type Reply = Vec<(CommitmentPosition, Publication)>;
+    type Reply = Result<Vec<(CommitmentPosition, Publication)>>;
 
     async fn handle(
         &mut self,
@@ -492,60 +509,60 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetPublications> for Ex
     ) -> Self::Reply {
         let limit = usize::try_from(limit.min(MAX_PUBLICATIONS_PER_REQUEST))
             .expect("the request limit fits in usize");
-        self.sequencer
+        Ok(self
+            .state
+            .online()?
+            .sequencer()
             .with_state(|state| state.publications_from(from_position).take(limit).collect())
-            .await
+            .await)
     }
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetMessagePath> for ExecutorActor<S, B> {
-    type Reply = Option<MembershipProof>;
+    type Reply = Result<Option<MembershipProof>>;
 
     async fn handle(
         &mut self,
         GetMessagePath { position }: GetMessagePath,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.sequencer
+        Ok(self
+            .state
+            .online()?
+            .sequencer()
             .with_state(|state| state.get_proof_for_position(position))
-            .await
+            .await)
     }
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetRecoveryBinding>
     for ExecutorActor<S, B>
 {
-    type Reply = Option<EncryptedNote>;
+    type Reply = Result<Option<EncryptedNote>>;
 
     async fn handle(
         &mut self,
         GetRecoveryBinding { address }: GetRecoveryBinding,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.sequencer
+        Ok(self
+            .state
+            .online()?
+            .sequencer()
             .with_state(|state| state.recovery_binding(address).cloned())
-            .await
+            .await)
     }
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetChannelId> for ExecutorActor<S, B> {
-    type Reply = Result<ChannelId>;
+    type Reply = Reply<ChannelId>;
 
     async fn handle(
         &mut self,
         GetChannelId: GetChannelId,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let channel_id = self
-            .bedrock_ref
-            .ask(sequencer_bedrock_actor::protocol::GetChannelId)
-            .await
-            .map_err(|err| {
-                let err = err.map_err(|_: Infallible| unreachable!());
-                Error::BedrockRequestFailed(err.erase_message())
-            })?;
-
-        Ok(*channel_id.channel_id.as_ref())
+        Reply(self.channel_id)
     }
 }
 
@@ -560,7 +577,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetCrossZoneDeadLetters
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let (total_retired, retained) = self
-            .sequencer
+            .state
+            .online()?
+            .sequencer()
             .cross_zone_dead_letters()
             .await
             .map_err(Error::CrossZoneDeadLettersUnavailable)?;
@@ -582,7 +601,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<RequeueCrossZoneDeadLet
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let outcome = self
-            .sequencer
+            .state
+            .online()?
+            .sequencer()
             .requeue_cross_zone_dead_letter(message_key)
             .await
             .map_err(Error::CrossZoneDeadLetterRequeueFailed)?;
@@ -622,37 +643,65 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountTransactions>
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait>
-    Message<sequencer_bedrock_actor::protocol::ChannelEvent> for ExecutorActor<S, B>
-{
-    type Reply = ();
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for ExecutorActor<S, B> {
+    type Reply = Result<()>;
 
     async fn handle(
         &mut self,
-        msg: sequencer_bedrock_actor::protocol::ChannelEvent,
+        msg: ChannelEvent,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        match msg {
-            sequencer_bedrock_actor::protocol::ChannelEvent::Update(channel_update) => {
-                self.sequencer.on_channel_update(channel_update).await;
+        match msg.event {
+            ChannelEventKind::FinalizedBlock(finalized_block) => {
+                self.state
+                    .modify(|state| async {
+                        match state {
+                            State::Error(details) => {
+                                panic!("Actor has encountered an error state: {details}")
+                            }
+                            State::Bootstrapping(bootstrapping) => {
+                                bootstrapping.on_finalized_block(*finalized_block).await
+                            }
+                            State::Online(_) => {
+                                // Online state listens for Publisher events
+                                Ok(state)
+                            }
+                        }
+                    })
+                    .await
+                    .expect("Failed to handle finalized block, Executor cannot recover from that");
             }
-            sequencer_bedrock_actor::protocol::ChannelEvent::Turn {
-                our_turn_to_write,
-                starting_slot,
-            } => {
-                if self.turn.update(our_turn_to_write, starting_slot) {
-                    sequencer_executor_actor_metrics::increment_turns_to_write_total();
+            ChannelEventKind::Publisher(publisher_event) => match &mut self.state {
+                State::Error(details) => panic!("Actor has encountered an error state: {details}"),
+                State::Bootstrapping(_) => {
+                    panic!("Publisher should not be running while executor is bootstrapping");
                 }
-                sequencer_executor_actor_metrics::record_turn_to_write(self.turn.is_ours());
-            }
-            sequencer_bedrock_actor::protocol::ChannelEvent::Config(live_channel_config) => {
-                self.sequencer
-                    .on_channel_config_update(live_channel_config)
-                    .await;
-            }
-            sequencer_bedrock_actor::protocol::ChannelEvent::Deposits(deposits) => {
-                self.sequencer.on_observed_deposits(deposits).await;
-            }
+                State::Online(online) => match publisher_event {
+                    PublisherEvent::Update(channel_update) => {
+                        online
+                            .sequencer_mut()
+                            .on_channel_update(*channel_update)
+                            .await;
+                    }
+                    PublisherEvent::Turn {
+                        our_turn_to_write,
+                        starting_slot,
+                    } => {
+                        online.update_turn(our_turn_to_write, starting_slot);
+                    }
+                    PublisherEvent::Config(live_channel_config) => {
+                        online
+                            .sequencer_mut()
+                            .on_channel_config_update(live_channel_config)
+                            .await;
+                    }
+                    PublisherEvent::Deposits(deposits) => {
+                        online.sequencer_mut().on_observed_deposits(deposits).await;
+                    }
+                },
+            },
         }
+
+        Ok(())
     }
 }

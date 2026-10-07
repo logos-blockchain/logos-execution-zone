@@ -10,22 +10,25 @@ use kameo::{
     message::{Context, Message},
     reply::DelegatedReply,
 };
+use lee::Account;
 use lee_core::{
     BlockId, CommitmentPosition, EncryptedNote, MembershipProof,
     account::{Balance, Nonce},
     program::Publication,
 };
+use sequencer_actors_common::Reply;
 pub use sequencer_actors_common::mock::{Checkpoint, Replace, ReplaceReply};
 
 use crate::{
     ExecutorActorTrait, Result,
     error::Error,
     protocol::{
-        ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
-        GetAccountView, GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
+        ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountView,
+        GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
         GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetMessagePath,
-        GetProofsAndRoot, GetPublications, GetRecoveryBinding, GetTransaction, ProduceBlock,
-        ProofsAndRoot, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, Transaction,
+        GetProofsAndRoot, GetProofsAndRootReply, GetPublications, GetRecoveryBinding,
+        GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
+        Transaction,
     },
 };
 
@@ -64,8 +67,8 @@ mockall::mock! {
         pub fn handle_get_account_balance(
             &mut self,
             msg: GetAccountBalance,
-            ctx: &mut Context<Self, Balance>
-        ) -> Balance;
+            ctx: &mut Context<Self, Result<Balance>>
+        ) -> Result<Balance>;
 
         pub fn handle_get_transaction(
             &mut self,
@@ -76,50 +79,50 @@ mockall::mock! {
         pub fn handle_get_account_nonces(
             &mut self,
             msg: GetAccountNonces,
-            ctx: &mut Context<Self, Vec<Nonce>>
-        ) -> Vec<Nonce>;
+            ctx: &mut Context<Self, Result<Vec<Nonce>>>
+        ) -> Result<Vec<Nonce>>;
 
         pub fn handle_get_proofs_and_root(
             &mut self,
             msg: GetProofsAndRoot,
-            ctx: &mut Context<Self, ProofsAndRoot>
-        ) -> ProofsAndRoot;
+            ctx: &mut Context<Self, Result<GetProofsAndRootReply>>
+        ) -> Result<GetProofsAndRootReply>;
 
         pub fn handle_get_account(
             &mut self,
             msg: GetAccount,
-            ctx: &mut Context<Self, GetAccountReply>
-        ) -> GetAccountReply;
+            ctx: &mut Context<Self, Result<Option<Account>>>
+        ) -> Result<Option<Account>>;
 
         pub fn handle_get_account_view(
             &mut self,
             msg: GetAccountView,
-            ctx: &mut Context<Self, GetAccountReply>
-        ) -> GetAccountReply;
+            ctx: &mut Context<Self, Result<Option<Account>>>
+        ) -> Result<Option<Account>>;
 
         pub fn handle_get_publications(
             &mut self,
             msg: GetPublications,
-            ctx: &mut Context<Self, Vec<(CommitmentPosition, Publication)>>
-        ) -> Vec<(CommitmentPosition, Publication)>;
+            ctx: &mut Context<Self, Result<Vec<(CommitmentPosition, Publication)>>>
+        ) -> Result<Vec<(CommitmentPosition, Publication)>>;
 
         pub fn handle_get_message_path(
             &mut self,
             msg: GetMessagePath,
-            ctx: &mut Context<Self, Option<MembershipProof>>
-        ) -> Option<MembershipProof>;
+            ctx: &mut Context<Self, Result<Option<MembershipProof>>>
+        ) -> Result<Option<MembershipProof>>;
 
         pub fn handle_get_recovery_binding(
             &mut self,
             msg: GetRecoveryBinding,
-            ctx: &mut Context<Self, Option<EncryptedNote>>
-        ) -> Option<EncryptedNote>;
+            ctx: &mut Context<Self, Result<Option<EncryptedNote>>>
+        ) -> Result<Option<EncryptedNote>>;
 
         pub fn handle_get_channel_id(
             &mut self,
             msg: GetChannelId,
-            ctx: &mut Context<Self, Result<ChannelId>>
-        ) -> Result<ChannelId>;
+            ctx: &mut Context<Self, Reply<ChannelId>>
+        ) -> Reply<ChannelId>;
 
         pub fn handle_get_cross_zone_dead_letters(
             &mut self,
@@ -136,9 +139,8 @@ mockall::mock! {
         pub fn handle_get_fee_quote(
             &mut self,
             msg: GetFeeQuote,
-            ctx: &mut Context<Self, FeeStateQuote>
-        ) -> FeeStateQuote;
-
+            ctx: &mut Context<Self, Result<FeeStateQuote>>
+        ) -> Result<FeeStateQuote>;
     }
 }
 
@@ -235,7 +237,7 @@ impl Message<GetLastBlockId> for MockExecutorActor {
 }
 
 impl Message<GetAccountBalance> for MockExecutorActor {
-    type Reply = Balance;
+    type Reply = Result<Balance>;
 
     async fn handle(
         &mut self,
@@ -259,7 +261,7 @@ impl Message<GetTransaction> for MockExecutorActor {
 }
 
 impl Message<GetAccountNonces> for MockExecutorActor {
-    type Reply = Vec<Nonce>;
+    type Reply = Result<Vec<Nonce>>;
 
     async fn handle(
         &mut self,
@@ -271,7 +273,7 @@ impl Message<GetAccountNonces> for MockExecutorActor {
 }
 
 impl Message<GetProofsAndRoot> for MockExecutorActor {
-    type Reply = ProofsAndRoot;
+    type Reply = Result<GetProofsAndRootReply>;
 
     async fn handle(
         &mut self,
@@ -283,7 +285,7 @@ impl Message<GetProofsAndRoot> for MockExecutorActor {
 }
 
 impl Message<GetAccount> for MockExecutorActor {
-    type Reply = GetAccountReply;
+    type Reply = Result<Option<Account>>;
 
     async fn handle(
         &mut self,
@@ -295,7 +297,7 @@ impl Message<GetAccount> for MockExecutorActor {
 }
 
 impl Message<GetAccountView> for MockExecutorActor {
-    type Reply = GetAccountReply;
+    type Reply = Result<Option<Account>>;
 
     async fn handle(
         &mut self,
@@ -307,7 +309,7 @@ impl Message<GetAccountView> for MockExecutorActor {
 }
 
 impl Message<GetPublications> for MockExecutorActor {
-    type Reply = Vec<(CommitmentPosition, Publication)>;
+    type Reply = Result<Vec<(CommitmentPosition, Publication)>>;
 
     async fn handle(
         &mut self,
@@ -319,7 +321,7 @@ impl Message<GetPublications> for MockExecutorActor {
 }
 
 impl Message<GetMessagePath> for MockExecutorActor {
-    type Reply = Option<MembershipProof>;
+    type Reply = Result<Option<MembershipProof>>;
 
     async fn handle(
         &mut self,
@@ -331,7 +333,7 @@ impl Message<GetMessagePath> for MockExecutorActor {
 }
 
 impl Message<GetRecoveryBinding> for MockExecutorActor {
-    type Reply = Option<EncryptedNote>;
+    type Reply = Result<Option<EncryptedNote>>;
 
     async fn handle(
         &mut self,
@@ -343,7 +345,7 @@ impl Message<GetRecoveryBinding> for MockExecutorActor {
 }
 
 impl Message<GetChannelId> for MockExecutorActor {
-    type Reply = Result<ChannelId>;
+    type Reply = Reply<ChannelId>;
 
     async fn handle(
         &mut self,
@@ -379,7 +381,7 @@ impl Message<RequeueCrossZoneDeadLetter> for MockExecutorActor {
 }
 
 impl Message<GetFeeQuote> for MockExecutorActor {
-    type Reply = FeeStateQuote;
+    type Reply = Result<FeeStateQuote>;
 
     async fn handle(
         &mut self,

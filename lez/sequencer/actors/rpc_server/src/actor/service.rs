@@ -10,7 +10,6 @@ use kameo::{
     error::{Infallible, SendError},
 };
 use log::debug;
-use sequencer_core::gossip::MaxBlockSizeReceiver;
 use sequencer_executor_actor::ExecutorActorTrait;
 use sequencer_gossip_actor::protocol::PublishTransaction;
 use sequencer_service_protocol::{
@@ -22,21 +21,15 @@ use sequencer_service_protocol::{
 
 pub struct Service<E: ExecutorActorTrait> {
     executor_ref: ActorRef<E>,
-    max_block_size_rx: MaxBlockSizeReceiver,
     gossip: Option<Recipient<PublishTransaction>>,
 }
 
 impl<E: ExecutorActorTrait> Service<E> {
-    pub fn new(
-        executor_ref: ActorRef<E>,
-        max_block_size_rx: MaxBlockSizeReceiver,
-        gossip: Option<Recipient<PublishTransaction>>,
-    ) -> Self {
+    pub fn new(executor_ref: ActorRef<E>, gossip: Option<Recipient<PublishTransaction>>) -> Self {
         sequencer_rpc_server_actor_metrics::init();
 
         Self {
             executor_ref,
-            max_block_size_rx,
             gossip,
         }
     }
@@ -50,24 +43,6 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         let tx_hash = tx.hash();
 
         let res = async move {
-            let encoded_tx =
-                borsh::to_vec(&tx).expect("Transaction borsh serialization should not fail");
-            let tx_size =
-                u64::try_from(encoded_tx.len()).expect("Transaction size should fit in u64");
-
-            let max_tx_size = self
-                .max_block_size_rx
-                .borrow()
-                .saturating_sub(sequencer_core::config::BLOCK_OVERHEAD);
-
-            if tx_size > max_tx_size {
-                return Err(ErrorObjectOwned::owned(
-                    ErrorCode::InvalidParams.code(),
-                    format!("Transaction too large: size {tx_size}, max {max_tx_size}"),
-                    None::<()>,
-                ));
-            }
-
             let authenticated_tx = tx.transaction_stateless_check().map_err(|err| {
                 ErrorObjectOwned::owned(
                     ErrorCode::InvalidParams.code(),
@@ -131,7 +106,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             .ask(sequencer_executor_actor::protocol::GetFeeQuote)
             .await
             .map(map_fee_state_quote)
-            .map_err(map_infallible_error)
+            .map_err(map_executor_error)
     }
 
     async fn check_health(&self) -> Result<(), ErrorObjectOwned> {
@@ -175,7 +150,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetAccountBalance { account_id })
             .await
-            .map_err(map_infallible_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_transaction(
@@ -195,7 +170,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetAccountNonces { account_ids })
             .await
-            .map_err(map_infallible_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_account_view(
@@ -207,8 +182,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
                 actor_state_selector,
             })
             .await
-            .map(|reply| reply.account)
-            .map_err(map_infallible_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_publications(
@@ -222,7 +196,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
                 limit,
             })
             .await
-            .map_err(map_infallible_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_message_path(
@@ -232,7 +206,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetMessagePath { position })
             .await
-            .map_err(map_infallible_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_recovery_binding(
@@ -242,7 +216,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetRecoveryBinding { address })
             .await
-            .map_err(map_infallible_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_proofs_and_root(
@@ -263,7 +237,8 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
                 message_positions,
             })
             .await
-            .map_err(map_infallible_error)
+            .map(|reply| (reply.proofs, reply.message_paths, reply.root))
+            .map_err(map_executor_error)
     }
 
     async fn get_account(
@@ -273,8 +248,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetAccount { account_id })
             .await
-            .map(|reply| reply.account)
-            .map_err(map_infallible_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>, ErrorObjectOwned> {
@@ -291,8 +265,8 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetChannelId)
             .await
-            .map(ChannelId)
-            .map_err(map_executor_error)
+            .map(|reply| ChannelId(*reply.0.as_ref()))
+            .map_err(map_infallible_error)
     }
 
     async fn get_cross_zone_dead_letters(
@@ -378,7 +352,8 @@ fn map_executor_error<M>(
                     None::<()>,
                 )
             }
-            invalid @ sequencer_executor_actor::error::Error::IncorrectFee(_) => {
+            invalid @ (sequencer_executor_actor::error::Error::IncorrectFee(_)
+            | sequencer_executor_actor::error::Error::TransactionTooLarge { .. }) => {
                 // With its cause, which the sender is shown.
                 let message = std::error::Error::source(&invalid).map_or_else(
                     || invalid.to_string(),
@@ -391,12 +366,27 @@ fn map_executor_error<M>(
                 "Mempool is full".to_owned(),
                 None::<()>,
             ),
+            sequencer_executor_actor::error::Error::NotOnline => ErrorObjectOwned::owned(
+                sequencer_service_rpc::SEQUENCER_IS_NOT_ONLINE_ERROR_CODE,
+                "Sequencer is not online yet, try again later".to_owned(),
+                None::<()>,
+            ),
             handle_err @ (sequencer_executor_actor::error::Error::BackgroundTaskFinishedUnexpectedly
             | sequencer_executor_actor::error::Error::StorageRequestFailed(_)
             | sequencer_executor_actor::error::Error::BedrockRequestFailed(_)
             | sequencer_executor_actor::error::Error::CrossZoneDeadLettersUnavailable(_)
             | sequencer_executor_actor::error::Error::CrossZoneDeadLetterRequeueFailed(_)
-            | sequencer_executor_actor::error::Error::SequencerStartFailed(_)) => {
+            | sequencer_executor_actor::error::Error::SequencerStartFailed(_)
+            | sequencer_executor_actor::error::Error::StoreAndChannelDivergence(_)
+            | sequencer_executor_actor::error::Error::StorageInconsistency(_)
+            | sequencer_executor_actor::error::Error::InvalidSequencerKey
+            | sequencer_executor_actor::error::Error::CheckpointEncodingFailed(_)
+            | sequencer_executor_actor::error::Error::InvalidGenesisConfig(_)
+            | sequencer_executor_actor::error::Error::MissingGenesisConfig(_)
+            | sequencer_executor_actor::error::Error::UnsupportedChannelParams(_)
+            | sequencer_executor_actor::error::Error::FundingKeyUnavailable(_)
+            | sequencer_executor_actor::error::Error::BlockReconstructionFailed { .. }
+            | sequencer_executor_actor::error::Error::SequencerStakeConfigNotFound) => {
                 internal_error(handle_err)
             }
         },
