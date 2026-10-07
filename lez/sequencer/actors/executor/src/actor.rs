@@ -674,6 +674,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
         msg: ChannelEvent,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        if msg.channel_id != self.channel_id {
+            warn!(
+                "Received a channel event for a different channel: {}",
+                msg.channel_id
+            );
+            return Ok(());
+        }
+
         match msg.event {
             ChannelEventKind::FinalizedBlock(finalized_block) => {
                 self.state
