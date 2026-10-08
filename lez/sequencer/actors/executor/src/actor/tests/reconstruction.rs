@@ -1,6 +1,8 @@
 //! Startup reconstruction: a starting executor replays the finalized channel
 //! history its store misses.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use chain_state::{ChainState, ChannelEntry, Tip};
 use common::{
@@ -102,7 +104,7 @@ async fn start_observing(
         executor
             .ask(ChannelEvent {
                 channel_id,
-                event: ChannelEventKind::FinalizedBlock(Box::new(finalized)),
+                event: ChannelEventKind::FinalizedBlock(Arc::new(finalized)),
             })
             .await?;
         observe(store);

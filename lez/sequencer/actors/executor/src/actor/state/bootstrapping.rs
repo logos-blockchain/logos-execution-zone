@@ -79,12 +79,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
     }
 
     /// Apply a finalized block to the bootstrapping state.
-    pub async fn on_finalized_block(mut self, finalized: FinalizedBlock) -> Result<State<S, B>> {
-        let block = match finalized.block {
+    pub async fn on_finalized_block(mut self, finalized: &FinalizedBlock) -> Result<State<S, B>> {
+        let block = match &finalized.block {
             BlockData::Block(block) => {
                 if let Some(check) = &mut self.consistency_check
                     && let Some(ChainConsistency::Inconsistent(mismatch)) =
-                        check.observe(&block, finalized.slot)
+                        check.observe(block, finalized.slot)
                 {
                     return Err(Error::StoreAndChannelDivergence(mismatch.clone()));
                 }
@@ -130,7 +130,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
     async fn apply_finalized_entry(
         &mut self,
         msg: MsgId,
-        entry_block: Option<Block>,
+        entry_block: Option<&Block>,
         slot: Slot,
     ) -> Result<()> {
         let storage_ref = &self.actors.storage_ref;
@@ -142,10 +142,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             .collect();
         let was_empty = self.chain.final_tip().is_none();
         let outcome = if self.on_lineage {
-            self.chain.apply_reconstructed(msg, entry_block.as_ref())
+            self.chain.apply_reconstructed(msg, entry_block)
         } else {
-            self.chain
-                .apply_finalized_redelivery(msg, entry_block.as_ref())
+            self.chain.apply_finalized_redelivery(msg, entry_block)
         };
 
         // The channel's first finalized block is its genesis: one that is not

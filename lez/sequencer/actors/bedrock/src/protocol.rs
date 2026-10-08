@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 pub use chain_state::ChannelEntry;
 use common::block::Block;
@@ -86,11 +86,11 @@ pub struct ChannelEvent {
 pub enum ChannelEventKind {
     /// A block that has been finalized on chain since configured `stream_from` arriving to
     /// `channel/<channel_id>/finalized_block` topic.
-    FinalizedBlock(Box<FinalizedBlock>),
+    FinalizedBlock(Arc<FinalizedBlock>),
 
     /// Events related to the channel publisher arriving to `channel/<channel_id>/publisher/`
     /// topics.
-    Publisher(PublisherEvent),
+    Publisher(Arc<PublisherEvent>),
 }
 
 #[derive(Debug, Clone)]

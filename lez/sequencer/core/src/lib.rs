@@ -302,7 +302,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// on this same head.
     pub async fn on_channel_update(
         &mut self,
-        update: sequencer_bedrock_actor::protocol::ChannelUpdate,
+        update: &sequencer_bedrock_actor::protocol::ChannelUpdate,
     ) {
         let sequencer_bedrock_actor::protocol::ChannelUpdate {
             checkpoint,
@@ -540,14 +540,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// Hands the channel-config actor the live channel and the config it should
     /// have. Sent from the follow path, turn or not: a peer only signs a draft
     /// matching the config it derived for itself.
-    pub async fn on_channel_config_update(&mut self, live: LiveChannelConfig) {
+    pub async fn on_channel_config_update(&mut self, live: &LiveChannelConfig) {
         let target = config_target(
             self.chain.lock().await.final_state(),
-            &live,
+            live,
             self.finalized_config,
         );
         let view = channel_config::ChannelView {
-            live_keys: live.keys,
+            live_keys: live.keys.clone(),
             required_signatures: live.required_signatures,
             target,
         };

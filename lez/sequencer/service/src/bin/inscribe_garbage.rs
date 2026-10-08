@@ -60,9 +60,13 @@ impl Message<ChannelEvent> for BlockWatcherActor {
     type Reply = ();
 
     async fn handle(&mut self, msg: ChannelEvent, _ctx: &mut Context<Self, Self::Reply>) {
-        let ChannelEventKind::Publisher(PublisherEvent::Update(update)) = msg.event else {
+        let ChannelEventKind::Publisher(publisher) = msg.event else {
             return;
         };
+        let PublisherEvent::Update(update) = &*publisher else {
+            return;
+        };
+
         self.finalized = highest(self.finalized.iter().chain(blocks_of(&update.finalized)));
         // A conflict replaces the view, so its orphaned blocks no longer count.
         self.view = match &update.view {

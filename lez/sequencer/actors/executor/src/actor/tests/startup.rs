@@ -160,7 +160,7 @@ async fn a_start_over_a_stored_genesis_bootstraps_from_the_channel() -> Result<(
     executor
         .ask(ChannelEvent {
             channel_id: config.bedrock_config.channel_id,
-            event: ChannelEventKind::FinalizedBlock(Box::new(finalized_at(&genesis, 0))),
+            event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&genesis, 0))),
         })
         .await?;
 
@@ -185,7 +185,7 @@ async fn bootstrapping_reaches_a_tip_whose_slot_a_config_change_moved() -> Resul
     executor
         .ask(ChannelEvent {
             channel_id: config.bedrock_config.channel_id,
-            event: ChannelEventKind::FinalizedBlock(Box::new(finalized_at(&genesis, 10))),
+            event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&genesis, 10))),
         })
         .await?;
 
@@ -222,7 +222,7 @@ async fn a_restart_restores_the_state_from_storage() -> Result<()> {
         executor
             .ask(ChannelEvent {
                 channel_id: config.bedrock_config.channel_id,
-                event: ChannelEventKind::FinalizedBlock(Box::new(finalized_at(&block, 0))),
+                event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&block, 0))),
             })
             .await?;
     }
@@ -272,7 +272,7 @@ async fn a_block_produced_after_a_restart_chains_on_the_stored_tip() -> Result<(
         executor
             .ask(ChannelEvent {
                 channel_id: config.bedrock_config.channel_id,
-                event: ChannelEventKind::FinalizedBlock(Box::new(finalized_at(&block, 0))),
+                event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&block, 0))),
             })
             .await?;
     }
@@ -335,10 +335,12 @@ async fn a_buffered_startup_checkpoint_cannot_rewind_the_pin() -> Result<()> {
     executor
         .ask(ChannelEvent {
             channel_id: config.bedrock_config.channel_id,
-            event: ChannelEventKind::Publisher(PublisherEvent::Update(Box::new(ChannelUpdate {
-                checkpoint: checkpoint_at(MsgId::root()),
-                ..empty_channel_update()
-            }))),
+            event: ChannelEventKind::Publisher(Arc::new(PublisherEvent::Update(Box::new(
+                ChannelUpdate {
+                    checkpoint: checkpoint_at(MsgId::root()),
+                    ..empty_channel_update()
+                },
+            )))),
         })
         .await?;
     executor.ask(ProduceBlock).await?;
@@ -386,7 +388,7 @@ async fn a_restart_restores_the_head_tier_and_recovers_from_an_orphan() -> Resul
     executor
         .ask(ChannelEvent {
             channel_id: config.bedrock_config.channel_id,
-            event: ChannelEventKind::FinalizedBlock(Box::new(finalized_at(&genesis, 0))),
+            event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&genesis, 0))),
         })
         .await?;
     assert_eq!(executor.ask(GetLastBlockId).await?, 2);
@@ -402,14 +404,16 @@ async fn a_restart_restores_the_head_tier_and_recovers_from_an_orphan() -> Resul
     executor
         .ask(ChannelEvent {
             channel_id: config.bedrock_config.channel_id,
-            event: ChannelEventKind::Publisher(PublisherEvent::Update(Box::new(ChannelUpdate {
-                checkpoint: checkpoint_at(block2_prime_msg),
-                view: ViewChange::Conflict {
-                    canonical: vec![entry(&block2_prime, &genesis)],
-                    orphaned: vec![entry(&block2, &genesis)],
+            event: ChannelEventKind::Publisher(Arc::new(PublisherEvent::Update(Box::new(
+                ChannelUpdate {
+                    checkpoint: checkpoint_at(block2_prime_msg),
+                    view: ViewChange::Conflict {
+                        canonical: vec![entry(&block2_prime, &genesis)],
+                        orphaned: vec![entry(&block2, &genesis)],
+                    },
+                    ..empty_channel_update()
                 },
-                ..empty_channel_update()
-            }))),
+            )))),
         })
         .await?;
 
@@ -459,12 +463,12 @@ async fn a_restart_reanchors_on_the_persisted_final_snapshot() -> Result<()> {
         executor
             .ask(ChannelEvent {
                 channel_id: config.bedrock_config.channel_id,
-                event: ChannelEventKind::Publisher(PublisherEvent::Update(Box::new(
+                event: ChannelEventKind::Publisher(Arc::new(PublisherEvent::Update(Box::new(
                     ChannelUpdate {
                         finalized: vec![entry(&block2, &store.blocks()[0])],
                         ..empty_channel_update()
                     },
-                ))),
+                )))),
             })
             .await?;
         executor.stop_gracefully().await?;
@@ -488,20 +492,22 @@ async fn a_restart_reanchors_on_the_persisted_final_snapshot() -> Result<()> {
         executor
             .ask(ChannelEvent {
                 channel_id: config.bedrock_config.channel_id,
-                event: ChannelEventKind::FinalizedBlock(Box::new(finalized_at(block, 0))),
+                event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(block, 0))),
             })
             .await?;
     }
     executor
         .ask(ChannelEvent {
             channel_id: config.bedrock_config.channel_id,
-            event: ChannelEventKind::Publisher(PublisherEvent::Update(Box::new(ChannelUpdate {
-                view: ViewChange::Conflict {
-                    canonical: Vec::new(),
-                    orphaned: vec![entry(&blocks[1], &blocks[0])],
+            event: ChannelEventKind::Publisher(Arc::new(PublisherEvent::Update(Box::new(
+                ChannelUpdate {
+                    view: ViewChange::Conflict {
+                        canonical: Vec::new(),
+                        orphaned: vec![entry(&blocks[1], &blocks[0])],
+                    },
+                    ..empty_channel_update()
                 },
-                ..empty_channel_update()
-            }))),
+            )))),
         })
         .await?;
 
@@ -562,7 +568,7 @@ async fn the_status_follows_bootstrapping_to_online() -> Result<()> {
     executor
         .ask(ChannelEvent {
             channel_id: config.bedrock_config.channel_id,
-            event: ChannelEventKind::FinalizedBlock(Box::new(finalized_at(&genesis, 0))),
+            event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&genesis, 0))),
         })
         .await?;
 

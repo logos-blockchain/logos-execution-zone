@@ -592,7 +592,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
                                 panic!("Actor has encountered an error state: {details}")
                             }
                             State::Bootstrapping(bootstrapping) => {
-                                bootstrapping.on_finalized_block(*finalized_block).await
+                                bootstrapping.on_finalized_block(&finalized_block).await
                             }
                             State::Online(_) => {
                                 // Online state listens for Publisher events
@@ -608,15 +608,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
                 State::Bootstrapping(_) => {
                     panic!("Publisher should not be running while executor is bootstrapping");
                 }
-                State::Online(online) => match publisher_event {
+                State::Online(online) => match &*publisher_event {
                     PublisherEvent::Update(channel_update) => {
                         online
                             .sequencer_mut()
-                            .on_channel_update(*channel_update)
+                            .on_channel_update(channel_update)
                             .await;
                     }
                     PublisherEvent::Turn { our_turn_to_write } => {
-                        online.set_is_our_turn(our_turn_to_write);
+                        online.set_is_our_turn(*our_turn_to_write);
                     }
                     PublisherEvent::Config(live_channel_config) => {
                         online
