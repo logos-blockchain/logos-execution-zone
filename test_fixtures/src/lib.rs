@@ -1202,8 +1202,7 @@ async fn build_sequencer_components(
         sequencer_setup = sequencer_setup.with_gossip(gossip);
     }
 
-    let (sequencer_handle, temp_sequencer_dir) = sequencer_setup
-        .setup()
+    let (sequencer_handle, temp_sequencer_dir) = Box::pin(sequencer_setup.setup())
         .await
         .context("Failed to setup Sequencer")?;
 

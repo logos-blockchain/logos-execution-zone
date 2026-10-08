@@ -72,7 +72,10 @@ impl SharedChannel {
     pub fn mock(&self) -> MockBedrockActor {
         let mut mock = MockBedrockActor::default();
         mock.expect_handle_initialize_channel_publisher()
-            .returning(|_msg, _ctx| Ok(true));
+            .returning({
+                let channel = self.clone();
+                move |_msg, _ctx| Ok(Some(ChannelSeq::mocked(channel.lock().seq)))
+            });
         mock.expect_handle_check_channel_exists().returning({
             let channel = self.clone();
             move |_msg, _ctx| Ok(channel.lock().tip_slot.is_some())

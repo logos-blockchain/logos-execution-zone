@@ -33,7 +33,7 @@ use crate::{
     error::Error,
     protocol::{
         AccreditedKeys, BlockData, BoxStream, ChangeChannelConfig, ChannelEvent, ChannelEventKind,
-        ChannelId, CheckChannelExists, CheckIsOurTurn, CreateChannel, Ed25519PublicKey,
+        ChannelId, ChannelSeq, CheckChannelExists, CheckIsOurTurn, CreateChannel, Ed25519PublicKey,
         FinalizedBlock, GetAccreditedKeys, GetChannelTipMessageId, GetChannelTipSlot,
         InitializeChannelPublisher, LiveChannelConfig, MsgId, PrepareConfig, PreparedConfig,
         PublishBlock, PublishOutcome, ReadChannel, Slot, UnverifiedEd25519PublicKey, ZoneMessage,
@@ -290,7 +290,7 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
 }
 
 impl<S: StorageActorTrait> Message<InitializeChannelPublisher> for BedrockActor<S> {
-    type Reply = Result<bool>;
+    type Reply = Result<Option<ChannelSeq>>;
 
     async fn handle(
         &mut self,
@@ -306,27 +306,26 @@ impl<S: StorageActorTrait> Message<InitializeChannelPublisher> for BedrockActor<
         self.assert_channel_id(channel_id);
 
         if self.publisher.is_some() {
-            return Ok(false);
+            return Ok(None);
         }
 
         let initial_checkpoint = self.storage_ref.ask(GetZoneCheckpoint).await?;
 
-        self.publisher = Some(
-            publisher::Publisher::new(
-                publisher::PublisherConfig {
-                    channel_id: self.channel_id,
-                    bedrock_signing_key,
-                    funding_pk,
-                    priority_fee_percent,
-                    resubmit_interval,
-                },
-                self.node.clone(),
-                initial_checkpoint,
-                self.broker_ref.clone(),
-            )
-            .await?,
-        );
-        Ok(true)
+        let (publisher, start_seq) = publisher::Publisher::new(
+            publisher::PublisherConfig {
+                channel_id: self.channel_id,
+                bedrock_signing_key,
+                funding_pk,
+                priority_fee_percent,
+                resubmit_interval,
+            },
+            self.node.clone(),
+            initial_checkpoint,
+            self.broker_ref.clone(),
+        )
+        .await?;
+        self.publisher = Some(publisher);
+        Ok(Some(start_seq))
     }
 }
 

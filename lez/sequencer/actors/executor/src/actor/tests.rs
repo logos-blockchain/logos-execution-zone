@@ -119,7 +119,7 @@ fn prepare_mock_bedrock_on_genesis(_channel_id: &ChannelId) -> MockBedrockActor 
         .returning(|_msg, _ctx| Ok(Some(mock_msg_of(&empty_genesis()))));
     mock_bedrock
         .expect_handle_initialize_channel_publisher()
-        .returning(|_msg, _ctx| Ok(true));
+        .returning(|_msg, _ctx| Ok(Some(ChannelSeq::mocked(0))));
     mock_bedrock
         .expect_handle_check_is_our_turn()
         .returning(|_msg, _ctx| Ok(true));
@@ -501,6 +501,71 @@ async fn a_publish_refused_as_stale_returns_its_transactions_to_the_mempool() ->
             .iter()
             .any(|tx| tx.hash() == transaction_hash),
         "the refused turn's transaction has to come back on the next one"
+    );
+
+    Ok(())
+}
+
+/// The updates a publisher broadcasts while starting, its cold-start backfill
+/// among them, reach the executor only after it is online. Until it applies
+/// them its view lags the channel, so its publishes are held to the sequence
+/// the publisher started at.
+#[test]
+async fn a_publish_expects_the_sequence_the_publisher_started_at() -> Result<()> {
+    let _res = env_logger::try_init();
+
+    let (config, _home, sequencer_key) = staked_sequencer_config();
+    let mut mock_storage = prepare_mock_storage_with_stake(stake_entries(sequencer_key));
+    mock_storage
+        .expect_handle_get_pending_deposit_events()
+        .returning(|_msg, _ctx| Ok(Vec::new()));
+
+    let (expected_tx, mut expected_rx) = mpsc::unbounded_channel();
+    let executor = spawn_on_genesis(
+        config,
+        MockStorageActor::spawn(mock_storage),
+        spawn_bedrock_pool(move |_channel_id| {
+            let mut mock_bedrock = MockBedrockActor::default();
+            mock_bedrock
+                .expect_handle_get_channel_tip_slot()
+                .returning(|_msg, _ctx| Ok(Some(Slot::from(0))));
+            mock_bedrock
+                .expect_handle_get_channel_tip_message_id()
+                .returning(|_msg, _ctx| Ok(Some(mock_msg_of(&empty_genesis()))));
+            mock_bedrock
+                .expect_handle_initialize_channel_publisher()
+                .returning(|_msg, _ctx| Ok(Some(ChannelSeq::mocked(3))));
+            mock_bedrock
+                .expect_handle_check_is_our_turn()
+                .returning(|_msg, _ctx| Ok(true));
+            mock_bedrock
+                .expect_handle_get_accredited_keys()
+                .returning(|_msg, _ctx| Ok(None));
+            let expected_tx = expected_tx.clone();
+            mock_bedrock
+                .expect_handle_publish_block()
+                .returning(move |msg, _ctx| {
+                    expected_tx
+                        .send(msg.expected_seq)
+                        .expect("the test still listens");
+                    Err(sequencer_bedrock_actor::error::Error::ChannelMoved {
+                        provided: msg.expected_seq.unwrap_or(ChannelSeq::mocked(0)),
+                        current: ChannelSeq::mocked(5),
+                    })
+                });
+            mock_bedrock
+        }),
+    )
+    .await?;
+
+    executor
+        .ask(protocol::ProduceBlock)
+        .await
+        .expect("a refused turn must still reply Ok");
+    assert_eq!(
+        expected_rx.try_recv().ok(),
+        Some(Some(ChannelSeq::mocked(3))),
+        "the publish has to expect the sequence the publisher started at"
     );
 
     Ok(())

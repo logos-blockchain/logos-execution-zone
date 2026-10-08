@@ -160,8 +160,8 @@ pub struct LiveChannelConfig {
 
 /// Initialize the channel publisher. This will make using messages like [`PublishBlock`] possible.
 ///
-/// If no previous channel publisher exists, this will initialize it and return `true`; otherwise,
-/// it will just return `false` without reinitializing the channel publisher.
+/// If no previous channel publisher exists, this will initialize it and return channel sequence it
+/// started at; otherwise, it will just return `None` without reinitializing the channel publisher.
 #[derive(Debug, Clone)]
 pub struct InitializeChannelPublisher {
     pub channel_id: ChannelId,

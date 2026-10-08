@@ -224,6 +224,7 @@ async fn start_sequencer_bare_on(
         config,
         mempool,
         chain,
+        None,
         bedrock_signing_key,
         storage_ref,
         bedrock_pool_ref,
