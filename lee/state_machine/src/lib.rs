@@ -22,7 +22,7 @@ pub use privacy_preserving_transaction::{
 };
 pub use public_transaction::PublicTransaction;
 pub use signature::{PrivateKey, PublicKey, Signature};
-pub use state::V03State;
+pub use state::{GenesisBuilder, V03State};
 pub use validated_state_diff::{ExecutionCharge, ValidatedStateDiff};
 
 pub mod encoding;

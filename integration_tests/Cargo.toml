@@ -70,6 +70,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+lee = { workspace = true, features = ["test-utils"] }
 fee_core.workspace = true
 sequencer_core = { workspace = true }
 sequencer_bedrock_actor = { workspace = true, features = [

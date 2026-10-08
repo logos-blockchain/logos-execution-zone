@@ -164,22 +164,9 @@ impl V03State {
         self
     }
 
-    /// Seeds each program at its given address, `immutable` or not.
-    #[must_use]
-    pub fn with_named_programs(
-        mut self,
-        programs: impl IntoIterator<Item = (AccountId, Program, bool)>,
-    ) -> Self {
-        for (account_id, program, immutable) in programs {
-            self.insert_program_at(account_id, &program, immutable);
-        }
-        self
-    }
-
     /// Seeds a program as a loader-owned header pointing at a segment chain holding its
-    /// `user_elf`, chunked the same way a live `program_loader` deploy would.
-    ///
-    /// FIXME: This function should be gated for tests-only and genesis-only.
+    /// `user_elf`, chunked the same way a live `program_loader` deploy would. Reached only through
+    /// [`GenesisBuilder`] and test helpers, so a live state never gains a program this way.
     fn insert_program_at(
         &mut self,
         header_account_id: AccountId,
@@ -411,8 +398,65 @@ impl V03State {
     }
 }
 
+/// Builds a genesis state: the only way outside tests to seed programs, and always onto a fresh
+/// state.
+#[derive(Default)]
+pub struct GenesisBuilder(V03State);
+
+impl GenesisBuilder {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn with_public_accounts(
+        self,
+        public_accounts: impl IntoIterator<Item = (AccountId, Account)>,
+    ) -> Self {
+        Self(self.0.with_public_accounts(public_accounts))
+    }
+
+    #[must_use]
+    pub fn with_private_accounts(
+        self,
+        private_accounts: impl IntoIterator<Item = (Commitment, Nullifier)>,
+    ) -> Self {
+        Self(self.0.with_private_accounts(private_accounts))
+    }
+
+    /// Seeds each program at its given address, `immutable` or not.
+    #[must_use]
+    pub fn with_named_programs(
+        mut self,
+        programs: impl IntoIterator<Item = (AccountId, Program, bool)>,
+    ) -> Self {
+        for (account_id, program, immutable) in programs {
+            self.0.insert_program_at(account_id, &program, immutable);
+        }
+        self
+    }
+
+    #[must_use]
+    pub fn build(self) -> V03State {
+        self.0
+    }
+}
+
 #[cfg(any(test, feature = "test-utils"))]
 impl V03State {
+    /// Seeds each program at its given address, `immutable` or not.
+    #[must_use]
+    pub fn with_named_programs(
+        mut self,
+        programs: impl IntoIterator<Item = (AccountId, Program, bool)>,
+    ) -> Self {
+        for (account_id, program, immutable) in programs {
+            self.insert_program_at(account_id, &program, immutable);
+        }
+        self
+    }
+
     /// Seeds each program immutable, at the address derived from its image ID.
     #[must_use]
     pub fn with_programs(mut self, programs: impl IntoIterator<Item = Program>) -> Self {
