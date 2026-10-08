@@ -12,12 +12,8 @@ use bip39::Mnemonic;
 use wallet::{WalletCore, cli::execute_keys_restoration};
 
 use crate::{
-    sequencer::api::lifecycle::setup_sequencer, sequencer_non_blocking::{FfiSequencerSetupNonBlocking, sequencer_ffi_spawn_sequencer_setup}, wallet::{
-        block_on, c_str_to_string,
-        error::{WalletFfiError, print_error},
-        get_runtime,
-        types::WalletHandle,
-    },
+    error::{FfiOperationError, print_error},
+    wallet::{block_on, c_str_to_string, types::WalletHandle},
 };
 
 /// Internal wrapper around `WalletCore` with mutex for thread safety.
@@ -29,9 +25,7 @@ pub(crate) struct WalletWrapper {
 pub struct FfiCreateWalletOutput {
     pub wallet: *mut WalletHandle,
     /// C compatible(null terminated) string.
-    pub mnemonic: *mut c_char,
-    /// Sequencer setup, can be polled untill completion.
-    pub sequencer_setup: *mut FfiSequencerSetupNonBlocking,
+    pub mnemonic: *mut c_char
 }
 
 impl Default for FfiCreateWalletOutput {
@@ -39,7 +33,6 @@ impl Default for FfiCreateWalletOutput {
         Self {
             wallet: std::ptr::null_mut(),
             mnemonic: std::ptr::null_mut(),
-            sequencer_setup: std::ptr::null_mut(),
         }
     }
 }
@@ -47,10 +40,10 @@ impl Default for FfiCreateWalletOutput {
 /// Helper to get the wallet wrapper from an opaque handle.
 pub(crate) fn get_wallet(
     handle: *mut WalletHandle,
-) -> Result<&'static WalletWrapper, WalletFfiError> {
+) -> Result<&'static WalletWrapper, FfiOperationError> {
     if handle.is_null() {
         print_error("Null wallet handle");
-        return Err(WalletFfiError::NullPointer);
+        return Err(FfiOperationError::NullPointer);
     }
     Ok(unsafe { &*handle.cast::<WalletWrapper>() })
 }
@@ -59,19 +52,19 @@ pub(crate) fn get_wallet(
 #[expect(dead_code, reason = "Maybe used later")]
 pub(crate) fn get_wallet_mut(
     handle: *mut WalletHandle,
-) -> Result<&'static mut WalletWrapper, WalletFfiError> {
+) -> Result<&'static mut WalletWrapper, FfiOperationError> {
     if handle.is_null() {
         print_error("Null wallet handle");
-        return Err(WalletFfiError::NullPointer);
+        return Err(FfiOperationError::NullPointer);
     }
     Ok(unsafe { &mut *handle.cast::<WalletWrapper>() })
 }
 
 /// Helper to convert a C string to a Rust `PathBuf`.
-fn c_str_to_path(ptr: *const c_char, name: &str) -> Result<PathBuf, WalletFfiError> {
+fn c_str_to_path(ptr: *const c_char, name: &str) -> Result<PathBuf, FfiOperationError> {
     if ptr.is_null() {
         print_error(format!("Null pointer for {name}"));
-        return Err(WalletFfiError::NullPointer);
+        return Err(FfiOperationError::NullPointer);
     }
 
     let c_str = unsafe { CStr::from_ptr(ptr) };
@@ -79,7 +72,7 @@ fn c_str_to_path(ptr: *const c_char, name: &str) -> Result<PathBuf, WalletFfiErr
         Ok(s) => Ok(PathBuf::from(s)),
         Err(e) => {
             print_error(format!("Invalid UTF-8 in {name}: {e}"));
-            Err(WalletFfiError::InvalidUtf8)
+            Err(FfiOperationError::InvalidUtf8)
         }
     }
 }
@@ -105,7 +98,6 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
     config_path: *const c_char,
     storage_path: *const c_char,
     password: *const c_char,
-    sequencer_config_path: *const c_char,
 ) -> FfiCreateWalletOutput {
     let Ok(config_path) = c_str_to_path(config_path, "config_path") else {
         return FfiCreateWalletOutput::default();
@@ -119,14 +111,12 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
         return FfiCreateWalletOutput::default();
     };
 
-    let runtime = get_runtime();
-
-    match runtime.block_on(WalletCore::new_init_storage(
+    match WalletCore::new_init_storage(
         config_path,
         storage_path,
         None,
         &password,
-    )) {
+    ) {
         Ok((core, mnemonic)) => {
             let wrapper = Box::new(WalletWrapper {
                 core: Mutex::new(core),
@@ -139,18 +129,9 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
 
             let raw_pointer = CString::into_raw(c_mnemonic_string);
 
-            let res = match unsafe { sequencer_ffi_spawn_sequencer_setup(runtime, sequencer_config_path) } {
-                Ok(res) => res,
-                Err(err) => {
-                    print_error(format!("Failed to create read-only sequencer: {err:?}"));
-                    return FfiCreateWalletOutput::default();
-                }
-            };
-
             FfiCreateWalletOutput {
                 wallet: handle,
-                mnemonic: raw_pointer,
-                sequencer_setup: &raw mut res,
+                mnemonic: raw_pointer
             }
         }
         Err(e) => {
@@ -233,7 +214,7 @@ pub unsafe extern "C" fn wallet_ffi_destroy(handle: *mut WalletHandle) {
 /// # Safety
 /// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn wallet_ffi_save(handle: *mut WalletHandle) -> WalletFfiError {
+pub unsafe extern "C" fn wallet_ffi_save(handle: *mut WalletHandle) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -243,15 +224,15 @@ pub unsafe extern "C" fn wallet_ffi_save(handle: *mut WalletHandle) -> WalletFfi
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
     match wallet.store_persistent_data() {
-        Ok(()) => WalletFfiError::Success,
+        Ok(()) => FfiOperationError::Success,
         Err(e) => {
             print_error(format!("Failed to save wallet: {e}"));
-            WalletFfiError::StorageError
+            FfiOperationError::StorageError
         }
     }
 }
@@ -280,7 +261,7 @@ pub unsafe extern "C" fn wallet_ffi_restore_data(
     mnemonic: *const c_char,
     password: *const c_char,
     depth: u32,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -290,40 +271,40 @@ pub unsafe extern "C" fn wallet_ffi_restore_data(
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
     let Ok(password) = c_str_to_string(password, "password") else {
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     };
 
     let Ok(mnemonic) = c_str_to_string(mnemonic, "mnemonic") else {
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     };
 
     let mnemonic = match Mnemonic::from_str(&mnemonic) {
         Ok(mn) => mn,
         Err(e) => {
             print_error(format!("Failed to parse mnemonic: {e}"));
-            return WalletFfiError::SerializationError;
+            return FfiOperationError::SerializationError;
         }
     };
 
     let res = match wallet.restore_storage(&mnemonic, &password) {
-        Ok(()) => WalletFfiError::Success,
+        Ok(()) => FfiOperationError::Success,
         Err(e) => {
             print_error(format!("Failed to restore wallet data: {e}"));
-            WalletFfiError::StorageError
+            FfiOperationError::StorageError
         }
     };
 
-    if res == WalletFfiError::Success {
+    if res == FfiOperationError::Success {
         match block_on(execute_keys_restoration(&mut wallet, depth)) {
-            Ok(()) => WalletFfiError::Success,
+            Ok(()) => FfiOperationError::Success,
             Err(err) => {
                 print_error(format!("Failed to restore wallet data: {err}"));
-                WalletFfiError::StorageError
+                FfiOperationError::StorageError
             }
         }
     } else {

@@ -1,11 +1,11 @@
 use lee::AccountId;
 
 use crate::{
+    error::FfiOperationError,
     primitives::{
         errors::PrimitiveOperationStatus,
         types::{FfiBytes32, FfiIdentifier, FfiNullifierPublicKey, FfiPdaSeed, vectors::FfiVecU8},
     },
-    wallet::error::WalletFfiError,
 };
 
 /// Produce account id for public PDA.
@@ -53,9 +53,9 @@ pub unsafe extern "C" fn wallet_ffi_account_id_for_private_pda(
     viewing_public_key: FfiVecU8,
     identifier: FfiIdentifier,
     account_id: *mut FfiBytes32,
-) -> WalletFfiError {
+) -> FfiOperationError {
     if viewing_public_key.entries.is_null() {
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let std_npk = npk.into();
@@ -77,7 +77,7 @@ pub unsafe extern "C" fn wallet_ffi_account_id_for_private_pda(
         .into();
     }
 
-    WalletFfiError::Success
+    FfiOperationError::Success
 }
 
 #[cfg(test)]
@@ -86,10 +86,10 @@ mod tests {
     use lee_core::{NullifierPublicKey, encryption::ViewingPublicKey, program::PdaSeed};
 
     use crate::{
+        error::FfiOperationError,
         primitives::types::FfiBytes32,
-        wallet::{
-            error::WalletFfiError,
-            pda::{wallet_ffi_account_id_for_private_pda, wallet_ffi_account_id_for_public_pda},
+        wallet::pda::{
+            wallet_ffi_account_id_for_private_pda, wallet_ffi_account_id_for_public_pda,
         },
     };
 
@@ -132,7 +132,7 @@ mod tests {
             )
         };
 
-        assert_eq!(err, WalletFfiError::Success);
+        assert_eq!(err, FfiOperationError::Success);
 
         assert_eq!(pda_id.into_value(), unsafe { (*ffi_pda_id).data });
     }

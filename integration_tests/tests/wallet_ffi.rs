@@ -23,12 +23,13 @@ use std::{
 use anyhow::Result;
 use common::HashType;
 use core_ffi::{
+    error,
     primitives::types::{
         FfiBytes32, FfiIdentifier, FfiPrivateAccountKeys, FfiPublicAccountKey, account::FfiAccount,
     },
     wallet::{
         FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiAccountMention,
-        FfiTransferResult, WalletHandle, error,
+        FfiTransferResult, WalletHandle,
         generic_transaction::{FfiDependency, FfiProgramWithDependencies, FfiTransactionResult},
         lifecycle::FfiCreateWalletOutput,
     },
@@ -1653,7 +1654,7 @@ fn test_wallet_ffi_single_label() -> Result<()> {
 
     let lab_1_availability = unsafe { wallet_ffi_check_label_available(wallet_ffi_handle, lab_1) };
 
-    assert_eq!(lab_1_availability.error, error::WalletFfiError::Success);
+    assert_eq!(lab_1_availability.error, error::FfiOperationError::Success);
     assert!(lab_1_availability.is_available);
 
     let acc_1_id_with_privacy = FfiAccountIdWithPrivacy {
@@ -1663,7 +1664,7 @@ fn test_wallet_ffi_single_label() -> Result<()> {
 
     let err = unsafe { wallet_ffi_add_label(wallet_ffi_handle, lab_1, acc_1_id_with_privacy) };
 
-    assert_eq!(err, error::WalletFfiError::Success);
+    assert_eq!(err, error::FfiOperationError::Success);
 
     let lab_1_availability = unsafe { wallet_ffi_check_label_available(wallet_ffi_handle, lab_1) };
 
@@ -1709,20 +1710,23 @@ fn test_wallet_ffi_more_labels() -> Result<()> {
 
     let err = unsafe { wallet_ffi_add_label(wallet_ffi_handle, lab_1, acc_1_id_with_privacy) };
 
-    assert_eq!(err, error::WalletFfiError::Success);
+    assert_eq!(err, error::FfiOperationError::Success);
 
     let err = unsafe { wallet_ffi_add_label(wallet_ffi_handle, lab_2, acc_1_id_with_privacy) };
 
-    assert_eq!(err, error::WalletFfiError::Success);
+    assert_eq!(err, error::FfiOperationError::Success);
 
     let err = unsafe { wallet_ffi_add_label(wallet_ffi_handle, lab_3, acc_1_id_with_privacy) };
 
-    assert_eq!(err, error::WalletFfiError::Success);
+    assert_eq!(err, error::FfiOperationError::Success);
 
     let mut label_list_for_out_acc =
         unsafe { wallet_ffi_get_all_labels_for_account(wallet_ffi_handle, acc_1_id_with_privacy) };
 
-    assert_eq!(label_list_for_out_acc.error, error::WalletFfiError::Success);
+    assert_eq!(
+        label_list_for_out_acc.error,
+        error::FfiOperationError::Success
+    );
     assert_eq!(label_list_for_out_acc.labels_size, 3);
 
     let lab_ref_1 = unsafe { &*label_list_for_out_acc.labels_data.add(0) };
@@ -1742,7 +1746,7 @@ fn test_wallet_ffi_more_labels() -> Result<()> {
 
     let err = unsafe { wallet_ffi_free_label_list(&raw mut label_list_for_out_acc) };
 
-    assert_eq!(err, error::WalletFfiError::Success);
+    assert_eq!(err, error::FfiOperationError::Success);
 
     unsafe {
         primitives_ffi_helpers::primitives_ffi_free_cstring(lab_1);

@@ -3,16 +3,15 @@ use std::{
     str::FromStr as _,
 };
 
-use crate::wallet::{
-    FfiAccountIdWithPrivacy, WalletHandle, c_str_to_string,
-    error::{WalletFfiError, print_error},
-    lifecycle::get_wallet,
+use crate::{
+    error::{FfiOperationError, print_error},
+    wallet::{FfiAccountIdWithPrivacy, WalletHandle, c_str_to_string, lifecycle::get_wallet},
 };
 
 #[repr(C)]
 pub struct LabelAvailability {
     pub is_available: bool,
-    pub error: WalletFfiError,
+    pub error: FfiOperationError,
 }
 
 impl LabelAvailability {
@@ -20,12 +19,12 @@ impl LabelAvailability {
     pub const fn availability(is_available: bool) -> Self {
         Self {
             is_available,
-            error: WalletFfiError::Success,
+            error: FfiOperationError::Success,
         }
     }
 
     #[must_use]
-    pub const fn error(error: WalletFfiError) -> Self {
+    pub const fn error(error: FfiOperationError) -> Self {
         Self {
             is_available: false,
             error,
@@ -37,7 +36,7 @@ impl LabelAvailability {
 #[derive(Debug, Clone, Copy)]
 pub struct AccountIdResolvedFromLabel {
     pub account_id: FfiAccountIdWithPrivacy,
-    pub error: WalletFfiError,
+    pub error: FfiOperationError,
 }
 
 impl AccountIdResolvedFromLabel {
@@ -45,12 +44,12 @@ impl AccountIdResolvedFromLabel {
     pub const fn account_id(account_id: FfiAccountIdWithPrivacy) -> Self {
         Self {
             account_id,
-            error: WalletFfiError::Success,
+            error: FfiOperationError::Success,
         }
     }
 
     #[must_use]
-    pub fn error(error: WalletFfiError) -> Self {
+    pub fn error(error: FfiOperationError) -> Self {
         Self {
             account_id: FfiAccountIdWithPrivacy::default(),
             error,
@@ -62,7 +61,7 @@ impl AccountIdResolvedFromLabel {
 pub struct LabelList {
     pub labels_data: *mut *const c_char,
     pub labels_size: usize,
-    pub error: WalletFfiError,
+    pub error: FfiOperationError,
 }
 
 impl LabelList {
@@ -75,12 +74,12 @@ impl LabelList {
         Self {
             labels_data,
             labels_size,
-            error: WalletFfiError::Success,
+            error: FfiOperationError::Success,
         }
     }
 
     #[must_use]
-    pub const fn error(error: WalletFfiError) -> Self {
+    pub const fn error(error: FfiOperationError) -> Self {
         Self {
             labels_data: std::ptr::null_mut(),
             labels_size: 0,
@@ -120,7 +119,7 @@ pub unsafe extern "C" fn wallet_ffi_check_label_available(
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return LabelAvailability::error(WalletFfiError::InternalError);
+            return LabelAvailability::error(FfiOperationError::InternalError);
         }
     };
 
@@ -151,7 +150,7 @@ pub unsafe extern "C" fn wallet_ffi_add_label(
     handle: *mut WalletHandle,
     label: *const c_char,
     account_id_with_privacy: FfiAccountIdWithPrivacy,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -166,7 +165,7 @@ pub unsafe extern "C" fn wallet_ffi_add_label(
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -174,10 +173,10 @@ pub unsafe extern "C" fn wallet_ffi_add_label(
         .storage_mut()
         .add_label(label.into(), account_id_with_privacy.into())
     {
-        Ok(()) => WalletFfiError::Success,
+        Ok(()) => FfiOperationError::Success,
         Err(err) => {
             print_error(format!("Failed to add label : {err}"));
-            WalletFfiError::InternalError
+            FfiOperationError::InternalError
         }
     }
 }
@@ -213,7 +212,7 @@ pub unsafe extern "C" fn wallet_ffi_resolve_label(
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return AccountIdResolvedFromLabel::error(WalletFfiError::InternalError);
+            return AccountIdResolvedFromLabel::error(FfiOperationError::InternalError);
         }
     };
 
@@ -223,7 +222,7 @@ pub unsafe extern "C" fn wallet_ffi_resolve_label(
         .map_or_else(
             || {
                 print_error("Failed to resolve label");
-                AccountIdResolvedFromLabel::error(WalletFfiError::InternalError)
+                AccountIdResolvedFromLabel::error(FfiOperationError::InternalError)
             },
             |acc_id| AccountIdResolvedFromLabel::account_id(acc_id.into()),
         )
@@ -254,7 +253,7 @@ pub unsafe extern "C" fn wallet_ffi_get_all_labels_for_account(
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return LabelList::error(WalletFfiError::InternalError);
+            return LabelList::error(FfiOperationError::InternalError);
         }
     };
 
@@ -266,7 +265,7 @@ pub unsafe extern "C" fn wallet_ffi_get_all_labels_for_account(
     {
         let Ok(label_c) = CString::from_str(label.as_ref()) else {
             print_error(format!("Failed to cast label into C string: {label}"));
-            return LabelList::error(WalletFfiError::InternalError);
+            return LabelList::error(FfiOperationError::InternalError);
         };
 
         let label_raw = label_c.into_raw().cast_const();
@@ -290,9 +289,11 @@ pub unsafe extern "C" fn wallet_ffi_get_all_labels_for_account(
 /// - `label_list` must be a valid pointer to `LabelList`, received from
 ///   `wallet_ffi_get_all_labels_for_account`
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn wallet_ffi_free_label_list(label_list: *mut LabelList) -> WalletFfiError {
+pub unsafe extern "C" fn wallet_ffi_free_label_list(
+    label_list: *mut LabelList,
+) -> FfiOperationError {
     if label_list.is_null() {
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let labels_raw = unsafe { &*label_list };
@@ -315,5 +316,5 @@ pub unsafe extern "C" fn wallet_ffi_free_label_list(label_list: *mut LabelList) 
         drop(boxed_slice);
     }
 
-    WalletFfiError::Success
+    FfiOperationError::Success
 }

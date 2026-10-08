@@ -9,6 +9,7 @@ use std::{
 
 use anyhow::{Context as _, Result};
 use core_ffi::{
+    error::FfiOperationError,
     primitives::{
         result::PointerResult,
         runtime::Runtime,
@@ -23,7 +24,6 @@ use core_ffi::{
     sequencer::{
         SequencerServiceFFI,
         api::{lifecycle::InitializedSequencerServiceFFIResult, query::LastBlockIdResult},
-        error::OperationStatus,
     },
 };
 use lee::{AccountId, PrivateKey, PublicKey, program::Program};
@@ -57,7 +57,7 @@ unsafe extern "C" {
     pub unsafe fn sequencer_ffi_query_block(
         sequencer: *const SequencerServiceFFI,
         block_id: FfiBlockId,
-    ) -> PointerResult<FfiBlockOpt, OperationStatus>;
+    ) -> PointerResult<FfiBlockOpt, FfiOperationError>;
 
     pub unsafe fn sequencer_ffi_start_sequencer(
         runtime: *const Runtime,
@@ -67,25 +67,25 @@ unsafe extern "C" {
     pub unsafe fn sequencer_ffi_query_account(
         sequencer: *const SequencerServiceFFI,
         account_id: FfiAccountId,
-    ) -> PointerResult<FfiAccount, OperationStatus>;
+    ) -> PointerResult<FfiAccount, FfiOperationError>;
 
     pub unsafe fn sequencer_ffi_query_block_vec(
         sequencer: *const SequencerServiceFFI,
         before: FfiOption<u64>,
         limit: u64,
-    ) -> PointerResult<FfiVec<FfiBlock>, OperationStatus>;
+    ) -> PointerResult<FfiVec<FfiBlock>, FfiOperationError>;
 
     pub unsafe fn sequencer_ffi_query_block_by_hash(
         sequencer: *const SequencerServiceFFI,
         hash: FfiHashType,
-    ) -> PointerResult<FfiBlockOpt, OperationStatus>;
+    ) -> PointerResult<FfiBlockOpt, FfiOperationError>;
 
     pub unsafe fn sequencer_ffi_query_transactions_by_account(
         sequencer: *const SequencerServiceFFI,
         account_id: FfiAccountId,
         offset: u64,
         limit: u64,
-    ) -> PointerResult<FfiVec<FfiTransaction>, OperationStatus>;
+    ) -> PointerResult<FfiVec<FfiTransaction>, FfiOperationError>;
 
     pub unsafe fn sequencer_ffi_query_events(
         sequencer: *const SequencerServiceFFI,
@@ -94,7 +94,7 @@ unsafe extern "C" {
         tx_hash: *const FfiHashType,
         program_account_id: *const FfiAccountId,
         selector: *const FfiSelector,
-    ) -> PointerResult<FfiVec<FfiEventRecord>, OperationStatus>;
+    ) -> PointerResult<FfiVec<FfiEventRecord>, FfiOperationError>;
 
     pub unsafe fn sequencer_ffi_stop_sequencer(sequencer: *mut SequencerServiceFFI);
 }
@@ -110,7 +110,7 @@ pub struct JoiningSetup {
     pub ctx: BlockingTestContext,
     pub node: NodeHttpClient,
     pub ownership_id: AccountId,
-    pub sequencer_ffi: PointerResult<SequencerServiceFFI, OperationStatus>,
+    pub sequencer_ffi: PointerResult<SequencerServiceFFI, FfiOperationError>,
     /// The joining node's home. Its `RocksDB` lives in here, so it has to
     /// outlive the sequencer; dropping it pulls the database out from under a
     /// node that is still running.

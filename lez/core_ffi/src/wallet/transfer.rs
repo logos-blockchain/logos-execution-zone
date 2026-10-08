@@ -12,10 +12,10 @@ use wallet::{
 };
 
 use crate::{
+    error::{FfiOperationError, print_error},
     primitives::types::{FfiBytes32, FfiIdentifier, FfiPrivateAccountKeys},
     wallet::{
         block_on,
-        error::{WalletFfiError, print_error},
         lifecycle::get_wallet,
         map_execution_error,
         types::{FfiTransferResult, WalletHandle},
@@ -65,7 +65,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
     to: *const FfiBytes32,
     amount: *const [u8; 16],
     out_result: *mut FfiTransferResult,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -73,14 +73,14 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
 
     if from.is_null() || to.is_null() || amount.is_null() || out_result.is_null() {
         print_error("Null pointer argument");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -103,7 +103,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
                 (*out_result).tx_hash = tx_hash;
                 (*out_result).success = true;
             }
-            WalletFfiError::Success
+            FfiOperationError::Success
         }
         Err(e) => {
             print_error(format!("Transfer failed: {e:?}"));
@@ -152,7 +152,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
     amount: *const [u8; 16],
     key_path: *const c_char,
     out_result: *mut FfiTransferResult,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -165,14 +165,14 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
         || out_result.is_null()
     {
         print_error("Null pointer argument");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -209,7 +209,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
                 (*out_result).tx_hash = tx_hash;
                 (*out_result).success = true;
             }
-            WalletFfiError::Success
+            FfiOperationError::Success
         }
         Err(e) => {
             print_error(format!("Transfer failed: {e:?}"));
@@ -255,7 +255,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_deshielded(
     to: *const FfiBytes32,
     amount: *const [u8; 16],
     out_result: *mut FfiTransferResult,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -263,14 +263,14 @@ pub unsafe extern "C" fn wallet_ffi_transfer_deshielded(
 
     if from.is_null() || to.is_null() || amount.is_null() || out_result.is_null() {
         print_error("Null pointer argument");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -288,7 +288,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_deshielded(
                 (*out_result).tx_hash = tx_hash;
                 (*out_result).success = true;
             }
-            WalletFfiError::Success
+            FfiOperationError::Success
         }
         Err(e) => {
             print_error(format!("Transfer failed: {e:?}"));
@@ -336,7 +336,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
     to_identifier: *const FfiIdentifier,
     amount: *const [u8; 16],
     out_result: *mut FfiTransferResult,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -349,14 +349,14 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
         || out_result.is_null()
     {
         print_error("Null pointer argument");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -388,7 +388,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
                 (*out_result).tx_hash = tx_hash;
                 (*out_result).success = true;
             }
-            WalletFfiError::Success
+            FfiOperationError::Success
         }
         Err(e) => {
             print_error(format!("Transfer failed: {e:?}"));
@@ -438,7 +438,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded_owned(
     amount: *const [u8; 16],
     key_path: *const c_char,
     out_result: *mut FfiTransferResult,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -446,14 +446,14 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded_owned(
 
     if from.is_null() || to.is_null() || amount.is_null() || out_result.is_null() {
         print_error("Null pointer argument");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -480,7 +480,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded_owned(
                 (*out_result).tx_hash = tx_hash;
                 (*out_result).success = true;
             }
-            WalletFfiError::Success
+            FfiOperationError::Success
         }
         Err(e) => {
             print_error(format!("Transfer failed: {e:?}"));
@@ -529,7 +529,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private_owned(
     to: *const FfiBytes32,
     amount: *const [u8; 16],
     out_result: *mut FfiTransferResult,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -537,14 +537,14 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private_owned(
 
     if from.is_null() || to.is_null() || amount.is_null() || out_result.is_null() {
         print_error("Null pointer argument");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -562,7 +562,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private_owned(
                 (*out_result).tx_hash = tx_hash;
                 (*out_result).success = true;
             }
-            WalletFfiError::Success
+            FfiOperationError::Success
         }
         Err(e) => {
             print_error(format!("Transfer failed: {e:?}"));

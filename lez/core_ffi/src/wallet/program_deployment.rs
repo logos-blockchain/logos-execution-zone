@@ -4,10 +4,10 @@ use lee::AccountId;
 use wallet::program_facades::program_loader::ProgramLoader;
 
 use crate::{
+    error::{FfiOperationError, print_error},
     primitives::types::FfiBytes32,
     wallet::{
         WalletHandle, block_on,
-        error::{WalletFfiError, print_error},
         generic_transaction::{FfiProgram, FfiTransactionResult},
         lifecycle::get_wallet,
         read_optional_account_id,
@@ -62,20 +62,20 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_write_segment(
     next_segment: *const FfiBytes32,
     payer: *const FfiBytes32,
     out_result: *mut FfiTransactionResult,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
     };
     if target.is_null() || bytecode_data.is_null() || out_result.is_null() {
         print_error("Null pointer argument");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -87,12 +87,12 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_write_segment(
     match block_on(ProgramLoader(&wallet).write_segment(target, bytecode, next_segment, payer)) {
         Ok(tx_hash) => {
             write_result(out_result, tx_hash);
-            WalletFfiError::Success
+            FfiOperationError::Success
         }
         Err(e) => {
             print_error(format!("WriteSegment failed: {e:?}"));
             write_failure(out_result);
-            WalletFfiError::NetworkError
+            FfiOperationError::NetworkError
         }
     }
 }
@@ -114,20 +114,20 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_create_header(
     immutable: bool,
     payer: *const FfiBytes32,
     out_result: *mut FfiTransactionResult,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
     };
     if target.is_null() || first_segment.is_null() || out_result.is_null() {
         print_error("Null pointer argument");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -141,7 +141,7 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_create_header(
         Err(e) => {
             print_error(format!("Failed to resolve segment chain: {e:?}"));
             write_failure(out_result);
-            return WalletFfiError::NetworkError;
+            return FfiOperationError::NetworkError;
         }
     };
 
@@ -154,12 +154,12 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_create_header(
     )) {
         Ok(tx_hash) => {
             write_result(out_result, tx_hash);
-            WalletFfiError::Success
+            FfiOperationError::Success
         }
         Err(e) => {
             print_error(format!("CreateHeader failed: {e:?}"));
             write_failure(out_result);
-            WalletFfiError::NetworkError
+            FfiOperationError::NetworkError
         }
     }
 }
@@ -183,20 +183,20 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update_header(
     immutable: bool,
     payer: *const FfiBytes32,
     out_result: *mut FfiTransactionResult,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
     };
     if header.is_null() || first_segment.is_null() || out_result.is_null() {
         print_error("Null pointer argument");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -210,7 +210,7 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update_header(
         Err(e) => {
             print_error(format!("Failed to resolve segment chain: {e:?}"));
             write_failure(out_result);
-            return WalletFfiError::NetworkError;
+            return FfiOperationError::NetworkError;
         }
     };
 
@@ -223,12 +223,12 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update_header(
     )) {
         Ok(tx_hash) => {
             write_result(out_result, tx_hash);
-            WalletFfiError::Success
+            FfiOperationError::Success
         }
         Err(e) => {
             print_error(format!("UpdateHeader failed: {e:?}"));
             write_failure(out_result);
-            WalletFfiError::NetworkError
+            FfiOperationError::NetworkError
         }
     }
 }
@@ -260,20 +260,20 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_deploy(
     immutable: bool,
     payer: *const FfiBytes32,
     out_result: *mut FfiTransactionResult,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
     };
     if header.is_null() || segments.is_null() || elf_data.is_null() || out_result.is_null() {
         print_error("Null pointer argument");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -290,12 +290,12 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_deploy(
                 (*out_result).tx_hash = tx_hash;
                 (*out_result).success = true;
             }
-            WalletFfiError::Success
+            FfiOperationError::Success
         }
         Err(e) => {
             print_error(format!("Deploy failed: {e:?}"));
             write_failure(out_result);
-            WalletFfiError::NetworkError
+            FfiOperationError::NetworkError
         }
     }
 }
@@ -329,20 +329,20 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update(
     immutable: bool,
     payer: *const FfiBytes32,
     out_result: *mut FfiTransactionResult,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
     };
     if header.is_null() || segments.is_null() || elf_data.is_null() || out_result.is_null() {
         print_error("Null pointer argument");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -359,12 +359,12 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update(
                 (*out_result).tx_hash = tx_hash;
                 (*out_result).success = true;
             }
-            WalletFfiError::Success
+            FfiOperationError::Success
         }
         Err(e) => {
             print_error(format!("Update failed: {e:?}"));
             write_failure(out_result);
-            WalletFfiError::NetworkError
+            FfiOperationError::NetworkError
         }
     }
 }

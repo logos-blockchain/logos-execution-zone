@@ -3,5 +3,4 @@
 pub use service::SequencerServiceFFI;
 
 pub mod api;
-pub mod error;
 mod service;
