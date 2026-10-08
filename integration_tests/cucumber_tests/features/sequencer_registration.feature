@@ -58,7 +58,7 @@ Feature: Sequencer registration
   @stake_registration_ci @P-01 @P0 @L3
   # Mirrors the registration leg of tests/sequencer_stake_demo.rs,
   # additionally asserting the config entry and both balance deltas.
-  Scenario: Happy-path registration through authenticated_transfer
+  Scenario: Happy-path registration
     When a Stake of "twice the minimum stake" is submitted
     Then the stake transaction is accepted
     And the config entry tracks the staked amount with no pending unstake
@@ -84,8 +84,8 @@ Feature: Sequencer registration
     And the config entry tracks the staked amount with no pending unstake
 
   @stake_registration_ci @P-25 @P0 @L3
-  # In-program reason: "Sender has insufficient balance" — the mover call
-  # itself fails, so the whole transaction is rejected atomically. The most
+  # In-program reason: the native transfer Stake chains fails on the
+  # funding balance, so the whole transaction is rejected atomically. The most
   # common real-world rejection on the stake-in walk.
   Scenario: Funding account holds less than the amount
     Given a funding account holding "one below the minimum stake"
@@ -98,9 +98,8 @@ Feature: Sequencer registration
   @stake_registration_ci @P-23 @P1 @L3
   # The plan expects a donation made before the first Stake to be absorbed
   # into the stake (expected_balance_after = donation + amount). Two dev
-  # changes move the goalposts: a credit leaves a default-owned account
-  # unowned (claiming is implicit on data writes only), so the donation lands
-  # and the first Stake still claims the account; and the stake is custodied
+  # changes move the goalposts: a credit lands on the native shard and
+  # leaves the stake shard empty, so the first Stake still claims the account; and the stake is custodied
   # in the funds PDA, so the donation stays on the ownership account and the
   # entry tracks only the staked amount. Revisit with the plan's §15.8
   # decision.

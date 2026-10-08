@@ -262,9 +262,9 @@ impl LezScenarioContext {
     /// through the scenario wallet.
     pub async fn send_program_transaction(
         &self,
-        accounts: Vec<wallet::AccountIdentity>,
+        accounts: Vec<wallet::AccountMention>,
         instruction_data: lee_core::program::InstructionData,
-        program_id: lee_core::program::ProgramId,
+        program_id: lee::AccountId,
     ) -> Result<HashType, StepError> {
         self.wallet()
             .send_program_transaction(accounts, instruction_data, program_id)

@@ -5,18 +5,17 @@
 
 use cucumber::{gherkin::Step, given};
 use lee::Account;
-use wallet::AccountIdentity;
 
 use super::{
     super::log_step,
     helpers::{
-        config_entry, first_configured_public_account, get_account, stake_config,
-        submit_accepted_stake, wait_for_inclusion,
+        config_entry, first_configured_public_account, get_account, native_balance, stake_config,
+        stake_shard, submit_accepted_stake,
     },
 };
 use crate::cucumber::{
     error::{StepError, StepResult},
-    stake_scenario::{StakeScenario, token_definition_instruction},
+    stake_scenario::StakeScenario,
     world::CucumberWorld,
 };
 
@@ -91,61 +90,17 @@ async fn fund_funding_account(
     let context = world.lez()?;
     let funding_id = context.new_public_account().await?;
     let supply_id = first_configured_public_account(context).await?;
-    // Claims the fresh account for authenticated_transfer with exactly
-    // `balance` on it, so it can act as the Stake mover's sender.
+    // Leaves exactly `balance` on the fresh account for Stake to move.
     context
         .public_transfer_to_new_account(supply_id, funding_id, balance)
         .await?;
-    let funded = get_account(context, funding_id).await?.balance;
+    let funded = native_balance(&get_account(context, funding_id).await?)?;
     if funded != balance {
         return Err(StepError::AssertionFailed {
             message: format!("the funding account holds {funded}, expected {balance}"),
         });
     }
     world.stake_mut()?.set_funding_id(funding_id);
-    Ok(())
-}
-
-#[given("the ownership account is already claimed by the token program")]
-async fn ownership_account_claimed_by_other_program(
-    world: &mut CucumberWorld,
-    step: &Step,
-) -> StepResult {
-    log_step(step);
-    let scenario = world.stake()?;
-    let ownership_id = scenario.ownership_id()?;
-    let timeout = scenario.wait_timeout()?;
-    let context = world.lez()?;
-    // Claiming is implicit on data writes, so a plain credit leaves the
-    // account unowned. A token definition writes data to both of its signing
-    // accounts; with the ownership account as the holding account, the token
-    // program claims it. The definition account is a throwaway, funded first
-    // because a token transaction, unlike Stake, is fee-charged and the
-    // wallet bills the first signer holding a balance.
-    let supply_id = first_configured_public_account(context).await?;
-    let definition_id = context.new_public_account().await?;
-    context
-        .public_transfer_to_new_account(supply_id, definition_id, wallet::DEFAULT_MAX_FEE)
-        .await?;
-    let hash = context
-        .send_program_transaction(
-            vec![
-                AccountIdentity::Public(definition_id),
-                AccountIdentity::Public(ownership_id),
-            ],
-            token_definition_instruction()?,
-            programs::token().id(),
-        )
-        .await?;
-    wait_for_inclusion(context, hash, timeout).await?;
-    let owner = get_account(context, ownership_id).await?.program_owner;
-    if owner != programs::token().id().into() {
-        return Err(StepError::AssertionFailed {
-            message: format!(
-                "the ownership account is owned by {owner}, expected the token program"
-            ),
-        });
-    }
     Ok(())
 }
 
@@ -168,10 +123,7 @@ async fn stake_second_sequencer_key(world: &mut CucumberWorld, step: &Step) -> S
         timeout,
     )
     .await?;
-    let owner = get_account(context, second_ownership_id)
-        .await?
-        .program_owner;
-    if owner != programs::sequencer_stake().id().into() {
+    if stake_shard(&get_account(context, second_ownership_id).await?).is_empty() {
         return Err(StepError::AssertionFailed {
             message: "staking the second sequencer key did not claim its ownership account"
                 .to_owned(),

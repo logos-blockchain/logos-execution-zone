@@ -9,13 +9,13 @@ use anyhow::{Context as _, anyhow};
 use async_trait::async_trait;
 use common::HashType;
 use lee::{AccountId, PrivateKey, PublicKey};
-use lee_core::program::{InstructionData, ProgramId};
+use lee_core::program::InstructionData;
 use tempfile::TempDir;
 use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
 use testing_framework_core::scenario::DynError;
 use tokio::sync::{mpsc, oneshot};
 use wallet::{
-    AccountIdentity, WalletCore,
+    AccountIdentity, AccountMention, WalletCore,
     account::{AccountIdWithPrivacy, Label},
     cli::{
         CliAccountMention, Command, SubcommandReturnValue, account::AccountSubcommand,
@@ -101,9 +101,9 @@ enum WalletRequest {
         response: oneshot::Sender<Result<HashType, String>>,
     },
     SendProgramTransaction {
-        accounts: Vec<AccountIdentity>,
+        accounts: Vec<AccountMention>,
         instruction_data: InstructionData,
-        program_id: ProgramId,
+        program_id: AccountId,
         response: oneshot::Sender<Result<HashType, String>>,
     },
     WalletPassword {
@@ -406,7 +406,7 @@ impl WalletActor {
                             } => {
                                 let result = components
                                     .wallet
-                                    .send_pub_tx(accounts, instruction_data, program_id.into())
+                                    .send_pub_tx(accounts, instruction_data, program_id)
                                     .await
                                     .map_err(|error| format!("{error:?}"));
                                 let _unused = response.send(result);
@@ -642,9 +642,9 @@ impl LezRuntime {
     /// decided during block building.
     pub async fn send_program_transaction(
         &self,
-        accounts: Vec<AccountIdentity>,
+        accounts: Vec<AccountMention>,
         instruction_data: InstructionData,
-        program_id: ProgramId,
+        program_id: AccountId,
     ) -> Result<HashType, DynError> {
         self.request(|response| WalletRequest::SendProgramTransaction {
             accounts,
