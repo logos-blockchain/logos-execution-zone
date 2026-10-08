@@ -11,9 +11,7 @@ use sequencer_service_rpc::RpcClient as _;
 
 pub use crate::helperfunctions::{read_mnemonic, read_pin};
 use crate::{
-    WalletCore,
-    account::{AccountIdWithPrivacy, Label},
-    cli::{
+    WalletCore, WalletSequencerClient, account::{AccountIdWithPrivacy, Label}, cli::{
         account::AccountSubcommand,
         chain::ChainSubcommand,
         config::ConfigSubcommand,
@@ -24,9 +22,7 @@ use crate::{
             bridge::BridgeSubcommand, native_token_transfer::AuthTransferSubcommand,
             program_loader::ProgramLoaderSubcommand,
         },
-    },
-    config::SequencerConnectionData,
-    storage::Storage,
+    }, config::SequencerConnectionData, storage::Storage,
 };
 
 pub mod account;
@@ -38,7 +34,7 @@ pub mod network;
 pub mod programs;
 
 pub(crate) trait WalletSubcommand {
-    async fn handle_subcommand(self, wallet_core: &mut WalletCore)
+    async fn handle_subcommand<C:WalletSequencerClient>(self, wallet_core: &mut WalletCore<C>)
     -> Result<SubcommandReturnValue>;
 }
 
@@ -198,8 +194,8 @@ impl Default for CliAccountMention {
     }
 }
 
-pub async fn execute_subcommand(
-    wallet_core: &mut WalletCore,
+pub async fn execute_subcommand<C:WalletSequencerClient>(
+    wallet_core: &mut WalletCore<C>,
     command: Command,
 ) -> Result<SubcommandReturnValue> {
     let subcommand_ret = match command {
@@ -271,7 +267,7 @@ pub async fn execute_subcommand(
     Ok(subcommand_ret)
 }
 
-pub async fn execute_continuous_run(wallet_core: &mut WalletCore) -> Result<()> {
+pub async fn execute_continuous_run<C: WalletSequencerClient>(wallet_core: &mut WalletCore<C>) -> Result<()> {
     loop {
         wallet_core.sync_to_latest_block().await?;
         tokio::time::sleep(wallet_core.config().seq_poll_timeout).await;
@@ -348,7 +344,7 @@ pub fn read_mnemonic_from_stdin() -> Result<Mnemonic> {
     Mnemonic::from_str(phrase.trim()).context("Invalid mnemonic phrase")
 }
 
-pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) -> Result<()> {
+pub async fn execute_keys_restoration<C: WalletSequencerClient>(wallet_core: &mut WalletCore<C>, depth: u32) -> Result<()> {
     wallet_core
         .storage
         .key_chain_mut()
