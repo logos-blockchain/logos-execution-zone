@@ -6,10 +6,12 @@ use std::time::Duration;
 use common::HashType;
 use futures::future::try_join_all;
 use lee::{Account, AccountId, PublicKey};
-use lee_core::program::{InstructionData, ProgramId};
+use lee_core::{
+    account::ShardData, native_token::NATIVE_TOKEN_PROGRAM_ID, program::InstructionData,
+};
 use sequencer_service_rpc::RpcClient as _;
 use sequencer_stake_core::{SequencerEntry, SequencerKey, SequencerStakeConfig};
-use wallet::AccountIdentity;
+use wallet::{AccountIdentity, AccountMention};
 
 use super::super::wait_until;
 use crate::cucumber::{
@@ -39,6 +41,47 @@ pub(super) async fn get_account(
         .map_err(StepError::query_failed)
 }
 
+/// The `sequencer_stake` shard of `account`.
+pub(super) fn stake_shard(account: &Account) -> &ShardData {
+    account.data.shard(programs::sequencer_stake_account_id())
+}
+
+/// The native balance of `account`.
+pub(super) fn native_balance(account: &Account) -> Result<u128, StepError> {
+    account
+        .data
+        .native_balance()
+        .map_err(|error| StepError::LogicalError {
+            message: format!("the native balance does not decode: {error}"),
+        })
+}
+
+/// Whether `ownership_id` already holds a `sequencer_stake` record.
+pub(super) async fn has_stake_record(
+    context: &LezScenarioContext,
+    ownership_id: AccountId,
+) -> Result<bool, StepError> {
+    Ok(!stake_shard(&get_account(context, ownership_id).await?).is_empty())
+}
+
+/// The standard `Stake` account list: signing funding and ownership accounts,
+/// then the unsigned stake funds PDA of the ownership account and the unsigned
+/// config account.
+pub(super) fn stake_accounts(
+    funding_id: AccountId,
+    ownership_id: AccountId,
+) -> Vec<AccountMention> {
+    let stake_id = programs::sequencer_stake_account_id();
+    vec![
+        AccountIdentity::Public(funding_id).balance(),
+        AccountIdentity::Public(ownership_id).select_program_shard(stake_id),
+        AccountIdentity::PublicNoSign(system_accounts::stake_funds_account_id(&ownership_id))
+            .balance(),
+        AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id())
+            .select_program_shard(stake_id),
+    ]
+}
+
 /// Reads and decodes the `sequencer_stake` config account.
 pub(super) async fn stake_config(
     context: &LezScenarioContext,
@@ -48,8 +91,10 @@ pub(super) async fn stake_config(
         system_accounts::sequencer_stake_config_account_id(),
     )
     .await?;
-    SequencerStakeConfig::from_bytes(account.data.as_ref()).ok_or_else(|| StepError::LogicalError {
-        message: "the config account does not decode as a SequencerStakeConfig".to_owned(),
+    SequencerStakeConfig::from_bytes(stake_shard(&account).as_ref()).ok_or_else(|| {
+        StepError::LogicalError {
+            message: "the config account does not decode as a SequencerStakeConfig".to_owned(),
+        }
     })
 }
 
@@ -128,9 +173,9 @@ pub(super) async fn scenario_snapshot(
 /// scenario wallet and records it for the inclusion/non-inclusion assertions.
 pub(super) async fn submit_and_record(
     world: &mut CucumberWorld,
-    accounts: Vec<AccountIdentity>,
+    accounts: Vec<AccountMention>,
     instruction_data: InstructionData,
-    program_id: ProgramId,
+    program_id: AccountId,
     amount: u128,
 ) -> StepResult {
     let snapshot = scenario_snapshot(world).await?;
@@ -194,11 +239,11 @@ async fn submit_canary(context: &LezScenarioContext) -> Result<HashType, StepErr
     context
         .send_program_transaction(
             vec![
-                AccountIdentity::Public(donor),
-                AccountIdentity::PublicNoSign(recipient),
+                AccountIdentity::Public(donor).balance(),
+                AccountIdentity::PublicNoSign(recipient).balance(),
             ],
             transfer_instruction(CANARY_AMOUNT)?,
-            programs::authenticated_transfer().id(),
+            NATIVE_TOKEN_PROGRAM_ID,
         )
         .await
 }
@@ -264,18 +309,12 @@ pub(super) async fn submit_accepted_stake(
     amount: u128,
     timeout: Duration,
 ) -> StepResult {
+    let has_record = has_stake_record(context, ownership_id).await?;
     let hash = context
         .send_program_transaction(
-            vec![
-                AccountIdentity::Public(funding_id),
-                AccountIdentity::Public(ownership_id),
-                AccountIdentity::PublicNoSign(system_accounts::stake_funds_account_id(
-                    &ownership_id,
-                )),
-                AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id()),
-            ],
-            stake_instruction(sequencer_key, amount)?,
-            programs::sequencer_stake().id(),
+            stake_accounts(funding_id, ownership_id),
+            stake_instruction(sequencer_key, amount, has_record)?,
+            programs::sequencer_stake_account_id(),
         )
         .await?;
     wait_for_inclusion(context, hash, timeout).await?;
