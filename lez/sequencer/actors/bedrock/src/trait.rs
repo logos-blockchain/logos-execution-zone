@@ -6,8 +6,8 @@ use crate::{
     Result,
     error::Error,
     protocol::{
-        AccreditedKeys, ChangeChannelConfig, ChannelReadStream, CheckChannelExists, CheckIsOurTurn,
-        CreateChannel, GetAccreditedKeys, GetChannelNotes, GetChannelTipMessageId,
+        AccreditedKeys, ChangeChannelConfig, ChannelReadStream, ChannelSeq, CheckChannelExists,
+        CheckIsOurTurn, CreateChannel, GetAccreditedKeys, GetChannelNotes, GetChannelTipMessageId,
         GetChannelTipSlot, InitializeChannelPublisher, MsgId, NoteId, PrepareConfig, PreparePin,
         PreparedConfig, PreparedPin, PublishBlock, PublishOutcome, PublishPin, ReadChannel, Slot,
     },
@@ -15,7 +15,7 @@ use crate::{
 
 pub trait BedrockActorTrait:
     Actor<Error = Error>
-    + Message<InitializeChannelPublisher, Reply = Result<bool>>
+    + Message<InitializeChannelPublisher, Reply = Result<Option<ChannelSeq>>>
     + Message<CreateChannel, Reply = Result<PublishOutcome>>
     + Message<PublishBlock, Reply = Result<PublishOutcome>>
     + Message<PreparePin, Reply = Result<PreparedPin>>
