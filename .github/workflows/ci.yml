@@ -258,12 +258,14 @@ jobs:
 
   abort-on-stale-fixtures:
     needs: test-fixtures-tests
-    if: failure()
+    # `failure()` would also fire for an unrelated ancestor failure.
+    if: needs.test-fixtures-tests.result == 'failure'
     runs-on: ubuntu-latest
     permissions:
       actions: write
     steps:
-      - run: gh run cancel ${{ github.run_id }}
+      # No checkout in this job, so `gh` cannot infer the repo from git.
+      - run: gh run cancel ${{ github.run_id }} -R ${{ github.repository }}
         env:
           GH_TOKEN: ${{ github.token }}
 
