@@ -1,7 +1,7 @@
 #![allow(dead_code, reason = "TODO")]
 
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashSet, VecDeque},
     path::Path,
     sync::Arc,
     time::{Duration, Instant},
@@ -31,10 +31,7 @@ use logos_blockchain_key_management_system_service::keys::ED25519_SECRET_KEY_SIZ
 pub use logos_blockchain_key_management_system_service::keys::Ed25519PublicKey;
 use logos_blockchain_zone_sdk::{
     Slot, ZoneMessage,
-    node_types::ChannelId,
-    sequencer::{
-        DepositInfo, InscriptionInfo, SequencerCheckpoint, WithdrawArg, channel_inscriptions,
-    },
+    sequencer::{DepositInfo, SequencerCheckpoint, WithdrawArg},
 };
 use mempool::{MemPool, MemPoolHandle};
 use num_bigint::BigUint;
@@ -930,11 +927,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 .collect();
 
             match view {
-                ViewChange::Extension(adopted) => {
-                    let channel_id = self.sequencer_config.bedrock_config.channel_id;
-                    let adopted = with_withheld_entries(adopted, &chain, checkpoint, channel_id);
-                    chain.apply_extension(adopted);
-                }
+                ViewChange::Extension(adopted) => chain.apply_extension(adopted.clone()),
                 ViewChange::Conflict { canonical, .. } => chain.apply_conflict(canonical.clone()),
             }
 
@@ -1579,6 +1572,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             parent,
         ) = {
             let chain = self.chain.lock().await;
+            if let Some(entry) = chain.check_for_gaps_in_lineage() {
+                error!(
+                    "Channel view entry {} chains on {}, which the view does not hold before it; skipping the turn",
+                    entry.msg, entry.parent
+                );
+                return Err(anyhow!("Channel view has a gap before entry {}", entry.msg));
+            }
             let tip = chain.head_tip();
             let parent = chain.pin();
             let height = tip.as_ref().map_or(GENESIS_BLOCK_ID, |head| {
@@ -2173,70 +2173,6 @@ async fn zone_checkpoint<S: StorageActorTrait>(
         .await?
         .map(|stored| decode_checkpoint(&stored.bytes))
         .transpose()
-}
-
-/// `adopted` preceded by the entries between the pin and its first one, taken
-/// from the sdk's pending set.
-fn with_withheld_entries(
-    adopted: &[ChannelEntry],
-    chain: &ChainState,
-    checkpoint: &SequencerCheckpoint,
-    channel_id: ChannelId,
-) -> Vec<ChannelEntry> {
-    let pin = chain.pin();
-    let Some(first) = adopted.first().filter(|first| first.parent != pin) else {
-        return adopted.to_vec();
-    };
-    warn!(
-        "zone-sdk adopted {} chained on {}, not on the pin {pin}; filling the gap from its pending set",
-        first.msg, first.parent
-    );
-    let pending: HashMap<MsgId, InscriptionInfo> = checkpoint
-        .pending_txs
-        .iter()
-        .flat_map(|(_, tx)| channel_inscriptions(tx, channel_id))
-        .map(|info| (info.this_msg, info))
-        .collect();
-    let held = |msg: MsgId| chain.view().iter().any(|entry| entry.msg == msg);
-    let mut entries = Vec::new();
-    let mut parent = first.parent;
-    while parent != pin
-        && !held(parent)
-        && entries.len() < pending.len()
-        && let Some(info) = pending.get(&parent)
-    {
-        entries.push(ChannelEntry {
-            msg: info.this_msg,
-            parent: info.parent_msg,
-            block: Block::try_from_slice(info.payload.as_ref()).ok(),
-        });
-        parent = info.parent_msg;
-    }
-    if parent == pin {
-        warn!(
-            "Filled the gap before {} with {} entries from zone-sdk's pending set",
-            first.msg,
-            entries.len()
-        );
-    } else if held(parent) {
-        warn!(
-            "zone-sdk adopted {} on a fork off {parent}, which the view holds before the pin",
-            first.msg
-        );
-    } else if parent == chain.final_msg() {
-        warn!(
-            "zone-sdk adopted {} on a fork off the final entry {parent}",
-            first.msg
-        );
-    } else {
-        error!(
-            "Could not fill the gap before {}: {parent} is not in zone-sdk's pending set",
-            first.msg
-        );
-    }
-    entries.reverse();
-    entries.extend_from_slice(adopted);
-    entries
 }
 
 /// Decodes what [`checkpoint_bytes`] wrote.
