@@ -7,12 +7,14 @@ use std::str::FromStr;
 
 use cucumber::{Parameter, gherkin::Step, then};
 use futures::future::try_join_all;
-use lee::Account;
 use sequencer_stake_core::{SequencerEntry, SequencerKey, StakeRecord};
 
 use super::{
     super::log_step,
-    helpers::{assert_not_included, config_entry, get_account, wait_for_inclusion},
+    helpers::{
+        assert_not_included, config_entry, get_account, native_balance, stake_shard,
+        wait_for_inclusion,
+    },
 };
 use crate::cucumber::{
     error::{StepError, StepResult},
@@ -129,16 +131,17 @@ async fn ownership_account_is_claimed(world: &mut CucumberWorld, step: &Step) ->
     log_step(step);
     let scenario = world.stake()?;
     let account = get_account(world.lez()?, scenario.ownership_id()?).await?;
-    if account.program_owner != programs::sequencer_stake().id().into() {
+    let shard = stake_shard(&account);
+    if shard.is_empty() {
         return Err(StepError::AssertionFailed {
-            message: "the ownership account is not owned by sequencer_stake".to_owned(),
+            message: "the ownership account holds no sequencer_stake record".to_owned(),
         });
     }
-    let record = StakeRecord::from_bytes(account.data.as_ref()).ok_or_else(|| {
-        StepError::AssertionFailed {
-            message: "the ownership account data does not decode as a StakeRecord".to_owned(),
-        }
-    })?;
+    let record =
+        StakeRecord::from_bytes(shard.as_ref()).ok_or_else(|| StepError::AssertionFailed {
+            message: "the ownership account's stake shard does not decode as a StakeRecord"
+                .to_owned(),
+        })?;
     if record.sequencer_key != scenario.sequencer_key() || record.pending_unstake.is_some() {
         return Err(StepError::AssertionFailed {
             message: format!(
@@ -155,9 +158,9 @@ async fn ownership_account_is_not_claimed(world: &mut CucumberWorld, step: &Step
     log_step(step);
     let ownership_id = world.stake()?.ownership_id()?;
     let account = get_account(world.lez()?, ownership_id).await?;
-    if account.program_owner != Account::default().program_owner {
+    if !stake_shard(&account).is_empty() {
         return Err(StepError::AssertionFailed {
-            message: "the ownership account is claimed, expected it to stay default-owned"
+            message: "the ownership account holds a sequencer_stake record, expected none"
                 .to_owned(),
         });
     }
@@ -175,13 +178,13 @@ async fn account_balance_increased(
     log_step(step);
     let scenario = world.stake()?;
     let account_id = scenario.account_id(role)?;
-    let balance_before = scenario.snapshot()?.account(account_id)?.balance;
+    let balance_before = native_balance(scenario.snapshot()?.account(account_id)?)?;
     let expected = balance_before
         .checked_add(scenario.last_submission()?.amount)
         .ok_or_else(|| StepError::AssertionFailed {
             message: format!("expected {role:?} balance overflows"),
         })?;
-    let observed = get_account(world.lez()?, account_id).await?.balance;
+    let observed = native_balance(&get_account(world.lez()?, account_id).await?)?;
     if observed != expected {
         return Err(StepError::AssertionFailed {
             message: format!("the {role:?} balance is {observed}, expected {expected}"),
@@ -191,7 +194,7 @@ async fn account_balance_increased(
 }
 
 /// Asserts that the `role` account's balance equals its pre-submission
-/// snapshot, whatever happened to its data or owner.
+/// snapshot, whatever happened to its other shards.
 #[then(regex = "^the ([a-z ]+) account balance is unchanged$")]
 async fn account_balance_unchanged(
     world: &mut CucumberWorld,
@@ -201,8 +204,8 @@ async fn account_balance_unchanged(
     log_step(step);
     let scenario = world.stake()?;
     let account_id = scenario.account_id(role)?;
-    let expected = scenario.snapshot()?.account(account_id)?.balance;
-    let observed = get_account(world.lez()?, account_id).await?.balance;
+    let expected = native_balance(scenario.snapshot()?.account(account_id)?)?;
+    let observed = native_balance(&get_account(world.lez()?, account_id).await?)?;
     if observed != expected {
         return Err(StepError::AssertionFailed {
             message: format!("the {role:?} balance is {observed}, expected {expected}"),
@@ -216,13 +219,13 @@ async fn funding_balance_decreased(world: &mut CucumberWorld, step: &Step) -> St
     log_step(step);
     let scenario = world.stake()?;
     let funding_id = scenario.funding_id()?;
-    let balance_before = scenario.snapshot()?.account(funding_id)?.balance;
+    let balance_before = native_balance(scenario.snapshot()?.account(funding_id)?)?;
     let expected = balance_before
         .checked_sub(scenario.last_submission()?.amount)
         .ok_or_else(|| StepError::AssertionFailed {
             message: "expected funding balance underflows".to_owned(),
         })?;
-    let observed = get_account(world.lez()?, funding_id).await?.balance;
+    let observed = native_balance(&get_account(world.lez()?, funding_id).await?)?;
     if observed != expected {
         return Err(StepError::AssertionFailed {
             message: format!("the funding balance is {observed}, expected {expected}"),
