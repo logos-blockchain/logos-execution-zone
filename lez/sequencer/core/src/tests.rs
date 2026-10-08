@@ -5653,86 +5653,12 @@ async fn the_first_finalized_block_is_not_reported() {
     assert!(!slash_recorded(&sequencer).await);
 }
 
-/// A tx inscribing `block` on `channel`, chained on `parent`.
-fn inscribing_tx(
-    channel: ChannelId,
-    parent: MsgId,
-    block: &Block,
-) -> logos_blockchain_core::mantle::SignedOps<
-    logos_blockchain_core::mantle::transactions::states::Unverified,
-    logos_blockchain_core::mantle::ledger::verification_mode::StandardMode,
-> {
-    use logos_blockchain_core::mantle::{
-        SignedOps,
-        ops::{
-            Op, OpProof,
-            channel::inscribe::{Inscription, InscriptionOp},
-        },
-        transactions::{MantleTxBuilder, OpProofs},
-    };
-    let inscription: Inscription = borsh::to_vec(block).unwrap().try_into().unwrap();
-    let signer = Ed25519Key::generate(&mut rand::rngs::OsRng);
-    let op = Op::ChannelInscribe(InscriptionOp {
-        channel_id: channel,
-        inscription,
-        parent,
-        signer: signer.public_key().into_unverified(),
-    });
-    let raw = MantleTxBuilder::new()
-        .extend_ops([op])
-        .unwrap()
-        .build()
-        .unwrap();
-    let proof = OpProof::Ed25519Sig(signer.sign_payload(&[0; 32]));
-    SignedOps::from_parts(raw, OpProofs::from([proof])).unwrap()
-}
-
-#[test]
-fn an_adopted_entry_off_the_pin_gets_its_withheld_parents_from_the_pending_set() {
-    let channel = ChannelId::from([3; 32]);
-    let chain = ChainState::new(V03State::new());
-    let pin = chain.pin();
-    let block2 = common::test_utils::produce_dummy_block(2, None, vec![]);
-    let block3 = common::test_utils::produce_dummy_block(3, Some(block2.header.hash), vec![]);
-    let tx2 = inscribing_tx(channel, pin, &block2);
-    let msg2 =
-        logos_blockchain_zone_sdk::sequencer::channel_inscriptions(&tx2, channel)[0].this_msg;
-    let adopted = vec![ChannelEntry {
-        msg: MsgId::from([3; 32]),
-        parent: msg2,
-        block: Some(block3),
-    }];
-
-    let msgs = |entries: Vec<ChannelEntry>| -> Vec<MsgId> {
-        entries.iter().map(|entry| entry.msg).collect()
-    };
-
-    let mut checkpoint = checkpoint_at(pin);
-    assert_eq!(
-        msgs(crate::with_withheld_entries(
-            &adopted,
-            &chain,
-            &checkpoint,
-            channel
-        )),
-        vec![adopted[0].msg],
-        "nothing to take when the pending set lacks the parent"
-    );
-
-    checkpoint.pending_txs = vec![(TxHash::from([0; 32]), tx2)];
-    let entries = crate::with_withheld_entries(&adopted, &chain, &checkpoint, channel);
-    assert_eq!(entries[0].parent, pin);
-    assert_eq!(
-        entries[0].block.as_ref().map(|block| block.header.hash),
-        Some(block2.header.hash)
-    );
-    assert_eq!(msgs(entries), vec![msg2, adopted[0].msg]);
-}
-
+/// The sdk delivered block 3 without block 2's entry, as on 2026-10-07: a
+/// block built now would carry height 2 on block 3's entry.
 #[tokio::test]
-async fn an_adopted_entry_after_a_withheld_one_still_reaches_the_head() {
+async fn a_turn_on_a_view_with_a_hole_is_skipped() {
     let config = setup_sequencer_config();
-    let (mut sequencer, _mempool_handle) = start_sequencer(config.clone()).await;
+    let (mut sequencer, mempool_handle) = start_sequencer(config.clone()).await;
     let genesis_meta = sequencer
         .storage_ref
         .ask(GetLatestBlockMeta)
@@ -5744,33 +5670,33 @@ async fn an_adopted_entry_after_a_withheld_one_still_reaches_the_head() {
     let block2 = settled_peer_block(&state, 2, genesis_meta.hash, vec![], producer);
     chain_state::apply_block_to_state(&block2, &mut state).unwrap();
     let block3 = settled_peer_block(&state, 3, block2.header.hash, vec![], producer);
-
-    // The sdk delivers block 3 but withholds block 2's entry, which it still tracks.
-    let channel = config.bedrock_config.channel_id;
-    let pin = sequencer.chain().lock().await.pin();
-    let tx2 = inscribing_tx(channel, pin, &block2);
-    let msg2 =
-        logos_blockchain_zone_sdk::sequencer::channel_inscriptions(&tx2, channel)[0].this_msg;
-    let mut checkpoint = mock_checkpoint();
-    checkpoint.pending_txs = vec![(TxHash::from([0; 32]), tx2)];
     sequencer
         .on_channel_update(Arc::new(ChannelUpdate {
-            checkpoint,
-            view: ViewChange::Extension(vec![entry_of(&block3, msg2)]),
+            view: ViewChange::Extension(vec![entry_of(&block3, mock_msg_of(&block2))]),
             ..empty_channel_update()
         }))
         .await;
-
-    assert_eq!(sequencer.chain_height().await, 3);
-    let view: Vec<MsgId> = sequencer
-        .chain()
-        .lock()
+    let pin = sequencer.chain().lock().await.pin();
+    mempool_handle
+        .push((
+            TransactionOrigin::User,
+            common::test_utils::create_transaction_native_token_transfer(
+                initial_public_user_accounts()[0].account_id,
+                0,
+                initial_public_user_accounts()[1].account_id,
+                10,
+                &create_signing_key_for_account1(),
+            ),
+        ))
         .await
-        .view()
-        .iter()
-        .map(|entry| entry.msg)
-        .collect();
-    assert!(view.ends_with(&[msg2, mock_msg_of(&block3)]));
-    let stored = block_at(&sequencer, 2).await.expect("block 2 is persisted");
-    assert_eq!(stored.header.hash, block2.header.hash);
+        .unwrap();
+
+    let skipped = sequencer.run_production_turn().await;
+    assert!(
+        skipped.is_err(),
+        "a turn on a view with a hole must not publish"
+    );
+    assert_eq!(sequencer.chain_height().await, 1);
+    assert_eq!(sequencer.chain().lock().await.pin(), pin);
+    assert_eq!(sequencer.mempool.len(), 1, "the user transaction is kept");
 }

@@ -159,6 +159,18 @@ impl ChainState {
         self.final_msg
     }
 
+    /// The first view entry not chained on the one before it, or on
+    /// `final_msg` for the first.
+    #[must_use]
+    pub fn check_for_gaps_in_lineage(&self) -> Option<&ChannelEntry> {
+        let mut parent = self.final_msg;
+        self.view.iter().find(|entry| {
+            let gap = entry.parent != parent;
+            parent = entry.msg;
+            gap
+        })
+    }
+
     #[must_use]
     pub fn view(&self) -> &[ChannelEntry] {
         &self.view
@@ -696,6 +708,29 @@ mod tests {
         assert_eq!(chain.head_tip().unwrap().hash, blocks[2].header.hash);
         assert_eq!(chain.pin(), msg(4));
         assert_head_is_the_fold(&chain);
+    }
+
+    #[test]
+    fn an_adopted_entry_off_the_pin_leaves_a_lineage_gap() {
+        let blocks = chain_of(3);
+        let entries = entries_for(&blocks);
+        let mut chain = ChainState::new(claimed_initial_state());
+        assert!(chain.check_for_gaps_in_lineage().is_none());
+
+        chain.apply_extension(vec![entries[0].clone(), entries[2].clone()]);
+        assert_eq!(
+            chain.check_for_gaps_in_lineage().map(|entry| entry.msg),
+            Some(entries[2].msg)
+        );
+    }
+
+    #[test]
+    fn an_entry_without_a_block_is_no_lineage_gap() {
+        let blocks = chain_of(1);
+        let entries = entries_for(&blocks);
+        let mut chain = ChainState::new(claimed_initial_state());
+        chain.apply_extension(vec![entries[0].clone(), entry(9, entries[0].msg, None)]);
+        assert!(chain.check_for_gaps_in_lineage().is_none());
     }
 
     #[test]
