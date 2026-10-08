@@ -452,7 +452,8 @@ mod tests {
         };
 
         let run = dry_run_public_transaction(&state, public_tx, 2, 200).unwrap();
-        assert!(run.cycles > 0, "a guest-run transfer meters cycles");
+        // A native transfer is protocol-recomputed and free; only guest programs meter cycles.
+        assert_eq!(run.cycles, 0);
         assert_eq!(run.revert, None);
         assert_eq!(
             state.get_account_by_id(from).nonce,

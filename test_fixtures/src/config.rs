@@ -189,6 +189,8 @@ pub fn sequencer_config(
         cross_zone,
         metrics_address: Some(SequencerConfig::DEFAULT_METRICS_ADDRESS),
         gossip,
+        // Integration tests price their transactions against the sequencer under test.
+        dry_run_rpc: true,
     })
 }
 
