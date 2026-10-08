@@ -1,6 +1,6 @@
 use std::ffi::c_char;
 
-use lez_core_ffi::primitives::types::{
+use core_ffi::primitives::types::{
     FfiOption, FfiPrivateAccountKeys, FfiVec,
     account::FfiAccount,
     block::{FfiBlock, FfiBlockOpt},

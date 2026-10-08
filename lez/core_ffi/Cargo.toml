@@ -1,5 +1,5 @@
 [package]
-name = "lez_core_ffi"
+name = "core_ffi"
 license = { workspace = true }
 version = "0.1.0"
 edition = "2024"
@@ -31,7 +31,7 @@ cbindgen.workspace = true
 
 [lib]
 crate-type = ["rlib", "cdylib", "staticlib"]
-name = "lez_core_ffi"
+name = "core_ffi"
 
 [package.metadata.cargo-machete]
 ignored = [

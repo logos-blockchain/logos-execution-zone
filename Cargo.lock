@@ -1976,6 +1976,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "core_ffi"
+version = "0.1.0"
+dependencies = [
+ "bip39",
+ "cbindgen",
+ "common",
+ "env_logger",
+ "kameo",
+ "key_protocol",
+ "lee",
+ "lee_core",
+ "log",
+ "programs",
+ "sequencer_executor_actor",
+ "sequencer_service",
+ "sequencer_service_rpc",
+ "sequencer_storage_actor",
+ "serde_json",
+ "tokio",
+ "wallet",
+]
+
+[[package]]
 name = "cpp_demangle"
 version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4784,6 +4807,7 @@ dependencies = [
  "bridge_lock_core",
  "bytesize",
  "common",
+ "core_ffi",
  "cross_zone_inbox_core",
  "cross_zone_marker_core",
  "cross_zone_outbox_core",
@@ -4799,7 +4823,6 @@ dependencies = [
  "key_protocol",
  "lee",
  "lee_core",
- "lez_core_ffi",
  "log",
  "logos-blockchain-core",
  "logos-blockchain-key-management-system-service",
@@ -5880,29 +5903,6 @@ version = "0.1.0"
 dependencies = [
  "indexer_core",
  "sequencer_core",
-]
-
-[[package]]
-name = "lez_core_ffi"
-version = "0.1.0"
-dependencies = [
- "bip39",
- "cbindgen",
- "common",
- "env_logger",
- "kameo",
- "key_protocol",
- "lee",
- "lee_core",
- "log",
- "programs",
- "sequencer_executor_actor",
- "sequencer_service",
- "sequencer_service_rpc",
- "sequencer_storage_actor",
- "serde_json",
- "tokio",
- "wallet",
 ]
 
 [[package]]

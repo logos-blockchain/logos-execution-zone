@@ -58,7 +58,7 @@ members = [
   "lez/programs/sequencer_stake",
   "lez/programs/program_loader/core",
   "lez/cross_zone",
-  "lez/lez_core_ffi",
+  "lez/core_ffi",
 
   "test_guest_core",
   "test_programs",
@@ -109,7 +109,7 @@ indexer_service_protocol = { path = "lez/indexer/service/protocol" }
 indexer_service_rpc = { path = "lez/indexer/service/rpc" }
 wallet = { path = "lez/wallet" }
 indexer_ffi = { path = "lez/indexer/ffi" }
-lez_core_ffi = { path = "lez/lez_core_ffi", default-features = false }
+core_ffi = { path = "lez/core_ffi", default-features = false }
 lez = { path = "lez" }
 programs = { path = "lez/programs", default-features = false, features = [
   "artifacts",

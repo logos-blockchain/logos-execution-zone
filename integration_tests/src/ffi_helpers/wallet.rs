@@ -1,6 +1,6 @@
 use std::ffi::c_char;
 
-use lez_core_ffi::{
+use core_ffi::{
     primitives::types::{
         FfiBytes32, FfiIdentifier, FfiPrivateAccountKeys, FfiPublicAccountKey, account::FfiAccount,
     },

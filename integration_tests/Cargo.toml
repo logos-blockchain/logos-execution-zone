@@ -31,7 +31,7 @@ indexer_service.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 sequencer_service = { workspace = true, features = ["rpc"] }
 indexer_ffi.workspace = true
-lez_core_ffi.workspace = true
+core_ffi.workspace = true
 indexer_service_protocol.workspace = true
 system_accounts.workspace = true
 sequencer_stake_core.workspace = true
