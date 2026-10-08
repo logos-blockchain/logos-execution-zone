@@ -37,7 +37,7 @@ async fn refusal(store: CannedStore, history: Vec<FinalizedBlock>) -> Error {
         Ok(state) => state,
         Err(err) => return err,
     };
-    for finalized in history {
+    for finalized in &history {
         let State::Bootstrapping(bootstrapping) = state else {
             panic!("the channel tip was reached without a refusal");
         };

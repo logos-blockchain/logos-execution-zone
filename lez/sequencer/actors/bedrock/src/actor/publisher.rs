@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    sync::Arc,
     time::Duration,
 };
 
@@ -301,7 +302,7 @@ impl Publisher {
                 topic: format!("channel/{}/publisher/{topic}", self.channel_id),
                 message: ChannelEvent {
                     channel_id: self.channel_id,
-                    event: ChannelEventKind::Publisher(event),
+                    event: ChannelEventKind::Publisher(Arc::new(event)),
                 },
             })
             .await

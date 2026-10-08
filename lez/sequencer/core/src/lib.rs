@@ -312,7 +312,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// on this same head.
     pub async fn on_channel_update(
         &mut self,
-        update: sequencer_bedrock_actor::protocol::ChannelUpdate,
+        update: &sequencer_bedrock_actor::protocol::ChannelUpdate,
     ) {
         let sequencer_bedrock_actor::protocol::ChannelUpdate {
             checkpoint,
@@ -555,7 +555,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
     /// Holds deposits seen before finality, for production to mint pinned and
     /// for peers' pins to be checked against.
-    pub async fn on_observed_deposits(&mut self, deposits: Vec<DepositInfo>) {
+    pub async fn on_observed_deposits(&mut self, deposits: &[DepositInfo]) {
         let observed = channel_signing::ObservedDeposits(
             deposits
                 .iter()
@@ -577,7 +577,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 .iter()
                 .all(|observed_deposit| observed_deposit.op_id != deposit.op_id)
             {
-                self.observed_deposits.push(deposit);
+                self.observed_deposits.push(deposit.clone());
             }
         }
     }
@@ -658,14 +658,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// Hands the channel-signing actor the live channel and the config it should
     /// have. Sent from the follow path, turn or not: a peer only signs a draft
     /// matching the config it derived for itself.
-    pub async fn on_channel_config_update(&mut self, live: LiveChannelConfig) {
+    pub async fn on_channel_config_update(&mut self, live: &LiveChannelConfig) {
         let target = config_target(
             self.chain.lock().await.final_state(),
-            &live,
+            live,
             self.finalized_config,
         );
         let view = channel_signing::ChannelView {
-            live_keys: live.keys,
+            live_keys: live.keys.clone(),
             required_signatures: live.required_signatures,
             transfer_signatures: live.transfer_threshold,
             target,

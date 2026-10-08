@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use common::{
@@ -405,7 +405,7 @@ async fn spawn_on_genesis(
     executor
         .ask(ChannelEvent {
             channel_id,
-            event: ChannelEventKind::FinalizedBlock(Box::new(finalized_at(&empty_genesis(), 0))),
+            event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&empty_genesis(), 0))),
         })
         .await?;
     Ok(executor)
