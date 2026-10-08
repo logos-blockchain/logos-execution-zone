@@ -72,6 +72,9 @@ pub struct BedrockActor {
     /// Version of the channel view this actor holds, bumped by every broadcast
     /// update and every publish.
     seq: ChannelSeq,
+    /// zone-sdk's LIB slot when it became ready; its events cover everything
+    /// finalized after it, so [`ReadChannel`] reads no further.
+    ready_lib_slot: Option<Slot>,
 }
 
 impl BedrockActor {
@@ -140,6 +143,7 @@ impl BedrockActor {
             channel_view_rx,
             broker_ref,
             seq,
+            ready_lib_slot: None,
         };
 
         // Wait for cold-start backfill to complete before returning so callers
@@ -148,6 +152,15 @@ impl BedrockActor {
             // Zone SDK sequencer will process ready event internally.
             let event = bedrock.sequencer.next_event().await;
             bedrock.on_event(event).await?;
+        }
+        bedrock.ready_lib_slot = bedrock
+            .sequencer
+            .checkpoint()
+            .map(|checkpoint| checkpoint.lib_slot);
+        if bedrock.ready_lib_slot.is_none() {
+            warn!(
+                "Zone SDK is ready without a checkpoint, so channel reads are not capped at its LIB"
+            );
         }
 
         Ok(bedrock)
@@ -662,13 +675,16 @@ impl Message<ReadChannel> for BedrockActor {
     ) -> Self::Reply {
         const BATCH_SIZE: Slot = Slot::new(100);
 
-        let lib_slot = self
+        let node_lib_slot = self
             .node
             .consensus_info()
             .await
             .map_err(|err| Error::NodeRequestFailed(err.into()))?
             .cryptarchia_info
             .lib_slot;
+        let lib_slot = self
+            .ready_lib_slot
+            .map_or(node_lib_slot, |ready| ready.min(node_lib_slot));
         let start_slot = after.map_or_else(Slot::genesis, |s| s.strict_add(1.into()));
 
         let node = self.node.clone();

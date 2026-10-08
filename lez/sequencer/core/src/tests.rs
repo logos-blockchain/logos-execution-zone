@@ -5586,6 +5586,53 @@ async fn a_finalized_block_off_the_lineage_is_not_reported() {
     assert!(!slash_recorded(&sequencer).await);
 }
 
+/// Adopts `entry`, as the sdk reports it entering the view.
+async fn adopt(sequencer: &mut SequencerCore<StorageActor, MockBedrockActor>, entry: ChannelEntry) {
+    sequencer
+        .on_channel_update(Arc::new(ChannelUpdate {
+            view: ViewChange::Extension(vec![entry]),
+            ..empty_channel_update()
+        }))
+        .await;
+}
+
+#[tokio::test]
+async fn a_stale_adopted_entry_finalized_below_the_tier_is_not_reported() {
+    let (mut sequencer, _mempool_handle) = start_sequencer(setup_sequencer_config()).await;
+    let (_, genesis_entry) = finalize_genesis(&mut sequencer).await;
+    sequencer.run_production_turn().await.unwrap();
+    let block2 = block_at(&sequencer, 2).await.unwrap();
+    let block2_entry = finalized_as_held(&sequencer.chain(), &block2).await;
+    finalize_signed(&mut sequencer, block2_entry.clone()).await;
+
+    // Queued before a reconstruction finalized past it: adopted, then finalized.
+    adopt(&mut sequencer, genesis_entry.clone()).await;
+    finalize_signed(&mut sequencer, genesis_entry).await;
+
+    assert!(!slash_recorded(&sequencer).await);
+    let chain = sequencer.chain();
+    let chain = chain.lock().await;
+    assert_eq!(chain.final_msg(), block2_entry.msg);
+    assert_eq!(chain.pin(), block2_entry.msg);
+    assert!(chain.view().is_empty());
+}
+
+#[tokio::test]
+async fn a_held_finalized_block_with_a_wrong_id_is_reported() {
+    let (mut sequencer, _mempool_handle) = start_sequencer(setup_sequencer_config()).await;
+    let (genesis, genesis_entry) = finalize_genesis(&mut sequencer).await;
+
+    let skips_ahead = common::test_utils::produce_dummy_block(
+        genesis.header.block_id + 2,
+        Some(genesis.header.hash),
+        vec![],
+    );
+    let entry = entry_of(&skips_ahead, genesis_entry.msg);
+    adopt(&mut sequencer, entry.clone()).await;
+    finalize_signed(&mut sequencer, entry).await;
+    assert!(slash_recorded(&sequencer).await);
+}
+
 #[tokio::test]
 async fn the_first_finalized_block_is_not_reported() {
     let (mut sequencer, _mempool_handle) = start_sequencer(setup_sequencer_config()).await;
