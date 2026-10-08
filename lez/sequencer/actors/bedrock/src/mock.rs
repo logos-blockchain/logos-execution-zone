@@ -18,10 +18,11 @@ use crate::{
     BedrockActorTrait, Result,
     error::Error,
     protocol::{
-        AccreditedKeys, ChangeChannelConfig, ChannelId, ChannelReadStream, CheckChannelExists,
-        CheckIsOurTurn, CreateChannel, GetAccreditedKeys, GetChannelNotes, GetChannelTipMessageId,
-        GetChannelTipSlot, InitializeChannelPublisher, MsgId, NoteId, PrepareConfig, PreparePin,
-        PreparedConfig, PreparedPin, PublishBlock, PublishOutcome, PublishPin, ReadChannel, Slot,
+        AccreditedKeys, ChangeChannelConfig, ChannelId, ChannelReadStream, ChannelSeq,
+        CheckChannelExists, CheckIsOurTurn, CreateChannel, GetAccreditedKeys, GetChannelNotes,
+        GetChannelTipMessageId, GetChannelTipSlot, InitializeChannelPublisher, MsgId, NoteId,
+        PrepareConfig, PreparePin, PreparedConfig, PreparedPin, PublishBlock, PublishOutcome,
+        PublishPin, ReadChannel, Slot,
     },
 };
 
@@ -64,8 +65,8 @@ mockall::mock! {
         pub fn handle_initialize_channel_publisher(
             &mut self,
             msg: InitializeChannelPublisher,
-            ctx: &mut Context<Self, Result<bool>>
-        ) -> Result<bool>;
+            ctx: &mut Context<Self, Result<Option<ChannelSeq>>>
+        ) -> Result<Option<ChannelSeq>>;
 
         pub fn handle_create_channel(
             &mut self,
@@ -187,7 +188,7 @@ impl Message<Replace> for MockBedrockActor {
 }
 
 impl Message<InitializeChannelPublisher> for MockBedrockActor {
-    type Reply = Result<bool>;
+    type Reply = Result<Option<ChannelSeq>>;
 
     async fn handle(
         &mut self,
