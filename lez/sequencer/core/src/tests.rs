@@ -138,7 +138,7 @@ async fn start_sequencer_on(
             .await
             .expect("the store is seeded with genesis");
         sequencer
-            .on_channel_update(ChannelUpdate {
+            .on_channel_update(&ChannelUpdate {
                 view: ViewChange::Extension(vec![entry_of(&genesis, MsgId::root())]),
                 ..empty_channel_update()
             })
@@ -1089,7 +1089,7 @@ async fn a_redelivered_record_is_dropped_once_its_delivery_is_irreversible() {
     assert_eq!(dispatches_in(&delivery_block), vec![key]);
 
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             checkpoint: checkpoint_at(mock_msg_of(&delivery_block)),
             finalized: vec![finalized_as_held(&sequencer.chain(), &delivery_block).await],
             ..empty_channel_update()
@@ -1715,7 +1715,7 @@ async fn a_stake_only_moves_the_committee_once_it_has_finalized() {
         .unwrap()
         .unwrap();
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![finalized_as_held(&sequencer.chain(), &genesis).await],
             ..empty_channel_update()
         })
@@ -2514,7 +2514,7 @@ async fn follow_update_persists_the_checkpoint_with_its_effects() {
     let peer_block = common::test_utils::produce_dummy_block(2, Some(genesis_meta.hash), vec![]);
     let pin = sequencer.chain().lock().await.pin();
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Extension(vec![entry_of(&peer_block, pin)]),
             ..empty_channel_update()
         })
@@ -2614,7 +2614,7 @@ async fn production_chains_on_a_garbage_entry_at_the_tip() {
         ..CannedChannel::empty()
     });
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Extension(vec![ChannelEntry {
                 msg: junk,
                 parent: pin,
@@ -2653,7 +2653,7 @@ async fn a_conflict_dropping_our_newest_block_rewinds_the_head_and_the_pin() {
         ..CannedChannel::empty()
     });
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Conflict {
                 canonical: kept,
                 orphaned: Vec::new(),
@@ -2684,7 +2684,7 @@ async fn a_conflict_dropping_a_garbage_entry_rewinds_only_the_pin() {
 
     let junk = MsgId::from([42_u8; 32]);
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Extension(vec![ChannelEntry {
                 msg: junk,
                 parent: pin,
@@ -2694,7 +2694,7 @@ async fn a_conflict_dropping_a_garbage_entry_rewinds_only_the_pin() {
         })
         .await;
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Conflict {
                 canonical: kept,
                 orphaned: Vec::new(),
@@ -2723,7 +2723,7 @@ async fn the_pin_stays_on_a_finalized_entry() {
     let block2_msg = finalized.msg;
 
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![finalized],
             ..empty_channel_update()
         })
@@ -2765,7 +2765,7 @@ async fn follow_update_records_deposits_for_the_production_drain() {
     };
 
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             deposits: vec![deposit],
             ..empty_channel_update()
         })
@@ -2839,7 +2839,7 @@ async fn an_observed_deposit_mints_in_a_block_pinned_on_its_notes() {
 
     let op_id = [0x5d; 32];
     sequencer
-        .on_observed_deposits(vec![deposit_info(op_id, 5, &[note])])
+        .on_observed_deposits(&[deposit_info(op_id, 5, &[note])])
         .await;
     let block_id = sequencer.run_production_turn().await.unwrap();
 
@@ -2874,7 +2874,9 @@ async fn sequencer_minting_an_observed_deposit() -> (
     let (mut sequencer, mempool_handle) =
         start_sequencer_on(setup_sequencer_config(), channel.share()).await;
     let deposit = deposit_info([0x5d; 32], 5, &[note]);
-    sequencer.on_observed_deposits(vec![deposit.clone()]).await;
+    sequencer
+        .on_observed_deposits(std::slice::from_ref(&deposit))
+        .await;
     let block_id = sequencer.run_production_turn().await.unwrap();
     let block = block_at(&sequencer, block_id)
         .await
@@ -2972,7 +2974,7 @@ async fn a_peer_pin_of_a_deposit_final_on_l1_is_still_signed() {
     let (mut sequencer, _mempool_handle, deposit, block) =
         sequencer_minting_an_observed_deposit().await;
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             checkpoint: checkpoint_at(mock_msg_of(&block)),
             deposits: vec![deposit.clone()],
             ..empty_channel_update()
@@ -2987,7 +2989,7 @@ async fn a_peer_pin_of_a_deposit_minted_in_a_final_block_is_not_signed() {
     let (mut sequencer, _mempool_handle, deposit, block) =
         sequencer_minting_an_observed_deposit().await;
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             checkpoint: checkpoint_at(mock_msg_of(&block)),
             finalized: vec![finalized_as_held(&sequencer.chain(), &block).await],
             ..empty_channel_update()
@@ -3034,7 +3036,9 @@ async fn a_pin_short_of_signatures_leaves_its_deposit_to_finality() {
 
     let op_id = [0x6a; 32];
     let deposit = deposit_info(op_id, 5, &[note]);
-    sequencer.on_observed_deposits(vec![deposit.clone()]).await;
+    sequencer
+        .on_observed_deposits(std::slice::from_ref(&deposit))
+        .await;
     let block_id = sequencer.run_production_turn().await.unwrap();
 
     let block = block_at(&sequencer, block_id)
@@ -3056,7 +3060,7 @@ async fn a_pin_short_of_signatures_leaves_its_deposit_to_finality() {
     );
 
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             checkpoint: checkpoint_at(mock_msg_of(&block)),
             deposits: vec![deposit],
             ..empty_channel_update()
@@ -3087,7 +3091,7 @@ async fn deposits_past_the_pin_input_limit_mint_in_the_next_block() {
 
     let (first, second) = ([0x6b; 32], [0x6c; 32]);
     sequencer
-        .on_observed_deposits(vec![
+        .on_observed_deposits(&[
             deposit_info(first, 5, first_notes),
             deposit_info(second, 5, second_notes),
         ])
@@ -3127,7 +3131,7 @@ async fn assert_failed_pin_leaves_its_deposit_to_finality(channel: CannedChannel
 
     let op_id = [0x6d; 32];
     sequencer
-        .on_observed_deposits(vec![deposit_info(op_id, 5, &[note])])
+        .on_observed_deposits(&[deposit_info(op_id, 5, &[note])])
         .await;
     let block_id = sequencer
         .run_production_turn()
@@ -3172,7 +3176,7 @@ async fn an_observed_deposit_off_the_branch_is_not_minted() {
 
     let op_id = [0x5e; 32];
     sequencer
-        .on_observed_deposits(vec![deposit_info(op_id, 5, &[channel_note(1)])])
+        .on_observed_deposits(&[deposit_info(op_id, 5, &[channel_note(1)])])
         .await;
     let block_id = sequencer.run_production_turn().await.unwrap();
 
@@ -3200,7 +3204,9 @@ async fn a_pinned_deposit_is_not_minted_again_once_final() {
 
     let op_id = [0x5f; 32];
     let deposit = deposit_info(op_id, 5, &[note]);
-    sequencer.on_observed_deposits(vec![deposit.clone()]).await;
+    sequencer
+        .on_observed_deposits(std::slice::from_ref(&deposit))
+        .await;
     let pinned_block_id = sequencer.run_production_turn().await.unwrap();
     let pinned_block = block_at(&sequencer, pinned_block_id)
         .await
@@ -3209,7 +3215,7 @@ async fn a_pinned_deposit_is_not_minted_again_once_final() {
 
     // The deposit finalizes before the block minting it does.
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             checkpoint: checkpoint_at(mock_msg_of(&pinned_block)),
             deposits: vec![deposit],
             ..empty_channel_update()
@@ -3270,7 +3276,7 @@ async fn reorg_to_genesis(
     let canonical = sequencer.chain().lock().await.view()[..1].to_vec();
     let genesis = canonical[0].msg;
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Conflict {
                 canonical,
                 orphaned: Vec::new(),
@@ -3290,7 +3296,7 @@ async fn a_final_deposit_mints_in_the_next_block_and_not_again() {
 
     let op_id = [0x61; 32];
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             deposits: vec![deposit_info(op_id, 5, &[])],
             ..empty_channel_update()
         })
@@ -3331,7 +3337,7 @@ async fn an_observed_deposit_is_not_minted_again_next_turn() {
 
     let op_id = [0x62; 32];
     sequencer
-        .on_observed_deposits(vec![deposit_info(op_id, 5, &[note])])
+        .on_observed_deposits(&[deposit_info(op_id, 5, &[note])])
         .await;
     let first = sequencer.run_production_turn().await.unwrap();
     let second = sequencer.run_production_turn().await.unwrap();
@@ -3364,7 +3370,7 @@ async fn an_observed_deposit_with_a_note_off_the_branch_is_not_minted() {
 
     let op_id = [0x66; 32];
     sequencer
-        .on_observed_deposits(vec![deposit_info(op_id, 5, &[on_branch, channel_note(2)])])
+        .on_observed_deposits(&[deposit_info(op_id, 5, &[on_branch, channel_note(2)])])
         .await;
     let block_id = sequencer.run_production_turn().await.unwrap();
 
@@ -3392,10 +3398,12 @@ async fn an_observed_deposit_without_notes_is_minted_only_once_final() {
 
     let op_id = [0x67; 32];
     let deposit = deposit_info(op_id, 5, &[]);
-    sequencer.on_observed_deposits(vec![deposit.clone()]).await;
+    sequencer
+        .on_observed_deposits(std::slice::from_ref(&deposit))
+        .await;
     let observed = sequencer.run_production_turn().await.unwrap();
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             deposits: vec![deposit],
             ..empty_channel_update()
         })
@@ -3426,7 +3434,7 @@ async fn an_orphaned_final_deposit_mint_is_minted_again_once() {
 
     let op_id = [0x63; 32];
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             deposits: vec![deposit_info(op_id, 5, &[])],
             ..empty_channel_update()
         })
@@ -3469,7 +3477,7 @@ async fn an_orphaned_pinned_deposit_is_minted_again_pinned_on_its_notes() {
 
     let op_id = [0x64; 32];
     sequencer
-        .on_observed_deposits(vec![deposit_info(op_id, 5, &[note])])
+        .on_observed_deposits(&[deposit_info(op_id, 5, &[note])])
         .await;
     sequencer.run_production_turn().await.unwrap();
 
@@ -3510,7 +3518,7 @@ async fn an_orphaned_pinned_deposit_whose_notes_left_the_branch_is_not_minted_ag
 
     let op_id = [0x65; 32];
     sequencer
-        .on_observed_deposits(vec![deposit_info(op_id, 5, &[note])])
+        .on_observed_deposits(&[deposit_info(op_id, 5, &[note])])
         .await;
     sequencer.run_production_turn().await.unwrap();
 
@@ -3556,7 +3564,7 @@ async fn a_minted_deposit_whose_notes_its_pin_spent_stays_observed() {
 
     let op_id = [0x6e; 32];
     sequencer
-        .on_observed_deposits(vec![deposit_info(op_id, 5, &[note])])
+        .on_observed_deposits(&[deposit_info(op_id, 5, &[note])])
         .await;
     sequencer.run_production_turn().await.unwrap();
 
@@ -3613,7 +3621,7 @@ async fn follow_adopted_peer_block_applies_and_persists() {
 
     let pin = sequencer.chain().lock().await.pin();
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Extension(vec![entry_of(&peer_block, pin)]),
             ..empty_channel_update()
         })
@@ -3660,7 +3668,7 @@ async fn an_extension_repeating_our_own_entry_is_deduped() {
     };
 
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Extension(vec![ours]),
             ..empty_channel_update()
         })
@@ -3703,7 +3711,7 @@ async fn a_conflict_dropping_our_block_reverts_it_and_requeues_its_user_txs() {
     let kept = sequencer.chain().lock().await.view()[..1].to_vec();
 
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Conflict {
                 canonical: kept,
                 orphaned: Vec::new(),
@@ -3757,13 +3765,13 @@ async fn a_conflict_after_finalization_requeues_nothing() {
     let finalized = finalized_as_held(&sequencer.chain(), &block2).await;
 
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![finalized],
             ..empty_channel_update()
         })
         .await;
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Conflict {
                 canonical: Vec::new(),
                 orphaned: Vec::new(),
@@ -3805,7 +3813,7 @@ async fn follow_finalized_own_block_moves_final_tier_and_marks_store() {
     let finalized = finalized_as_held(&sequencer.chain(), &block2).await;
 
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![finalized],
             ..empty_channel_update()
         })
@@ -3852,7 +3860,7 @@ async fn follow_finalized_delivery_drops_its_pending_record() {
 
     let finalized = finalized_as_held(&sequencer.chain(), &delivery_block).await;
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![finalized],
             ..empty_channel_update()
         })
@@ -3897,7 +3905,7 @@ async fn a_parked_finalized_block_does_not_drop_a_dispatch_record() {
     let finalized = entry_of(&parked, MsgId::from([44; 32]));
 
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![finalized],
             ..empty_channel_update()
         })
@@ -3931,7 +3939,7 @@ async fn follow_finalized_backfill_block_is_applied_and_marked_finalized() {
     let finalized = finalized_as_held(&sequencer.chain(), &peer_block).await;
 
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![finalized],
             ..empty_channel_update()
         })
@@ -3986,7 +3994,7 @@ async fn restart_restores_the_view_and_recovers_from_a_conflict() {
         common::test_utils::produce_dummy_block(2, Some(genesis.header.hash), vec![]);
     let replacement = entry_of(&block2_prime, genesis_entry.msg);
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Conflict {
                 canonical: vec![genesis_entry, replacement],
                 orphaned: Vec::new(),
@@ -4051,7 +4059,7 @@ async fn a_conflict_keeping_our_block_requeues_nothing() {
     let view = sequencer.chain().lock().await.view().to_vec();
 
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Conflict {
                 canonical: view,
                 orphaned: Vec::new(),
@@ -4093,7 +4101,7 @@ async fn restart_reanchors_on_the_persisted_final_snapshot() {
         let block2 = block_at(&sequencer, 2).await.unwrap();
         let finalized = finalized_as_held(&sequencer.chain(), &block2).await;
         sequencer
-            .on_channel_update(ChannelUpdate {
+            .on_channel_update(&ChannelUpdate {
                 finalized: vec![finalized],
                 ..empty_channel_update()
             })
@@ -4126,7 +4134,7 @@ async fn a_publish_on_a_pin_the_view_moved_past_is_dropped() {
     // A peer block wins height 2 while "our" block is in flight.
     let peer_block = common::test_utils::produce_dummy_block(2, Some(genesis_meta.hash), vec![]);
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Extension(vec![entry_of(&peer_block, pin)]),
             ..empty_channel_update()
         })
@@ -4219,13 +4227,13 @@ async fn follow_update_persists_blocks_meta_and_state_atomically() {
 
     // Both adopted, then block 2 finalized.
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Extension(vec![entry2.clone(), entry3]),
             ..empty_channel_update()
         })
         .await;
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![entry2],
             ..empty_channel_update()
         })
@@ -4271,7 +4279,7 @@ async fn a_foreign_block_below_the_final_tip_settles_no_deposit_record() {
     let block2 = block_at(&sequencer, 2).await.unwrap();
     let finalized = finalized_as_held(&sequencer.chain(), &block2).await;
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![finalized],
             ..empty_channel_update()
         })
@@ -4291,7 +4299,7 @@ async fn a_foreign_block_below_the_final_tip_settles_no_deposit_record() {
         notes: DepositRecreatedNotes::default(),
     };
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             deposits: vec![deposit],
             ..empty_channel_update()
         })
@@ -4313,7 +4321,7 @@ async fn a_foreign_block_below_the_final_tip_settles_no_deposit_record() {
     );
     let pin = sequencer.chain().lock().await.pin();
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![entry_of(&forged, pin)],
             ..empty_channel_update()
         })
@@ -4358,7 +4366,7 @@ async fn a_finalized_competitor_requeues_the_user_txs_of_our_block() {
         common::test_utils::produce_dummy_block(2, Some(genesis_block.header.hash), vec![]);
 
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![genesis.clone(), entry_of(&peer_block, genesis.msg)],
             view: ViewChange::Conflict {
                 canonical: Vec::new(),
@@ -4391,7 +4399,7 @@ async fn a_block_back_on_the_head_is_stored_again() {
 
     for canonical in [view[..1].to_vec(), view.clone()] {
         sequencer
-            .on_channel_update(ChannelUpdate {
+            .on_channel_update(&ChannelUpdate {
                 view: ViewChange::Conflict {
                     canonical,
                     orphaned: Vec::new(),
@@ -4443,7 +4451,7 @@ async fn a_restart_without_a_view_follows_the_channel_from_the_final_tier() {
 
     let finalized = view;
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized,
             ..empty_channel_update()
         })
@@ -6753,7 +6761,7 @@ async fn finalize_signed(
 ) {
     let signer = Ed25519Key::from_bytes(&[5; 32]).public_key();
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized_signers: vec![(entry.msg, signer)],
             finalized: vec![entry],
             ..empty_channel_update()
@@ -6822,7 +6830,7 @@ async fn a_finalized_block_off_the_lineage_is_not_reported() {
 /// Adopts `entry`, as the sdk reports it entering the view.
 async fn adopt(sequencer: &mut SequencerCore<StorageActor, MockBedrockActor>, entry: ChannelEntry) {
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Extension(vec![entry]),
             ..empty_channel_update()
         })
@@ -7071,7 +7079,7 @@ async fn a_turn_on_a_view_with_a_hole_is_skipped() {
     chain_state::apply_block_to_state(&block2, &mut state).unwrap();
     let block3 = settled_peer_block(&state, 3, block2.header.hash, vec![], producer);
     sequencer
-        .on_channel_update(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Extension(vec![entry_of(&block3, mock_msg_of(&block2))]),
             ..empty_channel_update()
         })
