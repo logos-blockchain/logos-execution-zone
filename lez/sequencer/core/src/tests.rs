@@ -2311,8 +2311,8 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
 fn state_with_clock_and_program(program: Program, clock_timestamp: u64) -> V03State {
     let program_id = AccountId::from_builtin_program(program.id());
     let mut state = V03State::new().with_named_programs([
-        (programs::clock_account_id(), programs::clock()),
-        (program_id, program),
+        (programs::clock_account_id(), programs::clock(), true),
+        (program_id, program, true),
     ]);
     for clock_id in system_accounts::clock_account_ids() {
         state.force_insert_account(clock_id, system_accounts::clock_account());
@@ -3831,6 +3831,7 @@ fn diag_sequencer_stake_writes_the_ownership_account_record() {
         .with_named_programs([(
             programs::sequencer_stake_account_id(),
             programs::sequencer_stake(),
+            true,
         )])
         .with_public_accounts([
             (funding_id, Account::funded(amount)),
@@ -3977,6 +3978,7 @@ fn stake_test_state(funding_id: AccountId, funding_balance: u128) -> V03State {
         .with_named_programs([(
             programs::sequencer_stake_account_id(),
             programs::sequencer_stake(),
+            true,
         )])
         .with_public_accounts([
             (funding_id, Account::funded(funding_balance)),
@@ -4362,6 +4364,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
         .with_named_programs([(
             programs::sequencer_stake_account_id(),
             programs::sequencer_stake(),
+            true,
         )])
         .with_public_accounts([
             (funding_id, Account::funded(amount)),

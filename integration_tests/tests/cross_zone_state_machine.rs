@@ -77,20 +77,32 @@ fn base_state() -> V03State {
         (
             programs::cross_zone_inbox_account_id(),
             programs::cross_zone_inbox(),
+            true,
         ),
         (
             programs::cross_zone_outbox_account_id(),
             programs::cross_zone_outbox(),
+            true,
         ),
-        (programs::ping_sender_account_id(), programs::ping_sender()),
+        (
+            programs::ping_sender_account_id(),
+            programs::ping_sender(),
+            true,
+        ),
         (
             programs::ping_receiver_account_id(),
             programs::ping_receiver(),
+            true,
         ),
-        (programs::bridge_lock_account_id(), programs::bridge_lock()),
+        (
+            programs::bridge_lock_account_id(),
+            programs::bridge_lock(),
+            true,
+        ),
         (
             programs::wrapped_token_account_id(),
             programs::wrapped_token(),
+            true,
         ),
     ])
 }
@@ -2181,7 +2193,7 @@ fn the_governance_path_holds() {
     let authority = AccountId::for_public_pda(&proxy_id, &seed);
 
     let mut state =
-        base_state().with_named_programs([(proxy_id, test_programs::authority_proxy())]);
+        base_state().with_named_programs([(proxy_id, test_programs::authority_proxy(), true)]);
     seed_wrapped_config_with_governance(&mut state, Some(proxy_id), Some(authority), &[]);
 
     let update = |sources: Vec<([u8; 32], AccountId)>| {
@@ -2282,7 +2294,7 @@ fn the_governance_path_guards_hold() {
 
     // A perfect call shape from a program that is not the configured governance.
     let mut other =
-        base_state().with_named_programs([(proxy_id, test_programs::authority_proxy())]);
+        base_state().with_named_programs([(proxy_id, test_programs::authority_proxy(), true)]);
     seed_wrapped_config_with_governance(
         &mut other,
         Some(programs::ping_sender_account_id()),
@@ -2298,7 +2310,7 @@ fn the_governance_path_guards_hold() {
 
     // No governance configured: every chained caller is refused.
     let mut closed =
-        base_state().with_named_programs([(proxy_id, test_programs::authority_proxy())]);
+        base_state().with_named_programs([(proxy_id, test_programs::authority_proxy(), true)]);
     seed_wrapped_config(&mut closed, Some(authority), &[]);
     seed_receiver_config(&mut closed, Some(authority), vec![]);
     rejects_at(
@@ -2347,7 +2359,7 @@ fn the_governance_path_guards_hold() {
 
     // The configured governance itself, but not delegating the authority.
     let mut undelegated =
-        base_state().with_named_programs([(proxy_id, test_programs::authority_proxy())]);
+        base_state().with_named_programs([(proxy_id, test_programs::authority_proxy(), true)]);
     seed_wrapped_config_with_governance(&mut undelegated, Some(proxy_id), Some(authority), &[]);
     rejects_at(
         &undelegated,
@@ -2370,7 +2382,7 @@ fn the_receiver_governance_path_holds() {
     let authority = AccountId::for_public_pda(&proxy_id, &seed);
 
     let mut state =
-        base_state().with_named_programs([(proxy_id, test_programs::authority_proxy())]);
+        base_state().with_named_programs([(proxy_id, test_programs::authority_proxy(), true)]);
     seed_receiver_config_with_governance(&mut state, Some(proxy_id), Some(authority), vec![]);
 
     let tx = via_proxy(
@@ -2414,7 +2426,7 @@ fn a_shared_authority_serves_both_targets() {
     let authority = AccountId::for_public_pda(&proxy_id, &seed);
 
     let mut state =
-        base_state().with_named_programs([(proxy_id, test_programs::authority_proxy())]);
+        base_state().with_named_programs([(proxy_id, test_programs::authority_proxy(), true)]);
     seed_wrapped_config_with_governance(&mut state, Some(proxy_id), Some(authority), &[]);
     seed_receiver_config_with_governance(&mut state, Some(proxy_id), Some(authority), vec![]);
 

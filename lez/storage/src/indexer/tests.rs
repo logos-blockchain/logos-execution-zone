@@ -105,8 +105,8 @@ fn initial_state() -> lee::V03State {
     lee::V03State::new()
         .with_public_accounts(public_accounts)
         .with_named_programs([
-            (programs::clock_account_id(), programs::clock()),
-            (programs::fee_account_id(), programs::fee()),
+            (programs::clock_account_id(), programs::clock(), true),
+            (programs::fee_account_id(), programs::fee(), true),
         ])
 }
 

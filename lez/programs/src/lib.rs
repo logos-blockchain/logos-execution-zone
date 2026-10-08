@@ -157,7 +157,7 @@ mod inner {
                     bridge_core::compute_bridge_account_id(bridge_account_id()),
                     Account::funded(u128::from(amount)),
                 )])
-                .with_named_programs([(bridge_account_id(), bridge())]);
+                .with_named_programs([(bridge_account_id(), bridge(), true)]);
 
             let tx = deposit_tx(op_id, recipient_id, amount);
             let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
