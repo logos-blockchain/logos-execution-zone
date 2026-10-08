@@ -16,7 +16,7 @@ use sequencer_stake_core::{
     SequencerKey, SequencerStakeConfig, SlashApproval, slash_approval_threshold,
 };
 use sequencer_storage_actor::{
-    StorageActor, StorageActorTrait,
+    StorageActorTrait,
     protocol::{GetSlashRecordBytes, PutSlashRecordBytes},
 };
 use tokio::sync::mpsc;
@@ -46,7 +46,7 @@ enum PersistedRecord {
 /// Peers' signatures, by offence and then by signer.
 type Approvals = BTreeMap<Offence, BTreeMap<SequencerKey, [u8; 64]>>;
 
-pub struct SlasherActor<S: StorageActorTrait = StorageActor> {
+pub struct SlasherActor<S: StorageActorTrait> {
     storage_ref: ActorRef<S>,
     /// Signs this node's approval of a slash.
     approver: Ed25519Key,
@@ -68,7 +68,8 @@ pub struct SlasherActor<S: StorageActorTrait = StorageActor> {
 
 impl<S: StorageActorTrait> SlasherActor<S> {
     /// Restores the persisted record, empty if none was written. `config` is the
-    /// committee at startup, so no approval is ever screened against nothing.
+    /// committee approvals are screened against until [`SetCommittee`] or
+    /// [`Propose`] brings a newer one.
     pub async fn load(
         storage_ref: ActorRef<S>,
         approver: Ed25519Key,
@@ -519,7 +520,7 @@ mod tests {
         ReportedOffence {
             signer: key.public_key().to_bytes(),
             inscription,
-            fault: crate::Fault::NotABlock,
+            fault: crate::protocol::Fault::NotABlock,
         }
     }
 

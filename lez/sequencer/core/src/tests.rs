@@ -2,7 +2,6 @@
 
 use std::{collections::HashSet, pin::pin, sync::Arc, time::Duration};
 
-use canned_channel::CannedChannel;
 use chain_state::{ChainState, ChannelEntry};
 use common::{
     HashType,
@@ -10,7 +9,8 @@ use common::{
     test_utils::sequencer_sign_key_for_testing,
     transaction::{LeeTransaction, clock_invocation, fee_invocation},
 };
-use kameo::actor::Spawn as _;
+use kameo::{actor::Spawn as _, supervision::RestartPolicy};
+use kameo_actors::{DeliveryStrategy, pubsub::PubSub};
 use lee::{
     Account, AccountId, PrivateKey, ProgramShardSelector, PublicKey, PublicTransaction, V03State,
     program::Program,
@@ -18,7 +18,6 @@ use lee::{
 use lee_core::{GENESIS_BLOCK_ID, account::Nonce};
 use logos_blockchain_core::{
     events::DepositRecreatedNotes,
-    header::HeaderId,
     mantle::{
         TxHash,
         ledger::Inputs,
@@ -29,38 +28,39 @@ use logos_blockchain_key_management_system_service::keys::{
     Ed25519Key, Ed25519PublicKey, ZkPublicKey,
 };
 use logos_blockchain_zone_sdk::{Slot, sequencer::DepositInfo};
-use mempool::MemPoolHandle;
+use mempool::{MemPool, MemPoolHandle};
 use ping_core::{ReceiverInstruction, ping_record_pda, receiver_config_account_id};
 use sequencer_bedrock_actor::{
-    mock::{MockBedrockActor, Replace},
+    mock::{CannedChannel, MockBedrockActor, SharedChannel, checkpoint_at, mock_msg_of},
     protocol::{
         ChannelSeq, ChannelUpdate, Checkpoint, LiveChannelConfig, PublishOutcome, ViewChange,
     },
 };
+use sequencer_channel_config_actor::ChannelConfigActor;
+use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::{
     StorageActor,
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, CrossZoneMessageKey, DispatchOrigin, GetBlock,
-        GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
-        GetPendingDepositEvents, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+        GetChannelViewBytes, GetFinalSnapshot, GetFirstBlockId, GetLatestBlockMeta, GetLeeState,
+        GetPendingCrossZoneDispatches, GetPendingDepositEvents, PendingCrossZoneDispatchRecord,
+        PendingDepositEventRecord,
     },
 };
+use sharding_pool_actor::{RestartConfig, ShardingPoolActor};
 use tempfile::tempdir;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 use tokio::sync::Mutex;
 
 use crate::{
     MAX_DISPATCHES_PER_BLOCK, RETIRE_DISPATCH_AFTER_FAILURES, SequencerCore, TransactionOrigin,
-    build_bridge_deposit_tx_from_event, build_finalize_unstake_tx, build_genesis_state,
-    classify_settled_deliveries,
+    build_bridge_deposit_tx_from_event, build_finalize_unstake_tx, classify_settled_deliveries,
     config::{
         self, BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, SequencerConfig,
     },
     config_target, deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
     extract_cross_zone_dispatch_key, is_sequencer_only_program, resubmittable_txs, zone_checkpoint,
 };
-
-mod canned_channel;
 
 /// The peer zone a cross-zone test receives from. Distinct from the test
 /// channel id (`[0; 32]`), which the inbox guest rejects as a source.
@@ -76,35 +76,14 @@ struct DepositMetadataForEncoding {
     recipient_id: lee::AccountId,
 }
 
-/// The `MsgId` the canned channel gives a published block, derived from its
-/// hash so tests can recompute it.
-fn mock_msg_of(block: &Block) -> MsgId {
-    let mut id = block.header.hash.0;
-    id[0] ^= 0xff;
-    MsgId::from(id)
-}
-
-fn checkpoint_at(tip: MsgId) -> Checkpoint {
-    Checkpoint {
-        last_msg_id: tip,
-        pending_txs: Vec::new(),
-        lib: HeaderId::from([0; 32]),
-        lib_slot: Slot::from(0),
-        channel_notes: Vec::new(),
-        finalized_config: MsgId::root(),
-    }
-}
-
 fn mock_checkpoint() -> Checkpoint {
     checkpoint_at(MsgId::from([0; 32]))
 }
 
-/// The bootstrap sequencer's key for `config`, exactly as `start_from_config`
-/// would derive it: read from `config.home`'s key file if present, else
-/// generated and persisted there. Callers building genesis state by hand (or
-/// reopening a store `start_from_config` already created) must use this
-/// rather than a fixed constant, so it always matches what's actually on
-/// disk.
+/// The bootstrap sequencer's key for `config`: read from `config.home`'s key
+/// file if present, else generated and persisted there. Callers building
+/// genesis state by hand must use this rather than a fixed constant, so it
+/// always matches what's actually on disk.
 fn test_bootstrap_sequencer_key(config: &SequencerConfig) -> sequencer_stake_core::SequencerKey {
     let bytes = crate::load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
         .expect("Failed to load or create bedrock signing key")
@@ -126,14 +105,14 @@ async fn start_sequencer(
     SequencerCore<StorageActor, MockBedrockActor>,
     MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
-    start_sequencer_on(config, CannedChannel::empty()).await
+    start_sequencer_on(config, CannedChannel::empty().share()).await
 }
 
 /// [`start_sequencer`] against a Bedrock serving `channel`, which reports the
 /// stored genesis as its first entry.
 async fn start_sequencer_on(
     config: SequencerConfig,
-    channel: CannedChannel,
+    channel: SharedChannel,
 ) -> (
     SequencerCore<StorageActor, MockBedrockActor>,
     MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
@@ -144,10 +123,10 @@ async fn start_sequencer_on(
             .await
             .expect("the store is seeded with genesis");
         sequencer
-            .on_channel_update(Arc::new(ChannelUpdate {
+            .on_channel_update(&ChannelUpdate {
                 view: ViewChange::Extension(vec![entry_of(&genesis, MsgId::root())]),
                 ..empty_channel_update()
-            }))
+            })
             .await;
     }
     (sequencer, mempool_handle)
@@ -160,22 +139,102 @@ async fn start_sequencer_bare(
     SequencerCore<StorageActor, MockBedrockActor>,
     MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
-    start_sequencer_bare_on(config, CannedChannel::empty()).await
+    start_sequencer_bare_on(config, CannedChannel::empty().share()).await
 }
 
+/// A sequencer over the store at `config`'s home, seeded with the genesis this
+/// node stakes itself in when it holds nothing yet. The chain is restored from
+/// the store the way the executor restores it: the final tier, with the stored
+/// channel view folded over it.
 async fn start_sequencer_bare_on(
     config: SequencerConfig,
-    channel: CannedChannel,
+    channel: SharedChannel,
 ) -> (
     SequencerCore<StorageActor, MockBedrockActor>,
     MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
     let storage = StorageActor::new(&config.db_path()).expect("Failed to open database");
     let storage_ref = StorageActor::spawn(storage);
-    let bedrock_ref = MockBedrockActor::spawn(channel.into_mock());
-    SequencerCore::start_from_config(config, storage_ref, bedrock_ref)
+
+    if storage_ref.ask(GetFirstBlockId).await.unwrap().is_none() {
+        let genesis_config = config
+            .genesis_config(Some(test_bootstrap_sequencer_key(&config)))
+            .unwrap();
+        let (genesis, genesis_state, genesis_events) = sequencer_genesis::genesis_block_and_state(
+            &config.block_signing_key().unwrap(),
+            &genesis_config,
+        );
+        let genesis_id = genesis.header.block_id;
+        storage_ref
+            .ask(AtomicUpdate::from_block(
+                genesis,
+                Arc::new(genesis_state),
+                vec![(genesis_id, genesis_events)],
+            ))
+            .await
+            .unwrap();
+    }
+
+    let (final_state, final_tip) = storage_ref
+        .ask(GetFinalSnapshot)
         .await
-        .expect("Failed to start the sequencer")
+        .unwrap()
+        .map_or_else(
+            || {
+                (
+                    sequencer_genesis::build_initial_state(config.cross_zone.is_some()),
+                    None,
+                )
+            },
+            |(state, meta)| (state, Some(chain_state::Tip::from(meta))),
+        );
+    let mut chain = ChainState::from_final(final_state, final_tip);
+    // An undecodable view leaves the chain on the final tier, as it does the executor's.
+    let _restored = storage_ref
+        .ask(GetChannelViewBytes)
+        .await
+        .unwrap()
+        .is_some_and(|view| chain.restore_view(&view).is_ok());
+
+    let bedrock_pool_ref = ShardingPoolActor::spawn(ShardingPoolActor::new(
+        RestartConfig {
+            policy: RestartPolicy::Never,
+            limit: 0,
+            within: Duration::ZERO,
+        },
+        move |_channel_id| channel.mock(),
+    ));
+    let bedrock_signing_key =
+        crate::load_or_create_signing_key(&config.home.join("bedrock_signing_key")).unwrap();
+    let mempool = MemPool::new(config.mempool_max_size);
+    let mempool_handle = mempool.handle().clone();
+    let slasher_ref = SlasherActor::spawn(
+        SlasherActor::load(
+            storage_ref.clone(),
+            bedrock_signing_key.clone(),
+            sequencer_stake_core::SequencerStakeConfig::default(),
+            *config.bedrock_config.channel_id.as_ref(),
+        )
+        .await,
+    );
+    let config_manager =
+        ChannelConfigActor::spawn(ChannelConfigActor::new(bedrock_signing_key.clone()));
+
+    let sequencer = SequencerCore::new(
+        config,
+        mempool,
+        chain,
+        None,
+        bedrock_signing_key,
+        storage_ref,
+        bedrock_pool_ref,
+        PubSub::spawn(PubSub::new(DeliveryStrategy::Guaranteed)),
+        slasher_ref,
+        config_manager,
+    )
+    .await
+    .expect("Failed to start the sequencer");
+    (sequencer, mempool_handle)
 }
 
 /// The stored block at `block_id`.
@@ -227,24 +286,7 @@ fn publish_outcome(block: &Block, parent: MsgId) -> PublishOutcome {
     }
 }
 
-/// Makes the sequencer's Bedrock serve `channel` from now on, as a channel
-/// moving under a running node does.
-async fn serve_channel(
-    sequencer: &SequencerCore<StorageActor, MockBedrockActor>,
-    channel: CannedChannel,
-) {
-    let replaced = sequencer
-        .bedrock_ref
-        .ask(Replace {
-            mock: channel.into_mock(),
-        })
-        .await;
-    assert!(replaced.is_ok(), "the Bedrock mock must still be running");
-}
-
-/// The next channel sequence, shared by the follow updates a test feeds in and
-/// the publishes [`canned_channel`] serves, so both rise in the order the test
-/// makes them happen — as they do behind the one real actor.
+/// The next channel sequence of the follow updates a test feeds in.
 fn next_channel_seq() -> ChannelSeq {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     ChannelSeq::mocked(
@@ -698,91 +740,6 @@ async fn pending_dispatches(
         .ask(GetPendingCrossZoneDispatches)
         .await
         .expect("pending dispatches readable")
-}
-
-#[tokio::test]
-async fn start_from_config() {
-    let config = setup_sequencer_config();
-    let (sequencer, _mempool_handle) = start_sequencer(config.clone()).await;
-
-    assert_eq!(sequencer.chain_height().await, 1);
-    assert_eq!(sequencer.sequencer_config.max_num_tx_in_block, 10);
-
-    let acc1_account_id = initial_public_user_accounts()[0].account_id;
-    let acc2_account_id = initial_public_user_accounts()[1].account_id;
-
-    let balance_acc_1 = sequencer
-        .with_state(|s| {
-            s.get_account_by_id(acc1_account_id)
-                .data
-                .native_balance()
-                .unwrap()
-        })
-        .await;
-    let balance_acc_2 = sequencer
-        .with_state(|s| {
-            s.get_account_by_id(acc2_account_id)
-                .data
-                .native_balance()
-                .unwrap()
-        })
-        .await;
-
-    assert_eq!(initial_public_user_accounts()[0].balance, balance_acc_1);
-    assert_eq!(initial_public_user_accounts()[1].balance, balance_acc_2);
-}
-
-#[tokio::test]
-async fn start_from_config_opens_existing_db_if_it_exists() {
-    let config = setup_sequencer_config();
-    let temp_dir = tempdir().unwrap();
-    let mut config = config;
-    config.home = temp_dir.path().to_path_buf();
-
-    let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let signing_key = config.block_signing_key().unwrap();
-    let (genesis_state, genesis_txs, _) =
-        build_genesis_state(&signing_key, &config, Some(bootstrap_sequencer_key));
-    let genesis_hashable_data = HashableBlockData {
-        block_id: 1,
-        transactions: genesis_txs,
-        prev_block_hash: HashType([0; 32]),
-        timestamp: 0,
-    };
-    let genesis_block = genesis_hashable_data.into_pending_block(&signing_key);
-
-    let storage = StorageActor::new(&config.db_path()).unwrap();
-    let storage_ref = StorageActor::spawn(storage);
-    storage_ref
-        .ask(AtomicUpdate::from_block(
-            genesis_block,
-            Arc::new(genesis_state),
-            Vec::new(),
-        ))
-        .await
-        .unwrap();
-    storage_ref.stop_gracefully().await.unwrap();
-    storage_ref.wait_for_shutdown().await;
-
-    let (sequencer, _mempool_handle) = start_sequencer(config).await;
-    assert_eq!(sequencer.chain_height().await, 1);
-    assert!(sequencer.storage_ref.ask(GetLastBlockId).await.is_ok());
-}
-
-#[should_panic(expected = "Failed to open database")]
-#[tokio::test]
-async fn start_from_config_panics_when_db_open_returns_non_not_found_error() {
-    let mut config = setup_sequencer_config();
-    let temp_dir = tempdir().unwrap();
-    config.home = temp_dir.path().to_path_buf();
-
-    let db_path = config.db_path();
-
-    std::fs::create_dir_all(&config.home).unwrap();
-    // Force RocksDB open to fail with an IO error by placing a file at DB path.
-    std::fs::write(&db_path, b"not-a-directory").unwrap();
-
-    let _ = start_sequencer(config).await;
 }
 
 // TODO: Reimplement these tests
@@ -1286,11 +1243,11 @@ async fn a_redelivered_record_is_dropped_once_its_delivery_is_irreversible() {
     assert_eq!(dispatches_in(&delivery_block), vec![key]);
 
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             checkpoint: checkpoint_at(mock_msg_of(&delivery_block)),
             finalized: vec![finalized_as_held(&sequencer.chain(), &delivery_block).await],
             ..empty_channel_update()
-        }))
+        })
         .await;
     assert!(pending_dispatches(&sequencer).await.is_empty());
 
@@ -1844,10 +1801,10 @@ async fn a_stake_only_moves_the_committee_once_it_has_finalized() {
         .unwrap()
         .unwrap();
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![finalized_as_held(&sequencer.chain(), &genesis).await],
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     let final_state = chain.lock().await.final_state().clone();
@@ -2643,10 +2600,10 @@ async fn follow_update_persists_the_checkpoint_with_its_effects() {
     let peer_block = common::test_utils::produce_dummy_block(2, Some(genesis_meta.hash), vec![]);
     let pin = sequencer.chain().lock().await.pin();
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Extension(vec![entry_of(&peer_block, pin)]),
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     // The checkpoint is the sdk resume cursor; landing it without the block
@@ -2666,19 +2623,16 @@ async fn follow_update_persists_the_checkpoint_with_its_effects() {
 #[tokio::test]
 async fn a_failed_publish_leaves_the_head_and_the_pin_alone() {
     let config = setup_sequencer_config();
-    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
+    let channel = CannedChannel::empty().share();
+    let (mut sequencer, _mempool_handle) = start_sequencer_on(config, channel.clone()).await;
 
     let first = sequencer.run_production_turn().await.unwrap();
     let pin = sequencer.chain().lock().await.pin();
 
-    serve_channel(
-        &sequencer,
-        CannedChannel {
-            publish_fails: true,
-            ..CannedChannel::empty()
-        },
-    )
-    .await;
+    channel.serve(CannedChannel {
+        publish_fails: true,
+        ..CannedChannel::empty()
+    });
     let failed = sequencer.run_production_turn().await;
     assert!(failed.is_err(), "the canned publish failure must surface");
     assert_eq!(sequencer.chain_height().await, first);
@@ -2691,19 +2645,16 @@ async fn a_failed_publish_leaves_the_head_and_the_pin_alone() {
 #[tokio::test]
 async fn a_block_is_refused_when_the_channel_tip_moved_under_it() {
     let config = setup_sequencer_config();
-    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
+    let channel = CannedChannel::empty().share();
+    let (mut sequencer, _mempool_handle) = start_sequencer_on(config, channel.clone()).await;
 
     let first = sequencer.run_production_turn().await.unwrap();
 
     // Someone else's inscription took the tip since our head was built.
-    serve_channel(
-        &sequencer,
-        CannedChannel {
-            tip: Some(MsgId::from([42_u8; 32])),
-            ..CannedChannel::empty()
-        },
-    )
-    .await;
+    channel.serve(CannedChannel {
+        tip: Some(MsgId::from([42_u8; 32])),
+        ..CannedChannel::empty()
+    });
 
     let refused = sequencer.run_production_turn().await;
     assert!(
@@ -2723,29 +2674,26 @@ async fn a_block_is_refused_when_the_channel_tip_moved_under_it() {
 #[tokio::test]
 async fn production_chains_on_a_garbage_entry_at_the_tip() {
     let config = setup_sequencer_config();
-    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
+    let channel = CannedChannel::empty().share();
+    let (mut sequencer, _mempool_handle) = start_sequencer_on(config, channel.clone()).await;
 
     let first = sequencer.run_production_turn().await.unwrap();
 
     let junk = MsgId::from([42_u8; 32]);
     let pin = sequencer.chain().lock().await.pin();
-    serve_channel(
-        &sequencer,
-        CannedChannel {
-            tip: Some(junk),
-            ..CannedChannel::empty()
-        },
-    )
-    .await;
+    channel.serve(CannedChannel {
+        tip: Some(junk),
+        ..CannedChannel::empty()
+    });
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Extension(vec![ChannelEntry {
                 msg: junk,
                 parent: pin,
                 block: None,
             }]),
             ..empty_channel_update()
-        }))
+        })
         .await;
     assert_eq!(sequencer.chain().lock().await.pin(), junk);
 
@@ -2764,29 +2712,26 @@ async fn production_chains_on_a_garbage_entry_at_the_tip() {
 #[tokio::test]
 async fn a_conflict_dropping_our_newest_block_rewinds_the_head_and_the_pin() {
     let config = setup_sequencer_config();
-    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
+    let channel = CannedChannel::empty().share();
+    let (mut sequencer, _mempool_handle) = start_sequencer_on(config, channel.clone()).await;
 
     sequencer.run_production_turn().await.unwrap();
     let dropped = sequencer.run_production_turn().await.unwrap();
     let kept = sequencer.chain().lock().await.view()[..2].to_vec();
     let block2_msg = kept[1].msg;
 
-    serve_channel(
-        &sequencer,
-        CannedChannel {
-            tip: Some(block2_msg),
-            ..CannedChannel::empty()
-        },
-    )
-    .await;
+    channel.serve(CannedChannel {
+        tip: Some(block2_msg),
+        ..CannedChannel::empty()
+    });
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Conflict {
                 canonical: kept,
                 orphaned: Vec::new(),
             },
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     assert_eq!(sequencer.chain().lock().await.pin(), block2_msg);
@@ -2811,23 +2756,23 @@ async fn a_conflict_dropping_a_garbage_entry_rewinds_only_the_pin() {
 
     let junk = MsgId::from([42_u8; 32]);
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Extension(vec![ChannelEntry {
                 msg: junk,
                 parent: pin,
                 block: None,
             }]),
             ..empty_channel_update()
-        }))
+        })
         .await;
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Conflict {
                 canonical: kept,
                 orphaned: Vec::new(),
             },
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     assert_eq!(sequencer.chain().lock().await.pin(), pin);
@@ -2850,10 +2795,10 @@ async fn the_pin_stays_on_a_finalized_entry() {
     let block2_msg = finalized.msg;
 
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![finalized],
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     let chain = sequencer.chain();
@@ -2870,35 +2815,6 @@ async fn the_pin_stays_on_a_finalized_entry() {
         .run_production_turn()
         .await
         .expect("the next block must pin on the finalized tip");
-}
-
-/// The bootstrap publishes fill the view with the entries the channel holds, so
-/// the first turn extends them.
-#[tokio::test]
-async fn the_bootstrap_publishes_leave_a_view_the_first_turn_extends() {
-    let config = setup_sequencer_config();
-    // No channel yet, so startup creates it and publishes our stored blocks.
-    let (mut sequencer, _mempool_handle) =
-        start_sequencer_on(config, CannedChannel::absent()).await;
-
-    // The published entries, chained from the root.
-    let view = sequencer.chain().lock().await.view().to_vec();
-    let mut parent = MsgId::root();
-    for entry in &view {
-        let block = entry
-            .block
-            .as_ref()
-            .expect("a bootstrap entry carries its block");
-        assert_eq!(entry.msg, mock_msg_of(block));
-        assert_eq!(entry.parent, parent);
-        parent = entry.msg;
-    }
-    assert_eq!(sequencer.chain().lock().await.pin(), parent);
-
-    sequencer
-        .run_production_turn()
-        .await
-        .expect("the first turn must produce, pinned on what the bootstrap published");
 }
 
 #[tokio::test]
@@ -2919,10 +2835,10 @@ async fn follow_update_records_deposits_for_the_production_drain() {
     };
 
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             deposits: vec![deposit],
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     let pending = sequencer
@@ -2964,10 +2880,10 @@ async fn follow_adopted_peer_block_applies_and_persists() {
 
     let pin = sequencer.chain().lock().await.pin();
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Extension(vec![entry_of(&peer_block, pin)]),
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     assert_eq!(sequencer.chain_height().await, 2);
@@ -3011,10 +2927,10 @@ async fn an_extension_repeating_our_own_entry_is_deduped() {
     };
 
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Extension(vec![ours]),
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     assert_eq!(
@@ -3054,13 +2970,13 @@ async fn a_conflict_dropping_our_block_reverts_it_and_requeues_its_user_txs() {
     let kept = sequencer.chain().lock().await.view()[..1].to_vec();
 
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Conflict {
                 canonical: kept,
                 orphaned: Vec::new(),
             },
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     assert_eq!(sequencer.chain_height().await, 1);
@@ -3108,19 +3024,19 @@ async fn a_conflict_after_finalization_requeues_nothing() {
     let finalized = finalized_as_held(&sequencer.chain(), &block2).await;
 
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![finalized],
             ..empty_channel_update()
-        }))
+        })
         .await;
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Conflict {
                 canonical: Vec::new(),
                 orphaned: Vec::new(),
             },
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     assert_eq!(
@@ -3156,10 +3072,10 @@ async fn follow_finalized_own_block_moves_final_tier_and_marks_store() {
     let finalized = finalized_as_held(&sequencer.chain(), &block2).await;
 
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![finalized],
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     let final_tip = sequencer
@@ -3203,10 +3119,10 @@ async fn follow_finalized_delivery_drops_its_pending_record() {
 
     let finalized = finalized_as_held(&sequencer.chain(), &delivery_block).await;
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![finalized],
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     assert!(
@@ -3248,10 +3164,10 @@ async fn a_parked_finalized_block_does_not_drop_a_dispatch_record() {
     let finalized = entry_of(&parked, MsgId::from([44; 32]));
 
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![finalized],
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     assert_eq!(
@@ -3282,10 +3198,10 @@ async fn follow_finalized_backfill_block_is_applied_and_marked_finalized() {
     let finalized = finalized_as_held(&sequencer.chain(), &peer_block).await;
 
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![finalized],
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     assert_eq!(
@@ -3337,13 +3253,13 @@ async fn restart_restores_the_view_and_recovers_from_a_conflict() {
         common::test_utils::produce_dummy_block(2, Some(genesis.header.hash), vec![]);
     let replacement = entry_of(&block2_prime, genesis_entry.msg);
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Conflict {
                 canonical: vec![genesis_entry, replacement],
                 orphaned: Vec::new(),
             },
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     // The head moved onto 2': transfer reverted, store overwritten, and the
@@ -3402,13 +3318,13 @@ async fn a_conflict_keeping_our_block_requeues_nothing() {
     let view = sequencer.chain().lock().await.view().to_vec();
 
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Conflict {
                 canonical: view,
                 orphaned: Vec::new(),
             },
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     let head_tip = sequencer
@@ -3444,10 +3360,10 @@ async fn restart_reanchors_on_the_persisted_final_snapshot() {
         let block2 = block_at(&sequencer, 2).await.unwrap();
         let finalized = finalized_as_held(&sequencer.chain(), &block2).await;
         sequencer
-            .on_channel_update(Arc::new(ChannelUpdate {
+            .on_channel_update(&ChannelUpdate {
                 finalized: vec![finalized],
                 ..empty_channel_update()
-            }))
+            })
             .await;
         sequencer.storage_ref.downgrade()
     };
@@ -3477,10 +3393,10 @@ async fn a_publish_on_a_pin_the_view_moved_past_is_dropped() {
     // A peer block wins height 2 while "our" block is in flight.
     let peer_block = common::test_utils::produce_dummy_block(2, Some(genesis_meta.hash), vec![]);
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Extension(vec![entry_of(&peer_block, pin)]),
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     // Our competing block at the same height, on the same pin.
@@ -3570,16 +3486,16 @@ async fn follow_update_persists_blocks_meta_and_state_atomically() {
 
     // Both adopted, then block 2 finalized.
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Extension(vec![entry2.clone(), entry3]),
             ..empty_channel_update()
-        }))
+        })
         .await;
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![entry2],
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     // Blocks, tip meta and state all reflect the end of the batch: a late
@@ -3622,10 +3538,10 @@ async fn a_foreign_block_below_the_final_tip_settles_no_deposit_record() {
     let block2 = block_at(&sequencer, 2).await.unwrap();
     let finalized = finalized_as_held(&sequencer.chain(), &block2).await;
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![finalized],
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     let recipient_id = initial_public_user_accounts()[0].account_id;
@@ -3640,10 +3556,10 @@ async fn a_foreign_block_below_the_final_tip_settles_no_deposit_record() {
         notes: DepositRecreatedNotes::default(),
     };
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             deposits: vec![deposit],
             ..empty_channel_update()
-        }))
+        })
         .await;
     let record = sequencer
         .storage_ref
@@ -3662,10 +3578,10 @@ async fn a_foreign_block_below_the_final_tip_settles_no_deposit_record() {
     );
     let pin = sequencer.chain().lock().await.pin();
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![entry_of(&forged, pin)],
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     assert!(
@@ -3707,14 +3623,14 @@ async fn a_finalized_competitor_requeues_the_user_txs_of_our_block() {
         common::test_utils::produce_dummy_block(2, Some(genesis_block.header.hash), vec![]);
 
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized: vec![genesis.clone(), entry_of(&peer_block, genesis.msg)],
             view: ViewChange::Conflict {
                 canonical: Vec::new(),
                 orphaned: Vec::new(),
             },
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     let head_tip = sequencer.chain().lock().await.head_tip().unwrap();
@@ -3740,13 +3656,13 @@ async fn a_block_back_on_the_head_is_stored_again() {
 
     for canonical in [view[..1].to_vec(), view.clone()] {
         sequencer
-            .on_channel_update(Arc::new(ChannelUpdate {
+            .on_channel_update(&ChannelUpdate {
                 view: ViewChange::Conflict {
                     canonical,
                     orphaned: Vec::new(),
                 },
                 ..empty_channel_update()
-            }))
+            })
             .await;
     }
 
@@ -3792,10 +3708,10 @@ async fn a_restart_without_a_view_follows_the_channel_from_the_final_tier() {
 
     let finalized = view;
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized,
             ..empty_channel_update()
-        }))
+        })
         .await;
 
     assert_eq!(sequencer.chain_height().await, 2);
@@ -4509,8 +4425,12 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
     let signing_key = config.block_signing_key().unwrap();
-    let (state, _genesis_txs, _) =
-        build_genesis_state(&signing_key, &config, Some(bootstrap_sequencer_key));
+    let (state, _genesis_txs, _) = sequencer_genesis::build_genesis_state(
+        &signing_key,
+        &config
+            .genesis_config(Some(bootstrap_sequencer_key))
+            .unwrap(),
+    );
 
     let stake_account = state.get_account_by_id(bootstrap_stake_account_id(&config));
     assert!(
@@ -4551,8 +4471,12 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
     let signing_key = config.block_signing_key().unwrap();
-    let (mut state, _genesis_txs, _) =
-        build_genesis_state(&signing_key, &config, Some(bootstrap_sequencer_key));
+    let (mut state, _genesis_txs, _) = sequencer_genesis::build_genesis_state(
+        &signing_key,
+        &config
+            .genesis_config(Some(bootstrap_sequencer_key))
+            .unwrap(),
+    );
 
     let stake_id = bootstrap_stake_account_id(&config);
     let destination = AccountId::from(&PublicKey::new_from_private_key(
@@ -4686,7 +4610,7 @@ fn slash_transaction(
 ) -> PublicTransaction {
     let LeeTransaction::Public(tx) = sequencer_slasher_actor::build_slash_tx(
         ownership_id,
-        &sequencer_slasher_actor::Offence {
+        &sequencer_slasher_actor::protocol::Offence {
             offender: sequencer_key,
             inscription: TEST_INSCRIPTION,
         },
@@ -5100,24 +5024,24 @@ async fn a_slash_lands_over_a_pending_partial_unstake() {
     let channel_id = config.channel_id.expect("genesis sets the channel id");
     let approval = test_approval_on(channel_id, 0x45, offender);
 
-    let slasher = sequencer.slasher_ref();
+    let slasher = sequencer.slasher_ref.clone();
     slasher
-        .ask(sequencer_slasher_actor::SetCommittee(config))
+        .ask(sequencer_slasher_actor::protocol::SetCommittee(config))
         .await
         .unwrap();
     slasher
-        .ask(sequencer_slasher_actor::Report {
-            offences: vec![sequencer_slasher_actor::ReportedOffence {
+        .ask(sequencer_slasher_actor::protocol::Report {
+            offences: vec![sequencer_slasher_actor::protocol::ReportedOffence {
                 signer: offender.to_bytes(),
                 inscription: TEST_INSCRIPTION,
-                fault: sequencer_slasher_actor::Fault::NotABlock,
+                fault: sequencer_slasher_actor::protocol::Fault::NotABlock,
             }],
         })
         .await
         .unwrap();
     slasher
-        .ask(sequencer_slasher_actor::Approval {
-            offence: sequencer_slasher_actor::Offence {
+        .ask(sequencer_slasher_actor::protocol::Approval {
+            offence: sequencer_slasher_actor::protocol::Offence {
                 offender,
                 inscription: TEST_INSCRIPTION,
             },
@@ -5461,7 +5385,10 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
     config.home = temp_dir.path().to_path_buf();
     let key = test_bootstrap_sequencer_key(&config);
     let signing_key = config.block_signing_key().unwrap();
-    let (state, txs, _) = build_genesis_state(&signing_key, &config, Some(key));
+    let (state, txs, _) = sequencer_genesis::build_genesis_state(
+        &signing_key,
+        &config.genesis_config(Some(key)).unwrap(),
+    );
     assert!(
         !txs.iter()
             .any(|tx| cross_zone_ids.contains(&tx_program(tx))),
@@ -5481,7 +5408,10 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
     });
     let key = test_bootstrap_sequencer_key(&config);
     let signing_key = config.block_signing_key().unwrap();
-    let (state, txs, _) = build_genesis_state(&signing_key, &config, Some(key));
+    let (state, txs, _) = sequencer_genesis::build_genesis_state(
+        &signing_key,
+        &config.genesis_config(Some(key)).unwrap(),
+    );
     let cross_zone_txs: Vec<_> = txs
         .iter()
         .map(tx_program)
@@ -5520,11 +5450,11 @@ async fn finalize_signed(
 ) {
     let signer = Ed25519Key::from_bytes(&[5; 32]).public_key();
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             finalized_signers: vec![(entry.msg, signer)],
             finalized: vec![entry],
             ..empty_channel_update()
-        }))
+        })
         .await;
 }
 
@@ -5589,10 +5519,10 @@ async fn a_finalized_block_off_the_lineage_is_not_reported() {
 /// Adopts `entry`, as the sdk reports it entering the view.
 async fn adopt(sequencer: &mut SequencerCore<StorageActor, MockBedrockActor>, entry: ChannelEntry) {
     sequencer
-        .on_channel_update(Arc::new(ChannelUpdate {
+        .on_channel_update(&ChannelUpdate {
             view: ViewChange::Extension(vec![entry]),
             ..empty_channel_update()
-        }))
+        })
         .await;
 }
 

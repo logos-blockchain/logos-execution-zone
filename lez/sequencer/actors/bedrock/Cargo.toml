@@ -10,6 +10,7 @@ workspace = true
 [features]
 # Adds actor implementation using kameo_actors.
 actor = [
+  "dep:lee_core",
   "dep:system_accounts",
 
   "dep:logos-blockchain-common-http-client",
@@ -29,7 +30,8 @@ common.workspace = true
 sequencer_stake_core.workspace = true
 sequencer_actors_common.workspace = true
 sequencer_storage_actor.workspace = true
-sequencer_channel_config_actor.workspace = true
+sharding_pool_actor.workspace = true
+lee_core = { workspace = true, optional = true }
 system_accounts = { workspace = true, optional = true }
 
 logos-blockchain-zone-sdk.workspace = true

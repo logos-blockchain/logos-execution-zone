@@ -27,7 +27,11 @@ use tokio::test;
 
 #[test]
 async fn user_origin_inbox_call_rejected() -> Result<()> {
-    let partial = SequencerPartialConfig::default();
+    let partial = SequencerPartialConfig {
+        // Covers the storage price doubling at the devnet's first epoch rotations.
+        priority_fee_percent: 150,
+        ..SequencerPartialConfig::default()
+    };
     let channel = config::bedrock_channel_id();
 
     let ctx = MultiZoneTestContextBuilder::default()

@@ -13,7 +13,7 @@ lee.workspace = true
 programs.workspace = true
 system_accounts.workspace = true
 sequencer_stake_core.workspace = true
-sequencer_storage_actor = { workspace = true, features = ["actor"] }
+sequencer_storage_actor.workspace = true
 
 logos-blockchain-key-management-system-service.workspace = true
 kameo.workspace = true

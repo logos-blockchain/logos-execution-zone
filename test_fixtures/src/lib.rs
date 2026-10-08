@@ -1,7 +1,7 @@
 //! Shared test/bench fixtures: spins up bedrock + sequencer + indexer + wallet
 //! end-to-end against docker-compose, exposes a `TestContext` callers can drive.
 
-use std::{collections::HashMap, net::SocketAddr, path::Path, sync::LazyLock, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, path::Path, sync::LazyLock};
 
 use anyhow::{Context as _, Result};
 use common::{HashType, transaction::LeeTransaction};
@@ -15,6 +15,7 @@ use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
 use sequencer_core::config::GenesisAction;
 use sequencer_service::{CrossZoneConfig, GossipConfig, SequencerHandle};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
+use sequencer_storage_actor::mock::MockStorageActor;
 use serde::Serialize;
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
@@ -43,6 +44,10 @@ pub(crate) const BEDROCK_SERVICE_WITH_OPEN_PORT: &str = "logos-blockchain-node-0
 pub(crate) const BEDROCK_SERVICE_PORT: u16 = 18080;
 
 static LOGGER: LazyLock<()> = LazyLock::new(env_logger::init);
+
+/// [`sequencer_bedrock_actor::BedrockActor`] running outside any sequencer, streaming the channel
+/// from genesis.
+pub type StandaloneBedrockActor = sequencer_bedrock_actor::BedrockActor<MockStorageActor>;
 
 struct IndexerComponents {
     indexer_handle: IndexerHandle,
@@ -1085,57 +1090,56 @@ async fn wait_until_genesis(client: &SequencerClient) -> Result<()> {
         .with_context(|| "Timed out waiting for genesis")?
 }
 
-/// Spawns a [`sequencer_bedrock_actor::BedrockActor`] outside any sequencer, resuming
-/// from no checkpoint.
-pub async fn spawn_standalone_bedrock_actor(
-    bedrock_config: sequencer_bedrock_actor::config::Config,
-) -> Result<ActorRef<sequencer_bedrock_actor::BedrockActor>> {
-    let mut mock_storage = sequencer_storage_actor::mock::MockStorageActor::default();
-    mock_storage
-        .expect_handle_get_zone_checkpoint()
-        .returning(|_msg, _ctx| Ok(None));
-    let mock_storage_ref = sequencer_storage_actor::mock::MockStorageActor::spawn(mock_storage);
-
+/// Spawns a [`sequencer_bedrock_actor::BedrockActor`] on `channel_id` outside any sequencer.
+///
+/// It resumes from no checkpoint and can't publish until it receives
+/// [`sequencer_bedrock_actor::protocol::InitializeChannelPublisher`].
+pub fn spawn_standalone_bedrock_actor(
+    bedrock_addr: SocketAddr,
+    channel_id: ChannelId,
+) -> Result<ActorRef<StandaloneBedrockActor>> {
     let broker_ref = kameo_actors::broker::Broker::spawn(kameo_actors::broker::Broker::new(
         kameo_actors::DeliveryStrategy::Guaranteed,
     ));
 
-    let bedrock =
-        sequencer_bedrock_actor::BedrockActor::new(bedrock_config, mock_storage_ref, broker_ref)
-            .await
-            .context("Failed to setup Bedrock Actor")?;
-    Ok(sequencer_bedrock_actor::BedrockActor::spawn(bedrock))
+    let mut storage = MockStorageActor::default();
+    storage
+        .expect_handle_get_zone_anchor()
+        .returning(|_msg, _ctx| Ok(None));
+    storage
+        .expect_handle_get_zone_checkpoint()
+        .returning(|_msg, _ctx| Ok(None));
+    let storage_ref = MockStorageActor::spawn(storage);
+
+    Ok(StandaloneBedrockActor::spawn(
+        sequencer_bedrock_actor::actor::Args {
+            node_url: config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?,
+            basic_auth: None,
+            channel_id,
+            storage_ref,
+            broker_ref,
+        },
+    ))
 }
 
 /// Spawns a [`sequencer_bedrock_actor::BedrockActor`] on `channel_id` for tests to
 /// query the channel through. It never publishes.
-pub async fn spawn_channel_observer(
+pub fn spawn_channel_observer(
     bedrock_addr: SocketAddr,
     channel_id: ChannelId,
-) -> Result<ActorRef<sequencer_bedrock_actor::BedrockActor>> {
-    spawn_standalone_bedrock_actor(sequencer_bedrock_actor::config::Config {
-        node_url: config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?,
-        basic_auth: None,
-        channel_id,
-        bedrock_signing_key: sequencer_bedrock_actor::config::Ed25519Key::from_bytes(
-            &config::SEQUENCER_BEDROCK_SIGNING_KEY,
-        ),
-        funding_pk: config::bedrock_funding_key(),
-        priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
-        resubmit_interval: Duration::from_secs(2),
-    })
-    .await
+) -> Result<ActorRef<StandaloneBedrockActor>> {
+    spawn_standalone_bedrock_actor(bedrock_addr, channel_id)
 }
 
 async fn wait_until_channel_exists(bedrock_addr: SocketAddr, channel_id: ChannelId) -> Result<()> {
     log::info!("Waiting for the channel to land on Bedrock");
 
-    let bedrock_ref = spawn_channel_observer(bedrock_addr, channel_id).await?;
+    let bedrock_ref = spawn_channel_observer(bedrock_addr, channel_id)?;
 
     let wait = async {
         loop {
             let channel_exists = bedrock_ref
-                .ask(sequencer_bedrock_actor::protocol::CheckChannelExists)
+                .ask(sequencer_bedrock_actor::protocol::CheckChannelExists { channel_id })
                 .await?;
             if channel_exists {
                 return Ok::<(), anyhow::Error>(());
@@ -1198,8 +1202,7 @@ async fn build_sequencer_components(
         sequencer_setup = sequencer_setup.with_gossip(gossip);
     }
 
-    let (sequencer_handle, temp_sequencer_dir) = sequencer_setup
-        .setup()
+    let (sequencer_handle, temp_sequencer_dir) = Box::pin(sequencer_setup.setup())
         .await
         .context("Failed to setup Sequencer")?;
 

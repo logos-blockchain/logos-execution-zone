@@ -329,7 +329,7 @@ async fn nonempty_local_against_empty_channel_fails_startup() -> Result<()> {
         Ok(Err(err)) => {
             let message = format!("{err:#}");
             assert!(
-                message.contains("Refusing to resume onto a foreign channel"),
+                message.contains("channel does not exist on the connected chain"),
                 "startup failed for an unexpected reason: {message}"
             );
         }

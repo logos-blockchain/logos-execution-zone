@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
         dest.display()
     );
 
-    generate_prebuilt_fixture(&dest)
+    Box::pin(generate_prebuilt_fixture(&dest))
         .await
         .context("Failed to regenerate prebuilt sequencer database fixture")?;
 

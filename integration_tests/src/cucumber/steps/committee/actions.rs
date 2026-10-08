@@ -225,17 +225,14 @@ async fn committee_is_active(
             Ok(Ed25519Key::from_bytes(&signing_key).public_key().to_bytes())
         })
         .collect::<Result<Vec<_>, StepError>>()?;
-    let observer = spawn_channel_observer(
-        context.bedrock().primary_api_addr(),
-        config::bedrock_channel_id(),
-    )
-    .await
-    .map_err(|source| StepError::QueryFailedSource { source })?;
+    let channel_id = config::bedrock_channel_id();
+    let observer = spawn_channel_observer(context.bedrock().primary_api_addr(), channel_id)
+        .map_err(|source| StepError::QueryFailedSource { source })?;
     let timeout = Duration::from_secs(timeout_seconds);
     let wait = async {
         loop {
             let accredited = observer
-                .ask(GetAccreditedKeys)
+                .ask(GetAccreditedKeys { channel_id })
                 .await
                 .map_err(|err| StepError::QueryFailedSource { source: err.into() })?;
             let active = accredited.is_some_and(|accredited| {
@@ -286,17 +283,14 @@ async fn sequencer_becomes_posting_turn(
                 message: format!("sequencer '{alias}' is not registered"),
             })?;
     let expected_key = Ed25519Key::from_bytes(&signing_key).public_key();
-    let observer = spawn_channel_observer(
-        context.bedrock().primary_api_addr(),
-        config::bedrock_channel_id(),
-    )
-    .await
-    .map_err(|source| StepError::QueryFailedSource { source })?;
+    let channel_id = config::bedrock_channel_id();
+    let observer = spawn_channel_observer(context.bedrock().primary_api_addr(), channel_id)
+        .map_err(|source| StepError::QueryFailedSource { source })?;
     let timeout = Duration::from_secs(timeout_seconds);
     let wait = async {
         loop {
             let is_turn = observer
-                .ask(GetAccreditedKeys)
+                .ask(GetAccreditedKeys { channel_id })
                 .await
                 .map_err(|err| StepError::QueryFailedSource { source: err.into() })?
                 .and_then(|accredited| accredited.whose_turn())

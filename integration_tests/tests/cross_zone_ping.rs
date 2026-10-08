@@ -35,7 +35,11 @@ const PING_PAYLOAD: &[u8] = b"hello-cross-zone";
 
 #[test]
 async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
-    let partial = SequencerPartialConfig::default();
+    let partial = SequencerPartialConfig {
+        // Covers the storage price doubling at the devnet's first epoch rotations.
+        priority_fee_percent: 150,
+        ..SequencerPartialConfig::default()
+    };
     let channel_a = config::bedrock_channel_id();
     let channel_b = config::bedrock_channel_id_b();
     let zone_a: [u8; 32] = *channel_a.as_ref();

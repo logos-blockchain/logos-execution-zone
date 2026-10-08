@@ -24,13 +24,13 @@ use log::debug;
 use crate::protocol::ResetAllBlocksToPending;
 use crate::{
     Result, StorageActorTrait,
-    actor::{event_filter::EventFilter, tx_index::TransactionIndex},
+    actor::tx_index::TransactionIndex,
     error::Error,
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, GetAccountTransactions, GetAllBlocks, GetBlock,
-        GetBlockByHash, GetBlockEvents, GetChannelViewBytes, GetCrossZonePeerFloorBytes,
+        DropSettledCrossZoneDispatches, DumpDb, EventFilter, GetAccountTransactions, GetAllBlocks,
+        GetBlock, GetBlockByHash, GetBlockEvents, GetChannelViewBytes, GetCrossZonePeerFloorBytes,
         GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetEventFilter,
         GetFinalSnapshot, GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
         GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,

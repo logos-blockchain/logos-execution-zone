@@ -1,8 +1,7 @@
-use std::collections::{HashMap, HashSet};
-
-use borsh::{BorshDeserialize, BorshSerialize};
 use common::{HashType, transaction::TxEvents};
 use lee_core::{BlockId, account::AccountId, program::TransactionEvent};
+
+use crate::protocol::{EventFilter, SelectorFilter};
 
 // Largest block span a single events range query may cover. Lives here so every surface
 // that serves the query (RPC service, FFI) enforces the identical bound.
@@ -12,24 +11,6 @@ pub const MAX_EVENT_QUERY_BLOCK_SPAN: u64 = 1000;
 // under the transport's response cap so this limit is the one that binds.
 pub const MAX_EVENT_QUERY_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const EVENT_RECORD_BASE_BYTES: usize = 256;
-
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub enum EventFilter {
-    Archival,
-    Sources(HashMap<AccountId, SelectorFilter>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub enum SelectorFilter {
-    All,
-    Only(HashSet<[u8; 8]>),
-}
-
-impl Default for EventFilter {
-    fn default() -> Self {
-        Self::Sources(HashMap::new())
-    }
-}
 
 impl EventFilter {
     fn keeps(&self, event: &TransactionEvent) -> bool {
@@ -229,6 +210,8 @@ pub const fn record_charge(record: &EventRecord) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, HashSet};
+
     use common::HashType;
     use lee_core::program::ProgramEvent;
 
@@ -263,7 +246,7 @@ mod tests {
 
     #[test]
     fn only_an_empty_source_set_keeps_nothing() {
-        assert!(EventFilter::default().keeps_nothing());
+        assert!(EventFilter::Sources(HashMap::new()).keeps_nothing());
         assert!(!EventFilter::Archival.keeps_nothing());
         assert!(!sources(vec![(PROGRAM_A, SelectorFilter::All)]).keeps_nothing());
     }
@@ -285,7 +268,10 @@ mod tests {
             vec![event(PROGRAM_A, SELECTOR_X), event(PROGRAM_B, SELECTOR_Y)],
         )];
 
-        assert_eq!(EventFilter::default().filter_block(blocks), vec![]);
+        assert_eq!(
+            EventFilter::Sources(HashMap::new()).filter_block(blocks),
+            vec![]
+        );
     }
 
     #[test]
@@ -355,7 +341,7 @@ mod tests {
             (Some(PROGRAM_A), None),
             (Some(PROGRAM_A), Some(SELECTOR_X)),
         ] {
-            assert!(!EventFilter::default().covers(program, selector));
+            assert!(!EventFilter::Sources(HashMap::new()).covers(program, selector));
         }
     }
 

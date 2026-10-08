@@ -11,9 +11,10 @@ use bytesize::ByteSize;
 use common::config::BasicAuth;
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use humantime_serde;
-use lee::{AccountId, PublicKey, Signature};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
+pub use sequencer_genesis::GenesisAction;
+use sequencer_genesis::GenesisConfig;
 pub use sequencer_stake_core::ChannelParams;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -31,31 +32,6 @@ pub const BLOCK_OVERHEAD: u64 = 2_048;
 )]
 pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 =
     logos_blockchain_core::mantle::ops::channel::inscribe::MAX_BYTES as u64;
-
-/// A transaction to be applied at genesis to supply initial balances.
-///
-/// Amounts are `u64`, not [`lee::Balance`], because every one is funded through
-/// the bridge's `Deposit`, whose amount is `u64`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum GenesisAction {
-    SupplyAccount {
-        account_id: AccountId,
-        balance: u64,
-    },
-    /// Funds a holder's holding PDA at genesis with one replayable genesis
-    /// credit; the balance-only PDA needs no claim.
-    SupplyBridgeLockHolding {
-        holder: AccountId,
-        amount: u64,
-    },
-    /// Stakes `sequencer_key` at genesis.
-    StakeSequencer {
-        sequencer_key: sequencer_stake_core::SequencerKey,
-        ownership_public_key: PublicKey,
-        stake_signature: Signature,
-    },
-}
 
 /// Sequencer p2p gossip configuration. Absent (`None`) disables gossip
 /// entirely: no sockets, no background tasks.
@@ -79,7 +55,10 @@ pub struct SequencerConfig {
     pub max_num_tx_in_block: usize,
     /// Maximum block size (includes header, user transactions, and the mandatory clock
     /// transaction).
-    #[serde(default = "default_max_block_size")]
+    #[serde(
+        default = "default_max_block_size",
+        deserialize_with = "deserialize_max_block_size"
+    )]
     pub max_block_size: ByteSize,
     /// Mempool maximum size.
     pub mempool_max_size: usize,
@@ -163,6 +142,37 @@ impl SequencerConfig {
         lee::PrivateKey::try_new(bytes).context("Block signing key is not a valid private key")
     }
 
+    /// The genesis this config describes.
+    ///
+    /// When [`Self::genesis`] stakes no sequencer, `bootstrap_sequencer_key` is staked by the key
+    /// in `<home>/sequencer_stake_signing_key`, created on first use.
+    pub fn genesis_config(
+        &self,
+        bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
+    ) -> Result<GenesisConfig> {
+        let mut actions = self.genesis.clone();
+        if let Some(sequencer_key) = bootstrap_sequencer_key
+            && !sequencer_genesis::stakes_any_sequencer(&actions)
+        {
+            let ownership_key = crate::load_or_create_stake_signing_key(
+                &self.home.join("sequencer_stake_signing_key"),
+            )
+            .context("Failed to load or create the stake signing key")?;
+            actions.push(sequencer_genesis::self_stake(
+                sequencer_key,
+                &ownership_key,
+                self.bedrock_config.channel_params.minimum_sequencer_stake,
+            ));
+        }
+
+        Ok(GenesisConfig {
+            channel_id: *self.bedrock_config.channel_id.as_ref(),
+            channel_params: self.bedrock_config.channel_params,
+            cross_zone: self.cross_zone.clone(),
+            actions,
+        })
+    }
+
     /// Where this sequencer's database lives, suffixed with the channel id like
     /// the indexer's, so several sequencers can share a home directory. Only the
     /// database is per-channel; `bedrock_signing_key` stays unsuffixed, so
@@ -172,6 +182,22 @@ impl SequencerConfig {
         self.home
             .join(format!("rocksdb-{}", self.bedrock_config.channel_id))
     }
+}
+
+fn deserialize_max_block_size<'de, D>(deserializer: D) -> Result<ByteSize, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    let size = s.parse::<ByteSize>().map_err(serde::de::Error::custom)?;
+
+    if size.as_u64() > MAX_PUBLISHABLE_BLOCK_SIZE {
+        return Err(serde::de::Error::custom(format!(
+            "max_block_size {size} exceeds Bedrock's inscription limit of \
+             {MAX_PUBLISHABLE_BLOCK_SIZE} bytes",
+        )));
+    }
+    Ok(size)
 }
 
 const fn default_max_block_size() -> ByteSize {
