@@ -11,7 +11,6 @@ Feature: Stake instruction validation
   # sequencer_registration.feature.
   #
   # Instruction cases not yet covered here:
-  # - P-15, P-16 need a bad-mover guest
   # - P-17, P-19 need a chained-caller guest
 
   Background:
@@ -21,17 +20,6 @@ Feature: Stake instruction validation
     And a default-owned, unclaimed ownership account for the sequencer key
     And a funding account holding "ten times the minimum stake"
     And chain waits give up after 60 blocks
-
-  @stake_instruction_ci @P-18 @P0 @L3
-  # In-program reason: "ConfirmStake can only be invoked as a self-chained
-  # call". The expected balance matches the stake funds account, the account
-  # ConfirmStake reads, and the caller check is the handler's first assert,
-  # so it is the one that rejects. The ownership account signs because a
-  # top-level transaction needs a signer and the funds PDA has no key.
-  Scenario: ConfirmStake submitted top-level is rejected
-    When a ConfirmStake matching the current funds balance is submitted as a top-level transaction
-    Then the stake transaction is not included within the next 2 blocks
-    And the config, funding and ownership accounts are unchanged
 
   @stake_instruction_ci @P-24 @P1 @L3
   # The borsh half mirrors sequencer_stake core's

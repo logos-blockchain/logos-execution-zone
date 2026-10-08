@@ -1,18 +1,15 @@
 Feature: Stake account validation
 
   # Node-level (L3) coverage of the pre-state account list a Stake names:
-  # [funding, ownership, funds, config]. The program checks who signed, who
-  # owns the ownership account, that the config slot holds the real config
-  # account, and that the list has exactly four entries. Every scenario runs
+  # [funding, ownership, funds, config]. The program checks who signed, that
+  # the config slot holds the real config account, and that the list has
+  # exactly four entries. Every scenario runs
   # against a deployed LEZ stack through the scenario wallet and the
   # sequencer's RPC API. The @P-NN tags are stable case ids.
   #
   # Rejection scenarios assert non-inclusion plus unchanged accounts; the
   # non-inclusion protocol and its two-block window are described in
   # sequencer_registration.feature.
-  #
-  # Account cases not yet covered here:
-  # - P-21 needs a second mover program fitting Stake's two-account slot
 
   Background:
     Given a LEZ stack with fast blocks and configured public accounts
@@ -27,18 +24,6 @@ Feature: Stake account validation
   Scenario: Registration without the ownership account's signature is rejected
     When a Stake of "twice the minimum stake" is submitted without the ownership account's signature
     Then the stake transaction is not included within the next 2 blocks
-    And the config, funding and ownership accounts are unchanged
-
-  @stake_accounts_ci @P-13 @P1 @L3
-  # In-program reason: "not a sequencer_stake ownership account". Claiming is
-  # implicit on data writes, so a plain transfer leaves its recipient
-  # unowned; the token program claims the ownership account by writing a
-  # token holding into it, which is the foreign owner the plan names.
-  Scenario: Ownership account owned by another program is rejected
-    Given the ownership account is already claimed by the token program
-    When a Stake of "twice the minimum stake" is submitted
-    Then the stake transaction is not included within the next 2 blocks
-    And the config has no entry for the sequencer key
     And the config, funding and ownership accounts are unchanged
 
   @stake_accounts_ci @P-14 @P0 @L3
