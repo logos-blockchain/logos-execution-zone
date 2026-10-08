@@ -11,8 +11,15 @@ Feature: Stake instruction validation
   # sequencer_registration.feature.
   #
   # Instruction cases not yet covered here:
-  # - P-15, P-16 need a bad-mover guest
-  # - P-17, P-19 need a chained-caller guest
+  # - P-15, P-16 need no new test program: the mover instruction data is
+  #   caller-controlled and opaque to sequencer_stake, so authenticated_transfer
+  #   can be told to move a different amount than the Stake declares
+  # - P-19 needs a ConfirmStake chained from another program, rejected by the
+  #   self-caller guard; the stake_chain_caller program supports it
+  #
+  # P-17 deploys a test program at runtime through program_loader, since test
+  # guests are not in the node's compiled-in program set. A deployed program is
+  # addressed by the header account its deployment claims, not by its image id.
 
   Background:
     Given a LEZ stack with fast blocks and configured public accounts
@@ -32,6 +39,30 @@ Feature: Stake instruction validation
     When a ConfirmStake matching the current funds balance is submitted as a top-level transaction
     Then the stake transaction is not included within the next 2 blocks
     And the config, funding and ownership accounts are unchanged
+
+  @stake_instruction_ci @P-17 @P1 @L3
+  # In-program reason: "Stake is only invoked as a top-level user
+  # transaction". The stake_chain_caller test program forwards an otherwise
+  # well-formed Stake into sequencer_stake as a chained call, so the
+  # caller-is-none guard is the only assert that can reject it.
+  #
+  # Unlike the other rejection scenarios, the top-level transaction targets the
+  # test program, not sequencer_stake, so it is fee-charged rather than exempt.
+  # A charged transaction whose execution fails is not dropped: it is included
+  # with its fee kept and its effects reverted, advancing only the signers'
+  # nonces. The rejection therefore shows as inclusion with no state change
+  # apart from those nonces. A genesis supply account pays the fee, so the
+  # funding account's balance stays put; the funds and config accounts do not
+  # sign, so they are unchanged outright.
+  Scenario: Stake invoked as a chained call is rejected
+    Given the stake_chain_caller test program is deployed
+    When a Stake of "twice the minimum stake" is submitted as a chained call through the stake_chain_caller program
+    Then the stake transaction is included in a block
+    And the ownership account is not claimed
+    And the config has no entry for the sequencer key
+    And the config and funds accounts are unchanged
+    And the funding account balance is unchanged
+    And the ownership account balance is unchanged
 
   @stake_instruction_ci @P-24 @P1 @L3
   # The borsh half mirrors sequencer_stake core's

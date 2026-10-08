@@ -4,12 +4,16 @@ use wallet::AccountIdentity;
 
 use super::{
     super::log_step,
-    helpers::{first_configured_public_account, get_account, submit_and_record},
+    helpers::{
+        first_configured_public_account, get_account, submit_and_record, submit_and_record_paid_by,
+    },
 };
 use crate::cucumber::{
     error::{StepError, StepResult},
     stake_scenario::{
-        confirm_stake_instruction, raw_stake_instruction, stake_instruction, transfer_instruction,
+        chain_caller_instruction, confirm_stake_instruction, raw_stake_instruction,
+        simple_balance_transfer_instruction, stake_instruction, stake_instruction_with_mover,
+        transfer_instruction,
     },
     world::CucumberWorld,
 };
@@ -52,6 +56,72 @@ async fn submit_stake(world: &mut CucumberWorld, step: &Step, expression: String
     let scenario = world.stake()?;
     let accounts = stake_accounts(scenario.funding_id()?, scenario.ownership_id()?);
     submit_stake_with_accounts(world, &expression, accounts).await
+}
+
+#[when(
+    expr = "a Stake of {string} is submitted as a chained call through the stake_chain_caller \
+            program"
+)]
+async fn submit_stake_as_chained_call(
+    world: &mut CucumberWorld,
+    step: &Step,
+    expression: String,
+) -> StepResult {
+    log_step(step);
+    let scenario = world.stake()?;
+    let amount = scenario.amount(&expression)?;
+    let chain_caller_id = scenario.deployed_program(&test_programs::stake_chain_caller())?;
+    // A well-formed Stake, submitted to the chain-caller program instead of
+    // top-level: sequencer_stake's `caller_account_id.is_none()` guard is the
+    // only thing that can reject it.
+    let forwarded = stake_instruction(scenario.sequencer_key(), amount)?;
+    let instruction = chain_caller_instruction(programs::sequencer_stake().id().into(), forwarded)?;
+    let accounts = stake_accounts(scenario.funding_id()?, scenario.ownership_id()?);
+    // The top-level program is not sequencer_stake, so the transaction is
+    // fee-charged. The funding account holds only its stake, far below the
+    // wallet's default fee reserve, so a genesis supply account pays instead;
+    // that also keeps the fee off the accounts the scenario asserts on.
+    let payer_id = first_configured_public_account(world.lez()?).await?;
+    submit_and_record_paid_by(
+        world,
+        accounts,
+        instruction,
+        chain_caller_id,
+        Some(payer_id),
+        amount,
+    )
+    .await
+}
+
+#[when(expr = "a Stake of {string} is submitted with simple_balance_transfer as the mover")]
+async fn submit_stake_with_simple_mover(
+    world: &mut CucumberWorld,
+    step: &Step,
+    expression: String,
+) -> StepResult {
+    log_step(step);
+    let scenario = world.stake()?;
+    let amount = scenario.amount(&expression)?;
+    let mover_id = scenario.deployed_program(&test_programs::simple_balance_transfer())?;
+    // simple_balance_transfer moves `amount` from the funding account into the
+    // stake funds account, standing in for authenticated_transfer as a
+    // different mover. The debit needs only the funding account's signature,
+    // which Stake passes through, not the mover's ownership of the account.
+    let instruction = stake_instruction_with_mover(
+        scenario.sequencer_key(),
+        amount,
+        mover_id,
+        simple_balance_transfer_instruction(amount)?,
+    )?;
+    let accounts = stake_accounts(scenario.funding_id()?, scenario.ownership_id()?);
+    submit_and_record(
+        world,
+        accounts,
+        instruction,
+        programs::sequencer_stake().id(),
+        amount,
+    )
+    .await
 }
 
 #[when(expr = "a Stake of {string} is submitted without the ownership account's signature")]

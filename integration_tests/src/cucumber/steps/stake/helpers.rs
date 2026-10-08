@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use common::HashType;
 use futures::future::try_join_all;
-use lee::{Account, AccountId, PublicKey};
+use lee::{Account, AccountId, PublicKey, program::Program};
 use lee_core::program::{InstructionData, ProgramId};
 use sequencer_service_rpc::RpcClient as _;
 use sequencer_stake_core::{SequencerEntry, SequencerKey, SequencerStakeConfig};
@@ -124,8 +124,10 @@ pub(super) async fn scenario_snapshot(
     Ok(AccountsSnapshot::new(accounts))
 }
 
-/// Snapshots the touchable accounts, submits one transaction through the
-/// scenario wallet and records it for the inclusion/non-inclusion assertions.
+/// Snapshots the touchable accounts, submits one transaction against a
+/// compiled-in program through the scenario wallet and records it for the
+/// inclusion/non-inclusion assertions. The wallet picks the fee payer, if the
+/// transaction is charged at all, from the signing accounts.
 pub(super) async fn submit_and_record(
     world: &mut CucumberWorld,
     accounts: Vec<AccountIdentity>,
@@ -133,10 +135,34 @@ pub(super) async fn submit_and_record(
     program_id: ProgramId,
     amount: u128,
 ) -> StepResult {
+    submit_and_record_paid_by(
+        world,
+        accounts,
+        instruction_data,
+        program_id.into(),
+        None,
+        amount,
+    )
+    .await
+}
+
+/// Like [`submit_and_record`], against the program at `program_account_id`
+/// (a compiled-in program's id mapped to an account, or the header account a
+/// runtime deployment claimed), with `payer` covering the fee if given: a
+/// separately funded account the wallet has the key for co-signs without
+/// joining the pre-state list.
+pub(super) async fn submit_and_record_paid_by(
+    world: &mut CucumberWorld,
+    accounts: Vec<AccountIdentity>,
+    instruction_data: InstructionData,
+    program_account_id: AccountId,
+    payer: Option<AccountId>,
+    amount: u128,
+) -> StepResult {
     let snapshot = scenario_snapshot(world).await?;
     let context = world.lez()?;
     let hash = context
-        .send_program_transaction(accounts, instruction_data, program_id)
+        .send_program_account_transaction(accounts, instruction_data, program_account_id, payer)
         .await?;
     // Mempool admission is synchronous with the send reply, so a tip read
     // here is at or past the admission point and the non-inclusion window is
@@ -151,6 +177,22 @@ pub(super) async fn submit_and_record(
         submitted_at_block,
     });
     Ok(())
+}
+
+/// Deploys `program` at runtime through `program_loader`, paid for by the
+/// first genesis supply account, and returns the header account the deployment
+/// claimed: the account the program is addressed by from then on. Test guests
+/// are not in the node's compiled-in program set, so scenarios that exercise
+/// one deploy it first. The wallet waits for every deployment transaction to
+/// land before returning.
+pub(super) async fn deploy_program(
+    context: &LezScenarioContext,
+    program: &Program,
+) -> Result<AccountId, StepError> {
+    let payer_id = first_configured_public_account(context).await?;
+    context
+        .deploy_program(program.elf().to_vec(), payer_id)
+        .await
 }
 
 /// Waits until `hash` appears in a block and returns that block's id, giving

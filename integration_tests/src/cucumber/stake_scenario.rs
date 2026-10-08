@@ -14,11 +14,11 @@
 //! therefore assert non-inclusion plus unchanged accounts instead of the
 //! in-program rejection message.
 
-use std::{str::FromStr, time::Duration};
+use std::{collections::BTreeMap, str::FromStr, time::Duration};
 
 use common::HashType;
 use lee::{Account, AccountId, program::Program};
-use lee_core::program::InstructionData;
+use lee_core::program::{InstructionData, ProgramId};
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use sequencer_stake_core::SequencerKey;
 
@@ -117,6 +117,10 @@ pub struct StakeScenario {
     ownership_id: Option<AccountId>,
     second_ownership_id: Option<AccountId>,
     off_curve_bytes: Option<[u8; 32]>,
+    /// Test programs deployed at runtime, keyed by image id: the header
+    /// account each deployment claimed, which is how a deployed program is
+    /// addressed.
+    deployed_programs: BTreeMap<ProgramId, AccountId>,
     snapshot: Option<AccountsSnapshot>,
     last_submission: Option<SubmissionRecord>,
 }
@@ -135,6 +139,7 @@ impl StakeScenario {
             ownership_id: None,
             second_ownership_id: None,
             off_curve_bytes: None,
+            deployed_programs: BTreeMap::new(),
             snapshot: None,
             last_submission: None,
         }
@@ -243,6 +248,22 @@ impl StakeScenario {
         })
     }
 
+    /// Records the account a runtime deployment of `program` claimed.
+    pub fn set_deployed_program(&mut self, program: &Program, account_id: AccountId) {
+        self.deployed_programs.insert(program.id(), account_id);
+    }
+
+    /// Returns the account `program` was deployed at, or a typed error if the
+    /// scenario has not deployed it.
+    pub fn deployed_program(&self, program: &Program) -> Result<AccountId, StepError> {
+        self.deployed_programs
+            .get(&program.id())
+            .copied()
+            .ok_or(StepError::MissingObservation {
+                field: "deployed test program",
+            })
+    }
+
     /// Stores the pre-submission account snapshot.
     pub fn set_snapshot(&mut self, snapshot: AccountsSnapshot) {
         self.snapshot = Some(snapshot);
@@ -324,11 +345,33 @@ pub fn stake_instruction(
     sequencer_key: SequencerKey,
     amount: u128,
 ) -> Result<InstructionData, StepError> {
+    stake_instruction_with_mover(
+        sequencer_key,
+        amount,
+        programs::authenticated_transfer().id().into(),
+        transfer_instruction(amount)?,
+    )
+}
+
+/// Serialized `sequencer_stake::Stake` for `sequencer_key` driven by an
+/// arbitrary mover.
+///
+/// The mover is the program `Stake` chains into, with the funding and stake
+/// funds accounts, to move `amount` into the funds account;
+/// `authenticated_transfer` is the default, but `Stake` is generic over it.
+/// A program is addressed by its account: a compiled-in program's image id
+/// mapped to an account id, or the header account a runtime deployment claimed.
+pub fn stake_instruction_with_mover(
+    sequencer_key: SequencerKey,
+    amount: u128,
+    mover_account_id: AccountId,
+    mover_instruction_data: InstructionData,
+) -> Result<InstructionData, StepError> {
     Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
         sequencer_key,
         amount,
-        mover_account_id: programs::authenticated_transfer().id().into(),
-        mover_instruction_data: transfer_instruction(amount)?,
+        mover_account_id,
+        mover_instruction_data,
     })
     .map_err(|error| StepError::LogicalError {
         message: format!("failed to serialize the Stake instruction: {error}"),
@@ -345,6 +388,28 @@ pub fn token_definition_instruction() -> Result<InstructionData, StepError> {
     })
     .map_err(|error| StepError::LogicalError {
         message: format!("failed to serialize the token definition instruction: {error}"),
+    })
+}
+
+/// Serialized instruction for the `stake_chain_caller` test program: forward
+/// `forwarded_instruction_data` to the program at `target_program_account_id`
+/// as a chained call.
+pub fn chain_caller_instruction(
+    target_program_account_id: AccountId,
+    forwarded_instruction_data: InstructionData,
+) -> Result<InstructionData, StepError> {
+    Program::serialize_instruction((target_program_account_id, forwarded_instruction_data)).map_err(
+        |error| StepError::LogicalError {
+            message: format!("failed to serialize the chain-caller instruction: {error}"),
+        },
+    )
+}
+
+/// Serialized instruction for the `simple_balance_transfer` test program: a
+/// bare `u128` amount it moves from its first account into its second.
+pub fn simple_balance_transfer_instruction(amount: u128) -> Result<InstructionData, StepError> {
+    Program::serialize_instruction(amount).map_err(|error| StepError::LogicalError {
+        message: format!("failed to serialize the simple_balance_transfer instruction: {error}"),
     })
 }
 
