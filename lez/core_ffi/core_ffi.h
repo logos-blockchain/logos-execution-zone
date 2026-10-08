@@ -6,19 +6,19 @@
 #include <stdlib.h>
 
 typedef enum FfiProgramImageClaimKind {
-  Disclosed = 0,
-  Undisclosed,
+  FfiProgramImageClaimKind_Disclosed = 0,
+  FfiProgramImageClaimKind_Undisclosed,
 } FfiProgramImageClaimKind;
 
 typedef enum FfiTransactionKind {
-  Public = 0,
-  Private,
+  FfiTransactionKind_Public = 0,
+  FfiTransactionKind_Private,
 } FfiTransactionKind;
 
 typedef enum FfiBedrockStatus {
-  Pending = 0,
-  Safe,
-  Finalized,
+  FfiBedrockStatus_Pending = 0,
+  FfiBedrockStatus_Safe,
+  FfiBedrockStatus_Finalized,
 } FfiBedrockStatus;
 
 /**
@@ -28,127 +28,127 @@ typedef enum FfiOperationError {
   /**
    * Operation completed successfully.
    */
-  Success = 0,
+  FfiOperationError_Success = 0,
   /**
    * A null pointer was passed where a valid pointer was expected.
    */
-  NullPointer = 1,
+  FfiOperationError_NullPointer = 1,
   /**
    * Invalid UTF-8 string.
    */
-  InvalidUtf8 = 2,
+  FfiOperationError_InvalidUtf8 = 2,
   /**
    * Invalid or malformed argument.
    */
-  InvalidArgument = 3,
+  FfiOperationError_InvalidArgument = 3,
   /**
    * Error during sequencer initialization.
    */
-  SequencerInitializationError = 4,
+  FfiOperationError_SequencerInitializationError = 4,
   /**
    * Wallet handle is not initialized.
    */
-  WalletNotInitialized = 5,
+  FfiOperationError_WalletNotInitialized = 5,
   /**
    * Configuration error.
    */
-  ConfigError = 6,
+  FfiOperationError_ConfigError = 6,
   /**
    * Storage/persistence error.
    */
-  StorageError = 7,
+  FfiOperationError_StorageError = 7,
   /**
    * Network/RPC error.
    */
-  NetworkError = 8,
+  FfiOperationError_NetworkError = 8,
   /**
    * Query failed.
    */
-  QueryError = 9,
+  FfiOperationError_QueryError = 9,
   /**
    * Account not found.
    */
-  AccountNotFound = 10,
+  FfiOperationError_AccountNotFound = 10,
   /**
    * Key not found for account.
    */
-  KeyNotFound = 11,
+  FfiOperationError_KeyNotFound = 11,
   /**
    * Insufficient funds for operation.
    */
-  InsufficientFunds = 12,
+  FfiOperationError_InsufficientFunds = 12,
   /**
    * Invalid account ID format.
    */
-  InvalidAccountId = 13,
+  FfiOperationError_InvalidAccountId = 13,
   /**
    * Tokio runtime error.
    */
-  RuntimeError = 14,
+  FfiOperationError_RuntimeError = 14,
   /**
    * Password required but not provided.
    */
-  PasswordRequired = 15,
+  FfiOperationError_PasswordRequired = 15,
   /**
    * Block synchronization error.
    */
-  SyncError = 16,
+  FfiOperationError_SyncError = 16,
   /**
    * Serialization/deserialization error.
    */
-  SerializationError = 17,
+  FfiOperationError_SerializationError = 17,
   /**
    * Invalid conversion from FFI types to LEE types.
    */
-  InvalidTypeConversion = 18,
+  FfiOperationError_InvalidTypeConversion = 18,
   /**
    * Invalid Key value.
    */
-  InvalidKeyValue = 19,
+  FfiOperationError_InvalidKeyValue = 19,
   /**
    * Invalid program bytecode.
    */
-  InvalidBytecode = 20,
+  FfiOperationError_InvalidBytecode = 20,
   /**
    * Fee payer cannot fund the fee reserve.
    */
-  PayerCannotFund = 21,
+  FfiOperationError_PayerCannotFund = 21,
   /**
    * Operation not supported yet.
    */
-  NotSupported = 22,
+  FfiOperationError_NotSupported = 22,
   /**
    * Maximum response size exceeded.
    */
-  ResponseTooBig = 23,
+  FfiOperationError_ResponseTooBig = 23,
   /**
    * Internal error (catch-all).
    */
-  InternalError = 99,
+  FfiOperationError_InternalError = 99,
 } FfiOperationError;
 
 /**
  * Enumeration to represent kinds of `FfiAccountIdentity`.
  */
 typedef enum FfiAccountIdentityKind {
-  Public = 0,
-  PublicNoSign = 1,
-  PublicKeycard = 2,
-  PrivateOwned = 3,
-  PrivateForeign = 4,
-  PrivatePdaOwned = 5,
-  PrivatePdaForeign = 6,
-  PrivateShared = 7,
-  PrivatePdaShared = 8,
+  FfiAccountIdentityKind_Public = 0,
+  FfiAccountIdentityKind_PublicNoSign = 1,
+  FfiAccountIdentityKind_PublicKeycard = 2,
+  FfiAccountIdentityKind_PrivateOwned = 3,
+  FfiAccountIdentityKind_PrivateForeign = 4,
+  FfiAccountIdentityKind_PrivatePdaOwned = 5,
+  FfiAccountIdentityKind_PrivatePdaForeign = 6,
+  FfiAccountIdentityKind_PrivateShared = 7,
+  FfiAccountIdentityKind_PrivatePdaShared = 8,
 } FfiAccountIdentityKind;
 
 /**
  * Which of `Disclosed`/`Shadow`/`Undisclosed` a program (or dependency) is resolved as.
  */
 typedef enum FfiProgramKind {
-  ProgramDisclosed = 0,
-  ProgramShadow = 1,
-  ProgramUndisclosed = 2,
+  FfiProgramKind_ProgramDisclosed = 0,
+  FfiProgramKind_ProgramShadow = 1,
+  FfiProgramKind_ProgramUndisclosed = 2,
 } FfiProgramKind;
 
 /**
@@ -466,9 +466,9 @@ typedef struct FfiOption_FfiTransaction {
 } FfiOption_FfiTransaction;
 
 typedef enum PointerKind_Tag {
-  Owned,
-  Borrowed,
-  Null,
+  PointerKind_Owned,
+  PointerKind_Borrowed,
+  PointerKind_Null,
 } PointerKind_Tag;
 
 typedef struct PointerKind {
