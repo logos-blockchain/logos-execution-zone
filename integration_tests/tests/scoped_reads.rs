@@ -514,12 +514,12 @@ async fn loader_reads_survive_a_bloated_segment_account() -> Result<()> {
         "the segment account must be past the whole-account response limit"
     );
 
+    let head_id = new_account(&mut ctx, false, None).await?;
     let loader = ProgramLoader(ctx.wallet());
 
     let chain = loader.resolve_chain(segment_id).await?;
     assert_eq!(chain, vec![segment_id]);
 
-    let (_, head_id) = fresh_key(0xD1);
     let tx_hash = loader
         .write_segment(
             head_id,

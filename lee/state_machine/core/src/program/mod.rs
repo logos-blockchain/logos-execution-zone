@@ -399,13 +399,16 @@ pub struct ProgramHeader {
 
 impl ProgramHeader {
     #[must_use]
-    pub fn to_bytes(&self) -> Vec<u8> {
-        borsh::to_vec(self).expect("program header serializes")
+    pub fn to_loader_shard(self) -> Vec<u8> {
+        LoaderEntry::Header(self).to_bytes()
     }
 
     #[must_use]
-    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        borsh::from_slice(bytes).ok()
+    pub fn from_loader_shard(bytes: &[u8]) -> Option<Self> {
+        match LoaderEntry::from_bytes(bytes)? {
+            LoaderEntry::Header(header) => Some(header),
+            LoaderEntry::Segment(_) => None,
+        }
     }
 }
 
@@ -421,8 +424,31 @@ pub struct ProgramSegment {
 
 impl ProgramSegment {
     #[must_use]
+    pub fn to_loader_shard(self) -> Vec<u8> {
+        LoaderEntry::Segment(self).to_bytes()
+    }
+
+    #[must_use]
+    pub fn from_loader_shard(bytes: &[u8]) -> Option<Self> {
+        match LoaderEntry::from_bytes(bytes)? {
+            LoaderEntry::Segment(segment) => Some(segment),
+            LoaderEntry::Header(_) => None,
+        }
+    }
+}
+
+/// What a loader shard holds. The tag keeps a header and a segment from decoding as each other;
+/// variants are append-only.
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum LoaderEntry {
+    Header(ProgramHeader),
+    Segment(ProgramSegment),
+}
+
+impl LoaderEntry {
+    #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
-        borsh::to_vec(self).expect("program segment serializes")
+        borsh::to_vec(self).expect("loader entry serializes")
     }
 
     #[must_use]
@@ -864,7 +890,7 @@ pub fn get_program_via<'state>(
     account_id: AccountId,
     loader_shard: impl Fn(AccountId) -> Option<&'state ShardData>,
 ) -> Option<(ProgramId, Vec<u8>)> {
-    let header = ProgramHeader::from_bytes(loader_shard(account_id)?)?;
+    let header = ProgramHeader::from_loader_shard(loader_shard(account_id)?)?;
 
     let mut elf = Vec::new();
     let mut next = Some(header.program_first_segment);
@@ -874,7 +900,7 @@ pub fn get_program_via<'state>(
         if segment_count > MAX_PROGRAM_SEGMENTS {
             return None;
         }
-        let segment = ProgramSegment::from_bytes(loader_shard(segment_id)?)?;
+        let segment = ProgramSegment::from_loader_shard(loader_shard(segment_id)?)?;
         elf.extend_from_slice(&segment.bytecode);
         next = segment.next_segment;
     }
@@ -919,9 +945,10 @@ pub fn immutable_mirror_commitment(
     program_header: &ProgramHeader,
 ) -> Commitment {
     let mirror_account_id = AccountId::for_immutable_mirror(header_account_id);
+    // Untagged: the mirror is only hashed, and the circuit recomputes it.
     let mirrored_account = Account::default().with_shard(
         PROGRAM_LOADER_ACCOUNT_ID,
-        ShardData::try_from(program_header.to_bytes())
+        ShardData::try_from(borsh::to_vec(program_header).expect("program header serializes"))
             .expect("program header must fit under DATA_MAX_LENGTH"),
     );
     Commitment::new(&mirror_account_id, &mirrored_account)

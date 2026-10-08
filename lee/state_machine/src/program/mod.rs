@@ -54,6 +54,7 @@ impl Program {
         Ok(Self { id, elf })
     }
 
+    /// Trusts `id` to be `elf`'s image id; genesis verifies it.
     #[must_use]
     pub const fn new_unchecked(id: ProgramId, elf: Cow<'static, [u8]>) -> Self {
         Self { id, elf }
