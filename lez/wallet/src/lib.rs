@@ -774,7 +774,7 @@ impl WalletCore {
                 .await??;
         let effect_cycles = self
             .sequencer_client
-            .estimate_private_effect_cycles(DeferredPublicActions(actions))
+            .estimate_private_effect_cycles(DeferredPublicActions(actions.clone()))
             .await?;
         let payer = match acc_manager.private_fee_payer_account_id() {
             Some(payer) => payer,
@@ -1016,19 +1016,10 @@ impl WalletCore {
         )
         .expect("transaction size fits u128");
         let run = self
-            .multi_sequencer_client
-            .metered_get(async |client: &SequencerClient| {
-                client
-                    .dry_run_public_transaction(LeeTransaction::Public(tx.clone()))
-                    .await
-            })
-            .await
-            .map_err(|err| ExecutionFailureKind::SequencerError(err.into()))?;
-        let quote = self
-            .multi_sequencer_client
-            .metered_get(async |client: &SequencerClient| client.get_fee_state().await)
-            .await
-            .map_err(|err| ExecutionFailureKind::SequencerError(err.into()))?;
+            .sequencer_client
+            .dry_run_public_transaction(LeeTransaction::Public(tx.clone()))
+            .await?;
+        let quote = self.sequencer_client.get_fee_state().await?;
         let actual_fee = u128::from(run.cycles)
             .saturating_mul(u128::from(quote.base_fee_exec))
             .saturating_add(data_bytes.saturating_mul(u128::from(quote.base_fee_stor)))
