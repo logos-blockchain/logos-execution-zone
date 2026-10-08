@@ -66,5 +66,4 @@ test_programs.workspace = true
 program_loader_core.workspace = true
 lee = { workspace = true, features = ["test-utils"] }
 key_protocol.workspace = true
-token_core.workspace = true
 ping_core.workspace = true

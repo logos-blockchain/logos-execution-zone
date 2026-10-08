@@ -25,15 +25,13 @@ cross_zone_outbox_core.workspace = true
 cross_zone_inbox_core.workspace = true
 cross_zone_marker_core.workspace = true
 bridge_lock_core.workspace = true
-amm_core.workspace = true
-token_core.workspace = true
 wrapped_token_core.workspace = true
 indexer_service_rpc = { workspace = true, features = ["client"] }
 indexer_service.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 sequencer_service = { workspace = true, features = ["rpc"] }
 indexer_ffi.workspace = true
-lez_core_ffi.workspace = true
+core_ffi.workspace = true
 indexer_service_protocol.workspace = true
 system_accounts.workspace = true
 sequencer_stake_core.workspace = true

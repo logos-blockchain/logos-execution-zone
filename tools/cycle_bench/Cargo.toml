@@ -17,12 +17,11 @@ ppe = ["prove"]
 lee = { workspace = true }
 lee_core = { workspace = true, features = ["host"] }
 clock_core.workspace = true
-token_core.workspace = true
-amm_core.workspace = true
-associated_token_account_core.workspace = true
-programs.workspace = true
+fee_core.workspace = true
+rand.workspace = true
 test_guest_core.workspace = true
 test_programs.workspace = true
+programs.workspace = true
 
 risc0-zkvm.workspace = true
 borsh.workspace = true

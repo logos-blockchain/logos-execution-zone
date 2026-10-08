@@ -10,5 +10,5 @@ fn main() {
         .with_pragma_once(true)
         .generate()
         .expect("Unable to generate bindings")
-        .write_to_file("lez_core_ffi.h");
+        .write_to_file("core_ffi.h");
 }
