@@ -11,11 +11,12 @@ use lee::{
 };
 use lee_core::{MembershipProof, program::ProgramHeader};
 
-use crate::wallet::{
-    FfiAccountMention, FfiBytes32, WalletHandle, block_on,
-    error::{WalletFfiError, print_error},
-    lifecycle::get_wallet,
-    map_execution_error, read_optional_account_id,
+use crate::{
+    error::{FfiOperationError, print_error},
+    wallet::{
+        FfiAccountMention, FfiBytes32, WalletHandle, block_on, lifecycle::get_wallet,
+        map_execution_error, read_optional_account_id,
+    },
 };
 
 #[repr(C)]
@@ -26,7 +27,7 @@ pub struct FfiProgram {
 }
 
 impl TryFrom<&FfiProgram> for Program {
-    type Error = WalletFfiError;
+    type Error = FfiOperationError;
 
     fn try_from(value: &FfiProgram) -> Result<Self, Self::Error> {
         let mut elf = Vec::with_capacity(value.elf_size);
@@ -38,7 +39,7 @@ impl TryFrom<&FfiProgram> for Program {
 
         Self::new(elf.into()).map_err(|err| {
             print_error(format!("Invalid program bytecode, err: {err}"));
-            WalletFfiError::InvalidBytecode
+            FfiOperationError::InvalidBytecode
         })
     }
 }
@@ -109,12 +110,13 @@ impl Default for FfiMembershipProof {
 }
 
 impl TryFrom<&FfiMembershipProof> for MembershipProof {
-    type Error = WalletFfiError;
+    type Error = FfiOperationError;
 
     fn try_from(value: &FfiMembershipProof) -> Result<Self, Self::Error> {
         let mut path = Vec::with_capacity(value.path_len);
         for i in 0..value.path_len {
-            let hash = unsafe { value.path.add(i).as_ref() }.ok_or(WalletFfiError::NullPointer)?;
+            let hash =
+                unsafe { value.path.add(i).as_ref() }.ok_or(FfiOperationError::NullPointer)?;
             path.push(hash.data);
         }
         Ok((value.index, path))
@@ -163,7 +165,7 @@ pub struct FfiProgramWithDependencies {
 }
 
 impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
-    type Error = WalletFfiError;
+    type Error = FfiOperationError;
 
     fn try_from(value: &FfiProgramWithDependencies) -> Result<Self, Self::Error> {
         let supplied_root = AccountId::from(value.self_account_id);
@@ -173,7 +175,7 @@ impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
         // Alignment will be different, we need to read elements one-by-one
         for i in 0..value.programs_size {
             let entry =
-                unsafe { value.programs.add(i).as_ref() }.ok_or(WalletFfiError::NullPointer)?;
+                unsafe { value.programs.add(i).as_ref() }.ok_or(FfiOperationError::NullPointer)?;
             let program: Program = (&entry.program).try_into()?;
             let account_id = ffi_account_id(&program, entry.kind, entry.account_id);
             if AccountId::from(entry.account_id) == supplied_root {
@@ -287,7 +289,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
     program_account_id: FfiBytes32,
     payer: *const FfiBytes32,
     out_result: *mut FfiTransactionResult,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -295,24 +297,24 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
 
     if account_mentions.is_null() {
         print_error("Null input pointer for account mentions list");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     if instruction_data.is_null() {
         print_error("Null input pointer for instruction data");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     if out_result.is_null() {
         print_error("Null output pointer return hash");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -349,7 +351,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
                 (*out_result).tx_hash = tx_hash;
                 (*out_result).success = true;
             }
-            WalletFfiError::Success
+            FfiOperationError::Success
         }
         Err(e) => {
             print_error(format!("Public send failed: {e:?}"));
@@ -388,7 +390,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
     instruction_data_size: usize,
     program_with_dependencies: *const FfiProgramWithDependencies,
     out_result: *mut FfiTransactionResult,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -396,24 +398,24 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
 
     if account_mentions.is_null() {
         print_error("Null input pointer for account mentions list");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     if instruction_data.is_null() {
         print_error("Null input pointer for instruction data");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     if out_result.is_null() {
         print_error("Null output pointer return hash");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -460,7 +462,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
                 (*out_result).secrets_size = secrets_size;
                 (*out_result).secrets_data = secrets_data;
             }
-            WalletFfiError::Success
+            FfiOperationError::Success
         }
         Err(e) => {
             print_error(format!("Private send failed: {e:?}"));
@@ -490,7 +492,7 @@ pub unsafe extern "C" fn wallet_ffi_poll_transaction_status(
     tx_hash: FfiBytes32,
     // ToDo: Replace with status enum.
     transaction_status: *mut bool,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -500,7 +502,7 @@ pub unsafe extern "C" fn wallet_ffi_poll_transaction_status(
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -508,7 +510,7 @@ pub unsafe extern "C" fn wallet_ffi_poll_transaction_status(
         *transaction_status = block_on(wallet.poll_transaction(HashType(tx_hash.data))).is_ok();
     }
 
-    WalletFfiError::Success
+    FfiOperationError::Success
 }
 
 /// Free a transaction result returned by `wallet_ffi_send_generic_public_transaction` or

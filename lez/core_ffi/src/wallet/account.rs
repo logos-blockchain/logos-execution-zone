@@ -7,10 +7,10 @@ use lee::{AccountId, ProgramShardSelector};
 use wallet::account::{AccountIdWithPrivacy, HumanReadableAccount};
 
 use crate::{
+    error::{FfiOperationError, print_error},
     primitives::types::{FfiBytes32, FfiIdentifier, FfiPrivateAccountKeys, account::FfiAccount},
     wallet::{
         block_on, c_str_to_string,
-        error::{WalletFfiError, print_error},
         lifecycle::get_wallet,
         types::{FfiAccountList, FfiAccountListEntry, WalletHandle},
     },
@@ -36,7 +36,7 @@ use crate::{
 pub unsafe extern "C" fn wallet_ffi_create_account_public(
     handle: *mut WalletHandle,
     out_account_id: *mut FfiBytes32,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -44,14 +44,14 @@ pub unsafe extern "C" fn wallet_ffi_create_account_public(
 
     if out_account_id.is_null() {
         print_error("Null output pointer for account_id");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let mut wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -61,7 +61,7 @@ pub unsafe extern "C" fn wallet_ffi_create_account_public(
         (*out_account_id).data = *account_id.value();
     }
 
-    WalletFfiError::Success
+    FfiOperationError::Success
 }
 
 /// Create a new private account, storing a default account entry in local storage.
@@ -91,7 +91,7 @@ pub unsafe extern "C" fn wallet_ffi_create_account_public(
 pub unsafe extern "C" fn wallet_ffi_create_account_private(
     handle: *mut WalletHandle,
     out_account_id: *mut FfiBytes32,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -99,14 +99,14 @@ pub unsafe extern "C" fn wallet_ffi_create_account_private(
 
     if out_account_id.is_null() {
         print_error("Null output pointer for account_id");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let mut wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -116,7 +116,7 @@ pub unsafe extern "C" fn wallet_ffi_create_account_private(
         (*out_account_id).data = *account_id.value();
     }
 
-    WalletFfiError::Success
+    FfiOperationError::Success
 }
 
 /// Create a new private key node.
@@ -143,7 +143,7 @@ pub unsafe extern "C" fn wallet_ffi_create_account_private(
 pub unsafe extern "C" fn wallet_ffi_create_private_accounts_key(
     handle: *mut WalletHandle,
     out_keys: *mut FfiPrivateAccountKeys,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -151,14 +151,14 @@ pub unsafe extern "C" fn wallet_ffi_create_private_accounts_key(
 
     if out_keys.is_null() {
         print_error("Null output pointer for keys");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let mut wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -177,7 +177,7 @@ pub unsafe extern "C" fn wallet_ffi_create_private_accounts_key(
         (*out_keys).viewing_public_key = vpk_ffi_vec;
     }
 
-    WalletFfiError::Success
+    FfiOperationError::Success
 }
 
 /// List all accounts in the wallet.
@@ -202,7 +202,7 @@ pub unsafe extern "C" fn wallet_ffi_create_private_accounts_key(
 pub unsafe extern "C" fn wallet_ffi_list_accounts(
     handle: *mut WalletHandle,
     out_list: *mut FfiAccountList,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -210,14 +210,14 @@ pub unsafe extern "C" fn wallet_ffi_list_accounts(
 
     if out_list.is_null() {
         print_error("Null output pointer for account list");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -254,7 +254,7 @@ pub unsafe extern "C" fn wallet_ffi_list_accounts(
         }
     }
 
-    WalletFfiError::Success
+    FfiOperationError::Success
 }
 
 /// Free an account list returned by `wallet_ffi_list_accounts`.
@@ -303,7 +303,7 @@ pub unsafe extern "C" fn wallet_ffi_get_balance(
     account_id: *const FfiBytes32,
     is_public: bool,
     out_balance: *mut [u8; 16],
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -311,14 +311,14 @@ pub unsafe extern "C" fn wallet_ffi_get_balance(
 
     if account_id.is_null() || out_balance.is_null() {
         print_error("Null pointer argument");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -329,7 +329,7 @@ pub unsafe extern "C" fn wallet_ffi_get_balance(
             Ok(b) => b,
             Err(e) => {
                 print_error(format!("Failed to get balance: {e}"));
-                return WalletFfiError::NetworkError;
+                return FfiOperationError::NetworkError;
             }
         }
     } else if let Some(account) = wallet.get_account_private(account_id) {
@@ -337,19 +337,19 @@ pub unsafe extern "C" fn wallet_ffi_get_balance(
             Ok(balance) => balance,
             Err(error) => {
                 print_error(format!("Private account balance is malformed: {error}"));
-                return WalletFfiError::SerializationError;
+                return FfiOperationError::SerializationError;
             }
         }
     } else {
         print_error("Private account not found");
-        return WalletFfiError::AccountNotFound;
+        return FfiOperationError::AccountNotFound;
     };
 
     unsafe {
         *out_balance = balance.to_le_bytes();
     }
 
-    WalletFfiError::Success
+    FfiOperationError::Success
 }
 
 /// Get full public account data from the network.
@@ -375,7 +375,7 @@ pub unsafe extern "C" fn wallet_ffi_get_account_public(
     handle: *mut WalletHandle,
     account_id: *const FfiBytes32,
     out_account: *mut FfiAccount,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -383,14 +383,14 @@ pub unsafe extern "C" fn wallet_ffi_get_account_public(
 
     if account_id.is_null() || out_account.is_null() {
         print_error("Null pointer argument");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -400,7 +400,7 @@ pub unsafe extern "C" fn wallet_ffi_get_account_public(
         Ok(a) => a,
         Err(e) => {
             print_error(format!("Failed to get account: {e}"));
-            return WalletFfiError::NetworkError;
+            return FfiOperationError::NetworkError;
         }
     };
 
@@ -408,7 +408,7 @@ pub unsafe extern "C" fn wallet_ffi_get_account_public(
         *out_account = account.into();
     }
 
-    WalletFfiError::Success
+    FfiOperationError::Success
 }
 
 /// Get full private account data from the local storage.
@@ -434,7 +434,7 @@ pub unsafe extern "C" fn wallet_ffi_get_account_private(
     handle: *mut WalletHandle,
     account_id: *const FfiBytes32,
     out_account: *mut FfiAccount,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -442,28 +442,28 @@ pub unsafe extern "C" fn wallet_ffi_get_account_private(
 
     if account_id.is_null() || out_account.is_null() {
         print_error("Null pointer argument");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
     let account_id = AccountId::new(unsafe { (*account_id).data });
 
     let Some(account) = wallet.get_account_private(account_id) else {
-        return WalletFfiError::AccountNotFound;
+        return FfiOperationError::AccountNotFound;
     };
 
     unsafe {
         *out_account = account.into();
     }
 
-    WalletFfiError::Success
+    FfiOperationError::Success
 }
 
 #[unsafe(no_mangle)]
@@ -476,7 +476,7 @@ pub unsafe extern "C" fn wallet_ffi_get_account_view(
     account_id: *const FfiBytes32,
     program_account_id: *const FfiBytes32,
     out_account: *mut FfiAccount,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -484,14 +484,14 @@ pub unsafe extern "C" fn wallet_ffi_get_account_view(
 
     if account_id.is_null() || out_account.is_null() {
         print_error("Null pointer argument");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -503,7 +503,7 @@ pub unsafe extern "C" fn wallet_ffi_get_account_view(
              id for the balance shard"
                 .to_owned(),
         );
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
     let shard_selector = ProgramShardSelector::new(
         account_id,
@@ -514,7 +514,7 @@ pub unsafe extern "C" fn wallet_ffi_get_account_view(
         Ok(a) => a,
         Err(e) => {
             print_error(format!("Failed to get account: {e}"));
-            return WalletFfiError::NetworkError;
+            return FfiOperationError::NetworkError;
         }
     };
 
@@ -522,7 +522,7 @@ pub unsafe extern "C" fn wallet_ffi_get_account_view(
         *out_account = account.into();
     }
 
-    WalletFfiError::Success
+    FfiOperationError::Success
 }
 
 /// Import a public account private key into wallet storage.
@@ -542,7 +542,7 @@ pub unsafe extern "C" fn wallet_ffi_get_account_view(
 pub unsafe extern "C" fn wallet_ffi_import_public_account(
     handle: *mut WalletHandle,
     private_key_hex: *const c_char,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -557,7 +557,7 @@ pub unsafe extern "C" fn wallet_ffi_import_public_account(
         Ok(value) => value,
         Err(e) => {
             print_error(format!("Invalid public account private key: {e}"));
-            return WalletFfiError::InvalidKeyValue;
+            return FfiOperationError::InvalidKeyValue;
         }
     };
 
@@ -565,7 +565,7 @@ pub unsafe extern "C" fn wallet_ffi_import_public_account(
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -575,10 +575,10 @@ pub unsafe extern "C" fn wallet_ffi_import_public_account(
         .add_imported_public_account(private_key);
 
     match wallet.store_persistent_data() {
-        Ok(()) => WalletFfiError::Success,
+        Ok(()) => FfiOperationError::Success,
         Err(e) => {
             print_error(format!("Failed to save wallet after public import: {e}"));
-            WalletFfiError::StorageError
+            FfiOperationError::StorageError
         }
     }
 }
@@ -608,7 +608,7 @@ pub unsafe extern "C" fn wallet_ffi_import_private_account(
     chain_index: *const c_char,
     identifier: *const FfiIdentifier,
     account_state_json: *const c_char,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -616,7 +616,7 @@ pub unsafe extern "C" fn wallet_ffi_import_private_account(
 
     if identifier.is_null() {
         print_error("Null pointer for identifier");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let key_chain_json = match c_str_to_string(key_chain_json, "key_chain_json") {
@@ -633,7 +633,7 @@ pub unsafe extern "C" fn wallet_ffi_import_private_account(
         Ok(value) => value,
         Err(e) => {
             print_error(format!("Invalid key chain JSON: {e}"));
-            return WalletFfiError::SerializationError;
+            return FfiOperationError::SerializationError;
         }
     };
 
@@ -641,7 +641,7 @@ pub unsafe extern "C" fn wallet_ffi_import_private_account(
         Ok(value) => value,
         Err(e) => {
             print_error(format!("Invalid account state JSON: {e}"));
-            return WalletFfiError::SerializationError;
+            return FfiOperationError::SerializationError;
         }
     };
 
@@ -651,7 +651,7 @@ pub unsafe extern "C" fn wallet_ffi_import_private_account(
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -667,7 +667,7 @@ pub unsafe extern "C" fn wallet_ffi_import_private_account(
             Ok(value) => value,
             Err(e) => {
                 print_error(format!("Invalid chain index string: {e}"));
-                return WalletFfiError::InvalidTypeConversion;
+                return FfiOperationError::InvalidTypeConversion;
             }
         };
 
@@ -682,10 +682,10 @@ pub unsafe extern "C" fn wallet_ffi_import_private_account(
         .add_imported_private_account(key_chain, chain_index, identifier, account);
 
     match wallet.store_persistent_data() {
-        Ok(()) => WalletFfiError::Success,
+        Ok(()) => FfiOperationError::Success,
         Err(e) => {
             print_error(format!("Failed to save wallet after private import: {e}"));
-            WalletFfiError::StorageError
+            FfiOperationError::StorageError
         }
     }
 }

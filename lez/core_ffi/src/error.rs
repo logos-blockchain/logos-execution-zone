@@ -9,66 +9,87 @@ use crate::primitives::errors::PrimitiveOperationStatus;
 /// Error codes returned by FFI functions.
 #[repr(C)]
 #[must_use]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WalletFfiError {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum FfiOperationError {
     /// Operation completed successfully.
+    #[default]
     Success = 0,
     /// A null pointer was passed where a valid pointer was expected.
     NullPointer = 1,
     /// Invalid UTF-8 string.
     InvalidUtf8 = 2,
+    /// Invalid or malformed argument.
+    InvalidArgument = 3,
+    /// Error during sequencer initialization.
+    SequencerInitializationError = 4,
     /// Wallet handle is not initialized.
-    WalletNotInitialized = 3,
+    WalletNotInitialized = 5,
     /// Configuration error.
-    ConfigError = 4,
+    ConfigError = 6,
     /// Storage/persistence error.
-    StorageError = 5,
+    StorageError = 7,
     /// Network/RPC error.
-    NetworkError = 6,
+    NetworkError = 8,
+    /// Query failed.
+    QueryError = 9,
     /// Account not found.
-    AccountNotFound = 7,
+    AccountNotFound = 10,
     /// Key not found for account.
-    KeyNotFound = 8,
+    KeyNotFound = 11,
     /// Insufficient funds for operation.
-    InsufficientFunds = 9,
+    InsufficientFunds = 12,
     /// Invalid account ID format.
-    InvalidAccountId = 10,
+    InvalidAccountId = 13,
     /// Tokio runtime error.
-    RuntimeError = 11,
+    RuntimeError = 14,
     /// Password required but not provided.
-    PasswordRequired = 12,
+    PasswordRequired = 15,
     /// Block synchronization error.
-    SyncError = 13,
+    SyncError = 16,
     /// Serialization/deserialization error.
-    SerializationError = 14,
+    SerializationError = 17,
     /// Invalid conversion from FFI types to LEE types.
-    InvalidTypeConversion = 15,
+    InvalidTypeConversion = 18,
     /// Invalid Key value.
-    InvalidKeyValue = 16,
+    InvalidKeyValue = 19,
     /// Invalid program bytecode.
-    InvalidBytecode = 17,
+    InvalidBytecode = 20,
     /// Fee payer cannot fund the fee reserve.
-    PayerCannotFund = 18,
+    PayerCannotFund = 21,
+    /// Operation not supported yet.
+    NotSupported = 22,
+    /// Maximum response size exceeded.
+    ResponseTooBig = 23,
     /// Internal error (catch-all).
     InternalError = 99,
 }
 
-impl From<Utf8Error> for WalletFfiError {
+impl From<Utf8Error> for FfiOperationError {
     fn from(_value: Utf8Error) -> Self {
         Self::InvalidUtf8
     }
 }
 
-impl WalletFfiError {
-    /// Check if it's [`WalletFfiError::Success`] or panic.
+impl FfiOperationError {
+    /// Check if it's [`FfiOperationError::Success`] or panic.
     pub fn unwrap(self) {
         let Self::Success = self else {
             panic!("Called `unwrap()` on error value `{self:#?}`");
         };
     }
+
+    #[must_use]
+    pub fn is_ok(&self) -> bool {
+        *self == Self::Success
+    }
+
+    #[must_use]
+    pub fn is_error(&self) -> bool {
+        !self.is_ok()
+    }
 }
 
-impl From<PrimitiveOperationStatus> for WalletFfiError {
+impl From<PrimitiveOperationStatus> for FfiOperationError {
     fn from(value: PrimitiveOperationStatus) -> Self {
         match value {
             PrimitiveOperationStatus::Ok => Self::Success,
@@ -83,5 +104,5 @@ impl From<PrimitiveOperationStatus> for WalletFfiError {
     reason = "In FFI context it's better to print errors than to return strings"
 )]
 pub fn print_error(msg: impl Into<String>) {
-    eprintln!("[wallet-ffi] {}", msg.into());
+    eprintln!("[ffi] {}", msg.into());
 }

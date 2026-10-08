@@ -7,11 +7,13 @@ use std::{
 use sequencer_service::SequencerConfig;
 
 use crate::{
+    error::FfiOperationError,
     primitives::{result::PointerResult, runtime::Runtime},
-    sequencer::{SequencerServiceFFI, error::OperationStatus},
+    sequencer::SequencerServiceFFI,
 };
 
-pub type InitializedSequencerServiceFFIResult = PointerResult<SequencerServiceFFI, OperationStatus>;
+pub type InitializedSequencerServiceFFIResult =
+    PointerResult<SequencerServiceFFI, FfiOperationError>;
 
 /// Creates and starts an sequencer based on the provided
 /// configuration file path.
@@ -63,10 +65,10 @@ pub unsafe extern "C" fn sequencer_ffi_start_sequencer(
 unsafe fn setup_sequencer(
     runtime: *const Runtime,
     config_path: *const c_char,
-) -> Result<SequencerServiceFFI, OperationStatus> {
+) -> Result<SequencerServiceFFI, FfiOperationError> {
     if config_path.is_null() {
         log::error!("Attempted to give a null config_path pointer. This is a bug. Aborting.");
-        return Err(OperationStatus::NullPointer);
+        return Err(FfiOperationError::NullPointer);
     }
 
     let user_config_path = PathBuf::from(
@@ -74,12 +76,12 @@ unsafe fn setup_sequencer(
             .to_str()
             .map_err(|e| {
                 log::error!("Could not convert the config path to string: {e}");
-                OperationStatus::InitializationError
+                FfiOperationError::SequencerInitializationError
             })?,
     );
     let config = SequencerConfig::from_path(&user_config_path).map_err(|e| {
         log::error!("Failed to read config: {e}");
-        OperationStatus::InitializationError
+        FfiOperationError::SequencerInitializationError
     })?;
 
     // Use the caller's runtime if one was supplied, otherwise create (and own)
@@ -88,7 +90,7 @@ unsafe fn setup_sequencer(
     let runtime = if runtime.is_null() {
         Runtime::new().map_err(|e| {
             log::error!("Could not create tokio runtime: {e}");
-            OperationStatus::InitializationError
+            FfiOperationError::SequencerInitializationError
         })?
     } else {
         // SAFETY: the caller guarantees `runtime` is valid and outlives the sequencer.
@@ -106,7 +108,7 @@ unsafe fn setup_sequencer(
         .block_on(sequencer_service::run(config, rpc_addr))
         .map_err(|e| {
             log::error!("Could not start the sequencer: {e:#}");
-            OperationStatus::InitializationError
+            FfiOperationError::SequencerInitializationError
         })?;
 
     Ok(SequencerServiceFFI::new(handle, runtime))
@@ -131,15 +133,15 @@ unsafe fn setup_sequencer(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sequencer_ffi_stop_sequencer(
     sequencer: *mut SequencerServiceFFI,
-) -> OperationStatus {
+) -> FfiOperationError {
     if sequencer.is_null() {
         log::error!("Attempted to stop a null sequencer pointer. This is a bug. Aborting.");
-        return OperationStatus::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let sequencer = unsafe { Box::from_raw(sequencer) };
 
     drop(sequencer);
 
-    OperationStatus::Ok
+    FfiOperationError::Success
 }

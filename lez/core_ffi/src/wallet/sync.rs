@@ -1,10 +1,8 @@
 //! Block synchronization functions.
 
-use crate::wallet::{
-    block_on,
-    error::{WalletFfiError, print_error},
-    lifecycle::get_wallet,
-    types::WalletHandle,
+use crate::{
+    error::{FfiOperationError, print_error},
+    wallet::{block_on, lifecycle::get_wallet, types::WalletHandle},
 };
 
 /// Synchronize private accounts to a specific block.
@@ -31,7 +29,7 @@ use crate::wallet::{
 pub unsafe extern "C" fn wallet_ffi_sync_to_block(
     handle: *mut WalletHandle,
     block_id: u64,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -41,15 +39,15 @@ pub unsafe extern "C" fn wallet_ffi_sync_to_block(
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
     match block_on(wallet.sync_to_block(block_id)) {
-        Ok(()) => WalletFfiError::Success,
+        Ok(()) => FfiOperationError::Success,
         Err(e) => {
             print_error(format!("Sync failed: {e}"));
-            WalletFfiError::SyncError
+            FfiOperationError::SyncError
         }
     }
 }
@@ -71,7 +69,7 @@ pub unsafe extern "C" fn wallet_ffi_sync_to_block(
 pub unsafe extern "C" fn wallet_ffi_get_last_synced_block(
     handle: *mut WalletHandle,
     out_block_id: *mut u64,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -79,14 +77,14 @@ pub unsafe extern "C" fn wallet_ffi_get_last_synced_block(
 
     if out_block_id.is_null() {
         print_error("Null output pointer");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -94,7 +92,7 @@ pub unsafe extern "C" fn wallet_ffi_get_last_synced_block(
         *out_block_id = wallet.storage().last_synced_block();
     }
 
-    WalletFfiError::Success
+    FfiOperationError::Success
 }
 
 /// Get the current block height from the sequencer.
@@ -115,7 +113,7 @@ pub unsafe extern "C" fn wallet_ffi_get_last_synced_block(
 pub unsafe extern "C" fn wallet_ffi_get_current_block_height(
     handle: *mut WalletHandle,
     out_block_height: *mut u64,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -123,14 +121,14 @@ pub unsafe extern "C" fn wallet_ffi_get_current_block_height(
 
     if out_block_height.is_null() {
         print_error("Null output pointer");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -139,11 +137,11 @@ pub unsafe extern "C" fn wallet_ffi_get_current_block_height(
             unsafe {
                 *out_block_height = last_block_id;
             }
-            WalletFfiError::Success
+            FfiOperationError::Success
         }
         Err(e) => {
             print_error(format!("Failed to get block height: {e:?}"));
-            WalletFfiError::NetworkError
+            FfiOperationError::NetworkError
         }
     }
 }

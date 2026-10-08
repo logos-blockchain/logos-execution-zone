@@ -21,21 +21,10 @@ typedef enum FfiBedrockStatus {
   Finalized,
 } FfiBedrockStatus;
 
-typedef enum OperationStatus {
-  Ok = 0,
-  NullPointer = 1,
-  InitializationError = 2,
-  ClientError = 3,
-  CastError = 4,
-  NotSupported = 5,
-  InvalidArgument = 6,
-  ResponseTooBig = 7,
-} OperationStatus;
-
 /**
  * Error codes returned by FFI functions.
  */
-typedef enum WalletFfiError {
+typedef enum FfiOperationError {
   /**
    * Operation completed successfully.
    */
@@ -49,74 +38,94 @@ typedef enum WalletFfiError {
    */
   InvalidUtf8 = 2,
   /**
+   * Invalid or malformed argument.
+   */
+  InvalidArgument = 3,
+  /**
+   * Error during sequencer initialization.
+   */
+  SequencerInitializationError = 4,
+  /**
    * Wallet handle is not initialized.
    */
-  WalletNotInitialized = 3,
+  WalletNotInitialized = 5,
   /**
    * Configuration error.
    */
-  ConfigError = 4,
+  ConfigError = 6,
   /**
    * Storage/persistence error.
    */
-  StorageError = 5,
+  StorageError = 7,
   /**
    * Network/RPC error.
    */
-  NetworkError = 6,
+  NetworkError = 8,
+  /**
+   * Query failed.
+   */
+  QueryError = 9,
   /**
    * Account not found.
    */
-  AccountNotFound = 7,
+  AccountNotFound = 10,
   /**
    * Key not found for account.
    */
-  KeyNotFound = 8,
+  KeyNotFound = 11,
   /**
    * Insufficient funds for operation.
    */
-  InsufficientFunds = 9,
+  InsufficientFunds = 12,
   /**
    * Invalid account ID format.
    */
-  InvalidAccountId = 10,
+  InvalidAccountId = 13,
   /**
    * Tokio runtime error.
    */
-  RuntimeError = 11,
+  RuntimeError = 14,
   /**
    * Password required but not provided.
    */
-  PasswordRequired = 12,
+  PasswordRequired = 15,
   /**
    * Block synchronization error.
    */
-  SyncError = 13,
+  SyncError = 16,
   /**
    * Serialization/deserialization error.
    */
-  SerializationError = 14,
+  SerializationError = 17,
   /**
    * Invalid conversion from FFI types to LEE types.
    */
-  InvalidTypeConversion = 15,
+  InvalidTypeConversion = 18,
   /**
    * Invalid Key value.
    */
-  InvalidKeyValue = 16,
+  InvalidKeyValue = 19,
   /**
    * Invalid program bytecode.
    */
-  InvalidBytecode = 17,
+  InvalidBytecode = 20,
   /**
    * Fee payer cannot fund the fee reserve.
    */
-  PayerCannotFund = 18,
+  PayerCannotFund = 21,
+  /**
+   * Operation not supported yet.
+   */
+  NotSupported = 22,
+  /**
+   * Maximum response size exceeded.
+   */
+  ResponseTooBig = 23,
   /**
    * Internal error (catch-all).
    */
   InternalError = 99,
-} WalletFfiError;
+} FfiOperationError;
 
 /**
  * Enumeration to represent kinds of `FfiAccountIdentity`.
@@ -503,12 +512,12 @@ typedef struct SequencerServiceFFI {
  * Pointer is not guaranteed. You should check the error field before
  * dereferencing the pointer.
  */
-typedef struct PointerResult_SequencerServiceFFI__OperationStatus {
+typedef struct PointerResult_SequencerServiceFFI__FfiOperationError {
   struct SequencerServiceFFI *value;
-  enum OperationStatus error;
-} PointerResult_SequencerServiceFFI__OperationStatus;
+  enum FfiOperationError error;
+} PointerResult_SequencerServiceFFI__FfiOperationError;
 
-typedef struct PointerResult_SequencerServiceFFI__OperationStatus InitializedSequencerServiceFFIResult;
+typedef struct PointerResult_SequencerServiceFFI__FfiOperationError InitializedSequencerServiceFFIResult;
 
 /**
  * Result of [`query_last_block`], returned **inline** (no heap allocation, so
@@ -521,7 +530,7 @@ typedef struct PointerResult_SequencerServiceFFI__OperationStatus InitializedSeq
 typedef struct LastBlockIdResult {
   uint64_t block_id;
   bool is_some;
-  enum OperationStatus error;
+  enum FfiOperationError error;
 } LastBlockIdResult;
 
 /**
@@ -530,10 +539,10 @@ typedef struct LastBlockIdResult {
  * Pointer is not guaranteed. You should check the error field before
  * dereferencing the pointer.
  */
-typedef struct PointerResult_FfiBlockOpt__OperationStatus {
+typedef struct PointerResult_FfiBlockOpt__FfiOperationError {
   FfiBlockOpt *value;
-  enum OperationStatus error;
-} PointerResult_FfiBlockOpt__OperationStatus;
+  enum FfiOperationError error;
+} PointerResult_FfiBlockOpt__FfiOperationError;
 
 /**
  * Simple wrapper around a pointer to a value or an error.
@@ -541,10 +550,10 @@ typedef struct PointerResult_FfiBlockOpt__OperationStatus {
  * Pointer is not guaranteed. You should check the error field before
  * dereferencing the pointer.
  */
-typedef struct PointerResult_FfiAccount__OperationStatus {
+typedef struct PointerResult_FfiAccount__FfiOperationError {
   struct FfiAccount *value;
-  enum OperationStatus error;
-} PointerResult_FfiAccount__OperationStatus;
+  enum FfiOperationError error;
+} PointerResult_FfiAccount__FfiOperationError;
 
 /**
  * Simple wrapper around a pointer to a value or an error.
@@ -552,10 +561,10 @@ typedef struct PointerResult_FfiAccount__OperationStatus {
  * Pointer is not guaranteed. You should check the error field before
  * dereferencing the pointer.
  */
-typedef struct PointerResult_u8__OperationStatus {
+typedef struct PointerResult_u8__FfiOperationError {
   uint8_t *value;
-  enum OperationStatus error;
-} PointerResult_u8__OperationStatus;
+  enum FfiOperationError error;
+} PointerResult_u8__FfiOperationError;
 
 /**
  * Simple wrapper around a pointer to a value or an error.
@@ -563,10 +572,10 @@ typedef struct PointerResult_u8__OperationStatus {
  * Pointer is not guaranteed. You should check the error field before
  * dereferencing the pointer.
  */
-typedef struct PointerResult_FfiOption_FfiTransaction_____OperationStatus {
+typedef struct PointerResult_FfiOption_FfiTransaction_____FfiOperationError {
   struct FfiOption_FfiTransaction *value;
-  enum OperationStatus error;
-} PointerResult_FfiOption_FfiTransaction_____OperationStatus;
+  enum FfiOperationError error;
+} PointerResult_FfiOption_FfiTransaction_____FfiOperationError;
 
 /**
  * Simple wrapper around a pointer to a value or an error.
@@ -574,10 +583,10 @@ typedef struct PointerResult_FfiOption_FfiTransaction_____OperationStatus {
  * Pointer is not guaranteed. You should check the error field before
  * dereferencing the pointer.
  */
-typedef struct PointerResult_FfiVec_FfiBlock_____OperationStatus {
+typedef struct PointerResult_FfiVec_FfiBlock_____FfiOperationError {
   struct FfiVec_FfiBlock *value;
-  enum OperationStatus error;
-} PointerResult_FfiVec_FfiBlock_____OperationStatus;
+  enum FfiOperationError error;
+} PointerResult_FfiVec_FfiBlock_____FfiOperationError;
 
 typedef struct FfiOption_u64 {
   uint64_t *value;
@@ -590,10 +599,10 @@ typedef struct FfiOption_u64 {
  * Pointer is not guaranteed. You should check the error field before
  * dereferencing the pointer.
  */
-typedef struct PointerResult_FfiVec_FfiTransaction_____OperationStatus {
+typedef struct PointerResult_FfiVec_FfiTransaction_____FfiOperationError {
   struct FfiVec_FfiTransaction *value;
-  enum OperationStatus error;
-} PointerResult_FfiVec_FfiTransaction_____OperationStatus;
+  enum FfiOperationError error;
+} PointerResult_FfiVec_FfiTransaction_____FfiOperationError;
 
 /**
  * Simple wrapper around a pointer to a value or an error.
@@ -601,10 +610,10 @@ typedef struct PointerResult_FfiVec_FfiTransaction_____OperationStatus {
  * Pointer is not guaranteed. You should check the error field before
  * dereferencing the pointer.
  */
-typedef struct PointerResult_u64__OperationStatus {
+typedef struct PointerResult_u64__FfiOperationError {
   uint64_t *value;
-  enum OperationStatus error;
-} PointerResult_u64__OperationStatus;
+  enum FfiOperationError error;
+} PointerResult_u64__FfiOperationError;
 
 /**
  * Simple wrapper around a pointer to a value or an error.
@@ -612,10 +621,10 @@ typedef struct PointerResult_u64__OperationStatus {
  * Pointer is not guaranteed. You should check the error field before
  * dereferencing the pointer.
  */
-typedef struct PointerResult_FfiVec_FfiEventRecord_____OperationStatus {
+typedef struct PointerResult_FfiVec_FfiEventRecord_____FfiOperationError {
   struct FfiVec_FfiEventRecord *value;
-  enum OperationStatus error;
-} PointerResult_FfiVec_FfiEventRecord_____OperationStatus;
+  enum FfiOperationError error;
+} PointerResult_FfiVec_FfiEventRecord_____FfiOperationError;
 
 /**
  * Opaque pointer to the Wallet instance.
@@ -776,7 +785,7 @@ typedef struct FfiPublicAccountKey {
 
 typedef struct LabelAvailability {
   bool is_available;
-  enum WalletFfiError error;
+  enum FfiOperationError error;
 } LabelAvailability;
 
 typedef struct FfiAccountIdWithPrivacy {
@@ -786,13 +795,13 @@ typedef struct FfiAccountIdWithPrivacy {
 
 typedef struct AccountIdResolvedFromLabel {
   struct FfiAccountIdWithPrivacy account_id;
-  enum WalletFfiError error;
+  enum FfiOperationError error;
 } AccountIdResolvedFromLabel;
 
 typedef struct LabelList {
   const char **labels_data;
   uintptr_t labels_size;
-  enum WalletFfiError error;
+  enum FfiOperationError error;
 } LabelList;
 
 typedef struct FfiCreateWalletOutput {
@@ -1058,7 +1067,7 @@ InitializedSequencerServiceFFIResult sequencer_ffi_start_sequencer(const struct 
  * - The `SequencerServiceFFI` instance was created by this library
  * - The pointer will not be used after this function returns
  */
-enum OperationStatus sequencer_ffi_stop_sequencer(struct SequencerServiceFFI *sequencer);
+enum FfiOperationError sequencer_ffi_stop_sequencer(struct SequencerServiceFFI *sequencer);
 
 /**
  * Initializes logging for the sequencer at `level`.
@@ -1135,15 +1144,15 @@ char *sequencer_ffi_query_status(const struct SequencerServiceFFI *sequencer);
  *
  * # Returns
  *
- * A `PointerResult<FfiBlockOpt, OperationStatus>` indicating success or failure.
+ * A `PointerResult<FfiBlockOpt, FfiOperationError>` indicating success or failure.
  *
  * # Safety
  *
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_FfiBlockOpt__OperationStatus sequencer_ffi_query_block(const struct SequencerServiceFFI *sequencer,
-                                                                            FfiBlockId block_id);
+struct PointerResult_FfiBlockOpt__FfiOperationError sequencer_ffi_query_block(const struct SequencerServiceFFI *sequencer,
+                                                                              FfiBlockId block_id);
 
 /**
  * Query the block by hash from sequencer.
@@ -1155,15 +1164,15 @@ struct PointerResult_FfiBlockOpt__OperationStatus sequencer_ffi_query_block(cons
  *
  * # Returns
  *
- * A `PointerResult<FfiBlockOpt, OperationStatus>` indicating success or failure.
+ * A `PointerResult<FfiBlockOpt, FfiOperationError>` indicating success or failure.
  *
  * # Safety
  *
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_FfiBlockOpt__OperationStatus sequencer_ffi_query_block_by_hash(const struct SequencerServiceFFI *sequencer,
-                                                                                    FfiHashType hash);
+struct PointerResult_FfiBlockOpt__FfiOperationError sequencer_ffi_query_block_by_hash(const struct SequencerServiceFFI *sequencer,
+                                                                                      FfiHashType hash);
 
 /**
  * Query the account by id from sequencer.
@@ -1175,15 +1184,15 @@ struct PointerResult_FfiBlockOpt__OperationStatus sequencer_ffi_query_block_by_h
  *
  * # Returns
  *
- * A `PointerResult<FfiAccount, OperationStatus>` indicating success or failure.
+ * A `PointerResult<FfiAccount, FfiOperationError>` indicating success or failure.
  *
  * # Safety
  *
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_FfiAccount__OperationStatus sequencer_ffi_query_account(const struct SequencerServiceFFI *sequencer,
-                                                                             FfiAccountId account_id);
+struct PointerResult_FfiAccount__FfiOperationError sequencer_ffi_query_account(const struct SequencerServiceFFI *sequencer,
+                                                                               FfiAccountId account_id);
 
 /**
  * Send transaction into sequencer.
@@ -1195,15 +1204,15 @@ struct PointerResult_FfiAccount__OperationStatus sequencer_ffi_query_account(con
  *
  * # Returns
  *
- * A `PointerResult<u8, OperationStatus>` indicating success or failure.
+ * A `PointerResult<u8, FfiOperationError>` indicating success or failure.
  *
  * # Safety
  *
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_u8__OperationStatus sequencer_ffi_send_transaction(const struct SequencerServiceFFI *sequencer,
-                                                                        struct FfiTransaction transaction);
+struct PointerResult_u8__FfiOperationError sequencer_ffi_send_transaction(const struct SequencerServiceFFI *sequencer,
+                                                                          struct FfiTransaction transaction);
 
 /**
  * Query the transaction by hash from sequencer.
@@ -1215,15 +1224,15 @@ struct PointerResult_u8__OperationStatus sequencer_ffi_send_transaction(const st
  *
  * # Returns
  *
- * A `PointerResult<FfiOption<FfiTransaction>, OperationStatus>` indicating success or failure.
+ * A `PointerResult<FfiOption<FfiTransaction>, FfiOperationError>` indicating success or failure.
  *
  * # Safety
  *
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_FfiOption_FfiTransaction_____OperationStatus sequencer_ffi_query_transaction(const struct SequencerServiceFFI *sequencer,
-                                                                                                  FfiHashType hash);
+struct PointerResult_FfiOption_FfiTransaction_____FfiOperationError sequencer_ffi_query_transaction(const struct SequencerServiceFFI *sequencer,
+                                                                                                    FfiHashType hash);
 
 /**
  * Query the blocks by block range from sequencer.
@@ -1236,16 +1245,16 @@ struct PointerResult_FfiOption_FfiTransaction_____OperationStatus sequencer_ffi_
  *
  * # Returns
  *
- * A `PointerResult<FfiVec<FfiBlock>, OperationStatus>` indicating success or failure.
+ * A `PointerResult<FfiVec<FfiBlock>, FfiOperationError>` indicating success or failure.
  *
  * # Safety
  *
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_FfiVec_FfiBlock_____OperationStatus sequencer_ffi_query_block_vec(const struct SequencerServiceFFI *sequencer,
-                                                                                       struct FfiOption_u64 before,
-                                                                                       uint64_t limit);
+struct PointerResult_FfiVec_FfiBlock_____FfiOperationError sequencer_ffi_query_block_vec(const struct SequencerServiceFFI *sequencer,
+                                                                                         struct FfiOption_u64 before,
+                                                                                         uint64_t limit);
 
 /**
  * Query the transactions range by account id from sequencer.
@@ -1259,17 +1268,17 @@ struct PointerResult_FfiVec_FfiBlock_____OperationStatus sequencer_ffi_query_blo
  *
  * # Returns
  *
- * A `PointerResult<FfiVec<FfiTransaction>, OperationStatus>` indicating success or failure.
+ * A `PointerResult<FfiVec<FfiTransaction>, FfiOperationError>` indicating success or failure.
  *
  * # Safety
  *
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_FfiVec_FfiTransaction_____OperationStatus sequencer_ffi_query_transactions_by_account(const struct SequencerServiceFFI *sequencer,
-                                                                                                           FfiAccountId account_id,
-                                                                                                           uint64_t offset,
-                                                                                                           uint64_t limit);
+struct PointerResult_FfiVec_FfiTransaction_____FfiOperationError sequencer_ffi_query_transactions_by_account(const struct SequencerServiceFFI *sequencer,
+                                                                                                             FfiAccountId account_id,
+                                                                                                             uint64_t offset,
+                                                                                                             uint64_t limit);
 
 /**
  * Query the block id by transaction hash from sequencer.
@@ -1281,15 +1290,15 @@ struct PointerResult_FfiVec_FfiTransaction_____OperationStatus sequencer_ffi_que
  *
  * # Returns
  *
- * A `PointerResult<u64, OperationStatus>` indicating success or failure.
+ * A `PointerResult<u64, FfiOperationError>` indicating success or failure.
  *
  * # Safety
  *
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_u64__OperationStatus sequencer_ffi_query_block_by_tx_hash(const struct SequencerServiceFFI *sequencer,
-                                                                               FfiHashType tx_hash);
+struct PointerResult_u64__FfiOperationError sequencer_ffi_query_block_by_tx_hash(const struct SequencerServiceFFI *sequencer,
+                                                                                 FfiHashType tx_hash);
 
 /**
  * Frees the resources associated with the query for block id by transaction hash.
@@ -1343,12 +1352,12 @@ void sequencer_ffi_free_query_block_id_by_transaction(uint64_t *val);
  * - each of `tx_hash`, `program_account_id` and `selector` is either null or a valid pointer to
  *   its respective type.
  */
-struct PointerResult_FfiVec_FfiEventRecord_____OperationStatus sequencer_ffi_query_events(const struct SequencerServiceFFI *sequencer,
-                                                                                          uint64_t from_block,
-                                                                                          struct FfiOption_u64 to_block,
-                                                                                          const FfiHashType *tx_hash,
-                                                                                          const FfiAccountId *program_account_id,
-                                                                                          const FfiSelector *selector);
+struct PointerResult_FfiVec_FfiEventRecord_____FfiOperationError sequencer_ffi_query_events(const struct SequencerServiceFFI *sequencer,
+                                                                                            uint64_t from_block,
+                                                                                            struct FfiOption_u64 to_block,
+                                                                                            const FfiHashType *tx_hash,
+                                                                                            const FfiAccountId *program_account_id,
+                                                                                            const FfiSelector *selector);
 
 /**
  * Create a new public account.
@@ -1368,8 +1377,8 @@ struct PointerResult_FfiVec_FfiEventRecord_____OperationStatus sequencer_ffi_que
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
  * - `out_account_id` must be a valid pointer to a `FfiBytes32` struct
  */
-enum WalletFfiError wallet_ffi_create_account_public(struct WalletHandle *handle,
-                                                     struct FfiBytes32 *out_account_id);
+enum FfiOperationError wallet_ffi_create_account_public(struct WalletHandle *handle,
+                                                        struct FfiBytes32 *out_account_id);
 
 /**
  * Create a new private account, storing a default account entry in local storage.
@@ -1396,8 +1405,8 @@ enum WalletFfiError wallet_ffi_create_account_public(struct WalletHandle *handle
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
  * - `out_account_id` must be a valid pointer to a `FfiBytes32` struct
  */
-enum WalletFfiError wallet_ffi_create_account_private(struct WalletHandle *handle,
-                                                      struct FfiBytes32 *out_account_id);
+enum FfiOperationError wallet_ffi_create_account_private(struct WalletHandle *handle,
+                                                         struct FfiBytes32 *out_account_id);
 
 /**
  * Create a new private key node.
@@ -1421,8 +1430,8 @@ enum WalletFfiError wallet_ffi_create_account_private(struct WalletHandle *handl
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
  * - `out_keys` must be a valid pointer to a `FfiPrivateAccountKeys` struct
  */
-enum WalletFfiError wallet_ffi_create_private_accounts_key(struct WalletHandle *handle,
-                                                           struct FfiPrivateAccountKeys *out_keys);
+enum FfiOperationError wallet_ffi_create_private_accounts_key(struct WalletHandle *handle,
+                                                              struct FfiPrivateAccountKeys *out_keys);
 
 /**
  * List all accounts in the wallet.
@@ -1444,8 +1453,8 @@ enum WalletFfiError wallet_ffi_create_private_accounts_key(struct WalletHandle *
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
  * - `out_list` must be a valid pointer to a `FfiAccountList` struct
  */
-enum WalletFfiError wallet_ffi_list_accounts(struct WalletHandle *handle,
-                                             struct FfiAccountList *out_list);
+enum FfiOperationError wallet_ffi_list_accounts(struct WalletHandle *handle,
+                                                struct FfiAccountList *out_list);
 
 /**
  * Free an account list returned by `wallet_ffi_list_accounts`.
@@ -1476,10 +1485,10 @@ void wallet_ffi_free_account_list(struct FfiAccountList *list);
  * - `account_id` must be a valid pointer to a `FfiBytes32` struct
  * - `out_balance` must be a valid pointer to a `[u8; 16]` array
  */
-enum WalletFfiError wallet_ffi_get_balance(struct WalletHandle *handle,
-                                           const struct FfiBytes32 *account_id,
-                                           bool is_public,
-                                           uint8_t (*out_balance)[16]);
+enum FfiOperationError wallet_ffi_get_balance(struct WalletHandle *handle,
+                                              const struct FfiBytes32 *account_id,
+                                              bool is_public,
+                                              uint8_t (*out_balance)[16]);
 
 /**
  * Get full public account data from the network.
@@ -1501,9 +1510,9 @@ enum WalletFfiError wallet_ffi_get_balance(struct WalletHandle *handle,
  * - `account_id` must be a valid pointer to a `FfiBytes32` struct
  * - `out_account` must be a valid pointer to a `FfiAccount` struct
  */
-enum WalletFfiError wallet_ffi_get_account_public(struct WalletHandle *handle,
-                                                  const struct FfiBytes32 *account_id,
-                                                  struct FfiAccount *out_account);
+enum FfiOperationError wallet_ffi_get_account_public(struct WalletHandle *handle,
+                                                     const struct FfiBytes32 *account_id,
+                                                     struct FfiAccount *out_account);
 
 /**
  * Get full private account data from the local storage.
@@ -1525,14 +1534,14 @@ enum WalletFfiError wallet_ffi_get_account_public(struct WalletHandle *handle,
  * - `account_id` must be a valid pointer to a `FfiBytes32` struct
  * - `out_account` must be a valid pointer to a `FfiAccount` struct
  */
-enum WalletFfiError wallet_ffi_get_account_private(struct WalletHandle *handle,
-                                                   const struct FfiBytes32 *account_id,
-                                                   struct FfiAccount *out_account);
+enum FfiOperationError wallet_ffi_get_account_private(struct WalletHandle *handle,
+                                                      const struct FfiBytes32 *account_id,
+                                                      struct FfiAccount *out_account);
 
-enum WalletFfiError wallet_ffi_get_account_view(struct WalletHandle *handle,
-                                                const struct FfiBytes32 *account_id,
-                                                const struct FfiBytes32 *program_account_id,
-                                                struct FfiAccount *out_account);
+enum FfiOperationError wallet_ffi_get_account_view(struct WalletHandle *handle,
+                                                   const struct FfiBytes32 *account_id,
+                                                   const struct FfiBytes32 *program_account_id,
+                                                   struct FfiAccount *out_account);
 
 /**
  * Import a public account private key into wallet storage.
@@ -1549,8 +1558,8 @@ enum WalletFfiError wallet_ffi_get_account_view(struct WalletHandle *handle,
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
  * - `private_key_hex` must be a valid pointer to a null-terminated C string
  */
-enum WalletFfiError wallet_ffi_import_public_account(struct WalletHandle *handle,
-                                                     const char *private_key_hex);
+enum FfiOperationError wallet_ffi_import_public_account(struct WalletHandle *handle,
+                                                        const char *private_key_hex);
 
 /**
  * Import a private account keychain and account state into wallet storage.
@@ -1572,11 +1581,11 @@ enum WalletFfiError wallet_ffi_import_public_account(struct WalletHandle *handle
  * - `identifier` must be a valid pointer to a `FfiIdentifier` struct
  * - `account_state_json` must be a valid pointer to a null-terminated C string
  */
-enum WalletFfiError wallet_ffi_import_private_account(struct WalletHandle *handle,
-                                                      const char *key_chain_json,
-                                                      const char *chain_index,
-                                                      const FfiIdentifier *identifier,
-                                                      const char *account_state_json);
+enum FfiOperationError wallet_ffi_import_private_account(struct WalletHandle *handle,
+                                                         const char *key_chain_json,
+                                                         const char *chain_index,
+                                                         const FfiIdentifier *identifier,
+                                                         const char *account_state_json);
 
 /**
  * Withdraw native tokens from a public account to Bedrock (L1) through the bridge.
@@ -1604,11 +1613,11 @@ enum WalletFfiError wallet_ffi_import_private_account(struct WalletHandle *handl
  * - `bedrock_account_pk` must be a valid pointer to a `FfiBytes32` struct
  * - `out_result` must be a valid pointer to a `FfiTransferResult` struct
  */
-enum WalletFfiError wallet_ffi_bridge_withdraw(struct WalletHandle *handle,
-                                               const struct FfiBytes32 *from,
-                                               uint64_t amount,
-                                               const struct FfiBytes32 *bedrock_account_pk,
-                                               struct FfiTransferResult *out_result);
+enum FfiOperationError wallet_ffi_bridge_withdraw(struct WalletHandle *handle,
+                                                  const struct FfiBytes32 *from,
+                                                  uint64_t amount,
+                                                  const struct FfiBytes32 *bedrock_account_pk,
+                                                  struct FfiTransferResult *out_result);
 
 /**
  * Send generic public transaction.
@@ -1635,14 +1644,14 @@ enum WalletFfiError wallet_ffi_bridge_withdraw(struct WalletHandle *handle,
  * - `payer` must be null or a valid pointer to a `FfiBytes32`
  * - `out_result` must be a valid pointer
  */
-enum WalletFfiError wallet_ffi_send_generic_public_transaction(struct WalletHandle *handle,
-                                                               const struct FfiAccountMention *account_mentions,
-                                                               uintptr_t account_mentions_size,
-                                                               const uint8_t *instruction_data,
-                                                               uintptr_t instruction_data_size,
-                                                               struct FfiBytes32 program_account_id,
-                                                               const struct FfiBytes32 *payer,
-                                                               struct FfiTransactionResult *out_result);
+enum FfiOperationError wallet_ffi_send_generic_public_transaction(struct WalletHandle *handle,
+                                                                  const struct FfiAccountMention *account_mentions,
+                                                                  uintptr_t account_mentions_size,
+                                                                  const uint8_t *instruction_data,
+                                                                  uintptr_t instruction_data_size,
+                                                                  struct FfiBytes32 program_account_id,
+                                                                  const struct FfiBytes32 *payer,
+                                                                  struct FfiTransactionResult *out_result);
 
 /**
  * Send generic private transaction.
@@ -1663,13 +1672,13 @@ enum WalletFfiError wallet_ffi_send_generic_public_transaction(struct WalletHand
  * - `instruction_data` must be a valid pointer
  * - `out_result` must be a valid pointer
  */
-enum WalletFfiError wallet_ffi_send_generic_private_transaction(struct WalletHandle *handle,
-                                                                const struct FfiAccountMention *account_mentions,
-                                                                uintptr_t account_mentions_size,
-                                                                const uint8_t *instruction_data,
-                                                                uintptr_t instruction_data_size,
-                                                                const struct FfiProgramWithDependencies *program_with_dependencies,
-                                                                struct FfiTransactionResult *out_result);
+enum FfiOperationError wallet_ffi_send_generic_private_transaction(struct WalletHandle *handle,
+                                                                   const struct FfiAccountMention *account_mentions,
+                                                                   uintptr_t account_mentions_size,
+                                                                   const uint8_t *instruction_data,
+                                                                   uintptr_t instruction_data_size,
+                                                                   const struct FfiProgramWithDependencies *program_with_dependencies,
+                                                                   struct FfiTransactionResult *out_result);
 
 /**
  * Poll transaction for its status.
@@ -1685,9 +1694,9 @@ enum WalletFfiError wallet_ffi_send_generic_private_transaction(struct WalletHan
  * # Safety
  * - `handle` must be a valid pointer.
  */
-enum WalletFfiError wallet_ffi_poll_transaction_status(struct WalletHandle *handle,
-                                                       struct FfiBytes32 tx_hash,
-                                                       bool *transaction_status);
+enum FfiOperationError wallet_ffi_poll_transaction_status(struct WalletHandle *handle,
+                                                          struct FfiBytes32 tx_hash,
+                                                          bool *transaction_status);
 
 /**
  * Free a transaction result returned by `wallet_ffi_send_generic_public_transaction` or
@@ -1718,9 +1727,9 @@ void wallet_ffi_free_transaction_result(struct FfiTransactionResult *result);
  * - `account_id` must be a valid pointer to a `FfiBytes32` struct
  * - `out_public_key` must be a valid pointer to a `FfiPublicAccountKey` struct
  */
-enum WalletFfiError wallet_ffi_get_public_account_key(struct WalletHandle *handle,
-                                                      const struct FfiBytes32 *account_id,
-                                                      struct FfiPublicAccountKey *out_public_key);
+enum FfiOperationError wallet_ffi_get_public_account_key(struct WalletHandle *handle,
+                                                         const struct FfiBytes32 *account_id,
+                                                         struct FfiPublicAccountKey *out_public_key);
 
 /**
  * Get keys for a private account.
@@ -1746,9 +1755,9 @@ enum WalletFfiError wallet_ffi_get_public_account_key(struct WalletHandle *handl
  * - `account_id` must be a valid pointer to a `FfiBytes32` struct
  * - `out_keys` must be a valid pointer to a `FfiPrivateAccountKeys` struct
  */
-enum WalletFfiError wallet_ffi_get_private_account_keys(struct WalletHandle *handle,
-                                                        const struct FfiBytes32 *account_id,
-                                                        struct FfiPrivateAccountKeys *out_keys);
+enum FfiOperationError wallet_ffi_get_private_account_keys(struct WalletHandle *handle,
+                                                           const struct FfiBytes32 *account_id,
+                                                           struct FfiPrivateAccountKeys *out_keys);
 
 /**
  * Convert an account ID to a Base58 string.
@@ -1784,8 +1793,8 @@ char *wallet_ffi_account_id_to_base58(const struct FfiBytes32 *account_id);
  * - `base58_str` must be a valid pointer to a null-terminated C string
  * - `out_account_id` must be a valid pointer to a `FfiBytes32` struct
  */
-enum WalletFfiError wallet_ffi_account_id_from_base58(const char *base58_str,
-                                                      struct FfiBytes32 *out_account_id);
+enum FfiOperationError wallet_ffi_account_id_from_base58(const char *base58_str,
+                                                         struct FfiBytes32 *out_account_id);
 
 /**
  * Resolve public account.
@@ -1801,9 +1810,9 @@ enum WalletFfiError wallet_ffi_account_id_from_base58(const char *base58_str,
  * # Safety
  * - `out_account_identity` must be a valid pointer to a `FfiAccountIdentity` struct
  */
-enum WalletFfiError wallet_ffi_resolve_public_account(struct FfiBytes32 account_id,
-                                                      bool needs_sign,
-                                                      struct FfiAccountIdentity *out_account_identity);
+enum FfiOperationError wallet_ffi_resolve_public_account(struct FfiBytes32 account_id,
+                                                         bool needs_sign,
+                                                         struct FfiAccountIdentity *out_account_identity);
 
 /**
  * Resolve private account.
@@ -1822,9 +1831,9 @@ enum WalletFfiError wallet_ffi_resolve_public_account(struct FfiBytes32 account_
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
  * - `out_account_identity` must be a valid pointer to a `FfiAccountIdentity` struct
  */
-enum WalletFfiError wallet_ffi_resolve_private_account(struct WalletHandle *handle,
-                                                       struct FfiBytes32 account_id,
-                                                       struct FfiAccountIdentity *out_account_identity);
+enum FfiOperationError wallet_ffi_resolve_private_account(struct WalletHandle *handle,
+                                                          struct FfiBytes32 account_id,
+                                                          struct FfiAccountIdentity *out_account_identity);
 
 /**
  * Free account identity returned by `wallet_ffi_resolve_private_account` or
@@ -1869,9 +1878,9 @@ struct LabelAvailability wallet_ffi_check_label_available(struct WalletHandle *h
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
  * - `label` must be a valid pointer to a null-terminated C string
  */
-enum WalletFfiError wallet_ffi_add_label(struct WalletHandle *handle,
-                                         const char *label,
-                                         struct FfiAccountIdWithPrivacy account_id_with_privacy);
+enum FfiOperationError wallet_ffi_add_label(struct WalletHandle *handle,
+                                            const char *label,
+                                            struct FfiAccountIdWithPrivacy account_id_with_privacy);
 
 /**
  * Resolve a label.
@@ -1920,7 +1929,7 @@ struct LabelList wallet_ffi_get_all_labels_for_account(struct WalletHandle *hand
  * - `label_list` must be a valid pointer to `LabelList`, received from
  *   `wallet_ffi_get_all_labels_for_account`
  */
-enum WalletFfiError wallet_ffi_free_label_list(struct LabelList *label_list);
+enum FfiOperationError wallet_ffi_free_label_list(struct LabelList *label_list);
 
 /**
  * Create a new wallet with fresh storage.
@@ -1990,7 +1999,7 @@ void wallet_ffi_destroy(struct WalletHandle *handle);
  * # Safety
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
  */
-enum WalletFfiError wallet_ffi_save(struct WalletHandle *handle);
+enum FfiOperationError wallet_ffi_save(struct WalletHandle *handle);
 
 /**
  * Restore wallet data from mnemonic and password.
@@ -2012,10 +2021,10 @@ enum WalletFfiError wallet_ffi_save(struct WalletHandle *handle);
  * - `password` must be a valid pointer to C string.
  * - `depth` parameter induces exponential growth in execution time, be aware of it.
  */
-enum WalletFfiError wallet_ffi_restore_data(struct WalletHandle *handle,
-                                            const char *mnemonic,
-                                            const char *password,
-                                            uint32_t depth);
+enum FfiOperationError wallet_ffi_restore_data(struct WalletHandle *handle,
+                                               const char *mnemonic,
+                                               const char *password,
+                                               uint32_t depth);
 
 /**
  * Get the sequencer address from the wallet configuration.
@@ -2069,12 +2078,12 @@ struct FfiBytes32 wallet_ffi_account_id_for_public_pda(struct FfiBytes32 program
  * - `viewing_public_key` must be a valid pointer to a `u8`
  * - `account_id` must be a valid pointer to a `FfiBytes32` struct
  */
-enum WalletFfiError wallet_ffi_account_id_for_private_pda(struct FfiBytes32 program_account_id,
-                                                          FfiPdaSeed pda_seed,
-                                                          FfiNullifierPublicKey npk,
-                                                          FfiVecU8 viewing_public_key,
-                                                          FfiIdentifier identifier,
-                                                          struct FfiBytes32 *account_id);
+enum FfiOperationError wallet_ffi_account_id_for_private_pda(struct FfiBytes32 program_account_id,
+                                                             FfiPdaSeed pda_seed,
+                                                             FfiNullifierPublicKey npk,
+                                                             FfiVecU8 viewing_public_key,
+                                                             FfiIdentifier identifier,
+                                                             struct FfiBytes32 *account_id);
 
 /**
  * Writes one `program_loader` bytecode segment.
@@ -2089,13 +2098,13 @@ enum WalletFfiError wallet_ffi_account_id_for_private_pda(struct FfiBytes32 prog
  *   to a `FfiBytes32` for a funded account whose signing key the wallet holds
  * - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
  */
-enum WalletFfiError wallet_ffi_program_loader_write_segment(struct WalletHandle *handle,
-                                                            const struct FfiBytes32 *target,
-                                                            const uint8_t *bytecode_data,
-                                                            uintptr_t bytecode_size,
-                                                            const struct FfiBytes32 *next_segment,
-                                                            const struct FfiBytes32 *payer,
-                                                            struct FfiTransactionResult *out_result);
+enum FfiOperationError wallet_ffi_program_loader_write_segment(struct WalletHandle *handle,
+                                                               const struct FfiBytes32 *target,
+                                                               const uint8_t *bytecode_data,
+                                                               uintptr_t bytecode_size,
+                                                               const struct FfiBytes32 *next_segment,
+                                                               const struct FfiBytes32 *payer,
+                                                               struct FfiTransactionResult *out_result);
 
 /**
  * Creates a new `program_loader` header pointing at an already-uploaded segment chain.
@@ -2108,12 +2117,12 @@ enum WalletFfiError wallet_ffi_program_loader_write_segment(struct WalletHandle 
  *   to a `FfiBytes32` for a funded account whose signing key the wallet holds
  * - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
  */
-enum WalletFfiError wallet_ffi_program_loader_create_header(struct WalletHandle *handle,
-                                                            const struct FfiBytes32 *target,
-                                                            const struct FfiBytes32 *first_segment,
-                                                            bool immutable,
-                                                            const struct FfiBytes32 *payer,
-                                                            struct FfiTransactionResult *out_result);
+enum FfiOperationError wallet_ffi_program_loader_create_header(struct WalletHandle *handle,
+                                                               const struct FfiBytes32 *target,
+                                                               const struct FfiBytes32 *first_segment,
+                                                               bool immutable,
+                                                               const struct FfiBytes32 *payer,
+                                                               struct FfiTransactionResult *out_result);
 
 /**
  * Rewrites an existing `program_loader` header to point at a different (already-uploaded)
@@ -2128,12 +2137,12 @@ enum WalletFfiError wallet_ffi_program_loader_create_header(struct WalletHandle 
  *   to a `FfiBytes32` for a funded account whose signing key the wallet holds
  * - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
  */
-enum WalletFfiError wallet_ffi_program_loader_update_header(struct WalletHandle *handle,
-                                                            const struct FfiBytes32 *header,
-                                                            const struct FfiBytes32 *first_segment,
-                                                            bool immutable,
-                                                            const struct FfiBytes32 *payer,
-                                                            struct FfiTransactionResult *out_result);
+enum FfiOperationError wallet_ffi_program_loader_update_header(struct WalletHandle *handle,
+                                                               const struct FfiBytes32 *header,
+                                                               const struct FfiBytes32 *first_segment,
+                                                               bool immutable,
+                                                               const struct FfiBytes32 *payer,
+                                                               struct FfiTransactionResult *out_result);
 
 /**
  * Deploys a new program from `elf_data`.
@@ -2153,15 +2162,15 @@ enum WalletFfiError wallet_ffi_program_loader_update_header(struct WalletHandle 
  *   to a `FfiBytes32` for a funded account whose signing key the wallet holds
  * - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
  */
-enum WalletFfiError wallet_ffi_program_loader_deploy(struct WalletHandle *handle,
-                                                     const struct FfiBytes32 *header,
-                                                     const struct FfiBytes32 *segments,
-                                                     uintptr_t segments_len,
-                                                     const uint8_t *elf_data,
-                                                     uintptr_t elf_size,
-                                                     bool immutable,
-                                                     const struct FfiBytes32 *payer,
-                                                     struct FfiTransactionResult *out_result);
+enum FfiOperationError wallet_ffi_program_loader_deploy(struct WalletHandle *handle,
+                                                        const struct FfiBytes32 *header,
+                                                        const struct FfiBytes32 *segments,
+                                                        uintptr_t segments_len,
+                                                        const uint8_t *elf_data,
+                                                        uintptr_t elf_size,
+                                                        bool immutable,
+                                                        const struct FfiBytes32 *payer,
+                                                        struct FfiTransactionResult *out_result);
 
 /**
  * Updates an existing program in place with `elf_data`.
@@ -2183,15 +2192,15 @@ enum WalletFfiError wallet_ffi_program_loader_deploy(struct WalletHandle *handle
  *   to a `FfiBytes32` for a funded account whose signing key the wallet holds
  * - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
  */
-enum WalletFfiError wallet_ffi_program_loader_update(struct WalletHandle *handle,
-                                                     const struct FfiBytes32 *header,
-                                                     const struct FfiBytes32 *segments,
-                                                     uintptr_t segments_len,
-                                                     const uint8_t *elf_data,
-                                                     uintptr_t elf_size,
-                                                     bool immutable,
-                                                     const struct FfiBytes32 *payer,
-                                                     struct FfiTransactionResult *out_result);
+enum FfiOperationError wallet_ffi_program_loader_update(struct WalletHandle *handle,
+                                                        const struct FfiBytes32 *header,
+                                                        const struct FfiBytes32 *segments,
+                                                        uintptr_t segments_len,
+                                                        const uint8_t *elf_data,
+                                                        uintptr_t elf_size,
+                                                        bool immutable,
+                                                        const struct FfiBytes32 *payer,
+                                                        struct FfiTransactionResult *out_result);
 
 /**
  * Free a ffi program returned by functions `wallet_ffi_*_elf`.
@@ -2223,7 +2232,7 @@ void wallet_ffi_free_ffi_program(struct FfiProgram *ffi_program);
  * # Safety
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
  */
-enum WalletFfiError wallet_ffi_sync_to_block(struct WalletHandle *handle, uint64_t block_id);
+enum FfiOperationError wallet_ffi_sync_to_block(struct WalletHandle *handle, uint64_t block_id);
 
 /**
  * Get the last synced block number.
@@ -2240,8 +2249,8 @@ enum WalletFfiError wallet_ffi_sync_to_block(struct WalletHandle *handle, uint64
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
  * - `out_block_id` must be a valid pointer to a `u64`
  */
-enum WalletFfiError wallet_ffi_get_last_synced_block(struct WalletHandle *handle,
-                                                     uint64_t *out_block_id);
+enum FfiOperationError wallet_ffi_get_last_synced_block(struct WalletHandle *handle,
+                                                        uint64_t *out_block_id);
 
 /**
  * Get the current block height from the sequencer.
@@ -2259,8 +2268,8 @@ enum WalletFfiError wallet_ffi_get_last_synced_block(struct WalletHandle *handle
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
  * - `out_block_height` must be a valid pointer to a `u64`
  */
-enum WalletFfiError wallet_ffi_get_current_block_height(struct WalletHandle *handle,
-                                                        uint64_t *out_block_height);
+enum FfiOperationError wallet_ffi_get_current_block_height(struct WalletHandle *handle,
+                                                           uint64_t *out_block_height);
 
 /**
  * Send a public token transfer.
@@ -2292,11 +2301,11 @@ enum WalletFfiError wallet_ffi_get_current_block_height(struct WalletHandle *han
  * - `amount` must be a valid pointer to a `[u8; 16]` array
  * - `out_result` must be a valid pointer to a `FfiTransferResult` struct
  */
-enum WalletFfiError wallet_ffi_transfer_public(struct WalletHandle *handle,
-                                               const struct FfiBytes32 *from,
-                                               const struct FfiBytes32 *to,
-                                               const uint8_t (*amount)[16],
-                                               struct FfiTransferResult *out_result);
+enum FfiOperationError wallet_ffi_transfer_public(struct WalletHandle *handle,
+                                                  const struct FfiBytes32 *from,
+                                                  const struct FfiBytes32 *to,
+                                                  const uint8_t (*amount)[16],
+                                                  struct FfiTransferResult *out_result);
 
 /**
  * Send a shielded token transfer.
@@ -2327,13 +2336,13 @@ enum WalletFfiError wallet_ffi_transfer_public(struct WalletHandle *handle,
  * - `amount` must be a valid pointer to a `[u8; 16]` array
  * - `out_result` must be a valid pointer to a `FfiTransferResult` struct
  */
-enum WalletFfiError wallet_ffi_transfer_shielded(struct WalletHandle *handle,
-                                                 const struct FfiBytes32 *from,
-                                                 const struct FfiPrivateAccountKeys *to_keys,
-                                                 const FfiIdentifier *to_identifier,
-                                                 const uint8_t (*amount)[16],
-                                                 const char *key_path,
-                                                 struct FfiTransferResult *out_result);
+enum FfiOperationError wallet_ffi_transfer_shielded(struct WalletHandle *handle,
+                                                    const struct FfiBytes32 *from,
+                                                    const struct FfiPrivateAccountKeys *to_keys,
+                                                    const FfiIdentifier *to_identifier,
+                                                    const uint8_t (*amount)[16],
+                                                    const char *key_path,
+                                                    struct FfiTransferResult *out_result);
 
 /**
  * Send a deshielded token transfer.
@@ -2363,11 +2372,11 @@ enum WalletFfiError wallet_ffi_transfer_shielded(struct WalletHandle *handle,
  * - `amount` must be a valid pointer to a `[u8; 16]` array
  * - `out_result` must be a valid pointer to a `FfiTransferResult` struct
  */
-enum WalletFfiError wallet_ffi_transfer_deshielded(struct WalletHandle *handle,
-                                                   const struct FfiBytes32 *from,
-                                                   const struct FfiBytes32 *to,
-                                                   const uint8_t (*amount)[16],
-                                                   struct FfiTransferResult *out_result);
+enum FfiOperationError wallet_ffi_transfer_deshielded(struct WalletHandle *handle,
+                                                      const struct FfiBytes32 *from,
+                                                      const struct FfiBytes32 *to,
+                                                      const uint8_t (*amount)[16],
+                                                      struct FfiTransferResult *out_result);
 
 /**
  * Send a private token transfer.
@@ -2398,12 +2407,12 @@ enum WalletFfiError wallet_ffi_transfer_deshielded(struct WalletHandle *handle,
  * - `amount` must be a valid pointer to a `[u8; 16]` array
  * - `out_result` must be a valid pointer to a `FfiTransferResult` struct
  */
-enum WalletFfiError wallet_ffi_transfer_private(struct WalletHandle *handle,
-                                                const struct FfiBytes32 *from,
-                                                const struct FfiPrivateAccountKeys *to_keys,
-                                                const FfiIdentifier *to_identifier,
-                                                const uint8_t (*amount)[16],
-                                                struct FfiTransferResult *out_result);
+enum FfiOperationError wallet_ffi_transfer_private(struct WalletHandle *handle,
+                                                   const struct FfiBytes32 *from,
+                                                   const struct FfiPrivateAccountKeys *to_keys,
+                                                   const FfiIdentifier *to_identifier,
+                                                   const uint8_t (*amount)[16],
+                                                   struct FfiTransferResult *out_result);
 
 /**
  * Send a shielded token transfer to an owned private account.
@@ -2436,12 +2445,12 @@ enum WalletFfiError wallet_ffi_transfer_private(struct WalletHandle *handle,
  * - `amount` must be a valid pointer to a `[u8; 16]` array
  * - `out_result` must be a valid pointer to a `FfiTransferResult` struct
  */
-enum WalletFfiError wallet_ffi_transfer_shielded_owned(struct WalletHandle *handle,
-                                                       const struct FfiBytes32 *from,
-                                                       const struct FfiBytes32 *to,
-                                                       const uint8_t (*amount)[16],
-                                                       const char *key_path,
-                                                       struct FfiTransferResult *out_result);
+enum FfiOperationError wallet_ffi_transfer_shielded_owned(struct WalletHandle *handle,
+                                                          const struct FfiBytes32 *from,
+                                                          const struct FfiBytes32 *to,
+                                                          const uint8_t (*amount)[16],
+                                                          const char *key_path,
+                                                          struct FfiTransferResult *out_result);
 
 /**
  * Send a private token transfer to an owned private account.
@@ -2474,11 +2483,11 @@ enum WalletFfiError wallet_ffi_transfer_shielded_owned(struct WalletHandle *hand
  * - `amount` must be a valid pointer to a `[u8; 16]` array
  * - `out_result` must be a valid pointer to a `FfiTransferResult` struct
  */
-enum WalletFfiError wallet_ffi_transfer_private_owned(struct WalletHandle *handle,
-                                                      const struct FfiBytes32 *from,
-                                                      const struct FfiBytes32 *to,
-                                                      const uint8_t (*amount)[16],
-                                                      struct FfiTransferResult *out_result);
+enum FfiOperationError wallet_ffi_transfer_private_owned(struct WalletHandle *handle,
+                                                         const struct FfiBytes32 *from,
+                                                         const struct FfiBytes32 *to,
+                                                         const uint8_t (*amount)[16],
+                                                         struct FfiTransferResult *out_result);
 
 /**
  * Free a transfer result returned by `wallet_ffi_transfer_public`.

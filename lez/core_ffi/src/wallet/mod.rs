@@ -33,17 +33,18 @@ use std::{
 };
 
 use ::wallet::ExecutionFailureKind;
-use error::WalletFfiError;
-// Re-export public types for cbindgen
-pub use error::WalletFfiError as FfiError;
 use tokio::runtime::Handle;
 pub use types::*;
 
-use crate::{primitives::types::FfiBytes32, wallet::error::print_error};
+// Re-export public types for cbindgen
+pub use crate::error::FfiOperationError as FfiError;
+use crate::{
+    error::{FfiOperationError, print_error},
+    primitives::types::FfiBytes32,
+};
 
 pub mod account;
 pub mod bridge;
-pub mod error;
 pub mod generic_transaction;
 pub mod keys;
 pub mod label;
@@ -104,10 +105,10 @@ pub(crate) unsafe fn read_optional_account_id(ptr: *const FfiBytes32) -> Option<
 }
 
 /// Helper to convert a C string to a Rust String.
-fn c_str_to_string(ptr: *const c_char, name: &str) -> Result<String, WalletFfiError> {
+fn c_str_to_string(ptr: *const c_char, name: &str) -> Result<String, FfiOperationError> {
     if ptr.is_null() {
         print_error(format!("Null pointer for {name}"));
-        return Err(WalletFfiError::NullPointer);
+        return Err(FfiOperationError::NullPointer);
     }
 
     let c_str = unsafe { CStr::from_ptr(ptr) };
@@ -115,7 +116,7 @@ fn c_str_to_string(ptr: *const c_char, name: &str) -> Result<String, WalletFfiEr
         Ok(s) => Ok(s.to_owned()),
         Err(e) => {
             print_error(format!("Invalid UTF-8 in {name}: {e}"));
-            Err(WalletFfiError::InvalidUtf8)
+            Err(FfiOperationError::InvalidUtf8)
         }
     }
 }

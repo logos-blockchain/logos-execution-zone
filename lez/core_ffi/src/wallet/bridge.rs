@@ -6,10 +6,10 @@ use lee::AccountId;
 use wallet::program_facades::bridge::Bridge;
 
 use crate::{
+    error::{FfiOperationError, print_error},
     primitives::types::FfiBytes32,
     wallet::{
         block_on,
-        error::{WalletFfiError, print_error},
         lifecycle::get_wallet,
         map_execution_error,
         types::{FfiTransferResult, WalletHandle},
@@ -47,7 +47,7 @@ pub unsafe extern "C" fn wallet_ffi_bridge_withdraw(
     amount: u64,
     bedrock_account_pk: *const FfiBytes32,
     out_result: *mut FfiTransferResult,
-) -> WalletFfiError {
+) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -55,14 +55,14 @@ pub unsafe extern "C" fn wallet_ffi_bridge_withdraw(
 
     if from.is_null() || bedrock_account_pk.is_null() || out_result.is_null() {
         print_error("Null pointer argument");
-        return WalletFfiError::NullPointer;
+        return FfiOperationError::NullPointer;
     }
 
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
+            return FfiOperationError::InternalError;
         }
     };
 
@@ -80,7 +80,7 @@ pub unsafe extern "C" fn wallet_ffi_bridge_withdraw(
                 (*out_result).tx_hash = tx_hash;
                 (*out_result).success = true;
             }
-            WalletFfiError::Success
+            FfiOperationError::Success
         }
         Err(e) => {
             print_error(format!("Bridge withdraw failed: {e:?}"));

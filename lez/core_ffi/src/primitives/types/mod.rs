@@ -1,3 +1,5 @@
+use core::slice;
+
 use common::HashType;
 use lee::{AccountId, ProgramId, PublicKey, SharedSecretKey, Signature};
 use lee_core::{
@@ -336,10 +338,12 @@ impl<T: Clone> FfiVec<T> {
     /// `self` must be valid.
     #[must_use]
     pub unsafe fn read_to_vec(&self) -> Vec<T> {
-        let mut std_vec = Vec::with_capacity(self.capacity);
-        for i in 0..self.len {
-            std_vec.push(unsafe { self.get(i) }.clone());
+        let mut std_vec = unsafe { slice::from_raw_parts(self.entries, self.len).to_vec() };
+
+        if self.capacity > self.len {
+            std_vec.reserve(self.capacity.saturating_sub(self.len));
         }
+
         std_vec
     }
 }

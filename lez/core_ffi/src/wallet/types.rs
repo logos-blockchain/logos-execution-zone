@@ -16,8 +16,8 @@ use lee_core::{
 use wallet::{AccountIdentity, AccountMention, account::AccountIdWithPrivacy};
 
 use crate::{
+    error::FfiOperationError,
     primitives::types::{FfiBytes32, FfiIdentifier, FfiPdaSeed},
-    wallet::error::WalletFfiError,
 };
 
 /// Opaque pointer to the Wallet instance.
@@ -176,7 +176,7 @@ pub struct FfiAccountMention {
 }
 
 impl TryFrom<&FfiAccountMention> for AccountMention {
-    type Error = WalletFfiError;
+    type Error = FfiOperationError;
 
     fn try_from(value: &FfiAccountMention) -> Result<Self, Self::Error> {
         Ok(AccountIdentity::try_from(&value.identity)?
@@ -313,11 +313,11 @@ impl From<AccountIdentity> for FfiAccountIdentity {
 }
 
 impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
-    type Error = WalletFfiError;
+    type Error = FfiOperationError;
 
     #[expect(
         clippy::map_err_ignore,
-        reason = "`WalletFfiError` must be a trivial enum for FFI"
+        reason = "`FfiOperationError` must be a trivial enum for FFI"
     )]
     fn try_from(value: &FfiAccountIdentity) -> Result<Self, Self::Error> {
         match value.kind {
@@ -344,9 +344,9 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                         )
                     };
                     Ok(MlKem768EncapsulationKey::from_bytes(slice.to_vec())
-                        .map_err(|_| WalletFfiError::InvalidKeyValue)?)
+                        .map_err(|_| FfiOperationError::InvalidKeyValue)?)
                 } else {
-                    Err(WalletFfiError::InvalidKeyValue)
+                    Err(FfiOperationError::InvalidKeyValue)
                 }?;
 
                 let npk = NullifierPublicKey(value.nullifier_public_key.data);
@@ -365,7 +365,7 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                     && AccountId::from(value.account_id)
                         != AccountId::for_private_account(&npk, &vpk, &kind)
                 {
-                    return Err(WalletFfiError::InvalidAccountId);
+                    return Err(FfiOperationError::InvalidAccountId);
                 }
 
                 Ok(Self::PrivateForeign { npk, vpk, kind })
@@ -379,9 +379,9 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                         )
                     };
                     Ok(MlKem768EncapsulationKey::from_bytes(slice.to_vec())
-                        .map_err(|_| WalletFfiError::InvalidKeyValue)?)
+                        .map_err(|_| FfiOperationError::InvalidKeyValue)?)
                 } else {
-                    Err(WalletFfiError::InvalidKeyValue)
+                    Err(FfiOperationError::InvalidKeyValue)
                 }?;
 
                 let ask = AuthorizationSecretKey(value.authorization_secret_key.data);
@@ -389,7 +389,7 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                 if value.nullifier_secret_key.data != nsk
                     || value.nullifier_public_key.data != NullifierPublicKey::from(&nsk).0
                 {
-                    return Err(WalletFfiError::InvalidKeyValue);
+                    return Err(FfiOperationError::InvalidKeyValue);
                 }
 
                 Ok(Self::PrivateShared {
@@ -407,15 +407,15 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                         )
                     };
                     Ok(MlKem768EncapsulationKey::from_bytes(slice.to_vec())
-                        .map_err(|_| WalletFfiError::InvalidKeyValue)?)
+                        .map_err(|_| FfiOperationError::InvalidKeyValue)?)
                 } else {
-                    Err(WalletFfiError::InvalidKeyValue)
+                    Err(FfiOperationError::InvalidKeyValue)
                 }?;
 
                 let nsk = value.nullifier_secret_key.data;
                 let npk = NullifierPublicKey::from(&nsk);
                 if value.nullifier_public_key.data != npk.0 {
-                    return Err(WalletFfiError::InvalidKeyValue);
+                    return Err(FfiOperationError::InvalidKeyValue);
                 }
 
                 let authority: AccountId = value.authority.into();
@@ -423,7 +423,7 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                 let identifier = value.identifier.into();
                 let derived = AccountId::for_private_pda(&authority, &seed, &npk, &vpk, identifier);
                 if AccountId::from(value.account_id) != derived {
-                    return Err(WalletFfiError::InvalidAccountId);
+                    return Err(FfiOperationError::InvalidAccountId);
                 }
 
                 Ok(Self::PrivatePdaShared {
@@ -480,8 +480,9 @@ mod tests {
     use wallet::AccountIdentity;
 
     use crate::{
+        error::FfiOperationError,
         primitives::types::FfiBytes32,
-        wallet::{FfiAccountIdentity, FfiAccountIdentityKind, error::WalletFfiError},
+        wallet::{FfiAccountIdentity, FfiAccountIdentityKind},
     };
 
     #[test]
@@ -649,7 +650,7 @@ mod tests {
 
         assert_eq!(
             AccountIdentity::try_from(&contradictory).unwrap_err(),
-            WalletFfiError::InvalidAccountId
+            FfiOperationError::InvalidAccountId
         );
     }
 
@@ -694,7 +695,7 @@ mod tests {
         ] {
             assert_eq!(
                 AccountIdentity::try_from(inconsistent).unwrap_err(),
-                WalletFfiError::InvalidKeyValue
+                FfiOperationError::InvalidKeyValue
             );
         }
 
@@ -702,7 +703,7 @@ mod tests {
         wrong_address.account_id.data[0] ^= 1;
         assert_eq!(
             AccountIdentity::try_from(&wrong_address).unwrap_err(),
-            WalletFfiError::InvalidAccountId
+            FfiOperationError::InvalidAccountId
         );
     }
 }
