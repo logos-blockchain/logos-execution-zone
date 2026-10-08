@@ -69,12 +69,13 @@ pub struct Publisher {
 }
 
 impl Publisher {
+    /// Starts a publisher, returning it with the sequence it started at.
     pub async fn new(
         config: PublisherConfig,
         node: NodeHttpClient,
         initial_checkpoint: Option<ZoneCheckpointRecord>,
         broker_ref: ActorRef<Broker<ChannelEvent>>,
-    ) -> Result<Self> {
+    ) -> Result<(Self, ChannelSeq)> {
         let PublisherConfig {
             channel_id,
             channel_signing_key,
@@ -141,7 +142,7 @@ impl Publisher {
             publisher.on_event(event).await?;
         }
 
-        Ok(publisher)
+        Ok((publisher, seq))
     }
 
     /// The next zone-sdk event. Cancel safe, unlike [`Self::on_event`].

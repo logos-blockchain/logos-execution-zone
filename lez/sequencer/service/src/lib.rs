@@ -612,7 +612,7 @@ fn bedrock_actor_args(
     let mut mock = BedrockActor::default();
 
     mock.expect_handle_initialize_channel_publisher()
-        .returning(|_msg, _ctx| Ok(true));
+        .returning(|_msg, _ctx| Ok(Some(ChannelSeq::mocked(0))));
 
     mock.expect_handle_check_channel_exists()
         .returning(|_msg, _ctx| Ok(false));
