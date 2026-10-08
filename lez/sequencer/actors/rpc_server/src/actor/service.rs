@@ -19,6 +19,9 @@ use sequencer_service_protocol::{
     HashType, MembershipProof, Nonce, ProgramId, ProgramShardSelector, PublicDryRun,
 };
 
+/// The methods [`crate::RpcServerActor`] serves only when `dry_run_rpc` is on.
+pub const DRY_RUN_METHODS: [&str; 2] = ["dryRunPublicTransaction", "estimatePrivateEffectCycles"];
+
 pub struct Service<E: ExecutorActorTrait> {
     executor_ref: ActorRef<E>,
     max_block_size: ByteSize,
