@@ -60,9 +60,9 @@ async fn gossiped_transaction_reaches_producing_sequencer() -> Result<()> {
 
     wait_for_height(seq_client_a, 2, "sequencer A to produce past genesis").await?;
 
-    // B follows the chain via L1 even though it never produces.
-    let sync_target = seq_client_a.get_last_block_id().await?;
-    wait_for_height(seq_client_b, sync_target, "B to sync to A's height").await?;
+    // B follows the channel, which trails A's local tip, so A's current height
+    // is not a height B can be expected to reach.
+    wait_for_height(seq_client_b, 2, "B to sync past genesis").await?;
 
     let accounts = initial_public_user_accounts();
     let from = accounts[0].account_id;
