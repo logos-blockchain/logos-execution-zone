@@ -70,8 +70,8 @@ async fn async_main() -> anyhow::Result<()> {
                 writer::Coloring::Never,
                 Verbosity::ShowWorldAndDocString,
             ))
-                .tee::<CucumberWorld, _>(writer::JUnit::for_tee(junit_xml_file, 0))
-                .normalized(),
+            .tee::<CucumberWorld, _>(writer::JUnit::for_tee(junit_xml_file, 0))
+            .normalized(),
         )
         // Sets a hook, executed on each Scenario before running all its Steps, including Background
         // ones.
@@ -116,7 +116,8 @@ async fn async_main() -> anyhow::Result<()> {
                     if let Some(parent) = path.parent() {
                         let _unused = std::fs::create_dir_all(parent);
                     }
-                    let _initial_debug_write = std::fs::write(&path, world.full_debug_info_string());
+                    let _initial_debug_write =
+                        std::fs::write(&path, world.full_debug_info_string());
 
                     let teardown_result = world.stop_runtime().await;
                     if let Err(error) = &teardown_result {
