@@ -135,7 +135,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
 
       - name: Check Rust files are formatted
-        run: cargo +nightly fmt --check
+        # Toolchain pinned in .github/docker/ci.Dockerfile; keep the two in sync.
+        run: cargo +nightly-2026-10-08 fmt --check
 
   fmt-toml:
     needs: ci-image
