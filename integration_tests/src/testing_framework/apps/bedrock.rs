@@ -9,8 +9,8 @@ use logos_blockchain_testing_framework::{
 };
 use num_bigint::BigUint;
 use tempfile::TempDir;
-use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext, LocalAppCluster};
-use testing_framework_core::scenario::DynError;
+use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
+use testing_framework_core::scenario::{ClusterHandle, ClusterRequest, DynError};
 use tokio::time::{sleep, timeout};
 
 /// A TF-managed Logos blockchain cluster used as LEZ's Bedrock layer.
@@ -122,7 +122,8 @@ impl AppDeployment<AppHostEnv> for BedrockApp {
             .scenario_base_dir(scenario_base_dir)
             .build()
             .context("failed to build Bedrock cluster deployment")?;
-        let cluster = Box::pin(ctx.deploy_local_cluster::<LbcEnv>(deployment)).await?;
+        let cluster =
+            Box::pin(ctx.deploy_cluster(ClusterRequest::<LbcEnv>::managed(deployment))).await?;
         let primary_api_addr = first_api_addr(&cluster)?;
 
         Ok(BedrockCluster {
@@ -136,7 +137,7 @@ impl AppDeployment<AppHostEnv> for BedrockApp {
 /// Client access and lifetime ownership for the deployed Bedrock cluster.
 #[derive(Clone)]
 pub struct BedrockCluster {
-    cluster: LocalAppCluster<LbcEnv>,
+    cluster: ClusterHandle<LbcEnv>,
     primary_api_addr: SocketAddr,
     _state_dir: Option<Arc<TempDir>>,
 }
@@ -144,7 +145,7 @@ pub struct BedrockCluster {
 impl BedrockCluster {
     /// Returns the underlying TF cluster handle for node-level control.
     #[must_use]
-    pub const fn cluster(&self) -> &LocalAppCluster<LbcEnv> {
+    pub const fn cluster(&self) -> &ClusterHandle<LbcEnv> {
         &self.cluster
     }
 
@@ -208,7 +209,7 @@ impl BedrockCluster {
     }
 }
 
-fn first_api_addr(cluster: &LocalAppCluster<LbcEnv>) -> Result<SocketAddr, DynError> {
+fn first_api_addr(cluster: &ClusterHandle<LbcEnv>) -> Result<SocketAddr, DynError> {
     let client = cluster
         .first_client()
         .ok_or_else(|| anyhow!("Bedrock cluster has no node clients"))?;
