@@ -18,12 +18,12 @@ pub use privacy_preserving_circuit::{
 };
 pub use privacy_preserving_transaction::{
     PrivacyPreservingTransaction,
-    circuit::{ProvingInput, execute_and_prove},
+    circuit::{ProvingInput, dry_run, execute_and_prove, execute_and_prove_with_fee},
 };
 pub use public_transaction::PublicTransaction;
 pub use signature::{PrivateKey, PublicKey, Signature};
 pub use state::V03State;
-pub use validated_state_diff::{ExecutionCharge, ValidatedStateDiff};
+pub use validated_state_diff::{ExecutionCharge, ValidatedStateDiff, meter_public_effects};
 
 pub mod encoding;
 pub mod error;

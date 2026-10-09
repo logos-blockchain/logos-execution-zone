@@ -303,6 +303,7 @@ fn setup_sequencer_config() -> SequencerConfig {
         cross_zone: None,
         metrics_address: None,
         gossip: None,
+        dry_run_rpc: false,
     }
 }
 

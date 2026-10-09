@@ -281,6 +281,11 @@ typedef struct FfiPrivacyPreservingMessage {
   uint64_t block_validity_window[2];
   uint64_t timestamp_validity_window[2];
   FfiProgramImageClaims program_image_claims;
+  /**
+   * `fee_height` is meaningful only when `has_fee_height` is true.
+   */
+  bool has_fee_height;
+  uint64_t fee_height;
 } FfiPrivacyPreservingMessage;
 
 typedef FfiVecU8 FfiProof;

@@ -11,6 +11,8 @@ workspace = true
 lee_core.workspace = true
 lee.workspace = true
 common.workspace = true
+fee_core.workspace = true
+borsh.workspace = true
 key_protocol.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 testnet_initial_state.workspace = true

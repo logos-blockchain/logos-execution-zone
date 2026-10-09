@@ -20,19 +20,12 @@ pub enum FeeTxView {
         tip: Fee,
         max_fee: Balance,
     },
-    Private {
-        payer: AccountId,
-    },
+    /// The fee is paid inside the proof: `paid` is the amount credited to the
+    /// fee inbox, priced at the fee state of `fee_height`.
+    Private { paid: Balance, fee_height: u64 },
 }
 
 impl FeeTxView {
-    #[must_use]
-    pub const fn payer(&self) -> AccountId {
-        match self {
-            Self::Public { payer, .. } | Self::Private { payer } => *payer,
-        }
-    }
-
     /// Storage gas: serialized bytes for public, the canonical constant size
     /// for private.
     #[must_use]
@@ -96,6 +89,18 @@ pub fn fee_actual_base(charged_cycles: Cycles, view: &FeeTxView, fee_state: &Fee
         + u128::from(view.gas_stor()) * u128::from(fee_state.base_fee_stor)
 }
 
+/// The base fee a private transaction owes at the given base fees:
+/// `(PRIVATE_VERIFY_GAS + effect_cycles)·base_fee_exec + PRIVATE_GAS_STOR·base_fee_stor`.
+#[must_use]
+pub fn private_fee_required(
+    effect_cycles: Cycles,
+    base_fee_exec: Fee,
+    base_fee_stor: Fee,
+) -> Balance {
+    (u128::from(market::PRIVATE_VERIFY_GAS) + u128::from(effect_cycles)) * u128::from(base_fee_exec)
+        + u128::from(market::PRIVATE_GAS_STOR) * u128::from(base_fee_stor)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,17 +131,11 @@ mod tests {
 
     #[test]
     fn spec_worked_example_private() {
-        // Any private transaction pays 409,764·8 + 224,063·8 = 5,070,616,
-        // identical for all of them in that block, and its reserve equals its
-        // actual fee.
-        let view = FeeTxView::Private { payer: payer() };
-        assert_eq!(fee_reserve(&view, &genesis()), 5_070_616);
-        assert_eq!(fee_actual_base(0, &view, &genesis()), 5_070_616);
-        assert_eq!(
-            fee_reserve(&view, &genesis()),
-            fee_actual_base(u64::MAX, &view, &genesis()),
-            "private reserve equals private actual regardless of reported cycles",
-        );
+        // A private transaction with no metered effects pays
+        // 409,764·8 + 224,063·8 = 5,070,616; each effect cycle adds one
+        // base_fee_exec.
+        assert_eq!(private_fee_required(0, 8, 8), 5_070_616);
+        assert_eq!(private_fee_required(1_000, 8, 8), 5_070_616 + 8_000);
     }
 
     #[test]

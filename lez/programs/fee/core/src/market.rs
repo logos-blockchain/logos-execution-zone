@@ -36,11 +36,16 @@ pub const BASE_FEE_STOR_MAX: Fee = u64::MAX / MAX_GAS_STOR;
 
 pub const SMOOTHING_WINDOW: usize = 50;
 
+/// How many blocks back a private transaction may price its fee.
+pub const PRIVATE_FEE_WINDOW: usize = 20;
+
 // FIXME: Provisional: re-pin with the LEZ wire-format numbers (spec Parameters TODO).
-/// Execution gas charged to every private transaction (STARK receipt verification,
-/// RISC Zero 3.0.5). THIS WILL BE WORKED ON WHILE HANDLING PPTX FEES!
+/// Execution gas charged to every private transaction: succinct receipt verification.
+///
+/// RISC Zero 3.0.5, `G_verify` ≈ 12.2 ms at 33,546 cycles/ms (`docs/benchmarks/cycle_bench.md`).
+/// Independent of the circuit's contents; re-pin on a RISC Zero bump.
 pub const PRIVATE_VERIFY_GAS: u64 = 409_764;
-/// Proof bytes inside every private transaction.
+/// Proof bytes inside every private transaction: the fixed succinct receipt size.
 pub const PROOF_BYTES: u64 = 223_551;
 /// Payload size every private transaction is padded to.
 pub const PRIVATE_PAD_BYTES: u64 = 512;

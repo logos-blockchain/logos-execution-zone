@@ -2,10 +2,11 @@ use std::collections::{HashMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    DummyInput, MembershipProof, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
-    PrivateWitness, ProgramImageWitness, ProvenCall, ShadowProgramWitness,
+    DummyInput, FeeTransfer, MembershipProof, PrivacyPreservingCircuitInput,
+    PrivacyPreservingCircuitOutput, PrivateWitness, ProgramImageWitness, ProvenCall,
+    ShadowProgramWitness,
     account::{AccountId, ProgramShardSelector},
-    execution_state::{Backend, DeferPublicEffects, ExecutionState, RootCall},
+    execution_state::{Backend, DeferPublicEffects, ExecutionOutcome, ExecutionState, RootCall},
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{
@@ -21,6 +22,7 @@ use risc0_zkvm::{
 use crate::{
     PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
     error::{InvalidProgramBehaviorError, LeeError},
+    privacy_preserving_transaction::message::PublicActionWithID,
     program::{Program, apply_journal, check_exit_code, plan_journal},
 };
 
@@ -178,7 +180,7 @@ impl ProgramWithDependencies {
 }
 
 /// Inputs for proving an LEE program's execution.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ProvingInput {
     pub shard_selectors: Vec<ProgramShardSelector>,
     pub signers: HashSet<AccountId>,
@@ -194,6 +196,30 @@ struct Prover<'programs> {
     programs: &'programs HashMap<AccountId, Dependency>,
     env_builder: ExecutorEnvBuilder<'static>,
     calls: Vec<ProvenCall>,
+    /// Only execute each guest session instead of proving it and collecting its receipt.
+    dry_run: bool,
+}
+
+impl Prover<'_> {
+    /// Runs one guest session and returns its journal; when proving, the receipt is added to the
+    /// circuit's assumptions.
+    fn session_journal(
+        &mut self,
+        program: &Program,
+        write: impl FnOnce(&mut ExecutorEnvBuilder) -> Result<(), LeeError>,
+    ) -> Result<Vec<u8>, LeeError> {
+        if self.dry_run {
+            let mut env_builder = ExecutorEnv::builder();
+            write(&mut env_builder)?;
+            let env = env_builder.build().unwrap();
+            Ok(Program::execute_session(env, program.elf(), u64::MAX)?.journal)
+        } else {
+            let receipt = prove_session(program, write)?;
+            let journal = receipt.journal.bytes.clone();
+            self.env_builder.add_assumption(receipt);
+            Ok(journal)
+        }
+    }
 }
 
 impl<'programs> Backend for Prover<'programs> {
@@ -225,9 +251,9 @@ impl<'programs> Backend for Prover<'programs> {
                 program_account_id: self_account_id,
             })?
             .program;
-        let receipt = prove_session(program, |env| Program::write_plan_inputs(input, env))?;
-        let plan = plan_journal(&receipt.journal.bytes)?;
-        self.env_builder.add_assumption(receipt);
+        let journal =
+            self.session_journal(program, |env| Program::write_plan_inputs(input, env))?;
+        let plan = plan_journal(&journal)?;
         let proven = ProvenCall {
             plan: plan.clone(),
             private_apply_outputs: Vec::new(),
@@ -244,9 +270,9 @@ impl<'programs> Backend for Prover<'programs> {
             return Ok(native_token::apply_output(input)
                 .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?);
         };
-        let receipt = prove_session(program, |env| Program::write_apply_inputs(input, env))?;
-        let output = apply_journal(&receipt.journal.bytes)?;
-        self.env_builder.add_assumption(receipt);
+        let journal =
+            self.session_journal(program, |env| Program::write_apply_inputs(input, env))?;
+        let output = apply_journal(&journal)?;
         proven.private_apply_outputs.push(output.clone());
         Ok(output)
     }
@@ -268,31 +294,76 @@ pub fn execute_and_prove(
     input: ProvingInput,
     program_with_dependencies: &ProgramWithDependencies,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
-    let ProvingInput {
-        shard_selectors,
-        signers,
-        private_witnesses,
-        instruction_data,
-        dummy_inputs,
-        ciphertext_padding,
-    } = input;
-    let ProgramWithDependencies {
-        self_account_id: initial_account_id,
-        programs,
-    } = program_with_dependencies;
+    execute_and_prove_with_fee(input, program_with_dependencies, None)
+}
 
-    let root = RootCall {
-        program_account_id: *initial_account_id,
-        shard_selectors,
-        instruction_data,
-        authorized_accounts: signers.into_iter().collect(),
+/// Executes the transaction without proving and returns the public effects it defers to
+/// settlement, so they can be metered before the fee is priced.
+pub fn dry_run(
+    input: &ProvingInput,
+    program_with_dependencies: &ProgramWithDependencies,
+) -> Result<Vec<PublicActionWithID>, LeeError> {
+    let mut backend = Prover {
+        programs: &program_with_dependencies.programs,
+        env_builder: ExecutorEnv::builder(),
+        calls: Vec::new(),
+        dry_run: true,
     };
+    let (_, outcome) = execute(input, program_with_dependencies, None, &mut backend)?;
+    Ok(outcome
+        .public
+        .into_iter()
+        .map(|action| PublicActionWithID {
+            account_id: action.account_id,
+            effects: action.effects,
+        })
+        .collect())
+}
+
+/// Runs the root call (and the fee transfer ahead of it) on `backend`, returning the outcome
+/// and the root call it ran.
+fn execute(
+    input: &ProvingInput,
+    program_with_dependencies: &ProgramWithDependencies,
+    fee: Option<&FeeTransfer>,
+    backend: &mut Prover<'_>,
+) -> Result<(RootCall, ExecutionOutcome<DeferPublicEffects>), LeeError> {
+    let root = RootCall {
+        program_account_id: program_with_dependencies.self_account_id,
+        shard_selectors: input.shard_selectors.clone(),
+        instruction_data: input.instruction_data.clone(),
+        authorized_accounts: input.signers.iter().copied().collect(),
+    };
+    let outcome =
+        ExecutionState::initialize(root.clone(), fee, &input.private_witnesses)?.run(backend)?;
+    Ok((root, outcome))
+}
+
+/// [`execute_and_prove`] with a native transfer run ahead of the root call, see [`FeeTransfer`].
+pub fn execute_and_prove_with_fee(
+    input: ProvingInput,
+    program_with_dependencies: &ProgramWithDependencies,
+    fee: Option<FeeTransfer>,
+) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
+    let programs = &program_with_dependencies.programs;
     let mut backend = Prover {
         programs,
         env_builder: ExecutorEnv::builder(),
         calls: Vec::new(),
+        dry_run: false,
     };
-    ExecutionState::initialize(root.clone(), &private_witnesses)?.run(&mut backend)?;
+    let (root, _) = execute(
+        &input,
+        program_with_dependencies,
+        fee.as_ref(),
+        &mut backend,
+    )?;
+    let ProvingInput {
+        private_witnesses,
+        dummy_inputs,
+        ciphertext_padding,
+        ..
+    } = input;
     let Prover {
         mut env_builder,
         calls,
@@ -333,6 +404,7 @@ pub fn execute_and_prove(
 
     let circuit_input = PrivacyPreservingCircuitInput {
         root,
+        fee,
         private_witnesses,
         dummy_inputs,
         ciphertext_padding,

@@ -62,15 +62,21 @@ impl ValidatedStateDiff {
 }
 
 /// The metered result of a public execution: the cycle count accumulated
-/// across every call in the chain.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// across every call in the chain, and why the action reverted if it did.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionCharge {
     pub cycles: Cycles,
+    /// The action failed in a chargeable way: the fee is kept and the effects
+    /// are dropped. Carries the failure's message.
+    pub revert: Option<String>,
 }
 
 impl ExecutionCharge {
     /// The charge of transaction kinds that meter nothing.
-    pub const FREE: Self = Self { cycles: 0 };
+    pub const FREE: Self = Self {
+        cycles: 0,
+        revert: None,
+    };
 }
 
 impl ValidatedStateDiff {
@@ -115,6 +121,7 @@ impl ValidatedStateDiff {
             diff,
             ExecutionCharge {
                 cycles: cycles_used,
+                revert: None,
             },
         ))
     }
@@ -165,23 +172,34 @@ impl ValidatedStateDiff {
             }
             Err(_) => cycle_budget,
         };
-        let diff = match result {
-            Ok(diff) => diff,
+        let (diff, revert) = match result {
+            Ok(diff) => (diff, None),
             // A chargeable action failure keeps no effects but still advances the
             // signers' nonces, so what `apply_state_diff` receives is the nonce
             // bumps alone: the fee stays committed and the tx cannot be replayed.
-            Err(err) if err.is_chargeable() => Self(StateDiff {
-                signer_account_ids: signers,
-                public_diff: HashMap::new(),
-                new_commitments: Vec::new(),
-                new_nullifiers: Vec::new(),
-                events: Vec::new(),
-            }),
+            Err(err) if err.is_chargeable() => (
+                Self(StateDiff {
+                    signer_account_ids: signers,
+                    public_diff: HashMap::new(),
+                    new_commitments: Vec::new(),
+                    new_nullifiers: Vec::new(),
+                    events: Vec::new(),
+                }),
+                Some(err.to_string()),
+            ),
             // A non-chargeable failure is a structural defect a correct proposer
             // would never include; reject the whole block.
-            Err(err) => return (ExecutionCharge { cycles }, Err(err)),
+            Err(err) => {
+                return (
+                    ExecutionCharge {
+                        cycles,
+                        revert: None,
+                    },
+                    Err(err),
+                );
+            }
         };
-        (ExecutionCharge { cycles }, Ok(diff))
+        (ExecutionCharge { cycles, revert }, Ok(diff))
     }
 
     /// Executes a fee-settlement invocation (reserve or refund), authorized by
@@ -279,6 +297,7 @@ impl ValidatedStateDiff {
                 instruction_data: instruction_data.to_vec(),
                 authorized_accounts: authorized.iter().copied().collect(),
             },
+            None,
             &[],
         )?;
         let mut backend = PublicBackend::new(state, block_id, timestamp, cycle_budget, cycles_used);
@@ -309,6 +328,24 @@ impl ValidatedStateDiff {
         block_id: BlockId,
         timestamp: Timestamp,
     ) -> Result<Self, LeeError> {
+        Self::from_privacy_preserving_transaction_metered(
+            tx,
+            state,
+            block_id,
+            timestamp,
+            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+        )
+        .map(|(diff, _cycles)| diff)
+    }
+
+    /// Also returns the cycles the deferred public effects used, bounded by `cycle_budget`.
+    pub fn from_privacy_preserving_transaction_metered(
+        tx: &PrivacyPreservingTransaction,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+        cycle_budget: Cycles,
+    ) -> Result<(Self, Cycles), LeeError> {
         let message = &tx.message;
         let witness_set = &tx.witness_set;
         let commitments = message.commitments();
@@ -408,20 +445,20 @@ impl ValidatedStateDiff {
         // 6. Nullifier uniqueness
         state.check_nullifiers_are_valid(&nullifiers)?;
 
-        let public_diff = apply_public_effects(
-            state,
-            &message.public_actions,
-            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
-        )?;
+        let (public_diff, cycles_used) =
+            apply_public_effects(state, &message.public_actions, cycle_budget)?;
         let new_nullifiers = nullifiers.iter().map(|(nullifier, _)| *nullifier).collect();
 
-        Ok(Self(StateDiff {
-            signer_account_ids,
-            public_diff,
-            new_commitments: commitments,
-            new_nullifiers,
-            events: vec![],
-        }))
+        Ok((
+            Self(StateDiff {
+                signer_account_ids,
+                public_diff,
+                new_commitments: commitments,
+                new_nullifiers,
+                events: vec![],
+            }),
+            cycles_used,
+        ))
     }
 
     /// Returns the public account changes produced by this transaction.
@@ -550,14 +587,22 @@ fn plan_program_loader<'state>(
     ))
 }
 
-/// Applies public effects to live state under one shared cycle budget.
-/// Private transactions are currently fee-exempt, so failed settlement attempts
-/// can be repeated without paying a fee.
+/// The cycles `actions` cost to apply on `state`, for pricing a private transaction's fee
+/// before it is proven.
+pub fn meter_public_effects(
+    state: &V03State,
+    actions: &[PublicActionWithID],
+    cycle_budget: Cycles,
+) -> Result<Cycles, LeeError> {
+    apply_public_effects(state, actions, cycle_budget).map(|(_, cycles)| cycles)
+}
+
+/// Applies public effects to live state under one shared cycle budget, returning the cycles used.
 fn apply_public_effects(
     state: &V03State,
     actions: &[PublicActionWithID],
     cycle_budget: Cycles,
-) -> Result<HashMap<AccountId, Account>, LeeError> {
+) -> Result<(HashMap<AccountId, Account>, Cycles), LeeError> {
     let mut pending: HashMap<AccountId, Account> = HashMap::new();
     let mut cycles_used: Cycles = 0;
     let mut appliers: HashMap<AccountId, Applier> = HashMap::new();
@@ -602,7 +647,7 @@ fn apply_public_effects(
             account.data.apply_output(&output);
         }
     }
-    Ok(pending)
+    Ok((pending, cycles_used))
 }
 
 /// Validates the witness set and replay nonces of a public transaction against
@@ -686,6 +731,7 @@ fn check_privacy_preserving_circuit_proof_is_valid(
         block_validity_window: message.block_validity_window,
         timestamp_validity_window: message.timestamp_validity_window,
         program_image_claims,
+        fee_height: message.fee_height,
     };
     proof
         .is_valid_for(&output)

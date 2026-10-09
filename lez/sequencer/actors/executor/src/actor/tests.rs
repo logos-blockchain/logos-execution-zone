@@ -56,6 +56,7 @@ fn sequencer_config() -> (SequencerConfig, TempDir) {
         cross_zone: None,
         metrics_address: None,
         gossip: None,
+        dry_run_rpc: false,
     };
 
     (config, home)
