@@ -9,7 +9,7 @@ use common::{
 };
 use kameo::{actor::Spawn as _, error::SendError};
 use lee::{
-    Account, AccountId, PrivateKey, ProgramShardSelector, PublicKey, PublicTransaction, Signature,
+    Account, AccountId, PrivateKey, ProgramShardSelector, PublicKey, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
 use lee_core::native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID};
@@ -44,7 +44,6 @@ fn sequencer_config() -> (SequencerConfig, TempDir) {
         mempool_max_size: 10,
         block_create_timeout: std::time::Duration::from_secs(5),
         retry_pending_blocks_timeout: std::time::Duration::from_secs(5),
-        signing_key: Some([37; 32]),
         bedrock_config: BedrockConfig {
             channel_id: [0; 32].into(),
             node_url: "http://not-used".parse().expect("Failed to parse URL"),
@@ -158,10 +157,6 @@ fn prepare_mock_storage_with_stake(
             prev_block_hash: HashType::default(),
             hash: genesis_block_meta.hash,
             timestamp: 0,
-            producer: PublicKey::new_from_private_key(
-                &PrivateKey::try_new([1_u8; 32]).expect("valid key"),
-            ),
-            signature: Signature { value: [0; 64] },
         },
         body: BlockBody {
             transactions: vec![],

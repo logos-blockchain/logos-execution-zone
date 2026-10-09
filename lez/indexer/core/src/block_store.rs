@@ -502,15 +502,13 @@ fn settled_test_block(
 ) -> common::block::Block {
     use common::{
         block::HashableBlockData,
-        test_utils::sequencer_sign_key_for_testing,
+        test_utils::producer_account_for_testing,
         transaction::{LeeTransaction, clock_invocation, fee_invocation},
     };
     let timestamp = id.saturating_mul(100);
     let (summary, payout) = chain_state::apply::derive_block_summary(state, &txs, id, timestamp)
         .expect("test transactions settle");
-    let producer = lee::AccountId::from(&lee::PublicKey::new_from_private_key(
-        &sequencer_sign_key_for_testing(),
-    ));
+    let producer = producer_account_for_testing();
     let mut transactions = txs;
     transactions.push(LeeTransaction::Public(fee_invocation(
         summary, payout, producer,
@@ -522,7 +520,7 @@ fn settled_test_block(
         timestamp,
         transactions,
     }
-    .into_pending_block(&sequencer_sign_key_for_testing());
+    .into_pending_block();
     chain_state::apply::apply_block_to_state(&block, state).expect("settled block applies");
     block
 }
@@ -1336,10 +1334,6 @@ mod accept_tests {
 
     use super::*;
 
-    fn signing_key() -> lee::PrivateKey {
-        lee::PrivateKey::try_new([7_u8; 32]).expect("valid key")
-    }
-
     // A block with a correct hash but empty body — enough to exercise the
     // acceptance checks (id/link/hash), which run before any state application.
     fn valid_hash_block(block_id: u64, prev: HashType) -> common::block::Block {
@@ -1349,7 +1343,7 @@ mod accept_tests {
             timestamp: 0,
             transactions: vec![],
         }
-        .into_pending_block(&signing_key())
+        .into_pending_block()
     }
 
     #[tokio::test]
