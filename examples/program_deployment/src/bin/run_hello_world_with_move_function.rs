@@ -8,7 +8,7 @@ use lee::{
     public_transaction,
 };
 use program_deployment::deploy_program;
-use sequencer_service_rpc::RpcClient as _;
+use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use wallet::{AccountIdentity, WalletCore};
 
 // Before running this example, compile the `hello_world_with_move_function.rs` guest program with:
@@ -70,7 +70,7 @@ enum Command {
 }
 
 async fn shard_bytes(
-    wallet_core: &WalletCore,
+    wallet_core: &WalletCore<SequencerClient>,
     account_id: AccountId,
     program_account_id: AccountId,
 ) -> Vec<u8> {
@@ -89,7 +89,7 @@ async fn main() {
     let cli = Cli::parse();
 
     // Initialize wallet
-    let mut wallet_core = WalletCore::from_env().unwrap();
+    let mut wallet_core = WalletCore::<SequencerClient>::from_env().unwrap();
 
     // Deploy the program through `program_loader`; `program` is also needed directly below, as
     // the local proving bundle for the private-tx arms.

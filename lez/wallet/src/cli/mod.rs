@@ -7,11 +7,10 @@ use common::HashType;
 use derive_more::Display;
 use futures::TryFutureExt as _;
 use lee_core::BlockId;
-use sequencer_service_rpc::RpcClient as _;
 
 pub use crate::helperfunctions::{read_mnemonic, read_pin};
 use crate::{
-    WalletCore,
+    WalletCore, WalletSequencerClient,
     account::{AccountIdWithPrivacy, Label},
     cli::{
         account::AccountSubcommand,
@@ -38,8 +37,10 @@ pub mod network;
 pub mod programs;
 
 pub(crate) trait WalletSubcommand {
-    async fn handle_subcommand(self, wallet_core: &mut WalletCore)
-    -> Result<SubcommandReturnValue>;
+    async fn handle_subcommand<C: WalletSequencerClient>(
+        self,
+        wallet_core: &mut WalletCore<C>,
+    ) -> Result<SubcommandReturnValue>;
 }
 
 /// Represents CLI command for a wallet.
@@ -198,8 +199,8 @@ impl Default for CliAccountMention {
     }
 }
 
-pub async fn execute_subcommand(
-    wallet_core: &mut WalletCore,
+pub async fn execute_subcommand<C: WalletSequencerClient>(
+    wallet_core: &mut WalletCore<C>,
     command: Command,
 ) -> Result<SubcommandReturnValue> {
     let subcommand_ret = match command {
@@ -271,7 +272,9 @@ pub async fn execute_subcommand(
     Ok(subcommand_ret)
 }
 
-pub async fn execute_continuous_run(wallet_core: &mut WalletCore) -> Result<()> {
+pub async fn execute_continuous_run<C: WalletSequencerClient>(
+    wallet_core: &mut WalletCore<C>,
+) -> Result<()> {
     loop {
         wallet_core.sync_to_latest_block().await?;
         tokio::time::sleep(wallet_core.config().seq_poll_timeout).await;
@@ -348,7 +351,10 @@ pub fn read_mnemonic_from_stdin() -> Result<Mnemonic> {
     Mnemonic::from_str(phrase.trim()).context("Invalid mnemonic phrase")
 }
 
-pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) -> Result<()> {
+pub async fn execute_keys_restoration<C: WalletSequencerClient>(
+    wallet_core: &mut WalletCore<C>,
+    depth: u32,
+) -> Result<()> {
     wallet_core
         .storage
         .key_chain_mut()

@@ -4,7 +4,7 @@ use lee_core::{
     program::InstructionData,
 };
 
-use crate::{ExecutionFailureKind, SelectedShard, WalletCore};
+use crate::{ExecutionFailureKind, SelectedShard, WalletCore, WalletSequencerClient};
 
 pub mod deshielded;
 pub mod private;
@@ -15,7 +15,7 @@ pub mod shielded;
     clippy::multiple_inherent_impl,
     reason = "impl blocks split across multiple files for organization"
 )]
-pub struct NativeTokenTransfer<'wallet>(pub &'wallet WalletCore);
+pub struct NativeTokenTransfer<'wallet, C: WalletSequencerClient>(pub &'wallet WalletCore<C>);
 
 fn native_transfer_preparation(
     balance_to_move: u128,

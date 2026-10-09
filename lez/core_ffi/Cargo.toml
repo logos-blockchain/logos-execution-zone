@@ -1,0 +1,44 @@
+[package]
+name = "core_ffi"
+license = { workspace = true }
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lee.workspace = true
+lee_core.workspace = true
+sequencer_service.workspace = true
+sequencer_executor_actor = { workspace = true, features = ["actor"] }
+sequencer_storage_actor.workspace = true
+sequencer_service_rpc.workspace = true
+common.workspace = true
+programs.workspace = true
+wallet.workspace = true
+key_protocol.workspace = true
+
+tokio = { features = ["rt-multi-thread"], workspace = true }
+log = { workspace = true }
+serde_json.workspace = true
+kameo.workspace = true
+env_logger.workspace = true
+bip39.workspace = true
+anyhow.workspace = true
+
+[lints]
+workspace = true
+
+[build-dependencies]
+cbindgen.workspace = true
+
+[lib]
+crate-type = ["rlib", "cdylib", "staticlib"]
+name = "core_ffi"
+
+[package.metadata.cargo-machete]
+ignored = [
+  "cbindgen",
+] # machete does not recognize this for build dep and complains.
+
+[features]
+default = ["prove"]
+prove = ["lee/prove"]

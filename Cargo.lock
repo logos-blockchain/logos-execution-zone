@@ -1976,6 +1976,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "core_ffi"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bip39",
+ "cbindgen",
+ "common",
+ "env_logger",
+ "kameo",
+ "key_protocol",
+ "lee",
+ "lee_core",
+ "log",
+ "programs",
+ "sequencer_executor_actor",
+ "sequencer_service",
+ "sequencer_service_rpc",
+ "sequencer_storage_actor",
+ "serde_json",
+ "tokio",
+ "wallet",
+]
+
+[[package]]
 name = "cpp_demangle"
 version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4784,6 +4808,7 @@ dependencies = [
  "bridge_lock_core",
  "bytesize",
  "common",
+ "core_ffi",
  "cross_zone_inbox_core",
  "cross_zone_marker_core",
  "cross_zone_outbox_core",
@@ -4810,7 +4835,6 @@ dependencies = [
  "programs",
  "sequencer_bedrock_actor",
  "sequencer_core",
- "sequencer_ffi",
  "sequencer_service",
  "sequencer_service_rpc",
  "sequencer_stake_core",
@@ -4829,7 +4853,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber 0.3.23",
  "wallet",
- "wallet-ffi",
  "wrapped_token_core",
 ]
 
@@ -11215,24 +11238,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sequencer_ffi"
-version = "0.1.0"
-dependencies = [
- "cbindgen",
- "common",
- "env_logger",
- "kameo",
- "lee",
- "lee_core",
- "log",
- "sequencer_executor_actor",
- "sequencer_service",
- "sequencer_storage_actor",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "sequencer_gossip_actor"
 version = "0.1.0"
 dependencies = [
@@ -13759,6 +13764,7 @@ dependencies = [
  "risc0-binfmt",
  "risc0-zkos-v1compat",
  "rpassword",
+ "sequencer_service_protocol",
  "sequencer_service_rpc",
  "serde",
  "serde_json",
@@ -13769,23 +13775,6 @@ dependencies = [
  "tokio",
  "url",
  "zeroize",
-]
-
-[[package]]
-name = "wallet-ffi"
-version = "0.1.0"
-dependencies = [
- "bip39",
- "cbindgen",
- "common",
- "key_protocol",
- "lee",
- "lee_core",
- "programs",
- "sequencer_service_rpc",
- "serde_json",
- "tokio",
- "wallet",
 ]
 
 [[package]]

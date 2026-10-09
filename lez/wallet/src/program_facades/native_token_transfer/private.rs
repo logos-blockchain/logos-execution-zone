@@ -8,9 +8,9 @@ use lee_core::{
 };
 
 use super::{NativeTokenTransfer, native_transfer_preparation};
-use crate::{AccountIdentity, ExecutionFailureKind};
+use crate::{AccountIdentity, ExecutionFailureKind, WalletSequencerClient};
 
-impl NativeTokenTransfer<'_> {
+impl<C: WalletSequencerClient> NativeTokenTransfer<'_, C> {
     pub async fn send_private_transfer_to_outer_account(
         &self,
         from: AccountId,

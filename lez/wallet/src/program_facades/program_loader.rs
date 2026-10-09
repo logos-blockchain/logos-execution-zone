@@ -4,16 +4,18 @@ use lee::{AccountId, ProgramShardSelector, program::Program};
 use lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
 use program_loader_core::{Instruction, MAX_PROGRAM_SEGMENTS, MAX_SEGMENT_DATA_LEN};
 
-use crate::{AccountIdentity, AccountMention, ExecutionFailureKind, WalletCore};
+use crate::{
+    AccountIdentity, AccountMention, ExecutionFailureKind, WalletCore, WalletSequencerClient,
+};
 
 /// Facade for `program_loader`'s `WriteSegment`/`CreateHeader`/`UpdateHeader` instructions.
 ///
 /// Every account (segment, header) is caller-supplied — no key generation happens here. Callers
 /// create accounts first via the ordinary `account new public` flow, the same way every other
 /// program-facing command takes accounts as `AccountId`s rather than conjuring them.
-pub struct ProgramLoader<'wallet>(pub &'wallet WalletCore);
+pub struct ProgramLoader<'wallet, C: WalletSequencerClient>(pub &'wallet WalletCore<C>);
 
-impl ProgramLoader<'_> {
+impl<C: WalletSequencerClient> ProgramLoader<'_, C> {
     /// Sends a `program_loader` instruction over `accounts`, paid by `payer` if given.
     ///
     /// A deploy's account list holds nothing but the brand-new accounts it is claiming, so there

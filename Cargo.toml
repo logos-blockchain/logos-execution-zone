@@ -32,7 +32,6 @@ members = [
   "lez/sequencer/actors/slasher",
   "lez/sequencer/actors/storage",
   "lez/sequencer/actors/bedrock",
-  "lez/sequencer/ffi",
   "lez/indexer/core",
   "lez/indexer/service",
   "lez/indexer/service/protocol",
@@ -43,7 +42,6 @@ members = [
   "lez/keycard_wallet",
   "lez/mempool",
   "lez/wallet",
-  "lez/wallet-ffi",
   "lez/common",
   "lez/programs",
   "lez/programs/bridge",
@@ -60,6 +58,7 @@ members = [
   "lez/programs/sequencer_stake",
   "lez/programs/program_loader/core",
   "lez/cross_zone",
+  "lez/core_ffi",
 
   "test_guest_core",
   "test_programs",
@@ -104,14 +103,13 @@ sequencer_slasher_actor = { path = "lez/sequencer/actors/slasher" }
 sequencer_storage_actor = { path = "lez/sequencer/actors/storage" }
 sequencer_bedrock_actor = { path = "lez/sequencer/actors/bedrock" }
 sequencer_service = { path = "lez/sequencer/service" }
-sequencer_ffi = { path = "lez/sequencer/ffi" }
 indexer_core = { path = "lez/indexer/core" }
 indexer_service = { path = "lez/indexer/service" }
 indexer_service_protocol = { path = "lez/indexer/service/protocol" }
 indexer_service_rpc = { path = "lez/indexer/service/rpc" }
 wallet = { path = "lez/wallet" }
-wallet-ffi = { path = "lez/wallet-ffi", default-features = false }
 indexer_ffi = { path = "lez/indexer/ffi" }
+core_ffi = { path = "lez/core_ffi", default-features = false }
 lez = { path = "lez" }
 programs = { path = "lez/programs", default-features = false, features = [
   "artifacts",

@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Subcommand;
 
 use crate::{
-    WalletCore,
+    WalletCore, WalletSequencerClient,
     cli::{SubcommandReturnValue, WalletSubcommand},
 };
 
@@ -24,10 +24,10 @@ pub enum ConfigSubcommand {
 }
 
 impl ConfigSubcommand {
-    fn handle_get(
+    fn handle_get<C: WalletSequencerClient>(
         all: bool,
         key: Option<String>,
-        wallet_core: &WalletCore,
+        wallet_core: &WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let config = wallet_core.config();
         if all {
@@ -65,10 +65,10 @@ impl ConfigSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    async fn handle_set(
+    async fn handle_set<C: WalletSequencerClient>(
         key: String,
         value: String,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let mut config = wallet_core.config().clone();
         match key.as_str() {
@@ -102,7 +102,10 @@ impl ConfigSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    fn handle_description(key: &str, _wallet_core: &WalletCore) -> SubcommandReturnValue {
+    fn handle_description<C: WalletSequencerClient>(
+        key: &str,
+        _wallet_core: &WalletCore<C>,
+    ) -> SubcommandReturnValue {
         match key {
             "override_rust_log" => {
                 println!("Value of variable RUST_LOG to override, affects logging");
@@ -145,9 +148,9 @@ impl ConfigSubcommand {
 }
 
 impl WalletSubcommand for ConfigSubcommand {
-    async fn handle_subcommand(
+    async fn handle_subcommand<C: WalletSequencerClient>(
         self,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::Get { all, key } => Self::handle_get(all, key, wallet_core),

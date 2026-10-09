@@ -10,7 +10,7 @@ use lee::{
 };
 use lee_core::program::PdaSeed;
 use program_deployment::deploy_program;
-use sequencer_service_rpc::RpcClient as _;
+use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use wallet::WalletCore;
 
 // Before running this example, compile the `tail_call_with_pda.rs` and
@@ -40,7 +40,7 @@ const PDA_SEED: PdaSeed = PdaSeed::new([37; 32]);
 #[tokio::main]
 async fn main() {
     // Initialize wallet
-    let mut wallet_core = WalletCore::from_env().unwrap();
+    let mut wallet_core = WalletCore::<SequencerClient>::from_env().unwrap();
 
     // Parse arguments
     // First argument is the path to the caller (`tail_call_with_pda`) program binary

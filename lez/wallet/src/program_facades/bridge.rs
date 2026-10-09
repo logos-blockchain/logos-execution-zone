@@ -1,11 +1,11 @@
 use common::HashType;
 use lee::{AccountId, program::Program};
 
-use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
+use crate::{AccountIdentity, ExecutionFailureKind, WalletCore, WalletSequencerClient};
 
-pub struct Bridge<'wallet>(pub &'wallet WalletCore);
+pub struct Bridge<'wallet, C: WalletSequencerClient>(pub &'wallet WalletCore<C>);
 
-impl Bridge<'_> {
+impl<C: WalletSequencerClient> Bridge<'_, C> {
     pub async fn send_withdraw(
         &self,
         sender_account_id: AccountId,

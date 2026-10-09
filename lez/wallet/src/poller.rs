@@ -4,23 +4,22 @@ use anyhow::Result;
 use common::{HashType, block::Block, transaction::LeeTransaction};
 use lee_core::BlockId;
 use log::warn;
-use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 
-use crate::config::WalletConfig;
+use crate::{WalletSequencerClient, config::WalletConfig};
 
 #[derive(Clone)]
 /// Helperstruct to poll transactions.
-pub struct TxPoller {
+pub struct TxPoller<C: WalletSequencerClient> {
     polling_max_blocks_to_query: usize,
     polling_max_error_attempts: u64,
     polling_delay: Duration,
     block_poll_max_amount: u64,
-    client: SequencerClient,
+    client: C,
 }
 
-impl TxPoller {
+impl<C: WalletSequencerClient> TxPoller<C> {
     #[must_use]
-    pub const fn new(config: &WalletConfig, client: SequencerClient) -> Self {
+    pub const fn new(config: &WalletConfig, client: C) -> Self {
         Self {
             polling_delay: config.seq_poll_timeout,
             polling_max_blocks_to_query: config.seq_tx_poll_max_blocks,

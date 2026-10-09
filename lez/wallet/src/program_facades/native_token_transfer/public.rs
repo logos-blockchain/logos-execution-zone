@@ -3,11 +3,11 @@ use lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID;
 
 use super::NativeTokenTransfer;
 use crate::{
-    AccountIdentity, ExecutionFailureKind,
+    AccountIdentity, ExecutionFailureKind, WalletSequencerClient,
     program_facades::native_token_transfer::native_transfer_preparation,
 };
 
-impl NativeTokenTransfer<'_> {
+impl<C: WalletSequencerClient> NativeTokenTransfer<'_, C> {
     pub async fn send_public_transfer(
         &self,
         from: AccountIdentity,

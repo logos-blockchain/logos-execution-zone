@@ -13,6 +13,7 @@ lee.workspace = true
 common.workspace = true
 key_protocol.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
+sequencer_service_protocol.workspace = true
 testnet_initial_state.workspace = true
 bridge_core.workspace = true
 keycard_wallet.workspace = true

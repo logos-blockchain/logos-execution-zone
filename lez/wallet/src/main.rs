@@ -5,6 +5,7 @@
 
 use anyhow::{Context as _, Result};
 use clap::{CommandFactory as _, Parser as _};
+use sequencer_service_rpc::SequencerClient;
 use wallet::{
     WalletCore,
     cli::{Args, execute_continuous_run, execute_subcommand, read_password_from_stdin},
@@ -38,8 +39,12 @@ async fn main() -> Result<()> {
             println!("Persistent storage not found, need to execute setup");
 
             let password = read_password_from_stdin()?;
-            let (wallet, mnemonic) =
-                WalletCore::new_init_storage(config_path, storage_path, None, &password)?;
+            let (wallet, mnemonic) = WalletCore::<SequencerClient>::new_init_storage(
+                config_path,
+                storage_path,
+                None,
+                &password,
+            )?;
 
             println!();
             println!("IMPORTANT: Write down your recovery phrase and store it securely.");
@@ -55,7 +60,8 @@ async fn main() -> Result<()> {
         let _output = execute_subcommand(&mut wallet, command).await?;
         Ok(())
     } else if continuous_run {
-        let mut wallet = WalletCore::new_update_chain(config_path, storage_path, None)?;
+        let mut wallet =
+            WalletCore::<SequencerClient>::new_update_chain(config_path, storage_path, None)?;
         execute_continuous_run(&mut wallet).await
     } else {
         let help = Args::command().render_long_help();
