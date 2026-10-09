@@ -25,9 +25,8 @@ impl From<&Block> for BlockMeta {
 /// The last peer block accepted onto a cross-zone peer chain, and the link the
 /// next one has to carry.
 ///
-/// `block_hash` is the recomputed hash, not `header.hash` as read: the
-/// signature does not cover that field, so a signed block may carry a bogus one
-/// and break the link against the peer's next honest block.
+/// `block_hash` is the recomputed hash, not `header.hash` as read: a block may
+/// carry a bogus one and break the link against the peer's next honest block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PeerChainTip {
     pub block_id: u64,
@@ -55,10 +54,6 @@ pub struct BlockHeader {
     pub prev_block_hash: BlockHash,
     pub hash: BlockHash,
     pub timestamp: Timestamp,
-    /// The block producer's signing key. Covered by `hash` and verified
-    /// against `signature`.
-    pub producer: lee::PublicKey,
-    pub signature: lee::Signature,
 }
 
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
@@ -91,21 +86,7 @@ impl Block {
             timestamp: self.header.timestamp,
             transactions: self.body.transactions.clone(),
         }
-        .compute_hash(&self.header.producer)
-    }
-
-    /// Whether the header signature verifies against the embedded producer
-    /// key. Every valid block must satisfy this.
-    ///
-    /// This attests only that the producer signed the *declared* `header.hash`,
-    /// not that the hash matches the block contents — so it is not an
-    /// authenticity check on its own. Pair it with a `recompute_hash` check (as
-    /// `validate_against_tip` does) before trusting it.
-    #[must_use]
-    pub fn has_valid_producer_signature(&self) -> bool {
-        self.header
-            .signature
-            .is_valid_for(&self.header.hash.0, &self.header.producer)
+        .compute_hash()
     }
 }
 
@@ -130,43 +111,34 @@ pub struct HashableBlockData {
 }
 
 impl HashableBlockData {
-    /// Domain-separated hash of the block contents and its producer:
-    /// `SHA256(PREFIX || borsh(self) || borsh(producer))`. The single source of
-    /// truth for both producing and verifying a block hash; no site can hash
-    /// without deciding the producer.
+    /// Domain-separated hash of the block contents:
+    /// `SHA256(PREFIX || borsh(self))`. The single source of truth for both
+    /// producing and verifying a block hash.
     #[must_use]
-    pub fn compute_hash(&self, producer: &lee::PublicKey) -> BlockHash {
+    pub fn compute_hash(&self) -> BlockHash {
         const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Block/\x00\x00\x00\x00\x00\x00\x00\x00";
 
         let data_bytes = borsh::to_vec(self).unwrap();
-        let producer_bytes = borsh::to_vec(producer).unwrap();
         let mut bytes = Vec::with_capacity(
             PREFIX
                 .len()
                 .checked_add(data_bytes.len())
-                .and_then(|len| len.checked_add(producer_bytes.len()))
                 .expect("length overflow"),
         );
         bytes.extend_from_slice(PREFIX);
         bytes.extend_from_slice(&data_bytes);
-        bytes.extend_from_slice(&producer_bytes);
         OwnHasher::hash(&bytes)
     }
 
     #[must_use]
-    pub fn into_pending_block(self, signing_key: &lee::PrivateKey) -> Block {
-        // TODO: does this introduce too much cost to derive the key on each block?
-        let producer = lee::PublicKey::new_from_private_key(signing_key);
-        let hash = self.compute_hash(&producer);
-        let signature = lee::Signature::new(signing_key, &hash.0);
+    pub fn into_pending_block(self) -> Block {
+        let hash = self.compute_hash();
         Block {
             header: BlockHeader {
                 block_id: self.block_id,
                 prev_block_hash: self.prev_block_hash,
                 hash,
                 timestamp: self.timestamp,
-                producer,
-                signature,
             },
             body: BlockBody {
                 transactions: self.transactions,
@@ -203,27 +175,25 @@ mod tests {
 
     #[test]
     fn recompute_hash_matches_header_for_well_formed_block() {
-        let key = lee::PrivateKey::try_new([7_u8; 32]).expect("valid key");
         let block = HashableBlockData {
             block_id: 5,
             prev_block_hash: HashType([9_u8; 32]),
             timestamp: 42,
             transactions: vec![test_utils::produce_dummy_empty_transaction()],
         }
-        .into_pending_block(&key);
+        .into_pending_block();
         assert_eq!(block.recompute_hash(), block.header.hash);
     }
 
     #[test]
     fn recompute_hash_detects_tampering() {
-        let key = lee::PrivateKey::try_new([7_u8; 32]).expect("valid key");
         let block = HashableBlockData {
             block_id: 5,
             prev_block_hash: HashType([9_u8; 32]),
             timestamp: 42,
             transactions: vec![test_utils::produce_dummy_empty_transaction()],
         }
-        .into_pending_block(&key);
+        .into_pending_block();
 
         let mut tampered = block;
         tampered.header.timestamp = 99; // header changed; stale hash no longer matches

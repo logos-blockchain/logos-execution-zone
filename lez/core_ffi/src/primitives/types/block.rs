@@ -1,7 +1,7 @@
 use common::block::{BedrockStatus, Block, BlockHeader};
 
 use crate::primitives::types::{
-    FfiBlockId, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiTimestamp, FfiVec,
+    FfiBlockId, FfiHashType, FfiOption, FfiTimestamp, FfiVec,
     transaction::primitives_ffi_free_transaction_vec_value, vectors::FfiBlockBody,
 };
 
@@ -41,8 +41,6 @@ pub struct FfiBlockHeader {
     pub prev_block_hash: FfiHashType,
     pub hash: FfiHashType,
     pub timestamp: FfiTimestamp,
-    pub producer: FfiPublicKey,
-    pub signature: FfiSignature,
 }
 
 impl From<BlockHeader> for FfiBlockHeader {
@@ -52,8 +50,6 @@ impl From<BlockHeader> for FfiBlockHeader {
             prev_block_hash,
             hash,
             timestamp,
-            producer,
-            signature,
         } = value;
 
         Self {
@@ -61,8 +57,6 @@ impl From<BlockHeader> for FfiBlockHeader {
             prev_block_hash: prev_block_hash.into(),
             hash: hash.into(),
             timestamp,
-            producer: producer.into(),
-            signature: signature.into(),
         }
     }
 }

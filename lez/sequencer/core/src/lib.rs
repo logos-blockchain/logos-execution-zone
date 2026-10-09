@@ -195,7 +195,6 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     /// Keys with stake on record, which the mesh admits channel-config
     /// messages from.
     staked_keys_tx: AccreditedKeysSender,
-    block_signing_key: lee::PrivateKey,
     /// Signs this node's approval of a slash.
     bedrock_signing_key: Ed25519Key,
     /// Collects the accredited signatures a channel config update needs.
@@ -281,7 +280,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// holds no chain yet.
     async fn seed_genesis_if_absent(
         storage_ref: &ActorRef<S>,
-        signing_key: &lee::PrivateKey,
         bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
         config: &SequencerConfig,
     ) {
@@ -293,8 +291,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             return;
         }
 
-        let (block, state, events) =
-            genesis_block_and_state(signing_key, bootstrap_sequencer_key, config);
+        let (block, state, events) = genesis_block_and_state(bootstrap_sequencer_key, config);
         let genesis_events = vec![(block.header.block_id, events)];
 
         storage_ref
@@ -361,11 +358,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             info!("Channel does not exist yet; starting it as channel creator");
         }
         let bootstrap_sequencer_key = (!channel_already_exists).then_some(own_sequencer_key);
-        let signing_key = config
-            .block_signing_key()
-            .expect("Failed to load the block signing key");
-        Self::seed_genesis_if_absent(&storage_ref, &signing_key, bootstrap_sequencer_key, &config)
-            .await;
+        Self::seed_genesis_if_absent(&storage_ref, bootstrap_sequencer_key, &config).await;
 
         let state = storage_ref
             .ask(GetLeeState)
@@ -554,7 +547,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             staked_keys_tx,
             config_manager,
             bedrock_signing_key,
-            block_signing_key: signing_key,
             config_draft: None,
             finalized_config,
             applied_seq: None,
@@ -656,10 +648,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .ask(sequencer_bedrock_actor::protocol::ReadChannel { after: after_slot })
             .await
             .context("Failed to read channel history for reconstruction")?;
-        // Finalized history is one chain, so each entry's parent is the one
-        // before it. The first entry's parent is the root when the read starts
-        // at the channel's beginning, and unknown otherwise.
-        let mut parent = after_slot.is_none().then(MsgId::root);
+        // Finalized history is read in lineage order, but a warm start re-reads
+        // what the final tier holds, so the lineage resumes past the stored final entry.
+        let stored_final = chain.lock().await.final_msg();
+        let mut on_lineage = stored_final == MsgId::root();
+        let mut read_any = false;
         while let Some((message, slot)) = messages.next().await {
             if let Some(check) = &mut consistency_check
                 && let Some(ChainConsistency::Inconsistent(mismatch)) =
@@ -682,17 +675,25 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     );
                 })
                 .ok();
-            let entry = ChannelEntry {
-                msg: zone_block.id,
-                parent: parent.unwrap_or_else(MsgId::root),
-                block,
-            };
-            // Locked per message (not across the stream `await`): concurrent
-            // follow events interleave safely — both paths apply idempotently
-            // and persist under this same lock.
+            // Locked per message, not across the stream `await`.
             let mut chain = chain.lock().await;
-            Self::apply_reconstructed_entry(storage_ref, &mut chain, entry, parent, slot).await?;
-            parent = Some(zone_block.id);
+            Self::apply_reconstructed_entry(
+                storage_ref,
+                &mut chain,
+                zone_block.id,
+                block,
+                on_lineage,
+                slot,
+            )
+            .await?;
+            on_lineage = on_lineage || zone_block.id == stored_final;
+            read_any = true;
+        }
+        if read_any && !on_lineage {
+            warn!(
+                "Reconstruction never re-read the stored final entry {stored_final}, so it left \
+                 the lineage untouched; the Bedrock node's finality may lag behind it"
+            );
         }
 
         // The channel exists once it has a tip; only when it has none is this
@@ -703,15 +704,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         Ok(channel_tip_slot.is_none())
     }
 
-    /// Applies one finalized channel entry during reconstruction. A block the
-    /// store already holds only settles its deliveries, a block that does not
-    /// apply is skipped, like the follow path does. Advances the persisted
-    /// anchor to a block the store holds after this.
+    /// Applies one finalized channel entry during reconstruction, moving the
+    /// final entry to it only `on_lineage`. A block the store already holds
+    /// only settles its deliveries, a block that does not apply is skipped,
+    /// like the follow path does. Advances the persisted anchor to a block the
+    /// store holds after this.
     async fn apply_reconstructed_entry(
         storage_ref: &ActorRef<S>,
         chain: &mut ChainState,
-        entry: ChannelEntry,
-        parent: Option<MsgId>,
+        msg: MsgId,
+        entry_block: Option<Block>,
+        on_lineage: bool,
         slot: Slot,
     ) -> Result<()> {
         let head_before: HashSet<HashType> = chain
@@ -720,7 +723,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .map(|block| block.header.hash)
             .collect();
         let was_empty = chain.final_tip().is_none();
-        let outcome = chain.apply_finalized(entry.msg, parent, entry.block.as_ref());
+        let outcome = if on_lineage {
+            chain.apply_reconstructed(msg, entry_block.as_ref())
+        } else {
+            chain.apply_finalized_redelivery(msg, entry_block.as_ref())
+        };
         // The channel's first finalized block is its genesis: one that is not
         // ours means a different chain, not an offence to step over.
         if was_empty
@@ -757,7 +764,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             update.finalized_up_to = chain.final_tip().map(|tip| tip.block_id);
         }
 
-        if let Some(block) = &entry.block {
+        if let Some(block) = &entry_block {
             let block_id = block.header.block_id;
             let record = ZoneAnchorRecord {
                 slot: slot.into_inner(),
@@ -874,8 +881,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             for entry in finalized {
                 // A root lineage over a held tier is a store restored without its view.
                 let judgeable = chain.final_tip().is_some() && chain.final_msg() != MsgId::root();
-                let outcome =
-                    chain.apply_finalized(entry.msg, Some(entry.parent), entry.block.as_ref());
+                let outcome = chain.apply_finalized(entry.msg, entry.parent, entry.block.as_ref());
                 let (Some(block), Some(outcome)) = (&entry.block, outcome) else {
                     continue;
                 };
@@ -1878,9 +1884,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             timestamp: new_block_timestamp,
         };
 
-        let block = hashable_data
-            .clone()
-            .into_pending_block(&self.block_signing_key);
+        let block = hashable_data.clone().into_pending_block();
 
         log::info!(
             "Created block with {} transactions in {} seconds",
@@ -2332,19 +2336,18 @@ fn chain_update(chain: &ChainState) -> AtomicUpdate {
 
 /// The genesis block and state `config` describes.
 fn genesis_block_and_state(
-    signing_key: &lee::PrivateKey,
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
     config: &SequencerConfig,
 ) -> (Block, lee::V03State, Vec<TxEvents>) {
     let (genesis_state, genesis_txs, genesis_events) =
-        build_genesis_state(signing_key, config, bootstrap_sequencer_key);
+        build_genesis_state(config, bootstrap_sequencer_key);
     let genesis_block = HashableBlockData {
         block_id: GENESIS_BLOCK_ID,
         transactions: genesis_txs,
         prev_block_hash: HashType([0; 32]),
         timestamp: 0,
     }
-    .into_pending_block(signing_key);
+    .into_pending_block();
 
     (genesis_block, genesis_state, genesis_events)
 }
@@ -2369,7 +2372,6 @@ fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
 /// [`LeeTransaction`]s that should be committed to the genesis block so external
 /// observers can replay them.
 fn build_genesis_state(
-    signing_key: &lee::PrivateKey,
     config: &SequencerConfig,
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
 ) -> (lee::V03State, Vec<LeeTransaction>, Vec<TxEvents>) {
@@ -2442,13 +2444,14 @@ fn build_genesis_state(
     //
     // A stakeless genesis (e.g. a sequencer reconstructing an existing channel
     // it did not bootstrap) has no staked account to reward, so it falls back to
-    // the signing key's account: this genesis is a throwaway placeholder (the real
+    // the default account: this genesis is a throwaway placeholder (the real
     // one is replayed from the channel), the summary is the default, so the
     // credit is zero and the account is left untouched.
-    let producer = staked.first().map_or_else(
-        || lee::AccountId::from(&lee::PublicKey::new_from_private_key(signing_key)),
-        |stake| lee::AccountId::from(&stake.owner),
-    );
+    let producer = staked
+        .first()
+        .map_or_else(lee::AccountId::default, |stake| {
+            lee::AccountId::from(&stake.owner)
+        });
 
     let genesis_summary = fee_core::BlockFeeSummary::default();
     let genesis_payout = chain_state::apply::block_payout(&genesis_opening, &genesis_summary);

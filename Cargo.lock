@@ -4813,6 +4813,7 @@ dependencies = [
  "cross_zone_outbox_core",
  "cucumber",
  "fee_core",
+ "futures",
  "hex",
  "indexer_ffi",
  "indexer_service",
