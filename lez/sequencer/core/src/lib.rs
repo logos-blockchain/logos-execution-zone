@@ -296,7 +296,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
         storage_ref
             // No need for events on first block
-            .ask(AtomicUpdate::from_block(block, Arc::new(state), genesis_events))
+            .ask(AtomicUpdate::from_block(
+                block,
+                Arc::new(state),
+                genesis_events,
+            ))
             .await
             .expect("Failed to seed the database with the genesis block");
 
