@@ -50,9 +50,7 @@ pub enum Error {
     InvalidChannelKeyList(#[source] anyhow::Error),
 
     #[error("Failed to assemble channel multi-sig proof")]
-    ChannelMultiSigProofAssemblyFailed(
-        #[from] logos_blockchain_core::proofs::channel_multi_sig_proof::Error,
-    ),
+    ChannelMultiSigProofAssemblyFailed(#[source] anyhow::Error),
 
     #[error("Too many operation proofs")]
     TooManyOperationProofs(#[source] anyhow::Error),

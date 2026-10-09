@@ -98,12 +98,10 @@ fn the_genesis_config_op_and_its_proof_pass_bedrock_verification() {
     );
     let tx_hash_view = TxHashView::new(TxHash::from([7; 32]));
 
-    let signed = SignedOperation::<_, Unverified, StandardMode>::new(
-        op,
-        super::genesis_config_proof().expect("the proof is well formed"),
-    )
-    .into_preverified(&())
-    .expect("the config is well formed");
+    let signed =
+        SignedOperation::<_, Unverified, StandardMode>::new(op, super::genesis_config_proof())
+            .into_preverified(&())
+            .expect("the config is well formed");
 
     signed
         .verify(&ChannelConfigValidationContext {
