@@ -8,8 +8,7 @@ use std::{collections::HashMap, time::Duration};
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, get_account,
-    utils::{private_fee_transfer, sync_private},
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, get_account, utils::sync_private,
     verify_commitment_is_in_state,
 };
 use lee::{
@@ -83,7 +82,7 @@ async fn fund_private_pda(
             ..Default::default()
         },
         &ProgramWithDependencies::native(),
-        Some(private_fee_transfer(wallet.client(), sender, 0).await?),
+        Some(wallet::private_fee_transfer(wallet.client(), sender, 0).await?),
     )
     .map_err(|e| anyhow::anyhow!("circuit proving failed: {e}"))?;
 

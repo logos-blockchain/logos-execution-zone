@@ -630,7 +630,7 @@ fn a_guest_evaluated_public_effect_settles_against_live_state() {
 
     // A dry run yields the same effects without a proof, and metering them on the state gives
     // the cycles settlement will charge.
-    let actions = crate::dry_run(proving_input, &program).unwrap();
+    let actions = crate::dry_run(&proving_input, &program).unwrap();
     assert_eq!(actions, tx.message.public_actions);
     assert_eq!(
         crate::meter_public_effects(

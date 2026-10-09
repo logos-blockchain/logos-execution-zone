@@ -418,15 +418,10 @@ fn settle_private_transaction(
         unreachable!("only private transactions classify as a private fee view");
     };
 
-    let (base_fee_exec, base_fee_stor) = opening.base_fees_at(*fee_height).ok_or_else(|| {
-        fee_validity(
-            FeeError::FeeHeightOutOfWindow {
-                fee_height: *fee_height,
-                height: opening.height,
-            }
-            .to_string(),
-        )
-    })?;
+    validate_static_tx(view, opening).map_err(|err| fee_validity(err.to_string()))?;
+    let (base_fee_exec, base_fee_stor) = opening
+        .base_fees_at(*fee_height)
+        .expect("the static check keeps the fee height inside the window");
 
     // The verification cost is charged up front; the effects may use what is
     // left of the block's execution gas.
@@ -452,9 +447,15 @@ fn settle_private_transaction(
     let gas_used_exec = accumulate_exec_gas(gas_used_exec, effect_cycles).map_err(gas_cap)?;
 
     let required = private_fee_required(effect_cycles, base_fee_exec, base_fee_stor);
-    let tip = paid
-        .checked_sub(required)
-        .ok_or_else(|| fee_validity(format!("private fee {paid} below the required {required}")))?;
+    let tip = paid.checked_sub(required).ok_or_else(|| {
+        fee_validity(
+            FeeError::PrivateFeeBelowRequired {
+                required,
+                paid: *paid,
+            }
+            .to_string(),
+        )
+    })?;
 
     validate_user_state_modification(transaction, state, &diff).map_err(|err| {
         BlockIngestError::RestrictedAccountModification {

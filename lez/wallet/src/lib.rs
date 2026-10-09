@@ -770,7 +770,7 @@ impl WalletCore {
         let dry_run_input = input.clone();
         let dry_run_program = program.clone();
         let actions =
-            tokio::task::spawn_blocking(move || lee::dry_run(dry_run_input, &dry_run_program))
+            tokio::task::spawn_blocking(move || lee::dry_run(&dry_run_input, &dry_run_program))
                 .await??;
         let effect_cycles = self
             .sequencer_client
@@ -787,7 +787,7 @@ impl WalletCore {
                     ))
                 })?,
         };
-        let fee = self.private_fee_transfer(payer, effect_cycles).await?;
+        let fee = private_fee_transfer(&self.sequencer_client, payer, effect_cycles).await?;
         if self.dry_run {
             let guest_effects = actions
                 .iter()
@@ -843,26 +843,6 @@ impl WalletCore {
             .await;
 
         Ok((call_res?, shared_secrets))
-    }
-
-    /// The in-proof fee `payer` pays for a privacy-preserving transaction whose public effects
-    /// meter `effect_cycles`, priced at the head fee state.
-    async fn private_fee_transfer(
-        &self,
-        payer: AccountId,
-        effect_cycles: u64,
-    ) -> Result<lee_core::FeeTransfer, ExecutionFailureKind> {
-        let quote = self.sequencer_client.get_fee_state().await?;
-        Ok(lee_core::FeeTransfer {
-            payer,
-            recipient: system_accounts::fee_inbox_account_id(),
-            amount: fee_core::assess::private_fee_required(
-                effect_cycles,
-                quote.base_fee_exec,
-                quote.base_fee_stor,
-            ),
-            height: quote.height,
-        })
     }
 
     pub async fn send_pub_tx(
@@ -1009,16 +989,14 @@ impl WalletCore {
     ) -> Result<(), ExecutionFailureKind> {
         let fee = tx.message().fee.expect("the wallet always declares a fee");
         // Storage gas is the wire size settlement sees: the whole `LeeTransaction`.
+        let tx = LeeTransaction::Public(tx);
         let data_bytes = u128::try_from(
-            borsh::to_vec(&LeeTransaction::Public(tx.clone()))
+            borsh::to_vec(&tx)
                 .map_err(|err| ExecutionFailureKind::SignError(err.into()))?
                 .len(),
         )
         .expect("transaction size fits u128");
-        let run = self
-            .sequencer_client
-            .dry_run_public_transaction(LeeTransaction::Public(tx.clone()))
-            .await?;
+        let run = self.sequencer_client.dry_run_public_transaction(tx).await?;
         let quote = self.sequencer_client.get_fee_state().await?;
         let actual_fee = u128::from(run.cycles)
             .saturating_mul(u128::from(quote.base_fee_exec))
@@ -1236,6 +1214,26 @@ impl WalletCore {
 )]
 pub const fn max_fee_for(gas_limit: u64) -> u128 {
     (gas_limit as u128 + ASSUMED_DATA_BYTES) * ASSUMED_BASE_FEE
+}
+
+/// The in-proof fee `payer` pays for a privacy-preserving transaction whose public effects
+/// meter `effect_cycles`, priced at the head fee state.
+pub async fn private_fee_transfer(
+    client: &SequencerClient,
+    payer: AccountId,
+    effect_cycles: u64,
+) -> Result<lee_core::FeeTransfer, ExecutionFailureKind> {
+    let quote = client.get_fee_state().await?;
+    Ok(lee_core::FeeTransfer {
+        payer,
+        recipient: system_accounts::fee_inbox_account_id(),
+        amount: fee_core::assess::private_fee_required(
+            effect_cycles,
+            quote.base_fee_exec,
+            quote.base_fee_stor,
+        ),
+        height: quote.height,
+    })
 }
 
 fn decrypt_note_at(

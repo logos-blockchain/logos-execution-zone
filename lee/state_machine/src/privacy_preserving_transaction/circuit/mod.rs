@@ -300,7 +300,7 @@ pub fn execute_and_prove(
 /// Executes the transaction without proving and returns the public effects it defers to
 /// settlement, so they can be metered before the fee is priced.
 pub fn dry_run(
-    input: ProvingInput,
+    input: &ProvingInput,
     program_with_dependencies: &ProgramWithDependencies,
 ) -> Result<Vec<PublicActionWithID>, LeeError> {
     let mut backend = Prover {
@@ -309,7 +309,7 @@ pub fn dry_run(
         calls: Vec::new(),
         dry_run: true,
     };
-    let (_, outcome, _) = execute(input, program_with_dependencies, None, &mut backend)?;
+    let (_, outcome) = execute(input, program_with_dependencies, None, &mut backend)?;
     Ok(outcome
         .public
         .into_iter()
@@ -323,11 +323,11 @@ pub fn dry_run(
 /// Runs the root call (and the fee transfer ahead of it) on `backend`, returning the outcome
 /// and the root call it ran.
 fn execute(
-    input: ProvingInput,
+    input: &ProvingInput,
     program_with_dependencies: &ProgramWithDependencies,
     fee: Option<&FeeTransfer>,
     backend: &mut Prover<'_>,
-) -> Result<(RootCall, ExecutionOutcome<DeferPublicEffects>, ProvingInput), LeeError> {
+) -> Result<(RootCall, ExecutionOutcome<DeferPublicEffects>), LeeError> {
     let root = RootCall {
         program_account_id: program_with_dependencies.self_account_id,
         shard_selectors: input.shard_selectors.clone(),
@@ -336,7 +336,7 @@ fn execute(
     };
     let outcome =
         ExecutionState::initialize(root.clone(), fee, &input.private_witnesses)?.run(backend)?;
-    Ok((root, outcome, input))
+    Ok((root, outcome))
 }
 
 /// [`execute_and_prove`] with a native transfer run ahead of the root call, see [`FeeTransfer`].
@@ -352,7 +352,12 @@ pub fn execute_and_prove_with_fee(
         calls: Vec::new(),
         dry_run: false,
     };
-    let (root, _, input) = execute(input, program_with_dependencies, fee.as_ref(), &mut backend)?;
+    let (root, _) = execute(
+        &input,
+        program_with_dependencies,
+        fee.as_ref(),
+        &mut backend,
+    )?;
     let ProvingInput {
         private_witnesses,
         dummy_inputs,
