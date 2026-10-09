@@ -22,8 +22,6 @@ pub enum BlockIngestError {
         computed: HashType,
         header: HashType,
     },
-    #[error("Block header signature does not verify against the embedded producer key")]
-    InvalidProducerSignature,
     #[error("Block has no transactions")]
     EmptyBlock,
     #[error("Last transaction must be the public clock invocation for the block timestamp")]
@@ -90,7 +88,6 @@ impl BlockIngestError {
             Self::UnexpectedBlockId { .. } | Self::BrokenChainLink { .. } => false,
             Self::Deserialize(_)
             | Self::HashMismatch { .. }
-            | Self::InvalidProducerSignature
             | Self::EmptyBlock
             | Self::InvalidClockTransaction
             | Self::InvalidFeeTransaction

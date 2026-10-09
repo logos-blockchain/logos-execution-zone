@@ -40,9 +40,7 @@ fn settled_block(
         chain_state::apply::derive_block_summary(state, &transactions, id, timestamp)
             .expect("test transactions settle")
     };
-    let producer = lee::AccountId::from(&lee::PublicKey::new_from_private_key(
-        &common::test_utils::sequencer_sign_key_for_testing(),
-    ));
+    let producer = common::test_utils::producer_account_for_testing();
     transactions.push(LeeTransaction::Public(fee_invocation(
         summary, payout, producer,
     )));
@@ -53,7 +51,7 @@ fn settled_block(
         timestamp,
         transactions,
     }
-    .into_pending_block(&common::test_utils::sequencer_sign_key_for_testing())
+    .into_pending_block()
 }
 
 fn acc1_sign_key() -> lee::PrivateKey {

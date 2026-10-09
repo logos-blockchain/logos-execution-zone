@@ -118,12 +118,11 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_block_with_a_wrong_
     .await
 }
 
-/// A block at `block_id` on `tip`, signed with a block key the leader does not hold.
+/// A block at `block_id` on `tip`.
 fn block_by_offender(block_id: u64, tip: &Block, transactions: Vec<LeeTransaction>) -> Vec<u8> {
     let block =
         common::test_utils::produce_dummy_block(block_id, Some(tip.header.hash), transactions);
-    let block = common::block::HashableBlockData::from(block)
-        .into_pending_block(&lee::PrivateKey::try_new([38; 32]).expect("a valid private key"));
+    let block = common::block::HashableBlockData::from(block).into_pending_block();
     borsh::to_vec(&block).expect("a block should serialize")
 }
 
@@ -285,7 +284,7 @@ async fn assert_offender_is_slashed(payload: impl Fn(&Block) -> Vec<u8>) -> Resu
         signers.len()
     );
     let leader_stake_key = sequencer_stake_core::SequencerKey::new(
-        Ed25519Key::from_bytes(&config::SEQUENCER_SIGNING_KEY)
+        Ed25519Key::from_bytes(&config::BEDROCK_SIGNING_KEY)
             .public_key()
             .to_bytes(),
     )
