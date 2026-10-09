@@ -61,6 +61,12 @@ Before merging a PR, consider squashing non-meaningful commits. E.g.:
 
 Could be squashed to an empty commit if they belong to the same PR.
 
+## CI
+
+`ci-ok` summarizes the whole run: it passes only when every other job either succeeded or was skipped. Watch that one check rather than the individual jobs.
+
+A documentation-only PR skips the code jobs, so `ci-ok` passing while the rest are skipped is the expected result there.
+
 ## Default branch
 
 By default all PRs must be directed into the `dev` branch. This helps us to keep releases stable.
