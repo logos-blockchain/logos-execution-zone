@@ -411,6 +411,7 @@ jobs:
             RUST_LOG=info,kameo=warn
             LOGOS_BLOCKCHAIN_NODE_BIN=${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
           run: |
+            # `--retries` names the flaky test, `with_retry` covers a bad runner.
             source .github/scripts/with_retry.sh
             if [[ "${{ matrix.target }}" == "tf_bedrock_builder" || \
                   "${{ matrix.target }}" == "tf_app_deployments" ]]; then
@@ -420,9 +421,9 @@ jobs:
               # allowing TF to use its local build provider.
               cargo fetch --locked
 
-              with_retry 'env -u GITHUB_ACTIONS -u CI cargo nextest run --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
+              with_retry 'env -u GITHUB_ACTIONS -u CI cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
             else
-              with_retry 'cargo nextest run --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
+              with_retry 'cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
             fi
   # `just build-artifacts` drives the host's Docker daemon via `cargo risczero
   # build`, so it goes through the image rather than `container:`.
