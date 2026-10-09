@@ -388,11 +388,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download integration test archive
+        timeout-minutes: 10
         uses: actions/download-artifact@v4
         with:
           name: integration-tests-archive
 
       - name: Download resolved Bedrock node
+        timeout-minutes: 10
         uses: actions/download-artifact@v4
         with:
           name: bedrock-node
