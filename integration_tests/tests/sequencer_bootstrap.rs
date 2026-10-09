@@ -221,7 +221,7 @@ async fn empty_local_reconstructs_from_populated_bedrock() -> Result<()> {
     // reads finalized history. A stays alive so its publish task keeps flushing.
     let finalized = wait_for_finalized(&indexer, PRODUCED_TARGET, FINALIZE_TIMEOUT).await?;
 
-    // Stop A, then wipe just its L2 store (keeping the bedrock signing key) so it
+    // Stop A, then wipe just its L2 store (keeping the channel signing key) so it
     // restarts from an empty store on the same channel/identity — a sequencer that
     // lost its local DB.
     drop(handle_a);

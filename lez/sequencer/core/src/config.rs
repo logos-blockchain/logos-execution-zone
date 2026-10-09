@@ -7,13 +7,11 @@ use std::{
 };
 
 use anyhow::{Result, ensure};
-use bytesize::ByteSize;
 use common::config::BasicAuth;
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use humantime_serde;
 use lee::{AccountId, PublicKey, Signature};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
-use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
 pub use sequencer_stake_core::ChannelParams;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -71,16 +69,13 @@ pub struct GossipConfig {
 
 // TODO: Provide default values
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SequencerConfig {
-    /// Home dir of sequencer storage. Holds `bedrock_signing_key`, and
+    /// Home dir of sequencer storage. Holds `channel_signing_key`, and
     /// `sequencer_stake_signing_key` when a solo sequencer creates the channel.
     pub home: PathBuf,
     /// Maximum number of user transactions in a block (excludes the mandatory clock transaction).
     pub max_num_tx_in_block: usize,
-    /// Maximum block size (includes header, user transactions, and the mandatory clock
-    /// transaction).
-    #[serde(default = "default_max_block_size")]
-    pub max_block_size: ByteSize,
     /// Mempool maximum size.
     pub mempool_max_size: usize,
     /// Interval in which blocks produced.
@@ -91,9 +86,9 @@ pub struct SequencerConfig {
     pub retry_pending_blocks_timeout: Duration,
     /// Bedrock configuration options.
     pub bedrock_config: BedrockConfig,
-    /// Genesis configuration.
-    #[serde(default)]
-    pub genesis: Vec<GenesisAction>,
+    /// What creating the channel writes into genesis; only read when the channel does not exist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub genesis: Option<GenesisConfig>,
     /// Presence selects the genesis program set, must match the indexer's, and
     /// cannot change on an existing chain. A source-only zone declares
     /// `"cross_zone": {}`.
@@ -108,6 +103,7 @@ pub struct SequencerConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BedrockConfig {
     /// Bedrock channel ID.
     pub channel_id: ChannelId,
@@ -115,13 +111,18 @@ pub struct BedrockConfig {
     pub node_url: Url,
     /// Bedrock auth.
     pub auth: Option<BasicAuth>,
-    pub funding_key: ZkPublicKey,
     #[serde(default = "default_priority_fee_percent")]
     pub priority_fee_percent: u64,
-    /// What it takes to write on this channel, fixed at genesis: the stake a
-    /// key needs to be accredited, and the turn timing round robin runs on.
-    /// Every node on the channel must agree on them.
+}
+
+/// The values a new channel is created with.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenesisConfig {
+    /// Fixed for the chain's life; every other node reads them from the chain.
     pub channel_params: ChannelParams,
+    #[serde(default)]
+    pub actions: Vec<GenesisAction>,
 }
 
 impl SequencerConfig {
@@ -133,25 +134,16 @@ impl SequencerConfig {
         let file = File::open(config_home)?;
         let reader = BufReader::new(file);
         let config: Self = serde_json::from_reader(reader)?;
-
-        // A turn passes on after `posting_timeout` idle slots (1 slot = 1s), so a slower block
-        // interval drops our turn between our own blocks.
-        let posting_timeout = Duration::from_secs(u64::from(
-            config.bedrock_config.channel_params.posting_timeout,
-        ));
-        ensure!(
-            config.block_create_timeout < posting_timeout,
-            "block_create_timeout ({:?}) must be under posting_timeout ({posting_timeout:?})",
-            config.block_create_timeout
-        );
-
+        if let Some(genesis) = &config.genesis {
+            check_channel_params(&genesis.channel_params, config.block_create_timeout)?;
+        }
         Ok(config)
     }
 
     /// Where this sequencer's database lives, suffixed with the channel id like
     /// the indexer's, so several sequencers can share a home directory. Only the
-    /// database is per-channel; `bedrock_signing_key` stays unsuffixed, so
-    /// sequencers sharing a home share one Bedrock identity.
+    /// database is per-channel; `channel_signing_key` stays unsuffixed, so
+    /// sequencers sharing a home share one channel signing key.
     #[must_use]
     pub fn db_path(&self) -> PathBuf {
         self.home
@@ -159,8 +151,34 @@ impl SequencerConfig {
     }
 }
 
-const fn default_max_block_size() -> ByteSize {
-    ByteSize::mib(1)
+/// Checks channel params against what this node and Bedrock can work with.
+pub fn check_channel_params(params: &ChannelParams, block_create_timeout: Duration) -> Result<()> {
+    ensure!(
+        keeps_turn(params, block_create_timeout),
+        "block_create_timeout ({block_create_timeout:?}) must be under posting_timeout ({}s)",
+        params.posting_timeout
+    );
+    check_max_block_size(params)
+}
+
+/// Whether blocks every `block_create_timeout` hold a turn: one passes on after
+/// `posting_timeout` idle slots (1 slot = 1s).
+#[must_use]
+pub fn keeps_turn(params: &ChannelParams, block_create_timeout: Duration) -> bool {
+    block_create_timeout < Duration::from_secs(u64::from(params.posting_timeout))
+}
+
+/// Checks `max_block_size` against what a block must hold and what Bedrock can carry.
+pub fn check_max_block_size(params: &ChannelParams) -> Result<()> {
+    ensure!(
+        (sequencer_stake_core::MIN_MAX_BLOCK_SIZE..=MAX_PUBLISHABLE_BLOCK_SIZE)
+            .contains(&params.max_block_size),
+        "max_block_size {} must be between {} and Bedrock's inscription limit of \
+         {MAX_PUBLISHABLE_BLOCK_SIZE} bytes",
+        params.max_block_size,
+        sequencer_stake_core::MIN_MAX_BLOCK_SIZE
+    );
+    Ok(())
 }
 
 fn default_gossip_listen_addr() -> libp2p::Multiaddr {
@@ -189,5 +207,6 @@ pub const fn default_channel_params() -> ChannelParams {
         posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
         posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
         exit_delay: system_accounts::DEFAULT_SEQUENCER_EXIT_DELAY,
+        max_block_size: system_accounts::DEFAULT_MAX_BLOCK_SIZE,
     }
 }

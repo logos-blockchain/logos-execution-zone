@@ -44,7 +44,6 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tokio-retry.workspace = true
 rand.workspace = true
 borsh.workspace = true
-bytesize.workspace = true
 hex.workspace = true
 url.workspace = true
 num-bigint.workspace = true

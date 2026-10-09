@@ -67,5 +67,4 @@ env_logger.workspace = true
 mockall.workspace = true
 tempfile.workspace = true
 bytesize.workspace = true
-num-bigint.workspace = true
 borsh.workspace = true

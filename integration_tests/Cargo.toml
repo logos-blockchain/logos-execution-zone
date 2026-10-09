@@ -54,7 +54,6 @@ testing-framework-core.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 kameo.workspace = true
-bytesize.workspace = true
 cucumber = { features = [
   "macros",
   "output-junit",

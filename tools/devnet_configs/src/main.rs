@@ -2,11 +2,11 @@
 //! (`lez/sequencer/service/docker-compose.devnet.yml`): one sequencer config
 //! all four nodes share, and a key directory per node.
 //!
-//! The shared config carries the genesis that stakes all four Bedrock signing
+//! The shared config carries the genesis that stakes all four channel signing
 //! keys, so the leader opens the channel already accrediting the whole
 //! committee and the followers replay the same chain — the arrangement
 //! `integration_tests/tests/multi_sequencer.rs` drives in-process. What is left
-//! per node is its Bedrock signing key, mounted into its home.
+//! per node is its channel signing key, mounted into its home.
 //!
 //! Run via `just regenerate-devnet-configs`, then commit the result. See this
 //! crate's README for what is safe to edit by hand instead.
@@ -56,9 +56,11 @@ fn main() -> Result<()> {
         )
     })?;
 
-    // Nothing here may differ between the nodes: they build this genesis
-    // independently and have to arrive at the same chain.
-    config.bedrock_config.channel_params.posting_timeframe = POSTING_TIMEFRAME;
+    let genesis = config
+        .genesis
+        .as_mut()
+        .context("The template config has no genesis")?;
+    genesis.channel_params.posting_timeframe = POSTING_TIMEFRAME;
     config.gossip = Some(GossipConfig {
         listen_addr: GOSSIP_LISTEN_ADDR
             .parse()
@@ -66,11 +68,14 @@ fn main() -> Result<()> {
         bootstrap_peers: vec![],
     });
     let signing_keys: Vec<[u8; 32]> = std::iter::repeat_with(random_key).take(NODES).collect();
-    let stakes = genesis_sequencer_stakes(&signing_keys, config.bedrock_config.channel_params)
+    let stakes = genesis_sequencer_stakes(&signing_keys, genesis.channel_params)
         .context("Failed to build the founding sequencer stakes")?;
     // Ahead of the template's supplies: the stakes are funded by their own
     // genesis deposit, and the accounts they credit are not the supplied ones.
-    config.genesis = stakes.into_iter().chain(config.genesis).collect();
+    genesis.actions = stakes
+        .into_iter()
+        .chain(std::mem::take(&mut genesis.actions))
+        .collect();
 
     write_config(&devnet_dir, &config)?;
     println!("✅ Wrote {}", devnet_dir.join(CONFIG_NAME).display());
@@ -136,12 +141,15 @@ fn write_config(dir: &Path, config: &SequencerConfig) -> Result<()> {
     Ok(())
 }
 
-/// Writes one node's Bedrock identity, the key the stake in the shared genesis
+/// Writes one node's channel signing key, the key the stake in the shared genesis
 /// accredits.
-fn write_key(dir: &Path, bedrock_key: [u8; 32]) -> Result<()> {
+fn write_key(dir: &Path, channel_key: [u8; 32]) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("Failed to create {}", dir.display()))?;
-    std::fs::write(dir.join("bedrock_signing_key"), bedrock_key)
-        .context("Failed to write bedrock_signing_key")
+    std::fs::write(
+        dir.join(sequencer_core::CHANNEL_SIGNING_KEY_FILE),
+        channel_key,
+    )
+    .context("Failed to write channel_signing_key")
 }
 
 /// This crate sits two levels down, at `tools/devnet_configs`.
@@ -164,10 +172,12 @@ mod tests {
             .join(CONFIGS_DIR)
             .join("devnet")
             .join(CONFIG_NAME);
-        let config = SequencerConfig::from_path(&path)?;
-        let minimum_stake = config.bedrock_config.channel_params.minimum_sequencer_stake;
+        let genesis = SequencerConfig::from_path(&path)?
+            .genesis
+            .context("The devnet config has no genesis")?;
+        let minimum_stake = genesis.channel_params.minimum_sequencer_stake;
 
-        let stakes = config.genesis.iter().filter_map(|action| match action {
+        let stakes = genesis.actions.iter().filter_map(|action| match action {
             GenesisAction::StakeSequencer {
                 sequencer_key,
                 ownership_public_key,

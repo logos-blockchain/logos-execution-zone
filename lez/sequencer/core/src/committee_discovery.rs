@@ -248,6 +248,7 @@ mod tests {
                     posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
                     posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
                     exit_delay: EXIT_DELAY,
+                    max_block_size: 1 << 20,
                 }),
                 channel_id: Some([0xC1; 32]),
                 entries: stakes

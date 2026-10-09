@@ -24,7 +24,7 @@ use test_fixtures::{
 use tokio::test;
 use wallet::AccountIdentity;
 
-/// Bedrock signing key of the sequencer that stakes its way in.
+/// Channel signing key of the sequencer that stakes its way in.
 const JOINER_SIGNING_KEY: [u8; 32] = [0x42; 32];
 
 /// Short block cadence for the demo.
@@ -40,7 +40,7 @@ fn fast_blocks() -> SequencerPartialConfig {
 async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     let demo_sequencer_key = Ed25519Key::from_bytes(&JOINER_SIGNING_KEY).public_key();
     let demo_stake_key = sequencer_stake_core::SequencerKey::new(demo_sequencer_key.to_bytes())
-        .expect("a Bedrock key is a valid Ed25519 public key");
+        .expect("a channel signing public key is a valid Ed25519 public key");
 
     let funding_private_key = PrivateKey::new_os_random();
     let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_private_key));
@@ -85,8 +85,8 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
 
     let config_id = system_accounts::sequencer_stake_config_account_id();
     let stake_id = programs::sequencer_stake_account_id();
-    // The proposal is read off the chain the stake is about to land on, the way `submit_stake`
-    // builds it: it is checked against the account it describes.
+    // The proposal is read off the chain the stake is about to land on: it is checked against the
+    // account it describes.
     let has_record = !get_account(&ctx, ownership_id)
         .await
         .context("Failed to read the stake ownership account")?
@@ -180,7 +180,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     // Only now start a node behind the key, against a channel that already has a chain.
     let (joiner, _joiner_home) = SequencerSetup::new(fast_blocks(), ctx.bedrock_addr())
         .with_channel_id(bedrock_channel_id())
-        .with_bedrock_signing_key(UnsecuredEd25519Key::from_bytes(&JOINER_SIGNING_KEY))
+        .with_channel_signing_key(UnsecuredEd25519Key::from_bytes(&JOINER_SIGNING_KEY))
         .joining_existing_channel()
         .setup()
         .await

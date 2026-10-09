@@ -23,6 +23,9 @@ pub const DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD: u16 = 1;
 /// Blocks an unstake waits before release.
 pub const DEFAULT_SEQUENCER_EXIT_DELAY: u64 = 100;
 
+/// Largest block a sequencer builds, in bytes.
+pub const DEFAULT_MAX_BLOCK_SIZE: u64 = 1024 * 1024;
+
 pub type Slots = u32;
 
 #[must_use]

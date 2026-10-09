@@ -150,7 +150,8 @@ The sequencer and logos blockchain node can be run locally:
       - `RUST_LOG=info cargo run -p indexer_service lez/indexer/service/configs/debug/indexer_config.json`
 
  3. On another terminal go to the `logos-blockchain/logos-execution-zone` repo and run the sequencer:
-      - `RUST_LOG=info cargo run -p sequencer_service lez/sequencer/service/configs/debug/sequencer_config.json`
+      - `cargo run -p sequencer_service -- setup lez/sequencer/service/sequencer_home --config lez/sequencer/service/configs/debug/sequencer_config.json --funding-public-key 2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26 --create-channel` (once; the key is the local Bedrock node's funded key)
+      - `RUST_LOG=info cargo run -p sequencer_service -- start lez/sequencer/service/sequencer_home`
  4. (To run the explorer): on another terminal go to `logos-blockchain/logos-execution-zone/lez/explorer_service` and run the following:
       - `cargo install cargo-leptos`
       - `cargo leptos build --release`
@@ -160,9 +161,8 @@ The sequencer and logos blockchain node can be run locally:
 
 After stopping services above you need to remove 3 folders to start cleanly:
  1. In the `logos-blockchain/logos-blockchain` folder `state` (not needed in case of docker setup)
- 2. In the `logos-execution-zone` folder `lez/sequencer/service/rocksdb-<channel id>`
- 3. In the `logos-execution-zone` file `lez/sequencer/service/bedrock_signing_key`
- 4. In the `logos-execution-zone` folder `lez/indexer/service/rocksdb-<channel id>`
+ 2. In the `logos-execution-zone` folder `lez/sequencer/service/sequencer_home`
+ 3. In the `logos-execution-zone` folder `lez/indexer/service/rocksdb-<channel id>`
 
 ### Normal mode (`just` commands)
 We provide a `Justfile` for developer and user needs, you can run the whole setup with it. The only difference will be that logos-blockchain (bedrock) will be started from docker.
@@ -209,7 +209,7 @@ This will use a wallet binary built from this repo and not the one installed in 
 ### Standalone mode
 The sequencer can be run in standalone mode with:
 ```bash
-RUST_LOG=info cargo run --features standalone -p sequencer_service -- lez/sequencer/service/configs/debug/sequencer_config.json
+just run-sequencer-standalone
 ```
 
 ## Running with Docker

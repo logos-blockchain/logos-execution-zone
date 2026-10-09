@@ -10,10 +10,10 @@ just regenerate-devnet-configs   # cargo run -p devnet_configs
 It writes, under `lez/configs/docker-all-in-one/devnet/`:
 
 - `sequencer_config.json`, shared by all four nodes. Extended from the single-node config next to it
-  with the genesis that stakes all four Bedrock signing keys — so the leader opens the channel
+  with the genesis that stakes all four channel signing keys — so the leader opens the channel
   already accrediting the whole committee — plus mDNS-discovered gossip and a turn short enough to
   watch rotation happen.
-- `seq-<n>/bedrock_signing_key`, the only thing left that differs between the nodes: the Bedrock
+- `seq-<n>/channel_signing_key`, the only thing left that differs between the nodes: the Bedrock
   identity the node's stake accredits, mounted into its home. 32 random bytes, drawn fresh on every
   run.
 

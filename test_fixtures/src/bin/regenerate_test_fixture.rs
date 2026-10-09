@@ -61,8 +61,8 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     let (sequencer_handle, temp_sequencer_dir) =
         SequencerSetup::new(config::SequencerPartialConfig::default(), bedrock_addr)
             .with_genesis(genesis)
-            .with_bedrock_signing_key(UnsecuredEd25519Key::from_bytes(
-                &config::BEDROCK_SIGNING_KEY,
+            .with_channel_signing_key(UnsecuredEd25519Key::from_bytes(
+                &config::CHANNEL_SIGNING_KEY,
             ))
             .setup()
             .await

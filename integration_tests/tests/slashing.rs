@@ -31,7 +31,7 @@ const STAKE: u128 = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
 /// Payload that never decodes as a block.
 const GARBAGE: &[u8] = b"this is not a block";
 
-/// The follower. Its Bedrock key is the seeded one, so a test can borrow it.
+/// The follower. Its channel signing key is the seeded one, so a test can borrow it.
 const OFFENDER_SEED: usize = 1;
 
 async fn balance(ctx: &TestContext, account: AccountId) -> Result<u128> {
@@ -159,7 +159,7 @@ async fn assert_offender_is_slashed(payload: impl Fn(&Block) -> Vec<u8>) -> Resu
     );
     let offender_stake_key =
         sequencer_stake_core::SequencerKey::new(offender_key.public_key().to_bytes())
-            .context("The offender's Bedrock key is not a valid Ed25519 point")?;
+            .context("The offender's channel signing public key is not a valid Ed25519 point")?;
     let offender_owner = config::founding_stake_owner_key(OFFENDER_SEED)?;
     let offender_account = AccountId::from(&lee::PublicKey::new_from_private_key(&offender_owner));
     let offender_funds = system_accounts::stake_funds_account_id(&offender_account);
@@ -214,7 +214,7 @@ async fn assert_offender_is_slashed(payload: impl Fn(&Block) -> Vec<u8>) -> Resu
         node_url: config::addr_to_url(config::UrlProtocol::Http, ctx.bedrock_addr())?,
         basic_auth: None,
         channel_id: channel,
-        bedrock_signing_key: offender_key.into(),
+        channel_signing_key: offender_key.into(),
         funding_pk: config::bedrock_funding_key(),
         priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
         resubmit_interval: Duration::from_secs(5),
@@ -284,11 +284,11 @@ async fn assert_offender_is_slashed(payload: impl Fn(&Block) -> Vec<u8>) -> Resu
         signers.len()
     );
     let leader_stake_key = sequencer_stake_core::SequencerKey::new(
-        Ed25519Key::from_bytes(&config::BEDROCK_SIGNING_KEY)
+        Ed25519Key::from_bytes(&config::CHANNEL_SIGNING_KEY)
             .public_key()
             .to_bytes(),
     )
-    .context("The leader's Bedrock key is not a valid Ed25519 point")?;
+    .context("The leader's channel signing public key is not a valid Ed25519 point")?;
     ensure!(
         signers.iter().any(|signer| *signer != leader_stake_key),
         "every approval was the leader's own, so none of them came over gossip"

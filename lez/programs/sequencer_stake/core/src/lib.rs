@@ -17,7 +17,11 @@ pub const SEQUENCER_STAKE_NAME: [u8; 15] = *b"sequencer_stake";
 /// Blocks before `requested_at` in which an `UnstakeRequest` may land.
 pub const UNSTAKE_REQUEST_WINDOW: u64 = 16;
 
-/// The Bedrock sequencer identity a stake backs. Holds only a valid Ed25519
+/// Smallest `max_block_size` genesis accepts, leaving room for the header and the fee and clock
+/// transactions.
+pub const MIN_MAX_BLOCK_SIZE: u64 = 4 * 1024;
+
+/// The channel signing public key a stake backs. Holds only a valid Ed25519
 /// public key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SequencerKey([u8; 32]);
@@ -193,6 +197,8 @@ pub struct ChannelParams {
     pub posting_timeout: u32,
     /// Blocks an unstake waits before `FinalizeUnstake` may release it.
     pub exit_delay: u64,
+    /// Largest block a sequencer builds, in borsh-encoded bytes.
+    pub max_block_size: u64,
 }
 
 /// Minimum stake and per-key standing, stored in this program's config shard.
@@ -421,6 +427,7 @@ mod tests {
                 posting_timeframe: 300,
                 posting_timeout: 25,
                 exit_delay: 10,
+                max_block_size: 1 << 20,
             }),
             channel_id: Some([0xC1; 32]),
             entries,
@@ -603,6 +610,7 @@ mod tests {
                 posting_timeframe: 300,
                 posting_timeout: 25,
                 exit_delay: 10,
+                max_block_size: 1 << 20,
             }),
             channel_id: Some([0xC1; 32]),
             entries: BTreeMap::from([(staying, entry(1_000, 0)), (leaving, entry(1_000, 1_000))]),

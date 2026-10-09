@@ -634,7 +634,7 @@ impl ZoneTestContextBuilder {
         debug!("Test context setup");
 
         let mut sequencer_keys = vec![UnsecuredEd25519Key::from_bytes(
-            &config::BEDROCK_SIGNING_KEY,
+            &config::CHANNEL_SIGNING_KEY,
         )];
         sequencer_keys.extend((1..mn_config.num_nodes).map(|i| {
             config::sequencer_signing_key_from_seed(
@@ -658,9 +658,12 @@ impl ZoneTestContextBuilder {
             Some(actions)
         };
 
-        // The fixture bakes in the default accounts + genesis, so custom genesis / from_scratch
-        // must build live. Otherwise load the fixture (fails if it is missing).
-        let use_prebuilt = !from_scratch && genesis_transactions.is_none();
+        // The fixture bakes in the default accounts + genesis, so custom genesis, channel params
+        // or from_scratch must build live. Otherwise load the fixture (fails if it is missing).
+        let use_prebuilt = !from_scratch
+            && genesis_transactions.is_none()
+            && sequencer_partial_config.unwrap_or_default().channel_params
+                == config::SequencerPartialConfig::default().channel_params;
 
         let indexer_components = if enable_indexer {
             let (indexer_handle, temp_indexer_dir) = setup_indexer(
@@ -704,7 +707,7 @@ impl ZoneTestContextBuilder {
             &initial_public_accounts,
             &initial_private_accounts,
             genesis_transactions.clone(),
-            UnsecuredEd25519Key::from_bytes(&config::BEDROCK_SIGNING_KEY),
+            UnsecuredEd25519Key::from_bytes(&config::CHANNEL_SIGNING_KEY),
             mn_config.bedrock_channel,
             cross_zone_config.clone(),
             leader_gossip,
@@ -1117,8 +1120,8 @@ pub async fn spawn_channel_observer(
         node_url: config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?,
         basic_auth: None,
         channel_id,
-        bedrock_signing_key: sequencer_bedrock_actor::config::Ed25519Key::from_bytes(
-            &config::BEDROCK_SIGNING_KEY,
+        channel_signing_key: sequencer_bedrock_actor::config::Ed25519Key::from_bytes(
+            &config::CHANNEL_SIGNING_KEY,
         ),
         funding_pk: config::bedrock_funding_key(),
         priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
@@ -1188,7 +1191,7 @@ async fn build_sequencer_components(
     if !use_prebuilt {
         sequencer_setup = sequencer_setup
             .with_genesis(genesis_actions)
-            .with_bedrock_signing_key(sequencer_key);
+            .with_channel_signing_key(sequencer_key);
     }
     sequencer_setup = sequencer_setup.with_channel_id(bedrock_channel_id);
     if let Some(cross_zone_config) = cross_zone_config.clone() {

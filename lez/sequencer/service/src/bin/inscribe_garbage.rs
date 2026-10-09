@@ -32,12 +32,8 @@ use sequencer_bedrock_actor::{
 #[derive(Debug, Parser)]
 #[clap(version)]
 struct Args {
-    #[clap(name = "config")]
-    config_path: PathBuf,
-    /// Home holding the `bedrock_signing_key` to sign with, matching the
-    /// sequencer's --home.
-    #[clap(long)]
-    home: Option<PathBuf>,
+    /// Sequencer home holding the config and the `channel_signing_key` to sign with.
+    home: PathBuf,
     /// Payload bytes; anything that does not decode as a block will do.
     #[clap(long, default_value = "not a block")]
     payload: String,
@@ -132,7 +128,6 @@ async fn wait_until_tip(bedrock_ref: &ActorRef<BedrockActor>, msg: MsgId) -> Res
 async fn main() -> Result<()> {
     env_logger::init();
     let Args {
-        config_path,
         home,
         payload,
         count,
@@ -140,22 +135,23 @@ async fn main() -> Result<()> {
         wrong_id,
     } = Args::parse();
 
-    let config = sequencer_service::SequencerConfig::from_path(&config_path)?;
-    let home = home.unwrap_or(config.home);
-    let bedrock_signing_key =
-        sequencer_core::load_or_create_signing_key(&home.join("bedrock_signing_key"))
-            .context("Failed to load the bedrock signing key")?;
+    let config =
+        sequencer_service::SequencerConfig::from_path(&home.join("sequencer_config.json"))?;
+    let channel_signing_key = sequencer_core::load_or_create_signing_key(
+        &home.join(sequencer_core::CHANNEL_SIGNING_KEY_FILE),
+    )
+    .context("Failed to load the channel signing key")?;
     println!(
         "signing as {}",
-        hex::encode(bedrock_signing_key.public_key().to_bytes())
+        hex::encode(channel_signing_key.public_key().to_bytes())
     );
 
     let bedrock_config = sequencer_bedrock_actor::config::Config {
         node_url: config.bedrock_config.node_url,
         basic_auth: config.bedrock_config.auth.map(Into::into),
         channel_id: config.bedrock_config.channel_id,
-        bedrock_signing_key,
-        funding_pk: config.bedrock_config.funding_key,
+        channel_signing_key,
+        funding_pk: sequencer_core::load_funding_public_key(&home)?,
         priority_fee_percent: config.bedrock_config.priority_fee_percent,
         resubmit_interval: Duration::from_secs(5),
     };

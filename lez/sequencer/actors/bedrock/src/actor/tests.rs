@@ -93,6 +93,7 @@ fn the_genesis_config_op_and_its_proof_pass_bedrock_verification() {
             posting_timeframe: 10,
             posting_timeout: 20,
             exit_delay: 10,
+            max_block_size: 1 << 20,
         },
         1,
     );

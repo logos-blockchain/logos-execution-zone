@@ -23,7 +23,7 @@ use sequencer_stake_core::SequencerKey;
 
 use crate::cucumber::error::StepError;
 
-/// Deterministic Bedrock signing seeds, fed through the shared
+/// Deterministic channel signing seeds, fed through the shared
 /// `sequencer_signing_key_from_seed` fixture derivation: each scenario runs
 /// against a fresh chain, so fixed seeds cannot collide across scenarios.
 const SEQUENCER_KEY_SEED: u32 = 0x51;
@@ -306,7 +306,7 @@ fn sequencer_key_from_seed(seed: u32) -> SequencerKey {
     let bytes = crate::config::sequencer_signing_key_from_seed(seed)
         .public_key()
         .to_bytes();
-    SequencerKey::new(bytes).expect("a Bedrock public key is a valid Ed25519 public key")
+    SequencerKey::new(bytes).expect("a channel signing public key is a valid Ed25519 public key")
 }
 
 /// Serialized native `Transfer` moving `amount`.

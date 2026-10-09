@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use jsonrpsee::{
     core::async_trait,
@@ -11,6 +10,7 @@ use kameo::{
     error::{Infallible, SendError},
 };
 use log::{error, warn};
+use sequencer_core::gossip::MaxBlockSizeReceiver;
 use sequencer_executor_actor::ExecutorActorTrait;
 use sequencer_gossip_actor::protocol::PublishTransaction;
 use sequencer_service_protocol::{
@@ -21,21 +21,21 @@ use sequencer_service_protocol::{
 
 pub struct Service<E: ExecutorActorTrait> {
     executor_ref: ActorRef<E>,
-    max_block_size: ByteSize,
+    max_block_size_rx: MaxBlockSizeReceiver,
     gossip: Option<Recipient<PublishTransaction>>,
 }
 
 impl<E: ExecutorActorTrait> Service<E> {
     pub fn new(
         executor_ref: ActorRef<E>,
-        max_block_size: ByteSize,
+        max_block_size_rx: MaxBlockSizeReceiver,
         gossip: Option<Recipient<PublishTransaction>>,
     ) -> Self {
         sequencer_rpc_server_actor_metrics::init();
 
         Self {
             executor_ref,
-            max_block_size,
+            max_block_size_rx,
             gossip,
         }
     }
@@ -55,8 +55,8 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
                 u64::try_from(encoded_tx.len()).expect("Transaction size should fit in u64");
 
             let max_tx_size = self
-                .max_block_size
-                .as_u64()
+                .max_block_size_rx
+                .borrow()
                 .saturating_sub(sequencer_core::config::BLOCK_OVERHEAD);
 
             if tx_size > max_tx_size {

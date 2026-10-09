@@ -101,7 +101,7 @@ unsafe extern "C" {
 /// Comfortably above `system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE`.
 pub const FUNDING_BALANCE: u128 = 2 * system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
 
-/// Bedrock signing key of the sequencer that stakes its way in.
+/// Channel signing key of the sequencer that stakes its way in.
 pub const JOINER_SIGNING_KEY: [u8; 32] = [0x42; 32];
 
 /// A leader node with an FFI node staked into its channel.
@@ -154,7 +154,7 @@ pub fn joining_setup() -> Result<JoiningSetup> {
     let joining_sequencer_key = Ed25519Key::from_bytes(&JOINER_SIGNING_KEY).public_key();
     let joining_stake_key =
         sequencer_stake_core::SequencerKey::new(joining_sequencer_key.to_bytes())
-            .expect("a Bedrock key is a valid Ed25519 public key");
+            .expect("a channel signing public key is a valid Ed25519 public key");
 
     let funding_private_key = PrivateKey::new_os_random();
     let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_private_key));
@@ -298,7 +298,7 @@ pub fn joining_setup() -> Result<JoiningSetup> {
     // Only now start a node behind the key, against a channel that already has a chain.
     let setup = SequencerSetup::new(fast_blocks(), ctx.ctx().bedrock_addr())
         .with_channel_id(bedrock_channel_id())
-        .with_bedrock_signing_key(UnsecuredEd25519Key::from_bytes(&JOINER_SIGNING_KEY))
+        .with_channel_signing_key(UnsecuredEd25519Key::from_bytes(&JOINER_SIGNING_KEY))
         .joining_existing_channel();
 
     let temp_sequencer_dir =

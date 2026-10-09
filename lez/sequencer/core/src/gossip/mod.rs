@@ -16,6 +16,11 @@ pub type AccreditedKeysSender = watch::Sender<Option<AccreditedKeys>>;
 /// Read by the gossip actor per inbound approval or config message.
 pub type AccreditedKeysReceiver = watch::Receiver<Option<AccreditedKeys>>;
 
+/// The chain's `max_block_size`, written by `refresh_committee`; RPC and gossip admission read it.
+pub type MaxBlockSizeSender = watch::Sender<u64>;
+
+pub type MaxBlockSizeReceiver = watch::Receiver<u64>;
+
 /// The mesh's accredited-key channel: `None` filters nothing, `Some` of an
 /// empty set filters everything.
 #[must_use]

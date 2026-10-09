@@ -219,7 +219,7 @@ async fn start_node(secret: [u8; 32], bootstrap: Vec<libp2p::Multiaddr>) -> (Tes
         CHANNEL,
         Ed25519Key::from_bytes(&secret),
         sink_ref.recipient(),
-        TEST_MAX_BLOCK_SIZE,
+        tokio::sync::watch::channel(TEST_MAX_BLOCK_SIZE).1,
         unscreened_mempool_submit(mempool_handle),
         accredited_keys_channel().1,
         accredited_keys_channel().1,
@@ -258,7 +258,7 @@ async fn wait_for(timeout: Duration, mut condition: impl AsyncFnMut() -> bool) -
 }
 
 #[test]
-fn a_peer_id_yields_the_bedrock_key_it_was_derived_from() {
+fn a_peer_id_yields_the_channel_signing_key_it_was_derived_from() {
     let key = Ed25519Key::from_bytes(&[9; 32]);
     let mut secret = key.clone().into_unsecured().to_bytes();
     let peer_id = libp2p::identity::Keypair::ed25519_from_bytes(&mut *secret)
@@ -293,7 +293,7 @@ async fn new_binds_and_reports_listen_addr() {
         [1; 32],
         Ed25519Key::from_bytes(&[9; 32]),
         test_approval_sink(),
-        TEST_MAX_BLOCK_SIZE,
+        tokio::sync::watch::channel(TEST_MAX_BLOCK_SIZE).1,
         unscreened_mempool_submit(test_mempool_handle()),
         accredited_keys_channel().1,
         accredited_keys_channel().1,
@@ -314,7 +314,7 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         [1; 32],
         Ed25519Key::from_bytes(&[9; 32]),
         test_approval_sink(),
-        TEST_MAX_BLOCK_SIZE,
+        tokio::sync::watch::channel(TEST_MAX_BLOCK_SIZE).1,
         unscreened_mempool_submit(test_mempool_handle()),
         accredited_keys_channel().1,
         accredited_keys_channel().1,
@@ -341,7 +341,7 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         [1; 32],
         Ed25519Key::from_bytes(&[10; 32]),
         test_approval_sink(),
-        TEST_MAX_BLOCK_SIZE,
+        tokio::sync::watch::channel(TEST_MAX_BLOCK_SIZE).1,
         unscreened_mempool_submit(test_mempool_handle()),
         accredited_keys_channel().1,
         accredited_keys_channel().1,

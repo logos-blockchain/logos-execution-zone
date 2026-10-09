@@ -21,8 +21,10 @@ use mempool::MemPoolHandle;
 use sequencer_actors_common::EraseMessage as _;
 use sequencer_bedrock_actor::BedrockActorTrait;
 use sequencer_core::{
-    ChannelConfigActor, SequencerCore, SubmitConfig, TransactionOrigin, config::SequencerConfig,
-    gossip::AccreditedKeysReceiver, task_group::TaskGroup,
+    ChannelConfigActor, SequencerCore, SubmitConfig, TransactionOrigin,
+    config::SequencerConfig,
+    gossip::{AccreditedKeysReceiver, MaxBlockSizeReceiver},
+    task_group::TaskGroup,
 };
 use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActorTrait;
@@ -127,6 +129,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
     pub fn staked_keys_watch(&self) -> AccreditedKeysReceiver {
         self.sequencer.staked_keys_watch()
     }
+
+    /// The chain's `max_block_size`, which admission caps transactions at.
+    #[must_use]
+    pub fn max_block_size_watch(&self) -> MaxBlockSizeReceiver {
+        self.sequencer.max_block_size_watch()
+    }
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActorTrait for ExecutorActor<S, B> {}
@@ -191,7 +199,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
                 }
                 log::info!(
                     "Block with id {id} created by {}",
-                    self.sequencer.bedrock_public_key_hex()
+                    self.sequencer.channel_signing_public_key_hex()
                 );
             }
             Err(err) if err.is::<sequencer_core::ChannelMovedWhileBuilding>() => {

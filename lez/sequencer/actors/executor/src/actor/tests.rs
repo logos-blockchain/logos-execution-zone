@@ -1,7 +1,6 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::Result;
-use bytesize::ByteSize;
 use common::{
     HashType,
     block::{BedrockStatus, Block, BlockBody, BlockHeader, BlockMeta},
@@ -14,7 +13,6 @@ use lee::{
 };
 use lee_core::native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID};
 use mockall::predicate::{always, eq, function};
-use num_bigint::BigUint;
 use sequencer_bedrock_actor::{
     mock::MockBedrockActor,
     protocol::{ChannelSeq, Checkpoint, HeaderId, PublishOutcome, Slot},
@@ -40,7 +38,6 @@ fn sequencer_config() -> (SequencerConfig, TempDir) {
     let config = SequencerConfig {
         home: home.path().to_path_buf(),
         max_num_tx_in_block: 10,
-        max_block_size: ByteSize::kib(1024),
         mempool_max_size: 10,
         block_create_timeout: std::time::Duration::from_secs(5),
         retry_pending_blocks_timeout: std::time::Duration::from_secs(5),
@@ -48,11 +45,12 @@ fn sequencer_config() -> (SequencerConfig, TempDir) {
             channel_id: [0; 32].into(),
             node_url: "http://not-used".parse().expect("Failed to parse URL"),
             auth: None,
-            funding_key: BigUint::default().into(),
             priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
-            channel_params: sequencer_core::config::default_channel_params(),
         },
-        genesis: Vec::new(),
+        genesis: Some(sequencer_core::config::GenesisConfig {
+            channel_params: sequencer_core::config::default_channel_params(),
+            actions: Vec::new(),
+        }),
         cross_zone: None,
         metrics_address: None,
         gossip: None,
@@ -107,19 +105,24 @@ fn prepare_mock_bedrock_with_empty_channel() -> MockBedrockActor {
     mock_bedrock
 }
 
-/// A config whose home already holds a known Bedrock signing key, so the stake
+/// A config whose home already holds a known channel signing key, so the stake
 /// config can name this node before the sequencer ever reads the key.
 fn staked_sequencer_config() -> (SequencerConfig, TempDir, SequencerKey) {
-    const BEDROCK_KEY: [u8; 32] = [0x5e; 32];
+    const CHANNEL_SIGNING_KEY: [u8; 32] = [0x5e; 32];
 
     let (config, home) = sequencer_config();
-    std::fs::write(config.home.join("bedrock_signing_key"), BEDROCK_KEY)
-        .expect("Failed to seed the Bedrock signing key");
+    std::fs::write(
+        config.home.join(sequencer_core::CHANNEL_SIGNING_KEY_FILE),
+        CHANNEL_SIGNING_KEY,
+    )
+    .expect("Failed to seed the channel signing key");
     let sequencer_key = SequencerKey::new(
-        sequencer_core::load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
-            .expect("the seeded key loads")
-            .public_key()
-            .to_bytes(),
+        sequencer_core::load_or_create_signing_key(
+            &config.home.join(sequencer_core::CHANNEL_SIGNING_KEY_FILE),
+        )
+        .expect("the seeded key loads")
+        .public_key()
+        .to_bytes(),
     )
     .expect("the seeded key is a valid Ed25519 public key");
 
@@ -175,6 +178,7 @@ fn prepare_mock_storage_with_stake(
                     posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
                     posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
                     exit_delay: system_accounts::DEFAULT_SEQUENCER_EXIT_DELAY,
+                    max_block_size: system_accounts::DEFAULT_MAX_BLOCK_SIZE,
                 }),
                 channel_id: Some([0xC1; 32]),
                 entries,
