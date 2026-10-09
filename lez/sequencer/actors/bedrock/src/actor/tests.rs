@@ -1,7 +1,6 @@
 use common::{
     HashType,
     block::{Block, HashableBlockData},
-    test_utils::sequencer_sign_key_for_testing,
 };
 use logos_blockchain_core::mantle::{
     SignedOps,
@@ -56,7 +55,7 @@ fn a_custom_tx_yields_its_block() {
         timestamp: 700,
         transactions: Vec::new(),
     }
-    .into_pending_block(&sequencer_sign_key_for_testing());
+    .into_pending_block();
 
     let custom = ChannelUpdateTx::Custom(inscribing_tx(channel, &block));
     let entries = channel_entries(&custom, channel);
