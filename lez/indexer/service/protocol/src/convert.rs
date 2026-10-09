@@ -633,40 +633,30 @@ impl From<common::block::BlockHeader> for BlockHeader {
             prev_block_hash,
             hash,
             timestamp,
-            producer,
-            signature,
         } = value;
         Self {
             block_id,
             prev_block_hash: prev_block_hash.into(),
             hash: hash.into(),
             timestamp,
-            producer: producer.into(),
-            signature: signature.into(),
         }
     }
 }
 
-impl TryFrom<BlockHeader> for common::block::BlockHeader {
-    type Error = lee::error::LeeError;
-
-    fn try_from(value: BlockHeader) -> Result<Self, Self::Error> {
+impl From<BlockHeader> for common::block::BlockHeader {
+    fn from(value: BlockHeader) -> Self {
         let BlockHeader {
             block_id,
             prev_block_hash,
             hash,
             timestamp,
-            producer,
-            signature,
         } = value;
-        Ok(Self {
+        Self {
             block_id,
             prev_block_hash: prev_block_hash.into(),
             hash: hash.into(),
             timestamp,
-            producer: producer.try_into()?,
-            signature: signature.into(),
-        })
+        }
     }
 }
 
@@ -733,7 +723,7 @@ impl TryFrom<Block> for common::block::Block {
         } = value;
 
         Ok(Self {
-            header: header.try_into()?,
+            header: header.into(),
             body: body.try_into()?,
             bedrock_status: bedrock_status.into(),
         })
@@ -890,9 +880,6 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
             indexer_core::BlockIngestError::InvalidFeeTransaction => Self::InvalidFeeTransaction,
             indexer_core::BlockIngestError::InvalidRewardTarget { reason } => {
                 Self::InvalidRewardTarget { reason }
-            }
-            indexer_core::BlockIngestError::InvalidProducerSignature => {
-                Self::InvalidProducerSignature
             }
             indexer_core::BlockIngestError::InvalidFeeClass { tx_index, reason } => {
                 Self::InvalidFeeClass { tx_index, reason }

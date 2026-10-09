@@ -1,12 +1,11 @@
 # Four sequencers on one channel, the committee arrangement
 # `integration_tests/tests/multi_sequencer.rs` drives in-process.
 #
-# All four run off one config file, whose genesis stakes all four block-signing
-# keys: seq-0 opens the channel already accrediting the whole committee, and the
-# others join a channel that expects them. A node's own directory holds all that
-# is left to differ — the key it signs blocks with, handed over by
-# `--signing-key`, and the Bedrock identity its stake accredits.
-# `just regenerate-devnet-configs` rebuilds both.
+# All four run off one config file, whose genesis stakes all four Bedrock
+# signing keys: seq-0 opens the channel already accrediting the whole committee,
+# and the others join a channel that expects them. A node's own directory holds
+# all that is left to differ — the Bedrock identity its stake accredits.
+# `just regenerate-devnet-configs` rebuilds them.
 #
 # The image is built with the `mdns` feature, so the nodes find each other on
 # the compose network and gossip their mempools without any address configured.
@@ -46,7 +45,7 @@ x-await-channel: &await_channel
         echo "waiting for the channel to land on Bedrock"
         sleep 2
       done
-      exec sequencer_service "$$config" --signing-key /etc/sequencer_service/signing_key
+      exec sequencer_service "$$config"
 
 services:
   # Build-only: shared base image (toolchain + r0vm) referenced as the
@@ -65,14 +64,11 @@ services:
     command:
       - sequencer_service
       - /etc/sequencer_service/sequencer_config.json
-      - --signing-key
-      - /etc/sequencer_service/signing_key
     ports:
       - "3040:3040"
       - "9000:9000"
     volumes:
       - ../../configs/docker-all-in-one/devnet/sequencer_config.json:/etc/sequencer_service/sequencer_config.json
-      - ../../configs/docker-all-in-one/devnet/seq-0/signing_key:/etc/sequencer_service/signing_key
       - ../../configs/docker-all-in-one/devnet/seq-0/bedrock_signing_key:/var/lib/sequencer_service/bedrock_signing_key
       - sequencer_devnet_data_0:/var/lib/sequencer_service
 
@@ -86,7 +82,6 @@ services:
       - "9001:9000"
     volumes:
       - ../../configs/docker-all-in-one/devnet/sequencer_config.json:/etc/sequencer_service/sequencer_config.json
-      - ../../configs/docker-all-in-one/devnet/seq-1/signing_key:/etc/sequencer_service/signing_key
       - ../../configs/docker-all-in-one/devnet/seq-1/bedrock_signing_key:/var/lib/sequencer_service/bedrock_signing_key
       - sequencer_devnet_data_1:/var/lib/sequencer_service
 
@@ -100,7 +95,6 @@ services:
       - "9002:9000"
     volumes:
       - ../../configs/docker-all-in-one/devnet/sequencer_config.json:/etc/sequencer_service/sequencer_config.json
-      - ../../configs/docker-all-in-one/devnet/seq-2/signing_key:/etc/sequencer_service/signing_key
       - ../../configs/docker-all-in-one/devnet/seq-2/bedrock_signing_key:/var/lib/sequencer_service/bedrock_signing_key
       - sequencer_devnet_data_2:/var/lib/sequencer_service
 
@@ -114,7 +108,6 @@ services:
       - "9003:9000"
     volumes:
       - ../../configs/docker-all-in-one/devnet/sequencer_config.json:/etc/sequencer_service/sequencer_config.json
-      - ../../configs/docker-all-in-one/devnet/seq-3/signing_key:/etc/sequencer_service/signing_key
       - ../../configs/docker-all-in-one/devnet/seq-3/bedrock_signing_key:/var/lib/sequencer_service/bedrock_signing_key
       - sequencer_devnet_data_3:/var/lib/sequencer_service
 

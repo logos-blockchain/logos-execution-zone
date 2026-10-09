@@ -160,7 +160,7 @@ impl SequencerSetup {
             genesis_transactions
                 .is_none()
                 .then_some(UnsecuredEd25519Key::from_bytes(
-                    &config::SEQUENCER_BEDROCK_SIGNING_KEY,
+                    &config::BEDROCK_SIGNING_KEY,
                 ))
         });
         if let Some(key) = &bedrock_signing_key {
@@ -198,7 +198,6 @@ impl SequencerSetup {
             config::bedrock_funding_key(),
             genesis_transactions,
             cross_zone,
-            bedrock_signing_key,
             gossip,
         )
         .context("Failed to create Sequencer config")?;
