@@ -8,7 +8,9 @@ license = { workspace = true }
 workspace = true
 
 [features]
-default = []
+default = ["backend-http"]
+backend-http = []
+backend-module = ["dep:logos-blockchain-zone-sdk-module-backend"]
 # In-process guest execution with a memoized memory image, via `lee`.
 prove = ["lee/prove", "chain_state/prove", "storage/prove"]
 
@@ -16,6 +18,7 @@ prove = ["lee/prove", "chain_state/prove", "storage/prove"]
 chain_state.workspace = true
 common.workspace = true
 logos-blockchain-zone-sdk.workspace = true
+logos-blockchain-zone-sdk-module-backend = { workspace = true, optional = true }
 lee.workspace = true
 lee_core = { workspace = true, features = ["host"] }
 cross_zone.workspace = true
