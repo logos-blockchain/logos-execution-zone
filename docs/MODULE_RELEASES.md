@@ -26,15 +26,28 @@ logos-execution-zone
 
 As shown by the (reverse) dependency graph above, modules depend on this repo, and UIs depend on those modules.
 
-For the repo that you are updating (and those that depend on it), do your updates in the code, and make sure to bump the `version` field in `metadata.json`. That is the version number seen by Logos Basecamp!
+Update the module / UI as follows:
 
-> [!NOTE]
->
-> Some modules may serve the version number as a static string as well outside of `metadata.json`, do a CTRL+F to find those if needed.
+- If a dependent version is updated and is using a difference branch / tag, change it's pinned ref in `flake.nix` and then do `flake nix update <module-name>`. For example:
+
+```diff
+- logos-execution-zone.url = "github:logos-blockchain/logos-execution-zone?ref=main
++ logos-execution-zone.url = "github:logos-blockchain/logos-execution-zone?ref=some-other-branch
+```
+
+- If you are still using `main` on that repo, simply do `flake nix update <module-name>` and you will actually see that `flake.lock` is updated to the latest commit.
+
+- Do your code updates as usual. When you are done, make sure that you stage the changes, otherwise `nix` will not see them!
+
+- Bump the `version` field in `metadata.json`. That is the version number seen by Logos Basecamp!
+  - Some modules may serve the version number as a static string as well outside of `metadata.json`, do a CTRL+F to find those if needed.
+  - You can keep the version as-is if you want to, but then when building a release you have to click <kbd>Force build</kbd>. More on this later.
+
+- Once you are done with the updates, always check with `nix build` to see that everything compiles. This may take a while depending on the module.
 
 > [!TIP]
 >
-> You can keep the version as-is if you want to, but then when building a release you have to click <kbd>Force build</kbd>. More on this later.
+> For the UI modules, you can further do `nix run .` to run a standalone application. After `nix build` these do not take that much time, so it's safer to actually see that UI runs like this as well.
 
 ## III. Updating Submodules in Logos Modules Repo
 
