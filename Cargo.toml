@@ -10,6 +10,7 @@ members = [
   "lee/key_protocol",
   "lee/state_machine",
   "lee/state_machine/core",
+  "lee/program_loader",
   "lee/privacy_preserving_circuit",
   "lee/state_machine/test_methods",
   "lee/state_machine/test_methods/guest",
@@ -58,7 +59,6 @@ members = [
   "lez/programs/ping_sender",
   "lez/programs/ping_receiver",
   "lez/programs/sequencer_stake",
-  "lez/programs/program_loader/core",
   "lez/cross_zone",
 
   "test_guest_core",
@@ -84,6 +84,7 @@ members = [
 [workspace.dependencies]
 lee = { path = "lee/state_machine" }
 lee_core = { path = "lee/state_machine/core" }
+program_loader_core = { path = "lee/program_loader" }
 common = { path = "lez/common" }
 chain_state = { path = "lez/chain_state" }
 mempool = { path = "lez/mempool" }
@@ -127,7 +128,6 @@ bridge_lock_core = { path = "lez/programs/bridge_lock/core" }
 wrapped_token_core = { path = "lez/programs/wrapped_token/core" }
 ping_core = { path = "lez/programs/ping_core" }
 sequencer_stake_core = { path = "lez/programs/sequencer_stake/core" }
-program_loader_core = { path = "lez/programs/program_loader/core" }
 cross_zone = { path = "lez/cross_zone" }
 build_utils = { path = "build_utils" }
 test_guest_core = { path = "test_guest_core" }
