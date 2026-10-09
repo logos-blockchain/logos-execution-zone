@@ -7,10 +7,8 @@ on:
       - "**.md"
       - "!.github/workflows/*.yml"
 
+  # No path filter: `ci-ok` must report on docs-only PRs too.
   pull_request:
-    paths-ignore:
-      - "**.md"
-      - "!.github/workflows/*.yml"
 
 # Supersede in-progress runs for a pull request; never cancel a push, so each
 # merge to main/dev keeps its own run.
@@ -26,7 +24,37 @@ permissions:
 name: General
 
 jobs:
+  # Gating `ci-image` alone skips the rest: every costly job chains through it.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - name: Detect non-documentation changes
+        id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          files="$(gh api --paginate \
+            "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            --jq '.[].filename')"
+
+          # An empty list means the API told us nothing, so assume code.
+          if [[ -n "$files" && -z "$(sed '/\.md$/d' <<< "$files")" ]]; then
+            echo "Documentation-only pull request; skipping the code jobs."
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+
   ci-image:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     permissions:
       contents: read
       packages: write
@@ -75,6 +103,8 @@ jobs:
       cancel-in-progress: true
 
   bedrock-resolver-tests:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -258,12 +288,14 @@ jobs:
 
   abort-on-stale-fixtures:
     needs: test-fixtures-tests
-    if: failure()
+    # `failure()` would also fire for an unrelated ancestor failure.
+    if: needs.test-fixtures-tests.result == 'failure'
     runs-on: ubuntu-latest
     permissions:
       actions: write
     steps:
-      - run: gh run cancel ${{ github.run_id }}
+      # No checkout in this job, so `gh` cannot infer the repo from git.
+      - run: gh run cancel ${{ github.run_id }} -R ${{ github.repository }}
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -465,3 +497,43 @@ jobs:
             exit 1
           fi
           echo "✅ Dashboards are up to date"
+
+  # The one required status check: `always()` so it reports even when `changes`
+  # skipped everything. A skipped job reports nothing and would block forever.
+  ci-ok:
+    if: always()
+    needs:
+      - changes
+      - ci-image
+      - bedrock-node
+      - cucumber
+      - bedrock-resolver-tests
+      - fmt-rs
+      - fmt-toml
+      - machete
+      - deny
+      - lint
+      - unit-tests
+      - test-fixtures-tests
+      - integration-tests-prebuild
+      - integration-tests
+      - artifacts
+      - dashboards
+    runs-on: ubuntu-latest
+    steps:
+      # Skipped is a pass; everything else, cancelled included, fails.
+      - name: Require every job to have succeeded or been skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          bad="$(jq -r 'to_entries
+            | map(select(.value.result != "success" and .value.result != "skipped"))
+            | .[] | "\(.key): \(.value.result)"' <<< "$NEEDS")"
+
+          if [[ -n "$bad" ]]; then
+            echo "::error::CI is not green:"
+            echo "$bad"
+            exit 1
+          fi
+
+          echo "Every job succeeded or was skipped."
