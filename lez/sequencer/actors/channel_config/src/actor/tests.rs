@@ -10,6 +10,7 @@ use logos_blockchain_core::{
         },
     },
 };
+use logos_blockchain_key_management_system_service::keys::Ed25519Signature;
 
 use super::*;
 
@@ -192,7 +193,7 @@ fn committee_view() -> ChannelView {
 fn rival_tx(target: &ConfigTarget, proposer: u8) -> Ops {
     let mut tx = draft_tx(target);
     tx.try_push(Op::Transfer(TransferOp::new(
-        Inputs::new([NoteId(ZkHash::from(u64::from(proposer)))]),
+        Inputs::new(NoteId(ZkHash::from(u64::from(proposer)))),
         Outputs::empty(),
     )))
     .expect("a second op fits");
@@ -306,6 +307,28 @@ fn a_signature_survives_the_wire() {
 
     assert_eq!(got.tx_hash, tx.hash().0);
     assert_eq!(got.signature, IndexedSignature::new(1, signature));
+}
+
+#[test]
+fn a_signature_keeps_its_wire_bytes() {
+    // Tag, draft hash, raw signature, then the little-endian key index: the
+    // layout peers on earlier builds send and expect.
+    let signature = Ed25519Signature::from_bytes(&[0x11; 64]);
+    let sent = Wire::Signature(Signature {
+        tx_hash: [0xaa; 32],
+        signature: IndexedSignature::new(0x0102, signature),
+    });
+    let mut expected = vec![1];
+    expected.extend_from_slice(&[0xaa; 32]);
+    expected.extend_from_slice(&[0x11; 64]);
+    expected.extend_from_slice(&[0x02, 0x01]);
+
+    assert_eq!(sent.encode(), expected);
+    let Some(Wire::Signature(got)) = Wire::decode(&expected) else {
+        panic!("expected a signature back");
+    };
+    assert_eq!(got.tx_hash, [0xaa; 32]);
+    assert_eq!(got.signature, IndexedSignature::new(0x0102, signature));
 }
 
 #[test]
@@ -670,7 +693,7 @@ async fn a_draft_bundling_a_withdrawal_is_not_signed() {
     let mut tx = draft_tx(&target());
     tx.try_push(Op::ChannelWithdraw(ChannelWithdrawOp {
         channel_id: ChannelId::from(CHANNEL),
-        inputs: Inputs::new([NoteId(ZkHash::from(7_u64))]),
+        inputs: Inputs::new(NoteId(ZkHash::from(7_u64))),
     }))
     .expect("a second op fits");
     actor
