@@ -9,7 +9,7 @@ use crate::{WalletSequencerClient, config::WalletConfig};
 
 #[derive(Clone)]
 /// Helperstruct to poll transactions.
-pub struct TxPoller<C:WalletSequencerClient> {
+pub struct TxPoller<C: WalletSequencerClient> {
     polling_max_blocks_to_query: usize,
     polling_max_error_attempts: u64,
     polling_delay: Duration,
@@ -17,7 +17,7 @@ pub struct TxPoller<C:WalletSequencerClient> {
     client: C,
 }
 
-impl<C:WalletSequencerClient> TxPoller<C> {
+impl<C: WalletSequencerClient> TxPoller<C> {
     #[must_use]
     pub const fn new(config: &WalletConfig, client: C) -> Self {
         Self {

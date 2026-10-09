@@ -26,7 +26,7 @@ use lee_core::{
     PrivateWitness, WitnessKind, encryption::ViewingPublicKey,
     native_token::Instruction as NativeInstruction, program::PdaSeed,
 };
-use sequencer_service_rpc::RpcClient as _;
+use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use testnet_initial_state::initial_pub_accounts_private_keys;
 use tokio::test;
 use wallet::{AccountIdentity, WalletCore};
@@ -37,7 +37,7 @@ use wallet::{AccountIdentity, WalletCore};
     reason = "test helper — grouping args would obscure intent"
 )]
 async fn fund_private_pda(
-    wallet: &WalletCore,
+    wallet: &WalletCore<SequencerClient>,
     sender: AccountId,
     npk: NullifierPublicKey,
     vpk: ViewingPublicKey,
@@ -103,7 +103,7 @@ async fn fund_private_pda(
 ///
 /// Alice must own the PDA in the wallet (i.e. it must have been synced after a receive).
 async fn spend_private_pda(
-    wallet: &WalletCore,
+    wallet: &WalletCore<SequencerClient>,
     pda_account_id: AccountId,
     recipient_npk: NullifierPublicKey,
     recipient_vpk: ViewingPublicKey,

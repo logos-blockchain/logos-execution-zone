@@ -5,7 +5,7 @@ use clap::Subcommand;
 use lee::AccountId;
 
 use crate::{
-    WalletCore,
+    WalletCore, WalletSequencerClient,
     account::AccountIdWithPrivacy,
     cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
     program_facades::program_loader::ProgramLoader,
@@ -119,12 +119,12 @@ pub enum ProgramLoaderSubcommand {
 }
 
 impl ProgramLoaderSubcommand {
-    async fn handle_write_segment(
+    async fn handle_write_segment<C: WalletSequencerClient>(
         target: CliAccountMention,
         bytecode_file: PathBuf,
         next_segment: Option<AccountId>,
         payer: Option<CliAccountMention>,
-        wallet_core: &WalletCore,
+        wallet_core: &WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let target_id = resolve_public(&target, wallet_core)?;
         let payer_id = payer
@@ -148,12 +148,12 @@ impl ProgramLoaderSubcommand {
             .await
     }
 
-    async fn handle_create_header(
+    async fn handle_create_header<C: WalletSequencerClient>(
         target: CliAccountMention,
         first_segment: AccountId,
         immutable: bool,
         payer: Option<CliAccountMention>,
-        wallet_core: &WalletCore,
+        wallet_core: &WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let target_id = resolve_public(&target, wallet_core)?;
         let payer_id = payer
@@ -180,12 +180,12 @@ impl ProgramLoaderSubcommand {
             .await
     }
 
-    async fn handle_update_header(
+    async fn handle_update_header<C: WalletSequencerClient>(
         header: CliAccountMention,
         first_segment: AccountId,
         immutable: bool,
         payer: Option<CliAccountMention>,
-        wallet_core: &WalletCore,
+        wallet_core: &WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let header_id = resolve_public(&header, wallet_core)?;
         let payer_id = payer
@@ -212,13 +212,13 @@ impl ProgramLoaderSubcommand {
             .await
     }
 
-    async fn handle_deploy(
+    async fn handle_deploy<C: WalletSequencerClient>(
         elf: PathBuf,
         header: CliAccountMention,
         segments: Vec<CliAccountMention>,
         immutable: bool,
         payer: Option<CliAccountMention>,
-        wallet_core: &WalletCore,
+        wallet_core: &WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let header_id = resolve_public(&header, wallet_core)?;
         let payer_id = payer
@@ -240,13 +240,13 @@ impl ProgramLoaderSubcommand {
         Ok(SubcommandReturnValue::RegisterAccount { account_id })
     }
 
-    async fn handle_update(
+    async fn handle_update<C: WalletSequencerClient>(
         elf: PathBuf,
         header: CliAccountMention,
         segments: Vec<CliAccountMention>,
         immutable: bool,
         payer: Option<CliAccountMention>,
-        wallet_core: &WalletCore,
+        wallet_core: &WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let header_id = resolve_public(&header, wallet_core)?;
         let payer_id = payer
@@ -272,9 +272,9 @@ impl ProgramLoaderSubcommand {
 }
 
 impl WalletSubcommand for ProgramLoaderSubcommand {
-    async fn handle_subcommand(
+    async fn handle_subcommand<C: WalletSequencerClient>(
         self,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::WriteSegment {
@@ -322,7 +322,10 @@ impl WalletSubcommand for ProgramLoaderSubcommand {
     }
 }
 
-fn resolve_public(mention: &CliAccountMention, wallet_core: &WalletCore) -> Result<AccountId> {
+fn resolve_public<C: WalletSequencerClient>(
+    mention: &CliAccountMention,
+    wallet_core: &WalletCore<C>,
+) -> Result<AccountId> {
     match mention.resolve(wallet_core.storage())? {
         AccountIdWithPrivacy::Public(account_id) => Ok(account_id),
         AccountIdWithPrivacy::Private(_) => {

@@ -4,7 +4,7 @@ use lee::{
     public_transaction::{Message, WitnessSet},
 };
 use program_deployment::deploy_program;
-use sequencer_service_rpc::RpcClient as _;
+use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use wallet::WalletCore;
 
 // Before running this example, compile the `hello_world.rs` guest program with:
@@ -28,7 +28,7 @@ use wallet::WalletCore;
 #[tokio::main]
 async fn main() {
     // Initialize wallet
-    let mut wallet_core = WalletCore::from_env().unwrap();
+    let mut wallet_core = WalletCore::<SequencerClient>::from_env().unwrap();
 
     // Parse arguments
     // First argument is the path to the program binary

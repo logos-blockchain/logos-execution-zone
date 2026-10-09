@@ -8,7 +8,7 @@ use clap::Subcommand;
 use keycard_wallet::KeycardWallet;
 
 use crate::{
-    WalletCore,
+    WalletCore, WalletSequencerClient,
     cli::{SubcommandReturnValue, WalletSubcommand, read_mnemonic, read_pin},
 };
 
@@ -44,7 +44,9 @@ pub enum KeycardSubcommand {
 }
 
 impl KeycardSubcommand {
-    fn handle_available(_wallet_core: &mut WalletCore) -> SubcommandReturnValue {
+    fn handle_available<C: WalletSequencerClient>(
+        _wallet_core: &mut WalletCore<C>,
+    ) -> SubcommandReturnValue {
         if KeycardWallet::is_keycard_available() {
             println!("\u{2705} Keycard is available.");
         } else {
@@ -54,7 +56,9 @@ impl KeycardSubcommand {
         SubcommandReturnValue::Empty
     }
 
-    fn handle_connect(_wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
+    fn handle_connect<C: WalletSequencerClient>(
+        _wallet_core: &mut WalletCore<C>,
+    ) -> Result<SubcommandReturnValue> {
         let pin = read_pin()?;
 
         let mut wallet = KeycardWallet::new()?;
@@ -64,7 +68,9 @@ impl KeycardSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    fn handle_init(_wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
+    fn handle_init<C: WalletSequencerClient>(
+        _wallet_core: &mut WalletCore<C>,
+    ) -> Result<SubcommandReturnValue> {
         let pin = read_pin()?;
 
         let mut wallet = KeycardWallet::new()?;
@@ -77,7 +83,9 @@ impl KeycardSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    fn handle_load(_wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
+    fn handle_load<C: WalletSequencerClient>(
+        _wallet_core: &mut WalletCore<C>,
+    ) -> Result<SubcommandReturnValue> {
         let pin = read_pin()?;
         let mnemonic = read_mnemonic()?;
 
@@ -91,9 +99,9 @@ impl KeycardSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    fn handle_factory_reset(
+    fn handle_factory_reset<C: WalletSequencerClient>(
         confirm: bool,
-        _wallet_core: &mut WalletCore,
+        _wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         if !confirm {
             eprintln!(
@@ -111,10 +119,10 @@ impl KeycardSubcommand {
     }
 
     #[cfg(feature = "keycard-debug")]
-    fn handle_get_private_keys(
+    fn handle_get_private_keys<C: WalletSequencerClient>(
         key_path: &str,
         reveal: bool,
-        _wallet_core: &mut WalletCore,
+        _wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         if !reveal {
             eprintln!(
@@ -137,9 +145,9 @@ impl KeycardSubcommand {
 }
 
 impl WalletSubcommand for KeycardSubcommand {
-    async fn handle_subcommand(
+    async fn handle_subcommand<C: WalletSequencerClient>(
         self,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::Available => Ok(Self::handle_available(wallet_core)),

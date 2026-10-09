@@ -13,19 +13,20 @@ use wallet::{WalletCore, cli::execute_keys_restoration};
 
 use crate::{
     error::{FfiOperationError, print_error},
+    sequencer_ffi_client::SequencerServiceFFIWrapper,
     wallet::{block_on, c_str_to_string, types::WalletHandle},
 };
 
 /// Internal wrapper around `WalletCore` with mutex for thread safety.
 pub(crate) struct WalletWrapper {
-    pub core: Mutex<WalletCore>,
+    pub core: Mutex<WalletCore<SequencerServiceFFIWrapper>>,
 }
 
 #[repr(C)]
 pub struct FfiCreateWalletOutput {
     pub wallet: *mut WalletHandle,
     /// C compatible(null terminated) string.
-    pub mnemonic: *mut c_char
+    pub mnemonic: *mut c_char,
 }
 
 impl Default for FfiCreateWalletOutput {
@@ -111,12 +112,7 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
         return FfiCreateWalletOutput::default();
     };
 
-    match WalletCore::new_init_storage(
-        config_path,
-        storage_path,
-        None,
-        &password,
-    ) {
+    match WalletCore::new_init_storage(config_path, storage_path, None, &password) {
         Ok((core, mnemonic)) => {
             let wrapper = Box::new(WalletWrapper {
                 core: Mutex::new(core),
@@ -131,7 +127,7 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
 
             FfiCreateWalletOutput {
                 wallet: handle,
-                mnemonic: raw_pointer
+                mnemonic: raw_pointer,
             }
         }
         Err(e) => {

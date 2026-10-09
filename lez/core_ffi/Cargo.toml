@@ -22,6 +22,7 @@ serde_json.workspace = true
 kameo.workspace = true
 env_logger.workspace = true
 bip39.workspace = true
+anyhow.workspace = true
 
 [lints]
 workspace = true

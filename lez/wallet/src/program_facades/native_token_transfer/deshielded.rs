@@ -2,9 +2,9 @@ use common::HashType;
 use lee::{AccountId, privacy_preserving_transaction::circuit::ProgramWithDependencies};
 
 use super::{NativeTokenTransfer, native_transfer_preparation};
-use crate::{AccountIdentity, ExecutionFailureKind};
+use crate::{AccountIdentity, ExecutionFailureKind, WalletSequencerClient};
 
-impl NativeTokenTransfer<'_> {
+impl<C: WalletSequencerClient> NativeTokenTransfer<'_, C> {
     pub async fn send_deshielded_transfer(
         &self,
         from: AccountId,

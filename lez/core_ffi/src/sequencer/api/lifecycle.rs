@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
 };
 
-use sequencer_service::{SequencerConfig};
+use sequencer_service::SequencerConfig;
 
 use crate::{
     error::FfiOperationError,

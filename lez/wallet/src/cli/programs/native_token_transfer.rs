@@ -4,7 +4,7 @@ use lee::AccountId;
 
 use crate::{
     AccDecodeData::Decode,
-    AccountIdentity, WalletCore,
+    AccountIdentity, WalletCore, WalletSequencerClient,
     account::AccountIdWithPrivacy,
     cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
     program_facades::native_token_transfer::NativeTokenTransfer,
@@ -51,7 +51,7 @@ impl AuthTransferSubcommand {
         clippy::too_many_arguments,
         reason = "extracted match arm with many destructured fields"
     )]
-    async fn handle_send(
+    async fn handle_send<C: WalletSequencerClient>(
         from_account: CliAccountMention,
         to_account: Option<CliAccountMention>,
         to_npk: Option<String>,
@@ -59,7 +59,7 @@ impl AuthTransferSubcommand {
         to_keys: Option<String>,
         to_identifier: Option<lee_core::Identifier>,
         amount: u128,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         // Resolve --to-keys into --to-npk / --to-vpk equivalents.
         let (to_npk, to_vpk) = if let Some(path) = to_keys {
@@ -149,9 +149,9 @@ impl AuthTransferSubcommand {
 }
 
 impl WalletSubcommand for AuthTransferSubcommand {
-    async fn handle_subcommand(
+    async fn handle_subcommand<C: WalletSequencerClient>(
         self,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::Send {
@@ -296,11 +296,11 @@ pub enum NativeTokenTransferProgramSubcommandPrivate {
 }
 
 impl NativeTokenTransferProgramSubcommandPrivate {
-    async fn handle_private_owned(
+    async fn handle_private_owned<C: WalletSequencerClient>(
         from: AccountId,
         to: AccountId,
         amount: u128,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let (tx_hash, [secret_from, secret_to]) = NativeTokenTransfer(wallet_core)
             .send_private_transfer_to_owned_account(from, to, amount)
@@ -314,13 +314,13 @@ impl NativeTokenTransferProgramSubcommandPrivate {
             .await
     }
 
-    async fn handle_private_foreign(
+    async fn handle_private_foreign<C: WalletSequencerClient>(
         from: AccountId,
         to_npk: String,
         to_vpk: String,
         to_identifier: Option<lee_core::Identifier>,
         amount: u128,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let (to_npk, to_vpk) = crate::cli::decode_npk_vpk(&to_npk, &to_vpk)?;
 
@@ -341,9 +341,9 @@ impl NativeTokenTransferProgramSubcommandPrivate {
 }
 
 impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
-    async fn handle_subcommand(
+    async fn handle_subcommand<C: WalletSequencerClient>(
         self,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::PrivateOwned { from, to, amount } => {
@@ -371,11 +371,11 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
 }
 
 impl NativeTokenTransferProgramSubcommandShielded {
-    async fn handle_shielded_owned(
+    async fn handle_shielded_owned<C: WalletSequencerClient>(
         from: Option<AccountIdentity>,
         to: AccountId,
         amount: u128,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
             .send_shielded_transfer(from.expect("from set during Send dispatch"), to, amount)
@@ -386,13 +386,13 @@ impl NativeTokenTransferProgramSubcommandShielded {
             .await
     }
 
-    async fn handle_shielded_foreign(
+    async fn handle_shielded_foreign<C: WalletSequencerClient>(
         from: Option<AccountIdentity>,
         to_npk: String,
         to_vpk: String,
         to_identifier: Option<lee_core::Identifier>,
         amount: u128,
-        wallet_core: &WalletCore,
+        wallet_core: &WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let (to_npk, to_vpk) = crate::cli::decode_npk_vpk(&to_npk, &to_vpk)?;
 
@@ -415,9 +415,9 @@ impl NativeTokenTransferProgramSubcommandShielded {
 }
 
 impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
-    async fn handle_subcommand(
+    async fn handle_subcommand<C: WalletSequencerClient>(
         self,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::ShieldedOwned { from, to, amount } => {
@@ -445,11 +445,11 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
 }
 
 impl NativeTokenTransferProgramSubcommand {
-    async fn handle_deshielded(
+    async fn handle_deshielded<C: WalletSequencerClient>(
         from: AccountId,
         to: AccountId,
         amount: u128,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
             .send_deshielded_transfer(from, to, amount)
@@ -460,11 +460,11 @@ impl NativeTokenTransferProgramSubcommand {
             .await
     }
 
-    async fn handle_public(
+    async fn handle_public<C: WalletSequencerClient>(
         from: Option<AccountIdentity>,
         to: Option<AccountIdentity>,
         amount: u128,
-        wallet_core: &WalletCore,
+        wallet_core: &WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let tx_hash = NativeTokenTransfer(wallet_core)
             .send_public_transfer(
@@ -481,9 +481,9 @@ impl NativeTokenTransferProgramSubcommand {
 }
 
 impl WalletSubcommand for NativeTokenTransferProgramSubcommand {
-    async fn handle_subcommand(
+    async fn handle_subcommand<C: WalletSequencerClient>(
         self,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::Private(private_subcommand) => {

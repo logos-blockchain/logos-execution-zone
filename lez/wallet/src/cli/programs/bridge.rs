@@ -2,7 +2,7 @@ use anyhow::{Context as _, Result};
 use clap::Subcommand;
 
 use crate::{
-    WalletCore,
+    WalletCore, WalletSequencerClient,
     account::AccountIdWithPrivacy,
     cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
     program_facades::bridge::Bridge,
@@ -26,9 +26,9 @@ pub enum BridgeSubcommand {
 }
 
 impl WalletSubcommand for BridgeSubcommand {
-    async fn handle_subcommand(
+    async fn handle_subcommand<C: WalletSequencerClient>(
         self,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::Withdraw {

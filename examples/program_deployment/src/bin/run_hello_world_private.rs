@@ -4,6 +4,7 @@ use lee::{
     AccountId, privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
 use program_deployment::deploy_program;
+use sequencer_service_rpc::SequencerClient;
 use wallet::{AccountIdentity, WalletCore};
 
 // Before running this example, compile the `hello_world.rs` guest program with:
@@ -29,7 +30,7 @@ use wallet::{AccountIdentity, WalletCore};
 #[tokio::main]
 async fn main() {
     // Initialize wallet
-    let mut wallet_core = WalletCore::from_env().unwrap();
+    let mut wallet_core = WalletCore::<SequencerClient>::from_env().unwrap();
 
     // Parse arguments
     // First argument is the path to the program binary

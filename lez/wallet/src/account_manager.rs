@@ -526,7 +526,7 @@ impl AccountManager {
     /// A fee-exempt transaction carries a vestigial fee declaration the sequencer
     /// never charges, so it still needs a payer id to fill. Only a wallet with no
     /// signing account at all yields `None`.
-    pub async fn fee_payer_account_id<C:WalletSequencerClient>(
+    pub async fn fee_payer_account_id<C: WalletSequencerClient>(
         &mut self,
         wallet: &WalletCore<C>,
     ) -> Result<Option<AccountId>, ExecutionFailureKind> {
@@ -673,7 +673,7 @@ const fn witness_kind(
     }
 }
 
-async fn public_account_view<C:WalletSequencerClient>(
+async fn public_account_view<C: WalletSequencerClient>(
     wallet: &WalletCore<C>,
     shard_selector: ProgramShardSelector,
 ) -> Result<Account, ExecutionFailureKind> {
@@ -697,7 +697,7 @@ fn merge_public_view(
     Ok(())
 }
 
-async fn prepare_account<C:WalletSequencerClient>(
+async fn prepare_account<C: WalletSequencerClient>(
     wallet: &WalletCore<C>,
     identity: AccountIdentity,
     shard_selector: ProgramShardSelector,
@@ -786,7 +786,7 @@ async fn prepare_account<C:WalletSequencerClient>(
     Ok(state)
 }
 
-fn private_key_tree_acc_preparation<C:WalletSequencerClient>(
+fn private_key_tree_acc_preparation<C: WalletSequencerClient>(
     wallet: &WalletCore<C>,
     account_id: AccountId,
 ) -> Result<AccountPreparedData, ExecutionFailureKind> {
@@ -849,7 +849,7 @@ fn private_foreign_acc_preparation(
     }
 }
 
-fn private_shared_acc_preparation<C:WalletSequencerClient>(
+fn private_shared_acc_preparation<C: WalletSequencerClient>(
     wallet: &WalletCore<C>,
     account_id: AccountId,
     nsk: NullifierSecretKey,
@@ -884,7 +884,7 @@ fn private_shared_acc_preparation<C:WalletSequencerClient>(
     }
 }
 
-async fn fetch_private_proofs_and_root<C:WalletSequencerClient>(
+async fn fetch_private_proofs_and_root<C: WalletSequencerClient>(
     wallet: &WalletCore<C>,
     states: &mut [State],
 ) -> Result<CommitmentSetDigest, ExecutionFailureKind> {

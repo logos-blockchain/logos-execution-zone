@@ -1,8 +1,11 @@
 use common::block::{BedrockStatus, Block, BlockHeader};
 
-use crate::primitives::types::{
-    FfiBlockId, FfiHashType, FfiOption, FfiTimestamp, FfiVec,
-    transaction::primitives_ffi_free_transaction_vec_value, vectors::FfiBlockBody,
+use crate::primitives::{
+    errors::PrimitiveOperationStatus,
+    types::{
+        FfiBlockId, FfiHashType, FfiOption, FfiTimestamp, FfiVec,
+        transaction::primitives_ffi_free_transaction_vec_value, vectors::FfiBlockBody,
+    },
 };
 
 #[repr(C)]
@@ -33,6 +36,33 @@ impl From<Block> for FfiBlock {
     }
 }
 
+impl TryFrom<FfiBlock> for Block {
+    type Error = PrimitiveOperationStatus;
+
+    fn try_from(value: FfiBlock) -> Result<Self, Self::Error> {
+        let FfiBlock {
+            header,
+            body,
+            bedrock_status,
+        } = value;
+
+        let mut std_vec = Vec::with_capacity(body.capacity);
+        let std_vec_ffi_body: Vec<_> = body.into();
+
+        for ffi_tx in std_vec_ffi_body {
+            std_vec.push(ffi_tx.try_into()?)
+        }
+
+        Ok(Self {
+            header: header.into(),
+            bedrock_status: bedrock_status.into(),
+            body: common::block::BlockBody {
+                transactions: std_vec,
+            },
+        })
+    }
+}
+
 pub type FfiBlockOpt = FfiOption<FfiBlock>;
 
 #[repr(C)]
@@ -46,6 +76,24 @@ pub struct FfiBlockHeader {
 impl From<BlockHeader> for FfiBlockHeader {
     fn from(value: BlockHeader) -> Self {
         let BlockHeader {
+            block_id,
+            prev_block_hash,
+            hash,
+            timestamp,
+        } = value;
+
+        Self {
+            block_id,
+            prev_block_hash: prev_block_hash.into(),
+            hash: hash.into(),
+            timestamp,
+        }
+    }
+}
+
+impl From<FfiBlockHeader> for BlockHeader {
+    fn from(value: FfiBlockHeader) -> Self {
+        let FfiBlockHeader {
             block_id,
             prev_block_hash,
             hash,
