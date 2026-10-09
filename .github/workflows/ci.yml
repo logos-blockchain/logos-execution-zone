@@ -404,6 +404,13 @@ jobs:
       - name: Make resolved Bedrock node executable
         run: chmod +x bedrock/.resolved/logos-blockchain-node
 
+      # A shard that runs out of room reports only "error writing file to disk".
+      - name: Report disk headroom before extraction
+        run: |
+          ls -l --block-size=M integration-tests.tar.zst
+          zstd -l integration-tests.tar.zst || true
+          df -h / /tmp /mnt || true
+
       - name: Run tests
         uses: ./.github/actions/run-in-ci-image
         with:
@@ -427,6 +434,10 @@ jobs:
             else
               with_retry 'cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
             fi
+
+      - name: Report disk headroom after the tests
+        if: always()
+        run: df -h / /tmp /mnt || true
   # `just build-artifacts` drives the host's Docker daemon via `cargo risczero
   # build`, so it goes through the image rather than `container:`.
   artifacts:
