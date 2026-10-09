@@ -100,7 +100,7 @@ pub fn screen(tx: &LeeTransaction, state: &lee::V03State) -> Result<()> {
 /// The cycles a private transaction's deferred public effects cost on the head
 /// state, for the wallet to price its fee with. Metered under the gas a block
 /// can give one private transaction's effects.
-pub fn estimate_private_effect_cycles(
+pub fn dry_run_private_effects(
     state: &lee::V03State,
     actions: &[lee::privacy_preserving_transaction::message::PublicActionWithID],
 ) -> std::result::Result<u64, lee::error::LeeError> {
@@ -435,11 +435,8 @@ mod tests {
         };
 
         let credit = borsh::to_vec(&Effect::Credit(1)).expect("serializes");
-        assert_eq!(
-            estimate_private_effect_cycles(&state, &effect(credit)).unwrap(),
-            0
-        );
-        assert!(estimate_private_effect_cycles(&state, &effect(vec![0xFF])).is_err());
+        assert_eq!(dry_run_private_effects(&state, &effect(credit)).unwrap(), 0);
+        assert!(dry_run_private_effects(&state, &effect(vec![0xFF])).is_err());
     }
 
     #[test]

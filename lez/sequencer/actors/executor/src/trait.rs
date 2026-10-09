@@ -9,7 +9,7 @@ use crate::{
     Result,
     error::Error,
     protocol::{
-        ChannelId, DryRunPublicTransaction, EstimatePrivateEffectCycles, FeeStateQuote, GetAccount,
+        ChannelId, DryRunPrivateEffects, DryRunPublicTransaction, FeeStateQuote, GetAccount,
         GetAccountBalance, GetAccountNonces, GetAccountReply, GetAccountView, GetBlock,
         GetBlockRange, GetChannelId, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply,
         GetFeeQuote, GetLastBlockId, GetProofsAndRoot, GetTransaction, ProduceBlock, PublicDryRun,
@@ -34,7 +34,7 @@ pub trait ExecutorActorTrait:
     + Message<GetCrossZoneDeadLetters, Reply = Result<GetCrossZoneDeadLettersReply>>
     + Message<RequeueCrossZoneDeadLetter, Reply = Result<RequeueCrossZoneDeadLetterReply>>
     + Message<GetFeeQuote, Reply = FeeStateQuote>
-    + Message<EstimatePrivateEffectCycles, Reply = Result<u64>>
+    + Message<DryRunPrivateEffects, Reply = Result<u64>>
     + Message<DryRunPublicTransaction, Reply = Result<PublicDryRun>>
 {
 }

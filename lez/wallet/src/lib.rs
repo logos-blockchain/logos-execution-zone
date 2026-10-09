@@ -774,7 +774,7 @@ impl WalletCore {
                 .await??;
         let effect_cycles = self
             .sequencer_client
-            .estimate_private_effect_cycles(DeferredPublicActions(actions.clone()))
+            .dry_run_private_effects(DeferredPublicActions(actions.clone()))
             .await?;
         let payer = match acc_manager.private_fee_payer_account_id() {
             Some(payer) => payer,

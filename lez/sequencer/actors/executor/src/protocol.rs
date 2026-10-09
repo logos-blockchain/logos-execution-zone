@@ -33,7 +33,7 @@ pub struct Transaction {
 pub struct GetFeeQuote;
 
 /// Meters a private transaction's deferred public effects on the head state.
-pub struct EstimatePrivateEffectCycles {
+pub struct DryRunPrivateEffects {
     pub actions: common::transaction::DeferredPublicActions,
 }
 

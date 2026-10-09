@@ -31,7 +31,7 @@ use crate::{
     ExecutorActorTrait, Result,
     error::Error,
     protocol::{
-        ChannelId, DryRunPublicTransaction, EstimatePrivateEffectCycles, FeeStateQuote, GetAccount,
+        ChannelId, DryRunPrivateEffects, DryRunPublicTransaction, FeeStateQuote, GetAccount,
         GetAccountBalance, GetAccountNonces, GetAccountReply, GetAccountTransactions,
         GetAccountView, GetBlock, GetBlockByHash, GetBlockRange, GetChannelId,
         GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId,
@@ -329,20 +329,18 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountBalance>
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<EstimatePrivateEffectCycles>
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<DryRunPrivateEffects>
     for ExecutorActor<S, B>
 {
     type Reply = Result<u64>;
 
     async fn handle(
         &mut self,
-        EstimatePrivateEffectCycles { actions }: EstimatePrivateEffectCycles,
+        DryRunPrivateEffects { actions }: DryRunPrivateEffects,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.sequencer
-            .with_state(|state| {
-                sequencer_core::fees::estimate_private_effect_cycles(state, &actions.0)
-            })
+            .with_state(|state| sequencer_core::fees::dry_run_private_effects(state, &actions.0))
             .await
             .map_err(|err| Error::PrivateEffectsFailed(err.into()))
     }

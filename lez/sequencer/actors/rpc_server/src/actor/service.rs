@@ -20,7 +20,7 @@ use sequencer_service_protocol::{
 };
 
 /// The methods [`crate::RpcServerActor`] serves only when `dry_run_rpc` is on.
-pub const DRY_RUN_METHODS: [&str; 2] = ["dryRunPublicTransaction", "estimatePrivateEffectCycles"];
+pub const DRY_RUN_METHODS: [&str; 2] = ["dryRunPublicTransaction", "dryRunPrivateEffects"];
 
 pub struct Service<E: ExecutorActorTrait> {
     executor_ref: ActorRef<E>,
@@ -139,12 +139,12 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             .map_err(map_infallible_error)
     }
 
-    async fn estimate_private_effect_cycles(
+    async fn dry_run_private_effects(
         &self,
         actions: DeferredPublicActions,
     ) -> Result<u64, ErrorObjectOwned> {
         self.executor_ref
-            .ask(sequencer_executor_actor::protocol::EstimatePrivateEffectCycles { actions })
+            .ask(sequencer_executor_actor::protocol::DryRunPrivateEffects { actions })
             .await
             .map_err(map_executor_error)
     }

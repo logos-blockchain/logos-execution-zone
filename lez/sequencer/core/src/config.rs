@@ -106,7 +106,7 @@ pub struct SequencerConfig {
     #[serde(default)]
     pub gossip: Option<GossipConfig>,
     /// Serve the dry-run RPCs (`dryRunPublicTransaction`,
-    /// `estimatePrivateEffectCycles`). Each call executes guest code for
+    /// `dryRunPrivateEffects`). Each call executes guest code for
     /// free, so enable it only on a sequencer that serves local wallets.
     #[serde(default)]
     pub dry_run_rpc: bool,

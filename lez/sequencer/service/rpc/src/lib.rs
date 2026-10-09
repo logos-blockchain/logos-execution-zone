@@ -47,8 +47,8 @@ pub trait Rpc {
 
     /// The cycles a privacy-preserving transaction's deferred public effects
     /// (from `lee::dry_run`) cost on the head state, for pricing its fee.
-    #[method(name = "estimatePrivateEffectCycles")]
-    async fn estimate_private_effect_cycles(
+    #[method(name = "dryRunPrivateEffects")]
+    async fn dry_run_private_effects(
         &self,
         actions: DeferredPublicActions,
     ) -> Result<u64, ErrorObjectOwned>;

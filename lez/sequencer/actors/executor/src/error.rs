@@ -41,7 +41,7 @@ pub enum Error {
     PublicDryRunFailed(#[source] anyhow::Error),
 
     /// `dryRunPublicTransaction` was given a privacy-preserving transaction.
-    /// Those are priced by `estimatePrivateEffectCycles` on their deferred
+    /// Those are priced by `dryRunPrivateEffects` on their deferred
     /// public effects, before the proof exists.
     #[error("Only a public transaction can be dry-run; a privacy-preserving one was given")]
     DryRunNotPublic,
