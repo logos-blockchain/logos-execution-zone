@@ -2663,7 +2663,7 @@ async fn follow_update_persists_the_checkpoint_with_its_effects() {
 #[tokio::test]
 async fn a_failed_publish_leaves_the_head_and_the_pin_alone() {
     let config = setup_sequencer_config();
-    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
 
     let first = sequencer.run_production_turn().await.unwrap();
     let pin = sequencer.chain().lock().await.pin();
@@ -2676,10 +2676,24 @@ async fn a_failed_publish_leaves_the_head_and_the_pin_alone() {
         },
     )
     .await;
+    mempool_handle
+        .push((
+            TransactionOrigin::User,
+            common::test_utils::create_transaction_native_token_transfer(
+                initial_public_user_accounts()[0].account_id,
+                0,
+                initial_public_user_accounts()[1].account_id,
+                10,
+                &create_signing_key_for_account1(),
+            ),
+        ))
+        .await
+        .unwrap();
     let failed = sequencer.run_production_turn().await;
     assert!(failed.is_err(), "the canned publish failure must surface");
     assert_eq!(sequencer.chain_height().await, first);
     assert_eq!(sequencer.chain().lock().await.pin(), pin);
+    assert_eq!(sequencer.mempool.len(), 1, "the user transaction is kept");
 }
 
 /// A block is chained on the pin its head was built on, so a tip that moved
@@ -5636,4 +5650,52 @@ async fn the_first_finalized_block_is_not_reported() {
     );
     finalize_signed(&mut sequencer, entry_of(&invalid, MsgId::root())).await;
     assert!(!slash_recorded(&sequencer).await);
+}
+
+/// The sdk delivered block 3 without block 2's entry, as on 2026-10-07: a
+/// block built now would carry height 2 on block 3's entry.
+#[tokio::test]
+async fn a_turn_on_a_view_with_a_hole_is_skipped() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, mempool_handle) = start_sequencer(config.clone()).await;
+    let genesis_meta = sequencer
+        .storage_ref
+        .ask(GetLatestBlockMeta)
+        .await
+        .unwrap()
+        .expect("genesis meta is set");
+    let producer = bootstrap_stake_account_id(&config);
+    let mut state = sequencer.with_state(Clone::clone).await;
+    let block2 = settled_peer_block(&state, 2, genesis_meta.hash, vec![], producer);
+    chain_state::apply_block_to_state(&block2, &mut state).unwrap();
+    let block3 = settled_peer_block(&state, 3, block2.header.hash, vec![], producer);
+    sequencer
+        .on_channel_update(Arc::new(ChannelUpdate {
+            view: ViewChange::Extension(vec![entry_of(&block3, mock_msg_of(&block2))]),
+            ..empty_channel_update()
+        }))
+        .await;
+    let pin = sequencer.chain().lock().await.pin();
+    mempool_handle
+        .push((
+            TransactionOrigin::User,
+            common::test_utils::create_transaction_native_token_transfer(
+                initial_public_user_accounts()[0].account_id,
+                0,
+                initial_public_user_accounts()[1].account_id,
+                10,
+                &create_signing_key_for_account1(),
+            ),
+        ))
+        .await
+        .unwrap();
+
+    let skipped = sequencer.run_production_turn().await;
+    assert!(
+        skipped.is_err(),
+        "a turn on a view with a hole must not publish"
+    );
+    assert_eq!(sequencer.chain_height().await, 1);
+    assert_eq!(sequencer.chain().lock().await.pin(), pin);
+    assert_eq!(sequencer.mempool.len(), 1, "the user transaction is kept");
 }
