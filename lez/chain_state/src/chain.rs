@@ -626,15 +626,13 @@ mod tests {
     ) -> Block {
         use common::{
             block::HashableBlockData,
-            test_utils::sequencer_sign_key_for_testing,
+            test_utils::producer_account_for_testing,
             transaction::{LeeTransaction, clock_invocation, fee_invocation},
         };
         let timestamp = id.saturating_mul(100);
         let (summary, payout) = crate::apply::derive_block_summary(state, &txs, id, timestamp)
             .expect("test transactions settle");
-        let producer = lee::AccountId::from(&lee::PublicKey::new_from_private_key(
-            &sequencer_sign_key_for_testing(),
-        ));
+        let producer = producer_account_for_testing();
         let mut transactions = txs;
         transactions.push(LeeTransaction::Public(fee_invocation(
             summary, payout, producer,
@@ -646,7 +644,7 @@ mod tests {
             timestamp,
             transactions,
         }
-        .into_pending_block(&sequencer_sign_key_for_testing())
+        .into_pending_block()
     }
 
     #[test]

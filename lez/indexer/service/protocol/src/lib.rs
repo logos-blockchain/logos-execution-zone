@@ -180,8 +180,6 @@ pub struct BlockHeader {
     pub prev_block_hash: HashType,
     pub hash: HashType,
     pub timestamp: Timestamp,
-    pub producer: PublicKey,
-    pub signature: Signature,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr, JsonSchema)]
@@ -507,7 +505,6 @@ pub enum BlockIngestError {
         header: HashType,
     },
     EmptyBlock,
-    InvalidProducerSignature,
     InvalidClockTransaction,
     InvalidFeeTransaction,
     InvalidRewardTarget {

@@ -104,8 +104,7 @@ fn block_on(
 ) -> Vec<u8> {
     let block =
         common::test_utils::produce_dummy_block(block_id, Some(parent.header.hash), transactions);
-    let block = common::block::HashableBlockData::from(block)
-        .into_pending_block(&lee::PrivateKey::new_os_random());
+    let block = common::block::HashableBlockData::from(block).into_pending_block();
     borsh::to_vec(&block).expect("a block should serialize")
 }
 

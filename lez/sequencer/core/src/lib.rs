@@ -195,7 +195,6 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     /// Keys with stake on record, which the mesh admits channel-config
     /// messages from.
     staked_keys_tx: AccreditedKeysSender,
-    block_signing_key: lee::PrivateKey,
     /// Signs this node's approval of a slash.
     bedrock_signing_key: Ed25519Key,
     /// Collects the accredited signatures a channel config update needs.
@@ -281,7 +280,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// holds no chain yet.
     async fn seed_genesis_if_absent(
         storage_ref: &ActorRef<S>,
-        signing_key: &lee::PrivateKey,
         bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
         config: &SequencerConfig,
     ) {
@@ -293,8 +291,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             return;
         }
 
-        let (block, state, events) =
-            genesis_block_and_state(signing_key, bootstrap_sequencer_key, config);
+        let (block, state, events) = genesis_block_and_state(bootstrap_sequencer_key, config);
         let genesis_events = vec![(block.header.block_id, events)];
 
         storage_ref
@@ -361,11 +358,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             info!("Channel does not exist yet; starting it as channel creator");
         }
         let bootstrap_sequencer_key = (!channel_already_exists).then_some(own_sequencer_key);
-        let signing_key = config
-            .block_signing_key()
-            .expect("Failed to load the block signing key");
-        Self::seed_genesis_if_absent(&storage_ref, &signing_key, bootstrap_sequencer_key, &config)
-            .await;
+        Self::seed_genesis_if_absent(&storage_ref, bootstrap_sequencer_key, &config).await;
 
         let state = storage_ref
             .ask(GetLeeState)
@@ -554,7 +547,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             staked_keys_tx,
             config_manager,
             bedrock_signing_key,
-            block_signing_key: signing_key,
             config_draft: None,
             finalized_config,
             applied_seq: None,
@@ -1900,9 +1892,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             timestamp: new_block_timestamp,
         };
 
-        let block = hashable_data
-            .clone()
-            .into_pending_block(&self.block_signing_key);
+        let block = hashable_data.clone().into_pending_block();
 
         log::info!(
             "Created block with {} transactions in {} seconds",
@@ -2354,19 +2344,18 @@ fn chain_update(chain: &ChainState) -> AtomicUpdate {
 
 /// The genesis block and state `config` describes.
 fn genesis_block_and_state(
-    signing_key: &lee::PrivateKey,
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
     config: &SequencerConfig,
 ) -> (Block, lee::V03State, Vec<TxEvents>) {
     let (genesis_state, genesis_txs, genesis_events) =
-        build_genesis_state(signing_key, config, bootstrap_sequencer_key);
+        build_genesis_state(config, bootstrap_sequencer_key);
     let genesis_block = HashableBlockData {
         block_id: GENESIS_BLOCK_ID,
         transactions: genesis_txs,
         prev_block_hash: HashType([0; 32]),
         timestamp: 0,
     }
-    .into_pending_block(signing_key);
+    .into_pending_block();
 
     (genesis_block, genesis_state, genesis_events)
 }
@@ -2391,7 +2380,6 @@ fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
 /// [`LeeTransaction`]s that should be committed to the genesis block so external
 /// observers can replay them.
 fn build_genesis_state(
-    signing_key: &lee::PrivateKey,
     config: &SequencerConfig,
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
 ) -> (lee::V03State, Vec<LeeTransaction>, Vec<TxEvents>) {
@@ -2464,13 +2452,14 @@ fn build_genesis_state(
     //
     // A stakeless genesis (e.g. a sequencer reconstructing an existing channel
     // it did not bootstrap) has no staked account to reward, so it falls back to
-    // the signing key's account: this genesis is a throwaway placeholder (the real
+    // the default account: this genesis is a throwaway placeholder (the real
     // one is replayed from the channel), the summary is the default, so the
     // credit is zero and the account is left untouched.
-    let producer = staked.first().map_or_else(
-        || lee::AccountId::from(&lee::PublicKey::new_from_private_key(signing_key)),
-        |stake| lee::AccountId::from(&stake.owner),
-    );
+    let producer = staked
+        .first()
+        .map_or_else(lee::AccountId::default, |stake| {
+            lee::AccountId::from(&stake.owner)
+        });
 
     let genesis_summary = fee_core::BlockFeeSummary::default();
     let genesis_payout = chain_state::apply::block_payout(&genesis_opening, &genesis_summary);
