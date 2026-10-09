@@ -1119,6 +1119,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             })
             .await;
 
+        if publish_res.is_err() {
+            // Nothing was inscribed, so the block's transactions go back in front.
+            for (origin, tx) in mempool_transactions.into_iter().rev() {
+                self.mempool.push_front((origin, tx));
+            }
+        }
         let outcome = match publish_res {
             Ok(outcome) => outcome,
             Err(kameo::error::SendError::HandlerError(
@@ -1126,12 +1132,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     provided: expected,
                     current,
                 },
-            )) => {
-                for (origin, tx) in mempool_transactions.into_iter().rev() {
-                    self.mempool.push_front((origin, tx));
-                }
-                return Err(ChannelMovedWhileBuilding { expected, current }.into());
-            }
+            )) => return Err(ChannelMovedWhileBuilding { expected, current }.into()),
             Err(err) => return Err(err).context("Failed to publish block to Bedrock"),
         };
 
@@ -1567,6 +1568,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             parent,
         ) = {
             let chain = self.chain.lock().await;
+            if let Some(entry) = chain.check_for_gaps_in_lineage() {
+                error!(
+                    "Channel view entry {} chains on {}, which the view does not hold before it; skipping the turn",
+                    entry.msg, entry.parent
+                );
+                return Err(anyhow!("Channel view has a gap before entry {}", entry.msg));
+            }
             let tip = chain.head_tip();
             let parent = chain.pin();
             let height = tip.as_ref().map_or(GENESIS_BLOCK_ID, |head| {
