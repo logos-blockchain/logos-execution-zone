@@ -98,9 +98,10 @@ jobs:
     permissions:
       contents: read
       packages: read
+    # Must not cancel pushes: every merge shares `github.ref` on a push.
     concurrency:
-      group: cucumber-${{ github.ref }}
-      cancel-in-progress: true
+      group: cucumber-${{ github.event.pull_request.number || github.sha }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
   bedrock-resolver-tests:
     needs: changes
@@ -388,11 +389,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download integration test archive
+        timeout-minutes: 10
         uses: actions/download-artifact@v4
         with:
           name: integration-tests-archive
 
       - name: Download resolved Bedrock node
+        timeout-minutes: 10
         uses: actions/download-artifact@v4
         with:
           name: bedrock-node
@@ -400,6 +403,13 @@ jobs:
 
       - name: Make resolved Bedrock node executable
         run: chmod +x bedrock/.resolved/logos-blockchain-node
+
+      # A shard that runs out of room reports only "error writing file to disk".
+      - name: Report disk headroom before extraction
+        run: |
+          ls -l --block-size=M integration-tests.tar.zst
+          zstd -l integration-tests.tar.zst || true
+          df -h / /tmp /mnt || true
 
       - name: Run tests
         uses: ./.github/actions/run-in-ci-image
@@ -410,6 +420,7 @@ jobs:
             RUST_LOG=info,kameo=warn
             LOGOS_BLOCKCHAIN_NODE_BIN=${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
           run: |
+            # `--retries` names the flaky test, `with_retry` covers a bad runner.
             source .github/scripts/with_retry.sh
             if [[ "${{ matrix.target }}" == "tf_bedrock_builder" || \
                   "${{ matrix.target }}" == "tf_app_deployments" ]]; then
@@ -419,10 +430,14 @@ jobs:
               # allowing TF to use its local build provider.
               cargo fetch --locked
 
-              with_retry 'env -u GITHUB_ACTIONS -u CI cargo nextest run --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
+              with_retry 'env -u GITHUB_ACTIONS -u CI cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
             else
-              with_retry 'cargo nextest run --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
+              with_retry 'cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
             fi
+
+      - name: Report disk headroom after the tests
+        if: always()
+        run: df -h / /tmp /mnt || true
   # `just build-artifacts` drives the host's Docker daemon via `cargo risczero
   # build`, so it goes through the image rather than `container:`.
   artifacts:
