@@ -98,9 +98,10 @@ jobs:
     permissions:
       contents: read
       packages: read
+    # Must not cancel pushes: every merge shares `github.ref` on a push.
     concurrency:
-      group: cucumber-${{ github.ref }}
-      cancel-in-progress: true
+      group: cucumber-${{ github.event.pull_request.number || github.sha }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
   bedrock-resolver-tests:
     needs: changes
