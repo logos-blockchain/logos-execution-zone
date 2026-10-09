@@ -40,7 +40,7 @@ build-artifact methods_path features="":
 # Format codebase.
 fmt:
     @echo "🎨 Formatting codebase"
-    cargo +nightly fmt
+    cargo +nightly-2026-10-08 fmt
     taplo fmt
 
 # Run tests.

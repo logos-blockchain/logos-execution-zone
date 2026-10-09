@@ -84,7 +84,7 @@ RUN curl -L --proto '=https' --tlsv1.2 -sSf \
 # in some CI job that reuses this cached image. pyo3's `auto-initialize` links
 # libpython, and the base image ships python3 without it, so check the .so too.
 RUN cargo --version \
-    && cargo +nightly fmt --version \
+    && cargo +nightly-2026-10-08 fmt --version \
     && cargo clippy --version \
     && ls /usr/lib/*/libpython3*.so \
     && r0vm --version \
