@@ -7,7 +7,6 @@ use chain_state::{ChainState, ChannelEntry};
 use common::{
     HashType,
     block::{BedrockStatus, Block, HashableBlockData},
-    test_utils::sequencer_sign_key_for_testing,
     transaction::{LeeTransaction, clock_invocation, fee_invocation},
 };
 use kameo::actor::Spawn as _;
@@ -291,7 +290,6 @@ fn setup_sequencer_config() -> SequencerConfig {
         max_block_size: bytesize::ByteSize::mib(1),
         mempool_max_size: 10000,
         block_create_timeout: Duration::from_secs(1),
-        signing_key: Some(*sequencer_sign_key_for_testing().value()),
         bedrock_config: BedrockConfig {
             channel_id: ChannelId::from([0; 32]),
             node_url: "http://not-used-in-unit-tests".parse().unwrap(),
@@ -369,7 +367,7 @@ fn settled_peer_block(
         timestamp,
         transactions,
     }
-    .into_pending_block(&sequencer_sign_key_for_testing())
+    .into_pending_block()
 }
 
 /// Asserts the block body is `user_txs` followed by the forced fee invocation
@@ -740,16 +738,15 @@ async fn start_from_config_opens_existing_db_if_it_exists() {
     config.home = temp_dir.path().to_path_buf();
 
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let signing_key = config.block_signing_key().unwrap();
     let (genesis_state, genesis_txs, _) =
-        build_genesis_state(&signing_key, &config, Some(bootstrap_sequencer_key));
+        build_genesis_state(&config, Some(bootstrap_sequencer_key));
     let genesis_hashable_data = HashableBlockData {
         block_id: 1,
         transactions: genesis_txs,
         prev_block_hash: HashType([0; 32]),
         timestamp: 0,
     };
-    let genesis_block = genesis_hashable_data.into_pending_block(&signing_key);
+    let genesis_block = genesis_hashable_data.into_pending_block();
 
     let storage = StorageActor::new(&config.db_path()).unwrap();
     let storage_ref = StorageActor::spawn(storage);
@@ -2622,7 +2619,7 @@ fn resubmittable_txs_of_blocks_without_user_txs_is_empty() {
         timestamp: 0,
         transactions: vec![],
     }
-    .into_pending_block(&sequencer_sign_key_for_testing());
+    .into_pending_block();
     assert!(resubmittable_txs(&empty).is_empty());
 
     let clock_only = common::test_utils::produce_dummy_block(1, None, vec![]);
@@ -4508,9 +4505,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
 fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let signing_key = config.block_signing_key().unwrap();
-    let (state, _genesis_txs, _) =
-        build_genesis_state(&signing_key, &config, Some(bootstrap_sequencer_key));
+    let (state, _genesis_txs, _) = build_genesis_state(&config, Some(bootstrap_sequencer_key));
 
     let stake_account = state.get_account_by_id(bootstrap_stake_account_id(&config));
     assert!(
@@ -4550,9 +4545,7 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
 fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let signing_key = config.block_signing_key().unwrap();
-    let (mut state, _genesis_txs, _) =
-        build_genesis_state(&signing_key, &config, Some(bootstrap_sequencer_key));
+    let (mut state, _genesis_txs, _) = build_genesis_state(&config, Some(bootstrap_sequencer_key));
 
     let stake_id = bootstrap_stake_account_id(&config);
     let destination = AccountId::from(&PublicKey::new_from_private_key(
@@ -5460,8 +5453,7 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
     let mut config = setup_sequencer_config();
     config.home = temp_dir.path().to_path_buf();
     let key = test_bootstrap_sequencer_key(&config);
-    let signing_key = config.block_signing_key().unwrap();
-    let (state, txs, _) = build_genesis_state(&signing_key, &config, Some(key));
+    let (state, txs, _) = build_genesis_state(&config, Some(key));
     assert!(
         !txs.iter()
             .any(|tx| cross_zone_ids.contains(&tx_program(tx))),
@@ -5480,8 +5472,7 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
         source_governance: None,
     });
     let key = test_bootstrap_sequencer_key(&config);
-    let signing_key = config.block_signing_key().unwrap();
-    let (state, txs, _) = build_genesis_state(&signing_key, &config, Some(key));
+    let (state, txs, _) = build_genesis_state(&config, Some(key));
     let cross_zone_txs: Vec<_> = txs
         .iter()
         .map(tx_program)
