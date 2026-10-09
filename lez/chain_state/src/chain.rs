@@ -160,11 +160,26 @@ impl ChainState {
     }
 
     /// The first view entry not chained on the one before it, or on
-    /// `final_msg` for the first.
+    /// `final_msg` for the first. Entries the tier already holds are skipped.
     #[must_use]
     pub fn check_for_gaps_in_lineage(&self) -> Option<&ChannelEntry> {
-        let mut parent = self.final_msg;
-        self.view.iter().find(|entry| {
+        let final_id = self.final_tip.as_ref().map(|tip| tip.block_id);
+        let settled = |entry: &ChannelEntry| {
+            entry
+                .block
+                .as_ref()
+                .is_some_and(|block| final_id.is_some_and(|id| block.header.block_id <= id))
+        };
+        let start = self
+            .view
+            .iter()
+            .position(|entry| !settled(entry))
+            .unwrap_or(self.view.len());
+        // The first kept entry chains on the last skipped one, not on `final_msg`.
+        let mut parent = start
+            .checked_sub(1)
+            .map_or(self.final_msg, |prev| self.view[prev].msg);
+        self.view[start..].iter().find(|entry| {
             let gap = entry.parent != parent;
             parent = entry.msg;
             gap
@@ -731,6 +746,37 @@ mod tests {
         let mut chain = ChainState::new(claimed_initial_state());
         chain.apply_extension(vec![entries[0].clone(), entry(9, entries[0].msg, None)]);
         assert!(chain.check_for_gaps_in_lineage().is_none());
+    }
+
+    #[test]
+    fn a_conflict_seating_already_final_entries_is_no_lineage_gap() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(4);
+        finalize_all(&mut chain, &blocks[..3]);
+
+        chain.apply_conflict(entries_for(&blocks));
+
+        assert!(chain.check_for_gaps_in_lineage().is_none());
+    }
+
+    #[test]
+    fn a_gap_above_already_final_entries_is_still_found() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(4);
+        finalize_all(&mut chain, &blocks[..2]);
+        let entries = entries_for(&blocks);
+
+        // Entry 3 is missing.
+        chain.apply_conflict(vec![
+            entries[0].clone(),
+            entries[1].clone(),
+            entries[3].clone(),
+        ]);
+
+        assert_eq!(
+            chain.check_for_gaps_in_lineage().map(|entry| entry.msg),
+            Some(entries[3].msg)
+        );
     }
 
     #[test]
