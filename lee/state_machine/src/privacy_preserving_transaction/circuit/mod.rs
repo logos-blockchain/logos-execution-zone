@@ -144,6 +144,7 @@ impl ProgramCatalog {
     }
 }
 
+/// Public states assumed for simulation purposes of a private part of a transaction.
 #[derive(Default)]
 pub struct Simulation {
     pub public_actor_states: HashMap<Actor, ActorState>,
@@ -151,6 +152,7 @@ pub struct Simulation {
     pub admitted_accounts: Option<BTreeSet<AccountId>>,
 }
 
+/// A recorder deriving the presentations of private senders.
 struct SenderPresentationRecorder<'present> {
     choose: &'present mut dyn FnMut(Actor) -> Option<SenderPresentation>,
     recorded: Vec<SenderPresentation>,
@@ -165,12 +167,14 @@ impl SenderPresentationRecorder<'_> {
     }
 }
 
+/// A selector of which asynchronous messages will be delivered atomically.
 struct CastPromotionSelector<'select> {
     select: &'select mut dyn FnMut(Placement, &MessageBody) -> bool,
     from_public: PromotionSelection,
     from_private: PromotionSelection,
 }
 
+/// The selection of casts to be delivered atomically and which are left.
 struct PromotionSelection {
     remaining_requested: BTreeSet<u64>,
     selected: BTreeSet<u64>,
@@ -192,6 +196,7 @@ impl PromotionSelection {
     }
 }
 
+/// A simulator recording the data for private execution by running thins in plaintext.
 struct Simulator<'input> {
     programs: &'input HashMap<AccountId, Dependency>,
     public_actor_states: &'input HashMap<Actor, ActorState>,
@@ -261,6 +266,7 @@ impl ExecutionEnvironment for Simulator<'_> {
     }
 }
 
+/// The prover handling the generation of the proof of a private part of a transaction.
 struct Prover<'programs> {
     programs: &'programs HashMap<AccountId, Dependency>,
     env_builder: ExecutorEnvBuilder<'static>,
@@ -339,6 +345,7 @@ pub fn execute_and_prove(
     mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
     mut choose_seal: impl FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
+    // Build a simulator to generate the parameters to generate the proof with.
     let mut simulator = Simulator {
         programs: &programs.programs,
         public_actor_states: &simulation.public_actor_states,
@@ -355,6 +362,9 @@ pub fn execute_and_prove(
         cycle_budget: DEFAULT_PUBLIC_CYCLE_BUDGET,
         cycles_used: 0,
     };
+
+    // Given the initial context and top level call, simulate a whole transaction and record
+    // predicted public-private messages.
     let predicted_cross_messages = WholeTransaction::new(
         input.context.clone(),
         input.root.clone().map(|witness| witness.body),
@@ -369,6 +379,7 @@ pub fn execute_and_prove(
     input.private_cast_promotions = selector.from_private.finish()?;
     let recorded = input.private_cast_promotions.clone();
     let mut presented = recorder.recorded.into_iter();
+    // Given the simulated outputs, use them to prove the private part of the transaction.
     prove(
         input,
         predicted_cross_messages,

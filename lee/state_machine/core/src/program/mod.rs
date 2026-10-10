@@ -264,6 +264,7 @@ impl AccountId {
     }
 }
 
+/// A message with source and target.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct MessageEnvelope<S> {
     pub from: S,
@@ -273,13 +274,16 @@ pub struct MessageEnvelope<S> {
 
 pub type MessageBody = MessageEnvelope<Actor>;
 
+/// A publication mode for asynchronous messages.
 #[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
 pub enum Publication {
+    /// A message whose contents are hidden other than the private receiver.
     Clear {
         body: MessageBody,
         recovery: EncryptedNote,
     },
+    /// A message whose contents and metadata are shielded.
     Sealed(SealedCast),
 }
 
@@ -293,6 +297,7 @@ impl Publication {
     }
 }
 
+/// A synchronous message processed in the same transaction it was emitted in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct Call {
     pub to: Actor,
@@ -316,6 +321,7 @@ impl Call {
     }
 }
 
+/// An asynchronous message that can be processed in a separate transaction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct Cast {
     pub to: Actor,
@@ -347,15 +353,19 @@ impl Sendable for Cast {
     }
 }
 
-/// The scheduled input of one transition, echoed whole in the journal.
+/// The info each actor sees when processing a message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ReceiveInput {
+    /// Actor processing the message.
     pub receiver: Actor,
     /// The actor that sent this message, at the address it presented; `None` when the transaction
     /// itself submitted it.
     pub from: Option<Actor>,
+    /// Input is authorized when signed by the receiver or authorized by owning program.
     pub is_authorized: bool,
+    /// State the actor starts with at the beginning of the message handling.
     pub pre_state: ActorState,
+    /// The message received.
     pub message: MessageData,
 }
 
@@ -381,6 +391,7 @@ impl From<&ReceiveInput> for StateReply {
     }
 }
 
+/// An i/o pair representing actor processing a given message.
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 #[must_use = "a Transition does nothing unless committed"]
@@ -395,15 +406,18 @@ impl Transition {
     }
 }
 
-/// What a handler returns. `None` keeps the actor state, empty data clears it, other data replaces
-/// it.
+/// Output of actors after processing a message.
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 #[must_use]
 pub struct Response {
+    /// A possible new state of the actor.
     pub post_state: Option<ActorState>,
+    /// The synchronous messages emitted by the actor.
     pub calls: Vec<Call>,
+    /// Asynchronous message emitted by the actor.
     pub casts: Vec<Cast>,
+    /// Events emitted by the actor.
     pub events: Vec<ProgramEvent>,
     pub validity: ValidityWindows,
 }

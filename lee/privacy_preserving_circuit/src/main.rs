@@ -57,6 +57,7 @@ fn main() {
         );
     }
 
+    // Extract the top-level message and whether it is a consumed cast.
     let (root, message_spend) = match root {
         TransactionEntry::Call(call) => (TransactionEntry::Call(call), None),
         TransactionEntry::Cast(witness) => {
@@ -69,19 +70,32 @@ fn main() {
             )
         }
     };
+
+    // Generate the private part of the transaction.
     let private_part = PrivatePart::new(
+        // Feed the public context assumed.
         context.clone(),
+        // The top-level message.
         root,
+        // All the private actor witnesses.
         &private_witnesses,
+        // Assumed messages between private and public actors.
         predicted_cross_messages,
     )
     .unwrap_or_else(|e| panic!("{e}"));
+
+    // Generate the backend to execute,
     let mut backend = PrivateBackend::new(
         image_id_by_account_id,
+        // Feed the precomputed actor responces.
         responses,
+        // Feed the presentations of the hidden accounts.
         sender_presentations,
+        // Feed which casts will be processed synchronously.
         private_cast_promotions,
     );
+
+    // Execute the private part of the transaction.
     let outcome = private_part
         .execute(&mut backend)
         .unwrap_or_else(|e| panic!("{e}"));

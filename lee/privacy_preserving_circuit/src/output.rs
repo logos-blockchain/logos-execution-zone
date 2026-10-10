@@ -54,6 +54,7 @@ pub fn compute_circuit_output(
             .push(private_action(witness, post_data, ciphertext_padding));
     }
 
+    // Pad the output with dummy commitment/nullifier pairs.
     let padding = dummy_inputs.into_iter().map(|dummy| {
         (
             (
@@ -63,6 +64,8 @@ pub fn compute_circuit_output(
             dummy.output,
         )
     });
+
+    // If a message is consumed, pad its nullifier with a dummy commitment.
     for (spend, filler) in message_spend.into_iter().chain(padding) {
         emit_dummy_output(&mut output, spend, filler, ciphertext_padding);
     }
@@ -127,6 +130,7 @@ fn emit_dummy_output(
     });
 }
 
+/// Generate a private action given old and new account data.
 fn private_action(
     witness: &PrivateWitness,
     post_data: AccountData,

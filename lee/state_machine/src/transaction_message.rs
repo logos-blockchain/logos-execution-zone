@@ -28,11 +28,16 @@ impl PublicAccountEvidence {
     }
 }
 
+/// Message processed by the sequencer.
 #[derive(Debug, Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct TransactionMessage<P> {
+    /// The public context of the execution.
     pub context: PublicExecutionContext,
+    /// Context specific to the execution.
     pub execution: P,
+    /// Nonces of public accounts used.
     pub nonces: BTreeMap<AccountId, Nonce>,
+    /// Evidence to show that claimed public accounts are indeed public.
     pub admission_evidence: Vec<PublicAccountEvidence>,
 }
 

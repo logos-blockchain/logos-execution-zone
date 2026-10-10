@@ -13,6 +13,7 @@ use crate::{
     },
 };
 
+/// The wrapper carrying metadata of the top-level message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub enum TransactionEntry<R> {
     Call(RootCall),
@@ -39,6 +40,7 @@ impl TransactionEntry<MessageBody> {
     }
 }
 
+/// The public context representation of the private transaction part proof.
 #[derive(Clone, Default, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub struct PublicExecutionContext {
@@ -65,40 +67,57 @@ impl PublicExecutionContext {
     }
 }
 
+/// An execution environment running the entire message passing through
+/// public and private actors.
 pub struct WholeTransaction<'witnesses> {
     execution: Execution<'witnesses, WholeScope>,
     scope: WholeScope,
 }
 
+/// An execution environment running only the private message passings
+/// given the assumed public context.
 pub struct PrivatePart<'witnesses> {
     execution: Execution<'witnesses, PrivateScope>,
     scope: PrivateScope,
 }
 
+/// An execution environment running only the public message passings
+/// given the assumed private deliveries.
 pub struct PublicPart {
     execution: Execution<'static, PublicScope>,
     scope: PublicScope,
 }
 
+/// The outcome of public actor message-passing.
 pub struct PublicOutcome {
     pub validity: ValidityWindows,
+    /// Resulting public account post-states.
     pub accounts: BTreeMap<AccountId, AccountData>,
+    /// Emitted events in the course of execution.
     pub events: Vec<(Actor, ProgramEvent)>,
+    /// Emitted casts in the course of execution.
     pub casts: Vec<MessageBody>,
 }
 
+/// Outcome for proving a private or hybrid transaction.
 pub struct WholeTransactionOutcome {
     pub public: PublicOutcome,
+    /// Predicted messages between private and public actors.
     pub predicted_cross_messages: PredictedCrossMessages,
 }
 
+/// Outcomes of private message-passing.
 pub struct PrivatePartOutcome {
     pub validity: ValidityWindows,
+    /// Resulting private account post-states.
     pub private_accounts: HashMap<AccountId, AccountData>,
+    /// Recording of passing messages between private and public actors.
     pub boundary: Boundary,
+    /// Emitted casts in the course of execution.
     pub casts: Vec<MessageBody>,
 }
 
+/// A message envelope with an authorization context.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct Delivery<S> {
     pub envelope: MessageEnvelope<S>,
@@ -107,6 +126,7 @@ pub struct Delivery<S> {
     pub pda_seeds: BTreeSet<PdaSeed>,
 }
 
+/// A record of message passing context between private and public actors.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub enum BoundaryStep {
     PrivateToPublic(Delivery<Actor>),
@@ -160,6 +180,7 @@ pub trait ExecutionEnvironment {
     }
 }
 
+/// A view of accounts at the point of message handling by the execution environment.
 pub struct TransitionView<'execution> {
     accounts: &'execution HashMap<AccountId, AccountEntry>,
     at_root: bool,
@@ -294,8 +315,11 @@ impl AccountEntry {
     }
 }
 
+/// Designates the work the executor is tasked with.
 enum Item<C> {
+    /// Process a delivered message.
     Deliver(Box<Delivery<Sender>>),
+    /// Finalize an execution subtree and resume the next branch.
     Resume(C),
 }
 
@@ -374,20 +398,26 @@ impl Delivery<Sender> {
     }
 }
 
+/// An engine running scoped execution.
 struct Execution<'witnesses, S: Scope> {
     witnesses: &'witnesses [PrivateWitness],
     context: PublicExecutionContext,
     accounts: HashMap<AccountId, AccountEntry>,
+    /// The hidden private addresses.
     aliases: HashMap<AccountId, AccountId>,
     pda_family_binding: HashMap<(AccountId, PdaSeed), AccountId>,
+    /// Pending items of execution tasks.
     pending: Vec<Item<S::Continuation>>,
     validity: ValidityWindows,
     events: Vec<(Actor, ProgramEvent)>,
     casts: Vec<MessageBody>,
+    /// Indices of casts to be executed as calls.
     candidates: Candidates,
+    /// Established public accounts.
     admitted: HashSet<AccountId>,
 }
 
+/// Positions of casts to be executed in the given transaction.
 #[derive(Default)]
 struct Candidates {
     public: u64,
@@ -447,9 +477,13 @@ trait Scope: Sized {
     fn finish(self, execution: Execution<'_, Self>) -> Result<Self::Outcome, ExecutionError>;
 }
 
+/// The scope for the whole transaction includes predicted messages between private and
+/// public actors as well as indexing of message groups processed publicly.
 #[derive(Default)]
 struct WholeScope {
+    /// Messages delivered between public and private actors.
     predicted_cross_messages: PredictedCrossMessages,
+    /// Recorded entrances into public message-passing environment.
     open: Vec<usize>,
 }
 
@@ -457,9 +491,15 @@ enum WholeContinuation {
     EndPublicSubtree,
 }
 
+/// The scope for private executions includes the prediced messages coming into
+/// the private environment, alongside the next grouping to be processed and the
+/// emitted boundary for the public side to consume.
 struct PrivateScope {
+    /// Messages coming into the private environment.
     predicted_cross_messages: PredictedCrossMessages,
+    /// The index of the execution group to process.
     next_group: usize,
+    /// The emitted boundary constructed in the process.
     boundary: Boundary,
 }
 
@@ -468,8 +508,12 @@ enum PrivateContinuation {
     EndPrivateSubtree,
 }
 
+/// The scope for public execution has the entire boundary between private and public
+/// actors and the cursor which boundary step to process.
 struct PublicScope {
+    /// The public-private boundary communication.
     boundary: Boundary,
+    /// Which boundary to process.
     cursor: usize,
 }
 

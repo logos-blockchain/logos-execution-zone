@@ -13,21 +13,26 @@ use crate::{
 const PLAINTEXT_LEN: usize = 32 + PrivateAccountKind::HEADER_LEN + 1 + 32;
 const KEY_DOMAIN: &[u8; 29] = b"LEE/v0.3/KDF-SHA256/Recovery/";
 
+/// Private recipient of a message.
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub struct Recipient {
     pub npk: NullifierPublicKey,
     pub vpk: ViewingPublicKey,
     pub kind: PrivateAccountKind,
+    /// Blinding factor.
     pub opening: Option<[u8; 32]>,
 }
 
+/// Material to produce an encryption ciphertext.
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub struct RecipientEncryption {
     pub recipient: Recipient,
+    /// The ephemeral key for ciphertext production.
     pub esk: EphemeralSecretKey,
 }
 
+/// Binding allowing to recover a blinded address for the appropriate key owner.
 #[derive(BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
 pub struct RecoveryBinding {

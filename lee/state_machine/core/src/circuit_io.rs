@@ -110,16 +110,23 @@ pub struct ShadowProgramWitness {
     pub image_id: ProgramId,
 }
 
+/// Struct carrying all data for shielded message claiming.
 #[derive(BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
 pub struct MessageWitness {
+    /// Plaintext of the message.
     pub body: MessageBody,
+    /// Leaf position of the commitment to the message.
     pub position: u64,
+    /// Blinding factor.
     pub rho: Option<[u8; 32]>,
+    /// Path to the commitment in the tree.
     pub path: Vec<[u8; 32]>,
+    /// Dummy commitment to hide the message consumption as opposed to state change.
     pub filler: DummyOutput,
 }
 
+/// Struct corresponding to a top-level message initiating a transaction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct RootCall {
     pub to: Actor,
@@ -137,19 +144,25 @@ pub enum InvalidMessageEvidence {
 /// Inputs for proving a transaction's private part.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct ProvingInput {
+    /// Top level initial message starting a transaction.
     pub root: TransactionEntry<MessageWitness>,
+    /// Assumptions on the public environment context for the proof.
     pub context: PublicExecutionContext,
     /// One witness for each private account used by the transaction.
     pub private_witnesses: Vec<PrivateWitness>,
+    /// Dummy inputs to obfuscate transaction data.
     pub dummy_inputs: Vec<DummyInput>,
     /// Minimum length of each note the guest encrypts, capped at `MAX_CIPHERTEXT_PADDING`.
     /// `dummy_inputs` carry their own ciphertexts and are checked against it, not padded.
     pub ciphertext_padding: Option<u32>,
+    /// Data to construct notes for asynchronous messages to private actors.
     pub recoveries: Vec<RecipientEncryption>,
+    /// Indices of private casts in order of execution which the environment will execute as calls.
     pub private_cast_promotions: BTreeSet<u64>,
 }
 
 impl ProvingInput {
+    /// If a root message is public, return it.
     #[must_use]
     pub fn public_root(&self) -> Option<RootCall> {
         match &self.root {
@@ -201,26 +214,28 @@ pub struct PrivacyPreservingCircuitInput {
     pub program_image_witnesses: Vec<ProgramImageWitness>,
     /// Identities of every shadow program invoked in the call graph.
     pub shadow_program_witnesses: Vec<ShadowProgramWitness>,
+    /// Actor responses to messages processed in-guest.
     pub responses: Vec<Response>,
-    /// Per private transition: Calls other than replies to `input.from`, then every Cast, in
-    /// their respective vector orders before descendants execute. Call replies preserve the
-    /// reached address and consume no entry. Public emissions consume none. Missing or surplus
-    /// entries are rejected.
+    /// Specifying whether a private sender is represented in plaintext or blinded.
     pub sender_presentations: Vec<SenderPresentation>,
     /// One per durable Cast of private execution, in the order it publishes them.
     pub cast_seals: Vec<RecipientEncryption>,
+    /// Predicted messages sent between public and private actors.
     pub predicted_cross_messages: PredictedCrossMessages,
 }
 
+/// Witness data for consuming a private account.
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub struct PrivateWitness {
     pub vpk: ViewingPublicKey,
     pub random_seed: [u8; 32],
     pub kind: WitnessKind,
     pub nullifier: NullifierWitness,
+    /// Blinding factors used for private execution.
     pub openings: BTreeSet<[u8; 32]>,
 }
 
+/// Struct representing a presentation of a private sender address.
 #[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub enum SenderPresentation {
@@ -241,8 +256,7 @@ pub enum WitnessKind {
     },
 }
 
-/// The key a regular private account's witness holds: an authorization key also authorizes the
-/// account's spending, a nullifier key only proves control of its state.
+/// The key a regular private account's witness holds.
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub enum RegularKey {
     Authorized(AuthorizationSecretKey),
@@ -413,18 +427,24 @@ pub struct PrivateAction {
     derive(Debug, Clone, PartialEq, Eq, Default)
 )]
 pub struct PrivacyPreservingCircuitOutput {
+    /// Assumed public context of the proof.
     pub context: PublicExecutionContext,
+    /// Results of private actor transitions.
     pub execution: ProvenExecution,
 }
 
+/// Struct representing transaction's private part.
 #[derive(BorshSerialize, BorshDeserialize)]
 #[cfg_attr(
     any(feature = "host", test),
     derive(Debug, Clone, PartialEq, Eq, Default)
 )]
 pub struct ProvenExecution {
+    /// A vector designating messages passing private-public boundary in either direction.
     pub boundary: Boundary,
+    /// The sealed asynchronous messages between private actors.
     pub casts: Vec<SealedCast>,
+    /// Bindings tying an address to the private account behind it.
     pub recovery_bindings: Vec<RecoveryBinding>,
     /// How the transaction starts, as far as the proof reveals it: a public Call, or `None` for a
     /// private Call or a received message, whose spend is an ordinary private action.
