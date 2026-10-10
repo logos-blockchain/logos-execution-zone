@@ -1,5 +1,3 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
-
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
@@ -10,6 +8,7 @@ use lee_core::{
         get_program_via, immutable_mirror_commitment,
     },
 };
+use rpds::{HashTrieMapSync, HashTrieSetSync, RedBlackTreeSetSync};
 
 use crate::{
     error::LeeError,
@@ -24,8 +23,16 @@ use crate::{
 #[cfg_attr(test, derive(Debug))]
 pub struct CommitmentSet {
     merkle_tree: MerkleTree,
-    commitments: HashMap<Commitment, usize>,
-    root_history: HashSet<CommitmentSetDigest>,
+    #[borsh(
+        serialize_with = "crate::encoding::persistent::serialize_map",
+        deserialize_with = "crate::encoding::persistent::deserialize_map"
+    )]
+    commitments: HashTrieMapSync<Commitment, usize>,
+    #[borsh(
+        serialize_with = "crate::encoding::persistent::serialize_set",
+        deserialize_with = "crate::encoding::persistent::deserialize_set"
+    )]
+    root_history: HashTrieSetSync<CommitmentSetDigest>,
 }
 
 impl CommitmentSet {
@@ -46,9 +53,9 @@ impl CommitmentSet {
     pub(crate) fn extend(&mut self, commitments: &[Commitment]) {
         for commitment in commitments.iter().copied() {
             let index = self.merkle_tree.insert(commitment.to_byte_array());
-            self.commitments.insert(commitment, index);
+            self.commitments.insert_mut(commitment, index);
         }
-        self.root_history.insert(self.digest());
+        self.root_history.insert_mut(self.digest());
     }
 
     fn contains(&self, commitment: &Commitment) -> bool {
@@ -61,23 +68,25 @@ impl CommitmentSet {
     pub(crate) fn with_capacity(capacity: usize) -> Self {
         Self {
             merkle_tree: MerkleTree::with_capacity(capacity),
-            commitments: HashMap::new(),
-            root_history: HashSet::new(),
+            commitments: HashTrieMapSync::new_sync(),
+            root_history: HashTrieSetSync::new_sync(),
         }
     }
 }
 
 #[cfg_attr(test, derive(Debug))]
 #[derive(Clone, PartialEq, Eq)]
-struct NullifierSet(BTreeSet<Nullifier>);
+struct NullifierSet(RedBlackTreeSetSync<Nullifier>);
 
 impl NullifierSet {
-    const fn new() -> Self {
-        Self(BTreeSet::new())
+    fn new() -> Self {
+        Self(RedBlackTreeSetSync::new_sync())
     }
 
     fn extend(&mut self, new_nullifiers: &[Nullifier]) {
-        self.0.extend(new_nullifiers);
+        for nullifier in new_nullifiers {
+            self.0.insert_mut(*nullifier);
+        }
     }
 
     fn contains(&self, nullifier: &Nullifier) -> bool {
@@ -95,14 +104,15 @@ impl BorshDeserialize for NullifierSet {
     fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let vec = Vec::<Nullifier>::deserialize_reader(reader)?;
 
-        let mut set = BTreeSet::new();
+        let mut set = RedBlackTreeSetSync::new_sync();
         for n in vec {
-            if !set.insert(n) {
+            if set.contains(&n) {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "duplicate nullifier in NullifierSet",
                 ));
             }
+            set.insert_mut(n);
         }
 
         Ok(Self(set))
@@ -112,7 +122,11 @@ impl BorshDeserialize for NullifierSet {
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(test, derive(Debug))]
 pub struct V03State {
-    public_state: HashMap<AccountId, Account>,
+    #[borsh(
+        serialize_with = "crate::encoding::persistent::serialize_map",
+        deserialize_with = "crate::encoding::persistent::deserialize_map"
+    )]
+    public_state: HashTrieMapSync<AccountId, Account>,
     private_state: (CommitmentSet, NullifierSet),
 }
 
@@ -124,7 +138,7 @@ impl Default for V03State {
         let private_state = (commitment_set, nullifier_set);
 
         Self {
-            public_state: HashMap::default(),
+            public_state: HashTrieMapSync::new_sync(),
             private_state,
         }
     }
@@ -148,10 +162,10 @@ impl V03State {
         mut self,
         balances: impl IntoIterator<Item = (AccountId, u128)>,
     ) -> Self {
-        let public_accounts = balances
-            .into_iter()
-            .map(|(account_id, balance)| (account_id, Account::funded(balance)));
-        self.public_state.extend(public_accounts);
+        for (account_id, balance) in balances {
+            self.public_state
+                .insert_mut(account_id, Account::funded(balance));
+        }
         self
     }
 
@@ -161,7 +175,9 @@ impl V03State {
         mut self,
         public_accounts: impl IntoIterator<Item = (AccountId, Account)>,
     ) -> Self {
-        self.public_state.extend(public_accounts);
+        for (account_id, account) in public_accounts {
+            self.public_state.insert_mut(account_id, account);
+        }
         self
     }
 
@@ -245,7 +261,8 @@ impl V03State {
                 )
                 .expect("segment fits under DATA_MAX_LENGTH"),
             );
-            self.public_state.insert(segment_account_ids[i], segment);
+            self.public_state
+                .insert_mut(segment_account_ids[i], segment);
         }
 
         let program_header = ProgramHeader {
@@ -258,7 +275,7 @@ impl V03State {
             ShardData::try_from(program_header.to_bytes())
                 .expect("program header fits under DATA_MAX_LENGTH"),
         );
-        self.public_state.insert(header_account_id, header);
+        self.public_state.insert_mut(header_account_id, header);
 
         if immutable {
             let commitment = immutable_mirror_commitment(header_account_id, &program_header);
@@ -280,7 +297,7 @@ impl V03State {
             reason = "Iteration order doesn't matter here"
         )]
         for (account_id, account) in public_diff {
-            *self.get_account_by_id_mut(account_id) = account;
+            self.public_state.insert_mut(account_id, account);
         }
         for account_id in signer_account_ids {
             self.get_account_by_id_mut(account_id)
@@ -315,7 +332,12 @@ impl V03State {
     }
 
     fn get_account_by_id_mut(&mut self, account_id: AccountId) -> &mut Account {
-        self.public_state.entry(account_id).or_default()
+        if !self.public_state.contains_key(&account_id) {
+            self.public_state.insert_mut(account_id, Account::default());
+        }
+        self.public_state
+            .get_mut(&account_id)
+            .expect("the account was just inserted")
     }
 
     #[must_use]
@@ -371,8 +393,7 @@ impl V03State {
     /// (base builtins plus any directly-seeded accounts) separately from their own
     /// configs, so a divergence there would otherwise go unnoticed. Both nodes log
     /// this at startup; equal values mean the two genesis states agree. Entries are
-    /// sorted by id before hashing, so the value does not depend on `HashMap`
-    /// iteration order.
+    /// sorted by id before hashing, so the value does not depend on iteration order.
     #[must_use]
     pub fn genesis_fingerprint(&self) -> [u8; 32] {
         use sha2::{Digest as _, Sha256};
@@ -442,7 +463,7 @@ impl V03State {
 #[cfg(any(test, feature = "test-utils"))]
 impl V03State {
     pub fn force_insert_account(&mut self, account_id: AccountId, account: Account) {
-        self.public_state.insert(account_id, account);
+        self.public_state.insert_mut(account_id, account);
     }
 }
 

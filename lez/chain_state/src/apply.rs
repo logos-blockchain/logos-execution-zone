@@ -28,7 +28,7 @@ use crate::{
 
 /// The parent the next block must chain on.
 // `l1_slot` will be added here when the `ChainState` anchor layer lands.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tip {
     pub block_id: u64,
     pub hash: HashType,

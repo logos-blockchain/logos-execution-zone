@@ -6,12 +6,10 @@ fn new_works() {
     let key2 = PrivateKey::try_new([2; 32]).unwrap();
     let addr1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
     let addr2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
-    let expected_public_state = {
-        let mut this = HashMap::new();
-        this.insert(addr1, Account::funded(100));
-        this.insert(addr2, Account::funded(151));
-        this
-    };
+    let expected_public_state: rpds::HashTrieMapSync<_, _> =
+        [(addr1, Account::funded(100)), (addr2, Account::funded(151))]
+            .into_iter()
+            .collect();
     let state =
         V03State::new().with_public_account_balances([(addr1, 100_u128), (addr2, 151_u128)]);
 
