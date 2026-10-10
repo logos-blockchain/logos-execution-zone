@@ -301,10 +301,13 @@ impl<S: StorageActorTrait> Message<Propose> for SlasherActor<S> {
             let Some(entry) = self.config.entries.get(&offence.offender) else {
                 continue;
             };
-            let approvals = self.approvals_for(offence, &self.config);
+            let mut approvals = self.approvals_for(offence, &self.config);
             if approvals.len() < threshold {
                 continue;
             }
+            // A threshold's worth is all `Slash` needs; each extra costs a signature check in the
+            // guest without adding authority. This node's own approval comes first and stays.
+            approvals.truncate(threshold);
             match build_slash_tx(entry.account_id, offence, approvals, entry.total_staked) {
                 Ok(tx) => {
                     proposed.push(tx);
@@ -736,6 +739,38 @@ mod tests {
         let proposed = propose(&slasher, committee()).await;
 
         assert_eq!(approvals_in(&proposed), vec![approver(), peer()]);
+    }
+
+    #[tokio::test]
+    async fn a_slash_carries_only_a_threshold_of_approvals() {
+        const MORE_PEER_SECRETS: [[u8; 32]; 2] = [[8; 32], [9; 32]];
+        let more_peers = MORE_PEER_SECRETS.map(|secret| {
+            SequencerKey::new(Ed25519Key::from_bytes(&secret).public_key().to_bytes())
+                .expect("valid key")
+        });
+        // Six keys: the threshold is four, and five of them (all but the offender) approve.
+        let committee = config_staking(&[
+            approver(),
+            offender(),
+            peer(),
+            second_peer(),
+            more_peers[0],
+            more_peers[1],
+        ]);
+        let slasher = slasher(approver_signing_key()).await;
+        refresh(&slasher, committee.clone()).await;
+        report(&slasher, vec![signed_by_offender(INSCRIPTION)]).await;
+        for secret in [PEER_SECRET, SECOND_PEER_SECRET]
+            .into_iter()
+            .chain(MORE_PEER_SECRETS)
+        {
+            send(&slasher, peer_approval(secret, INSCRIPTION)).await;
+        }
+
+        let approvals = approvals_in(&propose(&slasher, committee).await);
+
+        assert_eq!(approvals.len(), 4, "exactly a threshold of approvals");
+        assert_eq!(approvals[0], approver(), "this node's own approval stays");
     }
 
     #[tokio::test]
