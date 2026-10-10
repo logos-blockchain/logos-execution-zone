@@ -1,115 +1,81 @@
 use lee_core::{
-    Commitment, CommitmentSetDigest, DummyInput, EncryptedAccountData, EncryptionScheme,
-    EphemeralSecretKey, MembershipProof, Nullifier, NullifierSecretKey, NullifierWitness,
-    PrivacyPreservingCircuitOutput, PrivateAccountKind, PrivateAction, PrivateWitness,
-    ProgramImageClaim, SharedSecretKey, WitnessKind,
-    account::{Account, AccountId, Nonce},
-    compute_digest_for_path,
-    encryption::{ViewTag, ViewingPublicKey},
-    execution_state::{DeferPublicEffects, ExecutionOutcome},
+    Commitment, CommitmentSetDigest, DummyInput, DummyOutput, EncryptedNote, EncryptionScheme,
+    EphemeralSecretKey, ML_KEM_768_CIPHERTEXT_LEN, Nullifier, PrivacyPreservingCircuitOutput,
+    PrivateAction, PrivateWitness, ProgramImageClaim, ProvenExecution, RecipientEncryption,
+    RootCall, SharedSecretKey,
+    account::{Account, AccountData},
+    execution_state::{PrivatePartOutcome, PublicExecutionContext},
 };
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Each input is a distinct part of the journal; bundling would be artificial"
+)]
 pub fn compute_circuit_output(
-    outcome: ExecutionOutcome<DeferPublicEffects>,
+    outcome: PrivatePartOutcome,
+    context: PublicExecutionContext,
+    public_root: Option<RootCall>,
     private_witnesses: &[PrivateWitness],
+    message_spend: Option<((Nullifier, CommitmentSetDigest), DummyOutput)>,
     dummy_inputs: Vec<DummyInput>,
     ciphertext_padding: Option<u32>,
     program_image_claims: Vec<ProgramImageClaim>,
+    recoveries: &[RecipientEncryption],
+    cast_seals: Vec<RecipientEncryption>,
 ) -> PrivacyPreservingCircuitOutput {
-    let ExecutionOutcome {
-        block_validity_window,
-        timestamp_validity_window,
-        public: public_actions,
+    let PrivatePartOutcome {
+        validity,
         mut private_accounts,
+        boundary,
+        casts,
     } = outcome;
-    let mut output = PrivacyPreservingCircuitOutput {
-        public_actions,
+    let casts = lee_core::seal_casts(&casts, cast_seals, ciphertext_padding)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let mut output = ProvenExecution {
+        boundary,
+        casts,
+        recovery_bindings: recoveries
+            .iter()
+            .map(RecipientEncryption::bind_recovery)
+            .collect(),
+        public_root,
         private_actions: Vec::new(),
-        block_validity_window,
-        timestamp_validity_window,
+        validity,
         program_image_claims,
     };
 
-    // Emit one action per private account, covering all its shards.
+    // Emit one action per private account, covering all its actor states.
     for witness in private_witnesses {
-        let PrivateWitness {
-            vpk,
-            random_seed,
-            identifier,
-            kind,
-            nullifier,
-        } = witness;
-        let account_id = witness.account_id();
-        let post_data = private_accounts.remove(&account_id).expect(
-            "initialize admits only root witnesses and finish emits every root private account",
+        let post_data = private_accounts.remove(&witness.account_id()).expect(
+            "every witness is declared as a private account and the private part emits each one",
         );
-
-        let (new_nullifier, new_nonce, view_tag) = match nullifier {
-            NullifierWitness::Init {
-                npk,
-                commitment_root,
-            } => (
-                (
-                    Nullifier::for_account_initialization(&account_id),
-                    *commitment_root,
-                ),
-                Nonce::private_account_nonce_init(&account_id),
-                EncryptedAccountData::compute_view_tag(npk, vpk),
-            ),
-            NullifierWitness::Update {
-                account,
-                view_tag,
-                nsk,
-                membership_proof,
-            } => (
-                compute_update_nullifier_and_set_digest(
-                    membership_proof,
-                    account,
-                    &account_id,
-                    nsk,
-                ),
-                account.nonce.private_account_nonce_increment(nsk),
-                *view_tag,
-            ),
-        };
-
-        let account_kind = match kind {
-            WitnessKind::Regular { .. } => PrivateAccountKind::Regular(*identifier),
-            WitnessKind::Pda {
-                binding: (program, seed),
-            } => PrivateAccountKind::Pda {
-                account_id: *program,
-                seed: *seed,
-                identifier: *identifier,
-            },
-        };
-
-        emit_private_output(
-            &mut output,
-            &Account {
-                nonce: new_nonce,
-                data: post_data,
-            },
-            &account_id,
-            &account_kind,
-            view_tag,
-            vpk,
-            random_seed,
-            new_nullifier,
-            ciphertext_padding,
-        );
+        output
+            .private_actions
+            .push(private_action(witness, post_data, ciphertext_padding));
     }
 
-    for dummy in dummy_inputs {
-        emit_dummy_output(&mut output, dummy, ciphertext_padding);
+    let padding = dummy_inputs.into_iter().map(|dummy| {
+        (
+            (
+                Nullifier::for_dummy(&dummy.nullifier_seed),
+                dummy.commitment_root,
+            ),
+            dummy.output,
+        )
+    });
+    for (spend, filler) in message_spend.into_iter().chain(padding) {
+        emit_dummy_output(&mut output, spend, filler, ciphertext_padding);
     }
 
     obfuscate_output_ordering(&mut output);
 
-    output
+    PrivacyPreservingCircuitOutput {
+        context,
+        execution: output,
+    }
 }
 
-fn obfuscate_output_ordering(output: &mut PrivacyPreservingCircuitOutput) {
+fn obfuscate_output_ordering(output: &mut ProvenExecution) {
     let mut commitments: Vec<_> = output
         .private_actions
         .iter()
@@ -127,21 +93,26 @@ fn obfuscate_output_ordering(output: &mut PrivacyPreservingCircuitOutput) {
 }
 
 fn emit_dummy_output(
-    output: &mut PrivacyPreservingCircuitOutput,
-    dummy: DummyInput,
+    output: &mut ProvenExecution,
+    (nullifier, root): (Nullifier, CommitmentSetDigest),
+    filler: DummyOutput,
     ciphertext_padding: Option<u32>,
 ) {
     if let Some(padding) = ciphertext_padding {
         assert!(
-            dummy.note.ciphertext.as_bytes().len()
+            filler.note.ciphertext.as_bytes().len()
                 >= usize::try_from(padding).expect("pad length fits in usize"),
             "Dummy note shorter than the requested ciphertext padding"
         );
     }
-    // Note: the nullifiers and commitments are generated from seeds.
+    assert_eq!(
+        filler.note.epk.0.len(),
+        ML_KEM_768_CIPHERTEXT_LEN,
+        "Dummy note encapsulation is not ML-KEM-768 ciphertext length"
+    );
+    // Note: the commitments, and the nullifiers of padding, are generated from seeds.
     // The prover is responsible for their randomness.
-    let nullifier = Nullifier::for_dummy(&dummy.nullifier_seed);
-    let commitment = Commitment::for_dummy(&nullifier, &dummy.commitment_seed);
+    let commitment = Commitment::for_dummy(&nullifier, &filler.commitment_seed);
     // Note: the encrypted post states are pushed as fed into the circuit.
     // That means that the prover is responsible for managing the randomness
     // so as to not reveal the padding.
@@ -150,62 +121,54 @@ fn emit_dummy_output(
     // explicitly as these are not uniformly random.
     output.private_actions.push(PrivateAction {
         nullifier,
-        root: dummy.commitment_root,
+        root,
         commitment,
-        encrypted_post_state: dummy.note,
+        encrypted_post_state: filler.note,
     });
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Inputs are distinct concerns from the variant arms; bundling would be artificial"
-)]
-fn emit_private_output(
-    output: &mut PrivacyPreservingCircuitOutput,
-    post_state: &Account,
-    account_id: &AccountId,
-    kind: &PrivateAccountKind,
-    view_tag: ViewTag,
-    vpk: &ViewingPublicKey,
-    random_seed: &[u8; 32],
-    new_nullifier: (Nullifier, CommitmentSetDigest),
+fn private_action(
+    witness: &PrivateWitness,
+    post_data: AccountData,
     ciphertext_padding: Option<u32>,
-) {
-    let commitment_post = Commitment::new(account_id, post_state);
+) -> PrivateAction {
+    let PrivateWitness {
+        vpk,
+        random_seed,
+        kind,
+        nullifier: _,
+        openings: _,
+    } = witness;
+    let account_id = witness.account_id();
+    let (nullifier, root, nonce) = witness
+        .transition()
+        .expect("a private account's membership proof must fit its path");
+    let post_state = Account {
+        nonce,
+        data: post_data,
+    };
+    let account_kind = kind.account_kind();
 
-    let esk = EphemeralSecretKey::new(account_id, random_seed, &post_state.nonce);
+    let esk = EphemeralSecretKey::new(&account_id, random_seed, &post_state.nonce);
     let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(vpk, &esk);
 
     let encrypted_account = EncryptionScheme::encrypt(
-        post_state,
-        kind,
+        &post_state,
+        &account_kind,
         &shared_secret,
-        &new_nullifier.0,
+        &nullifier,
         ciphertext_padding,
     );
 
-    output.private_actions.push(PrivateAction {
-        nullifier: new_nullifier.0,
-        root: new_nullifier.1,
-        commitment: commitment_post,
-        encrypted_post_state: EncryptedAccountData {
+    PrivateAction {
+        nullifier,
+        root,
+        commitment: Commitment::new(&account_id, &post_state),
+        encrypted_post_state: EncryptedNote {
             ciphertext: encrypted_account,
             epk,
-            view_tag,
         },
-    });
-}
-
-fn compute_update_nullifier_and_set_digest(
-    membership_proof: &MembershipProof,
-    pre_account: &Account,
-    account_id: &AccountId,
-    nsk: &NullifierSecretKey,
-) -> (Nullifier, CommitmentSetDigest) {
-    let commitment_pre = Commitment::new(account_id, pre_account);
-    let set_digest = compute_digest_for_path(&commitment_pre, membership_proof);
-    let nullifier = Nullifier::for_account_update(&commitment_pre, nsk);
-    (nullifier, set_digest)
+    }
 }
 
 #[cfg(test)]
