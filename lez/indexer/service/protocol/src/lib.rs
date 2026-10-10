@@ -513,6 +513,9 @@ pub enum BlockIngestError {
     InvalidRewardTarget {
         reason: String,
     },
+    MisplacedSystemUpgraderTransaction {
+        tx_index: u64,
+    },
     InvalidFeeClass {
         tx_index: u64,
         reason: String,

@@ -894,6 +894,9 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
             indexer_core::BlockIngestError::InvalidProducerSignature => {
                 Self::InvalidProducerSignature
             }
+            indexer_core::BlockIngestError::MisplacedSystemUpgraderTransaction { tx_index } => {
+                Self::MisplacedSystemUpgraderTransaction { tx_index }
+            }
             indexer_core::BlockIngestError::InvalidFeeClass { tx_index, reason } => {
                 Self::InvalidFeeClass { tx_index, reason }
             }
