@@ -35,6 +35,7 @@ indexer_ffi.workspace = true
 sequencer_ffi.workspace = true
 indexer_service_protocol.workspace = true
 system_accounts.workspace = true
+system_upgrader_core.workspace = true
 sequencer_stake_core.workspace = true
 programs.workspace = true
 test_programs.workspace = true
@@ -69,6 +70,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+lee = { workspace = true, features = ["test-utils"] }
 fee_core.workspace = true
 sequencer_core = { workspace = true }
 sequencer_bedrock_actor = { workspace = true, features = [

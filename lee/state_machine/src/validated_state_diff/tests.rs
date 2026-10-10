@@ -339,6 +339,7 @@ fn metered_nonzero_exit_is_charged_its_metered_cycles() {
         .with_named_programs(std::iter::once((
             program_id,
             crate::test_methods::exits_nonzero(),
+            true,
         )));
     let message = Message::try_new(
         program_id,

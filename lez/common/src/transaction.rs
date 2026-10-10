@@ -224,9 +224,9 @@ pub fn clock_invocation(block_id: BlockId, timestamp: Timestamp) -> lee::PublicT
 /// Whether `tx` is a sequencer-injected or account-less system transaction.
 ///
 /// Identified by shape: an empty witness set invoking the bridge deposit, the
-/// cross-zone inbox dispatch, or the `ping_sender` cross-zone send. Fee- and
-/// cap-exempt. Shared by the sequencer (build) and the transition (replay) so
-/// the two can never disagree.
+/// cross-zone inbox dispatch, the `ping_sender` cross-zone send, or `system_upgrader`.
+/// Fee- and cap-exempt. Shared by the sequencer (build) and the transition (replay)
+/// so the two can never disagree.
 ///
 /// Cross-zone traffic is exempt by design, not as a stopgap: an outbound send
 /// is account-less (there is no payer to charge) and an inbound dispatch is
@@ -262,7 +262,7 @@ pub fn is_system_injection(tx: &LeeTransaction) -> bool {
             Ok(ping_core::SenderInstruction::Send { .. })
         );
     }
-    false
+    crate::system_upgrades::is_system_upgrader_tx(tx)
 }
 
 /// Whether `tx` is a cross-zone outbound lock (`bridge_lock::Lock`).

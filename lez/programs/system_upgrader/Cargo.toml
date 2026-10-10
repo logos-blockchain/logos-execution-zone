@@ -1,0 +1,11 @@
+[package]
+name = "system_upgrader_program"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[dependencies]
+borsh.workspace = true
+system_upgrader_core.workspace = true
+sequencer_stake_core.workspace = true
+lee_core.workspace = true

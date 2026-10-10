@@ -14,7 +14,8 @@ const INBOX_CONFIG_SEED: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxCfg/000/";
 /// already relocates every PDA in this crate whenever the crate changes.
 const INBOX_SEEN_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxSeen/01/";
 
-pub const CROSS_ZONE_INBOX_NAME: [u8; 16] = *b"cross_zone_inbox";
+pub const CROSS_ZONE_INBOX_NAME: lee_core::program::SystemProgramName =
+    lee_core::program::SystemProgramName::new(b"cross_zone_inbox");
 
 /// Raw 32-byte zone (channel) id; the host maps it to the zone-sdk `ChannelId`.
 pub type ZoneId = [u8; 32];
@@ -243,7 +244,7 @@ pub enum Instruction {
 
 #[must_use]
 pub fn cross_zone_inbox_account_id() -> AccountId {
-    AccountId::from_builtin_program_name(&CROSS_ZONE_INBOX_NAME)
+    AccountId::from_system_program_name(&CROSS_ZONE_INBOX_NAME)
 }
 
 /// Content-addressed replay key for a delivered message.

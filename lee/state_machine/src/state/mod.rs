@@ -141,20 +141,6 @@ impl V03State {
         self.private_state.0.digest()
     }
 
-    /// Initializes state with given public account balances leaving other account fields at their
-    /// default values.
-    #[must_use]
-    pub fn with_public_account_balances(
-        mut self,
-        balances: impl IntoIterator<Item = (AccountId, u128)>,
-    ) -> Self {
-        let public_accounts = balances
-            .into_iter()
-            .map(|(account_id, balance)| (account_id, Account::funded(balance)));
-        self.public_state.extend(public_accounts);
-        self
-    }
-
     /// Initializes state with given public accounts.
     #[must_use]
     pub fn with_public_accounts(
@@ -178,43 +164,9 @@ impl V03State {
         self
     }
 
-    #[must_use]
-    pub fn with_named_programs(
-        mut self,
-        programs: impl IntoIterator<Item = (AccountId, Program)>,
-    ) -> Self {
-        for (account_id, program) in programs {
-            self.insert_program_at(account_id, &program, true);
-        }
-        self
-    }
-
-    #[must_use]
-    pub fn with_programs(self, programs: impl IntoIterator<Item = Program>) -> Self {
-        self.with_genesis_programs(programs.into_iter().map(|program| (program, true)))
-    }
-
-    #[must_use]
-    pub fn with_genesis_programs(
-        mut self,
-        programs: impl IntoIterator<Item = (Program, bool)>,
-    ) -> Self {
-        for (program, immutable) in programs {
-            self.insert_program(&program, immutable);
-        }
-        self
-    }
-
-    /// Seeds a builtin as a loader-owned header pointing at a segment chain holding its
-    /// `user_elf`, chunked the same way a live `program_loader` deploy would.
-    pub(crate) fn insert_program(&mut self, program: &Program, immutable: bool) {
-        self.insert_program_at(
-            AccountId::from_builtin_program(program.id()),
-            program,
-            immutable,
-        );
-    }
-
+    /// Seeds a program as a loader-owned header pointing at a segment chain holding its
+    /// `user_elf`, chunked the same way a live `program_loader` deploy would. Reached only through
+    /// [`GenesisBuilder`] and test helpers, so a live state never gains a program this way.
     fn insert_program_at(
         &mut self,
         header_account_id: AccountId,
@@ -338,8 +290,9 @@ impl V03State {
         self.public_state.get(&account_id)
     }
 
-    /// Reconstructs a genesis-seeded builtin's bytecode from its header and segment chain at
-    /// `account_id` — a program deployed elsewhere via `program_loader` won't be found here.
+    /// The program deployed at `account_id`: its `image_id` and full `ProgramBinary` (the
+    /// protocol's kernel re-attached to the `user_elf` read off its segment chain), or `None` if
+    /// there isn't one. The `image_id` is the header's, not recomputed from the bytes.
     #[must_use]
     pub fn get_builtin_program(&self, account_id: AccountId) -> Option<(ProgramId, Vec<u8>)> {
         crate::program::resolve_program(account_id, |id| self.loader_shard(id))
@@ -445,15 +398,100 @@ impl V03State {
     }
 }
 
+/// Builds a genesis state: the only way outside tests to seed programs, and always onto a fresh
+/// state.
+#[derive(Default)]
+pub struct GenesisBuilder(V03State);
+
+impl GenesisBuilder {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn with_public_accounts(
+        self,
+        public_accounts: impl IntoIterator<Item = (AccountId, Account)>,
+    ) -> Self {
+        Self(self.0.with_public_accounts(public_accounts))
+    }
+
+    #[must_use]
+    pub fn with_private_accounts(
+        self,
+        private_accounts: impl IntoIterator<Item = (Commitment, Nullifier)>,
+    ) -> Self {
+        Self(self.0.with_private_accounts(private_accounts))
+    }
+
+    /// Seeds each program at its given address, `immutable` or not.
+    #[must_use]
+    pub fn with_named_programs(
+        mut self,
+        programs: impl IntoIterator<Item = (AccountId, Program, bool)>,
+    ) -> Self {
+        for (account_id, program, immutable) in programs {
+            self.0.insert_program_at(account_id, &program, immutable);
+        }
+        self
+    }
+
+    #[must_use]
+    pub fn build(self) -> V03State {
+        self.0
+    }
+}
+
 #[cfg(any(test, feature = "test-utils"))]
 impl V03State {
+    /// Seeds each program at its given address, `immutable` or not.
+    #[must_use]
+    pub fn with_named_programs(
+        mut self,
+        programs: impl IntoIterator<Item = (AccountId, Program, bool)>,
+    ) -> Self {
+        for (account_id, program, immutable) in programs {
+            self.insert_program_at(account_id, &program, immutable);
+        }
+        self
+    }
+
+    /// Seeds each program immutable, at the address derived from its image ID.
+    #[must_use]
+    pub fn with_programs(mut self, programs: impl IntoIterator<Item = Program>) -> Self {
+        for program in programs {
+            self.insert_program(&program);
+        }
+        self
+    }
+
+    /// Seeds `program` immutable, at the address derived from its image ID.
+    pub(crate) fn insert_program(&mut self, program: &Program) {
+        self.insert_program_at(AccountId::from_builtin_program(program.id()), program, true);
+    }
+
+    /// Initializes state with given public account balances leaving other account fields at their
+    /// default values.
+    #[must_use]
+    pub fn with_public_account_balances(
+        self,
+        balances: impl IntoIterator<Item = (AccountId, u128)>,
+    ) -> Self {
+        self.with_public_accounts(
+            balances
+                .into_iter()
+                .map(|(account_id, balance)| (account_id, Account::funded(balance))),
+        )
+    }
+
     pub fn force_insert_account(&mut self, account_id: AccountId, account: Account) {
         self.public_state.insert(account_id, account);
     }
 }
 
 /// The deterministic `AccountId` a genesis-seeded builtin's `index`-th segment lives at.
-/// Only `insert_program` needs this — a live deploy has a real signer to pick addresses instead.
+/// Only `insert_program_at` needs this — a live deploy has a real signer to pick addresses instead.
 fn genesis_segment_account_id(header_account_id: AccountId, index: usize) -> AccountId {
     use sha2::{Digest as _, Sha256};
     const GENESIS_SEGMENT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/GenesisSeg/\x00";

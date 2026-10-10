@@ -36,7 +36,7 @@ use clock_core::{
     CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
     ClockAccountData,
 };
-use cycle_bench::{ppe, stats::Stats};
+use cycle_bench::{ppe, stats::Stats, system_upgrader};
 use fee_core::{BlockFeeSummary, state::FeeState};
 use lee::program::Program;
 use lee_core::{
@@ -494,6 +494,28 @@ fn data_writer_case(label: &'static str, bytes: usize) -> Result<Case> {
     )
 }
 
+/// `system_upgrader`'s guest work only. `Apply`'s chain walk runs natively in `program_loader`;
+/// the `system_upgrader` criterion bench times it.
+fn system_upgrader_case(
+    label: &'static str,
+    (accounts, instruction): (
+        Vec<(AccountMeta, ShardData)>,
+        system_upgrader_core::Instruction,
+    ),
+) -> Result<Case> {
+    Case::new(
+        "system_upgrader",
+        label,
+        programs::system_upgrader(),
+        programs::system_upgrader_account_id(),
+        accounts
+            .into_iter()
+            .map(|(account, data)| Fixture { account, data })
+            .collect(),
+        &instruction,
+    )
+}
+
 fn clock_account(account_id: AccountId, block_id: BlockId) -> Fixture {
     Fixture::new(
         account_id,
@@ -583,6 +605,34 @@ fn main() -> Result<()> {
         )?,
         data_writer_case("Write 4 KiB", 4 * 1024)?,
         data_writer_case("Write 64 KiB", 64 * 1024)?,
+        system_upgrader_case(
+            "Schedule (committee 2)",
+            system_upgrader::schedule_guest_input(2),
+        )?,
+        system_upgrader_case(
+            "Schedule (committee 4)",
+            system_upgrader::schedule_guest_input(4),
+        )?,
+        system_upgrader_case(
+            "Schedule (committee 7)",
+            system_upgrader::schedule_guest_input(7),
+        )?,
+        system_upgrader_case(
+            "Schedule (committee 10)",
+            system_upgrader::schedule_guest_input(10),
+        )?,
+        system_upgrader_case(
+            "Schedule (committee 20)",
+            system_upgrader::schedule_guest_input(20),
+        )?,
+        system_upgrader_case(
+            "Apply (clock code)",
+            system_upgrader::apply_guest_input(&programs::clock()),
+        )?,
+        system_upgrader_case(
+            "Apply (sequencer_stake code)",
+            system_upgrader::apply_guest_input(&programs::sequencer_stake()),
+        )?,
     ];
 
     let mut results: Vec<BenchResult> = cases

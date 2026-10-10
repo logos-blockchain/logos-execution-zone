@@ -16,22 +16,30 @@ ppe = ["prove"]
 [dependencies]
 lee = { workspace = true }
 lee_core = { workspace = true, features = ["host"] }
+system_upgrader_core.workspace = true
 clock_core.workspace = true
 fee_core.workspace = true
 rand.workspace = true
 test_guest_core.workspace = true
 test_programs.workspace = true
 programs.workspace = true
+program_loader_core.workspace = true
+sequencer_stake_core.workspace = true
 
 risc0-zkvm.workspace = true
 borsh.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
+risc0-binfmt.workspace = true
 clap = { workspace = true }
 
 [dev-dependencies]
 criterion.workspace = true
+
+[[bench]]
+name = "system_upgrader"
+harness = false
 
 [[bench]]
 name = "verify"

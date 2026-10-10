@@ -15,7 +15,8 @@ const FEE_STATE_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/State/0000000/";
 const FEE_ESCROW_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/Escrow/000000/";
 const FEE_INBOX_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/Inbox/0000000/";
 
-pub const FEE_NAME: [u8; 3] = *b"fee";
+pub const FEE_NAME: lee_core::program::SystemProgramName =
+    lee_core::program::SystemProgramName::new(b"fee");
 
 /// Per-block fee summary carried as the fee invocation's instruction and
 /// validated byte-for-byte by the transition.
@@ -49,7 +50,7 @@ pub enum Instruction {
 
 #[must_use]
 pub fn fee_account_id() -> AccountId {
-    AccountId::from_builtin_program_name(&FEE_NAME)
+    AccountId::from_system_program_name(&FEE_NAME)
 }
 
 #[must_use]

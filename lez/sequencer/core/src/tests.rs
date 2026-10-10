@@ -2311,8 +2311,8 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
 fn state_with_clock_and_program(program: Program, clock_timestamp: u64) -> V03State {
     let program_id = AccountId::from_builtin_program(program.id());
     let mut state = V03State::new().with_named_programs([
-        (programs::clock_account_id(), programs::clock()),
-        (program_id, program),
+        (programs::clock_account_id(), programs::clock(), true),
+        (program_id, program, true),
     ]);
     for clock_id in system_accounts::clock_account_ids() {
         state.force_insert_account(clock_id, system_accounts::clock_account());
@@ -3831,6 +3831,7 @@ fn diag_sequencer_stake_writes_the_ownership_account_record() {
         .with_named_programs([(
             programs::sequencer_stake_account_id(),
             programs::sequencer_stake(),
+            true,
         )])
         .with_public_accounts([
             (funding_id, Account::funded(amount)),
@@ -3977,6 +3978,7 @@ fn stake_test_state(funding_id: AccountId, funding_balance: u128) -> V03State {
         .with_named_programs([(
             programs::sequencer_stake_account_id(),
             programs::sequencer_stake(),
+            true,
         )])
         .with_public_accounts([
             (funding_id, Account::funded(funding_balance)),
@@ -4362,6 +4364,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
         .with_named_programs([(
             programs::sequencer_stake_account_id(),
             programs::sequencer_stake(),
+            true,
         )])
         .with_public_accounts([
             (funding_id, Account::funded(amount)),
@@ -5598,4 +5601,107 @@ async fn the_first_finalized_block_is_not_reported() {
     );
     finalize_signed(&mut sequencer, entry_of(&invalid, MsgId::root())).await;
     assert!(!slash_recorded(&sequencer).await);
+}
+
+fn system_upgrader_tx(instruction: &system_upgrader_core::Instruction) -> LeeTransaction {
+    LeeTransaction::Public(lee::PublicTransaction::new(
+        lee::public_transaction::Message::try_new(
+            lee_core::program::SYSTEM_UPGRADER_ACCOUNT_ID,
+            vec![],
+            vec![],
+            instruction,
+        )
+        .unwrap(),
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+    ))
+}
+
+#[test]
+fn every_system_upgrader_tx_is_sequencer_only() {
+    let apply = system_upgrader_tx(&system_upgrader_core::Instruction::Apply {
+        name: programs::CLOCK_NAME,
+        from_height: 1,
+    });
+    let schedule = system_upgrader_tx(&system_upgrader_core::Instruction::Schedule {
+        name: programs::CLOCK_NAME,
+        first_segment: AccountId::new([1; 32]),
+        from_height: 1,
+        approvals: vec![],
+    });
+
+    assert!(super::is_sequencer_only_tx(&apply));
+    assert!(super::is_sequencer_only_tx(&schedule));
+}
+
+#[test]
+fn a_due_system_upgrade_gets_an_apply() {
+    use lee_core::program::{
+        PROGRAM_LOADER_ACCOUNT_ID, ProgramSegment, SYSTEM_UPGRADER_ACCOUNT_ID,
+    };
+    use system_upgrader_core::{Registry, ScheduledUpgrade, registry_account_id};
+
+    let segment = AccountId::new([0x51; 32]);
+    let upgrade = ScheduledUpgrade {
+        first_segment: segment,
+        from_height: 5,
+    };
+    let genesis = testnet_initial_state::initial_state(false);
+    let mut registry = Registry::from_bytes(
+        genesis
+            .get_account_by_id(registry_account_id())
+            .data
+            .shard(SYSTEM_UPGRADER_ACCOUNT_ID),
+    )
+    .unwrap();
+    registry
+        .programs
+        .insert(programs::CLOCK_NAME, Some(upgrade));
+    let clock = programs::clock_account_id();
+    let state = testnet_initial_state::initial_state(false).with_public_accounts([
+        (
+            registry_account_id(),
+            lee::Account::default().with_shard(
+                SYSTEM_UPGRADER_ACCOUNT_ID,
+                registry.to_bytes().try_into().unwrap(),
+            ),
+        ),
+        (
+            segment,
+            lee::Account::default().with_shard(
+                PROGRAM_LOADER_ACCOUNT_ID,
+                ProgramSegment {
+                    bytecode: vec![1],
+                    next_segment: None,
+                }
+                .to_loader_shard()
+                .try_into()
+                .unwrap(),
+            ),
+        ),
+    ]);
+
+    assert!(
+        super::build_upgrade_apply_txs(&state, 4).is_empty(),
+        "nothing is due before the upgrade's height"
+    );
+    let txs = super::build_upgrade_apply_txs(&state, 5);
+    let [LeeTransaction::Public(apply)] = txs.as_slice() else {
+        panic!("expected one Apply, for clock; got {txs:?}");
+    };
+    assert_eq!(
+        apply.message().shard_selectors,
+        vec![
+            ProgramShardSelector::new(registry_account_id(), SYSTEM_UPGRADER_ACCOUNT_ID),
+            ProgramShardSelector::new(clock, PROGRAM_LOADER_ACCOUNT_ID),
+            ProgramShardSelector::new(segment, PROGRAM_LOADER_ACCOUNT_ID),
+        ]
+    );
+    assert_eq!(
+        borsh::from_slice::<system_upgrader_core::Instruction>(&apply.message().instruction_data)
+            .unwrap(),
+        system_upgrader_core::Instruction::Apply {
+            name: programs::CLOCK_NAME,
+            from_height: 5,
+        }
+    );
 }

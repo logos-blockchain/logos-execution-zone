@@ -1192,7 +1192,7 @@ fn two_private_pda_family_members_receive_and_spend() {
     let recipient_signing_key = test_public_account_keys_2().signing_key;
 
     let mut state = V03State::new().with_public_account_balances([(funder_id, 500)]);
-    state.insert_program(&proxy, true);
+    state.insert_program(&proxy);
 
     let alice_pda_0_account = Account {
         nonce: Nonce::private_account_nonce_init(&alice_pda_0_id),

@@ -10,6 +10,7 @@ members = [
   "lee/key_protocol",
   "lee/state_machine",
   "lee/state_machine/core",
+  "lee/program_loader",
   "lee/privacy_preserving_circuit",
   "lee/state_machine/test_methods",
   "lee/state_machine/test_methods/guest",
@@ -47,6 +48,7 @@ members = [
   "lez/common",
   "lez/programs",
   "lez/programs/bridge",
+  "lez/programs/system_upgrader",
   "lez/programs/clock",
   "lez/programs/fee",
   "lez/programs/fee/core",
@@ -58,7 +60,6 @@ members = [
   "lez/programs/ping_sender",
   "lez/programs/ping_receiver",
   "lez/programs/sequencer_stake",
-  "lez/programs/program_loader/core",
   "lez/cross_zone",
 
   "test_guest_core",
@@ -84,6 +85,7 @@ members = [
 [workspace.dependencies]
 lee = { path = "lee/state_machine" }
 lee_core = { path = "lee/state_machine/core" }
+program_loader_core = { path = "lee/program_loader" }
 common = { path = "lez/common" }
 chain_state = { path = "lez/chain_state" }
 mempool = { path = "lez/mempool" }
@@ -118,6 +120,7 @@ programs = { path = "lez/programs", default-features = false, features = [
 ] }
 system_accounts = { path = "lez/system_accounts" }
 clock_core = { path = "lez/programs/clock/core" }
+system_upgrader_core = { path = "lez/programs/system_upgrader/core" }
 cross_zone_marker_core = { path = "lez/programs/cross_zone_marker" }
 fee_core = { path = "lez/programs/fee/core" }
 bridge_core = { path = "lez/programs/bridge/core" }
@@ -127,7 +130,6 @@ bridge_lock_core = { path = "lez/programs/bridge_lock/core" }
 wrapped_token_core = { path = "lez/programs/wrapped_token/core" }
 ping_core = { path = "lez/programs/ping_core" }
 sequencer_stake_core = { path = "lez/programs/sequencer_stake/core" }
-program_loader_core = { path = "lez/programs/program_loader/core" }
 cross_zone = { path = "lez/cross_zone" }
 build_utils = { path = "build_utils" }
 test_guest_core = { path = "test_guest_core" }
@@ -272,6 +274,9 @@ codegen-units = 1
 # Keccak speedup for in-guest ML KEM
 [patch.crates-io]
 keccak = { git = "https://github.com/logos-blockchain/sponges", rev = "3a56e99771beedf04946eab21a4a62adc2951377" }
+# RISC Zero's accelerated forks: Ed25519 approval checks in guests cost ~4x fewer cycles.
+curve25519-dalek = { git = "https://github.com/risc0/curve25519-dalek", rev = "385adda1fa3b66d9aaa8b8fcc99ddc324d33ba32" }
+crypto-bigint = { git = "https://github.com/risc0/RustCrypto-crypto-bigint", rev = "3ab63a6f1048833f7047d5a50532e4a4cc789384" }
 
 # Keep backtraces but drop full DWARF type info to avoid LLD OOM/SIGBUS when
 # linking large integration-test binaries on resource-constrained CI runners.

@@ -9,6 +9,7 @@ key_protocol.workspace = true
 lee.workspace = true
 lee_core.workspace = true
 system_accounts.workspace = true
+system_upgrader_core.workspace = true
 programs.workspace = true
 
 serde.workspace = true
