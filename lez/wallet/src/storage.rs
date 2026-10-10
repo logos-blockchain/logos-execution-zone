@@ -20,6 +20,7 @@ use crate::{
 
 pub mod key_chain;
 mod persistent;
+pub mod spent_nullifiers;
 
 #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 pub struct Storage {

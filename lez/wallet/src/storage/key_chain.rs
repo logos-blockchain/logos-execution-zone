@@ -1,16 +1,24 @@
 use core::panic;
-use std::collections::{BTreeMap, HashMap, HashSet, btree_map::Entry};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, HashMap, HashSet, btree_map::Entry},
+};
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result, anyhow, ensure};
+use common::{block::Block, transaction::LeeTransaction};
+use futures::{Stream, TryStreamExt as _};
 use key_protocol::key_management::{
     KeyChain,
     group_key_holder::GroupKeyHolder,
     key_tree::{KeyTreePrivate, KeyTreePublic, chain_index::ChainIndex, traits::KeyTreeNode as _},
     secret_holders::{PrivateKeyHolder, SeedHolder, ViewingSecretKey},
 };
-use lee::{Account, AccountId, privacy_preserving_transaction::message::Message};
+use lee::{
+    Account, AccountId, EncryptedNote, Recipient, privacy_preserving_transaction::message::Message,
+};
 use lee_core::{
-    Commitment, Identifier, Nullifier, NullifierSecretKey, PrivateAccountKind, SharedSecretKey,
+    BlockId, Commitment, Nullifier, NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
+    SealedCast, SharedSecretKey, encryption::ViewingPublicKey, program::MessageBody,
 };
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
@@ -47,22 +55,38 @@ pub struct FoundPrivateAccount<'acc> {
     pub chain_index: Option<ChainIndex>,
 }
 
+pub struct ManagedPrivateAccount<'acc> {
+    pub account: &'acc Account,
+    pub kind: &'acc PrivateAccountKind,
+    pub keys: Cow<'acc, PrivateKeyHolder>,
+    pub vpk: ViewingPublicKey,
+}
+
 /// Metadata for a shared account (GMS-derived), stored alongside the cached plaintext state.
-/// The group label and identifier (or PDA seed) are needed to re-derive keys during sync.
+/// The group label and derivation are needed to re-derive keys during sync.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct SharedAccountEntry {
     pub group_label: Label,
-    pub identifier: Identifier,
-    /// For PDA accounts, the seed and program ID used to derive keys via `derive_keys_for_pda`.
-    /// `None` for regular shared accounts (keys derived from identifier via derivation seed).
-    pub pda_seed: Option<lee_core::program::PdaSeed>,
-    pub authority_program_id: Option<lee_core::program::ProgramId>,
+    pub derivation: SharedAccountDerivation,
+    pub kind: PrivateAccountKind,
     pub account: Account,
 }
 
-/// Maps each owned or shared private account to the nullifier its next update will publish,
-/// so sync can spot updates by nullifier rather than view tag.
+/// How a shared account's keys derive from its group's GMS.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub enum SharedAccountDerivation {
+    /// A regular account, selected by a wallet-local id its co-owners agree on.
+    Regular { derivation_id: [u8; 32] },
+    /// A private PDA, keyed by its program and seed via `derive_keys_for_pda`.
+    Pda {
+        seed: lee_core::program::PdaSeed,
+        program_id: lee_core::program::ProgramId,
+    },
+}
+
+/// Maps each owned or shared private account to the nullifier its next transition spends; an
+/// account not yet initialized waits on its empty predecessor's.
 #[derive(Default)]
 pub struct NullifierIndex(HashMap<Nullifier, AccountId>);
 
@@ -89,14 +113,6 @@ impl NullifierIndex {
         );
     }
 
-    /// Indexes `account_id` by the nullifier its initialization publishes.
-    pub fn track_initialization(&mut self, account_id: AccountId) {
-        self.0.insert(
-            Nullifier::for_account_initialization(&account_id),
-            account_id,
-        );
-    }
-
     /// Replaces a spent nullifier with the account's `next` one.
     pub fn update(&mut self, spent: &Nullifier, next: Nullifier, account_id: AccountId) {
         self.0.remove(spent);
@@ -116,7 +132,7 @@ pub struct UserKeyChain {
     /// Tree of private account keys.
     private_key_tree: KeyTreePrivate,
     /// Cached plaintext state of shared private accounts (PDAs and regular shared accounts),
-    /// keyed by `AccountId`. Each entry stores the group label and identifier needed
+    /// keyed by `AccountId`. Each entry stores the group label and derivation needed
     /// to re-derive keys during sync.
     shared_private_accounts: BTreeMap<lee::AccountId, SharedAccountEntry>,
     /// Group key holders for shared account management, keyed by a human-readable label.
@@ -162,12 +178,13 @@ impl UserKeyChain {
         &mut self,
         depth: u32,
         get_account: impl Fn(AccountId) -> F,
+        awaited: &HashSet<AccountId>,
     ) -> Result<()> {
         self.public_key_tree
             .cleanup_tree_remove_uninit_layered(depth, get_account)
             .await?;
         self.private_key_tree
-            .cleanup_tree_remove_uninit_layered(depth);
+            .cleanup_tree_remove_uninit_layered(depth, awaited);
         Ok(())
     }
 
@@ -236,18 +253,6 @@ impl UserKeyChain {
                 .create_private_accounts_key_node_layered()
                 .expect("Search for new node slot failed"),
         }
-    }
-
-    /// Registers an additional identifier on an existing private key node, deriving and recording
-    /// the corresponding [`AccountId`]. Returns [`None`] if the node does not exist or the
-    /// identifier is already registered.
-    pub fn register_identifier_on_private_key_chain(
-        &mut self,
-        cci: &ChainIndex,
-        identifier: Identifier,
-    ) -> Option<lee::AccountId> {
-        self.private_key_tree
-            .register_identifier_on_node(cci, identifier)
     }
 
     /// Returns private account for given `account_id`. Doesn't search in pda accounts cache.
@@ -336,23 +341,109 @@ impl UserKeyChain {
             )
     }
 
+    // The recipient a recovery note for `address` names, with the nullifier key that receives
+    // for it, if one of this wallet's key pairs owns it, whether or not an account is recorded
+    // under it yet.
+    #[must_use]
+    pub fn recover(
+        &self,
+        address: AccountId,
+        note: &EncryptedNote,
+    ) -> Option<(Recipient, NullifierSecretKey)> {
+        self.key_pairs().find_map(|(npk, vsk, nsk)| {
+            Recipient::recover(address, note, &vsk.d, &vsk.z)
+                .filter(|recipient| recipient.npk == npk)
+                .map(|recipient| (recipient, nsk))
+        })
+    }
+
+    // A sealed Cast's body, recipient and commitment randomness, with the nullifier key that
+    // receives it, if one of this wallet's key pairs opens it.
+    #[must_use]
+    pub fn open(
+        &self,
+        sealed: &SealedCast,
+    ) -> Option<(MessageBody, Recipient, [u8; 32], NullifierSecretKey)> {
+        self.key_pairs().find_map(|(npk, vsk, nsk)| {
+            sealed
+                .open(npk, &vsk.d, &vsk.z)
+                .map(|(body, recipient, rho)| (body, recipient, rho, nsk))
+        })
+    }
+
+    fn owned_key_chains(&self) -> impl Iterator<Item = &KeyChain> {
+        self.imported_private_accounts
+            .keys()
+            .map(|key| &key.key_chain)
+            .chain(
+                self.private_key_tree
+                    .key_map
+                    .values()
+                    .map(|node| &node.value.0),
+            )
+    }
+
+    fn key_pairs(
+        &self,
+    ) -> impl Iterator<Item = (NullifierPublicKey, ViewingSecretKey, NullifierSecretKey)> + '_ {
+        self.owned_key_chains()
+            .map(|key_chain| {
+                (
+                    key_chain.nullifier_public_key,
+                    key_chain.private_key_holder.viewing_secret_key.clone(),
+                    key_chain.private_key_holder.nullifier_secret_key(),
+                )
+            })
+            .chain(self.shared_private_accounts.values().filter_map(|entry| {
+                let keys = self.derive_shared_account_keys(entry)?;
+                let nsk = keys.nullifier_secret_key();
+                Some((NullifierPublicKey::from(&nsk), keys.viewing_secret_key, nsk))
+            }))
+    }
+
     /// Re-derives the [`PrivateKeyHolder`] for a shared account `entry`, dispatching on PDA vs
-    /// regular. `None` if the group key holder is absent or a PDA entry lacks its program id.
+    /// regular. `None` if the group key holder is absent.
     #[must_use]
     pub fn derive_shared_account_keys(
         &self,
         entry: &SharedAccountEntry,
     ) -> Option<PrivateKeyHolder> {
         let holder = self.group_key_holder(&entry.group_label)?;
-        Some(match (&entry.pda_seed, &entry.authority_program_id) {
-            (Some(pda_seed), Some(program_id)) => holder.derive_keys_for_pda(program_id, pda_seed),
-            (Some(_), None) => return None,
-            _ => holder.derive_regular_shared_account_keys_from_identifier(entry.identifier),
+        Some(match &entry.derivation {
+            SharedAccountDerivation::Regular { derivation_id } => {
+                holder.derive_regular_shared_account_keys(derivation_id)
+            }
+            SharedAccountDerivation::Pda { seed, program_id } => {
+                holder.derive_keys_for_pda(program_id, seed)
+            }
+        })
+    }
+
+    #[must_use]
+    pub fn managed_private_account(
+        &self,
+        account_id: AccountId,
+    ) -> Option<ManagedPrivateAccount<'_>> {
+        if let Some(found) = self.private_account(account_id) {
+            return Some(ManagedPrivateAccount {
+                account: found.account,
+                kind: found.kind,
+                keys: Cow::Borrowed(&found.key_chain.private_key_holder),
+                vpk: found.key_chain.viewing_public_key.clone(),
+            });
+        }
+        let entry = self.shared_private_account(account_id)?;
+        let keys = self.derive_shared_account_keys(entry)?;
+        Some(ManagedPrivateAccount {
+            account: &entry.account,
+            kind: &entry.kind,
+            vpk: keys.generate_viewing_public_key(),
+            keys: Cow::Owned(keys),
         })
     }
 
     /// Maps each owned and shared account's current-state update nullifier to its `account_id`,
-    /// so co-owner updates are found during sync by nullifier rather than view tag.
+    /// so sync finds every account's next transition, its initialization included, by nullifier.
     #[must_use]
     pub fn build_latest_nullifier_index(&self) -> NullifierIndex {
         let mut index = NullifierIndex::default();
@@ -381,16 +472,16 @@ impl UserKeyChain {
         index
     }
 
-    /// Applies every watched nullifier the `message` publishes: decrypts the position-aligned
-    /// note, stores the new state, and rolls the index to the account's next nullifier. Returns
-    /// the output slots handled, so the view-tag pass can skip them.
+    /// Applies every watched nullifier the `message` publishes: decrypts the note in that
+    /// nullifier's action, stores the new state, and rolls the index to the account's next
+    /// nullifier. Returns the action slots it followed.
     pub fn sync_updates_via_nullifiers(
         &mut self,
         message: &Message,
         index: &mut NullifierIndex,
     ) -> HashSet<usize> {
-        let mut handled = HashSet::new();
-        for (i, action) in message.private_actions.iter().enumerate() {
+        let mut followed = HashSet::new();
+        for (i, action) in message.execution.private_actions.iter().enumerate() {
             // Get the nullifier information if awaiting the nullifier.
             let Some(account_id) = index.account_for(&action.nullifier) else {
                 continue;
@@ -401,11 +492,115 @@ impl UserKeyChain {
                 // Update the index to await for the new state of the account, i.e.
                 // the new nullifier.
                 index.update(&action.nullifier, new_nullifier, account_id);
-                // Record that this nullifier's position can be skipped for scanning.
-                handled.insert(i);
+                followed.insert(i);
             }
         }
-        handled
+        followed
+    }
+
+    /// Trial-decrypts each note of `message` outside the `followed` slots with every owned key
+    /// pair. An account whose decrypted state the message commits is recorded and followed by its
+    /// next nullifier, as restoration needs for the private PDAs under its keys.
+    pub fn discover_unfollowed(
+        &mut self,
+        message: &Message,
+        followed: &HashSet<usize>,
+        index: &mut NullifierIndex,
+    ) {
+        let commitments: HashSet<Commitment> =
+            message.execution.commitments().into_iter().collect();
+        let found: Vec<_> = (0..message.execution.private_actions.len())
+            .filter(|slot| !followed.contains(slot))
+            .flat_map(|slot| {
+                let epk = &message.execution.private_actions[slot]
+                    .encrypted_post_state
+                    .epk;
+                self.owned_key_chains().filter_map(move |key_chain| {
+                    let secret = key_chain.calculate_shared_secret_receiver(epk)?;
+                    let (kind, account) = crate::decrypt_note_at(message, slot, &secret)?;
+                    let account_id = AccountId::for_private_account(
+                        &key_chain.nullifier_public_key,
+                        &key_chain.viewing_public_key,
+                        &kind,
+                    );
+                    let nsk = key_chain.private_key_holder.nullifier_secret_key();
+                    Some((account_id, kind, account, nsk))
+                })
+            })
+            .filter(|(account_id, _, account, _)| {
+                commitments.contains(&Commitment::new(account_id, account))
+            })
+            .collect();
+        for (account_id, kind, account, nsk) in found {
+            index.track(account_id, &account, &nsk);
+            self.insert_private_account(account_id, kind, account)
+                .expect("an owned key pair derives the account");
+        }
+    }
+
+    /// Records the account a received message names, at its empty state, under the key pair that
+    /// holds its nullifier key: an owned one, or a shared one whose derivation the new entry keeps.
+    pub fn record_received(&mut self, recipient: &Recipient) -> Result<()> {
+        let account_id = recipient.account_id();
+        let Some(shared) = self
+            .shared_private_accounts
+            .values()
+            .find(|entry| {
+                self.derive_shared_account_keys(entry)
+                    .is_some_and(|keys| keys.generate_nullifier_public_key() == recipient.npk)
+            })
+            .cloned()
+        else {
+            return self.insert_private_account(
+                account_id,
+                recipient.kind.clone(),
+                Account::default(),
+            );
+        };
+        self.insert_shared_private_account(
+            account_id,
+            SharedAccountEntry {
+                kind: recipient.kind.clone(),
+                account: Account::default(),
+                ..shared
+            },
+        );
+        Ok(())
+    }
+
+    /// Records an account through `record`, at the state the history from genesis through `tip`
+    /// brings it to from its empty predecessor, or not at all: a failed, short or gapped history
+    /// leaves the key chain as it was.
+    pub async fn record_caught_up(
+        &mut self,
+        record: impl FnOnce(&mut Self) -> Result<()>,
+        account_id: AccountId,
+        nsk: &NullifierSecretKey,
+        tip: BlockId,
+        blocks: impl Stream<Item = Result<Block>>,
+    ) -> Result<()> {
+        let mut recorded = self.clone();
+        record(&mut recorded)?;
+        let mut index = NullifierIndex::default();
+        index.track(account_id, &Account::default(), nsk);
+        let mut expected = 1..=tip;
+        let mut blocks = std::pin::pin!(blocks);
+        while let Some(block) = blocks.try_next().await? {
+            ensure!(
+                expected.next() == Some(block.header.block_id),
+                "History reaches block {} out of sequence",
+                block.header.block_id
+            );
+            for tx in &block.body.transactions {
+                // Sync updates while watching only the init nullifier.
+                if let LeeTransaction::PrivacyPreserving(pp_tx) = tx {
+                    recorded.sync_updates_via_nullifiers(&pp_tx.message, &mut index);
+                }
+            }
+        }
+        ensure!(expected.next().is_none(), "History ends before block {tip}");
+        *self = recorded;
+        Ok(())
     }
 
     /// Decrypts the note at slot `i` for `account_id`, stores the new state, and returns the
@@ -416,67 +611,30 @@ impl UserKeyChain {
         message: &Message,
         i: usize,
     ) -> Option<Nullifier> {
-        let encrypted = &message.private_actions[i].encrypted_post_state;
-
-        let (nsk, secret, is_shared) = if let Some(entry) = self.shared_private_account(account_id)
-        {
-            let keys = self.derive_shared_account_keys(entry)?;
-            let secret = SharedSecretKey::decapsulate(
-                &encrypted.epk,
-                &keys.viewing_secret_key.d,
-                &keys.viewing_secret_key.z,
-            )?;
-            (keys.nullifier_secret_key(), secret, true)
-        } else {
-            let found = self.private_account(account_id)?;
-            let secret = found
-                .key_chain
-                .calculate_shared_secret_receiver(&encrypted.epk)?;
-            (
-                found.key_chain.private_key_holder.nullifier_secret_key(),
-                secret,
-                false,
-            )
-        };
+        let epk = &message.execution.private_actions[i]
+            .encrypted_post_state
+            .epk;
+        let keys = self.managed_private_account(account_id)?.keys;
+        let secret = SharedSecretKey::decapsulate(
+            epk,
+            &keys.viewing_secret_key.d,
+            &keys.viewing_secret_key.z,
+        )?;
+        let nsk = keys.nullifier_secret_key();
 
         let (kind, new_account) = crate::decrypt_note_at(message, i, &secret)?;
+        // The note is the sender's claim: follow it only to a state the message commits.
+        if !message
+            .execution
+            .commitments()
+            .contains(&Commitment::new(&account_id, &new_account))
+        {
+            return None;
+        }
         let new_nullifier = NullifierIndex::next_update_nullifier(account_id, &new_account, &nsk);
-
-        if is_shared {
-            self.update_shared_private_account_state(&account_id, new_account);
-        } else {
-            self.insert_private_account(account_id, kind, new_account)
-                .ok()?;
-        }
+        self.insert_private_account(account_id, kind, new_account)
+            .ok()?;
         Some(new_nullifier)
-    }
-
-    /// Constructs the next nullifier based on current account state
-    /// of the ID.
-    fn next_update_nullifier(&self, account_id: AccountId) -> Option<Nullifier> {
-        if let Some(entry) = self.shared_private_account(account_id) {
-            let keys = self.derive_shared_account_keys(entry)?;
-            return Some(NullifierIndex::next_update_nullifier(
-                account_id,
-                &entry.account,
-                &keys.nullifier_secret_key(),
-            ));
-        }
-        let acc = self.private_account(account_id)?;
-        Some(NullifierIndex::next_update_nullifier(
-            account_id,
-            acc.account,
-            &acc.key_chain.private_key_holder.nullifier_secret_key(),
-        ))
-    }
-
-    #[must_use]
-    pub fn locate_spend(&self, account_id: AccountId, message: &Message) -> Option<usize> {
-        let init = Nullifier::for_account_initialization(&account_id);
-        let update = self.next_update_nullifier(account_id);
-        message.private_actions.iter().position(|action| {
-            action.nullifier == init || Some(&action.nullifier) == update.as_ref()
-        })
     }
 
     pub fn add_imported_public_account(&mut self, private_key: lee::PrivateKey) {
@@ -490,14 +648,13 @@ impl UserKeyChain {
         &mut self,
         key_chain: KeyChain,
         chain_index: Option<ChainIndex>,
-        identifier: Identifier,
         account: Account,
     ) {
         let key = ImportedPrivateAccountKey {
             key_chain,
             chain_index,
         };
-        let kind = PrivateAccountKind::Regular(identifier);
+        let kind = PrivateAccountKind::Regular;
         let entry = self.imported_private_accounts.entry(key.clone());
         match entry {
             Entry::Occupied(mut occupied) => {
@@ -535,19 +692,17 @@ impl UserKeyChain {
             return Ok(());
         }
 
-        // Then try to update imported account
+        // Then try an imported key pair, which may receive at a kind it has not recorded yet
         for (key, data) in &mut self.imported_private_accounts {
-            for (kind, imported_account) in &mut data.accounts {
-                let expected_id = AccountId::for_private_account(
-                    &key.key_chain.nullifier_public_key,
-                    &key.key_chain.viewing_public_key,
-                    kind,
-                );
-                if expected_id == account_id {
-                    debug!("Updating imported private account {account_id}");
-                    *imported_account = account;
-                    return Ok(());
-                }
+            let expected_id = AccountId::for_private_account(
+                &key.key_chain.nullifier_public_key,
+                &key.key_chain.viewing_public_key,
+                &kind,
+            );
+            if expected_id == account_id {
+                debug!("Updating imported private account {account_id}");
+                data.accounts.insert(kind, account);
+                return Ok(());
             }
         }
 
@@ -672,17 +827,6 @@ impl UserKeyChain {
         self.shared_private_accounts.insert(account_id, entry);
     }
 
-    /// Updates the cached account state for a shared private account.
-    pub fn update_shared_private_account_state(
-        &mut self,
-        account_id: &lee::AccountId,
-        account: lee_core::account::Account,
-    ) {
-        if let Some(entry) = self.shared_private_accounts.get_mut(account_id) {
-            entry.account = account;
-        }
-    }
-
     /// Inserts or replaces a `GroupKeyHolder` under the given label.
     ///
     /// If a holder already exists under this label, it is silently replaced and the old
@@ -783,7 +927,7 @@ impl UserKeyChain {
                         account: account.clone(),
                         key_chain: key_chain.clone(),
                         chain_index: chain_index.clone(),
-                        identifier: kind.identifier(),
+                        kind: kind.clone(),
                     },
                 )));
             }
@@ -860,7 +1004,7 @@ impl UserKeyChain {
                             accounts: BTreeMap::new(),
                         })
                         .accounts
-                        .insert(PrivateAccountKind::Regular(data.identifier), data.account);
+                        .insert(data.kind, data.account);
                 }
             }
         }
