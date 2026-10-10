@@ -10,7 +10,7 @@ use kameo::{
 };
 use log::info;
 use sequencer_executor_actor::ExecutorActorTrait;
-use sequencer_gossip_actor::protocol::PublishTransaction;
+use sequencer_gossip_actor::protocol::{PublishSystemApproval, PublishTransaction};
 use sequencer_service_rpc::RpcServer as _;
 use tokio::select;
 
@@ -25,12 +25,18 @@ pub struct RpcServerActor {
     addr: SocketAddr,
 }
 
+/// Where the RPC server hands what it accepted, for the gossip mesh.
+pub struct GossipPublishers {
+    pub transactions: Recipient<PublishTransaction>,
+    pub system_approvals: Recipient<PublishSystemApproval>,
+}
+
 impl RpcServerActor {
     pub async fn new<E: ExecutorActorTrait>(
         listen_addr: SocketAddr,
         max_block_size: ByteSize,
         executor_ref: ActorRef<E>,
-        gossip: Option<Recipient<PublishTransaction>>,
+        gossip: Option<GossipPublishers>,
     ) -> Result<Self> {
         let server = jsonrpsee::server::ServerBuilder::with_config(
             jsonrpsee::server::ServerConfigBuilder::new()

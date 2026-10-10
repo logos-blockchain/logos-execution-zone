@@ -12,7 +12,7 @@ use kameo::{
 };
 use log::{error, warn};
 use sequencer_executor_actor::ExecutorActorTrait;
-use sequencer_gossip_actor::protocol::PublishTransaction;
+use sequencer_gossip_actor::protocol::{PublishSystemApproval, PublishTransaction};
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
     CrossZoneDeadLetter, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, FeeStateQuote,
@@ -23,20 +23,25 @@ pub struct Service<E: ExecutorActorTrait> {
     executor_ref: ActorRef<E>,
     max_block_size: ByteSize,
     gossip: Option<Recipient<PublishTransaction>>,
+    system_approval_gossip: Option<Recipient<PublishSystemApproval>>,
 }
 
 impl<E: ExecutorActorTrait> Service<E> {
     pub fn new(
         executor_ref: ActorRef<E>,
         max_block_size: ByteSize,
-        gossip: Option<Recipient<PublishTransaction>>,
+        gossip: Option<super::GossipPublishers>,
     ) -> Self {
         sequencer_rpc_server_actor_metrics::init();
 
+        let (gossip, system_approval_gossip) = gossip
+            .map(|publishers| (publishers.transactions, publishers.system_approvals))
+            .unzip();
         Self {
             executor_ref,
             max_block_size,
             gossip,
+            system_approval_gossip,
         }
     }
 }
@@ -307,9 +312,20 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             .map_err(|err| invalid(format!("the approval does not decode: {err}")))?;
 
         self.executor_ref
-            .ask(sequencer_executor_actor::protocol::SubmitSystemApproval { approval: signed })
+            .ask(sequencer_executor_actor::protocol::SubmitSystemApproval {
+                approval: signed.clone(),
+            })
             .await
-            .map_err(map_executor_error)
+            .map_err(map_executor_error)?;
+
+        // Published only once accepted, like a transaction, so peers aren't fed what this node
+        // refused.
+        if let Some(gossip) = &self.system_approval_gossip
+            && let Err(err) = gossip.tell(PublishSystemApproval(signed)).try_send()
+        {
+            log::warn!("Dropping local approval publish: gossip mailbox full or closed: {err}");
+        }
+        Ok(())
     }
 }
 

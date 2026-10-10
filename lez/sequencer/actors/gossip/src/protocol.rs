@@ -8,6 +8,10 @@ pub struct GetConnectedPeers;
 /// Publish a locally-submitted transaction to the gossip mesh.
 pub struct PublishTransaction(pub LeeTransaction);
 
+/// Publish a committee member's approval of a `system_upgrader` change, once this node has
+/// accepted it.
+pub struct PublishSystemApproval(pub system_upgrader_core::SignedApproval);
+
 /// Publish one of this node's own channel-config messages to the mesh.
 #[cfg(feature = "actor")]
 pub struct PublishConfig(pub sequencer_channel_config_actor::Wire);
