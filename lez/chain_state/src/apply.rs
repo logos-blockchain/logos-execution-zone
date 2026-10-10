@@ -523,7 +523,7 @@ fn settle_charged_transaction(
 
 #[cfg(test)]
 mod tests {
-    use std::borrow::Cow;
+    use std::{borrow::Cow, collections::BTreeMap};
 
     use common::{
         block::HashableBlockData,
@@ -531,29 +531,23 @@ mod tests {
             create_transaction_native_token_transfer, produce_dummy_block,
             produce_dummy_empty_transaction, sequencer_sign_key_for_testing, test_fee_declaration,
         },
+        transaction::FeePayee,
     };
-    use lee::{
-        AccountId, ProgramShardSelector, PublicTransaction, program::Program, public_transaction,
-    };
+    use lee::{AccountId, Actor, PublicTransaction, program::Program, public_transaction};
     use lee_core::{
         account::Nonce,
-        program::{InstructionData, ProgramEvent},
+        program::{ProgramEvent, Response},
     };
+    use test_guest_core::Script;
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_state};
 
     use super::*;
 
-    #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
-    struct EmitterInstruction {
-        events: Vec<ProgramEvent>,
-        chain: Vec<(AccountId, InstructionData)>,
-    }
-
     #[must_use]
     const fn event_emitter() -> Program {
         Program::new_unchecked(
-            test_methods::EVENT_EMITTER_ID,
-            Cow::Borrowed(test_methods::EVENT_EMITTER_ELF),
+            test_methods::SCRIPTED_ID,
+            Cow::Borrowed(test_methods::SCRIPTED_ELF),
         )
     }
 
@@ -677,7 +671,7 @@ mod tests {
             state
                 .get_account_by_id(system_accounts::fee_state_account_id())
                 .data
-                .shard(system_accounts::fee_program_id()),
+                .actor_state(system_accounts::fee_program_id()),
         );
         // Five blocks applied: height tracks the chain; zero load holds the floor.
         assert_eq!(fee_state.height, 5);
@@ -736,9 +730,9 @@ mod tests {
                 LeeTransaction::Public(fee_invocation(
                     bad_summary,
                     0,
-                    lee::AccountId::from(&lee::PublicKey::new_from_private_key(
+                    FeePayee::Present(lee::AccountId::from(&lee::PublicKey::new_from_private_key(
                         &sequencer_sign_key_for_testing(),
-                    )),
+                    ))),
                 )),
                 LeeTransaction::Public(clock_invocation(1, 100)),
             ],
@@ -853,7 +847,7 @@ mod tests {
             state
                 .get_account_by_id(system_accounts::fee_state_account_id())
                 .data
-                .shard(system_accounts::fee_program_id()),
+                .actor_state(system_accounts::fee_program_id()),
         );
 
         // Accrue real revenue in the inbox with one legitimate charged transfer.
@@ -873,18 +867,22 @@ mod tests {
         // revenue to the attacker. The guest accepts it — the fee program owns
         // the inbox it debits — producing a diff that modifies the restricted
         // inbox, which the apply-path guard must reject.
-        let fee_program_id = fee_invocation(BlockFeeSummary::default(), 0, attacker)
+        let fee_state = fee_invocation(BlockFeeSummary::default(), 0, FeePayee::Present(attacker))
             .message()
-            .program_account_id;
+            .execution
+            .root
+            .to;
         let message = lee::public_transaction::Message::try_new_with_fees(
-            fee_program_id,
+            fee_state,
             vec![
-                lee::ProgramShardSelector::native_balance(system_accounts::fee_inbox_account_id()),
-                lee::ProgramShardSelector::native_balance(attacker),
+                fee_state,
+                lee::Actor::native_balance(system_accounts::fee_inbox_account_id()),
+                lee::Actor::native_balance(attacker),
             ],
-            vec![state.get_account_by_id(attacker).nonce],
-            fee_core::Instruction::Refund {
+            BTreeMap::from([(attacker, state.get_account_by_id(attacker).nonce)]),
+            fee_core::Message::Refund {
                 amount: inbox_revenue,
+                payer: attacker,
             },
             common::test_utils::test_fee_declaration(attacker),
         )
@@ -920,7 +918,7 @@ mod tests {
             state
                 .get_account_by_id(system_accounts::fee_state_account_id())
                 .data
-                .shard(system_accounts::fee_program_id()),
+                .actor_state(system_accounts::fee_program_id()),
         );
         let sender_before = state
             .get_account_by_id(sender)
@@ -981,7 +979,7 @@ mod tests {
             state
                 .get_account_by_id(system_accounts::fee_state_account_id())
                 .data
-                .shard(system_accounts::fee_program_id()),
+                .actor_state(system_accounts::fee_program_id()),
         );
 
         let payer_before = state
@@ -1058,11 +1056,47 @@ mod tests {
             tip.hash,
             vec![],
             &state,
-            system_accounts::bridge_account_id(),
+            FeePayee::Present(system_accounts::bridge_account_id()),
         );
         let err = apply_block(Some(&tip), &block, &mut state)
             .expect_err("a reward to a system account is rejected");
         assert!(matches!(err, BlockIngestError::InvalidRewardTarget { .. }));
+    }
+
+    #[test]
+    fn a_block_crediting_an_absent_producer_it_cannot_reach_is_rejected() {
+        let mut state = initial_state(true);
+        let accounts = initial_pub_accounts_private_keys();
+        let genesis = produce_dummy_block(1, None, vec![]);
+        apply_block(None, &genesis, &mut state).expect("genesis applies");
+        let tip = tip_of(&genesis);
+        let producer = common::test_utils::producer_account_for_testing();
+        // Its tip makes the fee transaction credit the producer.
+        let transfer = common::test_utils::create_transaction_native_token_transfer_with_fees(
+            accounts[0].account_id,
+            0,
+            accounts[1].account_id,
+            10,
+            &accounts[0].pub_sign_key,
+            lee::FeeDeclaration::new(accounts[0].account_id, 2_000_000, 1, u128::MAX >> 1),
+        );
+
+        for (payee, refusal) in [
+            (
+                FeePayee::Present(producer),
+                "declared public but not admitted",
+            ),
+            (FeePayee::Bound(producer), "without a recovery binding"),
+        ] {
+            let block = settled_block_rewarding(2, tip.hash, vec![transfer.clone()], &state, payee);
+            let err = apply_block(Some(&tip), &block, &mut state.clone())
+                .expect_err("an absent, unbound producer cannot be paid");
+
+            assert!(matches!(
+                err,
+                BlockIngestError::StateTransition { reason, .. } if reason.contains(refusal)
+            ));
+        }
     }
 
     #[test]
@@ -1084,13 +1118,14 @@ mod tests {
         let sign_key = accounts[0].pub_sign_key.clone();
         let emitter_id = AccountId::from_builtin_program(event_emitter().id());
 
+        let emitter = Actor::new(from, emitter_id);
         let message = public_transaction::Message::try_new_with_fees(
-            emitter_id,
-            vec![ProgramShardSelector::native_balance(from)],
-            vec![Nonce(0)],
-            EmitterInstruction {
-                events: vec![emitted(5)],
-                chain: vec![],
+            emitter,
+            vec![emitter],
+            BTreeMap::from([(from, Nonce(0))]),
+            Script {
+                response: Response::keep_state().event(emitted(5)),
+                ..Script::default()
             },
             test_fee_declaration(from),
         )
@@ -1124,7 +1159,7 @@ mod tests {
             prev_hash,
             transactions,
             state,
-            common::test_utils::producer_account_for_testing(),
+            FeePayee::Present(common::test_utils::producer_account_for_testing()),
         )
     }
 
@@ -1135,7 +1170,7 @@ mod tests {
         prev_hash: HashType,
         mut transactions: Vec<LeeTransaction>,
         state: &V03State,
-        reward: lee::AccountId,
+        reward: FeePayee,
     ) -> common::block::Block {
         let timestamp = id.saturating_mul(100);
         let (summary, payout) = super::derive_block_summary(state, &transactions, id, timestamp)

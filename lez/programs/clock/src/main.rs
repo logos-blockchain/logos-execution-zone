@@ -77,7 +77,14 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
 
 #[cfg(test)]
 mod tests {
+    use lee_core::{
+        account::{AccountId, ActorState},
+        program::Transition,
+    };
+
     use super::*;
+
+    const CLOCK: AccountId = AccountId::new([1; 32]);
 
     fn data(block_id: u64) -> ClockAccountData {
         ClockAccountData {
@@ -86,11 +93,67 @@ mod tests {
         }
     }
 
+    fn tick(block_id: u64) -> Message {
+        Message::Tick {
+            timestamp: 1_700_000_000,
+            block_id,
+        }
+    }
+
+    fn run(
+        account_id: AccountId,
+        origin: Option<AccountId>,
+        pre: ClockAccountData,
+        message: Message,
+    ) -> Transition {
+        let receiver = Actor::new(account_id, CLOCK);
+        let input = ReceiveInput {
+            receiver,
+            from: origin.map(|sender| Actor::new(sender, sender)),
+            is_authorized: false,
+            pre_state: ActorState::from(pre.to_bytes()),
+            message: borsh::to_vec(&message).unwrap(),
+        };
+        handle_message(&input, message).into_transition(input)
+    }
+
+    fn written(data: ClockAccountData) -> Option<ActorState> {
+        Some(ActorState::from(data.to_bytes()))
+    }
+
+    fn record_to(account_id: AccountId, data: ClockAccountData) -> Call {
+        Call::new(Actor::new(account_id, CLOCK), &Message::Record(data))
+    }
+
     #[test]
     fn the_every_block_account_advances_by_one() {
+        let transition = run(CLOCK_01_PROGRAM_ACCOUNT_ID, None, data(7), tick(8));
+
+        assert_eq!(transition.response.post_state, written(data(8)));
+        assert!(transition.response.calls.is_empty() && transition.response.casts.is_empty());
+    }
+
+    #[test]
+    fn a_tick_records_into_the_coarser_accounts_it_is_due_at() {
+        let at_ten = run(CLOCK_01_PROGRAM_ACCOUNT_ID, None, data(9), tick(10));
         assert_eq!(
-            apply(Effect::Advance(data(8)), &data(7).to_bytes()),
-            Some(data(8).to_bytes())
+            (at_ten.response.calls, at_ten.response.casts),
+            (
+                vec![record_to(CLOCK_10_PROGRAM_ACCOUNT_ID, data(10))],
+                Vec::new()
+            )
+        );
+
+        let at_fifty = run(CLOCK_01_PROGRAM_ACCOUNT_ID, None, data(49), tick(50));
+        assert_eq!(
+            (at_fifty.response.calls, at_fifty.response.casts),
+            (
+                vec![
+                    record_to(CLOCK_10_PROGRAM_ACCOUNT_ID, data(50)),
+                    record_to(CLOCK_50_PROGRAM_ACCOUNT_ID, data(50)),
+                ],
+                Vec::new()
+            )
         );
     }
 
@@ -98,20 +161,73 @@ mod tests {
     #[should_panic(expected = "Clock block id must advance by exactly one")]
     fn a_block_id_that_skips_ahead_is_refused() {
         // The block ID drives the 10/50 schedule, so a forged one would off schedule.
-        apply(Effect::Advance(data(9)), &data(7).to_bytes());
+        let _transition = run(CLOCK_01_PROGRAM_ACCOUNT_ID, None, data(7), tick(9));
     }
 
     #[test]
     #[should_panic(expected = "Clock block id must advance by exactly one")]
     fn a_block_id_that_repeats_is_refused() {
-        apply(Effect::Advance(data(7)), &data(7).to_bytes());
+        let _transition = run(CLOCK_01_PROGRAM_ACCOUNT_ID, None, data(7), tick(7));
+    }
+
+    #[test]
+    #[should_panic(expected = "Tick is addressed to the every-block clock account")]
+    fn only_the_every_block_account_takes_a_tick() {
+        let _transition = run(CLOCK_10_PROGRAM_ACCOUNT_ID, None, data(9), tick(10));
     }
 
     #[test]
     fn a_coarser_account_stores_the_same_values() {
-        assert_eq!(
-            apply(Effect::Record(data(50)), &data(40).to_bytes()),
-            Some(data(50).to_bytes())
+        let sender = Some(CLOCK);
+        let transition = run(
+            CLOCK_50_PROGRAM_ACCOUNT_ID,
+            sender,
+            data(40),
+            Message::Record(data(50)),
+        );
+
+        assert_eq!(transition.response.post_state, written(data(50)));
+    }
+
+    #[test]
+    #[should_panic(expected = "Clock records are only sent by the every-block clock account")]
+    fn a_record_from_another_program_is_refused() {
+        let sender = Some(AccountId::new([3; 32]));
+        let _transition = run(
+            CLOCK_50_PROGRAM_ACCOUNT_ID,
+            sender,
+            data(40),
+            Message::Record(data(50)),
+        );
+    }
+
+    #[test]
+    fn a_timestamp_within_bounds_is_kept() {
+        let transition = run(
+            CLOCK_50_PROGRAM_ACCOUNT_ID,
+            None,
+            data(40),
+            Message::AssertTimestamp {
+                at_least: 1_699_999_999,
+                at_most: 1_700_000_001,
+            },
+        );
+
+        assert_eq!(transition.response.post_state, None);
+        assert!(transition.response.calls.is_empty() && transition.response.casts.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "Clock timestamp 1700000000 is outside [1700000001, 1700000002]")]
+    fn a_timestamp_outside_bounds_is_refused() {
+        let _transition = run(
+            CLOCK_50_PROGRAM_ACCOUNT_ID,
+            None,
+            data(40),
+            Message::AssertTimestamp {
+                at_least: 1_700_000_001,
+                at_most: 1_700_000_002,
+            },
         );
     }
 }

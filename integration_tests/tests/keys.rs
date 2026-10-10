@@ -10,7 +10,10 @@ use anyhow::{Context as _, Result};
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, fetch_privacy_preserving_tx, private_mention,
     public_mention,
-    utils::{assert_public_account_restored, new_account, restored_private_account, send},
+    utils::{
+        assert_public_account_restored, new_account, receive_pending, restored_private_account,
+        send,
+    },
     verify_commitment_is_in_state,
 };
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
@@ -52,7 +55,7 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
             to_account.key_chain.viewing_public_key.to_bytes(),
         )),
         to_keys: None,
-        to_identifier: Some(to_account.kind.identifier()),
+        to_pk: None,
         amount: 100,
     });
 
@@ -71,12 +74,19 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         .wallet()
         .get_private_account_commitment(from)
         .context("Failed to get private account commitment for sender")?;
-    assert!(tx.message.commitments().contains(&new_commitment1));
+    assert!(
+        tx.message
+            .execution
+            .commitments()
+            .contains(&new_commitment1)
+    );
 
-    for commitment in tx.message.commitments() {
+    for commitment in tx.message.execution.commitments() {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 
+    // Sent by keys, the credit is pending until the owner receives it.
+    receive_pending(&mut ctx).await?;
     let to_res_acc = ctx
         .wallet()
         .get_account_private(to_account_id)
@@ -145,7 +155,7 @@ async fn restore_keys_from_seed() -> Result<()> {
     log::info!("Preparation complete, performing keys restoration");
 
     // Restore keys from seed
-    wallet::cli::execute_keys_restoration(ctx.wallet_mut(), 10).await?;
+    ctx.wallet_mut().restore_keys(10).await?;
 
     // Verify restored private accounts
     let acc1 = restored_private_account(&ctx, to_account_id1, "Acc 1");

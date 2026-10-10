@@ -786,8 +786,8 @@ impl From<FfiAccountIdWithPrivacy> for AccountIdWithPrivacy {
 mod tests {
     use lee::{AccountId, PrivateKey, PublicKey};
     use lee_core::{
-        encryption::ViewingPublicKey, program::PdaSeed, AuthorizationSecretKey, Identifier,
-        NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
+        encryption::ViewingPublicKey, program::PdaSeed, AuthorizationSecretKey, NullifierPublicKey,
+        NullifierSecretKey, PrivateAccountKind,
     };
     use wallet::AccountIdentity;
 
@@ -803,10 +803,9 @@ mod tests {
         let nsk = NullifierSecretKey::from(&ask);
         let vpk = ViewingPublicKey::from_seed(&[44; 32], &[54; 32]);
         let npk = (&nsk).into();
-        let identifier = lee_core::Identifier::new([45; 32]);
 
         let private_reg_acc_id =
-            AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(identifier));
+            AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular);
         let pda_authority = AccountId::new([46; 32]);
         let pda_seed = PdaSeed::new([47; 32]);
         let private_pda_acc_id = AccountId::for_private_account(
@@ -815,7 +814,6 @@ mod tests {
             &PrivateAccountKind::Pda {
                 account_id: pda_authority,
                 seed: pda_seed,
-                identifier,
             },
         );
 
@@ -831,7 +829,7 @@ mod tests {
         let acc_identity_4 = AccountIdentity::PrivateForeign {
             npk,
             vpk: vpk.clone(),
-            kind: PrivateAccountKind::Regular(identifier),
+            kind: PrivateAccountKind::Regular,
         };
         let acc_identity_5 = AccountIdentity::PrivateOwned(private_pda_acc_id);
         let acc_identity_6 = AccountIdentity::PrivateForeign {
@@ -840,20 +838,17 @@ mod tests {
             kind: PrivateAccountKind::Pda {
                 account_id: pda_authority,
                 seed: pda_seed,
-                identifier,
             },
         };
         let acc_identity_7 = AccountIdentity::PrivateShared {
             ask,
             vpk: vpk.clone(),
-            identifier,
         };
         let acc_identity_8 = AccountIdentity::PrivatePdaShared {
             authority: pda_authority,
             seed: pda_seed,
             nsk,
             vpk,
-            identifier,
         };
 
         let ffi_acc_identity_1: FfiAccountIdentity = acc_identity_1.clone().into();
@@ -938,7 +933,6 @@ mod tests {
         let kind = PrivateAccountKind::Pda {
             account_id: AccountId::new([46; 32]),
             seed: PdaSeed::new([47; 32]),
-            identifier: Identifier::new([5; 32]),
         };
         let derived = AccountId::for_private_account(&npk, &vpk, &kind);
 
@@ -963,23 +957,64 @@ mod tests {
     }
 
     #[test]
+    fn a_public_pda_address_is_filled_on_export_and_checked_on_import() {
+        let program = AccountId::new([46; 32]);
+        let seed = PdaSeed::new([47; 32]);
+        let identity = AccountIdentity::PublicPda { program, seed };
+
+        let exported: FfiAccountIdentity = identity.clone().into();
+
+        assert_eq!(exported.kind, FfiAccountIdentityKind::PublicPda);
+        assert_eq!(
+            AccountId::from(exported.account_id),
+            AccountId::for_public_pda(&program, &seed)
+        );
+        assert_eq!(AccountIdentity::try_from(&exported).unwrap(), identity);
+
+        let mut contradictory = exported;
+        contradictory.account_id.data[0] ^= 1;
+
+        assert_eq!(
+            AccountIdentity::try_from(&contradictory).unwrap_err(),
+            WalletFfiError::InvalidAccountId
+        );
+    }
+
+    #[test]
+    fn a_public_foreign_address_is_derived_from_its_key_on_export_and_checked_on_import() {
+        let pk = lee::PublicKey::new_from_private_key(&lee::PrivateKey::try_new([48; 32]).unwrap());
+        let identity = AccountIdentity::PublicForeign(pk.clone());
+
+        let exported: FfiAccountIdentity = identity.clone().into();
+
+        assert_eq!(exported.kind, FfiAccountIdentityKind::PublicForeign);
+        assert_eq!(AccountId::from(exported.account_id), AccountId::from(&pk));
+        assert_eq!(AccountIdentity::try_from(&exported).unwrap(), identity);
+
+        let mut contradictory = exported;
+        contradictory.account_id.data[0] ^= 1;
+
+        assert_eq!(
+            AccountIdentity::try_from(&contradictory).unwrap_err(),
+            WalletFfiError::InvalidAccountId
+        );
+    }
+
+    #[test]
     fn inconsistent_derived_keys_are_rejected() {
         let ask = AuthorizationSecretKey([43; 32]);
         let nsk = NullifierSecretKey::from(&ask);
         let vpk = ViewingPublicKey::from_seed(&[44; 32], &[54; 32]);
-        let identifier = lee_core::Identifier::new([45; 32]);
 
         let shared = AccountIdentity::PrivateShared {
             ask,
             vpk: vpk.clone(),
-            identifier,
         };
         let pda_shared = AccountIdentity::PrivatePdaShared {
             authority: AccountId::new([48; 32]),
             seed: PdaSeed::new([49; 32]),
             nsk,
             vpk,
-            identifier,
         };
 
         let mut tampered_nsk: FfiAccountIdentity = shared.clone().into();

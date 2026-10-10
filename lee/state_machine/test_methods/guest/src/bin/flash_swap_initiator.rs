@@ -1,5 +1,5 @@
-//! Flash swap initiator, demonstrates the "prep → callback → assert" pattern using
-//! generalized multi tail-calls with `self_account_id` and `caller_account_id`.
+//! Flash swap initiator, demonstrates the "read → lend → callback → read" pattern using ordered
+//! sends and native balance reads.
 //!
 //! # Pattern
 //!
@@ -9,179 +9,158 @@
 //!
 //! # How it works
 //!
-//! This program handles two instruction variants:
+//! - `Initiate` (external): records the loan and reads the vault balance.
+//! - The first reply checks the vault holds the proposed balance, then sends, in order:
+//!   1. A custody transfer out of the vault to the receiver
+//!   2. The user callback (arbitrary logic, e.g. arbitrage)
+//!   3. A second read of the vault balance
+//! - The second reply requires the vault balance to be back at its value before the swap.
 //!
-//! - `Initiate` (external): the top-level entrypoint. Emits 3 chained calls:
-//!   1. Token transfer out (vault → receiver)
-//!   2. User callback (arbitrary logic, e.g. arbitrage)
-//!   3. Self-call to `InvariantCheck` (using `self_account_id` to reference itself)
+//! Pending swaps form a stack, so a callback may start another swap: depth-first execution
+//! answers the inner swap's reads before the outer swap's second read.
 //!
-//! - `InvariantCheck` (internal): enforces that the vault balance was restored after the callback.
-//!   Uses `caller_account_id == Some(self_account_id)` to prevent standalone calls (this is the
-//!   visibility enforcement mechanism).
-//!
-//! # What this demonstrates
-//!
-//! - `self_account_id`: enables a program to chain back to itself (step 3 above)
-//! - `caller_account_id`: enables a program to restrict which callers can invoke an instruction
-//! - `Plan::inspect`: checks the supplied starting balance against the vault's actual balance
-//!   before the transfer.
-//! - Atomic rollback: if the callback doesn't return funds, the invariant check fails, and all
-//!   state changes from steps 1 and 2 are rolled back automatically.
-//!
-//! # Tests
-//!
-//! See `lee/src/state.rs` for integration tests:
-//! - `flash_swap_successful`: full round-trip, funds returned, state unchanged
-//! - `flash_swap_callback_keeps_funds_rollback`: callback keeps funds, full rollback
-//! - `flash_swap_self_call_targets_correct_program`: zero-amount self-call isolation test
-//! - `flash_swap_standalone_invariant_check_rejected`: `caller_account_id` access control
+//! If the callback does not return funds, the second check fails and the whole transaction rolls
+//! back.
 
+use std::collections::BTreeSet;
+
+use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::ProgramShardSelector,
-    native_token::{NATIVE_TOKEN_PROGRAM_ID, custody_transfer, decode_balance},
-    program::{ChainedCall, PdaSeed, Plan, ProgramCall, apply_keep, read_program_call},
+    account::{AccountId, Actor},
+    native_token::{self, NATIVE_TOKEN_PROGRAM_ID, custody_transfer, decode_balance},
+    program::{Call, PdaSeed, ReceiveInput, Response, StateReply},
 };
 
-#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
-pub enum FlashSwapInstruction {
-    /// External entrypoint: initiate a flash swap.
-    ///
-    /// Emits 3 chained calls:
-    /// 1. Token transfer (vault → receiver, `amount_out`)
-    /// 2. Callback (user logic, e.g. arbitrage)
-    /// 3. Self-call `InvariantCheck` (verify vault balance did not decrease)
-    Initiate {
-        callback_program_id: lee_core::account::AccountId,
-        amount_out: u128,
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct Loan {
+    vault: AccountId,
+    receiver: AccountId,
+    callback: Actor,
+    amount_out: u128,
+    vault_balance: u128,
+    callback_message: Vec<u8>,
+}
+
+#[derive(BorshSerialize, BorshDeserialize)]
+pub enum FlashSwapMessage {
+    Initiate(Loan),
+}
+
+#[derive(BorshSerialize, BorshDeserialize)]
+enum Phase {
+    Lending(Loan),
+    Repaying {
+        vault: AccountId,
         vault_balance: u128,
-        callback_instruction_data: Vec<u8>,
     },
-    /// Internal: verify the vault invariant holds after callback execution.
-    ///
-    /// Access control: only callable as a chained call from this program itself.
-    /// This is enforced by checking `caller_account_id == Some(self_account_id)`.
-    /// Any attempt to call this instruction as a standalone top-level transaction
-    /// will be rejected because `caller_account_id` will be `None`.
-    InvariantCheck { min_vault_balance: u128 },
 }
 
-#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
-enum Guard {
-    BalanceIs(u128),
-    BalanceAtLeast(u128),
-}
-
-fn main() {
-    match read_program_call::<FlashSwapInstruction>() {
-        ProgramCall::Plan(input, instruction) => plan(&input, &instruction),
-        ProgramCall::Apply(input) => {
-            let guard: Guard =
-                borsh::from_slice(&input.effect_data).expect("the initiator wrote its own guard");
-            let balance = decode_balance(&input.pre_data)
-                .expect("the guarded shard is a native balance shard");
-            match guard {
-                Guard::BalanceIs(proposed) => assert_eq!(
-                    balance, proposed,
-                    "Proposed vault balance {proposed} is not the vault's actual balance \
-                     {balance}"
-                ),
-                Guard::BalanceAtLeast(minimum) => assert!(
-                    balance >= minimum,
-                    "Flash swap invariant violated: vault balance {balance} < minimum {minimum}"
-                ),
-            }
-            apply_keep(input)
+impl Phase {
+    const fn expected(&self) -> (AccountId, u128) {
+        match self {
+            Self::Lending(Loan {
+                vault,
+                vault_balance,
+                ..
+            })
+            | Self::Repaying {
+                vault,
+                vault_balance,
+            } => (*vault, *vault_balance),
         }
     }
 }
 
-fn plan(input: &lee_core::program::PlanInput, instruction: &FlashSwapInstruction) -> ! {
-    match instruction {
-        FlashSwapInstruction::Initiate {
-            callback_program_id,
+fn read_vault(vault: AccountId) -> Call {
+    Call::new(
+        Actor::native_balance(vault),
+        &native_token::Message::ReadState,
+    )
+}
+
+fn pending(input: &ReceiveInput) -> Vec<Phase> {
+    if input.pre_state.is_empty() {
+        Vec::new()
+    } else {
+        borsh::from_slice(&input.pre_state).expect("the initiator holds its pending swaps")
+    }
+}
+
+fn keep(pending: &[Phase]) -> Response {
+    Response::set_state(if pending.is_empty() {
+        Vec::new()
+    } else {
+        borsh::to_vec(pending).expect("pending swaps encode")
+    })
+}
+
+fn answer(input: &ReceiveInput, mut pending: Vec<Phase>, reply: &StateReply) -> Response {
+    let phase = pending.pop().expect("a reply must answer a pending read");
+    let (vault, vault_balance) = phase.expected();
+    assert_eq!(
+        input.from,
+        Some(Actor::native_balance(vault)),
+        "the reply must read the vault"
+    );
+    let balance = decode_balance(&reply.state).expect("the vault holds a canonical balance");
+    match phase {
+        Phase::Lending(Loan {
+            receiver,
+            callback,
             amount_out,
-            vault_balance,
-            callback_instruction_data,
-        } => {
-            let Ok([vault, receiver]) = <[_; 2]>::try_from(input.accounts.clone()) else {
-                panic!("Initiate requires exactly 2 accounts: vault, receiver");
-            };
-            let mut plan = Plan::new(input);
-
-            // The invariant's floor comes in with the instruction, so it is a proposal, pinned by
-            // a guard on the vault's native balance.
-            plan.inspect(
-                &vault,
-                NATIVE_TOKEN_PROGRAM_ID,
-                &Guard::BalanceIs(*vault_balance),
-            );
-
-            // Chained call 1: Token transfer (vault → receiver).
-            // The vault is a PDA of this initiator program (seed = [0_u8; 32]), so we provide
-            // the PDA seed to authorize the token program to debit the vault on our behalf.
-            plan.call(custody_transfer(
-                vault.account_id,
-                PdaSeed::new([0; 32]),
-                receiver.account_id,
-                *amount_out,
-            ));
-
-            // Chained call 2: User callback. The callback may run arbitrary logic (arbitrage,
-            // etc.) and is expected to return funds to the vault.
-            plan.call(ChainedCall {
-                program_account_id: *callback_program_id,
-                shard_selectors: vec![
-                    ProgramShardSelector::from(&vault),
-                    ProgramShardSelector::from(&receiver),
-                ],
-                instruction_data: callback_instruction_data.clone(),
-                pda_seeds: vec![],
-            });
-
-            // Chained call 3: Self-call to enforce the invariant.
-            // Uses `self_account_id` to reference this program, the key feature that enables
-            // the "prep → callback → assert" pattern without a separate checker program.
-            // If the callback did not return funds, the vault's balance by this point will be
-            // below `min_vault_balance` and that call's guard will panic, rolling back the
-            // entire transaction.
-            plan.call(ChainedCall::new(
-                input.self_account_id, // self-referential chained call
-                vec![ProgramShardSelector::from(&vault)],
-                &FlashSwapInstruction::InvariantCheck {
-                    min_vault_balance: *vault_balance,
-                },
-            ));
-
-            plan.write()
-        }
-
-        FlashSwapInstruction::InvariantCheck { min_vault_balance } => {
-            // Visibility enforcement: `InvariantCheck` is an internal instruction.
-            // It must only be called as a chained call from this program itself (via `Initiate`).
-            // When called as a top-level transaction, `caller_account_id` is `None` → panics.
-            // When called as a chained call from `Initiate`, `caller_account_id` is
-            // `Some(self_account_id)` → passes.
+            callback_message,
+            ..
+        }) => {
             assert_eq!(
-                input.caller_account_id,
-                Some(input.self_account_id),
-                "InvariantCheck is an internal instruction: must be called by flash_swap_initiator \
-                 via a chained call",
+                balance, vault_balance,
+                "the vault must hold the proposed balance"
             );
-
-            let Ok([vault]) = <[_; 1]>::try_from(input.accounts.clone()) else {
-                panic!("InvariantCheck requires exactly 1 account: vault");
-            };
-
-            // The core invariant: vault balance must not have decreased. Checked by this
-            // program's own apply against the vault's actual balance shard.
-            let mut plan = Plan::new(input);
-            plan.inspect(
-                &vault,
-                NATIVE_TOKEN_PROGRAM_ID,
-                &Guard::BalanceAtLeast(*min_vault_balance),
+            pending.push(Phase::Repaying {
+                vault,
+                vault_balance,
+            });
+            keep(&pending)
+                .send(custody_transfer(
+                    vault,
+                    PdaSeed::new([0; 32]),
+                    receiver,
+                    amount_out,
+                ))
+                .send(Call {
+                    to: callback,
+                    message: callback_message,
+                    pda_seeds: BTreeSet::new(),
+                })
+                .send(read_vault(vault))
+        }
+        Phase::Repaying { .. } => {
+            assert_eq!(
+                balance, vault_balance,
+                "the vault must end where it started"
             );
-            plan.write()
+            keep(&pending)
         }
     }
+}
+
+lee_core::define_actor_logic!(raw handle_message);
+
+fn handle_message(input: &ReceiveInput) -> Response {
+    let mut pending = pending(input);
+    if input
+        .from
+        .is_some_and(|from| from.program_account_id == NATIVE_TOKEN_PROGRAM_ID)
+    {
+        let native_token::Message::StateReply(reply) =
+            borsh::from_slice(&input.message).expect("a native message must decode")
+        else {
+            panic!("the native program sends the initiator only state replies");
+        };
+        return answer(input, pending, &reply);
+    }
+    let FlashSwapMessage::Initiate(loan) =
+        borsh::from_slice(&input.message).expect("a flash swap message must decode");
+    let read = read_vault(loan.vault);
+    pending.push(Phase::Lending(loan));
+    keep(&pending).send(read)
 }

@@ -107,21 +107,22 @@ impl AccountId {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::BTreeSet;
 
-    fn shard_bearing_account() -> Account {
+    use super::*;
+    use crate::{account::AccountData, execution_state::PublicExecutionContext};
+
+    fn actor_state_bearing_account() -> Account {
         Account {
             nonce: 42_u128.into(),
-            ..Account::funded(123_456_789_012_345_678_901_234_567_890_123_456).with_shard(
-                AccountId::new([7; 32]),
-                b"hola mundo".to_vec().try_into().unwrap(),
-            )
+            ..Account::funded(123_456_789_012_345_678_901_234_567_890_123_456)
+                .with_actor_state(AccountId::new([7; 32]), b"hola mundo".to_vec().into())
         }
     }
 
     #[test]
     fn encoding() {
-        let account = shard_bearing_account();
+        let account = actor_state_bearing_account();
 
         let expected_bytes = [
             42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -133,6 +134,41 @@ mod tests {
 
         let bytes = account.to_bytes();
         assert_eq!(bytes, expected_bytes);
+    }
+
+    #[test]
+    fn sets_and_maps_decode_only_in_strictly_ascending_key_order() {
+        let context = |promotions: [u64; 2]| {
+            [
+                vec![0; 8],
+                vec![2, 0, 0, 0],
+                promotions.map(u64::to_le_bytes).concat(),
+            ]
+            .concat()
+        };
+        let account_data = |keys: [u8; 2]| {
+            [
+                vec![2, 0, 0, 0],
+                keys.map(|key| [[key; 32].as_slice(), &[1, 0, 0, 0, key]].concat())
+                    .concat(),
+            ]
+            .concat()
+        };
+
+        assert_eq!(
+            borsh::from_slice::<PublicExecutionContext>(&context([1, 2]))
+                .unwrap()
+                .cast_promotions,
+            BTreeSet::from([1, 2])
+        );
+        assert!(borsh::from_slice::<AccountData>(&account_data([1, 2])).is_ok());
+        for entries in [[2, 1], [1, 1]] {
+            assert!(
+                borsh::from_slice::<PublicExecutionContext>(&context(entries.map(u64::from)))
+                    .is_err()
+            );
+            assert!(borsh::from_slice::<AccountData>(&account_data(entries)).is_err());
+        }
     }
 
     #[test]
@@ -157,7 +193,7 @@ mod tests {
     #[cfg(feature = "host")]
     #[test]
     fn account_to_bytes_roundtrip() {
-        let account = shard_bearing_account();
+        let account = actor_state_bearing_account();
         let bytes = account.to_bytes();
         let mut cursor = Cursor::new(bytes.as_ref());
         let account_from_cursor = Account::from_cursor(&mut cursor).unwrap();

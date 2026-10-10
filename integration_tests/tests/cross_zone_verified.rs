@@ -9,18 +9,20 @@
 //! payload landing in the indexer's state proves verification passed; a forgery
 //! would have halted the indexer instead.
 
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
-use cross_zone_outbox_core::outbox_pda;
+use cross_zone_outbox_core::{outbox_pda, outbox_pda_seed};
 use integration_tests::{
     config::{self, SequencerPartialConfig},
     indexer_client::IndexerClient,
 };
-use lee::{AccountId, ProgramShardSelector, PublicTransaction, public_transaction::Message};
+use lee::{
+    AccountId, Actor, PublicAccountEvidence, PublicTransaction, public_transaction::Message,
+};
 use ping_core::{
-    ReceiverInstruction, SenderInstruction, ping_record_pda, receiver_config_account_id,
+    ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id,
     sender_config_account_id,
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
@@ -113,34 +115,37 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransactio
     let outbox_id = programs::cross_zone_outbox_account_id();
     let ordinal = 0;
 
-    let payload = borsh::to_vec(&ReceiverInstruction::Record {
+    let payload = borsh::to_vec(&ReceiverMessage::Record {
         payload: PING_PAYLOAD.to_vec(),
     })
-    .expect("serialize ping instruction");
+    .expect("serialize ping message");
 
-    let send = SenderInstruction::Send {
+    let sender_id = programs::ping_sender_account_id();
+    let config = Actor::new(sender_config_account_id(sender_id), sender_id);
+    let outbox = Actor::new(
+        outbox_pda(outbox_id, sender_id, &target_zone, ordinal),
+        outbox_id,
+    );
+    let send = SenderMessage::Send {
+        outbox,
         target_zone,
         target_account_id: receiver_id,
         target_accounts: vec![
-            ProgramShardSelector::new(receiver_config_account_id(receiver_id), receiver_id),
-            ProgramShardSelector::new(ping_record_pda(receiver_id), receiver_id),
+            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+            Actor::new(ping_record_pda(receiver_id), receiver_id),
         ],
         payload,
         ordinal,
     };
 
-    let sender_id = programs::ping_sender_account_id();
-    let outbox_account = outbox_pda(outbox_id, sender_id, &target_zone, ordinal);
-    let message = Message::try_new(
-        sender_id,
-        vec![
-            ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
-            ProgramShardSelector::new(outbox_account, outbox_id),
-        ],
-        vec![],
-        send,
-    )
-    .expect("build ping message");
+    let message = Message {
+        admission_evidence: vec![PublicAccountEvidence::Pda {
+            program: outbox_id,
+            seed: outbox_pda_seed(sender_id, &target_zone, ordinal),
+        }],
+        ..Message::try_new(config, vec![config, outbox], BTreeMap::new(), send)
+            .expect("build ping message")
+    };
     LeeTransaction::Public(PublicTransaction::new(
         message,
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
@@ -161,11 +166,12 @@ async fn wait_for_indexer_delivery(
     };
     let wait = async {
         loop {
-            let account =
-                indexer_service_rpc::RpcClient::get_account(&**indexer, account_id).await?;
+            let account = indexer_service_rpc::RpcClient::get_account(&**indexer, account_id)
+                .await?
+                .unwrap_or_else(|| lee::Account::default().into());
             let data = account
                 .data
-                .shards
+                .actor_states
                 .get(&program_account_id)
                 .map_or_else(Vec::new, |data| data.0.clone());
             if !data.is_empty() {

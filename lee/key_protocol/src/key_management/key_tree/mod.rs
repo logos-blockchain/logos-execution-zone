@@ -541,37 +541,33 @@ mod tests {
             .key_map
             .get_mut(&ChainIndex::from_str("/1").unwrap())
             .unwrap();
-        acc.value.1.insert(
-            PrivateAccountKind::Regular(Identifier::ZERO),
-            lee::Account::funded(2),
-        );
+        acc.value
+            .1
+            .insert(PrivateAccountKind::Regular, lee::Account::funded(2));
 
         let acc = tree
             .key_map
             .get_mut(&ChainIndex::from_str("/2").unwrap())
             .unwrap();
-        acc.value.1.insert(
-            PrivateAccountKind::Regular(Identifier::ZERO),
-            lee::Account::funded(3),
-        );
+        acc.value
+            .1
+            .insert(PrivateAccountKind::Regular, lee::Account::funded(3));
 
         let acc = tree
             .key_map
             .get_mut(&ChainIndex::from_str("/0/1").unwrap())
             .unwrap();
-        acc.value.1.insert(
-            PrivateAccountKind::Regular(Identifier::ZERO),
-            lee::Account::funded(5),
-        );
+        acc.value
+            .1
+            .insert(PrivateAccountKind::Regular, lee::Account::funded(5));
 
         let acc = tree
             .key_map
             .get_mut(&ChainIndex::from_str("/1/0").unwrap())
             .unwrap();
-        acc.value.1.insert(
-            PrivateAccountKind::Regular(Identifier::ZERO),
-            lee::Account::funded(6),
-        );
+        acc.value
+            .1
+            .insert(PrivateAccountKind::Regular, lee::Account::funded(6));
 
         // Update account_id_map for nodes that now have entries
         for chain_index_str in ["/1", "/2", "/0/1", "/1/0"] {
@@ -583,7 +579,7 @@ mod tests {
             }
         }
 
-        tree.cleanup_tree_remove_uninit_layered(10);
+        tree.cleanup_tree_remove_uninit_layered(10, &HashSet::new());
 
         let mut key_set_res = HashSet::new();
         key_set_res.insert("/0".to_owned());
@@ -604,7 +600,7 @@ mod tests {
 
         let acc = &tree.key_map[&ChainIndex::from_str("/1").unwrap()];
         assert_eq!(
-            acc.value.1[&PrivateAccountKind::Regular(Identifier::ZERO)]
+            acc.value.1[&PrivateAccountKind::Regular]
                 .data
                 .native_balance()
                 .unwrap(),
@@ -613,7 +609,7 @@ mod tests {
 
         let acc = &tree.key_map[&ChainIndex::from_str("/2").unwrap()];
         assert_eq!(
-            acc.value.1[&PrivateAccountKind::Regular(Identifier::ZERO)]
+            acc.value.1[&PrivateAccountKind::Regular]
                 .data
                 .native_balance()
                 .unwrap(),
@@ -622,7 +618,7 @@ mod tests {
 
         let acc = &tree.key_map[&ChainIndex::from_str("/0/1").unwrap()];
         assert_eq!(
-            acc.value.1[&PrivateAccountKind::Regular(Identifier::ZERO)]
+            acc.value.1[&PrivateAccountKind::Regular]
                 .data
                 .native_balance()
                 .unwrap(),
@@ -631,11 +627,31 @@ mod tests {
 
         let acc = &tree.key_map[&ChainIndex::from_str("/1/0").unwrap()];
         assert_eq!(
-            acc.value.1[&PrivateAccountKind::Regular(Identifier::ZERO)]
+            acc.value.1[&PrivateAccountKind::Regular]
                 .data
                 .native_balance()
                 .unwrap(),
             6
         );
+    }
+
+    #[test]
+    fn cleanup_keeps_a_default_node_a_pending_credit_awaits() {
+        let awaited_node = ChainIndex::from_str("/1/0").unwrap();
+        let mut tree = KeyTreePrivate::new(&seed_holder_for_tests());
+        tree.generate_tree_for_depth(10);
+        let awaited: HashSet<AccountId> = tree.key_map[&awaited_node].account_ids().collect();
+        let mut unawaited = tree.clone();
+
+        tree.cleanup_tree_remove_uninit_layered(10, &awaited);
+        unawaited.cleanup_tree_remove_uninit_layered(10, &HashSet::new());
+
+        assert!(
+            awaited
+                .iter()
+                .all(|account_id| tree.account_id_map[account_id] == awaited_node)
+        );
+        assert!(tree.key_map.contains_key(&awaited_node));
+        assert!(!unawaited.key_map.contains_key(&awaited_node));
     }
 }

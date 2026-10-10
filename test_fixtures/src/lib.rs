@@ -1039,10 +1039,10 @@ pub async fn verify_commitment_is_in_state(
     seq_client: &SequencerClient,
 ) -> bool {
     seq_client
-        .get_proofs_and_root(vec![commitment])
+        .get_proofs_and_root(vec![commitment], None)
         .await
         .ok()
-        .and_then(|(proofs, _)| proofs.into_iter().next().flatten())
+        .and_then(|(proofs, _, _)| proofs.into_iter().next().flatten())
         .is_some()
 }
 

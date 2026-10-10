@@ -1,31 +1,111 @@
+use lee_core::{RootCall, execution_state::BoundaryStep};
+
 use super::*;
 
-#[derive(Clone, Copy, borsh::BorshSerialize, borsh::BorshDeserialize)]
-enum ForgeField {
-    SelfId,
-    Selector,
-    PreData,
-    EffectData,
+// One funded private account, rooted at its scripted actor, whose native balance it may also
+// address.
+struct PrivateRoot {
+    state: V03State,
+    keys: TestPrivateKeys,
+    account_id: AccountId,
+    pre_account: Account,
 }
 
-fn assert_execution_failure<T>(result: &Result<T, LeeError>, expected: &str) {
-    assert!(
-        matches!(
-            result,
-            Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(error)))
-                if error.to_string().contains(expected)
-        ),
-        "expected an execution rejection containing {expected:?}, got: {:?}",
-        result.as_ref().err()
-    );
+impl PrivateRoot {
+    fn new() -> Self {
+        let keys = test_private_account_keys_1();
+        let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk());
+        let pre_account = Account::funded(100);
+        let state = V03State::new()
+            .with_test_programs()
+            .with_private_account(&keys, &pre_account);
+        Self {
+            state,
+            keys,
+            account_id,
+            pre_account,
+        }
+    }
+
+    fn proving_input(&self, script: &Script, public_actors: Vec<Actor>) -> ProvingInput {
+        let membership_proof = self
+            .state
+            .get_proof_for_commitment(&Commitment::new(&self.account_id, &self.pre_account))
+            .expect("the account's commitment must be in state");
+        ProvingInput {
+            context: PublicExecutionContext::new(public_actors, []),
+            private_witnesses: vec![update_witness(
+                &self.keys,
+                self.pre_account.clone(),
+                membership_proof,
+            )],
+            ..proving_input(root(Actor::new(self.account_id, scripted_id()), script))
+        }
+    }
+
+    fn prove(&self, script: &Script, public_actors: Vec<Actor>) -> PrivacyPreservingTransaction {
+        let proven = execute_and_prove(
+            self.proving_input(script, public_actors),
+            &Simulation::default(),
+            &synthetic_program(crate::test_methods::scripted()),
+            |_| SenderPresentation::Canonical,
+            |_, _| false,
+            no_seal,
+        )
+        .unwrap();
+        private_tx(proven, vec![], &[])
+    }
 }
 
-fn assert_program_prove_failure<T>(result: &Result<T, LeeError>, expected: &str) {
-    assert!(
-        matches!(result, Err(LeeError::ProgramProveFailed(msg)) if msg.contains(expected)),
-        "expected ProgramProveFailed containing {expected:?}, got: {:?}",
-        result.as_ref().err()
-    );
+// A shielded P → A → Q statement: the public root P sends into the private actor A, whose
+// transition sends to the public actor Q. The proof always assumes P delivers `inner_transition` to
+// A.
+struct NestedBoundary {
+    state: V03State,
+    outer: Actor,
+    inner: Actor,
+    tx: PrivacyPreservingTransaction,
+}
+
+impl NestedBoundary {
+    fn prove(outer_script: &Script) -> Self {
+        let keys = test_private_account_keys_1();
+        let (outer, inner) = nested_actors();
+        let proven = execute_and_prove_with_cross_messages(
+            ProvingInput {
+                context: PublicExecutionContext::new(vec![outer, inner], []),
+                private_witnesses: vec![init_witness(&keys)],
+                ..proving_input(root(outer, outer_script))
+            },
+            vec![
+                vec![Delivery {
+                    envelope: MessageEnvelope {
+                        from: outer,
+                        to: nested_private(),
+                        message: borsh::to_vec(&inner_transition()).unwrap(),
+                    },
+                    inherited_authorizations: BTreeSet::new(),
+                    inherits_entry_authorizations: true,
+                    pda_seeds: BTreeSet::new(),
+                }],
+                Vec::new(),
+            ],
+            &synthetic_program(crate::test_methods::scripted()),
+            |_| SenderPresentation::Canonical,
+            |_, _| false,
+            no_seal,
+        )
+        .unwrap();
+
+        Self {
+            state: V03State::new()
+                .with_programs([crate::test_methods::scripted()])
+                .with_empty_public_accounts([outer.account_id, inner.account_id]),
+            outer,
+            inner,
+            tx: private_tx(proven, vec![], &[]),
+        }
+    }
 }
 
 #[test]
@@ -44,12 +124,12 @@ fn transition_from_privacy_preserving_transaction_shielded() {
         let mut this = state.get_account_by_id(sender_keys.account_id());
         let post_balance = this.data.native_balance().unwrap() - balance_to_move;
         this.data
-            .set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(post_balance));
+            .set_actor_state(NATIVE_TOKEN_PROGRAM_ID, encode_balance(post_balance));
         this.nonce.public_account_nonce_increment();
         this
     };
 
-    let [expected_new_commitment] = tx.message().commitments().try_into().unwrap();
+    let [expected_new_commitment] = tx.message().execution.commitments().try_into().unwrap();
     assert!(!state.private_state.0.contains(&expected_new_commitment));
 
     state
@@ -70,7 +150,7 @@ fn transition_from_privacy_preserving_transaction_shielded() {
 }
 
 #[test]
-fn privacy_preserving_witness_set_cannot_have_dulicate_signers() {
+fn privacy_preserving_witness_set_cannot_have_duplicate_signers() {
     let sender_keys = test_public_account_keys_1();
     let recipient_keys = test_private_account_keys_1();
 
@@ -78,12 +158,10 @@ fn privacy_preserving_witness_set_cannot_have_dulicate_signers() {
 
     let tx = shielded_balance_transfer_for_tests(&sender_keys, &recipient_keys, 37, &state);
 
-    // Re-sign the same message with the sender twice; both nonces match the
+    // Re-sign the same message with the sender twice; its nonce matches the
     // current state, so only the repeat is at fault.
     let (_, proof) = tx.witness_set.into_raw_parts();
-    let mut message = tx.message;
-    let nonce = message.nonces[0];
-    message.nonces = vec![nonce, nonce];
+    let message = tx.message;
     let witness_set = WitnessSet::for_message(
         &message,
         proof,
@@ -121,16 +199,10 @@ fn transition_from_privacy_preserving_transaction_private() {
         &state,
     );
 
-    let sender_account_id = AccountId::for_regular_private_account(
-        &sender_keys.npk(),
-        &sender_keys.vpk(),
-        Identifier::ZERO,
-    );
-    let recipient_account_id = AccountId::for_regular_private_account(
-        &recipient_keys.npk(),
-        &recipient_keys.vpk(),
-        Identifier::ZERO,
-    );
+    let sender_account_id =
+        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk());
+    let recipient_account_id =
+        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk());
     let expected_new_commitment_1 = Commitment::new(
         &sender_account_id,
         &Account {
@@ -148,7 +220,7 @@ fn transition_from_privacy_preserving_transaction_private() {
     let expected_new_commitment_2 = Commitment::new(
         &recipient_account_id,
         &Account {
-            nonce: Nonce::private_account_nonce_init(&recipient_account_id),
+            nonce: Nonce::default().private_account_nonce_increment(&recipient_keys.nsk()),
             ..Account::funded(balance_to_move)
         },
     );
@@ -185,7 +257,10 @@ fn privacy_tampered_epk_is_rejected() {
     );
 
     // Flip a byte of the first note's epk
-    tx.message.private_actions[0].encrypted_post_state.epk.0[0] ^= 0xFF;
+    tx.message.execution.private_actions[0]
+        .encrypted_post_state
+        .epk
+        .0[0] ^= 0xFF;
 
     assert!(
         matches!(
@@ -193,32 +268,6 @@ fn privacy_tampered_epk_is_rejected() {
             Err(LeeError::InvalidPrivacyPreservingProof)
         ),
         "a tampered epk must be rejected by proof verification"
-    );
-}
-
-/// After a valid fully-private tx is proven, tampering with a note's view tag should
-/// make the shielding proof invalid.
-#[test]
-fn privacy_tampered_view_tag_is_rejected() {
-    use crate::validated_state_diff::ValidatedStateDiff;
-
-    let (state, mut tx) = valid_private_transfer_tx_and_state();
-
-    // Baseline: the untampered tx verifies.
-    assert!(
-        ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0).is_ok(),
-        "the unmodified private transfer must verify"
-    );
-
-    // Flip the first note's view_tag
-    tx.message.private_actions[0].encrypted_post_state.view_tag ^= 0xFF;
-
-    assert!(
-        matches!(
-            ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0),
-            Err(LeeError::InvalidPrivacyPreservingProof)
-        ),
-        "a tampered view_tag must be rejected by proof verification"
     );
 }
 
@@ -241,17 +290,31 @@ fn a_journal_claiming_an_unsigned_account_authorized_is_rejected() {
         witness_set,
     } = signed;
     message.nonces.clear();
-    let witness_set = WitnessSet::for_message(&message, witness_set.proof, &[]);
-    let unsigned = PrivacyPreservingTransaction::new(message, witness_set);
+    let unsigned = PrivacyPreservingTransaction::new(
+        message.clone(),
+        WitnessSet::for_message(&message, witness_set.proof.clone(), &[]),
+    );
 
     assert!(matches!(
         ValidatedStateDiff::from_privacy_preserving_transaction(&unsigned, &state, 1, 0),
+        Err(LeeError::InvalidInput(msg)) if msg == "Authorized accounts do not match the signers"
+    ));
+
+    // Dropping the claim to match the missing signature detaches the statement from its proof.
+    message.context.authorized_accounts.clear();
+    let unclaimed = PrivacyPreservingTransaction::new(
+        message.clone(),
+        WitnessSet::for_message(&message, witness_set.proof, &[]),
+    );
+
+    assert!(matches!(
+        ValidatedStateDiff::from_privacy_preserving_transaction(&unclaimed, &state, 1, 0),
         Err(LeeError::InvalidPrivacyPreservingProof)
     ));
 }
 
 #[test]
-fn a_tampered_deferred_effect_is_rejected() {
+fn a_tampered_boundary_output_is_rejected() {
     use crate::validated_state_diff::ValidatedStateDiff;
 
     let sender_keys = test_private_account_keys_1();
@@ -275,7 +338,10 @@ fn a_tampered_deferred_effect_is_rejected() {
         "the unmodified transfer must verify"
     );
 
-    tx.message.public_actions[0].effects[0].data[0] ^= 0xFF;
+    let BoundaryStep::PrivateToPublic(delivery) = &mut tx.message.execution.boundary[0] else {
+        panic!("the transfer's boundary opens with its public call");
+    };
+    delivery.envelope.message[0] ^= 0xFF;
 
     assert!(matches!(
         ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0),
@@ -284,53 +350,44 @@ fn a_tampered_deferred_effect_is_rejected() {
 }
 
 #[test]
-fn a_failing_deferred_effect_leaves_the_state_untouched() {
-    let program = crate::test_methods::native_spender();
-    let program_id = AccountId::from_builtin_program(program.id());
+fn a_failing_public_transition_leaves_the_state_untouched() {
+    let program_id = scripted_id();
     let sender_keys = test_public_account_keys_1();
     let sender_id = sender_keys.account_id();
-    let own_id = AccountId::new([7; 32]);
+    let sender = Actor::native_balance(sender_id);
+    let own = Actor::new(AccountId::new([7; 32]), program_id);
     let recipient_keys = test_private_account_keys_1();
-    let recipient_id = AccountId::for_regular_private_account(
-        &recipient_keys.npk(),
-        &recipient_keys.vpk(),
-        Identifier::ZERO,
-    );
+    let recipient_id =
+        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk());
     let mut state = V03State::new()
-        .with_programs([program.clone()])
-        .with_public_account_balances([(sender_id, 10)]);
-    let own_data: Vec<u8> = vec![1];
+        .with_programs([crate::test_methods::scripted()])
+        .with_public_account_balances([(sender_id, 10)])
+        .with_empty_public_accounts([own.account_id]);
     let overdraft: u128 = 11;
 
-    // Plans cannot read balances, so the overdraft proves and only fails once settled.
-    let (output, proof) = execute_and_prove(
+    // The builder's snapshot funds the overdraft, so it proves and only fails once settled.
+    let script = Script::write(vec![1]).call(sender, &transfer(recipient_id, overdraft));
+    let proven = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![
-                ProgramShardSelector::new(own_id, program_id),
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(recipient_id),
-            ],
-            signers: [sender_id].into(),
-            private_witnesses: vec![init_witness(&recipient_keys, Identifier::ZERO)],
-            instruction_data: Program::serialize_instruction((own_data, overdraft)).unwrap(),
-            ..Default::default()
+            context: PublicExecutionContext::new(vec![own, sender], [sender_id]),
+            private_witnesses: vec![init_witness(&recipient_keys)],
+            ..proving_input(root(own, &script))
         },
-        &synthetic_program(program),
+        &Simulation {
+            public_actor_states: [(sender, encode_balance(overdraft))].into(),
+            admitted_accounts: None,
+        },
+        &synthetic_program(crate::test_methods::scripted()),
+        |_| SenderPresentation::Canonical,
+        |_, _| false,
+        no_seal,
     )
     .unwrap();
-    let message =
-        Message::from_circuit_output(vec![state.get_account_by_id(sender_id).nonce], output);
-    assert_eq!(
-        message
-            .public_actions
-            .iter()
-            .map(|action| action.account_id)
-            .collect::<Vec<_>>(),
-        vec![own_id, sender_id],
-        "the own-shard write must settle before the failing debit"
+    let tx = private_tx(
+        proven,
+        vec![state.get_account_by_id(sender_id).nonce],
+        &[&sender_keys.signing_key],
     );
-    let witness_set = WitnessSet::for_message(&message, proof, &[&sender_keys.signing_key]);
-    let tx = PrivacyPreservingTransaction::new(message, witness_set);
     let public_state = state.public_state.clone();
 
     let result = state.transition_from_privacy_preserving_transaction(&tx, 1, 0);
@@ -339,8 +396,10 @@ fn a_failing_deferred_effect_leaves_the_state_untouched() {
         matches!(
             result,
             Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::NativeTransferFailed(_)
-            ))
+                InvalidProgramBehaviorError::NativeTransferFailed(
+                    TransferError::InsufficientBalance { account_id }
+                )
+            )) if account_id == sender_id
         ),
         "expected the debit to fail at settlement, got {result:?}"
     );
@@ -349,7 +408,10 @@ fn a_failing_deferred_effect_leaves_the_state_untouched() {
         !state
             .private_state
             .1
-            .contains(&Nullifier::for_account_initialization(&recipient_id))
+            .contains(&Nullifier::for_account_initialization(
+                &recipient_id,
+                &recipient_keys.nsk()
+            ))
     );
 }
 
@@ -374,7 +436,7 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
         let mut this = state.get_account_by_id(recipient_keys.account_id());
         let post_balance = this.data.native_balance().unwrap() + balance_to_move;
         this.data
-            .set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(post_balance));
+            .set_actor_state(NATIVE_TOKEN_PROGRAM_ID, encode_balance(post_balance));
         this
     };
 
@@ -386,11 +448,8 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
         &state,
     );
 
-    let sender_account_id = AccountId::for_regular_private_account(
-        &sender_keys.npk(),
-        &sender_keys.vpk(),
-        Identifier::ZERO,
-    );
+    let sender_account_id =
+        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk());
     let expected_new_commitment = Commitment::new(
         &sender_account_id,
         &Account {
@@ -428,93 +487,35 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
 }
 
 #[test]
-fn a_data_write_on_a_shard_the_executing_program_does_not_own_is_rejected_in_the_circuit() {
-    let program = crate::test_methods::data_changer();
-    let keys = test_private_account_keys_1();
-    let witness = init_witness(&keys, Identifier::ZERO);
-    let target_id = witness.account_id();
-    let foreign_program_account_id =
-        AccountId::from_builtin_program(crate::test_methods::noop().id());
-    // Another program's shard and the native balance shard are both foreign to the executing
-    // program; the circuit refuses each for the same reason the public path does.
-    let cases = [
-        (
-            "another program's shard",
-            ProgramShardSelector::new(target_id, foreign_program_account_id),
-            vec![7_u8; 4],
-        ),
-        (
-            "the native balance shard",
-            ProgramShardSelector::native_balance(target_id),
-            encode_balance(500).to_vec(),
-        ),
-    ];
+fn an_unauthorized_public_debit_proves_but_is_refused_at_settlement() {
+    let sender_id = test_public_account_keys_1().account_id();
+    let sender = Actor::native_balance(sender_id);
+    let recipient_keys = test_private_account_keys_1();
+    let recipient_id =
+        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk());
+    let mut state = V03State::new().with_public_account_balances([(sender_id, 100)]);
 
-    for (shard, selector, written) in cases {
-        let result = execute_and_prove(
-            ProvingInput {
-                shard_selectors: vec![selector],
-                private_witnesses: vec![witness.clone()],
-                instruction_data: Program::serialize_instruction(written).unwrap(),
-                ..Default::default()
-            },
-            &synthetic_program(program.clone()),
-        );
-
-        assert_execution_failure(&result, "wrote data on a shard selector of");
-        assert!(result.is_err(), "writing {shard} must be refused");
-    }
-}
-
-#[test]
-fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_circuit() {
-    let program = crate::test_methods::data_changer();
-    let program_id = AccountId::from_builtin_program(program.id());
-    let keys = test_private_account_keys_1();
-    let witness = init_witness(&keys, Identifier::ZERO);
-    let account_id = witness.account_id();
-
-    let large_data: Vec<u8> =
-        vec![
-            0;
-            usize::try_from(lee_core::account::data::DATA_MAX_LENGTH.as_u64())
-                .expect("DATA_MAX_LENGTH fits in usize")
-                + 1
-        ];
-
-    let result = execute_and_prove(
+    // An honest prover would refuse the debit; this one assumes its credit without running it.
+    let proven = execute_and_prove_with_cross_messages(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::new(account_id, program_id)],
-            private_witnesses: vec![witness],
-            instruction_data: Program::serialize_instruction(large_data).unwrap(),
-            ..Default::default()
+            context: PublicExecutionContext::new(vec![sender], []),
+            private_witnesses: vec![init_witness(&recipient_keys)],
+            ..proving_input(root(sender, &transfer(recipient_id, 10)))
         },
-        &synthetic_program(program),
-    );
+        vec![vec![credit(
+            sender,
+            Actor::native_balance(recipient_id),
+            10,
+        )]],
+        &ProgramCatalog::default(),
+        |_| SenderPresentation::Canonical,
+        |_, _| false,
+        no_seal,
+    )
+    .expect("the proof does not cover the public debit");
+    let tx = private_tx(proven, vec![], &[]);
 
-    assert_program_prove_failure(&result, "written data fits the data limit");
-}
-
-#[test]
-fn unauthorized_debit_is_refused_when_proving() {
-    let sender_id = AccountId::new([0; 32]);
-    let recipient_id = AccountId::new([1; 32]);
-
-    let result = execute_and_prove(
-        ProvingInput {
-            shard_selectors: vec![
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(recipient_id),
-            ],
-            signers: [recipient_id].into(),
-            instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
-                amount: 10,
-            })
-            .unwrap(),
-            ..Default::default()
-        },
-        &ProgramWithDependencies::native(),
-    );
+    let result = state.transition_from_privacy_preserving_transaction(&tx, 1, 0);
 
     assert!(
         matches!(
@@ -525,7 +526,7 @@ fn unauthorized_debit_is_refused_when_proving() {
                 )
             )) if account_id == sender_id
         ),
-        "expected an unauthorized sender rejection"
+        "expected an unauthorized sender rejection, got {result:?}"
     );
 }
 
@@ -573,200 +574,218 @@ fn two_deshielded_transfers_to_one_recipient_compose_at_settlement() {
 }
 
 #[test]
-fn a_guest_evaluated_public_effect_settles_against_live_state() {
-    let program = crate::test_methods::native_spender();
-    let program_id = AccountId::from_builtin_program(program.id());
-    let sender_keys = test_private_account_keys_1();
-    let sender_id = AccountId::for_regular_private_account(
-        &sender_keys.npk(),
-        &sender_keys.vpk(),
-        Identifier::ZERO,
-    );
-    let written_to = AccountId::new([77; 32]);
-    let recipient_id = AccountId::new([88; 32]);
+fn a_private_roots_public_outputs_settle_against_live_state() {
+    let mut root = PrivateRoot::new();
+    let written_to = Actor::new(AccountId::new([77; 32]), scripted_id());
+    let recipient = Actor::native_balance(AccountId::new([88; 32]));
+    for actor in [written_to, recipient] {
+        root.state
+            .force_insert_account(actor.account_id, Account::default());
+    }
     let amount: u128 = 30;
 
-    let pre_account = Account::funded(100);
-    let mut state = V03State::new()
-        .with_test_programs()
-        .with_private_account(&sender_keys, &pre_account);
-    let membership_proof = state
-        .get_proof_for_commitment(&Commitment::new(&sender_id, &pre_account))
-        .expect("the account's commitment must be in state");
+    let tx = root.prove(
+        &Script::default()
+            .call(written_to, &Script::write(vec![5; 4]))
+            .call(
+                Actor::native_balance(root.account_id),
+                &transfer(recipient.account_id, amount),
+            ),
+        vec![written_to, recipient],
+    );
 
-    let (output, proof) = execute_and_prove(
-        ProvingInput {
-            shard_selectors: vec![
-                // A public account whose shard belongs to the guest, so the guest evaluates the
-                // effect on it.
-                ProgramShardSelector::new(written_to, program_id),
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(recipient_id),
-            ],
-            private_witnesses: vec![update_witness(
-                &sender_keys,
-                Identifier::ZERO,
-                pre_account,
-                membership_proof,
-            )],
-            instruction_data: Program::serialize_instruction((vec![5_u8; 4], amount)).unwrap(),
-            ..Default::default()
-        },
-        &synthetic_program(program),
-    )
-    .unwrap();
-
-    let message = Message::from_circuit_output(vec![], output);
-    let witness_set = WitnessSet::for_message(&message, proof, &[]);
-    let tx = PrivacyPreservingTransaction::new(message, witness_set);
-
-    state
+    root.state
         .transition_from_privacy_preserving_transaction(&tx, 1, 0)
-        .expect("a guest-evaluated public effect settles");
+        .expect("the public outputs settle");
 
-    // The guest's own shard was written by its apply, not by a pinned post-state.
+    // The scripted actor's own actor state was written by its live transition at settlement.
     assert_eq!(
-        state
-            .get_account_by_id(written_to)
+        root.state
+            .get_account_by_id(written_to.account_id)
             .data
-            .shard(program_id)
+            .actor_state(scripted_id())
             .as_ref(),
         &[5_u8; 4]
     );
     // The native leg of the same transaction settled alongside it.
     assert_eq!(
-        state.get_account_by_id(recipient_id).data.native_balance(),
+        root.state
+            .get_account_by_id(recipient.account_id)
+            .data
+            .native_balance(),
         Ok(amount)
     );
 }
 
 fn assert_forged_field_is_refused(forge_field: ForgeField) {
-    let program = crate::test_methods::forges_apply_echo();
-    let program_id = AccountId::from_builtin_program(program.id());
-    let sender_keys = test_private_account_keys_1();
-    let sender_id = AccountId::for_regular_private_account(
-        &sender_keys.npk(),
-        &sender_keys.vpk(),
-        Identifier::ZERO,
-    );
-    let written_to = AccountId::new([77; 32]);
+    let mut root = PrivateRoot::new();
+    let program_id = AccountId::from_builtin_program(crate::test_methods::forges_echo().id());
+    let forger = Actor::new(AccountId::new([77; 32]), program_id);
+    root.state
+        .force_insert_account(forger.account_id, Account::default());
 
-    let pre_account = Account::funded(100);
-    let mut state = V03State::new()
-        .with_test_programs()
-        .with_private_account(&sender_keys, &pre_account);
-    let membership_proof = state
-        .get_proof_for_commitment(&Commitment::new(&sender_id, &pre_account))
-        .expect("the account's commitment must be in state");
-
-    let (output, proof) = execute_and_prove(
-        ProvingInput {
-            shard_selectors: vec![
-                ProgramShardSelector::new(written_to, program_id),
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(AccountId::new([88; 32])),
-            ],
-            private_witnesses: vec![update_witness(
-                &sender_keys,
-                Identifier::ZERO,
-                pre_account,
-                membership_proof,
-            )],
-            instruction_data: Program::serialize_instruction((forge_field, 30_u128)).unwrap(),
-            ..Default::default()
-        },
-        &synthetic_program(program),
+    // The prover assumes the forger delivers nothing back, without running it.
+    let proven = execute_and_prove_with_cross_messages(
+        root.proving_input(&Script::default().call(forger, &forge_field), vec![forger]),
+        vec![Vec::new()],
+        &synthetic_program(crate::test_methods::scripted()),
+        |_| SenderPresentation::Canonical,
+        |_, _| false,
+        no_seal,
     )
     .unwrap();
+    let tx = private_tx(proven, vec![], &[]);
 
-    let message = Message::from_circuit_output(vec![], output);
-    let witness_set = WitnessSet::for_message(&message, proof, &[]);
-    let tx = PrivacyPreservingTransaction::new(message, witness_set);
-
-    let result = state.transition_from_privacy_preserving_transaction(&tx, 1, 0);
+    let result = root
+        .state
+        .transition_from_privacy_preserving_transaction(&tx, 1, 0);
 
     assert!(
         matches!(
             &result,
             Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::Execution(ExecutionError::ExecutionValidation {
-                    source: ExecutionValidationError::ApplyInputMismatch { .. },
+                InvalidProgramBehaviorError::Execution(ExecutionError::TransitionInputMismatch {
+                    program_account_id,
                     ..
                 })
-            ))
+            )) if *program_account_id == program_id
         ),
-        "expected the echo binding to refuse the forged apply output, got {result:?}"
+        "expected the echo binding to refuse the forged transition, got {result:?}"
     );
-    // Neither the forged balance nor the effect the proof actually recorded lands.
-    assert_eq!(state.get_account_by_id(written_to), Account::default());
+    assert_eq!(
+        root.state.get_account_by_id(forger.account_id),
+        Account::default()
+    );
 }
 
 #[test]
-fn a_deferred_apply_returning_chained_calls_is_refused_at_settlement() {
-    let program = crate::test_methods::chains_from_apply();
-    let program_id = AccountId::from_builtin_program(program.id());
-    let keys = test_private_account_keys_1();
-    let private_id =
-        AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::ZERO);
+fn a_public_transition_forging_any_echoed_field_is_refused() {
+    for field in [
+        ForgeField::Receiver,
+        ForgeField::Sender,
+        ForgeField::IsAuthorized,
+        ForgeField::PreState,
+        ForgeField::Message,
+    ] {
+        assert_forged_field_is_refused(field);
+    }
+}
 
-    let pre_account = Account::funded(100);
-    let mut state = V03State::new()
-        .with_programs([crate::test_methods::chains_from_apply()])
-        .with_private_account(&keys, &pre_account);
-    let membership_proof = state
-        .get_proof_for_commitment(&Commitment::new(&private_id, &pre_account))
-        .expect("the account's commitment must be in state");
-
-    let (output, proof) = execute_and_prove(
-        ProvingInput {
-            shard_selectors: vec![
-                ProgramShardSelector::new(AccountId::new([77; 32]), program_id),
-                ProgramShardSelector::native_balance(private_id),
-            ],
-            private_witnesses: vec![update_witness(
-                &keys,
-                Identifier::ZERO,
-                pre_account,
-                membership_proof,
-            )],
-            instruction_data: Program::serialize_instruction(()).unwrap(),
-            ..Default::default()
-        },
-        &synthetic_program(program),
+fn nested_actors() -> (Actor, Actor) {
+    (
+        Actor::new(AccountId::new([1; 32]), scripted_id()),
+        Actor::new(AccountId::new([2; 32]), scripted_id()),
     )
-    .unwrap();
+}
 
-    let message = Message::from_circuit_output(vec![], output);
-    let witness_set = WitnessSet::for_message(&message, proof, &[]);
-    let tx = PrivacyPreservingTransaction::new(message, witness_set);
+fn inner_transition() -> Script {
+    Script::default().call(nested_actors().1, &Script::write(vec![2; 4]))
+}
 
-    let result = state.transition_from_privacy_preserving_transaction(&tx, 1, 0);
+fn nested_private() -> Actor {
+    let keys = test_private_account_keys_1();
+    Actor::new(
+        AccountId::for_regular_private_account(&keys.npk(), &keys.vpk()),
+        scripted_id(),
+    )
+}
+
+fn outer_transition(delivered: &Script) -> Script {
+    Script::write(vec![1; 4]).call(nested_private(), delivered)
+}
+
+#[test]
+fn a_nested_boundary_settles_both_public_writes() {
+    let mut nested = NestedBoundary::prove(&outer_transition(&inner_transition()));
 
     assert!(matches!(
-        execution_error(result),
-        ExecutionError::ExecutionValidation {
-            program_account_id,
-            source: ExecutionValidationError::ChainedCallsFromApply,
-        } if program_account_id == program_id
+        nested.tx.message.execution.boundary.as_slice(),
+        [
+            BoundaryStep::PublicToPrivate(_),
+            BoundaryStep::PrivateToPublic(_),
+            BoundaryStep::EndPublicSubtree,
+            BoundaryStep::EndPrivateSubtree,
+        ]
     ));
+
+    nested
+        .state
+        .transition_from_privacy_preserving_transaction(&nested.tx, 1, 0)
+        .expect("the live public transitions reproduce the proven boundary");
+
+    for (actor, written) in [(nested.outer, [1; 4]), (nested.inner, [2; 4])] {
+        assert_eq!(
+            nested
+                .state
+                .get_account_by_id(actor.account_id)
+                .data
+                .actor_state(scripted_id())
+                .as_ref(),
+            written
+        );
+    }
 }
 
 #[test]
-fn an_apply_forging_its_own_account_id_is_refused() {
-    assert_forged_field_is_refused(ForgeField::SelfId);
+fn a_tampered_cross_message_or_public_root_is_rejected() {
+    use crate::validated_state_diff::ValidatedStateDiff;
+
+    let nested = NestedBoundary::prove(&outer_transition(&inner_transition()));
+    let verify = |tx: &PrivacyPreservingTransaction| {
+        ValidatedStateDiff::from_privacy_preserving_transaction(tx, &nested.state, 1, 0)
+    };
+    assert!(
+        verify(&nested.tx).is_ok(),
+        "the unmodified statement must verify"
+    );
+    let mut cross_message_tampered = nested.tx.clone();
+    let BoundaryStep::PublicToPrivate(cross_message) =
+        &mut cross_message_tampered.message.execution.boundary[0]
+    else {
+        panic!("the nested boundary opens by entering the private transition");
+    };
+    cross_message.envelope.message[0] ^= 0xFF;
+    let mut root_tampered = nested.tx.clone();
+    let Some(RootCall { message, .. }) = &mut root_tampered.message.execution.public_root else {
+        panic!("the nested statement starts with a public call");
+    };
+    message[0] ^= 0xFF;
+
+    for tampered in [cross_message_tampered, root_tampered] {
+        assert!(matches!(
+            verify(&tampered),
+            Err(LeeError::InvalidPrivacyPreservingProof)
+        ));
+    }
 }
 
 #[test]
-fn an_apply_forging_the_applied_selector_is_refused() {
-    assert_forged_field_is_refused(ForgeField::Selector);
-}
+fn a_public_transition_departing_from_its_predicted_cross_message_is_rejected_and_applies_nothing()
+{
+    // The outer transition's live script delivers something other than the assumed message.
+    let undeclared = Actor::new(AccountId::new([3; 32]), scripted_id());
+    let mut nested = NestedBoundary::prove(
+        &outer_transition(&Script::default()).cast(undeclared, &Script::default()),
+    );
+    let public_state = nested.state.public_state.clone();
 
-#[test]
-fn an_apply_forging_the_pre_state_it_was_given_is_refused() {
-    assert_forged_field_is_refused(ForgeField::PreData);
-}
+    let result = nested
+        .state
+        .transition_from_privacy_preserving_transaction(&nested.tx, 1, 0);
 
-#[test]
-fn an_apply_forging_the_effect_it_actually_planned_is_refused() {
-    assert_forged_field_is_refused(ForgeField::EffectData);
+    assert!(
+        matches!(
+            execution_error(result),
+            ExecutionError::CrossMessageMismatch { index: 0 }
+        ),
+        "the live delivery must be checked against the assumed one"
+    );
+    assert_eq!(nested.state.public_state, public_state);
+    assert!(
+        nested
+            .state
+            .get_proof_for_commitment(&nested.tx.message.execution.commitments()[0])
+            .is_none()
+    );
+    assert!(nested.state.publications_from(0).next().is_none());
 }

@@ -59,48 +59,113 @@ fn assert_config_account(input: &ReceiveInput) {
 
 #[cfg(test)]
 mod tests {
+    use lee_core::{
+        account::{AccountId, Actor, ActorState},
+        program::{Call, Transition},
+    };
+
     use super::*;
 
+    const PING_SENDER: AccountId = AccountId::new([7; 32]);
     const OUTBOX: AccountId = AccountId::new([9; 32]);
+
+    fn run(origin: Option<AccountId>, pre: &[u8], message: SenderMessage) -> Transition {
+        let receiver = Actor::new(sender_config_account_id(PING_SENDER), PING_SENDER);
+        let input = ReceiveInput {
+            receiver,
+            from: origin.map(|sender| Actor::new(sender, sender)),
+            is_authorized: false,
+            pre_state: ActorState::from(pre.to_vec()),
+            message: borsh::to_vec(&message).unwrap(),
+        };
+        handle_message(&input, message).into_transition(input)
+    }
+
+    fn send_through(outbox_program: AccountId) -> SenderMessage {
+        SenderMessage::Send {
+            outbox: Actor::new(AccountId::new([2; 32]), outbox_program),
+            target_zone: [1; 32],
+            target_account_id: AccountId::new([3; 32]),
+            target_accounts: vec![],
+            payload: b"ping".to_vec(),
+            ordinal: 0,
+        }
+    }
+
+    fn config(outbox: AccountId) -> ActorState {
+        ActorState::from(outbox_bytes(outbox).to_vec())
+    }
 
     #[test]
     fn the_pinned_outbox_is_accepted() {
-        assert_eq!(apply(Effect::OutboxIs(OUTBOX), &outbox_bytes(OUTBOX)), None);
+        let transition = run(None, &outbox_bytes(OUTBOX), send_through(OUTBOX));
+
+        assert_eq!(transition.response.post_state, None);
+        assert_eq!(
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![Call::new(
+                    Actor::new(AccountId::new([2; 32]), OUTBOX),
+                    &OutboxMessage::Emit {
+                        target_zone: [1; 32],
+                        target_account_id: AccountId::new([3; 32]),
+                        target_accounts: vec![],
+                        payload: b"ping".to_vec(),
+                        ordinal: 0,
+                    },
+                )],
+                Vec::new()
+            )
+        );
     }
 
     #[test]
     #[should_panic(expected = "does not pin as its outbox")]
     fn another_program_cannot_stand_in_for_the_outbox() {
-        // Unguarded this redirects the emission's child call to an arbitrary program, which
-        // then reads the outbox account's shard under its own interpretation.
-        apply(
-            Effect::OutboxIs(AccountId::new([1; 32])),
+        // Unguarded this redirects the emission to an arbitrary program, which then records it,
+        // or not, under its own interpretation.
+        let _transition = run(
+            None,
             &outbox_bytes(OUTBOX),
+            send_through(AccountId::new([1; 32])),
         );
     }
 
     #[test]
     fn an_empty_config_takes_the_first_init() {
+        let init = SenderMessage::InitConfig {
+            outbox_account_id: OUTBOX,
+        };
         assert_eq!(
-            apply(Effect::InitConfig(OUTBOX), &[]),
-            Some(outbox_bytes(OUTBOX).to_vec())
+            run(None, &[], init).response.post_state,
+            Some(config(OUTBOX))
         );
     }
 
     #[test]
     fn an_identical_reinit_is_a_no_op_rewrite() {
+        let init = SenderMessage::InitConfig {
+            outbox_account_id: OUTBOX,
+        };
         assert_eq!(
-            apply(Effect::InitConfig(OUTBOX), &outbox_bytes(OUTBOX)),
-            Some(outbox_bytes(OUTBOX).to_vec())
+            run(None, &outbox_bytes(OUTBOX), init).response.post_state,
+            Some(config(OUTBOX))
         );
     }
 
     #[test]
-    #[should_panic(expected = "shard already holds different data")]
+    #[should_panic(expected = "actor state already holds different data")]
     fn a_reinit_naming_a_different_outbox_is_refused() {
-        apply(
-            Effect::InitConfig(AccountId::new([1; 32])),
-            &outbox_bytes(OUTBOX),
-        );
+        let init = SenderMessage::InitConfig {
+            outbox_account_id: AccountId::new([1; 32]),
+        };
+        let _transition = run(None, &outbox_bytes(OUTBOX), init);
+    }
+
+    #[test]
+    #[should_panic(expected = "ping_sender is only invoked as a top-level user transaction")]
+    fn a_message_from_another_program_is_refused() {
+        let sender = Some(AccountId::new([6; 32]));
+        let _transition = run(sender, &outbox_bytes(OUTBOX), send_through(OUTBOX));
     }
 }

@@ -14,17 +14,17 @@
 //! source-and-target pair. Nothing forbids writing that route, and the token
 //! still trusts the table rather than checking its own sources, which is #673.
 
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
-use cross_zone_outbox_core::outbox_pda;
+use cross_zone_outbox_core::outbox_pda_seed;
 use integration_tests::{
     config::{self, SequencerPartialConfig},
     indexer_client::IndexerClient,
 };
 use lee::{
-    AccountId, PrivateKey, ProgramShardSelector, PublicKey, PublicTransaction,
+    AccountId, Actor, PrivateKey, PublicAccountEvidence, PublicKey, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute, GenesisAction};
@@ -128,6 +128,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     let escrowed = seq_client_a
         .get_account(escrow_id)
         .await?
+        .unwrap_or_default()
         .data
         .native_balance()
         .unwrap();
@@ -141,6 +142,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
             &holder_id.into_value(),
         ))
         .await?
+        .unwrap_or_default()
         .data
         .native_balance()
         .unwrap();
@@ -182,23 +184,30 @@ fn build_lock_tx(
     let outbox_id = programs::cross_zone_outbox_account_id();
     let ordinal = 0;
 
-    let mint = wrapped_token_core::Instruction::Mint {
+    let mint = wrapped_token_core::Message::Mint {
         recipient: RECIPIENT,
         amount: LOCK_AMOUNT,
     };
     let payload = borsh::to_vec(&mint).expect("serialize mint");
 
     let target_accounts = vec![
-        ProgramShardSelector::new(
+        Actor::new(
             wrapped_token_core::config_account_id(wrapped_token_id),
             wrapped_token_id,
         ),
-        ProgramShardSelector::new(
+        Actor::new(
             wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
             wrapped_token_id,
         ),
     ];
-    let lock = bridge_lock_core::Instruction::Lock {
+    let holder = Actor::new(holder_id, bridge_lock_id);
+    let slot = PublicAccountEvidence::Pda {
+        program: outbox_id,
+        seed: outbox_pda_seed(bridge_lock_id, &target_zone, ordinal),
+    };
+    let outbox = Actor::new(slot.account_id(), outbox_id);
+    let lock = bridge_lock_core::Message::Lock {
+        outbox,
         amount: LOCK_AMOUNT,
         target_zone,
         target_account_id: wrapped_token_id,
@@ -207,27 +216,40 @@ fn build_lock_tx(
         ordinal,
     };
 
+    // The lock is received at the holder's own actor, which its signature authorizes; it
+    // checks the route at the config, moves the holding into escrow and emits to the outbox.
     let accounts = vec![
-        ProgramShardSelector::new(
+        holder,
+        Actor::new(
             bridge_lock_core::config_account_id(bridge_lock_id),
             bridge_lock_id,
         ),
-        ProgramShardSelector::native_balance(holder_id),
-        ProgramShardSelector::native_balance(bridge_lock_core::holding_account_id(
+        Actor::native_balance(bridge_lock_core::holding_account_id(
             programs::bridge_lock_account_id(),
             &holder_id.into_value(),
         )),
-        ProgramShardSelector::native_balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
-        ProgramShardSelector::new(
-            outbox_pda(outbox_id, bridge_lock_id, &target_zone, ordinal),
-            outbox_id,
-        ),
+        Actor::native_balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
+        outbox,
     ];
     // One nonce per signature: the holder signs, at its genesis nonce 0. The
     // lock is fee-exempt (cross-zone outbound traffic), so it carries no fee
     // declaration.
-    let message = Message::try_new(bridge_lock_id, accounts, vec![0_u128.into()], lock)
-        .expect("build lock message");
+    let message = Message {
+        admission_evidence: vec![
+            PublicAccountEvidence::Pda {
+                program: bridge_lock_id,
+                seed: bridge_lock_core::escrow_seed(),
+            },
+            slot,
+        ],
+        ..Message::try_new(
+            holder,
+            accounts,
+            BTreeMap::from([(holder_id, 0_u128.into())]),
+            lock,
+        )
+        .expect("build lock message")
+    };
     let witness = WitnessSet::for_message(&message, &[holder_key]);
     LeeTransaction::Public(PublicTransaction::new(message, witness))
 }
@@ -244,7 +266,9 @@ async fn wait_for_balance(
     };
     let wait = async {
         loop {
-            let held = indexer_service_rpc::RpcClient::get_account(&**indexer, account_id).await?;
+            let held = indexer_service_rpc::RpcClient::get_account(&**indexer, account_id)
+                .await?
+                .unwrap_or_else(|| lee::Account::default().into());
             if held.data.balance() == Some(expected) {
                 return Ok::<u128, anyhow::Error>(held.data.balance().unwrap());
             }
@@ -266,11 +290,12 @@ async fn wait_for_mint(indexer: &IndexerClient, holding_id: AccountId) -> Result
     };
     let wait = async {
         loop {
-            let account =
-                indexer_service_rpc::RpcClient::get_account(&**indexer, account_id).await?;
+            let account = indexer_service_rpc::RpcClient::get_account(&**indexer, account_id)
+                .await?
+                .unwrap_or_else(|| lee::Account::default().into());
             let balance = account
                 .data
-                .shards
+                .actor_states
                 .get(&wrapped_token_id)
                 .map_or(0, |data| wrapped_token_core::read_balance(&data.0));
             if balance != 0 {

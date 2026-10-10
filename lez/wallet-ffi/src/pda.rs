@@ -107,10 +107,8 @@ mod tests {
         let pda_seed = PdaSeed::new([42; 32]);
         let vpk = ViewingPublicKey::from_bytes(vec![43; 1184]).unwrap();
         let npk = NullifierPublicKey([44; 32]);
-        let identifier = lee_core::Identifier::new([100; 32]);
 
-        let pda_id =
-            AccountId::for_private_pda(&program_account_id, &pda_seed, &npk, &vpk, identifier);
+        let pda_id = AccountId::for_private_pda(&program_account_id, &pda_seed, &npk, &vpk);
 
         let vpk_ptr = Box::into_raw(vpk.to_bytes().to_vec().into_boxed_slice()) as *const u8;
 
@@ -124,7 +122,6 @@ mod tests {
                 npk.into(),
                 vpk_ptr,
                 1184,
-                identifier.into(),
                 ffi_pda_id,
             )
         };

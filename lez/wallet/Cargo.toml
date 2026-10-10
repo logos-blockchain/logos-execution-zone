@@ -57,6 +57,7 @@ derive_more = { workspace = true, features = ["display"] }
 keycard-debug = []
 
 [dev-dependencies]
+jsonrpsee = { workspace = true, features = ["server"] }
 lee = { workspace = true, features = ["test-utils"] }
 tempfile.workspace = true
 key_protocol = { workspace = true, features = ["test_utils"] }

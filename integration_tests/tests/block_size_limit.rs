@@ -4,13 +4,13 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::Result;
 use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, config::SequencerPartialConfig};
-use lee::{AccountId, PrivateKey, ProgramShardSelector, PublicKey};
+use lee::{AccountId, Actor, PrivateKey, PublicKey};
 use lee_core::account::Nonce;
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
@@ -46,14 +46,12 @@ async fn reject_oversized_transaction() -> Result<()> {
     let segment_id = AccountId::from(&PublicKey::new_from_private_key(
         &PrivateKey::try_new([220; 32]).unwrap(),
     ));
+    let segment = Actor::new(segment_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID);
     let message = lee::public_transaction::Message::try_new(
-        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        vec![ProgramShardSelector::new(
-            segment_id,
-            lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        )],
-        vec![lee_core::account::Nonce(0)],
-        program_loader_core::Instruction::WriteSegment {
+        segment,
+        vec![segment],
+        BTreeMap::from([(segment_id, Nonce(0))]),
+        program_loader_core::Message::WriteSegment {
             bytecode: oversized_binary,
             next_segment: None,
         },
@@ -111,14 +109,12 @@ async fn accept_transaction_within_limit() -> Result<()> {
         .await?
         .nonce;
 
+    let segment = Actor::new(segment_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID);
     let message = lee::public_transaction::Message::try_new_with_fees(
-        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        vec![ProgramShardSelector::new(
-            segment_id,
-            lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        )],
-        vec![lee_core::account::Nonce(0), payer_nonce],
-        program_loader_core::Instruction::WriteSegment {
+        segment,
+        vec![segment],
+        BTreeMap::from([(segment_id, Nonce(0)), (payer.account_id, payer_nonce)]),
+        program_loader_core::Message::WriteSegment {
             bytecode: small_binary,
             next_segment: None,
         },
@@ -187,20 +183,18 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
                     segment_id: AccountId,
                     bytecode: Vec<u8>,
                     nonce_for_payer: Nonce| {
+        let segment = Actor::new(segment_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID);
         let message = lee::public_transaction::Message::try_new_with_fees(
-            lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-            vec![ProgramShardSelector::new(
-                segment_id,
-                lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-            )],
-            vec![lee_core::account::Nonce(0), nonce_for_payer],
-            program_loader_core::Instruction::WriteSegment {
+            segment,
+            vec![segment],
+            BTreeMap::from([(segment_id, Nonce(0)), (payer.account_id, nonce_for_payer)]),
+            program_loader_core::Message::WriteSegment {
                 bytecode,
                 next_segment: None,
             },
             common::test_utils::test_fee_declaration(payer.account_id),
         )
-        .expect("WriteSegment instruction data should always be serializable");
+        .expect("WriteSegment message should always be serializable");
         let witness_set = lee::public_transaction::WitnessSet::for_message(
             &message,
             &[segment_key, &payer.pub_sign_key],
@@ -245,18 +239,13 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
                 let LeeTransaction::Public(public_tx) = tx else {
                     return None;
                 };
-                if public_tx.message.program_account_id
-                    != lee_core::program::PROGRAM_LOADER_ACCOUNT_ID
-                {
+                let lee::RootCall { to, message } = &public_tx.message.execution.root;
+                if to.program_account_id != lee_core::program::PROGRAM_LOADER_ACCOUNT_ID {
                     return None;
                 }
-                let instruction: program_loader_core::Instruction =
-                    borsh::from_slice(&public_tx.message.instruction_data).ok()?;
-                matches!(
-                    instruction,
-                    program_loader_core::Instruction::WriteSegment { .. }
-                )
-                .then(|| public_tx.message.shard_selectors[0].account_id)
+                let message: program_loader_core::Message = borsh::from_slice(message).ok()?;
+                matches!(message, program_loader_core::Message::WriteSegment { .. })
+                    .then_some(to.account_id)
             })
             .collect()
     };

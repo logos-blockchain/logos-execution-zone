@@ -96,3 +96,108 @@ impl RecipientEncryption {
 }
 
 #[cfg(feature = "host")]
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+    use crate::{encryption::note_key, program::PdaSeed};
+
+    const D: [u8; 32] = [1; 32];
+    const Z: [u8; 32] = [2; 32];
+    const NPK: NullifierPublicKey = NullifierPublicKey([3; 32]);
+
+    fn recipient(kind: PrivateAccountKind, opening: Option<[u8; 32]>) -> Recipient {
+        Recipient {
+            npk: NPK,
+            vpk: ViewingPublicKey::from_seed(&D, &Z),
+            kind,
+            opening,
+        }
+    }
+
+    fn kinds() -> [PrivateAccountKind; 2] {
+        [
+            PrivateAccountKind::Regular,
+            PrivateAccountKind::Pda {
+                account_id: AccountId::new([5; 32]),
+                seed: PdaSeed::new([6; 32]),
+            },
+        ]
+    }
+
+    fn bind(recipient: Recipient) -> RecoveryBinding {
+        RecipientEncryption {
+            recipient,
+            esk: EphemeralSecretKey([8; 32]),
+        }
+        .bind_recovery()
+    }
+
+    #[test]
+    fn a_binding_names_its_recipients_account_or_the_alias_its_opening_selects() {
+        for kind in kinds() {
+            let account_id =
+                AccountId::for_private_account(&NPK, &ViewingPublicKey::from_seed(&D, &Z), &kind);
+
+            assert_eq!(bind(recipient(kind.clone(), None)).address, account_id);
+            assert_eq!(
+                bind(recipient(kind, Some([9; 32]))).address,
+                account_id.blinded(&[9; 32])
+            );
+        }
+    }
+
+    #[test]
+    fn a_recovery_note_opens_to_its_recipient_only_under_its_viewing_secret_and_address() {
+        for kind in kinds() {
+            for opening in [None, Some([9; 32])] {
+                let expected = recipient(kind.clone(), opening);
+                let RecoveryBinding { address, note } = bind(expected.clone());
+
+                assert_eq!(Recipient::recover(address, &note, &D, &Z), Some(expected));
+                assert_eq!(
+                    Recipient::recover(address, &note, &[10; 32], &[11; 32]),
+                    None
+                );
+                assert_eq!(
+                    Recipient::recover(AccountId::new([12; 32]), &note, &D, &Z),
+                    None
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_recovery_note_has_one_length() {
+        let lengths: BTreeSet<usize> = kinds()
+            .into_iter()
+            .flat_map(|kind| {
+                [None, Some([9; 32])].map(|opening| {
+                    bind(recipient(kind.clone(), opening))
+                        .note
+                        .ciphertext
+                        .0
+                        .len()
+                })
+            })
+            .collect();
+
+        assert_eq!(lengths, BTreeSet::from([PLAINTEXT_LEN]));
+    }
+
+    #[test]
+    fn the_recovery_key_matches_its_pinned_derivation() {
+        assert_eq!(
+            note_key(
+                KEY_DOMAIN,
+                &SharedSecretKey([1; 32]),
+                AccountId::new([2; 32]).value()
+            ),
+            [
+                123, 198, 241, 111, 152, 68, 119, 130, 150, 194, 252, 251, 51, 227, 67, 212, 237,
+                28, 208, 233, 118, 90, 57, 206, 144, 119, 185, 61, 129, 76, 221, 222,
+            ]
+        );
+    }
+}

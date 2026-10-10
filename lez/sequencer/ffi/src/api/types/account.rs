@@ -148,31 +148,22 @@ pub unsafe extern "C" fn sequencer_ffi_free_ffi_account_opt(val: *mut FfiOption<
 mod tests {
     use std::collections::BTreeMap;
 
-    use lee::{Account, AccountData, AccountId, ShardData};
+    use lee::{Account, AccountData, AccountId, ActorState};
     use lee_core::account::Nonce;
 
     use crate::api::types::account::FfiAccount;
 
     #[test]
     fn account_roundtrip() {
-        let mut shards = BTreeMap::new();
+        let mut actor_states = BTreeMap::new();
 
-        shards.insert(
-            AccountId::new([42; 32]),
-            ShardData::try_from(vec![1, 1, 1, 1]).expect("Must fit"),
-        );
-        shards.insert(
-            AccountId::new([43; 32]),
-            ShardData::try_from(vec![2, 2, 2, 2]).expect("Must fit"),
-        );
-        shards.insert(
-            AccountId::new([44; 32]),
-            ShardData::try_from(vec![3, 3, 3, 3]).expect("Must fit"),
-        );
+        actor_states.insert(AccountId::new([42; 32]), ActorState::from(vec![1, 1, 1, 1]));
+        actor_states.insert(AccountId::new([43; 32]), ActorState::from(vec![2, 2, 2, 2]));
+        actor_states.insert(AccountId::new([44; 32]), ActorState::from(vec![3, 3, 3, 3]));
 
         let account_std = Account {
             nonce: Nonce::from(5),
-            data: AccountData { shards },
+            data: AccountData { actor_states },
         };
 
         let ffi_account: FfiAccount = account_std.clone().into();

@@ -1,15 +1,13 @@
 #![cfg(test)]
 
-use associated_token_account_core::{
-    AtaContents, compute_ata_seed, get_associated_token_account_id,
-};
+use associated_token_account_core::ata_of;
 use borsh::BorshSerialize;
 use lee::{
-    Account, AccountId, PrivateKey, ProgramShardSelector, PublicKey, PublicTransaction, ShardData,
-    V03State, error::LeeError, public_transaction,
+    Account, AccountId, Actor, ActorState, PrivateKey, PublicKey, PublicTransaction, V03State,
+    error::LeeError, public_transaction, test_utils::signer_nonces,
 };
 use lee_core::account::Nonce;
-use token_core::{TokenHolding, TokenKind};
+use token_core::{NewTokenDefinition, TokenDescriptor, TokenHolding, TokenKind};
 
 fn token_program_id() -> AccountId {
     programs::token_account_id()
@@ -26,36 +24,21 @@ fn owner_keys() -> (PrivateKey, AccountId) {
 }
 
 fn public_tx<T: BorshSerialize>(
-    program_id: AccountId,
-    shard_selectors: Vec<ProgramShardSelector>,
+    to: Actor,
+    public_actors: Vec<Actor>,
     nonces: Vec<Nonce>,
-    instruction: T,
+    message: T,
     signing_keys: &[&PrivateKey],
 ) -> PublicTransaction {
-    let message =
-        public_transaction::Message::try_new(program_id, shard_selectors, nonces, instruction)
-            .unwrap();
+    let message = public_transaction::Message::try_new(
+        to,
+        public_actors,
+        signer_nonces(signing_keys, nonces),
+        message,
+    )
+    .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, signing_keys);
     PublicTransaction::new(message, witness_set)
-}
-
-fn create_tx(
-    shard_selectors: Vec<ProgramShardSelector>,
-    nonces: Vec<Nonce>,
-    signing_keys: &[&PrivateKey],
-    contents: AtaContents,
-) -> PublicTransaction {
-    public_tx(
-        ata_program_id(),
-        shard_selectors,
-        nonces,
-        associated_token_account_core::Instruction::Create {
-            token_program_id: token_program_id(),
-            kind: TokenKind::Fungible,
-            contents,
-        },
-        signing_keys,
-    )
 }
 
 fn plant_definition(
@@ -66,16 +49,20 @@ fn plant_definition(
     name: &str,
     total_supply: u128,
 ) {
+    let definition = Actor::new(definition_id, token_program_id());
+    let holding = Actor::new(holding_id, token_program_id());
+    *state = std::mem::take(state).with_empty_public_accounts([definition_id, holding_id]);
     let tx = public_tx(
-        token_program_id(),
-        vec![
-            ProgramShardSelector::new(definition_id, token_program_id()),
-            ProgramShardSelector::new(holding_id, token_program_id()),
-        ],
+        definition,
+        vec![definition, holding],
         vec![],
-        token_core::Instruction::NewFungibleDefinition {
-            name: name.to_string(),
-            total_supply,
+        token_core::Message::NewDefinition {
+            definition: NewTokenDefinition::Fungible {
+                name: name.to_string(),
+                total_supply,
+            },
+            holding: holding_id,
+            metadata: None,
         },
         &[],
     );
@@ -98,15 +85,18 @@ fn repairing_a_squat_requires_the_owner_and_disturbs_nothing_else() {
     const SQUATTER_DEFINITION_ID: AccountId = AccountId::new([0x11; 32]);
     const THROWAWAY_HOLDING_ID: AccountId = AccountId::new([0x12; 32]);
     const FOREIGN_PROGRAM_ID: AccountId = AccountId::new([0x13; 32]);
-    let foreign_shard = ShardData::try_from(vec![7u8; 4]).unwrap();
+    let foreign_actor_state = ActorState::from(vec![7u8; 4]);
 
     let (owner_key, owner_id) = owner_keys();
-    let ata_id = get_associated_token_account_id(
-        &ata_program_id(),
-        &compute_ata_seed(owner_id, INTENDED_DEFINITION_ID, token_program_id()),
+    let (ata_id, _) = ata_of(
+        ata_program_id(),
+        owner_id,
+        INTENDED_DEFINITION_ID,
+        token_program_id(),
     );
 
-    let noisy_ata = Account::funded(500).with_shard(FOREIGN_PROGRAM_ID, foreign_shard.clone());
+    let noisy_ata =
+        Account::funded(500).with_actor_state(FOREIGN_PROGRAM_ID, foreign_actor_state.clone());
 
     let mut state = V03State::new()
         .with_named_programs([
@@ -126,28 +116,43 @@ fn repairing_a_squat_requires_the_owner_and_disturbs_nothing_else() {
     );
     plant_definition(&mut state, 2, SQUATTER_DEFINITION_ID, ata_id, "SQUAT", 500);
 
-    let definition_selector = ProgramShardSelector::new(INTENDED_DEFINITION_ID, token_program_id());
-    let ata_selector = ProgramShardSelector::new(ata_id, token_program_id());
-    let repair_selectors = vec![
-        ProgramShardSelector::native_balance(owner_id),
-        definition_selector,
-        ata_selector,
-    ];
+    let owner = Actor::new(owner_id, ata_program_id());
+    let ata = Actor::new(ata_id, token_program_id());
+    let create = |nonces, signing_keys: &[&PrivateKey]| {
+        public_tx(
+            owner,
+            vec![
+                owner,
+                Actor::new(INTENDED_DEFINITION_ID, token_program_id()),
+                ata,
+            ],
+            nonces,
+            associated_token_account_core::Message::Create {
+                token_program_id: token_program_id(),
+                definition_id: INTENDED_DEFINITION_ID,
+                kind: TokenKind::Fungible,
+            },
+            signing_keys,
+        )
+    };
 
     assert_rejected(
         &mut state,
-        &create_tx(repair_selectors.clone(), vec![], &[], AtaContents::Squatted),
+        &create(vec![], &[]),
         3,
-        "Owner authorization is missing",
+        "Only Uninitialized or authorized accounts can be initialized",
     );
     assert_rejected(
         &mut state,
         &public_tx(
-            token_program_id(),
-            vec![definition_selector, ata_selector],
+            ata,
+            vec![ata],
             vec![],
-            token_core::Instruction::InitializeAccount {
-                kind: TokenKind::Fungible,
+            token_core::Message::EnsureHolding {
+                descriptor: TokenDescriptor {
+                    definition_id: INTENDED_DEFINITION_ID,
+                    kind: TokenKind::Fungible,
+                },
             },
             &[],
         ),
@@ -164,19 +169,14 @@ fn repairing_a_squat_requires_the_owner_and_disturbs_nothing_else() {
     let intended_definition_before = state.get_account_by_id(INTENDED_DEFINITION_ID);
 
     let owner_nonce = state.get_account_by_id(owner_id).nonce;
-    let repair_tx = create_tx(
-        repair_selectors,
-        vec![owner_nonce],
-        &[&owner_key],
-        AtaContents::Squatted,
-    );
+    let repair_tx = create(vec![owner_nonce], &[&owner_key]);
     state
         .transition_from_public_transaction(&repair_tx, 3, 0)
         .unwrap();
 
     let repaired = state.get_account_by_id(ata_id);
     assert_eq!(
-        TokenHolding::try_from(repaired.data.shard(token_program_id())).unwrap(),
+        TokenHolding::try_from(repaired.data.actor_state(token_program_id())).unwrap(),
         TokenHolding::Fungible {
             definition_id: INTENDED_DEFINITION_ID,
             balance: 0,
@@ -186,7 +186,10 @@ fn repairing_a_squat_requires_the_owner_and_disturbs_nothing_else() {
         repaired.data.native_balance().unwrap(),
         native_balance_before_repair
     );
-    assert_eq!(repaired.data.shard(FOREIGN_PROGRAM_ID), &foreign_shard);
+    assert_eq!(
+        repaired.data.actor_state(FOREIGN_PROGRAM_ID),
+        &foreign_actor_state
+    );
     assert_eq!(
         state.get_account_by_id(SQUATTER_DEFINITION_ID),
         squatter_definition_before

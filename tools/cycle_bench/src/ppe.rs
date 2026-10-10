@@ -2,9 +2,8 @@
 //!
 //! Composition cost is the delta between standalone `prover.prove(env, elf)` for
 //! a single program (measured in the main bench) and a full `execute_and_prove`
-//! that wraps the same program in the privacy circuit. Chained-call depth sweep
-//! uses the `chain_caller` test program, whose children execute the token program,
-//! with N=1, 3, 5, 9.
+//! that wraps the same program in the privacy circuit. The send-depth sweep uses a
+//! `scripted` test actor that sends N=1, 3, 5, 9 token transfers, each a private token transition.
 //!
 //! `Receipt::verify(PRIVACY_PRESERVING_CIRCUIT_ID)` timings (the `G_verify` fee-model
 //! parameter) are measured by the `verify` criterion bench under `benches/verify.rs`,
@@ -51,8 +50,8 @@ pub fn run_all() -> Vec<PpeBenchResult> {
     results.push(ppe_impl::run_token_transfer_in_ppe());
 
     for depth in [1_u32, 3, 5, 9] {
-        eprintln!("PPE: running chain_caller to token Transfer depth={depth}");
-        results.push(ppe_impl::run_chain_caller(depth));
+        eprintln!("PPE: running scripted to token Transfer depth={depth}");
+        results.push(ppe_impl::run_scripted_transfers(depth));
     }
 
     results

@@ -160,7 +160,8 @@ mod tests {
     /// existing encoding.
     #[test]
     fn lock_is_the_first_variant() {
-        let lock = Instruction::Lock {
+        let lock = Message::Lock {
+            outbox: Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32])),
             amount: 1,
             target_zone: [7; 32],
             target_account_id: AccountId::new([1; 32]),

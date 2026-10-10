@@ -80,8 +80,8 @@ async fn indexer_state_consistency() -> Result<()> {
     let acc1_seq_state = get_account(&ctx, ctx.existing_public_accounts()[0]).await?;
     let acc2_seq_state = get_account(&ctx, ctx.existing_public_accounts()[1]).await?;
 
-    assert_eq!(acc1_ind_state, acc1_seq_state.into());
-    assert_eq!(acc2_ind_state, acc2_seq_state.into());
+    assert_eq!(acc1_ind_state, Some(acc1_seq_state.into()));
+    assert_eq!(acc2_ind_state, Some(acc2_seq_state.into()));
 
     // ToDo: Check private state transition
 

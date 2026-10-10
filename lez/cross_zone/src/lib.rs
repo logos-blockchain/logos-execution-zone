@@ -448,4 +448,60 @@ mod tests {
         };
         let _tx = build_wrapped_token_init_config_tx(&cross_zone);
     }
+
+    #[test]
+    fn a_genesis_init_config_carries_the_evidence_deriving_its_root() {
+        let cross_zone = CrossZoneConfig {
+            peers: Vec::new(),
+            source_authority: None,
+            source_governance: None,
+        };
+        for tx in [
+            build_inbox_init_config_tx([1; 32]),
+            build_wrapped_token_init_config_tx(&cross_zone),
+            build_ping_sender_init_config_tx(),
+            build_bridge_lock_init_config_tx(),
+            build_ping_receiver_init_config_tx(&cross_zone),
+        ] {
+            let root = tx.message.execution.root.to;
+            assert!(
+                matches!(
+                    &*tx.message.admission_evidence,
+                    [evidence @ lee::PublicAccountEvidence::Pda { program, .. }]
+                        if *program == root.program_account_id
+                            && evidence.account_id() == root.account_id
+                ),
+                "{root:?} carries {:?}",
+                tx.message.admission_evidence
+            );
+        }
+    }
+
+    #[test]
+    fn a_dispatch_carries_the_evidence_of_the_seen_shard_it_declares() {
+        let tx = build_dispatch_from_emission(
+            &EmissionSource {
+                src_zone: [3; 32],
+                src_block_id: 7,
+                src_block_hash: [4; 32],
+                src_tx_index: 0,
+                src_account_id: AccountId::new([5; 32]),
+            },
+            programs::ping_receiver_account_id(),
+            &[],
+            Vec::new(),
+        );
+
+        let inbox_id = programs::cross_zone_inbox_account_id();
+        let shard = Actor::new(inbox_seen_shard_account_id(inbox_id, &[3; 32], 7), inbox_id);
+        assert!(tx.message.context.actors.contains(&shard));
+        assert_eq!(
+            tx.message
+                .admission_evidence
+                .iter()
+                .map(lee::PublicAccountEvidence::account_id)
+                .collect::<Vec<_>>(),
+            vec![shard.account_id]
+        );
+    }
 }

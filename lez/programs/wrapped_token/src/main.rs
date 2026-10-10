@@ -277,7 +277,12 @@ fn mint_source(
 
 #[cfg(test)]
 mod tests {
-    use lee_core::{account::ShardData, program::ShardEffect};
+    use borsh::BorshSerialize;
+    use lee_core::{
+        account::ActorState,
+        program::{Call, Transition},
+    };
+    use wrapped_token_core::SourcePolicy;
 
     use super::*;
 
@@ -335,129 +340,198 @@ mod tests {
         )
     }
 
-    fn marker_of(inbox: AccountId, src_zone: [u8; 32], src: AccountId) -> AccountId {
-        inbox_source_marker_account_id(inbox, &src_zone, src)
+    fn actor(account_id: AccountId) -> Actor {
+        Actor::new(account_id, WRAPPED_ID)
     }
 
-    fn shard(bytes: Vec<u8>) -> ShardData {
-        ShardData::try_from(bytes).expect("the shard fits")
+    fn config_actor() -> Actor {
+        actor(config_account_id(WRAPPED_ID))
     }
 
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "callers hand over freshly built pre-states"
-    )]
-    fn apply_at(pre_data: ShardData, effect: &Effect) -> Vec<u8> {
-        apply(effect.clone(), &pre_data).expect("every wrapped-token apply writes")
+    fn holding_actor() -> Actor {
+        actor(holding_account_id(WRAPPED_ID, &RECIPIENT))
     }
 
-    fn mint_effect(caller: Option<AccountId>, marker: AccountId, amount: u128) -> Effect {
-        Effect::Mint {
-            caller_account_id: caller,
-            marker,
+    fn run(
+        receiver: Actor,
+        origin: Option<AccountId>,
+        is_authorized: bool,
+        pre: Vec<u8>,
+        message: &impl BorshSerialize,
+    ) -> Transition {
+        let input = ReceiveInput {
+            receiver,
+            from: origin.map(|sender| Actor::new(sender, sender)),
+            is_authorized,
+            pre_state: ActorState::from(pre),
+            message: borsh::to_vec(message).unwrap(),
+        };
+        handle_message(&input).into_transition(input)
+    }
+
+    fn at_config(
+        origin: Option<AccountId>,
+        pre: &WrappedTokenConfig,
+        message: &Message,
+    ) -> Transition {
+        run(config_actor(), origin, false, pre.to_bytes(), message)
+    }
+
+    fn mint_from(
+        deliverer: AccountId,
+        src_zone: [u8; 32],
+        src_account_id: AccountId,
+        amount: u128,
+    ) -> Message {
+        Message::MintFrom {
+            deliverer,
+            src_zone,
+            src_account_id,
+            recipient: RECIPIENT,
             amount,
         }
     }
 
-    fn applied_config(pre_data: ShardData, effect: &Effect) -> WrappedTokenConfig {
-        WrappedTokenConfig::from_bytes(&apply_at(pre_data, effect)).expect("a config was written")
+    fn mint_at_config(message: &Message) -> Transition {
+        at_config(Some(WRAPPED_ID), &config(), message)
     }
 
-    fn mint_accounts(marker: AccountId) -> Vec<AccountMeta> {
-        vec![
-            AccountMeta::native_balance(marker, false),
-            AccountMeta::new(config_account_id(WRAPPED_ID), false, WRAPPED_ID),
-            AccountMeta::new(
-                holding_account_id(WRAPPED_ID, &RECIPIENT),
-                false,
-                WRAPPED_ID,
-            ),
-        ]
-    }
-
-    fn governance_metas(authority: AccountId, is_authorized: bool) -> Vec<AccountMeta> {
-        vec![
-            AccountMeta::new(config_account_id(WRAPPED_ID), false, WRAPPED_ID),
-            AccountMeta::native_balance(authority, is_authorized),
-        ]
-    }
-
-    fn plan_for(
-        caller_account_id: Option<AccountId>,
-        accounts: Vec<AccountMeta>,
-        instruction: Instruction,
-    ) -> Plan {
-        plan(
-            &PlanInput {
-                self_account_id: WRAPPED_ID,
-                caller_account_id,
-                accounts,
-                instruction_data: borsh::to_vec(&instruction).expect("the instruction serializes"),
-            },
-            instruction,
+    fn written_config(transition: &Transition) -> WrappedTokenConfig {
+        WrappedTokenConfig::from_bytes(
+            transition
+                .response
+                .post_state
+                .as_ref()
+                .expect("a wrapped-token config is written"),
         )
+        .expect("a config was written")
+    }
+
+    fn credit_at_holding(origin: Option<AccountId>, pre: u128, amount: u128) -> Transition {
+        run(
+            holding_actor(),
+            origin,
+            false,
+            balance_bytes(pre).to_vec(),
+            &Message::Credit(amount),
+        )
+    }
+
+    fn to_config(message: &Message) -> Call {
+        Call::new(config_actor(), message)
+    }
+
+    // The authority's actor receives `message` from `origin`; the config then receives what it
+    // forwards, as the driver would deliver it.
+    fn through_authority(
+        origin: Option<AccountId>,
+        is_authorized: bool,
+        message: &Message,
+    ) -> Transition {
+        let entry = run(actor(AUTHORITY), origin, is_authorized, Vec::new(), message);
+        assert!(
+            entry.response.casts.is_empty(),
+            "the forwarded change is an inline call"
+        );
+        let [
+            Call {
+                to, message: data, ..
+            },
+        ] = <[Call; 1]>::try_from(entry.response.calls).expect("one forwarded change");
+        assert_eq!(to, config_actor());
+        at_config(
+            Some(WRAPPED_ID),
+            &config(),
+            &borsh::from_slice(&data).expect("the forwarded change decodes"),
+        )
+    }
+
+    fn update(authority: AccountId, via: Option<AccountId>) -> Message {
+        Message::UpdateSources {
+            authority,
+            via,
+            sources: vec![],
+        }
     }
 
     #[test]
     fn a_mint_pins_the_authenticated_caller_and_the_delivered_marker() {
-        let marker = marker_of(MINTER, ZONE_A, PEER_A);
-        let plan = plan_for(
-            Some(MINTER),
-            mint_accounts(marker),
-            Instruction::Mint {
+        let delivery = Delivery {
+            src_zone: ZONE_A,
+            src_account_id: PEER_A,
+            payload: borsh::to_vec(&Message::Mint {
                 recipient: RECIPIENT,
                 amount: 10,
-            },
+            })
+            .unwrap(),
+        };
+        let transition = run(
+            actor(WRAPPED_ID),
+            Some(MINTER),
+            false,
+            Vec::new(),
+            &delivery,
         );
 
-        let config_meta = AccountMeta::new(config_account_id(WRAPPED_ID), false, WRAPPED_ID);
-        let holding_meta = AccountMeta::new(
-            holding_account_id(WRAPPED_ID, &RECIPIENT),
-            false,
-            WRAPPED_ID,
-        );
+        assert_eq!(transition.response.post_state, None);
         assert_eq!(
-            plan.output().effects,
-            vec![
-                ShardEffect::new(&config_meta, &mint_effect(Some(MINTER), marker, 10)),
-                ShardEffect::new(&holding_meta, &Effect::Credit(10)),
-            ],
-            "the caller travels from the runtime's metadata, and the config is checked first"
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![to_config(&mint_from(MINTER, ZONE_A, PEER_A, 10))],
+                Vec::new()
+            ),
+            "the deliverer travels from the runtime's origin, and the config is checked first"
         );
-        assert!(plan.output().chained_calls.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "Mint is only callable by the authorized minter")]
+    fn a_mint_sent_directly_is_refused() {
+        let _transition = run(
+            actor(WRAPPED_ID),
+            None,
+            false,
+            Vec::new(),
+            &Message::Mint {
+                recipient: RECIPIENT,
+                amount: 1,
+            },
+        );
     }
 
     #[test]
     fn a_mint_advances_only_the_matching_sources_counter() {
-        let written = applied_config(
-            shard(config().to_bytes()),
-            &mint_effect(Some(MINTER), marker_of(MINTER, ZONE_A, PEER_A), 400),
-        );
+        let transition = mint_at_config(&mint_from(MINTER, ZONE_A, PEER_A, 400));
+
         assert_eq!(
-            written.sources,
+            written_config(&transition).sources,
             vec![
                 entry(ZONE_A, PEER_A, Some(1_000), 500),
                 entry(ZONE_B, PEER_B, None, 0),
             ]
+        );
+        assert_eq!(
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![
+                    Call::new(holding_actor(), &Message::Credit(400))
+                        .with_pda_seeds(vec![holding_seed(&RECIPIENT)])
+                ],
+                Vec::new()
+            )
         );
     }
 
     #[test]
     #[should_panic(expected = "Mint is only callable by the authorized minter")]
     fn a_caller_that_is_not_the_configured_minter_cannot_mint() {
-        apply_at(
-            shard(config().to_bytes()),
-            &mint_effect(Some(STRANGER), marker_of(MINTER, ZONE_A, PEER_A), 1),
-        );
+        let _transition = mint_at_config(&mint_from(STRANGER, ZONE_A, PEER_A, 1));
     }
 
     #[test]
     #[should_panic(expected = "Mint is only callable by the authorized minter")]
     fn a_top_level_mint_is_refused() {
-        apply_at(
-            shard(config().to_bytes()),
-            &mint_effect(None, marker_of(MINTER, ZONE_A, PEER_A), 1),
-        );
+        let _transition = at_config(None, &config(), &mint_from(MINTER, ZONE_A, PEER_A, 1));
     }
 
     #[test]
@@ -465,113 +539,67 @@ mod tests {
     fn a_marker_no_authorized_source_derives_cannot_mint() {
         // Unbacked money printing if it were taken on the inbox's word: wrapped tokens have no
         // other backing check anywhere.
-        apply_at(
-            shard(config().to_bytes()),
-            &mint_effect(Some(MINTER), marker_of(MINTER, ZONE_A, STRANGER), 1),
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "Mint is only callable for a peer source this token authorizes")]
-    fn a_marker_derived_under_another_inbox_cannot_mint() {
-        // The derivation uses the config's own minter, so a marker minted under some other
-        // inbox's address space names no source here.
-        apply_at(
-            shard(config().to_bytes()),
-            &mint_effect(Some(MINTER), marker_of(STRANGER, ZONE_A, PEER_A), 1),
-        );
+        let _transition = mint_at_config(&mint_from(MINTER, ZONE_A, STRANGER, 1));
     }
 
     #[test]
     #[should_panic(expected = "mint exceeds this source's lifetime cap")]
     fn a_mint_beyond_the_sources_lifetime_cap_is_refused() {
-        apply_at(
-            shard(config().to_bytes()),
-            &mint_effect(Some(MINTER), marker_of(MINTER, ZONE_A, PEER_A), 901),
-        );
+        let _transition = mint_at_config(&mint_from(MINTER, ZONE_A, PEER_A, 901));
     }
 
     #[test]
     fn an_uncapped_source_mints_freely() {
-        let written = applied_config(
-            shard(config().to_bytes()),
-            &mint_effect(
-                Some(MINTER),
-                marker_of(MINTER, ZONE_B, PEER_B),
-                MAX_MINT_AMOUNT,
-            ),
-        );
-        assert_eq!(written.sources[1].minted, MAX_MINT_AMOUNT);
-    }
-
-    #[test]
-    #[should_panic(expected = "second account must be the wrapped-token config PDA")]
-    fn a_mint_that_names_another_account_as_the_config_is_refused() {
-        let mut metas = mint_accounts(marker_of(MINTER, ZONE_A, PEER_A));
-        metas[1] = AccountMeta::new(STRANGER, false, WRAPPED_ID);
-        let _plan = plan_for(
-            Some(MINTER),
-            metas,
-            Instruction::Mint {
-                recipient: RECIPIENT,
-                amount: 1,
-            },
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "third account must be the recipient holding PDA")]
-    fn a_mint_credited_outside_the_recipients_holding_is_refused() {
-        let mut metas = mint_accounts(marker_of(MINTER, ZONE_A, PEER_A));
-        metas[2] = AccountMeta::new(STRANGER, false, WRAPPED_ID);
-        let _plan = plan_for(
-            Some(MINTER),
-            metas,
-            Instruction::Mint {
-                recipient: RECIPIENT,
-                amount: 1,
-            },
+        let transition = mint_at_config(&mint_from(MINTER, ZONE_B, PEER_B, MAX_MINT_AMOUNT));
+        assert_eq!(
+            written_config(&transition).sources[1].minted,
+            MAX_MINT_AMOUNT
         );
     }
 
     #[test]
     #[should_panic(expected = "mint amount exceeds the per-mint cap")]
     fn a_mint_above_the_per_mint_cap_is_refused() {
-        let _plan = plan_for(
-            Some(MINTER),
-            mint_accounts(marker_of(MINTER, ZONE_A, PEER_A)),
-            Instruction::Mint {
-                recipient: RECIPIENT,
-                amount: MAX_MINT_AMOUNT.saturating_add(1),
-            },
-        );
+        let _transition = mint_at_config(&mint_from(
+            MINTER,
+            ZONE_B,
+            PEER_B,
+            MAX_MINT_AMOUNT.saturating_add(1),
+        ));
     }
 
     #[test]
     fn a_credit_adds_to_the_recipients_balance() {
-        assert_eq!(
-            apply_at(shard(balance_bytes(40).to_vec()), &Effect::Credit(2)),
-            balance_bytes(42).to_vec()
-        );
-        assert_eq!(
-            apply_at(ShardData::empty(), &Effect::Credit(42)),
-            balance_bytes(42).to_vec()
-        );
+        let written = |pre, amount| {
+            credit_at_holding(Some(WRAPPED_ID), pre, amount)
+                .response
+                .post_state
+        };
+        let balance = |amount: u128| Some(ActorState::from(balance_bytes(amount).to_vec()));
+        assert_eq!(written(40, 2), balance(42));
+        assert_eq!(written(0, 42), balance(42));
     }
 
     #[test]
     #[should_panic(expected = "wrapped-token balance overflow")]
     fn a_credit_that_overflows_the_holding_is_refused() {
-        apply_at(shard(balance_bytes(u128::MAX).to_vec()), &Effect::Credit(1));
+        let _transition = credit_at_holding(Some(WRAPPED_ID), u128::MAX, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "a credit is only sent by this token's config")]
+    fn a_credit_from_another_program_is_refused() {
+        let _transition = credit_at_holding(Some(STRANGER), 0, 1);
     }
 
     #[test]
     fn an_update_carries_over_a_kept_sources_counter_and_zeroes_a_re_added_one() {
-        let written = applied_config(
-            shard(config().to_bytes()),
-            &Effect::UpdateSources {
-                caller_account_id: None,
+        let transition = at_config(
+            Some(WRAPPED_ID),
+            &config(),
+            &Message::UpdateSources {
                 authority: AUTHORITY,
+                via: None,
                 sources: vec![
                     policy(ZONE_A, PEER_A, Some(2_000)),
                     policy(ZONE_A, PEER_B, Some(5)),
@@ -579,7 +607,7 @@ mod tests {
             },
         );
         assert_eq!(
-            written.sources,
+            written_config(&transition).sources,
             vec![
                 entry(ZONE_A, PEER_A, Some(2_000), 100),
                 entry(ZONE_A, PEER_B, Some(5), 0),
@@ -588,15 +616,16 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "second account must be the configured authority")]
+    #[should_panic(expected = "must be the configured authority")]
     fn an_account_that_is_not_the_authority_cannot_replace_the_sources() {
         // The second independent route to unbounded minting: install a source naming yourself
         // with no cap, then walk into `Mint`.
-        apply_at(
-            shard(config().to_bytes()),
-            &Effect::UpdateSources {
-                caller_account_id: None,
+        let _transition = at_config(
+            Some(WRAPPED_ID),
+            &config(),
+            &Message::UpdateSources {
                 authority: STRANGER,
+                via: None,
                 sources: vec![policy(ZONE_A, STRANGER, None)],
             },
         );
@@ -605,24 +634,61 @@ mod tests {
     #[test]
     #[should_panic(expected = "the authority acts at top level, or through the configured")]
     fn a_program_the_config_does_not_name_cannot_carry_a_governance_call() {
-        apply_at(
-            shard(config().to_bytes()),
-            &Effect::UpdateSources {
-                caller_account_id: Some(STRANGER),
-                authority: AUTHORITY,
-                sources: vec![],
-            },
+        let _transition = at_config(
+            Some(WRAPPED_ID),
+            &config(),
+            &update(AUTHORITY, Some(STRANGER)),
+        );
+    }
+
+    #[test]
+    fn the_governance_program_may_act_for_the_authority() {
+        let transition = at_config(
+            Some(WRAPPED_ID),
+            &config(),
+            &update(AUTHORITY, Some(GOVERNANCE)),
+        );
+        assert_eq!(written_config(&transition).sources, vec![]);
+    }
+
+    #[test]
+    #[should_panic(expected = "a change is only forwarded by the authority's own actor")]
+    fn the_governance_program_cannot_reach_the_config_past_the_authority() {
+        let _transition = at_config(
+            Some(GOVERNANCE),
+            &config(),
+            &update(AUTHORITY, Some(GOVERNANCE)),
+        );
+    }
+
+    // The driver authorizes the authority's actor for the governance program only when it
+    // sends with the seed that derives the authority.
+    #[test]
+    fn governance_granting_the_authoritys_seed_acts_through_its_actor() {
+        let transition =
+            through_authority(Some(GOVERNANCE), true, &update(AUTHORITY, Some(GOVERNANCE)));
+        assert_eq!(written_config(&transition).sources, vec![]);
+    }
+
+    #[test]
+    #[should_panic(expected = "the configured authority must authorize a source change")]
+    fn governance_without_the_authoritys_seed_is_refused() {
+        let _transition = through_authority(
+            Some(GOVERNANCE),
+            false,
+            &update(AUTHORITY, Some(GOVERNANCE)),
         );
     }
 
     #[test]
     #[should_panic(expected = "wrapped-token sources are fixed at genesis")]
     fn sources_cannot_be_replaced_once_the_authority_is_renounced() {
-        apply_at(
-            shard(config_with(None, vec![]).to_bytes()),
-            &Effect::UpdateSources {
-                caller_account_id: None,
+        let _transition = at_config(
+            Some(WRAPPED_ID),
+            &config_with(None, vec![]),
+            &Message::UpdateSources {
                 authority: AUTHORITY,
+                via: None,
                 sources: vec![policy(ZONE_A, STRANGER, None)],
             },
         );
@@ -631,10 +697,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "UpdateSources lists the same source twice")]
     fn an_update_listing_one_source_twice_is_refused() {
-        let _plan = plan_for(
-            None,
-            governance_metas(AUTHORITY, true),
-            Instruction::UpdateSources {
+        let _transition = at_config(
+            Some(WRAPPED_ID),
+            &config(),
+            &Message::UpdateSources {
+                authority: AUTHORITY,
+                via: None,
                 sources: vec![
                     policy(ZONE_A, PEER_A, Some(1)),
                     policy(ZONE_A, PEER_A, Some(2)),
@@ -646,44 +714,66 @@ mod tests {
     #[test]
     #[should_panic(expected = "the configured authority must authorize a source change")]
     fn an_unsigned_source_change_is_refused() {
-        let _plan = plan_for(
+        let _transition = run(
+            actor(AUTHORITY),
             None,
-            governance_metas(AUTHORITY, false),
-            Instruction::UpdateSources { sources: vec![] },
+            false,
+            Vec::new(),
+            &update(AUTHORITY, None),
+        );
+    }
+
+    // A signed authority does not make any program its governance.
+    #[test]
+    #[should_panic(expected = "the authority acts at top level")]
+    fn a_governance_change_entered_from_another_program_is_refused() {
+        let _transition = through_authority(
+            Some(STRANGER),
+            true,
+            &Message::RenounceAuthority {
+                authority: AUTHORITY,
+                via: None,
+            },
         );
     }
 
     #[test]
     fn an_update_pins_the_authenticated_caller_and_the_named_authority() {
-        let plan = plan_for(
-            Some(GOVERNANCE),
-            governance_metas(AUTHORITY, true),
-            Instruction::UpdateSources {
+        let transition = run(
+            actor(AUTHORITY),
+            None,
+            true,
+            Vec::new(),
+            &Message::UpdateSources {
+                authority: STRANGER,
+                via: Some(GOVERNANCE),
                 sources: vec![policy(ZONE_A, PEER_A, None)],
             },
         );
         assert_eq!(
-            plan.output().effects,
-            vec![ShardEffect::new(
-                &AccountMeta::new(config_account_id(WRAPPED_ID), false, WRAPPED_ID),
-                &Effect::UpdateSources {
-                    caller_account_id: Some(GOVERNANCE),
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![to_config(&Message::UpdateSources {
                     authority: AUTHORITY,
+                    via: None,
                     sources: vec![policy(ZONE_A, PEER_A, None)],
-                },
-            )]
+                })],
+                Vec::new()
+            )
         );
     }
 
     #[test]
     fn renouncing_clears_the_authority_and_leaves_the_sources_alone() {
-        let written = applied_config(
-            shard(config().to_bytes()),
-            &Effect::RenounceAuthority {
-                caller_account_id: None,
+        let transition = at_config(
+            Some(WRAPPED_ID),
+            &config(),
+            &Message::RenounceAuthority {
                 authority: AUTHORITY,
+                via: None,
             },
         );
+        let written = written_config(&transition);
         assert_eq!(written.authority, None);
         assert_eq!(written.sources, config().sources);
     }
@@ -691,59 +781,63 @@ mod tests {
     #[test]
     #[should_panic(expected = "wrapped-token authority is already renounced")]
     fn a_second_renounce_is_refused() {
-        apply_at(
-            shard(config_with(None, vec![]).to_bytes()),
-            &Effect::RenounceAuthority {
-                caller_account_id: None,
+        let _transition = at_config(
+            Some(WRAPPED_ID),
+            &config_with(None, vec![]),
+            &Message::RenounceAuthority {
                 authority: AUTHORITY,
+                via: None,
             },
         );
     }
 
     #[test]
-    #[should_panic(expected = "second account must be the configured authority")]
+    #[should_panic(expected = "must be the configured authority")]
     fn a_stranger_cannot_renounce_the_authority() {
-        apply_at(
-            shard(config().to_bytes()),
-            &Effect::RenounceAuthority {
-                caller_account_id: None,
+        let _transition = at_config(
+            Some(WRAPPED_ID),
+            &config(),
+            &Message::RenounceAuthority {
                 authority: STRANGER,
+                via: None,
             },
         );
     }
 
     #[test]
     fn a_first_init_writes_the_config_and_a_replay_is_a_no_op() {
-        assert_eq!(
-            apply_at(ShardData::empty(), &Effect::InitConfig(config())),
-            config().to_bytes()
-        );
-        assert_eq!(
-            apply_at(shard(config().to_bytes()), &Effect::InitConfig(config())),
-            config().to_bytes()
-        );
+        let init = Message::InitConfig(config());
+        let first = run(config_actor(), None, false, Vec::new(), &init);
+        assert_eq!(written_config(&first), config());
+        assert_eq!(written_config(&at_config(None, &config(), &init)), config());
     }
 
     #[test]
-    #[should_panic(expected = "shard already holds different data")]
+    #[should_panic(expected = "actor state already holds different data")]
     fn a_reinit_with_different_contents_is_refused() {
-        apply_at(
-            shard(config().to_bytes()),
-            &Effect::InitConfig(config_with(Some(STRANGER), vec![])),
+        let _transition = at_config(
+            None,
+            &config(),
+            &Message::InitConfig(config_with(Some(STRANGER), vec![])),
         );
     }
 
     #[test]
     #[should_panic(expected = "InitConfig is a top-level genesis transaction")]
     fn an_inbox_delivered_init_is_refused() {
-        let _plan = plan_for(
-            Some(MINTER),
-            vec![AccountMeta::new(
-                config_account_id(WRAPPED_ID),
-                false,
-                WRAPPED_ID,
-            )],
-            Instruction::InitConfig(config()),
+        let _transition = at_config(Some(MINTER), &config(), &Message::InitConfig(config()));
+    }
+
+    #[test]
+    #[should_panic(expected = "the receiver must be the wrapped-token config PDA")]
+    fn an_init_at_another_account_is_refused() {
+        // Unchecked, a genesis-shaped write into an empty holding would read back as a balance.
+        let _transition = run(
+            holding_actor(),
+            None,
+            false,
+            Vec::new(),
+            &Message::InitConfig(config()),
         );
     }
 }

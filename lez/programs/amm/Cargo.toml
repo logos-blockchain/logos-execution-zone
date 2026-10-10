@@ -12,3 +12,6 @@ borsh.workspace = true
 lee_core.workspace = true
 token_core.workspace = true
 amm_core.workspace = true
+
+[dev-dependencies]
+token_program.workspace = true

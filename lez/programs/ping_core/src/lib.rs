@@ -190,7 +190,8 @@ mod tests {
     /// existing encoding.
     #[test]
     fn send_is_the_first_variant() {
-        let send = SenderInstruction::Send {
+        let send = SenderMessage::Send {
+            outbox: Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32])),
             target_zone: [7; 32],
             target_account_id: AccountId::new([1; 32]),
             target_accounts: vec![],
@@ -205,7 +206,7 @@ mod tests {
     /// decoded by the destination, so its tag byte is wire format.
     #[test]
     fn record_is_the_first_variant() {
-        let record = ReceiverInstruction::Record { payload: vec![] };
+        let record = ReceiverMessage::Record { payload: vec![] };
         let bytes = borsh::to_vec(&record).expect("Record serializes");
         assert_eq!(bytes[0], 0);
     }

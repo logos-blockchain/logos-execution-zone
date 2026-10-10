@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::{Context as _, Result};
 use integration_tests::{L2_TO_L1_TIMEOUT, account_balance, get_account, new_account};
-use lee::{AccountId, PrivateKey, PublicKey, program::Program};
+use lee::{Account, AccountId, PrivateKey, PublicAccountEvidence, PublicKey, program::Program};
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, UnsecuredEd25519Key};
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
@@ -30,7 +30,7 @@ use sequencer_ffi::{
         },
     },
 };
-use sequencer_service::GenesisAction;
+use sequencer_service::{DepositRecipient, GenesisAction};
 use tempfile::TempDir;
 use test_fixtures::{
     BlockingTestContext, MultiZoneTestContextBuilder, ZoneTestContextBuilder,
@@ -60,7 +60,7 @@ unsafe extern "C" {
     pub unsafe fn sequencer_ffi_query_account(
         sequencer: *const SequencerServiceFFI,
         account_id: FfiAccountId,
-    ) -> PointerResult<FfiAccount, OperationStatus>;
+    ) -> PointerResult<FfiOption<FfiAccount>, OperationStatus>;
 
     pub unsafe fn sequencer_ffi_query_block_vec(
         sequencer: *const SequencerServiceFFI,
@@ -148,6 +148,16 @@ pub fn wait_for_sequencer_ffi_block(
     }
 }
 
+pub fn queried_account(sequencer: &SequencerServiceFFI, account_id: AccountId) -> Option<Account> {
+    // SAFETY: `sequencer` is a valid reference for the duration of the call.
+    let res =
+        unsafe { sequencer_ffi_query_account(std::ptr::from_ref(sequencer), account_id.into()) };
+    assert!(res.error.is_ok(), "Failed to fetch account {account_id}");
+    // SAFETY: the query returned a valid option, read and converted exactly once.
+    let account: Option<FfiAccount> = unsafe { res.value.read() }.into();
+    account.map(|account| account.try_into().expect("Data must fit"))
+}
+
 /// Sets up blocking context with one leader node
 /// and joins FFI node through staking flow.
 pub fn joining_setup() -> Result<JoiningSetup> {
@@ -164,7 +174,9 @@ pub fn joining_setup() -> Result<JoiningSetup> {
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
                 .with_sequencer_partial_config(fast_blocks())
                 .with_genesis(vec![GenesisAction::SupplyAccount {
-                    account_id: funding_id,
+                    recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(
+                        PublicKey::new_from_private_key(&funding_private_key),
+                    )),
                     balance: FUNDING_BALANCE.try_into().expect("Must fit"),
                 }]),
         )
@@ -195,13 +207,13 @@ pub fn joining_setup() -> Result<JoiningSetup> {
 
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
 
-    let stake_instruction_data =
-        Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
-            sequencer_key: joining_stake_key,
-            amount: FUNDING_BALANCE,
-            has_record: false,
-        })
-        .context("Failed to serialize Stake instruction")?;
+    let stake_message = Program::serialize_message(sequencer_stake_core::Message::Stake {
+        sequencer_key: joining_stake_key,
+        amount: FUNDING_BALANCE,
+        has_record: false,
+        funding: funding_id,
+    })
+    .context("Failed to serialize Stake message")?;
 
     log::info!(
         "Submitting Stake transaction for sequencer key {}",
@@ -209,17 +221,18 @@ pub fn joining_setup() -> Result<JoiningSetup> {
     );
     let config_id = system_accounts::sequencer_stake_config_account_id();
     let stake_id = programs::sequencer_stake_account_id();
+    let root = AccountIdentity::Public(ownership_id).select_program_actor_state(stake_id);
     ctx.block_on(|ctx| async {
         ctx.wallet()
             .send_pub_tx(
                 vec![
-                    AccountIdentity::Public(funding_id).balance(),
-                    AccountIdentity::Public(ownership_id).select_program_shard(stake_id),
+                    root,
                     AccountIdentity::PublicNoSign(funds_id).balance(),
-                    AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
+                    AccountIdentity::Public(funding_id).balance(),
+                    AccountIdentity::PublicNoSign(config_id).select_program_actor_state(stake_id),
                 ],
-                stake_instruction_data,
-                stake_id,
+                0,
+                stake_message,
             )
             .await
             .map_err(|err| anyhow::anyhow!("Failed to submit Stake transaction: {err:?}"))
@@ -232,7 +245,7 @@ pub fn joining_setup() -> Result<JoiningSetup> {
             Ok(!get_account(ctx, ownership_id)
                 .await?
                 .data
-                .shard(stake_id)
+                .actor_state(stake_id)
                 .is_empty())
         })
     })?;
@@ -243,7 +256,7 @@ pub fn joining_setup() -> Result<JoiningSetup> {
             .context("Failed to read the stake ownership account")
     })?;
     assert!(
-        !ownership_account.data.shard(stake_id).is_empty(),
+        !ownership_account.data.actor_state(stake_id).is_empty(),
         "ownership account should now hold a sequencer_stake record"
     );
     let staked_balance = ctx.block_on(|ctx| account_balance(ctx, funds_id))?;
@@ -252,7 +265,7 @@ pub fn joining_setup() -> Result<JoiningSetup> {
         "the funds PDA should hold the staked balance"
     );
     let record = sequencer_stake_core::StakeRecord::from_bytes(
-        ownership_account.data.shard(stake_id).as_ref(),
+        ownership_account.data.actor_state(stake_id).as_ref(),
     )
     .context("ownership account data did not decode as a StakeRecord")?;
     assert_eq!(record.sequencer_key, joining_stake_key);

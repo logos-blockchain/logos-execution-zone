@@ -14,18 +14,20 @@
 //! wiring from `spawn_watchers` through the store, so a silent regression here
 //! would leave every other test green while the feature does nothing.
 
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
-use cross_zone_outbox_core::outbox_pda;
+use cross_zone_outbox_core::{outbox_pda, outbox_pda_seed};
 use integration_tests::{
     config::{self, SequencerPartialConfig},
     setup::{SequencerSetup, sequencer_client, setup_bedrock_node},
 };
-use lee::{AccountId, ProgramShardSelector, PublicTransaction, public_transaction::Message};
+use lee::{
+    AccountId, Actor, PublicAccountEvidence, PublicTransaction, public_transaction::Message,
+};
 use ping_core::{
-    ReceiverInstruction, SenderInstruction, ping_record_pda, receiver_config_account_id,
+    ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id,
     sender_config_account_id,
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
@@ -137,9 +139,9 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
     );
 
     // The delivery itself must survive the restart untouched.
-    let account = client_b.get_account(record_id).await?;
+    let account = client_b.get_account(record_id).await?.unwrap_or_default();
     assert_eq!(
-        account.data.shard(receiver_id).to_vec(),
+        account.data.actor_state(receiver_id).to_vec(),
         PING_PAYLOAD,
         "the delivered payload must survive the restart"
     );
@@ -157,7 +159,7 @@ async fn count_inbox_transactions(client: &SequencerClient, from: u64, to: u64) 
         };
         for tx in &block.body.transactions {
             if let LeeTransaction::Public(public_tx) = tx
-                && public_tx.message().program_account_id == inbox_id
+                && public_tx.message().execution.root.to.program_account_id == inbox_id
             {
                 count = count.saturating_add(1);
             }
@@ -187,39 +189,42 @@ async fn wait_for_block_id(
 }
 
 /// Builds a top-level `ping_sender` transaction that chains into the outbox to emit
-/// a message carrying a `ping_receiver::Record` instruction for the target zone.
+/// a message carrying a `ping_receiver::Record` message for the target zone.
 fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransaction {
     let outbox_id = programs::cross_zone_outbox_account_id();
     let ordinal = 0;
 
-    let payload = borsh::to_vec(&ReceiverInstruction::Record {
+    let payload = borsh::to_vec(&ReceiverMessage::Record {
         payload: PING_PAYLOAD.to_vec(),
     })
-    .expect("serialize ping instruction");
+    .expect("serialize ping message");
 
-    let send = SenderInstruction::Send {
+    let sender_id = programs::ping_sender_account_id();
+    let config = Actor::new(sender_config_account_id(sender_id), sender_id);
+    let outbox = Actor::new(
+        outbox_pda(outbox_id, sender_id, &target_zone, ordinal),
+        outbox_id,
+    );
+    let send = SenderMessage::Send {
+        outbox,
         target_zone,
         target_account_id: receiver_id,
         target_accounts: vec![
-            ProgramShardSelector::new(receiver_config_account_id(receiver_id), receiver_id),
-            ProgramShardSelector::new(ping_record_pda(receiver_id), receiver_id),
+            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+            Actor::new(ping_record_pda(receiver_id), receiver_id),
         ],
         payload,
         ordinal,
     };
 
-    let sender_id = programs::ping_sender_account_id();
-    let outbox_account = outbox_pda(outbox_id, sender_id, &target_zone, ordinal);
-    let message = Message::try_new(
-        sender_id,
-        vec![
-            ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
-            ProgramShardSelector::new(outbox_account, outbox_id),
-        ],
-        vec![],
-        send,
-    )
-    .expect("build ping message");
+    let message = Message {
+        admission_evidence: vec![PublicAccountEvidence::Pda {
+            program: outbox_id,
+            seed: outbox_pda_seed(sender_id, &target_zone, ordinal),
+        }],
+        ..Message::try_new(config, vec![config, outbox], BTreeMap::new(), send)
+            .expect("build ping message")
+    };
     LeeTransaction::Public(PublicTransaction::new(
         message,
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
@@ -234,8 +239,8 @@ async fn wait_for_delivery(
 ) -> Result<Vec<u8>> {
     let wait = async {
         loop {
-            let account = client.get_account(record_id).await?;
-            let data = account.data.shard(receiver_id).to_vec();
+            let account = client.get_account(record_id).await?.unwrap_or_default();
+            let data = account.data.actor_state(receiver_id).to_vec();
             if !data.is_empty() {
                 return Ok::<Vec<u8>, anyhow::Error>(data);
             }

@@ -9,14 +9,16 @@
 //! inbox guest's caller-is-none assertion passes for a top-level user tx, so the
 //! sequencer ingress guard is the only thing that stops this.
 
+use std::collections::BTreeMap;
+
 use anyhow::Result;
 use common::transaction::LeeTransaction;
 use cross_zone_inbox_core::{
-    CrossZoneMessage, Instruction, inbox_config_account_id, inbox_seen_shard_account_id,
+    CrossZoneMessage, Message as InboxMessage, inbox_config_account_id, inbox_seen_shard_account_id,
 };
 use integration_tests::config::{self, SequencerPartialConfig};
 use lee::{
-    AccountId, ProgramShardSelector, PublicTransaction,
+    AccountId, Actor, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
 use sequencer_service_rpc::RpcClient as _;
@@ -56,14 +58,12 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
         l1_inclusion_witness: None,
     };
     let seen_id = inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id);
+    let config = Actor::new(inbox_config_account_id(inbox_id), inbox_id);
     let message = Message::try_new(
-        inbox_id,
-        vec![
-            ProgramShardSelector::new(inbox_config_account_id(inbox_id), inbox_id),
-            ProgramShardSelector::new(seen_id, inbox_id),
-        ],
-        vec![],
-        Instruction::Dispatch(msg),
+        config,
+        vec![config, Actor::new(seen_id, inbox_id)],
+        BTreeMap::new(),
+        InboxMessage::Dispatch(msg),
     )
     .expect("build dispatch message");
     let tx = LeeTransaction::Public(PublicTransaction::new(

@@ -16,7 +16,7 @@ use wallet::{
         CliAccountMention, Command, SubcommandReturnValue, account::AccountSubcommand,
         programs::native_token_transfer::AuthTransferSubcommand,
     },
-    program_facades::native_token_transfer::NativeTokenTransfer,
+    program_facades::{CreditDelivery, native_token_transfer::NativeTokenTransfer},
 };
 
 /// The sender's post-transfer balance is `before - amount - fee`.
@@ -49,7 +49,7 @@ async fn successful_transfer_to_existing_account() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         to_keys: None,
-        to_identifier: Some(lee_core::Identifier::ZERO),
+        to_pk: None,
         amount: 100,
     });
     let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -130,6 +130,34 @@ pub async fn successful_transfer_to_new_account() -> Result<()> {
     Ok(())
 }
 
+// A recipient absent from public state whose key this wallet does not hold: named by its public
+// key, the transfer carries that key's identity evidence, so its first credit lands.
+#[test]
+async fn a_foreign_recipient_named_by_its_public_key_receives_its_first_credit() -> Result<()> {
+    let mut ctx = TestContext::new().await?;
+
+    let sender = ctx.existing_public_accounts()[0];
+    let recipient_key = PublicKey::new_from_private_key(&lee::PrivateKey::try_new([77; 32])?);
+    let recipient = AccountId::from(&recipient_key);
+    assert_eq!(get_account(&ctx, recipient).await?, lee::Account::default());
+
+    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
+        from: public_mention(sender),
+        to: None,
+        to_npk: None,
+        to_vpk: None,
+        to_keys: None,
+        to_pk: Some(recipient_key),
+        amount: 100,
+    });
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+
+    assert_eq!(account_balance(&ctx, recipient).await?, 100);
+
+    Ok(())
+}
+
 /// A transfer beyond the sender's balance is refused by the wallet before it
 /// ever reaches the sequencer: the native-transfer facade balance-checks the
 /// amount client-side and returns `InsufficientFundsError`. Nothing is
@@ -151,12 +179,14 @@ async fn transfer_beyond_balance_is_refused_client_side() -> Result<()> {
     let sender_nonce_before = get_account(&ctx, sender).await?.nonce.0;
 
     let refused = NativeTokenTransfer(ctx.wallet())
-        .send_public_transfer(
+        .transfer(
             AccountIdentity::Public(sender),
             AccountIdentity::Public(receiver),
             sender_before * 2,
+            CreditDelivery::Automatic,
         )
-        .await;
+        .await
+        .map(|(tx_hash, _)| tx_hash);
     assert!(
         matches!(refused, Err(ExecutionFailureKind::InsufficientFundsError)),
         "an over-balance transfer must be refused client-side, got: {refused:?}",

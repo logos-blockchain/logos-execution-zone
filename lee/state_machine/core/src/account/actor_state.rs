@@ -40,3 +40,22 @@ impl Borrow<[u8]> for ActorState {
         &self.0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn state_encoding_matches_bytes_beyond_the_former_limit() {
+        let bytes = vec![7_u8; 100 * 1024 + 1];
+        let state = ActorState::from(bytes.clone());
+
+        let borsh = borsh::to_vec(&bytes).unwrap();
+        assert_eq!(borsh::to_vec(&state).unwrap(), borsh);
+        assert_eq!(borsh::from_slice::<ActorState>(&borsh).unwrap(), state);
+
+        let json = serde_json::to_string(&bytes).unwrap();
+        assert_eq!(serde_json::to_string(&state).unwrap(), json);
+        assert_eq!(serde_json::from_str::<ActorState>(&json).unwrap(), state);
+    }
+}

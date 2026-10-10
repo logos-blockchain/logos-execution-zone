@@ -1,5 +1,4 @@
 use cucumber::{gherkin::Step, given};
-use lee::Account;
 use sequencer_service_rpc::RpcClient as _;
 use tracing::warn;
 use wallet::account::Label;
@@ -16,8 +15,8 @@ async fn create_new_public_account(world: &mut CucumberWorld, step: &Step) -> St
     let context = world.lez()?;
     let account = context.new_public_account().await?;
     match context.sequencer_client().get_account(account).await {
-        Ok(state) if state == Account::default() => {}
-        Ok(state) => {
+        Ok(None) => {}
+        Ok(Some(state)) => {
             warn!(target: TARGET,
                 "Cucumber step '{}' found non-default state for fresh public account {account:?}",
                 step.value

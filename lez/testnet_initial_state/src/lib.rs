@@ -269,8 +269,8 @@ mod tests {
     const PUB_ACC_A_TEXT_ADDR: &str = "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV";
     const PUB_ACC_B_TEXT_ADDR: &str = "7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo";
 
-    const PRIV_ACC_A_TEXT_ADDR: &str = "GzKZCEamT6Mt7SnwrhoAJvaQpTG4q7yegcBSCYoRVyaE";
-    const PRIV_ACC_B_TEXT_ADDR: &str = "Baovohr2wgDpZXAEXwfvmMKBrsdotsxUsYpH3LUufDe";
+    const PRIV_ACC_A_TEXT_ADDR: &str = "44KVvzvh2ephQU9aR5snboGUXKgS1FnPYh1W4KZKwmhm";
+    const PRIV_ACC_B_TEXT_ADDR: &str = "478hD6LXFTYu5gRRkWkCyXPRsWgCwAfRredoCUfxr5b9";
 
     #[test]
     fn pub_state_consistency() {
@@ -307,10 +307,9 @@ mod tests {
     #[test]
     fn private_state_consistency() {
         let init_private_accs_keys = initial_priv_accounts_private_keys();
-        let init_comms = initial_commitments();
 
         // `nsk`/`npk` carry no constants of their own: the key chains derive from `SSK_*`, and the
-        // two address canaries below pin H(PREFIX || npk || vpk || identifier), so drift anywhere
+        // two address canaries below pin H(PREFIX || npk || vpk), so drift anywhere
         // in ask -> nsk -> npk or in vsk -> vpk moves one of them. Nothing is left unpinned.
         // `VSK_*` stays pinned separately because it is the last value on the vsk -> vpk leg that
         // a test can compare directly.
@@ -337,39 +336,35 @@ mod tests {
             init_private_accs_keys[1].account_id().to_string(),
             PRIV_ACC_B_TEXT_ADDR
         );
+    }
 
-        assert_eq!(
-            init_private_accs_keys[0].key_chain.nullifier_public_key,
-            init_comms[0].npk
-        );
-        assert_eq!(
-            init_private_accs_keys[1].key_chain.nullifier_public_key,
-            init_comms[1].npk
-        );
+    #[test]
+    fn the_pinned_recovery_bindings_name_the_private_accounts_none_of_them_funded() {
+        let state = initial_state(false);
+        let accounts = initial_priv_accounts_private_keys();
+        let bindings = initial_recovery_bindings();
+        assert_eq!(bindings.len(), accounts.len());
 
-        assert_eq!(
-            init_comms[0],
-            PrivateAccountPublicInitialData {
-                npk: init_private_accs_keys[0].key_chain.nullifier_public_key,
-                vpk: init_private_accs_keys[0]
-                    .key_chain
-                    .viewing_public_key
-                    .clone(),
-                account: Account::funded(PRIV_ACC_A_INITIAL_BALANCE),
-            }
-        );
-
-        assert_eq!(
-            init_comms[1],
-            PrivateAccountPublicInitialData {
-                npk: init_private_accs_keys[1].key_chain.nullifier_public_key,
-                vpk: init_private_accs_keys[1]
-                    .key_chain
-                    .viewing_public_key
-                    .clone(),
-                account: Account::funded(PRIV_ACC_B_INITIAL_BALANCE),
-            }
-        );
+        for (data, binding) in accounts.iter().zip(&bindings) {
+            let keys = &data.key_chain.private_key_holder;
+            assert_eq!(binding.address, data.account_id());
+            assert_eq!(
+                Recipient::recover(
+                    binding.address,
+                    &binding.note,
+                    &keys.viewing_secret_key.d,
+                    &keys.viewing_secret_key.z
+                ),
+                Some(data.recipient())
+            );
+            assert_eq!(state.recovery_binding(binding.address), Some(&binding.note));
+            assert!(
+                !state.is_spent(&lee_core::Nullifier::for_account_initialization(
+                    &binding.address,
+                    &keys.nullifier_secret_key()
+                ))
+            );
+        }
     }
 
     #[test]
@@ -393,14 +388,20 @@ mod tests {
             state
                 .get_account_by_id(system_accounts::fee_state_account_id())
                 .data
-                .shard(programs::fee_account_id()),
+                .actor_state(programs::fee_account_id()),
         );
         assert_eq!(fee_state, fee_core::state::FeeState::genesis());
         for empty_id in [
             system_accounts::fee_escrow_account_id(),
             system_accounts::fee_inbox_account_id(),
         ] {
-            assert!(state.get_account_by_id(empty_id).data.shards.is_empty());
+            assert!(
+                state
+                    .get_account_by_id(empty_id)
+                    .data
+                    .actor_states
+                    .is_empty()
+            );
         }
     }
 
@@ -423,7 +424,7 @@ mod tests {
             "the bridge holds the whole supply"
         );
         assert_eq!(
-            bridge.data.shards.keys().copied().collect::<Vec<_>>(),
+            bridge.data.actor_states.keys().copied().collect::<Vec<_>>(),
             vec![lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID],
             "the bridge holds balance alone, no program's record"
         );

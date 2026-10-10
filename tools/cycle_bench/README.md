@@ -29,9 +29,9 @@ cargo bench -p cycle_bench --features ppe --bench verify
 
 ## What you'll see
 
-- Per-program executor cycles and segments, plus exec wall time as `best / mean ± stdev (n=N)`.
+- Executor cycles and segments per transition (one `handle_message` row for each guest transition an operation takes), plus exec wall time as `best / mean ± stdev (n=N)`.
 - With `--prove`: prover total cycles, paging cycles, segments, and wall time.
-- With `--ppe`: end-to-end `execute_and_prove` wall time and `S_agg` (the borsh-serialized InnerReceipt length) for one auth-transfer-in-PPE case and a chain-caller depth sweep.
+- With `--ppe`: end-to-end `execute_and_prove` wall time and `S_agg` (the borsh-serialized InnerReceipt length) for a native-transfer and a token-transfer case in PPE and a sweep over the number of token transfers a scripted actor sends.
 - From the `verify` criterion bench: `ppe/verify_native_transfer` slope-regression point estimate with 95% CI bounds.
 
 ## Baseline comparison (verify bench)

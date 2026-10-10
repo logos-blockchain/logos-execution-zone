@@ -289,17 +289,17 @@ impl Display for AccountId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::program::ApplyInput;
 
     #[test]
     fn a_persisted_account_with_a_legacy_balance_field_is_refused() {
-        let current = serde_json::from_str::<Account>(r#"{"nonce":7,"data":{"shards":{}}}"#)
+        let current = serde_json::from_str::<Account>(r#"{"nonce":7,"data":{"actor_states":{}}}"#)
             .expect("the stored shape loads");
         assert_eq!(current.nonce, Nonce(7));
         assert_eq!(current.data.native_balance(), Ok(0));
 
-        let legacy =
-            serde_json::from_str::<Account>(r#"{"nonce":7,"data":{"balance":123,"shards":{}}}"#);
+        let legacy = serde_json::from_str::<Account>(
+            r#"{"nonce":7,"data":{"balance":123,"actor_states":{}}}"#,
+        );
 
         assert!(legacy.is_err(), "a legacy balance field was accepted");
     }
@@ -319,10 +319,10 @@ mod tests {
     }
 
     #[test]
-    fn default_account_has_no_shards() {
+    fn default_account_has_no_actor_states() {
         let new_acc = Account::default();
 
-        assert!(new_acc.data.shards.is_empty());
+        assert!(new_acc.data.actor_states.is_empty());
     }
 
     #[cfg(feature = "host")]
@@ -362,14 +362,6 @@ mod tests {
         let default_account_id = AccountId::default();
         let expected_account_id = AccountId::new([0; 32]);
         assert_eq!(default_account_id, expected_account_id);
-    }
-
-    #[test]
-    fn initialize_private_nonce() {
-        let account_id = AccountId::new([42; 32]);
-        let nonce = Nonce::private_account_nonce_init(&account_id);
-        let expected_nonce = Nonce(37_937_661_125_547_691_021_612_781_941_709_513_486);
-        assert_eq!(nonce, expected_nonce);
     }
 
     #[test]
@@ -413,65 +405,59 @@ mod tests {
     }
 
     #[test]
-    fn apply_output_prunes_an_emptied_shard() {
+    fn set_actor_state_prunes_an_emptied_actor_state() {
         let program = AccountId::new([3; 32]);
-        let mut account =
-            Account::funded(10).with_shard(program, b"record".to_vec().try_into().unwrap());
+        let mut account = Account::funded(10).with_actor_state(program, b"record".to_vec().into());
 
-        account.data.apply_output(&ApplyOutput::new(
-            ApplyInput {
-                self_account_id: program,
-                selector: ProgramShardSelector::new(AccountId::new([1; 32]), program),
-                pre_data: b"record".to_vec().try_into().unwrap(),
-                effect_data: Vec::new(),
-            },
-            Some(ShardData::empty()),
-        ));
+        account.data.set_actor_state(program, ActorState::empty());
 
-        assert!(!account.data.shards.contains_key(&program));
+        assert!(!account.data.actor_states.contains_key(&program));
         assert_eq!(account, Account::funded(10));
     }
 
     #[test]
-    fn project_reads_absent_shards_as_empty() {
+    fn project_reads_absent_actor_states_as_empty() {
         let held = AccountId::new([3; 32]);
         let absent = AccountId::new([4; 32]);
         let data = Account::funded(9)
             .data
-            .with_shard(held, b"record".to_vec().try_into().unwrap());
+            .with_actor_state(held, b"record".to_vec().into());
 
         let projection = data.project([held, absent]);
 
         assert_eq!(projection.native_balance(), Ok(0));
-        assert_eq!(projection.shards.get(&absent), Some(&ShardData::empty()));
-        assert_eq!(projection.shards.len(), 2);
+        assert_eq!(
+            projection.actor_states.get(&absent),
+            Some(&ActorState::empty())
+        );
+        assert_eq!(projection.actor_states.len(), 2);
     }
 
     #[test]
-    fn apply_keeps_the_nonce_and_prunes_emptied_shards() {
+    fn update_keeps_the_nonce_and_prunes_emptied_actor_states() {
         let program = AccountId::new([3; 32]);
         let mut account = Account {
             nonce: Nonce(7),
-            ..Account::funded(9).with_shard(program, b"record".to_vec().try_into().unwrap())
+            ..Account::funded(9).with_actor_state(program, b"record".to_vec().into())
         };
 
         account.data.update(&AccountData {
-            shards: [(program, ShardData::empty())].into(),
+            actor_states: [(program, ActorState::empty())].into(),
         });
 
         assert_eq!(account.nonce, Nonce(7));
         assert_eq!(account.data.native_balance(), Ok(9));
-        assert_eq!(account.data.shards.len(), 1);
+        assert_eq!(account.data.actor_states.len(), 1);
     }
 
     #[test]
-    fn project_then_apply_is_identity_on_the_touched_shards() {
+    fn project_then_update_is_identity_on_the_touched_actor_states() {
         let touched = AccountId::new([3; 32]);
         let untouched = AccountId::new([4; 32]);
         let data = Account::funded(9)
             .data
-            .with_shard(touched, b"record".to_vec().try_into().unwrap())
-            .with_shard(untouched, b"other".to_vec().try_into().unwrap());
+            .with_actor_state(touched, b"record".to_vec().into())
+            .with_actor_state(untouched, b"other".to_vec().into());
 
         let mut applied = data.clone();
         applied.update(&data.project([touched]));
@@ -483,10 +469,8 @@ mod tests {
     fn an_account_json_round_trip_holds_the_largest_balance_and_nonce() {
         let account = Account {
             nonce: Nonce(u128::MAX),
-            ..Account::funded(u128::MAX).with_shard(
-                AccountId::new([3; 32]),
-                b"record".to_vec().try_into().unwrap(),
-            )
+            ..Account::funded(u128::MAX)
+                .with_actor_state(AccountId::new([3; 32]), b"record".to_vec().into())
         };
 
         let json = serde_json::to_string(&account).unwrap();
@@ -506,7 +490,7 @@ mod tests {
 
         assert_eq!(
             serde_json::to_string(&account).unwrap(),
-            r#"{"nonce":7,"data":{"shards":{"11111111111111111111111111111111":[9,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}}}"#
+            r#"{"nonce":7,"data":{"actor_states":{"11111111111111111111111111111111":[9,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}}}"#
         );
     }
 }

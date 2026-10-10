@@ -62,7 +62,9 @@ pub fn is_fee_authorized<M: SignedMessage>(message: &M, witness_set: &WitnessSet
 
 #[cfg(test)]
 mod tests {
-    use lee_core::account::ProgramShardSelector;
+    use std::collections::BTreeMap;
+
+    use lee_core::account::{Actor, Nonce};
 
     use super::*;
     use crate::{
@@ -83,11 +85,12 @@ mod tests {
 
     fn charged_message(payer: AccountId) -> Message {
         Message::try_new_with_fees(
-            AccountId::from_builtin_program([0_u32; 8]),
-            vec![ProgramShardSelector::native_balance(account_id_of(
-                &keys().0,
-            ))],
-            vec![0_u128.into()],
+            Actor::new(
+                account_id_of(&keys().0),
+                AccountId::from_builtin_program([0_u32; 8]),
+            ),
+            vec![Actor::native_balance(account_id_of(&keys().0))],
+            BTreeMap::from([(account_id_of(&keys().0), Nonce(0))]),
             vec![1_u8, 2, 3],
             FeeDeclaration::new(payer, 1_000, 0, 10_000),
         )
@@ -96,11 +99,12 @@ mod tests {
 
     fn exempt_message() -> Message {
         Message::try_new(
-            AccountId::from_builtin_program([0_u32; 8]),
-            vec![ProgramShardSelector::native_balance(account_id_of(
-                &keys().0,
-            ))],
-            vec![0_u128.into()],
+            Actor::new(
+                account_id_of(&keys().0),
+                AccountId::from_builtin_program([0_u32; 8]),
+            ),
+            vec![Actor::native_balance(account_id_of(&keys().0))],
+            BTreeMap::from([(account_id_of(&keys().0), Nonce(0))]),
             vec![1_u8, 2, 3],
         )
         .expect("valid message")
@@ -137,7 +141,7 @@ mod tests {
     fn an_exempt_message_is_always_authorized() {
         let (signer_key, _) = keys();
         let message = exempt_message();
-        assert_eq!(message.fee, None);
+        assert_eq!(message.execution.fee, None);
         let witness_set = WitnessSet::for_message(&message, &[&signer_key]);
         assert!(is_fee_authorized(&message, &witness_set));
     }
@@ -152,6 +156,7 @@ mod tests {
 
         let mut tampered = message;
         tampered
+            .execution
             .fee
             .as_mut()
             .expect("charged message has a fee")

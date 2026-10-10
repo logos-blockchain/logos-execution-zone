@@ -1195,8 +1195,8 @@ mod tests {
         let LeeTransaction::Public(public_tx) = tx else {
             panic!("a dispatch is a public transaction");
         };
-        let Ok(cross_zone_inbox_core::Instruction::Dispatch(msg)) =
-            borsh::from_slice(&public_tx.message().instruction_data)
+        let Ok(cross_zone_inbox_core::Message::Dispatch(msg)) =
+            borsh::from_slice(&public_tx.message().execution.root.message)
         else {
             panic!("the recorded transaction is an inbox dispatch");
         };

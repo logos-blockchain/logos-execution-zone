@@ -17,7 +17,9 @@ use indexer_ffi::{
         types::{FfiAccountId, FfiOption, FfiVec, account::FfiAccount, block::FfiBlock},
     },
 };
+use indexer_service_protocol::Account;
 use integration_tests::{BlockingTestContext, L2_TO_L1_TIMEOUT};
+use lee::AccountId;
 use tempfile::TempDir;
 use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
@@ -35,13 +37,32 @@ unsafe extern "C" {
     pub unsafe fn query_account(
         indexer: *const IndexerServiceFFI,
         account_id: FfiAccountId,
-    ) -> PointerResult<FfiAccount, OperationStatus>;
+    ) -> PointerResult<FfiOption<FfiAccount>, OperationStatus>;
+
+    pub unsafe fn free_ffi_account_opt(val: *mut FfiOption<FfiAccount>);
 
     pub unsafe fn start_indexer(
         runtime: *const Runtime,
         config_path: *const c_char,
         storage_dir: *const c_char,
     ) -> InitializedIndexerServiceFFIResult;
+}
+
+pub fn indexed_account(indexer: &IndexerServiceFFI, account_id: &AccountId) -> Option<Account> {
+    // SAFETY: `indexer` is a valid reference for the duration of the call.
+    let res = unsafe { query_account(std::ptr::from_ref(indexer), account_id.into()) };
+    assert!(res.error.is_ok(), "Failed to fetch account {account_id}");
+    // SAFETY: a successful query returns a valid option.
+    let opt = unsafe { &*res.value };
+    let account = opt.is_some.then(|| {
+        // SAFETY: a present option holds a valid account.
+        Account::from(unsafe { &*opt.value })
+    });
+    // SAFETY: the option came from the query and is freed once, after its last read.
+    unsafe {
+        free_ffi_account_opt(res.value);
+    }
+    account
 }
 
 pub fn setup_indexer_ffi(bedrock_addr: SocketAddr) -> Result<(IndexerServiceFFI, TempDir)> {

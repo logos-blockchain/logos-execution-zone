@@ -13,42 +13,12 @@ mod guests {
 
 #[must_use]
 #[inline]
-pub const fn data_writer() -> Program {
-    use guests::{DATA_WRITER_ELF, DATA_WRITER_ID, DATA_WRITER_PATH};
+pub const fn scripted() -> Program {
+    use guests::{SCRIPTED_ELF, SCRIPTED_ID, SCRIPTED_PATH};
 
-    let _unused = DATA_WRITER_PATH;
+    let _unused = SCRIPTED_PATH;
 
-    Program::new_unchecked(DATA_WRITER_ID, Cow::Borrowed(DATA_WRITER_ELF))
-}
-
-#[must_use]
-#[inline]
-pub const fn chain_caller() -> Program {
-    use guests::{CHAIN_CALLER_ELF, CHAIN_CALLER_ID, CHAIN_CALLER_PATH};
-
-    let _unused = CHAIN_CALLER_PATH;
-
-    Program::new_unchecked(CHAIN_CALLER_ID, Cow::Borrowed(CHAIN_CALLER_ELF))
-}
-
-#[must_use]
-#[inline]
-pub const fn authority_proxy() -> Program {
-    use guests::{AUTHORITY_PROXY_ELF, AUTHORITY_PROXY_ID, AUTHORITY_PROXY_PATH};
-
-    let _unused = AUTHORITY_PROXY_PATH;
-
-    Program::new_unchecked(AUTHORITY_PROXY_ID, Cow::Borrowed(AUTHORITY_PROXY_ELF))
-}
-
-#[must_use]
-#[inline]
-pub const fn pda_spend_proxy() -> Program {
-    use guests::{PDA_SPEND_PROXY_ELF, PDA_SPEND_PROXY_ID, PDA_SPEND_PROXY_PATH};
-
-    let _unused = PDA_SPEND_PROXY_PATH;
-
-    Program::new_unchecked(PDA_SPEND_PROXY_ID, Cow::Borrowed(PDA_SPEND_PROXY_ELF))
+    Program::new_unchecked(SCRIPTED_ID, Cow::Borrowed(SCRIPTED_ELF))
 }
 
 #[must_use]
@@ -72,14 +42,4 @@ pub const fn cooldown() -> Program {
     let _unused = COOLDOWN_PATH;
 
     Program::new_unchecked(COOLDOWN_ID, Cow::Borrowed(COOLDOWN_ELF))
-}
-
-#[must_use]
-#[inline]
-pub const fn clock_chain_caller() -> Program {
-    use guests::{CLOCK_CHAIN_CALLER_ELF, CLOCK_CHAIN_CALLER_ID, CLOCK_CHAIN_CALLER_PATH};
-
-    let _unused = CLOCK_CHAIN_CALLER_PATH;
-
-    Program::new_unchecked(CLOCK_CHAIN_CALLER_ID, Cow::Borrowed(CLOCK_CHAIN_CALLER_ELF))
 }

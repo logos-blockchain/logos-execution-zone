@@ -1182,7 +1182,6 @@ mod tests {
         let acc = AccountIdentity::PrivateShared {
             ask: AuthorizationSecretKey([0; 32]),
             vpk: ViewingPublicKey::from_seed(&[2_u8; 32], &[3_u8; 32]),
-            identifier: Identifier::new([42; 32]),
         };
         assert!(acc.is_private());
         assert!(!acc.is_public());
@@ -1191,32 +1190,34 @@ mod tests {
     fn private_state() -> State {
         let npk = NullifierPublicKey([0; 32]);
         let vpk = ViewingPublicKey::from_seed(&[0; 32], &[0; 32]);
-        let account_id = lee::AccountId::from((&npk, &vpk, Identifier::ZERO));
+        let account_id = lee::AccountId::from((&npk, &vpk));
         let pre_state = PreparedAccount {
             account_id,
             account: Account::default(),
         };
         State::Private(Box::new(AccountPreparedData {
-            kind: WitnessKind::Regular { ask: None },
-            nsk: None,
-            npk,
-            identifier: Identifier::ZERO,
+            kind: WitnessKind::Regular(RegularKey::Nullifying([0; 32])),
             vpk,
             pre_state,
             proof: None,
             random_seed: [0; 32],
+            openings: BTreeSet::new(),
         }))
     }
 
     fn public_state() -> State {
         let npk = NullifierPublicKey([0; 32]);
         let vpk = ViewingPublicKey::from_seed(&[0; 32], &[0; 32]);
-        let account_id = lee::AccountId::from((&npk, &vpk, Identifier::ZERO));
+        let account_id = lee::AccountId::from((&npk, &vpk));
         let account = PreparedAccount {
             account_id,
             account: Account::default(),
         };
-        State::Public { account, sk: None }
+        State::Public {
+            account,
+            sk: None,
+            admission: Admission::Present,
+        }
     }
 
     fn public_signing_state(seed: u8, balance: u128) -> State {
@@ -1232,13 +1233,12 @@ mod tests {
                 account,
             },
             sk: Some(sk),
+            admission: Admission::Present,
         }
     }
 
     /// A balance read that fails the test if the walk reaches it.
-    fn never_fetches(
-        selector: ProgramShardSelector,
-    ) -> Ready<Result<Account, ExecutionFailureKind>> {
+    fn never_fetches(selector: Actor) -> Ready<Result<Account, ExecutionFailureKind>> {
         panic!(
             "the payer walk must not read a balance it already holds, got {}",
             selector.account_id
@@ -1247,14 +1247,14 @@ mod tests {
 
     fn answers(
         account: &Account,
-    ) -> impl FnMut(ProgramShardSelector) -> Ready<Result<Account, ExecutionFailureKind>> {
+    ) -> impl FnMut(Actor) -> Ready<Result<Account, ExecutionFailureKind>> {
         let account = account.clone();
         move |_| ready(Ok(account.clone()))
     }
 
     fn payer(
         manager: &mut AccountManager,
-        fetch: impl FnMut(ProgramShardSelector) -> Ready<Result<Account, ExecutionFailureKind>>,
+        fetch: impl FnMut(Actor) -> Ready<Result<Account, ExecutionFailureKind>>,
     ) -> Option<AccountId> {
         block_on(manager.fee_payer_account_id_with(fetch)).expect("the walk succeeds")
     }
@@ -1271,6 +1271,7 @@ mod tests {
             rows,
             pin: None,
             dummy_commitment_root: [0; 32],
+            message_path: None,
         }
     }
 
@@ -1302,7 +1303,7 @@ mod tests {
         let funded = public_signing_state(5, 1_000);
         let funded_id = funded.account().account_id;
         let mut manager = manager(vec![public_signing_state(4, 0), funded]);
-        // The unfunded candidate carries no native shard, so it is read; the read
+        // The unfunded candidate carries no native actor state, so it is read; the read
         // confirms it is empty and the walk moves on.
         assert_eq!(
             payer(&mut manager, answers(&Account::default())),
@@ -1338,10 +1339,9 @@ mod tests {
 
     #[test]
     fn an_application_scoped_candidate_is_funded_by_the_balance_read() {
-        // Prepared for an application shard alone, so its balance is absent until read.
+        // Prepared for an application actor state alone, so its balance is absent until read.
         let program_id = AccountId::new([9; 32]);
-        let scoped =
-            Account::default().with_shard(program_id, vec![1_u8; 4].try_into().expect("data fits"));
+        let scoped = Account::default().with_actor_state(program_id, vec![1_u8; 4].into());
         let candidate = public_signing_state_with(6, scoped);
         let candidate_id = candidate.account().account_id;
         let mut manager = manager(vec![candidate]);
@@ -1357,9 +1357,9 @@ mod tests {
             "the read balance is merged in"
         );
         assert_eq!(
-            merged.data.shard(program_id).as_ref(),
+            merged.data.actor_state(program_id).as_ref(),
             vec![1_u8; 4],
-            "merging a balance read must not drop the application shard"
+            "merging a balance read must not drop the application actor state"
         );
     }
 
@@ -1405,28 +1405,6 @@ mod tests {
     }
 
     #[test]
-    fn foreign_private_init_is_unauthorized() {
-        let npk = NullifierPublicKey([7; 32]);
-        let vpk = ViewingPublicKey::from_seed(&[8; 32], &[9; 32]);
-        let account_id = lee::AccountId::from((&npk, &vpk, Identifier::ZERO));
-        let pre = private_foreign_acc_preparation(
-            account_id,
-            npk,
-            vpk,
-            &PrivateAccountKind::Regular(Identifier::ZERO),
-        );
-
-        assert!(matches!(pre.kind, WitnessKind::Regular { ask: None }));
-
-        let manager = manager(vec![State::Private(Box::new(pre))]);
-        assert!(!manager.selected_shards()[0].is_authorized);
-        assert!(matches!(
-            manager.private_witnesses().unwrap()[0].kind,
-            WitnessKind::Regular { ask: None }
-        ));
-    }
-
-    #[test]
     fn an_owned_pdas_credential_never_becomes_a_regular_one() {
         let ask = AuthorizationSecretKey([5; 32]);
         let authority = AccountId::new([6; 32]);
@@ -1436,56 +1414,250 @@ mod tests {
             &PrivateAccountKind::Pda {
                 account_id: authority,
                 seed,
-                identifier: Identifier::new([3; 32]),
             },
-            Some(ask),
+            RegularKey::Authorized(ask),
         );
-        let regular = witness_kind(
-            &PrivateAccountKind::Regular(Identifier::new([3; 32])),
-            Some(ask),
-        );
+        let regular = witness_kind(&PrivateAccountKind::Regular, RegularKey::Authorized(ask));
 
-        assert!(matches!(pda, WitnessKind::Pda { binding } if binding == (authority, seed)));
-        assert!(matches!(regular, WitnessKind::Regular { ask: Some(_) }));
+        assert!(matches!(
+            pda,
+            WitnessKind::Pda { nsk, binding }
+                if nsk == NullifierSecretKey::from(&ask) && binding == (authority, seed)
+        ));
+        assert!(matches!(
+            regular,
+            WitnessKind::Regular(RegularKey::Authorized(_))
+        ));
     }
 
     #[test]
-    fn a_foreign_pda_is_derived_from_its_binding_and_stays_unauthorized() {
-        let npk = NullifierPublicKey([1; 32]);
+    fn a_keyed_pda_is_derived_from_its_binding_and_stays_unauthorized() {
+        let nsk = [1; 32];
+        let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from_seed(&[2; 32], &[3; 32]);
         let authority = AccountId::new([4; 32]);
         let seed = PdaSeed::new([5; 32]);
         let kind = PrivateAccountKind::Pda {
             account_id: authority,
             seed,
-            identifier: Identifier::new([9; 32]),
         };
 
         let account_id = AccountId::for_private_account(&npk, &vpk, &kind);
         assert_ne!(
             account_id,
-            AccountId::for_private_account(
-                &npk,
-                &vpk,
-                &PrivateAccountKind::Regular(Identifier::new([9; 32]))
-            ),
+            AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular),
             "the binding is part of the address, not decoration",
         );
 
-        let pre = private_foreign_acc_preparation(account_id, npk, vpk, &kind);
-
-        assert_eq!(pre.identifier, Identifier::new([9; 32]));
+        let pre = AccountPreparedData {
+            kind: witness_kind(&kind, RegularKey::Nullifying(nsk)),
+            vpk,
+            pre_state: PreparedAccount {
+                account_id,
+                account: Account::default(),
+            },
+            proof: None,
+            random_seed: [0; 32],
+            openings: BTreeSet::new(),
+        };
 
         let manager = manager(vec![State::Private(Box::new(pre))]);
-        assert!(!manager.selected_shards()[0].is_authorized);
+        assert!(!manager.selected_actor_states()[0].is_authorized);
         let witnesses = manager.private_witnesses().unwrap();
-        assert!(
-            matches!(&witnesses[0].kind, WitnessKind::Pda { binding } if *binding == (authority, seed))
-        );
+        assert!(matches!(
+            &witnesses[0].kind,
+            WitnessKind::Pda { nsk: held, binding } if *held == nsk && *binding == (authority, seed)
+        ));
         assert!(matches!(
             &witnesses[0].nullifier,
-            NullifierWitness::Init { npk: init_npk, .. } if *init_npk == npk
+            NullifierWitness::Init { .. }
         ));
+    }
+
+    #[test]
+    fn an_owned_account_without_authorization_keeps_only_its_nullifier_key() {
+        let ask = AuthorizationSecretKey([5; 32]);
+        let nsk = NullifierSecretKey::from(&ask);
+        let npk = NullifierPublicKey::from(&nsk);
+        let vpk = ViewingPublicKey::from_seed(&[2; 32], &[3; 32]);
+        let account_id = lee::AccountId::from((&npk, &vpk));
+        let owned = State::Private(Box::new(AccountPreparedData {
+            kind: witness_kind(&PrivateAccountKind::Regular, regular_key(ask, false)),
+            vpk,
+            pre_state: PreparedAccount {
+                account_id,
+                account: Account::funded(5),
+            },
+            proof: Some((0, Vec::new())),
+            random_seed: [0; 32],
+            openings: BTreeSet::new(),
+        }));
+
+        let manager = manager(vec![owned]);
+        assert!(!manager.selected_actor_states()[0].is_authorized);
+        let witnesses = manager.private_witnesses().unwrap();
+        assert!(matches!(
+            witnesses[0].kind,
+            WitnessKind::Regular(RegularKey::Nullifying(kept)) if kept == nsk
+        ));
+        assert!(matches!(
+            &witnesses[0].nullifier,
+            NullifierWitness::Update { .. }
+        ));
+    }
+
+    #[test]
+    fn a_keycard_account_without_authorization_neither_signs_nor_advances_its_nonce() {
+        let account_id = lee::AccountId::new([7; 32]);
+        let account = || PreparedAccount {
+            account_id,
+            account: Account {
+                nonce: Nonce(3),
+                ..Account::default()
+            },
+        };
+
+        let signing = manager(vec![State::PublicKeycard {
+            account: account(),
+            key_path: "m/44'/60'/0'/0/0".to_owned(),
+        }]);
+        assert!(signing.selected_actor_states()[0].is_authorized);
+        assert_eq!(signing.signers(), HashSet::from([account_id]));
+        assert_eq!(
+            signing.public_account_nonces(),
+            BTreeMap::from([(account_id, Nonce(3))])
+        );
+
+        let unsigned = manager(vec![State::Public {
+            account: account(),
+            sk: None,
+            admission: Admission::Present,
+        }]);
+        assert!(!unsigned.selected_actor_states()[0].is_authorized);
+        assert!(unsigned.signers().is_empty());
+        assert!(unsigned.public_account_nonces().is_empty());
+    }
+
+    #[test]
+    fn only_an_absent_non_signing_public_account_carries_admission_evidence() {
+        let key = lee::PrivateKey::try_new([9; 32]).expect("valid key");
+        let key_evidence = PublicAccountEvidence::Key(lee::PublicKey::new_from_private_key(&key));
+        assert_eq!(
+            Admission::of(false, Some(key_evidence.clone())),
+            Admission::Evidence(key_evidence.clone())
+        );
+        assert_eq!(
+            Admission::of(true, Some(key_evidence.clone())),
+            Admission::Present
+        );
+        assert_eq!(Admission::of(false, None), Admission::Missing);
+
+        let signer = lee::PrivateKey::try_new([8; 32]).expect("valid key");
+        let signer_evidence =
+            PublicAccountEvidence::Key(lee::PublicKey::new_from_private_key(&signer));
+        let pda = PublicAccountEvidence::Pda {
+            program: AccountId::new([4; 32]),
+            seed: PdaSeed::new([5; 32]),
+        };
+        let public = |sk, admission| State::Public {
+            account: PreparedAccount {
+                account_id: AccountId::new([1; 32]),
+                account: Account::default(),
+            },
+            sk,
+            admission,
+        };
+        let manager = manager(vec![
+            public(None, Admission::Evidence(key_evidence.clone())),
+            public(None, Admission::Evidence(pda.clone())),
+            public(None, Admission::Present),
+            public(Some(signer), Admission::Evidence(signer_evidence.clone())),
+            public(None, Admission::Evidence(signer_evidence.clone())),
+            private_state(),
+        ]);
+
+        assert_eq!(
+            manager.admission_evidence(),
+            vec![key_evidence, pda, signer_evidence]
+        );
+    }
+
+    #[test]
+    fn admitted_accounts_are_signers_and_accounts_present_or_carrying_evidence() {
+        let signer = lee::PrivateKey::try_new([8; 32]).expect("valid key");
+        let signer_evidence =
+            PublicAccountEvidence::Key(lee::PublicKey::new_from_private_key(&signer));
+        let public = |tag, sk, admission| State::Public {
+            account: PreparedAccount {
+                account_id: AccountId::new([tag; 32]),
+                account: Account::default(),
+            },
+            sk,
+            admission,
+        };
+        let pda = PublicAccountEvidence::Pda {
+            program: AccountId::new([4; 32]),
+            seed: PdaSeed::new([5; 32]),
+        };
+
+        let manager = manager(vec![
+            public(1, Some(signer), Admission::Evidence(signer_evidence)),
+            public(2, None, Admission::Present),
+            public(3, None, Admission::Evidence(pda)),
+            public(4, None, Admission::Missing),
+            State::PublicKeycard {
+                account: PreparedAccount {
+                    account_id: AccountId::new([5; 32]),
+                    account: Account::default(),
+                },
+                key_path: "m/44'/60'/0'/0/0".to_owned(),
+            },
+            public(6, None, Admission::Missing),
+            public(7, None, Admission::Present),
+            private_state(),
+        ]);
+
+        assert_eq!(
+            manager.admitted_accounts(),
+            BTreeSet::from([1, 2, 3, 5, 7].map(|tag| AccountId::new([tag; 32])))
+        );
+    }
+
+    #[test]
+    fn a_public_foreign_identity_names_its_keys_account_and_is_kept_without_signing() {
+        let pk = lee::PublicKey::new_from_private_key(
+            &lee::PrivateKey::try_new([9; 32]).expect("valid key"),
+        );
+        let foreign = AccountIdentity::PublicForeign(pk.clone());
+
+        assert!(foreign.is_public());
+        assert_eq!(foreign.account_id(), AccountId::from(&pk));
+        assert_eq!(foreign.public_account_id(), Some(AccountId::from(&pk)));
+        assert_eq!(
+            foreign.without_signing(),
+            AccountIdentity::PublicForeign(pk)
+        );
+    }
+
+    #[test]
+    fn an_unsigned_public_account_is_mentioned_alike_however_it_is_spelled() {
+        let account_id = AccountId::new([7; 32]);
+        for unsigned in [
+            AccountIdentity::PublicNoSign(account_id).balance(),
+            AccountIdentity::Public(account_id)
+                .balance()
+                .without_authorization(),
+            AccountMention {
+                identity: AccountIdentity::PublicNoSign(account_id),
+                program_account_id: NATIVE_TOKEN_PROGRAM_ID,
+                authorizes: true,
+                openings: BTreeSet::new(),
+            }
+            .normalized(),
+        ] {
+            assert_eq!(unsigned.identity, AccountIdentity::Public(account_id));
+            assert!(!unsigned.authorizes);
+        }
     }
 
     #[test]
@@ -1498,7 +1670,6 @@ mod tests {
             let State::Private(mut pre) = private_state() else {
                 panic!("private_state builds a private account")
             };
-            pre.nsk = Some([1; 32]);
             pre.pre_state.account = account;
             let account_id = pre.pre_state.account_id;
 
@@ -1511,7 +1682,7 @@ mod tests {
 
     #[test]
     fn dummy_inputs_default_pads_private_count_to_max() {
-        let max = AccountManager::MAX_PRIVATE_ACCOUNTS;
+        let max = AccountManager::PADDED_PRIVATE_ACTIONS;
 
         // Empty txs get padded to the max.
         assert_eq!(manager(vec![]).dummy_inputs_default().len(), max);
@@ -1538,6 +1709,49 @@ mod tests {
             .take(max + 2)
             .collect();
         assert_eq!(manager(over).dummy_inputs_default().len(), 0);
+
+        // A received message's spend takes a padding slot like an account's.
+        let receiving = |states| AccountManager {
+            message_path: Some((0, Vec::new())),
+            ..manager(states)
+        };
+        assert_eq!(
+            receiving(vec![private_state()])
+                .dummy_inputs_default()
+                .len(),
+            max - 2
+        );
+        let full: Vec<State> = std::iter::repeat_with(private_state)
+            .take(max - 1)
+            .collect();
+        assert_eq!(receiving(full).dummy_inputs_default().len(), 0);
+        let over: Vec<State> = std::iter::repeat_with(private_state).take(max).collect();
+        assert_eq!(receiving(over).dummy_inputs_default().len(), 0);
+    }
+
+    #[test]
+    fn a_receipt_takes_only_the_message_path_at_its_position_that_reproduces_the_root() {
+        let commitment = Commitment::new(&AccountId::new([0; 32]), &Account::default());
+        let path = (3, vec![[1; 32], [2; 32]]);
+        let root = compute_digest_for_path(&commitment, path.0, &path.1).unwrap();
+
+        assert_eq!(
+            message_path_at((3, commitment), Some(path.clone()), root).unwrap(),
+            path
+        );
+        for (case, position, path, root) in [
+            ("no path", 3, None, root),
+            ("another position", 2, Some(path.clone()), root),
+            ("another root", 3, Some(path), [4; 32]),
+        ] {
+            assert!(
+                matches!(
+                    message_path_at((position, commitment), path, root),
+                    Err(ExecutionFailureKind::SequencerError(_))
+                ),
+                "{case}"
+            );
+        }
     }
 
     #[test]
@@ -1546,12 +1760,12 @@ mod tests {
         let lengths: Vec<usize> = manager(vec![])
             .dummy_inputs_default()
             .iter()
-            .map(|dummy| dummy.note.ciphertext.as_bytes().len())
+            .map(|dummy| dummy.output.note.ciphertext.as_bytes().len())
             .collect();
 
         assert_eq!(
             lengths,
-            vec![expected; AccountManager::MAX_PRIVATE_ACCOUNTS]
+            vec![expected; AccountManager::PADDED_PRIVATE_ACTIONS]
         );
     }
 
@@ -1562,10 +1776,10 @@ mod tests {
         let State::Private(pre) = &mut state else {
             panic!("private_state builds a private account")
         };
-        pre.pre_state.account.data.set_shard(
-            AccountId::new([9_u8; 32]),
-            vec![0_u8; pad].try_into().expect("data fits"),
-        );
+        pre.pre_state
+            .account
+            .data
+            .set_actor_state(AccountId::new([9_u8; 32]), vec![0_u8; pad].into());
         let account_id = pre.pre_state.account_id;
 
         assert_eq!(
@@ -1576,6 +1790,41 @@ mod tests {
             manager(vec![private_state()])
                 .accounts_outgrowing_pad()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_presenter_draws_a_fresh_alias_per_message_of_a_private_account() {
+        let (private, public) = (AccountId::new([1; 32]), AccountId::new([2; 32]));
+        let mut present = manager(vec![State::Private(Box::new(AccountPreparedData {
+            kind: WitnessKind::Regular(RegularKey::Nullifying([4; 32])),
+            vpk: ViewingPublicKey::from_seed(&[0; 32], &[0; 32]),
+            pre_state: PreparedAccount {
+                account_id: private,
+                account: Account::default(),
+            },
+            proof: None,
+            random_seed: [0; 32],
+            openings: BTreeSet::from([[9; 32]]),
+        }))])
+        .presenter();
+
+        let factors: HashSet<[u8; 32]> =
+            std::iter::repeat_with(|| present(Actor::native_balance(private)))
+                .take(3)
+                .map(|presentation| {
+                    let SenderPresentation::Blinded(factor) = presentation else {
+                        panic!("a private account presents an alias");
+                    };
+                    factor
+                })
+                .collect();
+
+        assert_eq!(factors.len(), 3);
+        assert!(!factors.contains(&[9; 32]));
+        assert_eq!(
+            present(Actor::native_balance(public)),
+            SenderPresentation::Canonical
         );
     }
 }

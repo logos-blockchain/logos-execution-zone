@@ -98,3 +98,25 @@ pub fn nonce_map(
     }
     Ok(nonces)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use lee_core::account::{AccountId, Nonce};
+
+    use super::{InvalidTransaction, nonce_map};
+
+    #[test]
+    fn a_nonce_map_rejects_a_repeated_account() {
+        let account_id = AccountId::new([1; 32]);
+        assert_eq!(
+            nonce_map([(account_id, Nonce(2)), (account_id, Nonce(3))]),
+            Err(InvalidTransaction::Nonces)
+        );
+        assert_eq!(
+            nonce_map([(account_id, Nonce(2))]),
+            Ok(BTreeMap::from([(account_id, Nonce(2))]))
+        );
+    }
+}

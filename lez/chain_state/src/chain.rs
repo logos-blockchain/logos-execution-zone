@@ -585,7 +585,7 @@ mod tests {
         use common::{
             block::HashableBlockData,
             test_utils::sequencer_sign_key_for_testing,
-            transaction::{LeeTransaction, clock_invocation, fee_invocation},
+            transaction::{FeePayee, LeeTransaction, clock_invocation, fee_invocation},
         };
         let timestamp = id.saturating_mul(100);
         let (summary, payout) = crate::apply::derive_block_summary(state, &txs, id, timestamp)
@@ -595,7 +595,9 @@ mod tests {
         ));
         let mut transactions = txs;
         transactions.push(LeeTransaction::Public(fee_invocation(
-            summary, payout, producer,
+            summary,
+            payout,
+            FeePayee::Present(producer),
         )));
         transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
         HashableBlockData {

@@ -44,7 +44,7 @@ thiserror.workspace = true
 cross_zone = { workspace = true, features = ["test-utils"] }
 tempfile.workspace = true
 ping_core.workspace = true
-test_methods.workspace = true
+test_guest_core.workspace = true
+test_programs.workspace = true
 bridge_core.workspace = true
 program_loader_core.workspace = true
-risc0-binfmt.workspace = true

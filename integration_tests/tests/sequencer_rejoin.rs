@@ -20,7 +20,7 @@ use test_fixtures::{
     spawn_channel_observer,
 };
 use tokio::test;
-use wallet::{AccountIdentity, AccountMention};
+use wallet::{AccountIdentity, AccountMention, program_facades::sequencer_stake::SequencerStake};
 
 /// What genesis stakes each founding sequencer.
 const STAKE: u128 = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
@@ -87,11 +87,9 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         .saturating_add(sequencer_stake_core::UNSTAKE_REQUEST_WINDOW);
     send_stake_tx(
         &ctx,
-        vec![
-            AccountIdentity::Public(ownership_b).select_program_shard(stake_id),
-            AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
-        ],
-        &sequencer_stake_core::Instruction::UnstakeRequest {
+        ownership_b,
+        vec![AccountIdentity::PublicNoSign(config_id).select_program_actor_state(stake_id)],
+        &sequencer_stake_core::Message::UnstakeRequest {
             sequencer_key: stake_key_b,
             amount: STAKE,
             destination: settlement,
@@ -128,28 +126,15 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     info!("B's stake released in full");
 
     // B rejoins on the same ownership account, which stays claimed after an exit.
-    let has_record = !get_account(&ctx, ownership_b)
+    SequencerStake(ctx.wallet())
+        .send_stake(
+            AccountIdentity::Public(ownership_b),
+            AccountIdentity::Public(settlement),
+            stake_key_b,
+            STAKE,
+        )
         .await
-        .context("Failed to read B's stake ownership account")?
-        .data
-        .shard(stake_id)
-        .is_empty();
-    send_stake_tx(
-        &ctx,
-        vec![
-            AccountIdentity::Public(settlement).balance(),
-            AccountIdentity::Public(ownership_b).select_program_shard(stake_id),
-            AccountIdentity::PublicNoSign(funds_b).balance(),
-            AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
-        ],
-        &sequencer_stake_core::Instruction::Stake {
-            sequencer_key: stake_key_b,
-            amount: STAKE,
-            has_record,
-        },
-    )
-    .await
-    .context("Failed to submit B's re-stake")?;
+        .map_err(|err| anyhow::anyhow!("Failed to submit B's re-stake: {err:?}"))?;
 
     wait_until("B's re-stake to land", || async {
         Ok(get_account(&ctx, funds_b)
@@ -191,16 +176,21 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     Ok(())
 }
 
-/// Sends `instruction` to `sequencer_stake` over `accounts`.
+/// Sends `message` to `ownership`'s `sequencer_stake` actor, declaring `others` too.
 async fn send_stake_tx(
     ctx: &TestContext,
-    accounts: Vec<AccountMention>,
-    instruction: &sequencer_stake_core::Instruction,
+    ownership: AccountId,
+    others: Vec<AccountMention>,
+    message: &sequencer_stake_core::Message,
 ) -> Result<()> {
-    let data = Program::serialize_instruction(instruction.clone())
-        .context("Failed to serialize the sequencer_stake instruction")?;
+    let data = Program::serialize_message(message.clone())
+        .context("Failed to serialize the sequencer_stake message")?;
+    let root = AccountIdentity::Public(ownership)
+        .select_program_actor_state(programs::sequencer_stake_account_id());
+    let mut accounts = vec![root];
+    accounts.extend(others);
     ctx.wallet()
-        .send_pub_tx(accounts, data, programs::sequencer_stake_account_id())
+        .send_pub_tx(accounts, 0, data)
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit sequencer_stake transaction: {err:?}"))?;
     Ok(())
@@ -217,7 +207,7 @@ async fn stake_entry(
     let config = sequencer_stake_core::SequencerStakeConfig::from_bytes(
         account
             .data
-            .shard(programs::sequencer_stake_account_id())
+            .actor_state(programs::sequencer_stake_account_id())
             .as_ref(),
     )
     .context("config account data did not decode as a SequencerStakeConfig")?;

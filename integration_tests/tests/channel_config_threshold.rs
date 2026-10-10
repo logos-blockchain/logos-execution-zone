@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result, ensure};
 use integration_tests::{account_balance, get_account, init_logger, new_account};
-use lee::{AccountId, PrivateKey, PublicKey, program::Program};
+use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey};
 use log::info;
 use logos_blockchain_core::mantle::channel::ChannelState;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
@@ -22,7 +22,7 @@ use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
 };
-use sequencer_core::config::GenesisAction;
+use sequencer_core::config::{DepositRecipient, GenesisAction};
 use test_fixtures::{
     MultiZoneTestContextBuilder, TestContext, ZoneTestContextBuilder,
     config::{
@@ -31,7 +31,7 @@ use test_fixtures::{
     },
 };
 use tokio::test;
-use wallet::AccountIdentity;
+use wallet::{AccountIdentity, program_facades::sequencer_stake::SequencerStake};
 
 /// Comfortably above `system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE`.
 const FUNDING_BALANCE: u128 = 2 * system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
@@ -99,7 +99,9 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
             .with_sequencer_partial_config(fast_blocks())
             .with_gossip()
             .with_genesis(vec![GenesisAction::SupplyAccount {
-                account_id: funding_id,
+                recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(
+                    PublicKey::new_from_private_key(&funding_private_key),
+                )),
                 balance: u64::try_from(FUNDING_BALANCE).expect("funding balance fits u64"),
             }]),
         )
@@ -142,37 +144,17 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
 
     let stake_id = programs::sequencer_stake_account_id();
-    // An untrusted claim about the ownership account this stake targets, read from live state
-    // the same way `submit_stake` builds it: it is checked against the account it describes.
-    let has_record = !get_account(&ctx, ownership_id)
-        .await
-        .context("Failed to read the stake ownership account")?
-        .data
-        .shard(stake_id)
-        .is_empty();
-    let stake_instruction_data =
-        Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
-            sequencer_key: joiner_stake_key,
-            amount: FUNDING_BALANCE,
-            has_record,
-        })
-        .context("Failed to serialize Stake instruction")?;
 
     info!(
         "Staking sequencer key {}",
         hex::encode(joiner_key.to_bytes())
     );
-    ctx.wallet()
-        .send_pub_tx(
-            vec![
-                AccountIdentity::Public(funding_id).balance(),
-                AccountIdentity::Public(ownership_id).select_program_shard(stake_id),
-                AccountIdentity::PublicNoSign(funds_id).balance(),
-                AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id())
-                    .select_program_shard(stake_id),
-            ],
-            stake_instruction_data,
-            stake_id,
+    SequencerStake(ctx.wallet())
+        .send_stake(
+            AccountIdentity::Public(ownership_id),
+            AccountIdentity::Public(funding_id),
+            joiner_stake_key,
+            FUNDING_BALANCE,
         )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit Stake transaction: {err:?}"))?;
@@ -181,7 +163,7 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
         Ok(!get_account(&ctx, ownership_id)
             .await?
             .data
-            .shard(stake_id)
+            .actor_state(stake_id)
             .is_empty())
     })
     .await?;

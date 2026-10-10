@@ -4,13 +4,13 @@ use anyhow::{Context as _, Result};
 use bytesize::ByteSize;
 use indexer_service::{ChannelId, ClientConfig, EventFilterConfig, IndexerConfig};
 use key_protocol::key_management::{KeyChain, secret_holders::SeedHolder};
-use lee::{AccountId, PrivateKey, PublicKey};
-use lee_core::Identifier;
+use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey};
 use logos_blockchain_key_management_system_service::keys::{UnsecuredEd25519Key, ZkPublicKey};
 use num_bigint::BigUint;
 use sequencer_core::{
     config::{
-        BedrockConfig, ChannelParams, CrossZoneConfig, GenesisAction, GossipConfig, SequencerConfig,
+        BedrockConfig, ChannelParams, CrossZoneConfig, DepositRecipient, GenesisAction,
+        GossipConfig, SequencerConfig,
     },
     sign_genesis_stake,
 };
@@ -69,7 +69,6 @@ const BEDROCK_FUNDING_KEY_HEX: &str =
 #[derive(Clone)]
 pub struct InitialPrivateAccountForWallet {
     pub key_chain: KeyChain,
-    pub identifier: Identifier,
     pub balance: u128,
 }
 
@@ -79,7 +78,6 @@ impl InitialPrivateAccountForWallet {
         AccountId::from((
             &self.key_chain.nullifier_public_key,
             &self.key_chain.viewing_public_key,
-            self.identifier,
         ))
     }
 }
@@ -227,11 +225,7 @@ pub fn default_private_accounts_for_wallet() -> Vec<InitialPrivateAccountForWall
     key_chains
         .into_iter()
         .zip(INITIAL_PRIVATE_BALANCES_FOR_WALLET)
-        .map(|(key_chain, balance)| InitialPrivateAccountForWallet {
-            key_chain,
-            identifier: Identifier::ZERO,
-            balance,
-        })
+        .map(|(key_chain, balance)| InitialPrivateAccountForWallet { key_chain, balance })
         .collect()
 }
 
@@ -265,14 +259,9 @@ pub fn genesis_from_accounts(
     public_accounts: &[(PrivateKey, u128)],
     private_total: u128,
 ) -> Vec<GenesisAction> {
-    let mut balances: Vec<(AccountId, u128)> = public_accounts
+    let mut balances: Vec<(PublicKey, u128)> = public_accounts
         .iter()
-        .map(|(private_key, balance)| {
-            (
-                AccountId::from(&PublicKey::new_from_private_key(private_key)),
-                *balance,
-            )
-        })
+        .map(|(private_key, balance)| (PublicKey::new_from_private_key(private_key), *balance))
         .collect();
 
     let funder_balance = &mut balances[PRIVATE_FUNDER_INDEX].1;
@@ -282,8 +271,8 @@ pub fn genesis_from_accounts(
 
     balances
         .into_iter()
-        .map(|(account_id, balance)| GenesisAction::SupplyAccount {
-            account_id,
+        .map(|(public_key, balance)| GenesisAction::SupplyAccount {
+            recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(public_key)),
             balance: u64::try_from(balance).expect("genesis balance exceeds u64"),
         })
         .collect()
@@ -491,11 +480,13 @@ mod tests {
         ));
         let supplied = |wanted: AccountId| {
             genesis.iter().find_map(|action| match action {
-                GenesisAction::SupplyAccount {
-                    account_id,
-                    balance,
-                } if *account_id == wanted => Some(*balance),
+                GenesisAction::SupplyAccount { recipient, balance }
+                    if recipient.account_id() == wanted =>
+                {
+                    Some(*balance)
+                }
                 GenesisAction::SupplyAccount { .. }
+                | GenesisAction::SupplyPrivateAccount { .. }
                 | GenesisAction::SupplyBridgeLockHolding { .. }
                 | GenesisAction::StakeSequencer { .. } => None,
             })

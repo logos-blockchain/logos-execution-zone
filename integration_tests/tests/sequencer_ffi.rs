@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use integration_tests::get_account;
+use lee::AccountId;
 use log::info;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use logos_blockchain_zone_sdk::adapter::Node as _;
@@ -145,31 +146,15 @@ fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
             .context("Failed to read the stake ownership account")
     })?;
 
-    let joined_ownership_account =
-    // SAFETY: sequencer_ffi created by FFI, it is valid.
-    unsafe {
-        sequencer_ffi_helpers::sequencer_ffi_query_account(
-            std::ptr::from_ref(sequencer_ffi),
-            ownership_id.into(),
-        )
-    };
-
-    assert!(
-        joined_ownership_account.error.is_ok(),
-        "Failed to fetch ownership account"
+    assert_eq!(
+        sequencer_ffi_helpers::queried_account(sequencer_ffi, ownership_id),
+        Some(ownership_account)
     );
-
-    let joined_ownership_account_cast =
-    // SAFETY: FFI ensures validity of value.
-    unsafe {
-        joined_ownership_account
-            .value
-            .read()
-            .try_into()
-            .expect("Data must fit")
-    };
-
-    assert_eq!(ownership_account, joined_ownership_account_cast);
+    assert_eq!(
+        sequencer_ffi_helpers::queried_account(sequencer_ffi, AccountId::new([0xAB; 32])),
+        None,
+        "an account the chain never touched is absent, not empty"
+    );
 
     info!("Leader and joining sequencer agree on {ownership_id} account");
 
@@ -357,8 +342,8 @@ fn sequencer_ffi_acc_id_to_tx_map() -> Result<()> {
         unsafe { owner_id_transactions.get(i) };
 
         match owner_id_selector_position(owner_id_tx, *owner_id.value())? {
-            // Stake: funding, ownership, funds, config.
-            Some(1) => stake_txs += 1,
+            // Stake: ownership (the root), funds, funding, config.
+            Some(0) => stake_txs += 1,
             // Fee distribution: fee state, escrow, inbox, producer payout.
             Some(3) => reward_txs += 1,
             position => anyhow::bail!(
@@ -522,18 +507,18 @@ fn sequencer_ffi_starting_events_produced_correctly() -> Result<()> {
     Ok(())
 }
 
-/// Which shard selector of `tx` names `account`, if any.
+/// Which declared public actor of `tx` names `account`, if any.
 fn owner_id_selector_position(tx: &FfiTransaction, account: [u8; 32]) -> Result<Option<usize>> {
     let FfiTransactionKind::Public = tx.kind else {
         return Err(anyhow::anyhow!("All owner_id transactions must be public"));
     };
 
-    let shard_selectors =
+    let public_actors =
         // SAFETY: the kind says the public body is the live union member.
-        unsafe { tx.body.public_body.read().message.shard_selectors };
+        unsafe { tx.body.public_body.read().message.context.actors };
 
-    Ok((0..shard_selectors.len).find(|&i| {
+    Ok((0..public_actors.len).find(|&i| {
         // SAFETY: `i` is below the vector's length.
-        unsafe { shard_selectors.get(i).account_id.data == account }
+        unsafe { public_actors.get(i).account_id.data == account }
     }))
 }

@@ -115,19 +115,27 @@ fn pay_out(input: &ReceiveInput, reply: &StateReply) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use lee_core::native_token::encode_balance;
+    use borsh::BorshSerialize;
+    use lee_core::{
+        account::{AccountId, ActorState, Balance},
+        native_token::encode_balance,
+        program::{Call, Transition},
+    };
 
     use super::*;
 
-    fn summary(revenue_base: Balance, revenue_tip: Balance) -> BlockFeeSummary {
-        BlockFeeSummary {
+    const FEE: AccountId = AccountId::new([1; 32]);
+    const PRODUCER: AccountId = AccountId::new([2; 32]);
+    const PAYER: AccountId = AccountId::new([3; 32]);
+
+    fn summary(revenue_base: Balance, revenue_tip: Balance) -> fee_core::BlockFeeSummary {
+        fee_core::BlockFeeSummary {
             revenue_base,
             revenue_tip,
-            ..BlockFeeSummary::default()
+            ..fee_core::BlockFeeSummary::default()
         }
     }
 
-    /// The state a chain reaches after 50 blocks each collecting 1000 of base revenue.
     fn warmed_state() -> FeeState {
         let mut state = FeeState::genesis();
         for _ in 0..market::SMOOTHING_WINDOW {
@@ -136,9 +144,63 @@ mod tests {
         state
     }
 
-    fn honest_payout(state: &FeeState, block: &BlockFeeSummary) -> Balance {
+    fn honest_payout(state: &FeeState, block: &fee_core::BlockFeeSummary) -> Balance {
         let mut state = state.clone();
         state.apply_block(block)
+    }
+
+    fn run(
+        account_id: AccountId,
+        from: Option<Actor>,
+        pre: Vec<u8>,
+        message: &impl BorshSerialize,
+    ) -> Transition {
+        let receiver = Actor::new(account_id, FEE);
+        let input = ReceiveInput {
+            receiver,
+            from,
+            is_authorized: false,
+            pre_state: ActorState::from(pre),
+            message: borsh::to_vec(message).unwrap(),
+        };
+        handle_message(&input).into_transition(input)
+    }
+
+    fn distribute_at(
+        state: &FeeState,
+        block: fee_core::BlockFeeSummary,
+        payout: Balance,
+    ) -> Transition {
+        run(
+            compute_fee_state_account_id(FEE),
+            None,
+            state.to_bytes(),
+            &Message::Distribute {
+                summary: block,
+                payout,
+                producer: PRODUCER,
+            },
+        )
+    }
+
+    // Distributes, then answers the inbox read with `inbox_balance`.
+    fn pay_out_after(
+        state: &FeeState,
+        block: fee_core::BlockFeeSummary,
+        payout: Balance,
+        inbox_balance: Balance,
+    ) -> Transition {
+        let distributed = distribute_at(state, block, payout).response.post_state;
+        run(
+            compute_fee_state_account_id(FEE),
+            Some(Actor::native_balance(compute_fee_inbox_account_id(FEE))),
+            distributed
+                .expect("a distribution records its pending payout")
+                .to_vec(),
+            &NativeMessage::StateReply(StateReply {
+                state: encode_balance(inbox_balance),
+            }),
+        )
     }
 
     #[test]
@@ -150,15 +212,17 @@ mod tests {
 
         let mut expected = state.clone();
         expected.apply_block(&block);
+        expected.pending = Some(PendingDistribution {
+            revenue_base: 1_000,
+            revenue_tip: 7,
+            payout,
+            producer: PRODUCER,
+        });
+
+        let transition = distribute_at(&state, block, payout);
         assert_eq!(
-            apply(
-                Effect::ApplyBlock {
-                    summary: block,
-                    payout
-                },
-                &state.to_bytes()
-            ),
-            Some(expected.to_bytes())
+            transition.response.post_state,
+            Some(ActorState::from(expected.to_bytes()))
         );
     }
 
@@ -170,13 +234,7 @@ mod tests {
         let payout = honest_payout(&state, &block)
             .checked_add(1)
             .expect("payout fits");
-        apply(
-            Effect::ApplyBlock {
-                summary: block,
-                payout,
-            },
-            &state.to_bytes(),
-        );
+        let _transition = distribute_at(&state, block, payout);
     }
 
     #[test]
@@ -186,38 +244,169 @@ mod tests {
         forged.apply_block(&summary(10_000_000, 0));
         let block = summary(0, 0);
         let payout = honest_payout(&forged, &block);
-        apply(
-            Effect::ApplyBlock {
-                summary: block,
-                payout,
-            },
-            &FeeState::genesis().to_bytes(),
-        );
+        let _transition = distribute_at(&FeeState::genesis(), block, payout);
     }
 
     #[test]
-    fn revenue_matching_the_collected_balance_is_accepted() {
+    #[should_panic(expected = "exceeds per-block gas caps")]
+    fn a_summary_over_the_gas_cap_is_refused() {
+        let block = fee_core::BlockFeeSummary {
+            gas_used_exec: market::MAX_GAS_EXEC + 1,
+            ..fee_core::BlockFeeSummary::default()
+        };
+        let _transition = distribute_at(&FeeState::genesis(), block, 0);
+    }
+
+    #[test]
+    fn a_distribution_with_tip_and_payout_sends_all_three_transfers_in_order() {
+        let state = warmed_state();
+        let block = summary(1_000, 7);
+        let payout = honest_payout(&state, &block);
+        assert!(payout > 0, "a warmed window pays out");
+
+        let transition = pay_out_after(&state, block, payout, 1_007);
+
+        let inbox = compute_fee_inbox_account_id(FEE);
+        let escrow = compute_fee_escrow_account_id(FEE);
         assert_eq!(
-            apply(
-                Effect::InboxHolds {
-                    revenue_base: 400,
-                    revenue_tip: 600,
-                },
-                &encode_balance(1_000)
-            ),
-            None
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![
+                    custody_transfer(inbox, fee_inbox_seed(), escrow, 1_000),
+                    custody_transfer(inbox, fee_inbox_seed(), PRODUCER, 7),
+                    custody_transfer(escrow, fee_escrow_seed(), PRODUCER, payout),
+                ],
+                Vec::new()
+            )
         );
     }
 
     #[test]
-    #[should_panic(expected = "inbox balance must equal the block's revenue")]
-    fn revenue_beyond_what_the_inbox_collected_is_refused() {
-        apply(
-            Effect::InboxHolds {
-                revenue_base: 400,
-                revenue_tip: 601,
+    fn a_distribution_without_tip_or_payout_sends_only_the_base_transfer() {
+        let block = summary(10, 0);
+        let payout = honest_payout(&FeeState::genesis(), &block);
+        assert_eq!(
+            payout, 0,
+            "a small first-block revenue pays out nothing yet"
+        );
+
+        let transition = pay_out_after(&FeeState::genesis(), block, payout, 10);
+
+        let inbox = compute_fee_inbox_account_id(FEE);
+        let escrow = compute_fee_escrow_account_id(FEE);
+        assert_eq!(
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![custody_transfer(inbox, fee_inbox_seed(), escrow, 10)],
+                Vec::new()
+            )
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Fee program is only invoked as a top-level system transaction")]
+    fn a_non_root_origin_is_refused() {
+        let sender = Some(Actor::new(AccountId::new([8; 32]), AccountId::new([8; 32])));
+        let _transition = run(
+            compute_fee_state_account_id(FEE),
+            sender,
+            FeeState::genesis().to_bytes(),
+            &Message::Refund {
+                amount: 1,
+                payer: PAYER,
             },
-            &encode_balance(1_000),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid fee state account")]
+    fn a_wrong_receiver_is_refused() {
+        let _transition = run(
+            AccountId::new([99; 32]),
+            None,
+            FeeState::genesis().to_bytes(),
+            &Message::Refund {
+                amount: 1,
+                payer: PAYER,
+            },
+        );
+    }
+
+    #[test]
+    fn a_distribution_reads_the_inbox_before_paying() {
+        let state = warmed_state();
+        let block = summary(1_000, 7);
+        let payout = honest_payout(&state, &block);
+
+        let transition = distribute_at(&state, block, payout);
+
+        assert_eq!(
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![Call::new(
+                    Actor::native_balance(compute_fee_inbox_account_id(FEE)),
+                    &NativeMessage::ReadState,
+                )],
+                Vec::new()
+            )
+        );
+    }
+
+    #[test]
+    fn a_confirmed_payout_clears_the_pending_distribution() {
+        let state = warmed_state();
+        let block = summary(1_000, 7);
+        let payout = honest_payout(&state, &block);
+        let mut expected = state.clone();
+        expected.apply_block(&block);
+
+        let transition = pay_out_after(&state, block, payout, 1_007);
+
+        assert_eq!(
+            transition.response.post_state,
+            Some(ActorState::from(expected.to_bytes()))
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "The inbox must hold exactly this block's revenue")]
+    fn an_inbox_holding_other_than_the_revenue_is_refused() {
+        let state = warmed_state();
+        let block = summary(1_000, 7);
+        let payout = honest_payout(&state, &block);
+        let _transition = pay_out_after(&state, block, payout, 1_006);
+    }
+
+    #[test]
+    #[should_panic(expected = "A reply must answer a pending distribution")]
+    fn an_unsolicited_reply_is_refused() {
+        let _transition = run(
+            compute_fee_state_account_id(FEE),
+            Some(Actor::native_balance(compute_fee_inbox_account_id(FEE))),
+            FeeState::genesis().to_bytes(),
+            &NativeMessage::StateReply(StateReply {
+                state: encode_balance(0),
+            }),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "The reply must read the fee inbox")]
+    fn a_reply_about_another_account_is_refused() {
+        let state = warmed_state();
+        let block = summary(1_000, 7);
+        let payout = honest_payout(&state, &block);
+        let pending = distribute_at(&state, block, payout).response.post_state;
+
+        let _transition = run(
+            compute_fee_state_account_id(FEE),
+            Some(Actor::native_balance(PRODUCER)),
+            pending
+                .expect("a distribution records its pending payout")
+                .to_vec(),
+            &NativeMessage::StateReply(StateReply {
+                state: encode_balance(1_007),
+            }),
         );
     }
 }

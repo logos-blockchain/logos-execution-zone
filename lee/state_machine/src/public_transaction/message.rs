@@ -108,144 +108,45 @@ impl crate::fees::SignedMessage for Message {
 
 #[cfg(test)]
 mod tests {
-    use lee_core::account::{AccountId, Nonce, ProgramShardSelector};
+    use std::collections::BTreeMap;
+
+    use lee_core::account::{AccountId, Actor, Nonce};
     use sha2::{Digest as _, Sha256};
 
     use super::{Message, PREFIX};
-    use crate::fees::FeeDeclaration;
 
-    // program_account_id: AccountId, matching the raw bytes of the old [1_u32; 8] ProgramId
-    // (each word as LE u32) so this pinned wire layout is unchanged.
-    const PROGRAM_ACCOUNT_ID_BYTES: &[u8] = &[
-        1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0,
-        0, 0,
-    ];
-    const POSITIONS_BYTES: &[u8] = &[
-        1, 0, 0, 0, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42,
-        42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43,
-        43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43,
-    ];
-    // The balance selector names the reserved native token program, not a tagged absence.
-    const BALANCE_POSITIONS_BYTES: &[u8] = &[
-        1, 0, 0, 0, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42,
-        42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    ];
-    // nonces: u32 len=1, then Nonce(5) as LE u128
-    const NONCES_BYTES: &[u8] = &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    #[test]
+    fn a_public_message_has_a_pinned_layout_and_hash() {
+        let to = Actor::new(AccountId::new([42; 32]), AccountId::new([0; 32]));
+        let message = Message::new_preserialized(
+            to,
+            vec![0],
+            [to],
+            BTreeMap::from([(to.account_id, Nonce(1))]),
+            None,
+        );
 
-    fn pinned_message(
-        shard_selectors: Vec<ProgramShardSelector>,
-        instruction_data: Vec<u8>,
-        fee: Option<FeeDeclaration>,
-    ) -> Message {
-        Message::new_preserialized(
-            AccountId::new([
-                1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0,
-                1, 0, 0, 0,
-            ]),
-            shard_selectors,
-            vec![Nonce(5)],
-            instruction_data,
-            fee,
-        )
-    }
-
-    fn named_shard_selector() -> ProgramShardSelector {
-        ProgramShardSelector::new(AccountId::new([42; 32]), AccountId::new([43; 32]))
-    }
-
-    /// Pins the borsh wire order (`program_account_id` ++ `shard_selectors` ++ `nonces` ++
-    /// `instruction_data` ++ `fee`) and the prefixed hash. Any layout change trips this.
-    fn assert_hash_pinned(
-        msg: &Message,
-        shard_selectors_bytes: &[u8],
-        instruction_bytes: &[u8],
-        fee_bytes: &[u8],
-    ) {
-        let expected_borsh: Vec<u8> = [
-            PROGRAM_ACCOUNT_ID_BYTES,
-            shard_selectors_bytes,
-            NONCES_BYTES,
-            instruction_bytes,
-            fee_bytes,
+        let expected: Vec<u8> = [
+            &[1, 0, 0, 0][..], // context.actors: one actor
+            &[42; 32],
+            &[0; 32],
+            &[1, 0, 0, 0], // context.authorized_accounts: the account naming a nonce
+            &[42; 32],
+            &[0, 0, 0, 0], // context.cast_promotions: none
+            &[42; 32],     // execution.root.to.account_id
+            &[0; 32],      // execution.root.to.program_account_id: the native token program
+            &[1, 0, 0, 0], // execution.root.message
+            &[0],
+            &[0],          // execution.fee: None
+            &[1, 0, 0, 0], // nonces: one account's nonce, a little-endian u128
+            &[42; 32],
+            &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            &[0, 0, 0, 0], // admission_evidence: none
         ]
         .concat();
-        assert_eq!(
-            borsh::to_vec(msg).unwrap(),
-            expected_borsh,
-            "`public_transaction::hash()`: expected borsh order has changed"
-        );
 
-        let preimage = [&PREFIX[..], &expected_borsh].concat();
-        let expected_hash: [u8; 32] = Sha256::digest(&preimage).into();
-        assert_eq!(
-            msg.hash(),
-            expected_hash,
-            "`public_transaction::hash()`: serialization has changed"
-        );
-    }
-
-    #[test]
-    fn hash_public_pinned_exempt() {
-        // instruction_data: u32 len=0; fee: `Option::None` -> a single 0 tag byte.
-        assert_hash_pinned(
-            &pinned_message(vec![named_shard_selector()], vec![], None),
-            POSITIONS_BYTES,
-            &[0, 0, 0, 0],
-            &[0],
-        );
-    }
-
-    #[test]
-    fn hash_public_pinned_balance_shard_selector() {
-        assert_hash_pinned(
-            &pinned_message(
-                vec![ProgramShardSelector::native_balance(AccountId::new(
-                    [42; 32],
-                ))],
-                vec![],
-                None,
-            ),
-            BALANCE_POSITIONS_BYTES,
-            &[0, 0, 0, 0],
-            &[0],
-        );
-    }
-
-    #[test]
-    fn hash_public_pinned_nonempty_instruction() {
-        // instruction_data is Vec<u8>: u32 len=3 then the raw bytes, one wire byte per element —
-        // pins the element width (the pre-borsh wire carried one u32 word per element).
-        assert_hash_pinned(
-            &pinned_message(vec![named_shard_selector()], vec![7, 8, 9], None),
-            POSITIONS_BYTES,
-            &[3, 0, 0, 0, 7, 8, 9],
-            &[0],
-        );
-    }
-
-    #[test]
-    fn hash_public_pinned_charged() {
-        // fee: `Option::Some` -> 1 tag byte, then payer (32 bytes), gas_limit
-        // (u64 LE), tip (u64 LE), max_fee (u128 LE).
-        let fee_bytes: &[u8] = &[
-            1, // Some tag
-            7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
-            7, 7, 7, // payer
-            9, 0, 0, 0, 0, 0, 0, 0, // gas_limit
-            3, 0, 0, 0, 0, 0, 0, 0, // tip
-            100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // max_fee
-        ];
-        assert_hash_pinned(
-            &pinned_message(
-                vec![named_shard_selector()],
-                vec![],
-                Some(FeeDeclaration::new(AccountId::new([7; 32]), 9, 3, 100)),
-            ),
-            POSITIONS_BYTES,
-            &[0, 0, 0, 0],
-            fee_bytes,
-        );
+        assert_eq!(message.to_bytes(), expected);
+        let digest: [u8; 32] = Sha256::digest([&PREFIX[..], &expected].concat()).into();
+        assert_eq!(message.hash(), digest);
     }
 }

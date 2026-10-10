@@ -9,10 +9,10 @@ use common::{
 };
 use kameo::{actor::Spawn as _, error::SendError};
 use lee::{
-    Account, AccountId, PrivateKey, ProgramShardSelector, PublicKey, PublicTransaction, Signature,
+    Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction, Signature,
     public_transaction::{Message, WitnessSet},
 };
-use lee_core::native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID};
+use lee_core::native_token::Message as NativeMessage;
 use mockall::predicate::{always, eq, function};
 use num_bigint::BigUint;
 use sequencer_bedrock_actor::{
@@ -73,21 +73,25 @@ fn test_transaction() -> LeeTransaction {
     let payer = accounts[0].account_id;
     let payer_key = accounts[0].pub_sign_key.clone();
 
-    let nonces = vec![0_u128.into(), 0_u128.into()];
+    let nonces = BTreeMap::from([(payer, 0_u128.into()), (acc2, 0_u128.into())]);
     let message = Message::try_new_with_fees(
-        NATIVE_TOKEN_PROGRAM_ID,
-        vec![
-            ProgramShardSelector::native_balance(payer),
-            ProgramShardSelector::native_balance(acc2),
-        ],
+        Actor::native_balance(payer),
+        vec![Actor::native_balance(payer), Actor::native_balance(acc2)],
         nonces,
-        NativeInstruction::Transfer { amount: 1337 },
+        transfer_to(acc2),
         common::test_utils::test_fee_declaration(payer),
     )
     .unwrap();
 
     let witness_set = WitnessSet::for_message(&message, &[&payer_key, &key2]);
     PublicTransaction::new(message, witness_set).into()
+}
+
+fn transfer_to(recipient: AccountId) -> NativeMessage {
+    NativeMessage::Transfer {
+        to: recipient,
+        amount: 1337,
+    }
 }
 
 /// A Bedrock whose channel exists but holds nothing yet, with this node on turn.
@@ -135,7 +139,7 @@ fn stake_entries(sequencer_key: SequencerKey) -> BTreeMap<SequencerKey, Sequence
         SequencerEntry {
             account_id: testnet_initial_state::initial_public_user_accounts()[0].account_id,
             total_staked: 1,
-            total_pending_unstake: 0,
+            pending_unstake: None,
         },
     )]
     .into()
@@ -172,7 +176,7 @@ fn prepare_mock_storage_with_stake(
     // actually settle; only the stake config is layered on, to name this node.
     let mut state = testnet_initial_state::initial_state(false).with_public_accounts([(
         system_accounts::sequencer_stake_config_account_id(),
-        Account::default().with_shard(
+        Account::default().with_actor_state(
             programs::sequencer_stake_account_id(),
             sequencer_stake_core::SequencerStakeConfig {
                 channel_params: Some(sequencer_stake_core::ChannelParams {
@@ -185,8 +189,7 @@ fn prepare_mock_storage_with_stake(
                 entries,
             }
             .to_bytes()
-            .try_into()
-            .expect("Sequencer stake config must fit into ShardData"),
+            .into(),
         ),
     )]);
     state
@@ -571,13 +574,10 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
     let payer = accounts[0].account_id;
     let payer_key = accounts[0].pub_sign_key.clone();
     let message = Message::try_new_with_fees(
-        NATIVE_TOKEN_PROGRAM_ID,
-        vec![
-            ProgramShardSelector::native_balance(payer),
-            ProgramShardSelector::native_balance(acc2),
-        ],
-        vec![0_u128.into(), 0_u128.into()],
-        NativeInstruction::Transfer { amount: 1337 },
+        Actor::native_balance(payer),
+        vec![Actor::native_balance(payer), Actor::native_balance(acc2)],
+        BTreeMap::from([(payer, 0_u128.into()), (acc2, 0_u128.into())]),
+        transfer_to(acc2),
         lee::FeeDeclaration::new(payer, 2_000_000, 0, 0),
     )
     .unwrap();

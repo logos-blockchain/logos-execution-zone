@@ -556,7 +556,6 @@ pub async fn setup_wallet_at(
             .add_imported_private_account(
                 private_account.key_chain.clone(),
                 None,
-                private_account.identifier,
                 lee::Account::default(),
             );
     }
@@ -587,7 +586,7 @@ pub async fn fund_private_accounts(
                 to_npk: None,
                 to_vpk: None,
                 to_keys: None,
-                to_identifier: Some(private_account.identifier),
+                to_pk: None,
                 amount: private_account.balance,
             }),
         )

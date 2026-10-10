@@ -1,57 +1,14 @@
 use super::*;
-use crate::account::Account;
 
-fn empty_input() -> PlanInput {
-    PlanInput {
-        self_account_id: AccountId::default(),
-        caller_account_id: None,
-        accounts: Vec::new(),
-        instruction_data: Vec::new(),
+fn receive_input() -> ReceiveInput {
+    let receiver = Actor::native_balance(AccountId::default());
+    ReceiveInput {
+        receiver,
+        from: None,
+        is_authorized: false,
+        pre_state: ActorState::empty(),
+        message: Vec::new(),
     }
-}
-
-fn plan_of(
-    accounts: &[AccountMeta],
-    effects: Vec<ShardEffect>,
-) -> Result<(), ExecutionValidationError> {
-    let input = PlanInput {
-        accounts: accounts.to_vec(),
-        ..empty_input()
-    };
-    validate_plan(
-        &input,
-        &PlanOutput::new(input.clone()).with_effects(effects),
-    )
-}
-
-#[test]
-fn call_kind_discriminants_are_pinned_and_unknown_ones_are_rejected() {
-    assert_eq!(borsh::to_vec(&CallKind::Plan).unwrap(), vec![0]);
-    assert_eq!(borsh::to_vec(&CallKind::Apply).unwrap(), vec![1]);
-
-    for byte in 2..=u8::MAX {
-        assert!(
-            borsh::from_slice::<CallKind>(&[byte]).is_err(),
-            "{byte} decoded as a call kind"
-        );
-    }
-}
-
-#[test]
-fn the_journal_tag_separates_the_two_entrypoints() {
-    let execute = GuestOutput::Plan(PlanOutput::new(empty_input()));
-    let apply = GuestOutput::Apply(output_of(AccountId::new([2; 32]), None));
-
-    assert_eq!(borsh::to_vec(&execute).unwrap()[0], 0);
-    assert_eq!(borsh::to_vec(&apply).unwrap()[0], 1);
-    assert_eq!(
-        borsh::from_slice::<GuestOutput>(&borsh::to_vec(&execute).unwrap()).unwrap(),
-        execute
-    );
-    assert_eq!(
-        borsh::from_slice::<GuestOutput>(&borsh::to_vec(&apply).unwrap()).unwrap(),
-        apply
-    );
 }
 
 #[test]
@@ -152,277 +109,61 @@ fn validity_window_from_range_full() {
 }
 
 #[test]
-fn program_output_try_with_block_validity_window_range() {
-    let output = PlanOutput::new(empty_input())
-        .try_with_block_validity_window(10_u64..100)
-        .unwrap();
-    assert_eq!(output.block_validity_window.start(), Some(10));
-    assert_eq!(output.block_validity_window.end(), Some(100));
+fn validity_windows_hold_and_intersect_in_both_dimensions() {
+    let windows =
+        |blocks: std::ops::Range<u64>, timestamps: std::ops::Range<u64>| ValidityWindows {
+            blocks: blocks.try_into().unwrap(),
+            timestamps: timestamps.try_into().unwrap(),
+        };
+    let both = windows(1..10, 1..10);
+
+    assert!(both.is_valid_at(9, 9));
+    assert!(!both.is_valid_at(10, 9));
+    assert!(!both.is_valid_at(9, 10));
+    assert_eq!(
+        both.intersect(windows(5..20, 1..5)),
+        Ok(windows(5..10, 1..5))
+    );
+    assert_eq!(both.intersect(windows(10..20, 1..10)), Err(InvalidWindow));
+    assert_eq!(both.intersect(windows(1..10, 10..20)), Err(InvalidWindow));
 }
 
 #[test]
-fn program_output_with_block_validity_window_range_from() {
-    let output = PlanOutput::new(empty_input()).with_block_validity_window(10_u64..);
-    assert_eq!(output.block_validity_window.start(), Some(10));
-    assert_eq!(output.block_validity_window.end(), None);
+fn response_try_with_block_validity_window_range() {
+    let transition = Response::keep_state()
+        .try_block_window(10_u64..100)
+        .unwrap()
+        .into_transition(receive_input());
+    assert_eq!(transition.response.validity.blocks.start(), Some(10));
+    assert_eq!(transition.response.validity.blocks.end(), Some(100));
 }
 
 #[test]
-fn program_output_with_block_validity_window_range_to() {
-    let output = PlanOutput::new(empty_input()).with_block_validity_window(..100_u64);
-    assert_eq!(output.block_validity_window.start(), None);
-    assert_eq!(output.block_validity_window.end(), Some(100));
+fn response_with_block_validity_window_range_from() {
+    let transition = Response::keep_state()
+        .block_window(10_u64..)
+        .into_transition(receive_input());
+    assert_eq!(transition.response.validity.blocks.start(), Some(10));
+    assert_eq!(transition.response.validity.blocks.end(), None);
 }
 
 #[test]
-fn program_output_try_with_block_validity_window_empty_range_fails() {
-    let result = PlanOutput::new(empty_input()).try_with_block_validity_window(5_u64..5);
+fn response_with_block_validity_window_range_to() {
+    let transition = Response::keep_state()
+        .block_window(..100_u64)
+        .into_transition(receive_input());
+    assert_eq!(transition.response.validity.blocks.start(), None);
+    assert_eq!(transition.response.validity.blocks.end(), Some(100));
+}
+
+#[test]
+fn response_try_with_block_validity_window_empty_range_fails() {
+    let result = Response::keep_state().try_block_window(5_u64..5);
     assert!(result.is_err());
 }
 
-// ---- validation tests ----
-
-fn output_of(evaluator: AccountId, post_data: Option<ShardData>) -> ApplyOutput {
-    ApplyOutput::new(
-        ApplyInput {
-            self_account_id: evaluator,
-            selector: ProgramShardSelector::new(AccountId::new([7; 32]), evaluator),
-            pre_data: ShardData::empty(),
-            effect_data: Vec::new(),
-        },
-        post_data,
-    )
-}
-
 #[test]
-fn a_data_write_on_a_shard_the_executing_program_does_not_own_is_rejected() {
-    let executing_account_id = AccountId::new([2; 32]);
-    let account_id = AccountId::new([7; 32]);
-    let mut output = output_of(
-        executing_account_id,
-        Some(b"record".to_vec().try_into().unwrap()),
-    );
-    output.input.selector.program_account_id = AccountId::new([1; 32]);
-
-    let expected = output.input.clone();
-    let result = validate_apply_output(&expected, &output);
-
-    assert!(matches!(
-        result,
-        Err(ExecutionValidationError::ForeignShardWrite {
-            account_id: id,
-            executing_account_id: executing,
-        }) if id == account_id && executing == executing_account_id
-    ));
-}
-
-#[test]
-fn a_data_write_on_the_executing_shard_is_accepted() {
-    let output = output_of(
-        AccountId::new([2; 32]),
-        Some(b"record".to_vec().try_into().unwrap()),
-    );
-
-    assert!(validate_apply_output(&output.input.clone(), &output).is_ok());
-}
-
-#[test]
-fn a_guest_cannot_write_the_native_balance_shard() {
-    let account_id = AccountId::new([7; 32]);
-    let mut output = output_of(
-        AccountId::new([2; 32]),
-        Some(crate::native_token::encode_balance(50)),
-    );
-    output.input.selector.program_account_id = crate::native_token::NATIVE_TOKEN_PROGRAM_ID;
-
-    let expected = output.input.clone();
-    let result = validate_apply_output(&expected, &output);
-
-    assert!(matches!(
-        result,
-        Err(ExecutionValidationError::ForeignShardWrite { account_id: id, .. }) if id == account_id
-    ));
-}
-
-#[test]
-fn an_apply_output_with_chained_calls_is_rejected() {
-    let mut output = output_of(AccountId::new([2; 32]), None);
-    output
-        .chained_calls
-        .push(ChainedCall::new(AccountId::new([3; 32]), Vec::new(), &()));
-
-    assert!(matches!(
-        validate_apply_output(&output.input, &output),
-        Err(ExecutionValidationError::ChainedCallsFromApply)
-    ));
-}
-
-#[test]
-fn an_apply_output_encodes_its_chained_calls_last() {
-    let output = output_of(
-        AccountId::new([2; 32]),
-        Some(b"record".to_vec().try_into().unwrap()),
-    );
-
-    let expected = [
-        borsh::to_vec(&output.input).unwrap(),
-        borsh::to_vec(&output.post_data).unwrap(),
-        vec![0; 4],
-    ]
-    .concat();
-    assert_eq!(borsh::to_vec(&output).unwrap(), expected);
-}
-
-#[test]
-fn two_shard_selectors_of_one_account_in_a_call_are_accepted() {
-    let account_id = AccountId::new([7; 32]);
-    let accounts = [
-        AccountMeta::new(account_id, true, AccountId::new([2; 32])),
-        AccountMeta::native_balance(account_id, true),
-    ];
-
-    assert!(plan_of(&accounts, Vec::new()).is_ok());
-}
-
-#[test]
-fn a_repeated_shard_selector_in_a_call_is_rejected() {
-    let account = AccountMeta::new(AccountId::new([7; 32]), true, AccountId::new([2; 32]));
-
-    assert!(matches!(
-        plan_of(&[account.clone(), account], Vec::new()),
-        Err(ExecutionValidationError::AccountShardSelectorsNotUnique)
-    ));
-}
-
-#[test]
-fn several_effects_may_name_one_input_handle_but_no_other_selector() {
-    let account = AccountMeta::new(AccountId::new([7; 32]), true, AccountId::new([2; 32]));
-    let effect = ShardEffect::new(&account, &7_u8);
-    let foreign = ShardEffect {
-        selector: ProgramShardSelector::native_balance(AccountId::new([7; 32])),
-        data: Vec::new(),
-    };
-
-    assert!(plan_of(std::slice::from_ref(&account), vec![effect.clone(), effect]).is_ok());
-    assert!(matches!(
-        plan_of(std::slice::from_ref(&account), vec![foreign]),
-        Err(ExecutionValidationError::EffectOutsideInputs { .. })
-    ));
-}
-
-#[test]
-fn apply_output_keeps_the_pre_shard_and_writes_only_the_selected_one() {
-    let program = AccountId::new([2; 32]);
-    let other = AccountId::new([3; 32]);
-    let held: ShardData = b"held".to_vec().try_into().unwrap();
-    let untouched: ShardData = b"untouched".to_vec().try_into().unwrap();
-    let mut account = Account::default()
-        .with_shard(program, held.clone())
-        .with_shard(other, untouched.clone());
-
-    account.data.apply_output(&output_of(program, None));
-
-    assert_eq!(account.data.shard(program), &held);
-
-    let written: ShardData = b"new".to_vec().try_into().unwrap();
-    account
-        .data
-        .apply_output(&output_of(program, Some(written.clone())));
-
-    assert_eq!(account.data.shard(program), &written);
-    assert_eq!(account.data.shard(other), &untouched);
-}
-
-#[test]
-fn a_plan_records_its_input_echo_and_every_obligation() {
-    let account = AccountMeta::new(AccountId::new([7; 32]), true, AccountId::new([2; 32]));
-    let input = PlanInput {
-        self_account_id: AccountId::new([2; 32]),
-        caller_account_id: Some(AccountId::new([9; 32])),
-        accounts: vec![
-            account.clone(),
-            AccountMeta::native_balance(AccountId::new([7; 32]), false),
-        ],
-        instruction_data: vec![7],
-    };
-    let mut plan = Plan::new(&input);
-
-    plan.effect(&account, &b"guard".to_vec());
-    plan.effect(&account, &b"write".to_vec());
-    plan.block_window(10_u64..);
-
-    assert_eq!(plan.output.input, input);
-    assert_eq!(plan.output.block_validity_window.start(), Some(10));
-    assert_eq!(
-        plan.output.effects,
-        vec![
-            ShardEffect::new(&account, &b"guard".to_vec()),
-            ShardEffect::new(&account, &b"write".to_vec()),
-        ]
-    );
-}
-
-#[test]
-#[should_panic(expected = "names the shard of")]
-fn a_plan_refuses_an_effect_on_a_shard_its_program_does_not_own() {
-    let foreign = AccountMeta::new(AccountId::new([7; 32]), true, AccountId::new([3; 32]));
-    let input = PlanInput {
-        self_account_id: AccountId::new([2; 32]),
-        caller_account_id: None,
-        accounts: vec![foreign.clone()],
-        instruction_data: Vec::new(),
-    };
-    let mut plan = Plan::new(&input);
-
-    plan.effect(&foreign, &b"write".to_vec());
-}
-
-#[test]
-fn an_inspection_selects_the_shard_of_its_declared_owner() {
-    let balance = AccountMeta::native_balance(AccountId::new([7; 32]), false);
-    let input = PlanInput {
-        self_account_id: AccountId::new([2; 32]),
-        caller_account_id: None,
-        accounts: vec![balance.clone()],
-        instruction_data: Vec::new(),
-    };
-    let mut plan = Plan::new(&input);
-
-    plan.inspect(
-        &balance,
-        crate::native_token::NATIVE_TOKEN_PROGRAM_ID,
-        &b"guard".to_vec(),
-    );
-
-    assert_eq!(
-        plan.output.effects,
-        vec![ShardEffect::new(&balance, &b"guard".to_vec())]
-    );
-}
-
-#[test]
-#[should_panic(expected = "names the shard of")]
-fn an_inspection_refuses_a_row_its_declared_owner_does_not_own() {
-    // The caller chose the row: it names another program's shard where the guard is declared
-    // on the native balance.
-    let row = AccountMeta::new(AccountId::new([7; 32]), false, AccountId::new([3; 32]));
-    let input = PlanInput {
-        self_account_id: AccountId::new([2; 32]),
-        caller_account_id: None,
-        accounts: vec![row.clone()],
-        instruction_data: Vec::new(),
-    };
-    let mut plan = Plan::new(&input);
-
-    plan.inspect(
-        &row,
-        crate::native_token::NATIVE_TOKEN_PROGRAM_ID,
-        &b"guard".to_vec(),
-    );
-}
-
-#[test]
-fn get_program_via_reads_the_loader_shard() {
+fn get_program_via_reads_the_loader_actor_state() {
     let program_account = AccountId::new([1; 32]);
     let segment_account = AccountId::new([2; 32]);
     let header = ProgramHeader {
@@ -434,13 +175,13 @@ fn get_program_via_reads_the_loader_shard() {
         bytecode: vec![1, 2, 3],
         next_segment: None,
     };
-    let program_shard: ShardData = header.to_bytes().try_into().unwrap();
-    let segment_shard: ShardData = segment.to_bytes().try_into().unwrap();
+    let program_actor_state: ActorState = header.to_bytes().into();
+    let segment_actor_state: ActorState = segment.to_bytes().into();
     let lookup = |id| {
         if id == program_account {
-            Some(&program_shard)
+            Some(&program_actor_state)
         } else if id == segment_account {
-            Some(&segment_shard)
+            Some(&segment_actor_state)
         } else {
             None
         }
@@ -450,15 +191,30 @@ fn get_program_via_reads_the_loader_shard() {
         Some(([7; 8], vec![1, 2, 3]))
     );
 
-    let deleted = ShardData::empty();
+    let deleted = ActorState::empty();
     let deleted_header = |id| (id == program_account).then_some(&deleted);
     assert_eq!(get_program_via(program_account, deleted_header), None);
+}
+
+#[test]
+fn blinded_account_id_matches_pinned_value() {
+    let expected = AccountId::new([
+        148, 161, 160, 119, 29, 201, 192, 211, 184, 174, 163, 247, 46, 96, 251, 199, 214, 114, 33,
+        129, 131, 146, 3, 170, 91, 106, 6, 196, 179, 204, 6, 31,
+    ]);
+    assert_eq!(AccountId::new([1; 32]).blinded(&[2; 32]), expected);
+}
+
+#[test]
+fn a_zero_factor_still_blinds_the_account() {
+    let account_id = AccountId::new([1; 32]);
+    assert_ne!(account_id.blinded(&[0; 32]), account_id);
 }
 
 // ---- AccountId::for_private_pda tests ----
 
 /// Pins `AccountId::for_private_pda` against a hardcoded expected output for a specific
-/// `(program_id, seed, npk, identifier)` tuple. Any change to `PRIVATE_PDA_PREFIX`, byte
+/// `(program_id, seed, npk, vpk)` tuple. Any change to `PRIVATE_PDA_PREFIX`, byte
 /// ordering, or the underlying hash breaks this test.
 #[test]
 fn for_private_pda_matches_pinned_value() {
@@ -466,12 +222,11 @@ fn for_private_pda_matches_pinned_value() {
     let seed = PdaSeed::new([2; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
-    let identifier = Identifier::new([u8::MAX; 32]);
     let expected = AccountId::new([
-        188, 37, 183, 176, 226, 199, 53, 66, 190, 178, 237, 19, 231, 11, 203, 112, 68, 22, 164, 23,
-        49, 187, 19, 207, 190, 52, 66, 80, 94, 84, 125, 167,
+        223, 164, 202, 230, 71, 5, 245, 251, 123, 188, 61, 38, 169, 97, 86, 120, 212, 228, 23, 167,
+        86, 215, 250, 1, 163, 54, 188, 71, 1, 216, 182, 174,
     ]);
-    let actual = AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, identifier);
+    let actual = AccountId::for_private_pda(&program_id, &seed, &npk, &vpk);
     assert_eq!(actual, expected);
 }
 
@@ -484,20 +239,8 @@ fn for_private_pda_differs_for_different_npk() {
     let npk_b = NullifierPublicKey([4; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
     assert_ne!(
-        AccountId::for_private_pda(
-            &program_id,
-            &seed,
-            &npk_a,
-            &vpk,
-            Identifier::new([u8::MAX; 32])
-        ),
-        AccountId::for_private_pda(
-            &program_id,
-            &seed,
-            &npk_b,
-            &vpk,
-            Identifier::new([u8::MAX; 32])
-        ),
+        AccountId::for_private_pda(&program_id, &seed, &npk_a, &vpk),
+        AccountId::for_private_pda(&program_id, &seed, &npk_b, &vpk),
     );
 }
 
@@ -510,20 +253,8 @@ fn for_private_pda_differs_for_different_seed() {
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
     assert_ne!(
-        AccountId::for_private_pda(
-            &program_id,
-            &seed_a,
-            &npk,
-            &vpk,
-            Identifier::new([u8::MAX; 32])
-        ),
-        AccountId::for_private_pda(
-            &program_id,
-            &seed_b,
-            &npk,
-            &vpk,
-            Identifier::new([u8::MAX; 32])
-        ),
+        AccountId::for_private_pda(&program_id, &seed_a, &npk, &vpk),
+        AccountId::for_private_pda(&program_id, &seed_b, &npk, &vpk),
     );
 }
 
@@ -536,44 +267,8 @@ fn for_private_pda_differs_for_different_program_id() {
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
     assert_ne!(
-        AccountId::for_private_pda(
-            &program_id_a,
-            &seed,
-            &npk,
-            &vpk,
-            Identifier::new([u8::MAX; 32])
-        ),
-        AccountId::for_private_pda(
-            &program_id_b,
-            &seed,
-            &npk,
-            &vpk,
-            Identifier::new([u8::MAX; 32])
-        ),
-    );
-}
-
-/// Different identifiers produce different addresses for the same `(program_id, seed, npk)`,
-/// confirming that each `(program_id, seed, npk)` tuple controls a family of 2^256 addresses.
-#[test]
-fn for_private_pda_differs_for_different_identifier() {
-    let program_id = AccountId::from_builtin_program([1; 8]);
-    let seed = PdaSeed::new([2; 32]);
-    let npk = NullifierPublicKey([3; 32]);
-    let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
-    assert_ne!(
-        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, Identifier::ZERO),
-        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, Identifier::new([1; 32])),
-    );
-    assert_ne!(
-        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, Identifier::ZERO),
-        AccountId::for_private_pda(
-            &program_id,
-            &seed,
-            &npk,
-            &vpk,
-            Identifier::new([u8::MAX; 32])
-        ),
+        AccountId::for_private_pda(&program_id_a, &seed, &npk, &vpk),
+        AccountId::for_private_pda(&program_id_b, &seed, &npk, &vpk),
     );
 }
 
@@ -585,13 +280,7 @@ fn for_private_pda_differs_from_public_pda() {
     let seed = PdaSeed::new([2; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
-    let private_id = AccountId::for_private_pda(
-        &program_id,
-        &seed,
-        &npk,
-        &vpk,
-        Identifier::new([u8::MAX; 32]),
-    );
+    let private_id = AccountId::for_private_pda(&program_id, &seed, &npk, &vpk);
     let public_id = AccountId::for_public_pda(&program_id, &seed);
     assert_ne!(private_id, public_id);
 }
@@ -633,11 +322,10 @@ fn for_immutable_mirror_differs_for_different_header() {
 #[cfg(feature = "host")]
 #[test]
 fn private_account_kind_header_round_trips() {
-    let regular = PrivateAccountKind::Regular(Identifier::new([42; 32]));
+    let regular = PrivateAccountKind::Regular;
     let pda = PrivateAccountKind::Pda {
         account_id: AccountId::new([1; 32]),
         seed: PdaSeed::new([2_u8; 32]),
-        identifier: Identifier::new([u8::MAX; 32]),
     };
     assert_eq!(
         PrivateAccountKind::from_header_bytes(&regular.to_header_bytes()),
@@ -658,16 +346,34 @@ fn private_account_kind_unknown_discriminant_returns_none() {
 }
 
 #[test]
+fn a_private_account_kind_header_has_a_pinned_layout() {
+    let mut pda = [0; PrivateAccountKind::HEADER_LEN];
+    pda[0] = 1;
+    pda[1..33].fill(1);
+    pda[33..].fill(2);
+
+    assert_eq!(PrivateAccountKind::HEADER_LEN, 65);
+    assert_eq!(PrivateAccountKind::Regular.to_header_bytes(), [0; 65]);
+    assert_eq!(
+        PrivateAccountKind::Pda {
+            account_id: AccountId::new([1; 32]),
+            seed: PdaSeed::new([2; 32]),
+        }
+        .to_header_bytes(),
+        pda
+    );
+}
+
+#[test]
 fn for_private_account_dispatches_correctly() {
     let program_id = AccountId::from_builtin_program([1; 8]);
     let seed = PdaSeed::new([2; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
-    let identifier = Identifier::new([77; 32]);
 
     assert_eq!(
-        AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(identifier)),
-        AccountId::for_regular_private_account(&npk, &vpk, identifier),
+        AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular),
+        AccountId::for_regular_private_account(&npk, &vpk),
     );
     assert_eq!(
         AccountId::for_private_account(
@@ -676,10 +382,9 @@ fn for_private_account_dispatches_correctly() {
             &PrivateAccountKind::Pda {
                 account_id: program_id,
                 seed,
-                identifier
             }
         ),
-        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, identifier),
+        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk),
     );
 }
 
@@ -706,29 +411,55 @@ fn account_id_from_builtin_program_reinterprets_words_as_le_bytes() {
 }
 
 #[test]
-fn a_foreign_shard_may_be_inspected_and_kept() {
-    let mut output = output_of(AccountId::new([9; 32]), None);
-    output.input.selector.program_account_id = AccountId::new([2; 32]);
-    output.input.pre_data = b"record".to_vec().try_into().unwrap();
+fn a_transition_journal_frame_has_a_pinned_layout() {
+    let receiver = Actor::new(AccountId::new([1; 32]), AccountId::new([2; 32]));
+    let transition = Transition {
+        input: ReceiveInput {
+            receiver,
+            from: None,
+            is_authorized: true,
+            pre_state: ActorState::from(b"ab".to_vec()),
+            message: b"m".to_vec(),
+        },
+        response: Response {
+            post_state: Some(ActorState::from(b"xyz".to_vec())),
+            calls: vec![Call {
+                to: Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32])),
+                message: b"q".to_vec(),
+                pda_seeds: BTreeSet::from([PdaSeed::new([9; 32])]),
+            }],
+            casts: Vec::new(),
+            events: Vec::new(),
+            validity: ValidityWindows::new_unbounded(),
+        },
+    };
 
-    assert!(validate_apply_output(&output.input.clone(), &output).is_ok());
-}
+    let expected: Vec<u8> = [
+        &[206, 0, 0, 0][..], // frame length: the 206 bytes below
+        &[1; 32],            // input.receiver.account_id
+        &[2; 32],            // input.receiver.program_account_id
+        &[0],                // input.from: None
+        &[1],                // input.is_authorized
+        &[2, 0, 0, 0],       // input.pre_state
+        b"ab",
+        &[1, 0, 0, 0], // input.message
+        b"m",
+        &[1], // post_state: Some
+        &[3, 0, 0, 0],
+        b"xyz",
+        &[1, 0, 0, 0], // calls: one call
+        &[3; 32],      // to
+        &[4; 32],
+        &[1, 0, 0, 0], // message
+        b"q",
+        &[1, 0, 0, 0], // pda_seeds: one seed
+        &[9; 32],
+        &[0, 0, 0, 0], // casts: none
+        &[0, 0, 0, 0], // events: none
+        &[0, 0],       // validity.blocks: from None, to None
+        &[0, 0],       // validity.timestamps: from None, to None
+    ]
+    .concat();
 
-#[test]
-fn an_apply_that_echoes_another_input_is_rejected_before_ownership_is_judged() {
-    // The echo decides both who owns the shard and where the write lands, so an apply that
-    // renames itself the native token program would otherwise mint into the balance shard while
-    // passing the ownership check on its own forged pair.
-    let scheduled = output_of(AccountId::new([2; 32]), None).input;
-
-    let mut forged = output_of(
-        crate::native_token::NATIVE_TOKEN_PROGRAM_ID,
-        Some(crate::native_token::encode_balance(1_000_000)),
-    );
-    forged.input.selector.program_account_id = crate::native_token::NATIVE_TOKEN_PROGRAM_ID;
-
-    assert!(matches!(
-        validate_apply_output(&scheduled, &forged),
-        Err(ExecutionValidationError::ApplyInputMismatch { .. })
-    ));
+    assert_eq!(crate::to_borsh_frame(&transition), expected);
 }

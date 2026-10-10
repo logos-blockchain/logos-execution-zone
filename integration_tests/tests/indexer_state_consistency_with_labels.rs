@@ -75,7 +75,7 @@ async fn indexer_state_consistency_with_labels() -> Result<()> {
         .unwrap();
     let acc1_seq_state = get_account(&ctx, ctx.existing_public_accounts()[0]).await?;
 
-    assert_eq!(acc1_ind_state, acc1_seq_state.into());
+    assert_eq!(acc1_ind_state, Some(acc1_seq_state.into()));
 
     log::info!("Indexer state is consistent after label-based transfer");
 

@@ -769,6 +769,5 @@ pub fn immutable_mirror_commitment(
     Commitment::new(&mirror_account_id, &mirrored_account)
 }
 
-
 #[cfg(test)]
 mod tests;

@@ -458,7 +458,6 @@ pub fn read_mnemonic_from_stdin() -> Result<Mnemonic> {
     Mnemonic::from_str(phrase.trim()).context("Invalid mnemonic phrase")
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,10 +479,13 @@ mod tests {
 
         let (parsed_npk, parsed_vpk) = read_keys_file(path.to_str().unwrap()).unwrap();
 
-        assert_eq!(parsed_npk, npk, "npk must round-trip through the keys file");
         assert_eq!(
-            parsed_vpk,
-            vpk.to_vec(),
+            parsed_npk.0, npk,
+            "npk must round-trip through the keys file"
+        );
+        assert_eq!(
+            parsed_vpk.to_bytes(),
+            vpk,
             "vpk must round-trip through the keys file"
         );
     }
@@ -528,7 +530,96 @@ mod tests {
         .unwrap();
 
         let (parsed_npk, parsed_vpk) = read_keys_file(path.to_str().unwrap()).unwrap();
-        assert_eq!(parsed_npk, npk);
-        assert_eq!(parsed_vpk, vpk.to_vec());
+        assert_eq!(parsed_npk.0, npk);
+        assert_eq!(parsed_vpk.to_bytes(), vpk);
+    }
+
+    #[test]
+    fn a_destination_is_one_account_one_set_of_keys_or_one_public_key() {
+        let (storage, _) = Storage::new("password").unwrap();
+        let npk = NullifierPublicKey([1; 32]);
+        let vpk = ViewingPublicKey::from_seed(&[2; 32], &[3; 32]);
+        let (npk_hex, vpk_hex) = (hex::encode(npk.0), hex::encode(vpk.to_bytes()));
+        let dir = tempfile::tempdir().unwrap();
+        let keys_path = dir.path().join("recipient.keys");
+        std::fs::write(&keys_path, format!("{npk_hex}\n{vpk_hex}\n")).unwrap();
+        let keys_file = keys_path.to_str().unwrap().to_owned();
+        let account_id = lee::AccountId::new([4; 32]);
+        let public_key =
+            PublicKey::new_from_private_key(&lee::PrivateKey::try_new([5; 32]).unwrap());
+        let mention = |prefix: &str| {
+            Some(CliAccountMention::from_str(&format!("{prefix}/{account_id}")).unwrap())
+        };
+        let foreign = AccountIdentity::PrivateForeign {
+            npk,
+            vpk,
+            kind: PrivateAccountKind::Regular,
+        };
+
+        for (account, npk, vpk, keys, public, expected) in [
+            (
+                None,
+                Some(&npk_hex),
+                Some(&vpk_hex),
+                None,
+                None,
+                foreign.clone(),
+            ),
+            (None, None, None, Some(&keys_file), None, foreign),
+            (
+                None,
+                None,
+                None,
+                None,
+                Some(public_key.clone()),
+                AccountIdentity::PublicForeign(public_key),
+            ),
+            (
+                mention("Public"),
+                None,
+                None,
+                None,
+                None,
+                AccountIdentity::PublicNoSign(account_id),
+            ),
+            (
+                mention("Private"),
+                None,
+                None,
+                None,
+                None,
+                AccountIdentity::PrivateOwned(account_id),
+            ),
+        ] {
+            let named = destination(
+                &storage,
+                account,
+                npk.cloned(),
+                vpk.cloned(),
+                keys.cloned(),
+                public,
+            );
+            assert_eq!(named.unwrap(), expected);
+        }
+
+        // Missing, incomplete or competing material names no destination.
+        for (account, npk, vpk, keys) in [
+            (None, None, None, None),
+            (None, Some(&npk_hex), None, None),
+            (mention("Public"), Some(&npk_hex), Some(&vpk_hex), None),
+            (mention("Public"), None, None, Some(&keys_file)),
+        ] {
+            assert!(
+                destination(
+                    &storage,
+                    account,
+                    npk.cloned(),
+                    vpk.cloned(),
+                    keys.cloned(),
+                    None
+                )
+                .is_err()
+            );
+        }
     }
 }

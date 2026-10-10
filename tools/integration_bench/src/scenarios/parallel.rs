@@ -70,8 +70,9 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                         to_npk: None,
                         to_vpk: None,
                         to_keys: None,
-                        to_identifier: Some(lee_core::Identifier::ZERO),
+                        to_pk: None,
                         amount: AMOUNT_PER_TRANSFER * 5,
+                        cast: false,
                     }),
                 )
                 .await
@@ -99,8 +100,9 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                 to_npk: None,
                 to_vpk: None,
                 to_keys: None,
-                to_identifier: Some(lee_core::Identifier::ZERO),
+                to_pk: None,
                 amount: AMOUNT_PER_TRANSFER,
+                cast: false,
             }),
         )
         .await?;

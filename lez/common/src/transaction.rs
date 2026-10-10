@@ -585,6 +585,8 @@ fn bridge_balance_only_increased(pre: &lee::Account, post: &lee::Account) -> boo
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use lee::{Account, AccountId, PrivateKey, PublicKey, V03State};
     use lee_core::{
         account::Nonce,
@@ -630,7 +632,7 @@ mod tests {
             nonce: pre.nonce,
             data: {
                 let mut data = pre.data.clone();
-                data.set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(600));
+                data.set_actor_state(NATIVE_TOKEN_PROGRAM_ID, encode_balance(600));
                 data
             },
         };
@@ -655,7 +657,7 @@ mod tests {
             nonce: Nonce(8),
             data: {
                 let mut data = pre.data.clone();
-                data.set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(600));
+                data.set_actor_state(NATIVE_TOKEN_PROGRAM_ID, encode_balance(600));
                 data
             },
         };
@@ -696,7 +698,7 @@ mod tests {
             nonce: pre.nonce,
             data: {
                 let mut data = pre.data.clone();
-                data.set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(600));
+                data.set_actor_state(NATIVE_TOKEN_PROGRAM_ID, encode_balance(600));
                 data
             },
         };
@@ -719,7 +721,7 @@ mod tests {
             nonce: pre.nonce,
             data: {
                 let mut data = pre.data.clone();
-                data.set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(400));
+                data.set_actor_state(NATIVE_TOKEN_PROGRAM_ID, encode_balance(400));
                 data
             },
         };
@@ -811,12 +813,17 @@ mod tests {
 
     /// A bridge `Deposit` in the injection shape: empty witness set.
     fn injected_deposit() -> super::LeeTransaction {
+        let bridge = programs::bridge_account_id();
+        let l1_deposit_op_id = [1; 32];
         let message = lee::public_transaction::Message::try_new(
-            programs::bridge_account_id(),
+            lee::Actor::new(
+                bridge_core::deposit_receipt_account_id(bridge, l1_deposit_op_id),
+                bridge,
+            ),
             vec![],
-            vec![],
-            bridge_core::Instruction::Deposit {
-                l1_deposit_op_id: [1; 32],
+            BTreeMap::new(),
+            bridge_core::Message::Deposit {
+                l1_deposit_op_id,
                 recipient_id: AccountId::new([2; 32]),
                 amount: 10,
             },
@@ -837,17 +844,17 @@ mod tests {
         let pre = Account::funded(500);
         let mut post = pre.clone();
         post.data
-            .set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(400));
+            .set_actor_state(NATIVE_TOKEN_PROGRAM_ID, encode_balance(400));
         state_and_diff(system_accounts::bridge_account_id(), pre, post)
     }
 
-    /// An account gaining a cross-zone inbox shard.
+    /// An account gaining a cross-zone inbox actor state.
     fn inbox_state_write() -> (V03State, lee::ValidatedStateDiff) {
         let pre = Account::funded(0);
         let mut post = pre.clone();
-        post.data.set_shard(
+        post.data.set_actor_state(
             programs::cross_zone_inbox_account_id(),
-            lee::ShardData::try_from(vec![1]).expect("fits"),
+            lee::ActorState::from(vec![1]),
         );
         state_and_diff(AccountId::new([5; 32]), pre, post)
     }

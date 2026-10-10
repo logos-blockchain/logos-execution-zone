@@ -50,7 +50,7 @@ async fn stake_config(ctx: &TestContext) -> Result<sequencer_stake_core::Sequenc
     sequencer_stake_core::SequencerStakeConfig::from_bytes(
         account
             .data
-            .shard(programs::sequencer_stake_account_id())
+            .actor_state(programs::sequencer_stake_account_id())
             .as_ref(),
     )
     .context("Config account should decode as SequencerStakeConfig")
@@ -62,11 +62,12 @@ fn slash_approvals_in(block: &Block) -> Option<Vec<sequencer_stake_core::SlashAp
         let LeeTransaction::Public(public) = tx else {
             return None;
         };
-        if public.message().program_account_id != programs::sequencer_stake_account_id() {
+        let lee::RootCall { to, message } = &public.message().execution.root;
+        if to.program_account_id != programs::sequencer_stake_account_id() {
             return None;
         }
-        match borsh::from_slice(&public.message().instruction_data) {
-            Ok(sequencer_stake_core::Instruction::Slash { approvals, .. }) => Some(approvals),
+        match borsh::from_slice(message) {
+            Ok(sequencer_stake_core::Message::Slash { approvals, .. }) => Some(approvals),
             _ => None,
         }
     })

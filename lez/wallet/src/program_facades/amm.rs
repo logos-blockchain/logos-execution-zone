@@ -482,9 +482,9 @@ fn outside_limit() -> ExecutionFailureKind {
     ))
 }
 
-
 #[cfg(test)]
 mod tests {
+    use amm_core::compute_vault_pda;
     use lee::error::LeeError;
 
     use super::*;
@@ -496,18 +496,6 @@ mod tests {
     const VAULT_B: AccountId = AccountId::new([7; 32]);
     const SOURCE: AccountId = AccountId::new([10; 32]);
     const DESTINATION: AccountId = AccountId::new([11; 32]);
-
-    fn route() -> Route {
-        Route {
-            amm_program_id: AccountId::new([3; 32]),
-            token_program_id: AccountId::new([4; 32]),
-            definition_token_a_id: TOKEN_A,
-            definition_token_b_id: TOKEN_B,
-            pool_id: AccountId::new([5; 32]),
-            vault_a_id: AccountId::new([6; 32]),
-            vault_b_id: AccountId::new([7; 32]),
-        }
-    }
 
     // Reserves 1000/500 with the supply `NewDefinition` mints for them, isqrt(500_000).
     fn pool() -> PoolDefinition {
@@ -524,6 +512,10 @@ mod tests {
             fees: 0,
             active: true,
         }
+    }
+
+    fn users() -> [AccountId; 3] {
+        [12, 13, 14].map(|tag| AccountId::new([tag; 32]))
     }
 
     fn assert_outside_limit<T>(result: Result<T, ExecutionFailureKind>) {
@@ -543,13 +535,13 @@ mod tests {
     #[test]
     fn an_add_meeting_its_minimum_liquidity_is_built_and_one_unit_more_is_refused() {
         // Up to 100 of each deposits 100 of A and 50 of B, minting 707 * 100 / 1000 = 70.
-        let instruction = route().add_liquidity(&pool(), 70, 100, 100).unwrap();
-        let amm_core::Instruction::AddLiquidity {
+        let message = add_liquidity(&pool(), 70, 100, 100, users()).unwrap();
+        let amm_core::Message::AddLiquidity {
             amount_to_add_token_a,
             amount_to_add_token_b,
             amount_liquidity,
             ..
-        } = instruction
+        } = message
         else {
             panic!("an add builds an AddLiquidity");
         };
@@ -562,18 +554,18 @@ mod tests {
             (100, 50, 70)
         );
 
-        assert_outside_limit(route().add_liquidity(&pool(), 71, 100, 100));
+        assert_outside_limit(add_liquidity(&pool(), 71, 100, 100, users()));
     }
 
     #[test]
     fn a_removal_meeting_both_minimums_is_built_and_either_one_unit_higher_is_refused() {
         // Burning 70 of 707 withdraws 1000 * 70 / 707 = 99 of A and 500 * 70 / 707 = 49 of B.
-        let instruction = route().remove_liquidity(&pool(), 70, 99, 49).unwrap();
-        let amm_core::Instruction::RemoveLiquidity {
+        let message = remove_liquidity(&pool(), 70, 99, 49, users()).unwrap();
+        let amm_core::Message::RemoveLiquidity {
             amount_to_remove_token_a,
             amount_to_remove_token_b,
             ..
-        } = instruction
+        } = message
         else {
             panic!("a removal builds a RemoveLiquidity");
         };
@@ -582,8 +574,8 @@ mod tests {
             (99, 49)
         );
 
-        assert_outside_limit(route().remove_liquidity(&pool(), 70, 100, 49));
-        assert_outside_limit(route().remove_liquidity(&pool(), 70, 99, 50));
+        assert_outside_limit(remove_liquidity(&pool(), 70, 100, 49, users()));
+        assert_outside_limit(remove_liquidity(&pool(), 70, 99, 50, users()));
     }
     fn fungible(definition_id: AccountId) -> TokenHolding {
         TokenHolding::Fungible {
@@ -592,57 +584,51 @@ mod tests {
         }
     }
 
-    fn offer(source: AccountId, amount_in: u128, amount_out: u128) -> SwapOffer {
-        SwapOffer::new(
+    fn trade(
+        pool: &PoolDefinition,
+        source: &TokenHolding,
+        amount_in: u128,
+        min_amount_out: u128,
+    ) -> Result<(Vec<AccountMention>, token_core::Message), ExecutionFailureKind> {
+        swap(
             POOL,
-            &pool(),
-            SOURCE,
-            &fungible(source),
+            pool,
+            AccountIdentity::Public(SOURCE),
+            source,
+            AccountIdentity::Public(DESTINATION),
             amount_in,
-            amount_out,
-        )
-        .unwrap()
-    }
-
-    fn signed_terms(offer: &SwapOffer) -> (AccountId, AccountId, u128, u128) {
-        let amm_core::Instruction::Swap {
-            token_program_id,
-            definition_id_in,
-            definition_id_out,
-            amount_in,
-            amount_out,
-        } = &offer.instruction
-        else {
-            panic!("a swap builds a Swap");
-        };
-        assert_eq!(*token_program_id, pool().token_program_id);
-        (
-            *definition_id_in,
-            *definition_id_out,
-            *amount_in,
-            *amount_out,
+            min_amount_out,
         )
     }
 
     #[test]
     fn a_swap_signs_the_requested_amounts_whatever_the_pool_would_quote() {
-        // 100 of A into 1000/500 is quoted 45 of B. Asking for less or more is the trader's call,
-        // and settlement decides whether the pool can pay it.
-        for amount_out in [10, 45, 46, 80] {
-            let offer = offer(TOKEN_A, 100, amount_out);
-            assert_eq!(signed_terms(&offer), (TOKEN_A, TOKEN_B, 100, amount_out));
+        // 100 of A into 1000/500 is quoted 45 of B. Asking for a lower or higher minimum is the
+        // trader's call, and settlement decides whether the pool meets it.
+        for (source, input_vault, definition_id_out, amount_in, min_amount_out) in [
+            (TOKEN_A, VAULT_A, TOKEN_B, 100, 10),
+            (TOKEN_A, VAULT_A, TOKEN_B, 100, 45),
+            (TOKEN_A, VAULT_A, TOKEN_B, 100, 46),
+            (TOKEN_A, VAULT_A, TOKEN_B, 100, 80),
+            (TOKEN_B, VAULT_B, TOKEN_A, 50, 90),
+        ] {
+            let (_, transfer) =
+                trade(&pool(), &fungible(source), amount_in, min_amount_out).unwrap();
             assert_eq!(
-                (offer.input_vault_id, offer.output_vault_id),
-                (VAULT_A, VAULT_B)
+                transfer,
+                swap_transfer(
+                    Actor::new(POOL, programs::amm_account_id()),
+                    input_vault,
+                    TokenDescriptor::fungible(source),
+                    amount_in,
+                    SwapRequest {
+                        definition_id_out,
+                        min_amount_out,
+                        payout: DESTINATION,
+                    },
+                )
             );
         }
-
-        let reverse = offer(TOKEN_B, 50, 90);
-        assert_eq!(signed_terms(&reverse), (TOKEN_B, TOKEN_A, 50, 90));
-        assert_eq!(
-            (reverse.input_vault_id, reverse.output_vault_id),
-            (VAULT_B, VAULT_A)
-        );
     }
 
     #[test]
@@ -651,8 +637,8 @@ mod tests {
             token_program_id: AccountId::new([4; 32]),
             ..pool()
         };
-        let Err(err) = SwapOffer::new(POOL, &pool, SOURCE, &fungible(TOKEN_A), 100, 45) else {
-            panic!("the offer was built through a token program the wallet cannot prove with");
+        let Err(err) = trade(&pool, &fungible(TOKEN_A), 100, 45) else {
+            panic!("the swap was built through a token program the wallet cannot prove with");
         };
         assert!(
             matches!(
@@ -674,9 +660,43 @@ mod tests {
             },
         ] {
             assert!(matches!(
-                SwapOffer::new(POOL, &pool(), SOURCE, &source, 100, 45),
+                trade(&pool(), &source, 100, 45),
                 Err(ExecutionFailureKind::AccountDataError(account_id)) if account_id == SOURCE
             ));
+        }
+    }
+
+    #[test]
+    fn liquidity_names_the_pool_and_its_vaults_by_their_derivations() {
+        let (amm, token) = (programs::amm_account_id(), programs::token_account_id());
+        let pool_id = compute_pool_pda(amm, TOKEN_A, TOKEN_B, token);
+        let route = Route {
+            amm_program_id: amm,
+            token_program_id: token,
+            definition_token_a_id: TOKEN_A,
+            definition_token_b_id: TOKEN_B,
+            pool_id,
+        };
+
+        let accounts = route.liquidity_accounts(
+            AccountIdentity::Public(SOURCE),
+            AccountIdentity::Public(DESTINATION),
+            AccountIdentity::Public(AccountId::new([12; 32])),
+            false,
+        );
+
+        for (mention, (account_id, program_account_id)) in accounts.iter().zip([
+            (pool_id, amm),
+            (compute_vault_pda(amm, pool_id, TOKEN_A), token),
+            (compute_vault_pda(amm, pool_id, TOKEN_B), token),
+        ]) {
+            assert!(
+                matches!(mention.identity, AccountIdentity::PublicPda { program, .. } if program == amm),
+                "{:?} is not one of the pool's PDAs",
+                mention.identity
+            );
+            assert_eq!(mention.identity.account_id(), account_id);
+            assert_eq!(mention.program_account_id, program_account_id);
         }
     }
 
@@ -686,6 +706,13 @@ mod tests {
             account_id,
             key_path: "m/44'/60'/0'/0/1".to_owned(),
         };
+        let pda = AccountIdentity::PublicPda {
+            program: AccountId::new([7; 32]),
+            seed: lee_core::program::PdaSeed::new([8; 32]),
+        };
+        let foreign = AccountIdentity::PublicForeign(lee::PublicKey::new_from_private_key(
+            &lee::PrivateKey::try_new([9; 32]).unwrap(),
+        ));
         // Given source and destination, then the identities the transaction must carry for them.
         let cases = [
             (
@@ -718,31 +745,53 @@ mod tests {
                 AccountIdentity::PrivateOwned(SOURCE),
                 AccountIdentity::PrivateOwned(DESTINATION),
             ),
+            (
+                AccountIdentity::Public(SOURCE),
+                pda.clone(),
+                AccountIdentity::Public(SOURCE),
+                pda,
+            ),
+            (
+                AccountIdentity::Public(SOURCE),
+                foreign.clone(),
+                AccountIdentity::Public(SOURCE),
+                foreign,
+            ),
         ];
 
         let token_program_id = pool().token_program_id;
+        let source = fungible(TOKEN_B);
         for (user_input, user_output, signed_input, named_output) in cases {
             // The destination is only named, never read: an empty holding is created by the
             // deposit.
-            let accounts = offer(TOKEN_B, 50, 90).accounts(user_input, user_output);
+            let (accounts, _) =
+                swap(POOL, &pool(), user_input, &source, user_output, 50, 90).unwrap();
             let expected = [
+                (signed_input, token_program_id),
+                (named_output, token_program_id),
                 (
                     AccountIdentity::PublicNoSign(POOL),
                     programs::amm_account_id(),
                 ),
                 (AccountIdentity::PublicNoSign(VAULT_B), token_program_id),
                 (AccountIdentity::PublicNoSign(VAULT_A), token_program_id),
-                (signed_input, token_program_id),
-                (named_output, token_program_id),
             ];
             assert_eq!(accounts.len(), expected.len());
             for (row, (mention, (identity, program_account_id))) in
-                accounts.iter().zip(&expected).enumerate()
+                accounts.iter().zip(expected).enumerate()
             {
+                let expected = identity.select_program_actor_state(program_account_id);
+                // The output only receives.
+                let expected = if row == 1 {
+                    expected.receiving()
+                } else {
+                    expected
+                };
                 assert!(
-                    mention.identity == *identity
-                        && mention.program_account_id == *program_account_id,
-                    "row {row} names the wrong identity or shard"
+                    mention.identity == expected.identity
+                        && mention.authorizes == expected.authorizes
+                        && mention.program_account_id == program_account_id,
+                    "row {row} names the wrong identity or actor state"
                 );
             }
         }
@@ -784,5 +833,32 @@ mod tests {
             estimate(&pool(), AccountId::new([9; 32]), QuoteAmount::In(1)),
             Err(ExecutionFailureKind::AccountDataError(_))
         ));
+    }
+
+    #[test]
+    fn a_private_liquidity_holding_that_only_receives_takes_part_without_spending_authority() {
+        let (amm, token) = (programs::amm_account_id(), programs::token_account_id());
+        let route = Route {
+            amm_program_id: amm,
+            token_program_id: token,
+            definition_token_a_id: TOKEN_A,
+            definition_token_b_id: TOKEN_B,
+            pool_id: compute_pool_pda(amm, TOKEN_A, TOKEN_B, token),
+        };
+        let holding = |tag| AccountIdentity::PrivateOwned(AccountId::new([tag; 32]));
+
+        // A deposit spends the token holdings and credits the liquidity one; a withdrawal burns
+        // the liquidity holding and pays out to the token ones.
+        for (withdrawing, authorizes) in
+            [(false, [true, true, false]), (true, [false, false, true])]
+        {
+            let accounts =
+                route.liquidity_accounts(holding(1), holding(2), holding(3), withdrawing);
+            let holdings: Vec<_> = accounts[4..]
+                .iter()
+                .map(|mention| mention.authorizes)
+                .collect();
+            assert_eq!(holdings, authorizes);
+        }
     }
 }

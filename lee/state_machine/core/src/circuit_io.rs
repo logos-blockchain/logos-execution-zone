@@ -467,101 +467,514 @@ impl PrivacyPreservingCircuitOutput {
 #[cfg(feature = "host")]
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
     use crate::{
-        Commitment, Nullifier,
-        account::{Account, AccountId},
+        Commitment, EncryptedNote, Nullifier, SealedCast,
+        account::{Account, AccountId, Actor},
         encryption::{Ciphertext, EphemeralPublicKey},
+        execution_state::{BoundaryStep, Delivery},
+        program::{MessageBody, MessageEnvelope},
     };
 
+    const NSK: NullifierSecretKey = [0; 32];
+
+    // The private account `NSK` controls, reachable at its own address and at the alias its one
+    // opening blinds.
+    fn receiver() -> PrivateWitness {
+        PrivateWitness {
+            vpk: ViewingPublicKey::from_seed(&[1; 32], &[2; 32]),
+            random_seed: [3; 32],
+            kind: WitnessKind::Regular(RegularKey::Nullifying(NSK)),
+            nullifier: NullifierWitness::Init {
+                commitment_root: [5; 32],
+            },
+            openings: BTreeSet::from([[6; 32]]),
+        }
+    }
+
+    fn body(to: Actor) -> MessageBody {
+        MessageBody {
+            from: Actor::new(AccountId::new([9; 32]), AccountId::new([10; 32])),
+            to,
+            message: b"m".to_vec(),
+        }
+    }
+
+    fn path() -> Vec<[u8; 32]> {
+        vec![[11; 32], [12; 32]]
+    }
+
+    fn received(to: Actor, position: u64, rho: Option<[u8; 32]>) -> MessageWitness {
+        MessageWitness {
+            body: body(to),
+            position,
+            rho,
+            path: path(),
+            filler: DummyOutput::default(),
+        }
+    }
+
+    fn proving(
+        root: TransactionEntry<MessageWitness>,
+        context: PublicExecutionContext,
+    ) -> ProvingInput {
+        ProvingInput {
+            root,
+            context,
+            private_witnesses: vec![receiver()],
+            dummy_inputs: Vec::new(),
+            ciphertext_padding: None,
+            recoveries: Vec::new(),
+            private_cast_promotions: BTreeSet::new(),
+        }
+    }
+
     #[test]
-    fn privacy_preserving_circuit_output_to_bytes_round_trips_via_borsh_frame() {
-        let touched = AccountId::new([8; 32]);
-        let also_touched = AccountId::new([9; 32]);
+    fn a_circuit_output_journal_has_a_pinned_layout() {
+        let public = Actor::new(AccountId::new([0; 32]), AccountId::new([1; 32]));
+        let private = Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32]));
         let output = PrivacyPreservingCircuitOutput {
-            public_actions: vec![
-                PublicAction {
-                    account_id: AccountId::new([0; 32]),
-                    is_authorized: true,
-                    effects: vec![
-                        DeferredPublicEffect {
-                            program_account_id: touched,
-                            shard_program_account_id: touched,
-                            data: b"post state data".to_vec(),
+            context: PublicExecutionContext {
+                actors: BTreeSet::from([public]),
+                authorized_accounts: BTreeSet::from([AccountId::new([4; 32])]),
+                cast_promotions: BTreeSet::from([5]),
+            },
+            execution: ProvenExecution {
+                boundary: vec![
+                    BoundaryStep::PrivateToPublic(Delivery {
+                        envelope: MessageEnvelope {
+                            from: private,
+                            to: public,
+                            message: vec![6],
                         },
-                        DeferredPublicEffect {
-                            program_account_id: touched,
-                            shard_program_account_id: also_touched,
-                            data: b"fresh record".to_vec(),
+                        inherited_authorizations: BTreeSet::from([AccountId::new([7; 32])]),
+                        inherits_entry_authorizations: false,
+                        pda_seeds: BTreeSet::from([PdaSeed::new([8; 32])]),
+                    }),
+                    BoundaryStep::PublicToPrivate(Delivery {
+                        envelope: MessageEnvelope {
+                            from: public,
+                            to: private,
+                            message: vec![9],
                         },
-                    ],
+                        inherited_authorizations: BTreeSet::new(),
+                        inherits_entry_authorizations: true,
+                        pda_seeds: BTreeSet::new(),
+                    }),
+                    BoundaryStep::EndPrivateSubtree,
+                    BoundaryStep::EndPublicSubtree,
+                ],
+                casts: vec![SealedCast {
+                    commitment: Commitment::from_byte_array([10; 32]),
+                    note: EncryptedNote {
+                        ciphertext: Ciphertext(vec![11; 3]),
+                        epk: EphemeralPublicKey(vec![12; 2]),
+                    },
+                }],
+                recovery_bindings: vec![RecoveryBinding {
+                    address: AccountId::new([13; 32]),
+                    note: EncryptedNote {
+                        ciphertext: Ciphertext(vec![14; 3]),
+                        epk: EphemeralPublicKey(vec![15; 2]),
+                    },
+                }],
+                public_root: Some(RootCall {
+                    to: public,
+                    message: vec![16; 2],
+                }),
+                private_actions: vec![PrivateAction {
+                    nullifier: Nullifier::from_byte_array([17; 32]),
+                    root: [18; 32],
+                    commitment: Commitment::from_byte_array([19; 32]),
+                    encrypted_post_state: EncryptedNote {
+                        ciphertext: Ciphertext(vec![20; 3]),
+                        epk: EphemeralPublicKey(vec![21; 2]),
+                    },
+                }],
+                validity: ValidityWindows {
+                    blocks: (22..).into(),
+                    timestamps: (..23).into(),
                 },
-                PublicAction {
-                    account_id: AccountId::new([1; 32]),
-                    is_authorized: false,
-                    effects: Vec::new(),
-                },
-            ],
-            private_actions: vec![PrivateAction {
-                nullifier: Nullifier::for_account_update(
-                    &Commitment::new(&AccountId::new([2; 32]), &Account::default()),
-                    &[1; 32],
-                ),
-                root: [0xab; 32],
-                commitment: Commitment::new(&AccountId::new([1; 32]), &Account::default()),
-                encrypted_post_state: EncryptedAccountData {
-                    ciphertext: Ciphertext(vec![255, 255, 1, 1, 2, 2]),
-                    epk: EphemeralPublicKey(vec![9, 9, 9]),
-                    view_tag: 42,
-                },
-            }],
-            block_validity_window: (1..).into(),
-            timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
-            program_image_claims: vec![ProgramImageClaim::Disclosed {
-                account_id: AccountId::new([3; 32]),
-                image_id: [4; 8],
-            }],
+                program_image_claims: vec![
+                    ProgramImageClaim::Disclosed {
+                        account_id: AccountId::new([24; 32]),
+                        image_id: [25; 8],
+                    },
+                    ProgramImageClaim::Undisclosed { root: [26; 32] },
+                ],
+            },
         };
-        let bytes = output.to_bytes();
-        let decoded: PrivacyPreservingCircuitOutput = borsh::from_slice(
-            crate::from_frame(&bytes).expect("self-produced frame is well-formed"),
-        )
-        .unwrap();
-        assert_eq!(output, decoded);
+
+        let expected: Vec<u8> = [
+            &[108, 3, 0, 0][..], // frame length: the 876 bytes below
+            &[1, 0, 0, 0],       // context.actors: one actor
+            &[0; 32],
+            &[1; 32],
+            &[1, 0, 0, 0], // context.authorized_accounts: one account
+            &[4; 32],
+            &[1, 0, 0, 0], // context.cast_promotions: one selected Cast
+            &[5, 0, 0, 0, 0, 0, 0, 0],
+            &[4, 0, 0, 0], // boundary: four steps
+            &[0],          // BoundaryStep::PrivateToPublic
+            &[2; 32],      // from
+            &[3; 32],
+            &[0; 32], // to
+            &[1; 32],
+            &[1, 0, 0, 0], // message
+            &[6],
+            &[1, 0, 0, 0], // inherited_authorizations: one account
+            &[7; 32],
+            &[0],          // inherits_entry_authorizations: false
+            &[1, 0, 0, 0], // pda_seeds: one seed
+            &[8; 32],
+            &[1],     // BoundaryStep::PublicToPrivate
+            &[0; 32], // from
+            &[1; 32],
+            &[2; 32], // to
+            &[3; 32],
+            &[1, 0, 0, 0], // message
+            &[9],
+            &[0, 0, 0, 0], // inherited_authorizations: none
+            &[1],          // inherits_entry_authorizations: true
+            &[0, 0, 0, 0], // pda_seeds: none
+            &[2],          // BoundaryStep::EndPrivateSubtree
+            &[3],          // BoundaryStep::EndPublicSubtree
+            &[1, 0, 0, 0], // casts: one sealed Cast
+            &[10; 32],     // commitment
+            &[3, 0, 0, 0], // note.ciphertext
+            &[11; 3],
+            &[2, 0, 0, 0], // note.epk
+            &[12; 2],
+            &[1, 0, 0, 0], // recovery_bindings: one binding
+            &[13; 32],     // address
+            &[3, 0, 0, 0], // note.ciphertext
+            &[14; 3],
+            &[2, 0, 0, 0], // note.epk
+            &[15; 2],
+            &[1],     // public_root: Some
+            &[0; 32], // to
+            &[1; 32],
+            &[2, 0, 0, 0], // message
+            &[16; 2],
+            &[1, 0, 0, 0], // private_actions: one action
+            &[17; 32],     // nullifier
+            &[18; 32],     // root
+            &[19; 32],     // commitment
+            &[3, 0, 0, 0], // encrypted_post_state.ciphertext
+            &[20; 3],
+            &[2, 0, 0, 0], // encrypted_post_state.epk
+            &[21; 2],
+            &[1], // validity.blocks.from: Some
+            &[22, 0, 0, 0, 0, 0, 0, 0],
+            &[0], // validity.blocks.to: None
+            &[0], // validity.timestamps.from: None
+            &[1], // validity.timestamps.to: Some
+            &[23, 0, 0, 0, 0, 0, 0, 0],
+            &[2, 0, 0, 0],            // program_image_claims: two claims
+            &[0],                     // ProgramImageClaim::Disclosed
+            &[24; 32],                // account_id
+            &[25, 0, 0, 0].repeat(8), // image_id: eight little-endian words
+            &[1],                     // ProgramImageClaim::Undisclosed
+            &[26; 32],                // root
+        ]
+        .concat();
+
+        assert_eq!(output.to_bytes(), expected);
+        assert_eq!(
+            crate::to_borsh_frame(&(&output.context, &output.execution)),
+            expected
+        );
+        let decoded: PrivacyPreservingCircuitOutput =
+            borsh::from_slice(crate::from_frame(&expected).expect("the frame is well-formed"))
+                .unwrap();
+        assert_eq!(decoded, output);
     }
 
     #[test]
     fn private_witness_account_id_matches_its_derivation() {
-        let npk = NullifierPublicKey([3; 32]);
+        let nsk = [3; 32];
+        let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from_seed(&[1; 32], &[2; 32]);
-        let identifier = Identifier::new([77; 32]);
         let witness = |kind| PrivateWitness {
             vpk: vpk.clone(),
             random_seed: [4; 32],
-            identifier,
             kind,
             nullifier: NullifierWitness::Init {
-                npk,
                 commitment_root: [5; 32],
             },
+            openings: BTreeSet::new(),
         };
         let program = AccountId::new([6; 32]);
         let seed = PdaSeed::new([7; 32]);
 
-        let regular = witness(WitnessKind::Regular { ask: None });
+        let regular = witness(WitnessKind::Regular(RegularKey::Nullifying(nsk)));
         assert!(!regular.is_pda());
         assert_eq!(
             regular.account_id(),
-            AccountId::for_regular_private_account(&npk, &vpk, identifier)
+            AccountId::for_regular_private_account(&npk, &vpk)
         );
 
         let pda = witness(WitnessKind::Pda {
+            nsk,
             binding: (program, seed),
         });
         assert!(pda.is_pda());
         assert_eq!(
             pda.account_id(),
-            AccountId::for_private_pda(&program, &seed, &npk, &vpk, identifier)
+            AccountId::for_private_pda(&program, &seed, &npk, &vpk)
+        );
+    }
+
+    #[test]
+    fn a_private_witness_has_a_pinned_layout() {
+        let account = Account::default();
+        let authorized = PrivateWitness {
+            kind: WitnessKind::Regular(RegularKey::Authorized(AuthorizationSecretKey([2; 32]))),
+            nullifier: NullifierWitness::Update {
+                account: account.clone(),
+                membership_proof: (4, vec![[11; 32]]),
+            },
+            ..receiver()
+        };
+        let pda = PrivateWitness {
+            kind: WitnessKind::Pda {
+                nsk: NSK,
+                binding: (AccountId::new([7; 32]), PdaSeed::new([8; 32])),
+            },
+            openings: BTreeSet::new(),
+            ..receiver()
+        };
+        let vpk = receiver().vpk;
+
+        let expected_authorized: Vec<u8> = [
+            &[160, 4, 0, 0][..], // vpk: 1184 bytes
+            vpk.to_bytes(),
+            &[3; 32], // random_seed
+            &[0, 0],  // kind: Regular(Authorized)
+            &[2; 32],
+            &[1], // nullifier: Update, with no view tag
+            &*borsh::to_vec(&account).unwrap(),
+            &[4, 0, 0, 0, 0, 0, 0, 0], // membership_proof: leaf index
+            &[1, 0, 0, 0],
+            &[11; 32],
+            &[1, 0, 0, 0], // openings: one
+            &[6; 32],
+        ]
+        .concat();
+        let expected_pda: Vec<u8> = [
+            &[160, 4, 0, 0][..], // vpk: 1184 bytes
+            vpk.to_bytes(),
+            &[3; 32], // random_seed
+            &[1],     // kind: Pda
+            &NSK,
+            &[7; 32], // binding
+            &[8; 32],
+            &[0], // nullifier: Init
+            &[5; 32],
+            &[0, 0, 0, 0], // openings: none
+        ]
+        .concat();
+
+        assert_eq!(borsh::to_vec(&authorized).unwrap(), expected_authorized);
+        assert_eq!(borsh::to_vec(&pda).unwrap(), expected_pda);
+    }
+
+    #[test]
+    fn an_initialization_spends_its_empty_predecessors_update_nullifier_whatever_its_anchor() {
+        let account_id = receiver().account_id();
+        let initialization = (
+            Nullifier::for_account_update(&Commitment::new(&account_id, &Account::default()), &NSK),
+            Nonce::default().private_account_nonce_increment(&NSK),
+        );
+        assert_eq!(
+            Nullifier::for_account_initialization(&account_id, &NSK),
+            initialization.0
+        );
+
+        for (anchor, witness) in [
+            ([5; 32], receiver()),
+            (
+                [10; 32],
+                PrivateWitness {
+                    random_seed: [9; 32],
+                    nullifier: NullifierWitness::Init {
+                        commitment_root: [10; 32],
+                    },
+                    openings: BTreeSet::new(),
+                    ..receiver()
+                },
+            ),
+        ] {
+            let (nullifier, root, nonce) = witness.transition().unwrap();
+            assert_eq!((nullifier, nonce), initialization);
+            assert_eq!(root, anchor);
+        }
+
+        let account = Account {
+            nonce: Nonce(7),
+            ..Account::default()
+        };
+        let commitment = Commitment::new(&account_id, &account);
+        let update = PrivateWitness {
+            nullifier: NullifierWitness::Update {
+                account,
+                membership_proof: (0, path()),
+            },
+            ..receiver()
+        };
+        assert_eq!(
+            update.transition(),
+            Ok((
+                Nullifier::for_account_update(&commitment, &NSK),
+                compute_digest_for_path(&commitment, 0, &path()).unwrap(),
+                Nonce(7).private_account_nonce_increment(&NSK),
+            ))
+        );
+    }
+
+    #[test]
+    fn a_received_message_is_nullified_with_its_receiving_witnesss_key() {
+        let private = Actor::new(receiver().account_id(), AccountId::new([8; 32]));
+        let other = PrivateWitness {
+            kind: WitnessKind::Regular(RegularKey::Nullifying([13; 32])),
+            openings: BTreeSet::new(),
+            ..receiver()
+        };
+        let commitment = Commitment::for_message(&body(private));
+
+        assert_eq!(
+            received(private, 3, None)
+                .spend(&[other, receiver()])
+                .unwrap(),
+            (
+                Nullifier::for_message(&NSK, &commitment, 3),
+                compute_digest_for_path(&commitment, 3, &path()).unwrap(),
+            )
+        );
+    }
+
+    #[test]
+    fn a_proof_discloses_only_a_public_call_root_and_spends_a_received_message_privately() {
+        let public = Actor::new(AccountId::new([7; 32]), AccountId::new([8; 32]));
+        let private = Actor::new(receiver().account_id(), AccountId::new([8; 32]));
+        let alias = Actor::new(
+            private.account_id.blinded(&[6; 32]),
+            private.program_account_id,
+        );
+        let context = PublicExecutionContext::new(vec![public], []);
+        let call = |to| {
+            TransactionEntry::Call(RootCall {
+                to,
+                message: b"m".to_vec(),
+            })
+        };
+
+        assert_eq!(
+            proving(call(public), context.clone()).public_root(),
+            Some(RootCall {
+                to: public,
+                message: b"m".to_vec(),
+            })
+        );
+        assert_eq!(proving(call(private), context.clone()).public_root(), None);
+        for to in [private, alias] {
+            let commitment = Commitment::for_message(&body(to));
+
+            assert_eq!(
+                proving(
+                    TransactionEntry::Cast(received(to, 3, None)),
+                    context.clone()
+                )
+                .public_root(),
+                None
+            );
+            assert_eq!(
+                received(to, 3, None).spend(&[receiver()]).unwrap(),
+                (
+                    Nullifier::for_message(&NSK, &commitment, 3),
+                    compute_digest_for_path(&commitment, 3, &path()).unwrap(),
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn an_account_or_program_membership_position_must_fit_its_path() {
+        for (position, fits) in [(3, true), (7, false)] {
+            let account = PrivateWitness {
+                nullifier: NullifierWitness::Update {
+                    account: Account::default(),
+                    membership_proof: (position, path()),
+                },
+                ..receiver()
+            };
+            let program = ProgramImageWitness::Undisclosed {
+                account_id: AccountId::new([13; 32]),
+                program_header: ProgramHeader {
+                    image_id: [14; 8],
+                    program_first_segment: AccountId::new([15; 32]),
+                    immutable: true,
+                },
+                membership_proof: (position, path()),
+            };
+
+            assert_eq!(account.transition().is_ok(), fits);
+            assert_eq!(program.to_claim().is_ok(), fits);
+        }
+    }
+
+    #[test]
+    fn a_received_message_whose_evidence_does_not_fit_it_is_not_spent() {
+        let private = Actor::new(receiver().account_id(), AccountId::new([8; 32]));
+        let commitment = Commitment::for_message(&body(private));
+        // A bit above the path's depth would reach the same root but spend another nullifier.
+        assert!(compute_digest_for_path(&commitment, 3, &path()).is_ok());
+        assert_eq!(
+            compute_digest_for_path(&commitment, 7, &path()),
+            Err(InvalidMembershipProof)
+        );
+        assert_ne!(
+            Nullifier::for_message(&NSK, &commitment, 3),
+            Nullifier::for_message(&NSK, &commitment, 7)
+        );
+        let stranger = Actor::new(AccountId::new([14; 32]), AccountId::new([8; 32]));
+
+        for (case, witness, refusal) in [
+            (
+                "a position above its path",
+                received(private, 7, None),
+                InvalidMessageEvidence::NoncanonicalPosition,
+            ),
+            (
+                "an address no witness reaches",
+                received(stranger, 3, None),
+                InvalidMessageEvidence::UnwitnessedDestination,
+            ),
+        ] {
+            assert_eq!(
+                witness.spend(&[receiver()]).unwrap_err().to_string(),
+                refusal.to_string(),
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_sealed_message_is_spent_under_its_randomness() {
+        let private = Actor::new(receiver().account_id(), AccountId::new([8; 32]));
+        let rho = [13; 32];
+        let commitment = Commitment::for_sealed_message(&body(private), &rho);
+
+        assert_eq!(
+            received(private, 3, Some(rho))
+                .spend(&[receiver()])
+                .unwrap(),
+            (
+                Nullifier::for_message(&NSK, &commitment, 3),
+                compute_digest_for_path(&commitment, 3, &path()).unwrap(),
+            )
         );
     }
 }

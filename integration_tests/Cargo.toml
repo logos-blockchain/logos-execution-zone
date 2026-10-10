@@ -23,7 +23,6 @@ bridge_core.workspace = true
 ping_core.workspace = true
 cross_zone_outbox_core.workspace = true
 cross_zone_inbox_core.workspace = true
-cross_zone_marker_core.workspace = true
 bridge_lock_core.workspace = true
 amm_core.workspace = true
 token_core.workspace = true
@@ -40,7 +39,7 @@ system_accounts.workspace = true
 sequencer_stake_core.workspace = true
 programs.workspace = true
 test_programs.workspace = true
-test_methods.workspace = true
+test_guest_core.workspace = true
 jsonrpsee = { workspace = true, features = ["jsonrpsee-types"] }
 testnet_initial_state.workspace = true
 program_loader_core.workspace = true

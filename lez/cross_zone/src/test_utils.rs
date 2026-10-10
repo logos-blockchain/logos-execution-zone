@@ -4,11 +4,13 @@
 use common::{block::Block, test_utils::produce_dummy_block, transaction::LeeTransaction};
 use cross_zone_inbox_core::ZoneId;
 use lee::{
-    GENESIS_BLOCK_ID, PublicTransaction,
+    GENESIS_BLOCK_ID, PublicAccountEvidence, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
-use lee_core::account::{AccountId, ProgramShardSelector};
-use ping_core::{SenderInstruction, ping_record_pda, receiver_config_account_id};
+use lee_core::account::{AccountId, Actor};
+use ping_core::{
+    SenderMessage, ping_record_pda, receiver_config_account_id, sender_config_account_id,
+};
 
 /// The peer's hash-linked chain from its genesis up to and including `last`,
 /// each block carrying the transactions `txs_at(block_id)` returns. Empty when
@@ -32,18 +34,35 @@ pub fn ping_emission(
     payload: &[u8],
 ) -> LeeTransaction {
     let receiver_id = programs::ping_receiver_account_id();
-    let send = SenderInstruction::Send {
+    let sender_id = programs::ping_sender_account_id();
+    let outbox_id = programs::cross_zone_outbox_account_id();
+    let config = Actor::new(sender_config_account_id(sender_id), sender_id);
+    let slot = PublicAccountEvidence::Pda {
+        program: outbox_id,
+        seed: cross_zone_outbox_core::outbox_pda_seed(sender_id, &target_zone, 0),
+    };
+    let outbox = Actor::new(slot.account_id(), outbox_id);
+    let send = SenderMessage::Send {
+        outbox,
         target_zone,
         target_account_id,
         target_accounts: vec![
-            ProgramShardSelector::new(receiver_config_account_id(receiver_id), receiver_id),
-            ProgramShardSelector::new(ping_record_pda(receiver_id), receiver_id),
+            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+            Actor::new(ping_record_pda(receiver_id), receiver_id),
         ],
         payload: payload.to_vec(),
         ordinal: 0,
     };
-    let message = Message::try_new(programs::ping_sender_account_id(), vec![], vec![], send)
-        .expect("emission serializes");
+    let message = Message {
+        admission_evidence: vec![slot],
+        ..Message::try_new(
+            config,
+            [config, outbox],
+            std::collections::BTreeMap::new(),
+            send,
+        )
+        .expect("emission serializes")
+    };
     LeeTransaction::Public(PublicTransaction::new(
         message,
         WitnessSet::from_raw_parts(vec![]),

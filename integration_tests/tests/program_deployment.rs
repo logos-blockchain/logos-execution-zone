@@ -23,7 +23,7 @@ use wallet::{
 async fn deploy_and_execute_program() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let deployed = test_programs::data_writer();
+    let deployed = test_programs::scripted();
     // Every account a deploy touches is freshly claimed and unfunded, so a genesis-funded wallet
     // account covers the fees instead (see `ProgramLoader::send`).
     let payer_id = ctx.existing_public_accounts()[0];
@@ -52,18 +52,19 @@ async fn deploy_and_execute_program() -> Result<()> {
 
     let target_id = new_account(&mut ctx, false, None).await?;
 
-    // The claimed account holds nothing to fund the reserve with, so `payer_id` co-signs: its
-    // nonce and signature go last, after the account list's own.
-    let nonces = ctx
-        .wallet_mut()
-        .get_accounts_nonces(&[target_id, payer_id])
-        .await?;
+    // The claimed account holds nothing to fund the reserve with, so `payer_id` co-signs.
+    let signers = [target_id, payer_id];
+    let nonces = signers
+        .into_iter()
+        .zip(ctx.wallet_mut().get_accounts_nonces(&signers).await?)
+        .collect();
     let written: Vec<u8> = vec![9; 4];
+    let target = lee::Actor::new(target_id, account_id);
     let message = lee::public_transaction::Message::try_new_with_fees(
-        account_id,
-        vec![lee::ProgramShardSelector::new(target_id, account_id)],
+        target,
+        vec![target],
         nonces,
-        written.clone(),
+        test_guest_core::Script::write(written.clone()),
         common::test_utils::test_fee_declaration(payer_id),
     )?;
     let target_key = ctx
@@ -91,7 +92,7 @@ async fn deploy_and_execute_program() -> Result<()> {
 
     assert_eq!(post_state_account.data.native_balance().unwrap(), 0);
     assert_eq!(
-        post_state_account.data.shard(account_id).as_ref(),
+        post_state_account.data.actor_state(account_id).as_ref(),
         written.as_slice()
     );
     assert_eq!(post_state_account.nonce.0, 1);

@@ -1201,8 +1201,11 @@ fn nonce_map(
         |(account_id, nonce)| (account_id.into(), Nonce(nonce)),
     ))?)
 }
+
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     #[test]
@@ -1212,7 +1215,7 @@ mod tests {
             nonce: lee_core::account::Nonce(u128::MAX),
             data: lee_core::account::Account::funded(u128::MAX)
                 .data
-                .with_shard(program, b"record".to_vec().try_into().unwrap()),
+                .with_actor_state(program, b"record".to_vec().into()),
         };
 
         let mirrored = Account::from(account.clone());
@@ -1221,34 +1224,7 @@ mod tests {
 
         assert_eq!(restored.nonce, u128::MAX);
         assert_eq!(restored.data.balance(), Some(u128::MAX));
-        assert_eq!(
-            lee_core::account::Account::try_from(restored).unwrap(),
-            account
-        );
-    }
-
-    #[test]
-    fn public_action_effects_keep_their_order_through_the_mirror() {
-        // A repeated write to one shard, and not a palindrome: a set would collapse the
-        // sequence and a reversal would show, and settlement folds them in emission order.
-        let apply = |data: u8| lee_core::execution_state::DeferredPublicEffect {
-            program_account_id: lee_core::account::AccountId::new([1; 32]),
-            shard_program_account_id: lee_core::account::AccountId::new([2; 32]),
-            data: vec![data],
-        };
-        let action = lee::privacy_preserving_transaction::message::PublicActionWithID {
-            account_id: lee_core::account::AccountId::new([3; 32]),
-            effects: vec![apply(7), apply(8), apply(9), apply(7)],
-        };
-
-        let mirrored = PublicActionWithID::from(action.clone());
-        let json = serde_json::to_string(&mirrored).unwrap();
-        let restored: PublicActionWithID = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(
-            lee::privacy_preserving_transaction::message::PublicActionWithID::from(restored),
-            action
-        );
+        assert_eq!(lee_core::account::Account::from(restored), account);
     }
 
     #[test]
@@ -1287,10 +1263,11 @@ mod tests {
         let signer_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&signer));
 
         let fee = lee::FeeDeclaration::new(signer_id, 2_000_000, 0, u128::MAX >> 1);
+        let to = lee::Actor::new(signer_id, lee::AccountId::new([7; 32]));
         let message = lee::public_transaction::Message::try_new_with_fees(
-            lee::AccountId::new([7; 32]),
-            vec![lee::ProgramShardSelector::native_balance(signer_id)],
-            vec![0_u128.into()],
+            to,
+            vec![to],
+            BTreeMap::from([(signer_id, 0_u128.into())]),
             0_u32,
             fee,
         )
@@ -1298,13 +1275,13 @@ mod tests {
         let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&signer]);
         let tx = lee::PublicTransaction::new(message, witness_set);
         let original_hash = tx.hash();
-        assert_eq!(tx.message().fee, Some(fee));
+        assert_eq!(tx.message().execution.fee, Some(fee));
 
         let protocol_tx: PublicTransaction = tx.into();
         let restored: lee::PublicTransaction = protocol_tx.try_into().expect("converts back");
 
         assert_eq!(
-            restored.message().fee,
+            restored.message().execution.fee,
             Some(fee),
             "the fee declaration must survive the round trip",
         );
@@ -1321,10 +1298,11 @@ mod tests {
         let signer = lee::PrivateKey::try_new([1_u8; 32]).expect("valid key");
         let signer_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&signer));
 
+        let to = lee::Actor::new(signer_id, lee::AccountId::new([7; 32]));
         let message = lee::public_transaction::Message::try_new(
-            lee::AccountId::new([7; 32]),
-            vec![lee::ProgramShardSelector::native_balance(signer_id)],
-            vec![0_u128.into()],
+            to,
+            vec![to],
+            BTreeMap::from([(signer_id, 0_u128.into())]),
             0_u32,
         )
         .expect("message builds");
@@ -1335,7 +1313,178 @@ mod tests {
         let protocol_tx: PublicTransaction = tx.into();
         let restored: lee::PublicTransaction = protocol_tx.try_into().expect("converts back");
 
-        assert_eq!(restored.message().fee, None);
+        assert_eq!(restored.message().execution.fee, None);
         assert_eq!(restored.hash(), original_hash);
+    }
+
+    fn account_id(tag: u8) -> lee_core::account::AccountId {
+        lee_core::account::AccountId::new([tag; 32])
+    }
+
+    fn actor(account_tag: u8, program_tag: u8) -> lee_core::account::Actor {
+        lee_core::account::Actor::new(account_id(account_tag), account_id(program_tag))
+    }
+
+    fn admission_evidence() -> Vec<lee::PublicAccountEvidence> {
+        let signer = lee::PrivateKey::try_new([1; 32]).expect("valid key");
+        vec![
+            lee::PublicAccountEvidence::Key(lee::PublicKey::new_from_private_key(&signer)),
+            lee::PublicAccountEvidence::Pda {
+                program: account_id(2),
+                seed: lee_core::program::PdaSeed::new([3; 32]),
+            },
+        ]
+    }
+
+    #[test]
+    fn a_public_message_with_admission_evidence_round_trips_through_the_mirror() {
+        let message = lee::public_transaction::Message::new(
+            actor(3, 4),
+            vec![12],
+            vec![actor(5, 6)],
+            BTreeMap::from([(account_id(13), lee_core::account::Nonce(7))]),
+            Some(lee::FeeDeclaration::new(account_id(8), 9, 10, 11)),
+            admission_evidence(),
+        );
+
+        let mirrored = PublicMessage::from(message.clone());
+        let json = serde_json::to_string(&mirrored).unwrap();
+        let restored: PublicMessage = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            lee::public_transaction::Message::try_from(restored).unwrap(),
+            message
+        );
+    }
+
+    #[test]
+    fn a_public_message_repeating_a_signer_nonce_does_not_convert() {
+        let mut mirrored = PublicMessage::from(lee::public_transaction::Message::new(
+            actor(1, 2),
+            vec![3],
+            vec![actor(1, 2)],
+            BTreeMap::from([(account_id(1), lee_core::account::Nonce(4))]),
+            None,
+            Vec::new(),
+        ));
+        let (repeated, _) = mirrored.nonces[0];
+        mirrored.nonces.push((repeated, 5));
+
+        assert!(lee::public_transaction::Message::try_from(mirrored).is_err());
+    }
+
+    #[test]
+    fn a_private_message_with_a_public_root_round_trips_through_the_mirror() {
+        // A repeated send to one actor, and not a palindrome: a set would collapse the
+        // sequence and a reversal would show, and execution replays them in emission order.
+        let repeated = lee_core::execution_state::Delivery {
+            envelope: lee_core::program::MessageEnvelope {
+                from: actor(3, 53),
+                to: actor(4, 5),
+                message: vec![6],
+            },
+            inherited_authorizations: BTreeSet::new(),
+            inherits_entry_authorizations: true,
+            pda_seeds: BTreeSet::new(),
+        };
+        let message = lee::privacy_preserving_transaction::message::Message {
+            context: lee_core::execution_state::PublicExecutionContext {
+                cast_promotions: BTreeSet::from([27, 28]),
+                ..lee_core::execution_state::PublicExecutionContext::default()
+            },
+            execution: lee_core::ProvenExecution {
+                boundary: vec![
+                    lee_core::execution_state::BoundaryStep::PrivateToPublic(repeated.clone()),
+                    lee_core::execution_state::BoundaryStep::PrivateToPublic(
+                        lee_core::execution_state::Delivery {
+                            envelope: lee_core::program::MessageEnvelope {
+                                from: actor(11, 61),
+                                to: actor(8, 9),
+                                message: vec![10],
+                            },
+                            inherited_authorizations: BTreeSet::from([account_id(14)]),
+                            inherits_entry_authorizations: true,
+                            pda_seeds: BTreeSet::from([lee_core::program::PdaSeed::new([15; 32])]),
+                        },
+                    ),
+                    lee_core::execution_state::BoundaryStep::PrivateToPublic(
+                        lee_core::execution_state::Delivery {
+                            envelope: lee_core::program::MessageEnvelope {
+                                from: actor(40, 90),
+                                to: actor(41, 42),
+                                message: vec![43],
+                            },
+                            inherited_authorizations: BTreeSet::new(),
+                            inherits_entry_authorizations: true,
+                            pda_seeds: BTreeSet::new(),
+                        },
+                    ),
+                    lee_core::execution_state::BoundaryStep::PrivateToPublic(repeated),
+                    lee_core::execution_state::BoundaryStep::PublicToPrivate(
+                        lee_core::execution_state::Delivery {
+                            envelope: lee_core::program::MessageEnvelope {
+                                from: actor(16, 17),
+                                to: actor(18, 19),
+                                message: vec![20],
+                            },
+                            inherited_authorizations: BTreeSet::new(),
+                            inherits_entry_authorizations: false,
+                            pda_seeds: BTreeSet::new(),
+                        },
+                    ),
+                    lee_core::execution_state::BoundaryStep::EndPrivateSubtree,
+                    lee_core::execution_state::BoundaryStep::EndPublicSubtree,
+                ],
+                casts: vec![
+                    lee_core::SealedCast {
+                        commitment: lee_core::Commitment::from_byte_array([22; 32]),
+                        note: lee_core::EncryptedNote {
+                            epk: lee_core::EphemeralPublicKey(vec![23; 2]),
+                            ciphertext: lee_core::encryption::Ciphertext::from_inner(vec![24; 3]),
+                        },
+                    };
+                    2
+                ],
+                recovery_bindings: vec![],
+                public_root: Some(lee_core::RootCall {
+                    to: lee_core::account::Actor::new(
+                        lee_core::account::AccountId::new([25; 32]),
+                        lee_core::account::AccountId::new([26; 32]),
+                    ),
+                    message: vec![27; 2],
+                }),
+                private_actions: vec![],
+                validity: lee_core::program::ValidityWindows::new_unbounded(),
+                program_image_claims: vec![],
+            },
+            nonces: BTreeMap::new(),
+            admission_evidence: admission_evidence(),
+        };
+
+        let mirrored = PrivacyPreservingMessage::from(message.clone());
+        let json = serde_json::to_string(&mirrored).unwrap();
+        let restored: PrivacyPreservingMessage = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            lee::privacy_preserving_transaction::message::Message::try_from(restored).unwrap(),
+            message
+        );
+    }
+
+    #[test]
+    fn a_sealed_cast_round_trips_through_the_mirror() {
+        let cast = lee_core::SealedCast {
+            commitment: lee_core::Commitment::from_byte_array([0; 32]),
+            note: lee_core::EncryptedNote {
+                epk: lee_core::EphemeralPublicKey(vec![1; 2]),
+                ciphertext: lee_core::encryption::Ciphertext::from_inner(vec![2; 3]),
+            },
+        };
+
+        let mirrored = SealedCast::from(cast.clone());
+        let json = serde_json::to_string(&mirrored).unwrap();
+        let restored: SealedCast = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(lee_core::SealedCast::from(restored), cast);
     }
 }

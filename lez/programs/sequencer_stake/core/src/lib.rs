@@ -386,31 +386,14 @@ mod tests {
         let off_curve = [2_u8; 32];
         assert!(SequencerKey::new(off_curve).is_none());
 
-        // 32 key bytes then a `None` discriminant: a `StakeRecord` with no
-        // pending unstake.
-        let record = [&off_curve[..], &[0_u8][..]].concat();
-        assert_eq!(StakeRecord::from_bytes(&record), None);
+        // A `StakeRecord` is the 32 key bytes alone.
+        assert_eq!(StakeRecord::from_bytes(&off_curve), None);
     }
 
     #[test]
     fn stake_record_roundtrip() {
         let record = StakeRecord {
             sequencer_key: test_key(7),
-            pending_unstake: None,
-        };
-        let bytes = record.to_bytes();
-        assert_eq!(StakeRecord::from_bytes(&bytes), Some(record));
-    }
-
-    #[test]
-    fn stake_record_with_pending_unstake_roundtrip() {
-        let record = StakeRecord {
-            sequencer_key: test_key(7),
-            pending_unstake: Some(PendingUnstake {
-                amount: 42,
-                destination: test_destination(),
-                requested_at: 3,
-            }),
         };
         let bytes = record.to_bytes();
         assert_eq!(StakeRecord::from_bytes(&bytes), Some(record));
@@ -423,7 +406,7 @@ mod tests {
             SequencerEntry {
                 account_id: test_destination(),
                 total_staked: 1_000_000,
-                total_pending_unstake: 0,
+                pending_unstake: None,
             },
         );
         SequencerStakeConfig {
@@ -448,21 +431,11 @@ mod tests {
     fn stake_record_does_not_decode_as_sequencer_stake_config() {
         // Secondary to the config account's id check, which is what actually
         // keeps an ownership account from being passed as the config.
-        for pending_unstake in [
-            None,
-            Some(PendingUnstake {
-                amount: 0,
-                destination: AccountId::new([0; 32]),
-                requested_at: 0,
-            }),
-        ] {
-            let bytes = StakeRecord {
-                sequencer_key: test_key(0),
-                pending_unstake,
-            }
-            .to_bytes();
-            assert_eq!(SequencerStakeConfig::from_bytes(&bytes), None);
+        let bytes = StakeRecord {
+            sequencer_key: test_key(0),
         }
+        .to_bytes();
+        assert_eq!(SequencerStakeConfig::from_bytes(&bytes), None);
     }
 
     #[test]
@@ -472,11 +445,15 @@ mod tests {
         assert_eq!(SequencerStakeConfig::from_bytes(&bytes), Some(config));
     }
 
-    fn entry(total_staked: u128, total_pending_unstake: u128) -> SequencerEntry {
+    fn entry(total_staked: u128, pending: u128) -> SequencerEntry {
         SequencerEntry {
             account_id: test_destination(),
             total_staked,
-            total_pending_unstake,
+            pending_unstake: (pending > 0).then_some(PendingUnstake {
+                amount: pending,
+                destination: test_destination(),
+                requested_at: 0,
+            }),
         }
     }
 

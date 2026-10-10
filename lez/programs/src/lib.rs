@@ -143,34 +143,38 @@ mod inner {
 
     #[cfg(test)]
     mod tests {
-        use lee::{
-            Account, AccountId, ProgramShardSelector, PublicTransaction, V03State,
-            public_transaction,
-        };
+        use lee::{Account, AccountId, Actor, PublicTransaction, V03State, public_transaction};
 
         use super::*;
 
         fn deposit_tx(op_id: [u8; 32], recipient_id: AccountId, amount: u64) -> PublicTransaction {
-            let message = public_transaction::Message::try_new(
+            let receipt = Actor::new(
+                bridge_core::deposit_receipt_account_id(bridge_account_id(), op_id),
                 bridge_account_id(),
-                vec![
-                    ProgramShardSelector::native_balance(bridge_core::compute_bridge_account_id(
-                        bridge_account_id(),
-                    )),
-                    ProgramShardSelector::native_balance(recipient_id),
-                    ProgramShardSelector::new(
-                        bridge_core::deposit_receipt_account_id(bridge_account_id(), op_id),
-                        bridge_account_id(),
-                    ),
-                ],
-                vec![],
-                bridge_core::Instruction::Deposit {
-                    l1_deposit_op_id: op_id,
-                    recipient_id,
-                    amount,
-                },
-            )
-            .unwrap();
+            );
+            let message = public_transaction::Message {
+                admission_evidence: vec![lee::PublicAccountEvidence::Pda {
+                    program: bridge_account_id(),
+                    seed: bridge_core::deposit_receipt_seed(op_id),
+                }],
+                ..public_transaction::Message::try_new(
+                    receipt,
+                    vec![
+                        receipt,
+                        Actor::native_balance(bridge_core::compute_bridge_account_id(
+                            bridge_account_id(),
+                        )),
+                        Actor::native_balance(recipient_id),
+                    ],
+                    std::collections::BTreeMap::new(),
+                    bridge_core::Message::Deposit {
+                        l1_deposit_op_id: op_id,
+                        recipient_id,
+                        amount,
+                    },
+                )
+                .unwrap()
+            };
 
             PublicTransaction::new(
                 message,
@@ -184,10 +188,13 @@ mod inner {
             let op_id = [9; 32];
             let amount = 1_000;
             let mut state = V03State::new()
-                .with_public_accounts([(
-                    bridge_core::compute_bridge_account_id(bridge_account_id()),
-                    Account::funded(u128::from(amount)),
-                )])
+                .with_public_accounts([
+                    (
+                        bridge_core::compute_bridge_account_id(bridge_account_id()),
+                        Account::funded(u128::from(amount)),
+                    ),
+                    (recipient_id, Account::default()),
+                ])
                 .with_named_programs([(bridge_account_id(), bridge())]);
 
             let tx = deposit_tx(op_id, recipient_id, amount);

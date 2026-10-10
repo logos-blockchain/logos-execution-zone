@@ -249,7 +249,7 @@ mod tests {
     /// its tag byte is wire format.
     #[test]
     fn mint_is_the_first_variant() {
-        let mint = Instruction::Mint {
+        let mint = Message::Mint {
             recipient: [3; 32],
             amount: 1,
         };

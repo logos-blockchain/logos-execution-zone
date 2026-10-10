@@ -522,26 +522,136 @@ const fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> ValidityWindow {
 
 #[cfg(test)]
 mod tests {
+    use indexer_service_protocol::{
+        AccountId, Actor, BoundaryStep, Ciphertext, Commitment, Delivery, EncryptedNote,
+        EphemeralPublicKey, FeeDeclaration, MessageEnvelope, PublicExecutionContext, RootCall,
+        SealedCast,
+    };
+
     use super::*;
 
+    fn account_id(tag: u8) -> AccountId {
+        AccountId { value: [tag; 32] }
+    }
+
+    fn actor(account_tag: u8, program_tag: u8) -> Actor {
+        Actor {
+            account_id: account_id(account_tag),
+            program_account_id: account_id(program_tag),
+        }
+    }
+
+    fn admission_evidence() -> Vec<PublicAccountEvidence> {
+        vec![
+            PublicAccountEvidence::Key(PublicKey([1; 32])),
+            PublicAccountEvidence::Pda {
+                program: account_id(2),
+                seed: PdaSeed([3; 32]),
+            },
+        ]
+    }
+
+    fn delivery(from: Actor, to: Actor, message: u8) -> Delivery<Actor> {
+        Delivery {
+            envelope: MessageEnvelope {
+                from,
+                to,
+                message: vec![message],
+            },
+            inherited_authorizations: vec![],
+            inherits_entry_authorizations: true,
+            pda_seeds: vec![],
+        }
+    }
+
     #[test]
-    fn public_action_effects_keep_their_order_over_the_ffi() {
-        let apply = |data: u8| DeferredPublicEffect {
-            program_account_id: AccountId { value: [1; 32] },
-            shard_program_account_id: AccountId { value: [2; 32] },
-            data: vec![data],
-        };
+    fn public_transaction_message_fee_and_admission_evidence_roundtrip_over_the_ffi() {
+        for fee in [
+            None,
+            Some(FeeDeclaration {
+                payer: account_id(3),
+                gas_limit: 5,
+                tip: 1,
+                max_fee: 42,
+            }),
+        ] {
+            let original = PublicTransaction {
+                hash: HashType([4; 32]),
+                message: PublicMessage {
+                    context: PublicExecutionContext {
+                        actors: vec![actor(6, 7)],
+                        authorized_accounts: vec![account_id(10)],
+                        cast_promotions: vec![],
+                    },
+                    root: RootCall {
+                        to: actor(5, 8),
+                        message: vec![9],
+                    },
+                    fee,
+                    nonces: vec![(account_id(10), 11)],
+                    admission_evidence: admission_evidence(),
+                },
+                witness_set: WitnessSet {
+                    signatures_and_public_keys: vec![],
+                    proof: None,
+                },
+            };
+
+            let ffi: FfiPublicTransactionBody = original.clone().into();
+            let back: PublicTransaction = Box::new(ffi).into();
+
+            assert_eq!(back.message, original.message);
+        }
+    }
+
+    #[test]
+    fn private_transaction_boundary_entry_and_admission_evidence_roundtrip_over_the_ffi() {
+        // A repeated send to one actor, and not a palindrome: a set would collapse the
+        // sequence and a reversal would show, and execution replays them in emission order.
+        let repeated = delivery(actor(3, 53), actor(5, 6), 7);
         let original = PrivacyPreservingTransaction {
             hash: HashType([4; 32]),
             message: PrivacyPreservingMessage {
-                public_actions: vec![PublicActionWithID {
-                    account_id: AccountId { value: [3; 32] },
-                    effects: vec![apply(7), apply(8), apply(9), apply(7)],
-                }],
+                context: PublicExecutionContext {
+                    cast_promotions: vec![22, 28],
+                    ..PublicExecutionContext::default()
+                },
+                boundary: vec![
+                    BoundaryStep::PrivateToPublic(repeated.clone()),
+                    BoundaryStep::PrivateToPublic(Delivery {
+                        inherited_authorizations: vec![account_id(15)],
+                        pda_seeds: vec![PdaSeed([16; 32])],
+                        ..delivery(actor(12, 62), actor(9, 10), 11)
+                    }),
+                    BoundaryStep::PrivateToPublic(delivery(actor(40, 90), actor(41, 42), 43)),
+                    BoundaryStep::PrivateToPublic(repeated),
+                    BoundaryStep::PublicToPrivate(Delivery {
+                        inherits_entry_authorizations: false,
+                        ..delivery(actor(17, 18), actor(19, 20), 21)
+                    }),
+                    BoundaryStep::EndPrivateSubtree,
+                    BoundaryStep::EndPublicSubtree,
+                ],
+                casts: vec![
+                    SealedCast {
+                        commitment: Commitment([23; 32]),
+                        note: EncryptedNote {
+                            epk: EphemeralPublicKey(vec![24; 2]),
+                            ciphertext: Ciphertext(vec![25; 3]),
+                        },
+                    };
+                    2
+                ],
+                recovery_bindings: vec![],
+                public_root: Some(RootCall {
+                    to: actor(27, 28),
+                    message: vec![29; 2],
+                }),
                 nonces: vec![],
                 private_actions: vec![],
                 block_validity_window: ValidityWindow((None, None)),
                 timestamp_validity_window: ValidityWindow((None, None)),
+                admission_evidence: admission_evidence(),
             },
             witness_set: WitnessSet {
                 signatures_and_public_keys: vec![],
@@ -552,42 +662,6 @@ mod tests {
         let ffi: FfiPrivateTransactionBody = original.clone().into();
         let back: PrivacyPreservingTransaction = Box::new(ffi).into();
 
-        assert_eq!(back.message.public_actions, original.message.public_actions);
-    }
-
-    #[test]
-    fn public_transaction_fee_roundtrips_over_the_ffi() {
-        let tx = |fee| PublicTransaction {
-            hash: HashType([1; 32]),
-            message: PublicMessage {
-                program_account_id: AccountId { value: [2; 32] },
-                shard_selectors: vec![ProgramShardSelector {
-                    account_id: AccountId { value: [3; 32] },
-                    program_account_id: indexer_service_protocol::AccountId::native_token_program(),
-                }],
-                nonces: vec![],
-                instruction_data: vec![9, 9],
-                fee,
-            },
-            witness_set: WitnessSet {
-                signatures_and_public_keys: vec![],
-                proof: None,
-            },
-        };
-
-        for fee in [
-            None,
-            Some(FeeDeclaration {
-                payer: AccountId { value: [3; 32] },
-                gas_limit: 5,
-                tip: 1,
-                max_fee: 42,
-            }),
-        ] {
-            let original = tx(fee);
-            let ffi: FfiPublicTransactionBody = original.clone().into();
-            let back: PublicTransaction = Box::new(ffi).into();
-            assert_eq!(back.message.fee, original.message.fee);
-        }
+        assert_eq!(back.message, original.message);
     }
 }

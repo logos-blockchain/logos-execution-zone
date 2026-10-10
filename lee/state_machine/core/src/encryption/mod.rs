@@ -198,11 +198,11 @@ pub(crate) fn pad_to_floor(buffer: &mut Vec<u8>, pad_to_len: Option<u32>) {
         }
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        Identifier,
         account::{Account, AccountId},
         program::PdaSeed,
     };
@@ -211,11 +211,11 @@ mod tests {
     fn encrypt_same_length_for_account_and_pda() {
         let account = Account::default();
         let secret = SharedSecretKey([0_u8; 32]);
-        let nullifier = Nullifier::for_account_initialization(&AccountId::new([0_u8; 32]));
+        let nullifier = Nullifier::for_dummy(&[0; 32]);
 
         let account_ct = EncryptionScheme::encrypt(
             &account,
-            &PrivateAccountKind::Regular(Identifier::new([42; 32])),
+            &PrivateAccountKind::Regular,
             &secret,
             &nullifier,
             None,
@@ -225,7 +225,6 @@ mod tests {
             &PrivateAccountKind::Pda {
                 account_id: AccountId::new([1_u8; 32]),
                 seed: PdaSeed::new([2_u8; 32]),
-                identifier: Identifier::new([42; 32]),
             },
             &secret,
             &nullifier,
@@ -236,10 +235,7 @@ mod tests {
     }
 
     fn account_with_data(data_len: usize) -> Account {
-        Account::default().with_shard(
-            AccountId::new([8_u8; 32]),
-            vec![7_u8; data_len].try_into().expect("data fits"),
-        )
+        Account::default().with_actor_state(AccountId::new([8_u8; 32]), vec![7_u8; data_len].into())
     }
 
     fn plaintext_len(account: &Account) -> u32 {
@@ -252,8 +248,8 @@ mod tests {
     #[test]
     fn encrypt_pads_short_plaintext_to_requested_length() {
         let secret = SharedSecretKey([0_u8; 32]);
-        let nullifier = Nullifier::for_account_initialization(&AccountId::new([0_u8; 32]));
-        let kind = PrivateAccountKind::Regular(Identifier::ZERO);
+        let nullifier = Nullifier::for_dummy(&[0; 32]);
+        let kind = PrivateAccountKind::Regular;
 
         for data_len in [0, 10, 100, 300] {
             let account = account_with_data(data_len);
@@ -274,8 +270,8 @@ mod tests {
     #[test]
     fn encrypt_leaves_plaintext_longer_than_the_pad_alone() {
         let secret = SharedSecretKey([0_u8; 32]);
-        let nullifier = Nullifier::for_account_initialization(&AccountId::new([0_u8; 32]));
-        let kind = PrivateAccountKind::Regular(Identifier::ZERO);
+        let nullifier = Nullifier::for_dummy(&[0; 32]);
+        let kind = PrivateAccountKind::Regular;
         let account = account_with_data(1000);
         let base = plaintext_len(&account);
 
@@ -299,16 +295,15 @@ mod tests {
         let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
         let receiver_ss = SharedSecretKey::decapsulate(&epk, &d, &z).unwrap();
 
-        let account = account_with_data(37).with_shard(
+        let account = account_with_data(37).with_actor_state(
             crate::native_token::NATIVE_TOKEN_PROGRAM_ID,
             crate::native_token::encode_balance(42),
         );
         let kind = PrivateAccountKind::Pda {
             account_id: AccountId::new([1_u8; 32]),
             seed: PdaSeed::new([2_u8; 32]),
-            identifier: Identifier::new([9; 32]),
         };
-        let nullifier = Nullifier::for_account_initialization(&AccountId::new([7_u8; 32]));
+        let nullifier = Nullifier::for_dummy(&[7; 32]);
 
         let ct = EncryptionScheme::encrypt(&account, &kind, &sender_ss, &nullifier, Some(PAD));
         assert_eq!(
@@ -334,9 +329,9 @@ mod tests {
     fn encrypt_rejects_padding_above_the_maximum() {
         let _ct = EncryptionScheme::encrypt(
             &Account::default(),
-            &PrivateAccountKind::Regular(Identifier::ZERO),
+            &PrivateAccountKind::Regular,
             &SharedSecretKey([0_u8; 32]),
-            &Nullifier::for_account_initialization(&AccountId::new([0_u8; 32])),
+            &Nullifier::for_dummy(&[0; 32]),
             Some(MAX_CIPHERTEXT_PADDING.saturating_add(1)),
         );
     }
@@ -353,12 +348,12 @@ mod tests {
         let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
         let receiver_ss = SharedSecretKey::decapsulate(&epk, &d, &z).unwrap();
 
-        let account = Account::funded(999).with_shard(
+        let account = Account::funded(999).with_actor_state(
             AccountId::new([12; 32]),
-            b"shard record".to_vec().try_into().unwrap(),
+            b"actor state record".to_vec().into(),
         );
-        let kind = PrivateAccountKind::Regular(Identifier::ZERO);
-        let nullifier = Nullifier::for_account_initialization(&AccountId::new([7_u8; 32]));
+        let kind = PrivateAccountKind::Regular;
+        let nullifier = Nullifier::for_dummy(&[7; 32]);
 
         let ct = EncryptionScheme::encrypt(&account, &kind, &sender_ss, &nullifier, None);
         let (decoded_kind, decoded_account) =
@@ -377,11 +372,22 @@ mod tests {
         );
 
         // Wrong nullifier must not decrypt correctly.
-        let wrong_nullifier = Nullifier::for_account_initialization(&AccountId::new([9; 32]));
+        let wrong_nullifier = Nullifier::for_dummy(&[9; 32]);
         let bad_via_nlf = EncryptionScheme::decrypt(&ct, &receiver_ss, &wrong_nullifier);
         assert!(
             bad_via_nlf.is_none_or(|(_, a)| a.data.native_balance() != Ok(999)),
             "wrong nullifier must not produce the correct plaintext"
+        );
+    }
+
+    #[test]
+    fn the_account_note_key_matches_its_pinned_derivation() {
+        assert_eq!(
+            note_key(ACCOUNT_KEY_DOMAIN, &SharedSecretKey([1; 32]), &[2; 32]),
+            [
+                14, 24, 5, 161, 233, 87, 180, 194, 168, 42, 43, 224, 144, 8, 219, 118, 162, 196,
+                68, 106, 51, 60, 178, 163, 139, 164, 53, 9, 82, 205, 47, 61,
+            ]
         );
     }
 

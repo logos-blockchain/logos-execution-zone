@@ -21,7 +21,7 @@ use wallet::{
         programs::native_token_transfer::AuthTransferSubcommand,
     },
     config::WalletConfigOverrides,
-    program_facades::native_token_transfer::NativeTokenTransfer,
+    program_facades::{CreditDelivery, native_token_transfer::NativeTokenTransfer},
 };
 
 use super::LezSequencerClient;
@@ -204,7 +204,7 @@ impl WalletActor {
                                         to_npk: None,
                                         to_vpk: None,
                                         to_keys: None,
-                                        to_identifier: Some(lee_core::Identifier::ZERO),
+                                        to_pk: None,
                                         amount,
                                     }),
                                 )
@@ -235,12 +235,14 @@ impl WalletActor {
                                 response,
                             } => {
                                 let result = NativeTokenTransfer(&components.wallet)
-                                    .send_public_transfer(
+                                    .transfer(
                                         AccountIdentity::Public(from),
                                         AccountIdentity::Public(to),
                                         amount,
+                                        CreditDelivery::Automatic,
                                     )
-                                    .await;
+                                    .await
+                                    .map(|(tx_hash, _)| tx_hash);
                                 let _unused = response.send(result);
                             }
                             WalletRequest::PrivateTransfer {
@@ -261,7 +263,7 @@ impl WalletActor {
                                         to_npk: None,
                                         to_vpk: None,
                                         to_keys: None,
-                                        to_identifier: Some(lee_core::Identifier::ZERO),
+                                        to_pk: None,
                                         amount,
                                     }),
                                 )
@@ -311,11 +313,12 @@ impl WalletActor {
                                 response,
                             } => {
                                 let result = async {
-                                    let tx_hash = NativeTokenTransfer(&components.wallet)
-                                        .send_public_transfer(
+                                    let (tx_hash, _) = NativeTokenTransfer(&components.wallet)
+                                        .transfer(
                                             AccountIdentity::Public(from),
                                             AccountIdentity::Public(to),
                                             amount,
+                                            CreditDelivery::Automatic,
                                         )
                                         .await
                                         .map_err(|error| anyhow!(error.to_string()))?;
@@ -367,7 +370,7 @@ impl WalletActor {
                                         to_npk: None,
                                         to_vpk: None,
                                         to_keys: None,
-                                        to_identifier: Some(lee_core::Identifier::ZERO),
+                                        to_pk: None,
                                         amount,
                                     }),
                                 )

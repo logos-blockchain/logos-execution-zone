@@ -150,6 +150,7 @@ pub struct V03State {
 }
 
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(test, derive(Debug))]
 enum StoredPublication {
     Clear(MessageBody),
     Sealed(SealedCast),
@@ -207,6 +208,7 @@ impl V03State {
     }
 
     /// Initializes state with given private accounts.
+    #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn with_private_accounts(
         mut self,
@@ -609,6 +611,17 @@ impl V03State {
 impl V03State {
     pub fn force_insert_account(&mut self, account_id: AccountId, account: Account) {
         self.public_state.insert(account_id, account);
+    }
+
+    #[must_use]
+    pub fn with_empty_public_accounts(
+        mut self,
+        account_ids: impl IntoIterator<Item = AccountId>,
+    ) -> Self {
+        for account_id in account_ids {
+            self.public_state.entry(account_id).or_default();
+        }
+        self
     }
 }
 

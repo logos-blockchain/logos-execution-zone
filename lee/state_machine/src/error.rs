@@ -178,15 +178,14 @@ mod tests {
         // `assert!`) surfaces as `ProgramExecutionFailed` — the common case.
         assert!(LeeError::ProgramExecutionFailed("guest panicked".into()).is_chargeable());
         assert!(LeeError::OutOfGas { budget: 0 }.is_chargeable());
-        assert!(LeeError::MaxChainedCallsDepthExceeded.is_chargeable());
         // Post-execution: the validity window is read off the program output.
         assert!(LeeError::OutOfValidityWindow.is_chargeable());
 
-        // An unknown program named by a chained call is only discovered after
-        // the caller already executed, so it is charged; named top-level it is
-        // detectable before execution and rejects instead.
-        assert!(LeeError::UnknownProgram { chained: true }.is_chargeable());
-        assert!(!LeeError::UnknownProgram { chained: false }.is_chargeable());
+        // An unknown program reached after the root is only discovered once an
+        // earlier transition executed, so it is charged; at the root it is detectable
+        // before execution and rejects instead.
+        assert!(LeeError::UnknownProgram { at_root: false }.is_chargeable());
+        assert!(!LeeError::UnknownProgram { at_root: true }.is_chargeable());
 
         // A malformed transaction is caught before execution, so it costs no
         // cycles and rejects the block instead of charging.

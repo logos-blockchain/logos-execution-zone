@@ -731,3 +731,135 @@ const fn pda_seed_to_ffi(seed: PdaSeed) -> FfiBytes32 {
 const fn ffi_to_pda_seed(seed: FfiBytes32) -> PdaSeed {
     PdaSeed::new(seed.data)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn account_id(tag: u8) -> AccountId {
+        AccountId::new([tag; 32])
+    }
+
+    fn actor(account_tag: u8, program_tag: u8) -> Actor {
+        Actor {
+            account_id: account_id(account_tag),
+            program_account_id: account_id(program_tag),
+        }
+    }
+
+    fn note(epk_tag: u8, ciphertext_tag: u8) -> EncryptedNote {
+        EncryptedNote {
+            epk: EphemeralPublicKey(vec![epk_tag; 2]),
+            ciphertext: Ciphertext::from_inner(vec![ciphertext_tag; 3]),
+        }
+    }
+
+    fn roundtrip<C, T>(value: T) -> T
+    where
+        T: Into<C>,
+        C: Into<T>,
+    {
+        let ffi: C = value.into();
+        ffi.into()
+    }
+
+    #[test]
+    fn boundary_steps_decode_only_the_payload_their_kind_selects() {
+        let delivery = Delivery {
+            envelope: MessageEnvelope {
+                from: actor(1, 51),
+                to: actor(2, 3),
+                message: vec![4],
+            },
+            inherited_authorizations: BTreeSet::from([account_id(5)]),
+            inherits_entry_authorizations: true,
+            pda_seeds: BTreeSet::from([PdaSeed::new([6; 32])]),
+        };
+        let cross_message = Delivery {
+            envelope: MessageEnvelope {
+                from: actor(7, 8),
+                to: actor(9, 10),
+                message: vec![11],
+            },
+            inherited_authorizations: BTreeSet::from([account_id(12)]),
+            inherits_entry_authorizations: false,
+            pda_seeds: BTreeSet::from([PdaSeed::new([13; 32])]),
+        };
+        let zeroed = || unsafe { std::mem::zeroed::<FfiBoundaryStep>() };
+        let steps = [
+            FfiBoundaryStep {
+                kind: FfiBoundaryStepKind::PrivateToPublic,
+                delivery: delivery.clone().into(),
+            },
+            FfiBoundaryStep {
+                kind: FfiBoundaryStepKind::PublicToPrivate,
+                delivery: cross_message.clone().into(),
+            },
+            FfiBoundaryStep {
+                kind: FfiBoundaryStepKind::EndPrivateSubtree,
+                ..zeroed()
+            },
+            FfiBoundaryStep {
+                kind: FfiBoundaryStepKind::EndPublicSubtree,
+                ..zeroed()
+            },
+        ];
+
+        assert_eq!(
+            steps.map(BoundaryStep::from),
+            [
+                BoundaryStep::PrivateToPublic(delivery),
+                BoundaryStep::PublicToPrivate(cross_message),
+                BoundaryStep::EndPrivateSubtree,
+                BoundaryStep::EndPublicSubtree,
+            ]
+        );
+    }
+
+    #[test]
+    fn each_shared_component_roundtrips_over_the_ffi() {
+        let context = PublicExecutionContext {
+            actors: BTreeSet::from([actor(1, 2), actor(3, 4)]),
+            authorized_accounts: BTreeSet::from([account_id(5), account_id(6)]),
+            cast_promotions: BTreeSet::from([7, 8]),
+        };
+        let cast = SealedCast {
+            commitment: Commitment::from_byte_array([9; 32]),
+            note: note(10, 11),
+        };
+        let binding = RecoveryBinding {
+            address: account_id(12),
+            note: note(13, 14),
+        };
+        let root = RootCall {
+            to: actor(15, 16),
+            message: vec![17; 2],
+        };
+        let fee = FeeDeclaration {
+            payer: account_id(18),
+            gas_limit: 5,
+            tip: 1,
+            max_fee: 42,
+        };
+        let signer = lee::PrivateKey::try_new([1; 32]).expect("valid key");
+
+        assert_eq!(
+            roundtrip::<FfiPublicExecutionContext, _>(context.clone()),
+            context
+        );
+        assert_eq!(roundtrip::<FfiSealedCast, _>(cast.clone()), cast);
+        assert_eq!(roundtrip::<FfiRecoveryBinding, _>(binding.clone()), binding);
+        assert_eq!(roundtrip::<FfiRootCall, _>(root.clone()), root);
+        assert_eq!(roundtrip::<FfiFeeDeclaration, _>(fee), fee);
+        for evidence in [
+            PublicAccountEvidence::Key(PublicKey::new_from_private_key(&signer)),
+            PublicAccountEvidence::Pda {
+                program: account_id(19),
+                seed: PdaSeed::new([20; 32]),
+            },
+        ] {
+            let ffi = FfiPublicAccountEvidence::from(evidence.clone());
+            assert_eq!(PublicAccountEvidence::try_from(ffi).unwrap(), evidence);
+        }
+    }
+}

@@ -11,15 +11,17 @@
 //! inbox dispatch, and zone B's sequencer delivers it. This is the M3 milestone,
 //! sequencer-trusted, with no indexer re-derivation (that is M4).
 
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
-use cross_zone_outbox_core::outbox_pda;
+use cross_zone_outbox_core::{outbox_pda, outbox_pda_seed};
 use integration_tests::config::{self, SequencerPartialConfig};
-use lee::{AccountId, ProgramShardSelector, PublicTransaction, public_transaction::Message};
+use lee::{
+    AccountId, Actor, PublicAccountEvidence, PublicTransaction, public_transaction::Message,
+};
 use ping_core::{
-    ReceiverInstruction, SenderInstruction, ping_record_pda, receiver_config_account_id,
+    ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id,
     sender_config_account_id,
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
@@ -113,40 +115,43 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
 }
 
 /// Builds a top-level `ping_sender` transaction that chains into the outbox to emit
-/// a message carrying a `ping_receiver::Record` instruction for the target zone.
+/// a message carrying a `ping_receiver::Record` message for the target zone.
 fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransaction {
     let outbox_id = programs::cross_zone_outbox_account_id();
     let ordinal = 0;
 
-    // The payload is the ping_receiver instruction, borsh-serialized into instruction_data bytes.
-    let payload = borsh::to_vec(&ReceiverInstruction::Record {
+    // The payload is the ping_receiver message, borsh-serialized.
+    let payload = borsh::to_vec(&ReceiverMessage::Record {
         payload: PING_PAYLOAD.to_vec(),
     })
     .expect("serialize ping instruction");
 
-    let send = SenderInstruction::Send {
+    let sender_id = programs::ping_sender_account_id();
+    let config = Actor::new(sender_config_account_id(sender_id), sender_id);
+    let outbox = Actor::new(
+        outbox_pda(outbox_id, sender_id, &target_zone, ordinal),
+        outbox_id,
+    );
+    let send = SenderMessage::Send {
+        outbox,
         target_zone,
         target_account_id: receiver_id,
         target_accounts: vec![
-            ProgramShardSelector::new(receiver_config_account_id(receiver_id), receiver_id),
-            ProgramShardSelector::new(ping_record_pda(receiver_id), receiver_id),
+            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+            Actor::new(ping_record_pda(receiver_id), receiver_id),
         ],
         payload,
         ordinal,
     };
 
-    let sender_id = programs::ping_sender_account_id();
-    let outbox_account = outbox_pda(outbox_id, sender_id, &target_zone, ordinal);
-    let message = Message::try_new(
-        sender_id,
-        vec![
-            ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
-            ProgramShardSelector::new(outbox_account, outbox_id),
-        ],
-        vec![],
-        send,
-    )
-    .expect("build ping message");
+    let message = Message {
+        admission_evidence: vec![PublicAccountEvidence::Pda {
+            program: outbox_id,
+            seed: outbox_pda_seed(sender_id, &target_zone, ordinal),
+        }],
+        ..Message::try_new(config, vec![config, outbox], BTreeMap::new(), send)
+            .expect("build ping message")
+    };
     LeeTransaction::Public(PublicTransaction::new(
         message,
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
@@ -161,8 +166,8 @@ async fn wait_for_delivery(
 ) -> Result<Vec<u8>> {
     let wait = async {
         loop {
-            let account = client.get_account(record_id).await?;
-            let data = account.data.shard(receiver_id).to_vec();
+            let account = client.get_account(record_id).await?.unwrap_or_default();
+            let data = account.data.actor_state(receiver_id).to_vec();
             if !data.is_empty() {
                 return Ok::<Vec<u8>, anyhow::Error>(data);
             }

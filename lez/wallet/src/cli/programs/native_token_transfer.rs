@@ -97,6 +97,8 @@ fn ensure_not_self_transfer(
 
 #[cfg(test)]
 mod tests {
+    use lee::AccountId;
+
     use super::*;
 
     const ID_A: [u8; 32] = [1; 32];

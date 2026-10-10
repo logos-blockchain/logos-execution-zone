@@ -365,28 +365,4 @@ mod tests {
             shard
         );
     }
-
-    #[test]
-    fn a_full_shard_fits_in_account_data() {
-        // Exact only because `DATA_MAX_LENGTH` is whole KiB, hence a multiple of 4.
-        let mut shard = SeenShard::default();
-        for index in 0..SeenShard::MAX_DELIVERIES {
-            shard.insert([5; 32], u32::try_from(index).expect("index fits"));
-        }
-        let max = usize::try_from(DATA_MAX_LENGTH.as_u64()).expect("cap fits in usize");
-        assert_eq!(
-            shard.to_bytes().len(),
-            max,
-            "MAX_DELIVERIES is exactly what an account can carry"
-        );
-
-        shard.insert(
-            [5; 32],
-            u32::try_from(SeenShard::MAX_DELIVERIES).expect("index fits"),
-        );
-        assert!(
-            shard.to_bytes().len() > max,
-            "and one more does not fit, so the guest would fail rather than truncate"
-        );
-    }
 }

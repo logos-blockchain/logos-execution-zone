@@ -769,14 +769,11 @@ mod tests {
             },
             receiver_id,
             &[
-                lee::ProgramShardSelector::new(
+                lee::Actor::new(
                     ping_core::receiver_config_account_id(receiver_id),
                     receiver_id,
                 ),
-                lee::ProgramShardSelector::new(
-                    ping_core::ping_record_pda(receiver_id),
-                    receiver_id,
-                ),
+                lee::Actor::new(ping_core::ping_record_pda(receiver_id), receiver_id),
             ],
             b"hi".to_vec(),
         ))

@@ -59,13 +59,29 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use lee_core::account::AccountId;
+    use lee_core::{
+        account::{AccountId, Actor, ActorState},
+        program::Transition,
+    };
 
     use super::*;
 
+    const OUTBOX: AccountId = AccountId::new([3; 32]);
+    const EMITTER: AccountId = AccountId::new([4; 32]);
+
+    fn emit() -> Message {
+        Message::Emit {
+            target_zone: [1; 32],
+            target_account_id: AccountId::new([6; 32]),
+            target_accounts: vec![],
+            payload: b"payload".to_vec(),
+            ordinal: 7,
+        }
+    }
+
     fn record() -> OutboxRecord {
         OutboxRecord {
-            emitter: AccountId::new([4; 32]),
+            emitter: EMITTER,
             target_zone: [1; 32],
             ordinal: 7,
             target_account_id: AccountId::new([6; 32]),
@@ -74,17 +90,35 @@ mod tests {
         }
     }
 
+    fn run(origin: Option<AccountId>, pre: Vec<u8>) -> Transition {
+        let receiver = Actor::new(outbox_pda(OUTBOX, EMITTER, &[1; 32], 7), OUTBOX);
+        let input = ReceiveInput {
+            receiver,
+            from: origin.map(|sender| Actor::new(sender, sender)),
+            is_authorized: false,
+            pre_state: ActorState::from(pre),
+            message: borsh::to_vec(&emit()).unwrap(),
+        };
+        handle_message(&input, emit()).into_transition(input)
+    }
+
     #[test]
     fn an_empty_slot_takes_the_record() {
         assert_eq!(
-            apply(Effect::CreateRecord(record()), &[]),
-            Some(record().to_bytes())
+            run(Some(EMITTER), Vec::new()).response.post_state,
+            Some(ActorState::from(record().to_bytes()))
         );
     }
 
     #[test]
     #[should_panic(expected = "Outbox slot already written")]
     fn an_occupied_slot_refuses_a_second_message() {
-        apply(Effect::CreateRecord(record()), &record().to_bytes());
+        let _transition = run(Some(EMITTER), record().to_bytes());
+    }
+
+    #[test]
+    #[should_panic(expected = "Outbox is only callable through a chain call from a user program")]
+    fn a_root_emit_has_no_emitter_and_is_refused() {
+        let _transition = run(None, Vec::new());
     }
 }

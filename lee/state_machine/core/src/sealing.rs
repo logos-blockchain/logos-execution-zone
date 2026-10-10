@@ -135,3 +135,209 @@ fn hiding_randomness(shared_secret: &SharedSecretKey) -> [u8; 32] {
 }
 
 #[cfg(feature = "host")]
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use chacha20::{
+        ChaCha20,
+        cipher::{KeyIvInit as _, StreamCipher as _},
+    };
+
+    use super::*;
+    use crate::{
+        account::{AccountId, Actor},
+        encryption::EphemeralSecretKey,
+        program::PdaSeed,
+    };
+
+    const D: [u8; 32] = [0; 32];
+    const Z: [u8; 32] = [1; 32];
+    const NPK: NullifierPublicKey = NullifierPublicKey([2; 32]);
+    const ESK: EphemeralSecretKey = EphemeralSecretKey([3; 32]);
+
+    // A regular and a PDA recipient, each at its canonical address and at an alias.
+    fn recipients() -> [Recipient; 4] {
+        let regular = PrivateAccountKind::Regular;
+        let pda = PrivateAccountKind::Pda {
+            account_id: AccountId::new([5; 32]),
+            seed: PdaSeed::new([6; 32]),
+        };
+        [
+            (regular.clone(), None),
+            (regular, Some([7; 32])),
+            (pda.clone(), None),
+            (pda, Some([7; 32])),
+        ]
+        .map(|(kind, opening)| Recipient {
+            npk: NPK,
+            vpk: ViewingPublicKey::from_seed(&D, &Z),
+            kind,
+            opening,
+        })
+    }
+
+    fn body(to: AccountId) -> MessageBody {
+        MessageBody {
+            from: Actor::new(AccountId::new([8; 32]), AccountId::new([9; 32])),
+            to: Actor::new(to, AccountId::new([10; 32])),
+            message: vec![11; 2],
+        }
+    }
+
+    fn sealed(recipient: &Recipient) -> SealedCast {
+        RecipientEncryption {
+            recipient: recipient.clone(),
+            esk: ESK,
+        }
+        .seal_message(&body(recipient.address()), Some(512))
+        .unwrap()
+    }
+
+    fn hash(parts: &[&[u8]]) -> [u8; 32] {
+        Impl::hash_bytes(&parts.concat())
+            .as_bytes()
+            .try_into()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_sealed_cast_commits_to_its_envelope_and_encrypts_it_as_documented() {
+        for recipient in recipients() {
+            let sealed = sealed(&recipient);
+            let body = body(recipient.address());
+            let (shared_secret, epk) =
+                SharedSecretKey::encapsulate_deterministic(&recipient.vpk, &ESK);
+            let rho = hash(&[b"LEE/v0.3/KDF-SHA256/Rho/".as_slice(), &shared_secret.0]);
+            let commitment = hash(&[
+                b"/LEE/v0.3/Commitment/Sealed/\x00\x00\x00\x00".as_slice(),
+                &hash(&[&borsh::to_vec(&body).unwrap()]),
+                &rho,
+            ]);
+            let key = hash(&[
+                b"LEE/v0.3/KDF-SHA256/Message/".as_slice(),
+                &shared_secret.0,
+                &commitment,
+            ]);
+            let mut plaintext = sealed.note.ciphertext.0.clone();
+            ChaCha20::new(&key.into(), &[0; 12].into()).apply_keystream(&mut plaintext);
+            let mut expected = recipient.kind.to_header_bytes().to_vec();
+            expected.push(u8::from(recipient.opening.is_some()));
+            expected.extend_from_slice(&recipient.opening.unwrap_or_default());
+            expected.extend_from_slice(&borsh::to_vec(&body).unwrap());
+            expected.resize(512, 0);
+
+            assert_eq!(sealed.note.epk, epk);
+            assert_eq!(sealed.commitment.to_byte_array(), commitment);
+            assert_eq!(plaintext, expected);
+        }
+    }
+
+    #[test]
+    fn a_sealed_cast_opens_only_to_its_recipient_and_only_as_committed() {
+        for recipient in recipients() {
+            let sealed = sealed(&recipient);
+            let (body, opened, _) = sealed.open(NPK, &D, &Z).unwrap();
+            assert_eq!(
+                (body.to.account_id, opened),
+                (recipient.address(), recipient)
+            );
+            let mut altered = sealed.clone();
+            // The sender's first byte, past the header, the flag and the opening.
+            altered.note.ciphertext.0[PrivateAccountKind::HEADER_LEN + 1 + 32] ^= 1;
+            let misplaced = SealedCast {
+                commitment: Commitment::from_byte_array([12; 32]),
+                ..sealed.clone()
+            };
+
+            // ML-KEM derives the key pair from `d` alone; `z` only seeds implicit rejection.
+            for (case, refused) in [
+                ("another viewing key", sealed.open(NPK, &[12; 32], &Z)),
+                (
+                    "another nullifier key",
+                    sealed.open(NullifierPublicKey([12; 32]), &D, &Z),
+                ),
+                ("an altered body", altered.open(NPK, &D, &Z)),
+                ("another commitment", misplaced.open(NPK, &D, &Z)),
+            ] {
+                assert!(refused.is_none(), "{case}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_sealed_note_under_its_floor_has_one_length() {
+        let lengths: BTreeSet<_> = recipients()
+            .iter()
+            .map(|recipient| sealed(recipient).note.ciphertext.0.len())
+            .collect();
+
+        assert_eq!(lengths, BTreeSet::from([512]));
+    }
+
+    #[test]
+    fn a_seal_refuses_a_body_addressed_anywhere_but_its_recipient() {
+        for recipient in recipients() {
+            let seal = RecipientEncryption {
+                recipient: recipient.clone(),
+                esk: ESK,
+            };
+            // The canonical address when the recipient takes an alias, and the alias otherwise.
+            let other_form = if recipient.opening.is_some() {
+                recipient.account_id()
+            } else {
+                recipient.account_id().blinded(&[7; 32])
+            };
+
+            for to in [AccountId::new([12; 32]), other_form] {
+                assert!(seal.seal_message(&body(to), None).is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn each_cast_is_sealed_by_the_seal_paired_with_it() {
+        let [recipient, ..] = recipients();
+        let to_recipient = body(recipient.address());
+        let seal = || RecipientEncryption {
+            recipient: recipient.clone(),
+            esk: ESK,
+        };
+
+        let sealed = seal_casts(std::slice::from_ref(&to_recipient), vec![seal()], None).unwrap();
+        assert_eq!(
+            sealed
+                .iter()
+                .map(|cast| cast.open(NPK, &D, &Z).map(|(body, ..)| body))
+                .collect::<Vec<_>>(),
+            vec![Some(to_recipient.clone())]
+        );
+
+        for (case, casts, seals, refusal) in [
+            (
+                "a missing seal",
+                vec![to_recipient],
+                vec![],
+                InvalidCastSeal::Unpaired,
+            ),
+            (
+                "a surplus seal",
+                vec![],
+                vec![seal()],
+                InvalidCastSeal::Unpaired,
+            ),
+            (
+                "a seal to another destination",
+                vec![body(AccountId::new([12; 32]))],
+                vec![seal()],
+                InvalidCastSeal::MisaddressedSeal,
+            ),
+        ] {
+            assert_eq!(
+                seal_casts(&casts, seals, None).unwrap_err().to_string(),
+                refusal.to_string(),
+                "{case}"
+            );
+        }
+    }
+}

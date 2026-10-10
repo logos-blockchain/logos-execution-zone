@@ -77,7 +77,8 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                     from: public_mention(user_a),
                     to: public_mention(user_b),
                     amount_in: 50,
-                    amount_out: 42,
+                    min_amount_out: 42,
+                    live: false,
                 }),
             )
             .await
@@ -188,8 +189,9 @@ async fn timed_token_send(
                     to_npk: None,
                     to_vpk: None,
                     to_keys: None,
-                    to_identifier: Some(lee_core::Identifier::ZERO),
+                    to_pk: None,
                     amount,
+                    cast: false,
                 }),
             )
             .await

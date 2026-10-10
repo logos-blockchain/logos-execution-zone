@@ -1,8 +1,8 @@
-# Real proving, without RISC0_DEV_MODE, of one private transfer end to end.
+# Real proving, without RISC0_DEV_MODE, of three private transfers end to end.
 #
-# Nightly rather than per-merge: the single proof takes ~60m on a standard
+# Nightly rather than per-merge: a single proof takes ~60m on a standard
 # runner and was the whole critical path of a push run. The `auth_transfer`
-# integration shard already covers this test's logic under dev mode, so what is
+# integration shard already covers these tests' logic under dev mode, so what is
 # left here is only "real proving still works", which a daily signal answers.
 name: Valid proof
 
@@ -27,7 +27,17 @@ jobs:
   valid-proof-test:
     needs: ci-image
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - test: private::private_transfer_to_owned_account
+            timeout: 150
+          - test: private::deshielded_transfer_to_public_account
+            timeout: 150
+          - test: private::private_transfer_to_owned_account_over_foreign_keys
+            timeout: 300
     steps:
       - uses: actions/checkout@v5
 
@@ -55,4 +65,4 @@ jobs:
           env: RUST_LOG=info,kameo=warn
           run: |
               source .github/scripts/with_retry.sh
-              with_retry 'cargo test -p integration_tests -- --exact private::private_transfer_to_owned_account' 1
+              with_retry 'cargo test -p integration_tests -- --exact ${{ matrix.test }}' 1

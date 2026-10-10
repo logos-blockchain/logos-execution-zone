@@ -13,12 +13,12 @@ use std::{
 };
 
 use indexer_service_protocol::{
-    Account, AccountData, AccountId, AccountSummary, BedrockStatus, Block, BlockBody, BlockHeader,
-    BlockId, Commitment, CommitmentSetDigest, DeferredPublicEffect, EncryptedAccountData,
-    EventRecord, EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus,
+    Account, AccountData, AccountId, AccountSummary, Actor, ActorState, ActorStateSummary,
+    BedrockStatus, Block, BlockBody, BlockHeader, BlockId, Commitment, CommitmentSetDigest,
+    EncryptedNote, EventRecord, EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus,
     IndexerSyncState, PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
-    ProgramShardSelector, PublicActionWithID, PublicKey, PublicMessage, PublicTransaction,
-    Selector, ShardData, ShardSummary, Signature, Transaction, ValidityWindow, WitnessSet,
+    PublicExecutionContext, PublicKey, PublicMessage, PublicTransaction, RootCall, Selector,
+    Signature, Transaction, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -116,11 +116,11 @@ impl MockIndexerService {
                 Account {
                     nonce: i as u128,
                     data: AccountData {
-                        shards: BTreeMap::from([(
+                        actor_states: BTreeMap::from([(
                             AccountId {
                                 value: [i as u8; 32],
                             },
-                            ShardData(vec![0xaa, 0xbb, 0xcc]),
+                            ActorState(vec![0xaa, 0xbb, 0xcc]),
                         )]),
                     },
                 },
@@ -269,31 +269,31 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
             .cloned())
     }
 
-    async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned> {
-        self.state
-            .read()
-            .await
-            .accounts
-            .get(&account_id)
-            .cloned()
-            .ok_or_else(|| ErrorObjectOwned::owned(-32001, "Account not found", None::<()>))
+    async fn get_account(
+        &self,
+        account_id: AccountId,
+    ) -> Result<Option<Account>, ErrorObjectOwned> {
+        Ok(self.state.read().await.accounts.get(&account_id).cloned())
     }
 
     async fn get_account_summary(
         &self,
         account_id: AccountId,
     ) -> Result<AccountSummary, ErrorObjectOwned> {
-        let account = self.get_account(account_id).await?;
+        let account = self
+            .get_account(account_id)
+            .await?
+            .ok_or_else(|| ErrorObjectOwned::owned(-32001, "Account not found", None::<()>))?;
         Ok(AccountSummary {
             nonce: account.nonce,
             balance: account.data.balance(),
-            shards: account
+            actor_states: account
                 .data
-                .shards
+                .actor_states
                 .iter()
-                .map(|(program, data)| ShardSummary {
+                .map(|(program, data)| ActorStateSummary {
                     program_account_id: *program,
-                    len: u64::try_from(data.0.len()).expect("a shard is capped well under u64"),
+                    len: u64::try_from(data.0.len()).expect("actor-state length fits in u64"),
                 })
                 .collect(),
         })
@@ -303,34 +303,25 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
         &self,
         account_id: AccountId,
         _block_id: BlockId,
-    ) -> Result<Account, ErrorObjectOwned> {
+    ) -> Result<Option<Account>, ErrorObjectOwned> {
         // Mock service does not track historical state; returns current state regardless of
         // block_id.
-        self.state
-            .read()
-            .await
-            .accounts
-            .get(&account_id)
-            .cloned()
-            .ok_or_else(|| ErrorObjectOwned::owned(-32001, "Account not found", None::<()>))
+        Ok(self.state.read().await.accounts.get(&account_id).cloned())
     }
 
-    async fn get_account_view(
-        &self,
-        selector: ProgramShardSelector,
-    ) -> Result<Account, ErrorObjectOwned> {
+    async fn get_account_view(&self, actor: Actor) -> Result<Option<Account>, ErrorObjectOwned> {
         Ok(project_account(
-            self.state.read().await.accounts.get(&selector.account_id),
-            selector,
+            self.state.read().await.accounts.get(&actor.account_id),
+            actor,
         ))
     }
 
     async fn get_account_view_at_block(
         &self,
-        selector: ProgramShardSelector,
+        actor: Actor,
         _block_id: BlockId,
-    ) -> Result<Account, ErrorObjectOwned> {
-        self.get_account_view(selector).await
+    ) -> Result<Option<Account>, ErrorObjectOwned> {
+        self.get_account_view(actor).await
     }
 
     async fn get_transaction(
@@ -381,14 +372,16 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
                 .filter(|(tx, _)| match tx {
                     Transaction::Public(pub_tx) => pub_tx
                         .message
-                        .shard_selectors
+                        .context
+                        .actors
                         .iter()
-                        .any(|shard_selector| shard_selector.account_id == account_id),
+                        .any(|actor| actor.account_id == account_id),
                     Transaction::PrivacyPreserving(priv_tx) => priv_tx
                         .message
-                        .public_actions
+                        .context
+                        .actors
                         .iter()
-                        .any(|action| action.account_id == account_id),
+                        .any(|actor| actor.account_id == account_id),
                 })
                 .cloned()
                 .collect()
@@ -466,29 +459,22 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
     }
 }
 
-fn project_account(account: Option<&Account>, selector: ProgramShardSelector) -> Account {
-    let Some(account) = account else {
-        return Account {
-            nonce: 0,
-            data: AccountData {
-                shards: BTreeMap::new(),
-            },
-        };
-    };
-    let program = selector.program_account_id;
-    let shards = BTreeMap::from([(
+fn project_account(account: Option<&Account>, actor: Actor) -> Option<Account> {
+    let account = account?;
+    let program = actor.program_account_id;
+    let actor_states = BTreeMap::from([(
         program,
         account
             .data
-            .shards
+            .actor_states
             .get(&program)
             .cloned()
-            .unwrap_or(ShardData(Vec::new())),
+            .unwrap_or(ActorState(Vec::new())),
     )]);
-    Account {
+    Some(Account {
         nonce: account.nonce,
-        data: AccountData { shards },
-    }
+        data: AccountData { actor_states },
+    })
 }
 
 // One canned event per block: the first transaction emits one event from a fixed program.
@@ -510,23 +496,31 @@ fn mock_public_tx(
     tx_idx: u64,
     account_ids: &[AccountId],
 ) -> Transaction {
+    let to = Actor {
+        account_id: account_ids[tx_idx as usize % account_ids.len()],
+        program_account_id: AccountId::native_token_program(),
+    };
     Transaction::Public(PublicTransaction {
         hash: tx_hash,
         message: PublicMessage {
-            program_account_id: AccountId { value: [1; 32] },
-            shard_selectors: vec![
-                ProgramShardSelector {
-                    account_id: account_ids[tx_idx as usize % account_ids.len()],
-                    program_account_id: AccountId::native_token_program(),
-                },
-                ProgramShardSelector {
-                    account_id: account_ids[(tx_idx as usize + 1) % account_ids.len()],
-                    program_account_id: AccountId::native_token_program(),
-                },
-            ],
-            nonces: vec![block_id as u128, (block_id + 1) as u128],
-            instruction_data: vec![1, 2, 3, 4],
+            context: PublicExecutionContext {
+                actors: vec![
+                    to,
+                    Actor {
+                        account_id: account_ids[(tx_idx as usize + 1) % account_ids.len()],
+                        program_account_id: AccountId::native_token_program(),
+                    },
+                ],
+                authorized_accounts: vec![to.account_id],
+                cast_promotions: vec![],
+            },
+            root: RootCall {
+                to,
+                message: vec![1, 2, 3, 4],
+            },
             fee: None,
+            nonces: vec![(to.account_id, block_id as u128)],
+            admission_evidence: vec![],
         },
         witness_set: WitnessSet {
             signatures_and_public_keys: vec![],
@@ -541,30 +535,38 @@ fn mock_privacy_preserving_tx(
     tx_idx: u64,
     account_ids: &[AccountId],
 ) -> Transaction {
+    let to = Actor {
+        account_id: account_ids[tx_idx as usize % account_ids.len()],
+        program_account_id: AccountId { value: [1_u8; 32] },
+    };
     Transaction::PrivacyPreserving(PrivacyPreservingTransaction {
         hash: tx_hash,
         message: PrivacyPreservingMessage {
-            public_actions: vec![PublicActionWithID {
-                account_id: account_ids[tx_idx as usize % account_ids.len()],
-                effects: vec![DeferredPublicEffect {
-                    program_account_id: AccountId { value: [1_u8; 32] },
-                    shard_program_account_id: AccountId { value: [1_u8; 32] },
-                    data: vec![0xdd, 0xee],
-                }],
-            }],
-            nonces: vec![block_id as u128],
+            context: PublicExecutionContext {
+                actors: vec![to],
+                authorized_accounts: vec![],
+                cast_promotions: vec![],
+            },
+            boundary: vec![],
+            casts: vec![],
+            recovery_bindings: vec![],
+            public_root: Some(RootCall {
+                to,
+                message: vec![0xdd, 0xee],
+            }),
+            nonces: vec![],
             private_actions: vec![PrivateAction {
                 nullifier: indexer_service_protocol::Nullifier([tx_idx as u8; 32]),
                 root: CommitmentSetDigest([0xff; 32]),
                 commitment: Commitment([block_id as u8; 32]),
-                encrypted_post_state: EncryptedAccountData {
+                encrypted_post_state: EncryptedNote {
                     ciphertext: indexer_service_protocol::Ciphertext(vec![0x01, 0x02, 0x03, 0x04]),
                     epk: indexer_service_protocol::EphemeralPublicKey(vec![0xaa; 32]),
-                    view_tag: 42,
                 },
             }],
             block_validity_window: ValidityWindow((None, None)),
             timestamp_validity_window: ValidityWindow((None, None)),
+            admission_evidence: vec![],
         },
         witness_set: WitnessSet {
             signatures_and_public_keys: vec![],

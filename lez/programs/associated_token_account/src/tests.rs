@@ -1,20 +1,18 @@
 #![cfg(test)]
 
 use associated_token_account_core::{
-    AtaContents, Instruction, compute_ata_seed, get_associated_token_account_id,
+    Message, ata_of, compute_ata_seed, get_associated_token_account_id,
 };
 use lee_core::{
-    account::{AccountId, ProgramShardSelector, ShardData},
-    program::{AccountMeta, Plan, PlanInput, ShardEffect},
+    account::{AccountId, Actor, ActorState},
+    program::{Call, PdaSeed, ReceiveInput, Transition},
 };
-use token_core::{TokenDefinition, TokenDescriptor, TokenHolding, TokenKind};
-
-use crate::Effect;
+use token_core::{TokenDescriptor, TokenKind};
 
 const ATA_PROGRAM_ID: AccountId = AccountId::new([1u8; 32]);
 const TOKEN_PROGRAM_ID: AccountId = AccountId::new([2u8; 32]);
 const STRANGER_PROGRAM_ID: AccountId = AccountId::new([0xEEu8; 32]);
-const NFT_DEFINITION_ID: AccountId = AccountId::new([0x03u8; 32]);
+const RECIPIENT_ID: AccountId = AccountId::new([0x77u8; 32]);
 const TRANSFER_AMOUNT: u128 = 5_000;
 const BURN_AMOUNT: u128 = 500;
 
@@ -26,109 +24,59 @@ fn definition_id() -> AccountId {
     AccountId::new([0x02u8; 32])
 }
 
-fn ata_of(definition_id: AccountId) -> AccountId {
-    get_associated_token_account_id(
-        &ATA_PROGRAM_ID,
-        &compute_ata_seed(owner_id(), definition_id, TOKEN_PROGRAM_ID),
-    )
-}
-
-fn ata_id() -> AccountId {
-    ata_of(definition_id())
-}
-
-fn token_handle(account_id: AccountId) -> AccountMeta {
-    AccountMeta::new(account_id, false, TOKEN_PROGRAM_ID)
-}
-
-fn owner_account() -> AccountMeta {
-    AccountMeta::native_balance(owner_id(), true)
-}
-
-fn unauthorized_owner_account() -> AccountMeta {
-    AccountMeta::native_balance(owner_id(), false)
-}
-
-fn fungible_definition() -> ShardData {
-    ShardData::from(&TokenDefinition::Fungible {
-        name: "TEST".to_string(),
-        total_supply: 1000,
-        metadata_id: None,
-    })
-}
-
-fn non_fungible_definition() -> ShardData {
-    ShardData::from(&TokenDefinition::NonFungible {
-        name: "NFT".to_string(),
-        printable_supply: 5,
-        metadata_id: AccountId::new([0u8; 32]),
-    })
-}
-
-fn descriptor(definition_id: AccountId, kind: TokenKind) -> TokenDescriptor {
+fn descriptor() -> TokenDescriptor {
     TokenDescriptor {
-        definition_id,
-        kind,
-    }
-}
-
-fn matching_holding() -> ShardData {
-    ShardData::from(&TokenHolding::Fungible {
         definition_id: definition_id(),
-        balance: 100,
-    })
-}
-
-fn foreign_holding() -> ShardData {
-    ShardData::from(&TokenHolding::Fungible {
-        definition_id: AccountId::new([0x99u8; 32]),
-        balance: 100,
-    })
-}
-
-// Drives the real entrypoint, so account arity, the PDA derivation and the planner's owner
-// checks are all on the path a test exercises.
-fn plan_for(accounts: Vec<AccountMeta>, instruction: Instruction) -> Plan {
-    crate::plan(
-        &PlanInput {
-            self_account_id: ATA_PROGRAM_ID,
-            caller_account_id: None,
-            accounts,
-            instruction_data: borsh::to_vec(&instruction).expect("the instruction serializes"),
-        },
-        instruction,
-    )
-}
-
-fn create_plan(
-    owner: AccountMeta,
-    ata: AccountMeta,
-    kind: TokenKind,
-    contents: AtaContents,
-) -> Plan {
-    plan_for(
-        vec![owner, token_handle(definition_id()), ata],
-        Instruction::Create {
-            token_program_id: TOKEN_PROGRAM_ID,
-            kind,
-            contents,
-        },
-    )
-}
-
-fn contents_effect(definition_id: AccountId, kind: TokenKind, contents: AtaContents) -> Effect {
-    Effect::AtaContents {
-        descriptor: descriptor(definition_id, kind),
-        contents,
+        kind: TokenKind::Fungible,
     }
 }
 
-fn kind_effect(kind: TokenKind) -> Effect {
-    Effect::DefinitionKind { kind }
+// The owner's ATA under `token_program_id`, as a send target, with the seed that grants it.
+fn holding(token_program_id: AccountId) -> (Actor, Vec<PdaSeed>) {
+    let (ata, seed) = ata_of(
+        ATA_PROGRAM_ID,
+        owner_id(),
+        definition_id(),
+        token_program_id,
+    );
+    (Actor::new(ata, token_program_id), vec![seed])
 }
 
-fn guard(pre_data: &ShardData, effect: &Effect) {
-    assert_eq!(crate::apply(effect.clone(), pre_data), None);
+// Drives the real entrypoint as a root delivery to the owner's actor under the ATA program.
+fn owner_transition(is_authorized: bool, message: Message) -> Transition {
+    let input = ReceiveInput {
+        receiver: Actor::new(owner_id(), ATA_PROGRAM_ID),
+        from: None,
+        is_authorized,
+        pre_state: ActorState::empty(),
+        message: borsh::to_vec(&message).expect("the message serializes"),
+    };
+    crate::handle_message(&input, message).into_transition(input)
+}
+
+fn create(token_program_id: AccountId) -> Message {
+    Message::Create {
+        token_program_id,
+        definition_id: definition_id(),
+        kind: TokenKind::Fungible,
+    }
+}
+
+fn transfer(token_program_id: AccountId) -> Message {
+    Message::Transfer {
+        token_program_id,
+        to: RECIPIENT_ID,
+        descriptor: descriptor(),
+        amount: TRANSFER_AMOUNT,
+    }
+}
+
+fn burn(token_program_id: AccountId) -> Message {
+    Message::Burn {
+        token_program_id,
+        descriptor: descriptor(),
+        amount: BURN_AMOUNT,
+    }
 }
 
 #[test]
@@ -183,393 +131,111 @@ fn the_ata_of_a_stranger_program_is_a_different_address() {
 }
 
 #[test]
-fn create_emits_chained_call_for_uninitialized_ata() {
-    let plan = create_plan(
-        unauthorized_owner_account(),
-        token_handle(ata_id()),
-        TokenKind::Fungible,
-        AtaContents::Empty,
-    );
-
-    assert_eq!(
-        plan.output().effects,
-        vec![ShardEffect::new(
-            &token_handle(ata_id()),
-            &contents_effect(definition_id(), TokenKind::Fungible, AtaContents::Empty),
-        )],
-        "the claimed emptiness must be pinned to the account it describes"
-    );
-    assert_eq!(plan.output().chained_calls.len(), 1);
-    assert_eq!(
-        plan.output().chained_calls[0].program_account_id,
-        TOKEN_PROGRAM_ID
-    );
-}
-
-#[test]
-#[should_panic(expected = "ATA account ID does not match expected derivation")]
-fn create_panics_on_wrong_ata_address() {
-    let _plan = create_plan(
-        owner_account(),
-        token_handle(AccountId::new([0xFFu8; 32])),
-        TokenKind::Fungible,
-        AtaContents::Empty,
-    );
-}
-
-#[test]
-#[should_panic(expected = "ATA account ID does not match expected derivation")]
-fn create_naming_a_stranger_program_cannot_reach_the_real_ata() {
-    let _plan = plan_for(
-        vec![
-            owner_account(),
-            AccountMeta::new(definition_id(), false, STRANGER_PROGRAM_ID),
-            AccountMeta::new(ata_id(), false, STRANGER_PROGRAM_ID),
-        ],
-        Instruction::Create {
-            token_program_id: STRANGER_PROGRAM_ID,
+fn create_grants_the_ata_seed_only_when_the_owner_signed() {
+    let (ata, seeds) = holding(TOKEN_PROGRAM_ID);
+    let assert_kind = Call::new(
+        Actor::new(definition_id(), TOKEN_PROGRAM_ID),
+        &token_core::Message::AssertKind {
             kind: TokenKind::Fungible,
-            contents: AtaContents::Empty,
         },
     );
+    let ensure = Call::new(
+        ata,
+        &token_core::Message::EnsureHolding {
+            descriptor: descriptor(),
+        },
+    );
+
+    let unsigned = owner_transition(false, create(TOKEN_PROGRAM_ID));
+    assert_eq!(unsigned.response.post_state, None);
+    assert_eq!(
+        (unsigned.response.calls, unsigned.response.casts),
+        (vec![assert_kind.clone(), ensure.clone()], Vec::new())
+    );
+    let signed = owner_transition(true, create(TOKEN_PROGRAM_ID));
+    assert_eq!(
+        (signed.response.calls, signed.response.casts),
+        (vec![assert_kind, ensure.with_pda_seeds(seeds)], Vec::new())
+    );
 }
 
 #[test]
-fn create_leaves_a_matching_holding_untouched_however_the_owner_is_authorized() {
-    let matches = [
-        (
-            definition_id(),
-            fungible_definition(),
-            TokenKind::Fungible,
-            matching_holding(),
-        ),
-        (
-            NFT_DEFINITION_ID,
-            non_fungible_definition(),
-            TokenKind::NftPrintedCopy,
-            ShardData::from(&TokenHolding::NftMaster {
-                definition_id: NFT_DEFINITION_ID,
-                print_balance: 5,
-            }),
-        ),
-        (
-            NFT_DEFINITION_ID,
-            non_fungible_definition(),
-            TokenKind::NftPrintedCopy,
-            ShardData::from(&TokenHolding::NftPrintedCopy {
-                definition_id: NFT_DEFINITION_ID,
-                owned: true,
-            }),
-        ),
-    ];
+fn create_naming_a_stranger_program_cannot_reach_the_real_ata() {
+    let (real_ata, _) = holding(TOKEN_PROGRAM_ID);
+    let (stranger_ata, _) = holding(STRANGER_PROGRAM_ID);
 
-    for (definition, definition_shard, kind, holding) in matches {
-        for owner in [owner_account(), unauthorized_owner_account()] {
-            let ata = token_handle(ata_of(definition));
-            let plan = plan_for(
-                vec![owner, token_handle(definition), ata.clone()],
-                Instruction::Create {
-                    token_program_id: TOKEN_PROGRAM_ID,
-                    kind,
-                    contents: AtaContents::Intended,
-                },
-            );
-
-            assert!(plan.output().chained_calls.is_empty());
-            assert_eq!(
-                plan.output().effects,
-                vec![
-                    ShardEffect::new(
-                        &ata,
-                        &contents_effect(definition, kind, AtaContents::Intended)
-                    ),
-                    ShardEffect::new(&token_handle(definition), &kind_effect(kind)),
-                ],
-                "the no-op branch has no child call, so it pins the kind itself"
-            );
-        }
-
-        guard(
-            &holding,
-            &contents_effect(definition, kind, AtaContents::Intended),
-        );
-        crate::create::check_definition_kind(&definition_shard, kind);
+    for message in [
+        create(STRANGER_PROGRAM_ID),
+        transfer(STRANGER_PROGRAM_ID),
+        burn(STRANGER_PROGRAM_ID),
+    ] {
+        let mut response = owner_transition(true, message).response;
+        assert!(response.casts.is_empty(), "every message sends to the ATA");
+        let Some(Call { to: target, .. }) = response.calls.pop() else {
+            panic!("every message sends to the ATA");
+        };
+        assert_eq!(target, stranger_ata);
+        assert_ne!(target, real_ata);
     }
-}
-
-#[test]
-fn create_repairs_a_squatted_ata_and_delegates_the_seed() {
-    let expected_seed = compute_ata_seed(owner_id(), definition_id(), TOKEN_PROGRAM_ID);
-    let expected_selectors = vec![
-        ProgramShardSelector::new(definition_id(), TOKEN_PROGRAM_ID),
-        ProgramShardSelector::new(ata_id(), TOKEN_PROGRAM_ID),
-    ];
-    let squats = [
-        foreign_holding(),
-        ShardData::from(&TokenHolding::NftMaster {
-            definition_id: definition_id(),
-            print_balance: 5,
-        }),
-        ShardData::try_from(vec![0xFFu8; 4]).unwrap(),
-    ];
-
-    let plan = create_plan(
-        owner_account(),
-        token_handle(ata_id()),
-        TokenKind::Fungible,
-        AtaContents::Squatted,
-    );
-    let [call] = <[_; 1]>::try_from(plan.output().chained_calls.clone()).unwrap();
-    assert_eq!(call.program_account_id, TOKEN_PROGRAM_ID);
-    assert_eq!(call.pda_seeds, vec![expected_seed]);
-    assert_eq!(call.shard_selectors, expected_selectors);
-    let decoded: token_core::Instruction = borsh::from_slice(&call.instruction_data).unwrap();
-    assert!(matches!(
-        decoded,
-        token_core::Instruction::InitializeAccount {
-            kind: TokenKind::Fungible
-        }
-    ));
-
-    for shard in squats {
-        guard(
-            &shard,
-            &contents_effect(definition_id(), TokenKind::Fungible, AtaContents::Squatted),
-        );
-    }
-}
-
-#[test]
-#[should_panic(expected = "Owner authorization is missing")]
-fn create_rejects_unauthorized_repair() {
-    let _plan = create_plan(
-        unauthorized_owner_account(),
-        AccountMeta::new(ata_id(), true, TOKEN_PROGRAM_ID),
-        TokenKind::Fungible,
-        AtaContents::Squatted,
-    );
-}
-
-#[test]
-#[should_panic(expected = "ATA account ID does not match expected derivation")]
-fn create_panics_on_wrong_address_even_over_a_matching_shard() {
-    let _plan = create_plan(
-        owner_account(),
-        token_handle(AccountId::new([0xABu8; 32])),
-        TokenKind::Fungible,
-        AtaContents::Intended,
-    );
-}
-
-#[test]
-#[should_panic(expected = "Associated token account does not hold what the instruction claims")]
-fn an_empty_claim_over_a_real_holding_is_rejected() {
-    guard(
-        &matching_holding(),
-        &contents_effect(definition_id(), TokenKind::Fungible, AtaContents::Empty),
-    );
-}
-
-#[test]
-#[should_panic(expected = "Associated token account does not hold what the instruction claims")]
-fn a_squatted_claim_over_a_real_holding_is_rejected() {
-    guard(
-        &matching_holding(),
-        &contents_effect(definition_id(), TokenKind::Fungible, AtaContents::Squatted),
-    );
-}
-
-#[test]
-#[should_panic(expected = "Associated token account does not hold what the instruction claims")]
-fn an_intended_claim_over_a_squat_is_rejected() {
-    guard(
-        &foreign_holding(),
-        &contents_effect(definition_id(), TokenKind::Fungible, AtaContents::Intended),
-    );
-}
-
-#[test]
-#[should_panic(expected = "Associated token account does not hold what the instruction claims")]
-fn an_intended_claim_over_an_empty_shard_is_rejected() {
-    guard(
-        &ShardData::empty(),
-        &contents_effect(definition_id(), TokenKind::Fungible, AtaContents::Intended),
-    );
-}
-
-#[test]
-#[should_panic(expected = "Associated token account does not hold what the instruction claims")]
-fn a_master_holding_is_not_the_intended_asset_of_a_fungible_definition() {
-    guard(
-        &ShardData::from(&TokenHolding::NftMaster {
-            definition_id: definition_id(),
-            print_balance: 5,
-        }),
-        &contents_effect(definition_id(), TokenKind::Fungible, AtaContents::Intended),
-    );
-}
-
-#[test]
-#[should_panic(expected = "Token Definition does not initialize this Token Holding kind")]
-fn a_kind_the_definition_does_not_initialize_is_rejected() {
-    crate::create::check_definition_kind(&fungible_definition(), TokenKind::NftPrintedCopy);
 }
 
 #[test]
 fn transfer_delegates_the_proposed_descriptor_under_the_ata_seed() {
-    const RECIPIENT_ID: AccountId = AccountId::new([0x77u8; 32]);
-    let plan = plan_for(
-        vec![
-            owner_account(),
-            token_handle(ata_id()),
-            token_handle(RECIPIENT_ID),
-        ],
-        Instruction::Transfer {
-            token_program_id: TOKEN_PROGRAM_ID,
-            descriptor: descriptor(definition_id(), TokenKind::Fungible),
-            amount: TRANSFER_AMOUNT,
-        },
-    );
+    let (ata, seeds) = holding(TOKEN_PROGRAM_ID);
 
-    assert!(plan.output().effects.is_empty());
-    let [call] = <[_; 1]>::try_from(plan.output().chained_calls.clone()).unwrap();
-    assert_eq!(call.program_account_id, TOKEN_PROGRAM_ID);
+    let transition = owner_transition(true, transfer(TOKEN_PROGRAM_ID));
     assert_eq!(
-        call.pda_seeds,
-        vec![compute_ata_seed(
-            owner_id(),
-            definition_id(),
-            TOKEN_PROGRAM_ID
-        )]
-    );
-    assert_eq!(
-        call.shard_selectors,
-        vec![
-            ProgramShardSelector::new(ata_id(), TOKEN_PROGRAM_ID),
-            ProgramShardSelector::new(RECIPIENT_ID, TOKEN_PROGRAM_ID),
-        ]
-    );
-    let decoded: token_core::Instruction = borsh::from_slice(&call.instruction_data).unwrap();
-    assert!(matches!(
-        decoded,
-        token_core::Instruction::Transfer {
-            amount_to_transfer: TRANSFER_AMOUNT,
-            descriptor: TokenDescriptor {
-                kind: TokenKind::Fungible,
-                ..
-            }
-        }
-    ));
-}
-
-#[test]
-#[should_panic(expected = "ATA account ID does not match expected derivation")]
-fn transfer_with_a_forged_definition_id_cannot_reach_the_sender_ata() {
-    let _plan = plan_for(
-        vec![
-            owner_account(),
-            token_handle(ata_id()),
-            token_handle(AccountId::new([0x77u8; 32])),
-        ],
-        Instruction::Transfer {
-            token_program_id: TOKEN_PROGRAM_ID,
-            descriptor: descriptor(AccountId::new([0x99u8; 32]), TokenKind::Fungible),
-            amount: TRANSFER_AMOUNT,
-        },
+        (transition.response.calls, transition.response.casts),
+        (
+            vec![
+                Call::new(
+                    ata,
+                    &token_core::Message::Transfer {
+                        to: RECIPIENT_ID,
+                        descriptor: descriptor(),
+                        amount: TRANSFER_AMOUNT,
+                        notify: None,
+                    },
+                )
+                .with_pda_seeds(seeds)
+            ],
+            Vec::new()
+        )
     );
 }
 
 #[test]
 #[should_panic(expected = "Owner authorization is missing")]
 fn transfer_rejects_an_unauthorized_owner() {
-    let _plan = plan_for(
-        vec![
-            unauthorized_owner_account(),
-            token_handle(ata_id()),
-            token_handle(AccountId::new([0x77u8; 32])),
-        ],
-        Instruction::Transfer {
-            token_program_id: TOKEN_PROGRAM_ID,
-            descriptor: descriptor(definition_id(), TokenKind::Fungible),
-            amount: TRANSFER_AMOUNT,
-        },
-    );
+    let _transition = owner_transition(false, transfer(TOKEN_PROGRAM_ID));
 }
 
 #[test]
 fn burn_delegates_the_named_definition_under_the_ata_seed() {
-    let plan = plan_for(
-        vec![
-            owner_account(),
-            token_handle(ata_id()),
-            token_handle(definition_id()),
-        ],
-        Instruction::Burn {
-            token_program_id: TOKEN_PROGRAM_ID,
-            kind: TokenKind::Fungible,
-            amount: BURN_AMOUNT,
-        },
-    );
+    let (ata, seeds) = holding(TOKEN_PROGRAM_ID);
 
-    assert!(plan.output().effects.is_empty());
-    let [call] = <[_; 1]>::try_from(plan.output().chained_calls.clone()).unwrap();
+    let transition = owner_transition(true, burn(TOKEN_PROGRAM_ID));
     assert_eq!(
-        call.pda_seeds,
-        vec![compute_ata_seed(
-            owner_id(),
-            definition_id(),
-            TOKEN_PROGRAM_ID
-        )]
-    );
-    assert_eq!(
-        call.shard_selectors,
-        vec![
-            ProgramShardSelector::new(definition_id(), TOKEN_PROGRAM_ID),
-            ProgramShardSelector::new(ata_id(), TOKEN_PROGRAM_ID),
-        ]
-    );
-    let decoded: token_core::Instruction = borsh::from_slice(&call.instruction_data).unwrap();
-    assert!(matches!(
-        decoded,
-        token_core::Instruction::Burn {
-            amount_to_burn: BURN_AMOUNT,
-            kind: TokenKind::Fungible
-        }
-    ));
-}
-
-#[test]
-#[should_panic(expected = "ATA account ID does not match expected derivation")]
-fn burn_naming_a_definition_the_ata_does_not_belong_to_is_rejected() {
-    // The seed carries the named definition, so pointing the burn at another one lands outside
-    // this owner's ATA family before the token program is ever reached.
-    let _plan = plan_for(
-        vec![
-            owner_account(),
-            token_handle(ata_id()),
-            token_handle(NFT_DEFINITION_ID),
-        ],
-        Instruction::Burn {
-            token_program_id: TOKEN_PROGRAM_ID,
-            kind: TokenKind::Fungible,
-            amount: BURN_AMOUNT,
-        },
+        (transition.response.calls, transition.response.casts),
+        (
+            vec![
+                Call::new(
+                    ata,
+                    &token_core::Message::Burn {
+                        descriptor: descriptor(),
+                        amount: BURN_AMOUNT,
+                        definition: definition_id(),
+                    },
+                )
+                .with_pda_seeds(seeds)
+            ],
+            Vec::new()
+        )
     );
 }
 
 #[test]
 #[should_panic(expected = "Owner authorization is missing")]
 fn burn_rejects_an_unauthorized_owner() {
-    let _plan = plan_for(
-        vec![
-            unauthorized_owner_account(),
-            token_handle(ata_id()),
-            token_handle(definition_id()),
-        ],
-        Instruction::Burn {
-            token_program_id: TOKEN_PROGRAM_ID,
-            kind: TokenKind::Fungible,
-            amount: BURN_AMOUNT,
-        },
-    );
+    let _transition = owner_transition(false, burn(TOKEN_PROGRAM_ID));
 }

@@ -31,6 +31,7 @@ use wallet::{
         group::GroupSubcommand,
         programs::native_token_transfer::AuthTransferSubcommand,
     },
+    storage::key_chain::SharedAccountDerivation,
 };
 
 /// Create a group, create a shared account from it, and verify registration.
@@ -60,7 +61,7 @@ async fn group_create_and_shared_account_registration() -> Result<()> {
         pda: false,
         seed: None,
         program_id: None,
-        identifier: None,
+        derivation_id: None,
     }));
 
     let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -79,7 +80,10 @@ async fn group_create_and_shared_account_registration() -> Result<()> {
         .shared_private_account(shared_account_id)
         .context("Shared account not found in storage")?;
     assert_eq!(entry.group_label, Label::new("test-group"));
-    assert!(entry.pda_seed.is_none());
+    assert!(matches!(
+        entry.derivation,
+        SharedAccountDerivation::Regular { .. }
+    ));
 
     log::info!("Shared account registered: {shared_account_id}");
     Ok(())
@@ -177,7 +181,7 @@ async fn fund_shared_account_from_public() -> Result<()> {
         pda: false,
         seed: None,
         program_id: None,
-        identifier: None,
+        derivation_id: None,
     }));
     let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
     let SubcommandReturnValue::RegisterAccount {
@@ -198,7 +202,7 @@ async fn fund_shared_account_from_public() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         to_keys: None,
-        to_identifier: None,
+        to_pk: None,
         amount: 100,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;

@@ -1,17 +1,18 @@
 // Backs the hand-built state/diff helpers below, which are compiled only for `common`'s own
 // unit tests. They rely on `lee::test_utils`, gated behind `lee`'s `test-utils` feature and
 // enabled here via dev-dependencies, so it never reaches a production build.
+use std::collections::BTreeMap;
 #[cfg(test)]
 use std::collections::HashMap;
 
 #[cfg(test)]
 use lee::{Account, PrivateKey, PublicKey, V03State, ValidatedStateDiff};
-use lee::{AccountId, ProgramShardSelector};
+use lee::{AccountId, Actor};
 
 use crate::{
     HashType,
     block::{Block, HashableBlockData},
-    transaction::{LeeTransaction, clock_invocation, fee_invocation},
+    transaction::{FeePayee, LeeTransaction, clock_invocation, fee_invocation},
 };
 
 // Helpers
@@ -84,9 +85,7 @@ pub fn produce_dummy_block(
     transactions.push(LeeTransaction::Public(fee_invocation(
         fee_core::BlockFeeSummary::default(),
         0,
-        lee::AccountId::from(&lee::PublicKey::new_from_private_key(
-            &sequencer_sign_key_for_testing(),
-        )),
+        FeePayee::Present(producer_account_for_testing()),
     )));
     transactions.push(LeeTransaction::Public(clock_invocation(
         id,
@@ -105,17 +104,15 @@ pub fn produce_dummy_block(
 
 #[must_use]
 pub fn produce_dummy_empty_transaction() -> LeeTransaction {
-    let program_id = lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID;
-    let shard_selectors = vec![];
-    let nonces = vec![];
+    let nowhere = Actor::native_balance(AccountId::default());
+    let private_key = lee::PrivateKey::try_new([1; 32]).unwrap();
     let message = lee::public_transaction::Message::try_new(
-        program_id,
-        shard_selectors,
-        nonces,
-        lee_core::native_token::Instruction::Transfer { amount: 0 },
+        nowhere,
+        Vec::new(),
+        signer_nonce(&private_key, 0),
+        native_transfer(nowhere.account_id, 0),
     )
     .unwrap();
-    let private_key = lee::PrivateKey::try_new([1; 32]).unwrap();
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&private_key]);
 
     let lee_tx = lee::PublicTransaction::new(message, witness_set);
@@ -157,19 +154,12 @@ pub fn create_transaction_native_token_transfer_with_fees(
     signing_key: &lee::PrivateKey,
     fee_declaration: lee::FeeDeclaration,
 ) -> LeeTransaction {
-    let shard_selectors = vec![
-        ProgramShardSelector::native_balance(from),
-        ProgramShardSelector::native_balance(to),
-    ];
-    let nonces = vec![nonce.into()];
-    let program_id = lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID;
+    let public_actors = vec![Actor::native_balance(from), Actor::native_balance(to)];
     let message = lee::public_transaction::Message::try_new_with_fees(
-        program_id,
-        shard_selectors,
-        nonces,
-        lee_core::native_token::Instruction::Transfer {
-            amount: balance_to_move,
-        },
+        Actor::native_balance(from),
+        public_actors,
+        signer_nonce(signing_key, nonce),
+        native_transfer(to, balance_to_move),
         fee_declaration,
     )
     .unwrap();
@@ -193,18 +183,27 @@ pub fn create_transaction_native_token_transfer_without_fee(
     signing_key: &lee::PrivateKey,
 ) -> LeeTransaction {
     let message = lee::public_transaction::Message::try_new(
-        lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
-        vec![
-            ProgramShardSelector::native_balance(from),
-            ProgramShardSelector::native_balance(to),
-        ],
-        vec![nonce.into()],
-        lee_core::native_token::Instruction::Transfer {
-            amount: balance_to_move,
-        },
+        Actor::native_balance(from),
+        vec![Actor::native_balance(from), Actor::native_balance(to)],
+        signer_nonce(signing_key, nonce),
+        native_transfer(to, balance_to_move),
     )
     .unwrap();
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
 
     LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
+}
+
+fn signer_nonce(
+    signing_key: &lee::PrivateKey,
+    nonce: u128,
+) -> BTreeMap<AccountId, lee_core::account::Nonce> {
+    BTreeMap::from([(
+        AccountId::from(&lee::PublicKey::new_from_private_key(signing_key)),
+        lee_core::account::Nonce(nonce),
+    )])
+}
+
+const fn native_transfer(to: AccountId, amount: u128) -> lee_core::native_token::Message {
+    lee_core::native_token::Message::Transfer { to, amount }
 }

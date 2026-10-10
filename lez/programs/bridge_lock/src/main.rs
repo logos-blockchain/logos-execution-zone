@@ -155,7 +155,10 @@ fn decode_mint(payload: &[u8]) -> WrappedMessage {
 
 #[cfg(test)]
 mod tests {
-    use lee_core::account::ShardData;
+    use lee_core::{
+        account::{AccountId, ActorState},
+        program::{Call, Transition},
+    };
 
     use super::*;
 
@@ -167,103 +170,167 @@ mod tests {
     const ZONE: [u8; 32] = [8; 32];
     const AMOUNT: u128 = 1_000;
 
-    fn config() -> ShardData {
-        ShardData::try_from(config_bytes(OUTBOX_ID, WRAPPED_ID).to_vec()).expect("config fits")
+    fn config() -> Vec<u8> {
+        config_bytes(OUTBOX_ID, WRAPPED_ID).to_vec()
     }
 
-    fn route(outbox_account_id: AccountId, target_account_id: AccountId) -> Effect {
-        Effect::Route {
-            outbox_account_id,
-            target_account_id,
-        }
+    fn config_actor() -> Actor {
+        Actor::new(config_account_id(BRIDGE_LOCK_ID), BRIDGE_LOCK_ID)
+    }
+
+    fn holder_actor() -> Actor {
+        Actor::new(HOLDER, BRIDGE_LOCK_ID)
+    }
+
+    fn outbox_actor() -> Actor {
+        Actor::new(
+            cross_zone_outbox_core::outbox_pda(OUTBOX_ID, BRIDGE_LOCK_ID, &ZONE, 0),
+            OUTBOX_ID,
+        )
+    }
+
+    fn run(
+        receiver: Actor,
+        origin: Option<AccountId>,
+        is_authorized: bool,
+        pre: Vec<u8>,
+        message: Message,
+    ) -> Transition {
+        let input = ReceiveInput {
+            receiver,
+            from: origin.map(|sender| Actor::new(sender, sender)),
+            is_authorized,
+            pre_state: ActorState::from(pre),
+            message: borsh::to_vec(&message).unwrap(),
+        };
+        handle_message(&input, message).into_transition(input)
     }
 
     fn mint_payload(amount: u128) -> Vec<u8> {
-        borsh::to_vec(&WrappedInstruction::Mint {
+        borsh::to_vec(&WrappedMessage::Mint {
             recipient: RECIPIENT,
             amount,
         })
         .expect("the mint serializes")
     }
 
-    fn target_accounts() -> Vec<ProgramShardSelector> {
+    fn target_accounts() -> Vec<Actor> {
         vec![
-            ProgramShardSelector::new(
+            Actor::new(
                 wrapped_token_core::config_account_id(WRAPPED_ID),
                 WRAPPED_ID,
             ),
-            ProgramShardSelector::new(
+            Actor::new(
                 wrapped_token_core::holding_account_id(WRAPPED_ID, &RECIPIENT),
                 WRAPPED_ID,
             ),
         ]
     }
 
-    fn lock_instruction(target_account_id: AccountId) -> Instruction {
-        Instruction::Lock {
+    fn lock_message(target_account_id: AccountId, payload: Vec<u8>) -> Message {
+        Message::Lock {
+            outbox: outbox_actor(),
             amount: AMOUNT,
             target_zone: ZONE,
             target_account_id,
             target_accounts: target_accounts(),
-            payload: mint_payload(AMOUNT),
+            payload,
             ordinal: 0,
         }
     }
 
-    fn accounts(outbox_program: AccountId) -> Vec<AccountMeta> {
-        vec![
-            AccountMeta::new(config_account_id(BRIDGE_LOCK_ID), false, BRIDGE_LOCK_ID),
-            AccountMeta::native_balance(HOLDER, true),
-            AccountMeta::native_balance(
-                holding_account_id(BRIDGE_LOCK_ID, &HOLDER.into_value()),
-                false,
-            ),
-            AccountMeta::native_balance(escrow_account_id(BRIDGE_LOCK_ID), false),
-            AccountMeta::new(
-                cross_zone_outbox_core::outbox_pda(outbox_program, BRIDGE_LOCK_ID, &ZONE, 0),
-                false,
-                outbox_program,
-            ),
-        ]
+    fn lock(origin: Option<AccountId>, is_authorized: bool, message: Message) -> Transition {
+        run(holder_actor(), origin, is_authorized, Vec::new(), message)
     }
 
-    fn plan_for(accounts: Vec<AccountMeta>, instruction: Instruction) -> Plan {
-        plan(
-            &PlanInput {
-                self_account_id: BRIDGE_LOCK_ID,
-                caller_account_id: None,
-                accounts,
-                instruction_data: borsh::to_vec(&instruction).expect("the instruction serializes"),
+    fn check_route(
+        outbox_account_id: AccountId,
+        target_account_id: AccountId,
+        pre: Vec<u8>,
+    ) -> Transition {
+        run(
+            config_actor(),
+            Some(holder_actor().program_account_id),
+            false,
+            pre,
+            Message::CheckRoute {
+                outbox_account_id,
+                target_account_id,
             },
-            instruction,
+        )
+    }
+
+    fn init(origin: Option<AccountId>, target_account_id: AccountId, pre: Vec<u8>) -> Transition {
+        run(
+            config_actor(),
+            origin,
+            false,
+            pre,
+            Message::InitConfig {
+                outbox_account_id: OUTBOX_ID,
+                target_account_id,
+            },
         )
     }
 
     #[test]
     fn a_lock_pins_its_route_before_it_moves_anything() {
-        let plan = plan_for(accounts(OUTBOX_ID), lock_instruction(WRAPPED_ID));
+        let transition = lock(None, true, lock_message(WRAPPED_ID, mint_payload(AMOUNT)));
 
+        let holder = HOLDER.into_value();
+        assert_eq!(transition.response.post_state, None);
         assert_eq!(
-            plan.output().effects,
-            vec![lee_core::program::ShardEffect::new(
-                &AccountMeta::new(config_account_id(BRIDGE_LOCK_ID), false, BRIDGE_LOCK_ID),
-                &route(OUTBOX_ID, WRAPPED_ID),
-            )],
-            "the chosen route must be pinned to the config"
+            (transition.response.calls, transition.response.casts),
+            (
+                vec![
+                    Call::new(
+                        config_actor(),
+                        &Message::CheckRoute {
+                            outbox_account_id: OUTBOX_ID,
+                            target_account_id: WRAPPED_ID,
+                        },
+                    ),
+                    custody_transfer(
+                        holding_account_id(BRIDGE_LOCK_ID, &holder),
+                        holding_seed(&holder),
+                        escrow_account_id(BRIDGE_LOCK_ID),
+                        AMOUNT
+                    ),
+                    Call::new(
+                        outbox_actor(),
+                        &OutboxMessage::Emit {
+                            target_zone: ZONE,
+                            target_account_id: WRAPPED_ID,
+                            target_accounts: target_accounts(),
+                            payload: mint_payload(AMOUNT),
+                            ordinal: 0,
+                        },
+                    ),
+                ],
+                Vec::new()
+            ),
+            "the route is checked first, then the escrow debit, then the emission"
         );
-        let calls = &plan.output().chained_calls;
-        assert_eq!(calls.len(), 2);
-        assert_eq!(
-            calls[0].program_account_id,
-            lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
-            "the escrow debit runs first"
+    }
+
+    #[test]
+    #[should_panic(expected = "bridge_lock is only invoked as a top-level user transaction")]
+    fn a_lock_from_another_program_is_refused() {
+        let _transition = lock(
+            Some(OUTBOX_ID),
+            true,
+            lock_message(WRAPPED_ID, mint_payload(AMOUNT)),
         );
-        assert_eq!(calls[1].program_account_id, OUTBOX_ID);
     }
 
     #[test]
     fn the_route_genesis_pinned_is_accepted() {
-        assert_eq!(apply(route(OUTBOX_ID, WRAPPED_ID), &config()), None);
+        assert_eq!(
+            check_route(OUTBOX_ID, WRAPPED_ID, config())
+                .response
+                .post_state,
+            None
+        );
     }
 
     #[test]
@@ -271,74 +338,75 @@ mod tests {
     fn an_outbox_the_config_does_not_pin_is_refused() {
         // The emission is what compensates the escrow debit. Steered to a program of the
         // caller's choosing, the balance is gone and nothing mints on the destination.
-        apply(route(AccountId::new([0xAA; 32]), WRAPPED_ID), &config());
+        let _transition = check_route(AccountId::new([0xAA; 32]), WRAPPED_ID, config());
     }
 
     #[test]
     #[should_panic(expected = "bridge_lock only mints through the wrapped token it is pinned to")]
     fn a_mint_target_the_config_does_not_pin_is_refused() {
-        apply(route(OUTBOX_ID, AccountId::new([0xBB; 32])), &config());
+        let _transition = check_route(OUTBOX_ID, AccountId::new([0xBB; 32]), config());
     }
 
     #[test]
     #[should_panic(expected = "config account holds an outbox and a mint target")]
     fn an_unwritten_config_authorizes_no_route() {
-        apply(route(OUTBOX_ID, WRAPPED_ID), &ShardData::empty());
+        let _transition = check_route(OUTBOX_ID, WRAPPED_ID, Vec::new());
+    }
+
+    #[test]
+    #[should_panic(expected = "the route is only checked for a lock of bridge_lock's own")]
+    fn a_route_check_from_outside_bridge_lock_is_refused() {
+        let _transition = run(
+            config_actor(),
+            None,
+            false,
+            config(),
+            Message::CheckRoute {
+                outbox_account_id: OUTBOX_ID,
+                target_account_id: WRAPPED_ID,
+            },
+        );
     }
 
     #[test]
     fn a_first_init_writes_the_route() {
         assert_eq!(
-            apply(
-                Effect::InitConfig {
-                    outbox_account_id: OUTBOX_ID,
-                    target_account_id: WRAPPED_ID,
-                },
-                &ShardData::empty()
-            ),
-            Some(config_bytes(OUTBOX_ID, WRAPPED_ID).to_vec())
+            init(None, WRAPPED_ID, Vec::new()).response.post_state,
+            Some(ActorState::from(config()))
         );
     }
 
     #[test]
     fn replaying_the_same_init_is_a_no_op() {
         assert_eq!(
-            apply(
-                Effect::InitConfig {
-                    outbox_account_id: OUTBOX_ID,
-                    target_account_id: WRAPPED_ID,
-                },
-                &config()
-            ),
-            Some(config_bytes(OUTBOX_ID, WRAPPED_ID).to_vec())
+            init(None, WRAPPED_ID, config()).response.post_state,
+            Some(ActorState::from(config()))
         );
     }
 
     #[test]
-    #[should_panic(expected = "shard already holds different data")]
+    #[should_panic(expected = "actor state already holds different data")]
     fn a_reinit_with_a_different_route_is_refused() {
-        apply(
-            Effect::InitConfig {
-                outbox_account_id: OUTBOX_ID,
-                target_account_id: AccountId::new([0xBB; 32]),
-            },
-            &config(),
+        let _transition = init(None, AccountId::new([0xBB; 32]), config());
+    }
+
+    #[test]
+    #[should_panic(expected = "bridge_lock is only invoked as a top-level user transaction")]
+    fn an_init_from_another_program_is_refused() {
+        let _transition = init(
+            Some(holder_actor().program_account_id),
+            WRAPPED_ID,
+            Vec::new(),
         );
     }
 
     #[test]
     #[should_panic(expected = "locked amount must equal the wrapped mint amount")]
     fn a_payload_minting_more_than_is_locked_is_refused() {
-        let _plan = plan_for(
-            accounts(OUTBOX_ID),
-            Instruction::Lock {
-                amount: AMOUNT,
-                target_zone: ZONE,
-                target_account_id: WRAPPED_ID,
-                target_accounts: target_accounts(),
-                payload: mint_payload(AMOUNT.saturating_mul(2)),
-                ordinal: 0,
-            },
+        let _transition = lock(
+            None,
+            true,
+            lock_message(WRAPPED_ID, mint_payload(AMOUNT.saturating_mul(2))),
         );
     }
 
@@ -346,18 +414,17 @@ mod tests {
     #[should_panic(expected = "target accounts must be the mint's config and the recipient's")]
     fn target_accounts_are_derived_from_the_proposed_target() {
         // A forged proposed target still has to name that target's own PDAs here, and the config
-        // effect then refuses it.
-        let _plan = plan_for(
-            accounts(OUTBOX_ID),
-            lock_instruction(AccountId::new([0xBB; 32])),
+        // then refuses it.
+        let _transition = lock(
+            None,
+            true,
+            lock_message(AccountId::new([0xBB; 32]), mint_payload(AMOUNT)),
         );
     }
 
     #[test]
     #[should_panic(expected = "holder must authorize the lock")]
     fn a_lock_without_the_holder_is_refused() {
-        let mut metas = accounts(OUTBOX_ID);
-        metas[1] = AccountMeta::native_balance(HOLDER, false);
-        let _plan = plan_for(metas, lock_instruction(WRAPPED_ID));
+        let _transition = lock(None, false, lock_message(WRAPPED_ID, mint_payload(AMOUNT)));
     }
 }

@@ -149,10 +149,7 @@ mod tests {
             target_zone: [1; 32],
             ordinal: 7,
             target_account_id: AccountId::new([6; 32]),
-            target_accounts: vec![ProgramShardSelector::new(
-                AccountId::new([9; 32]),
-                AccountId::new([6; 32]),
-            )],
+            target_accounts: vec![Actor::new(AccountId::new([9; 32]), AccountId::new([6; 32]))],
             payload: b"payload".to_vec(),
         };
 

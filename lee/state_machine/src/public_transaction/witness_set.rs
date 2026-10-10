@@ -56,7 +56,9 @@ impl WitnessSet {
 
 #[cfg(test)]
 mod tests {
-    use lee_core::account::ProgramShardSelector;
+    use std::collections::BTreeMap;
+
+    use lee_core::account::{Actor, Nonce};
 
     use super::*;
     use crate::AccountId;
@@ -69,14 +71,11 @@ mod tests {
         let pubkey2 = PublicKey::new_from_private_key(&key2);
         let addr1 = AccountId::from(&pubkey1);
         let addr2 = AccountId::from(&pubkey2);
-        let nonces = vec![1_u128.into(), 2_u128.into()];
+        let nonces = BTreeMap::from([(addr1, Nonce(1)), (addr2, Nonce(2))]);
         let instruction = vec![1, 2, 3, 4];
         let message = Message::try_new(
-            AccountId::from_builtin_program([0; 8]),
-            vec![
-                ProgramShardSelector::native_balance(addr1),
-                ProgramShardSelector::native_balance(addr2),
-            ],
+            Actor::new(addr1, AccountId::from_builtin_program([0; 8])),
+            vec![Actor::native_balance(addr1), Actor::native_balance(addr2)],
             nonces,
             instruction,
         )
