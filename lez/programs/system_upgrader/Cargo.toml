@@ -7,4 +7,5 @@ license = { workspace = true }
 [dependencies]
 borsh.workspace = true
 system_upgrader_core.workspace = true
+sequencer_stake_core.workspace = true
 lee_core.workspace = true

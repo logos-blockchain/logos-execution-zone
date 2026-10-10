@@ -5626,6 +5626,7 @@ fn every_system_upgrader_tx_is_sequencer_only() {
         name: programs::CLOCK_NAME,
         first_segment: AccountId::new([1; 32]),
         from_height: 1,
+        approvals: vec![],
     });
 
     assert!(super::is_sequencer_only_tx(&apply));

@@ -139,15 +139,97 @@ mod inner {
                 PROGRAM_LOADER_ACCOUNT_ID, SYSTEM_UPGRADER_ACCOUNT_ID, SystemProgramName,
             };
             use system_upgrader_core::{
-                Instruction, Registry, ScheduledUpgrade, registry_account_id,
+                Approval, Instruction, Proposal, Registry, ScheduledUpgrade, approval_message,
+                registry_account_id,
             };
 
             use super::super::*;
 
             const FROM_HEIGHT: u64 = 5;
+            const VALID_UNTIL: u64 = 100;
+            const CHANNEL_ID: [u8; 32] = [5; 32];
+
+            /// The committee: three accredited keys, so two approvals meet the threshold.
+            fn committee_key(seed: u8) -> sequencer_stake_core::ed25519_dalek::SigningKey {
+                sequencer_stake_core::ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+            }
+
+            fn committee_config() -> (AccountId, Account) {
+                let entries = (1..=3)
+                    .map(|seed| {
+                        (
+                            sequencer_stake_core::SequencerKey::new(
+                                committee_key(seed).verifying_key().to_bytes(),
+                            )
+                            .unwrap(),
+                            sequencer_stake_core::SequencerEntry {
+                                account_id: AccountId::new([seed; 32]),
+                                total_staked: 10,
+                                total_pending_unstake: 0,
+                            },
+                        )
+                    })
+                    .collect();
+                let config = sequencer_stake_core::SequencerStakeConfig {
+                    channel_params: Some(sequencer_stake_core::ChannelParams {
+                        minimum_sequencer_stake: 1,
+                        posting_timeframe: 1,
+                        posting_timeout: 2,
+                        exit_delay: 1,
+                    }),
+                    channel_id: Some(CHANNEL_ID),
+                    entries,
+                };
+                (
+                    committee_account_id(),
+                    Account::default().with_shard(
+                        sequencer_stake_account_id(),
+                        config.to_bytes().try_into().unwrap(),
+                    ),
+                )
+            }
+
+            fn committee_account_id() -> AccountId {
+                sequencer_stake_core::sequencer_stake_config_account_id(sequencer_stake_account_id())
+            }
+
+            fn committee_selector() -> ProgramShardSelector {
+                ProgramShardSelector::new(committee_account_id(), sequencer_stake_account_id())
+            }
 
             fn registry_selector() -> ProgramShardSelector {
                 ProgramShardSelector::new(registry_account_id(), SYSTEM_UPGRADER_ACCOUNT_ID)
+            }
+
+            /// Approvals of `proposal` by the committee keys `seeds`, each through `valid_until`.
+            fn approvals_for(proposal: &Proposal, seeds: &[u8], valid_until: u64) -> Vec<Approval> {
+                use sequencer_stake_core::ed25519_dalek::Signer as _;
+
+                seeds
+                    .iter()
+                    .map(|seed| {
+                        let key = committee_key(*seed);
+                        Approval {
+                            signer: sequencer_stake_core::SequencerKey::new(
+                                key.verifying_key().to_bytes(),
+                            )
+                            .unwrap(),
+                            valid_until,
+                            signature: key
+                                .sign(&approval_message(CHANNEL_ID, proposal, valid_until))
+                                .to_bytes()
+                                .to_vec(),
+                        }
+                    })
+                    .collect()
+            }
+
+            fn schedule_proposal(name: SystemProgramName, first_segment: AccountId) -> Proposal {
+                Proposal::Schedule {
+                    name,
+                    first_segment,
+                    from_height: FROM_HEIGHT,
+                }
             }
 
             /// An unsigned transaction, as the producer builds it.
@@ -195,13 +277,16 @@ mod inner {
                         std::iter::once((system_upgrader_account_id(), system_upgrader(), false))
                             .chain(programs),
                     )
-                    .with_public_accounts([(
-                        registry_account_id(),
-                        Account::default().with_shard(
-                            SYSTEM_UPGRADER_ACCOUNT_ID,
-                            registry.to_bytes().try_into().unwrap(),
+                    .with_public_accounts([
+                        committee_config(),
+                        (
+                            registry_account_id(),
+                            Account::default().with_shard(
+                                SYSTEM_UPGRADER_ACCOUNT_ID,
+                                registry.to_bytes().try_into().unwrap(),
+                            ),
                         ),
-                    )])
+                    ])
                     .with_public_accounts(ids.iter().zip(segments).map(|(id, segment)| {
                         (
                             *id,
@@ -215,12 +300,21 @@ mod inner {
             }
 
             fn schedule_tx(first_segment: AccountId) -> PublicTransaction {
-                schedule_tx_with(CLOCK_NAME, first_segment)
+                schedule_tx_with(
+                    CLOCK_NAME,
+                    first_segment,
+                    approvals_for(
+                        &schedule_proposal(CLOCK_NAME, first_segment),
+                        &[1, 2],
+                        VALID_UNTIL,
+                    ),
+                )
             }
 
             fn schedule_tx_with(
                 name: SystemProgramName,
                 first_segment: AccountId,
+                approvals: Vec<Approval>,
             ) -> PublicTransaction {
                 system_upgrader_tx(
                     vec![
@@ -229,11 +323,13 @@ mod inner {
                             AccountId::from_system_program_name(&name),
                             PROGRAM_LOADER_ACCOUNT_ID,
                         ),
+                        committee_selector(),
                     ],
                     Instruction::Schedule {
                         name,
                         first_segment,
                         from_height: FROM_HEIGHT,
+                        approvals,
                     },
                 )
             }
@@ -260,19 +356,30 @@ mod inner {
             }
 
             fn cancel_tx(first_segment: AccountId) -> PublicTransaction {
+                let proposal = Proposal::Cancel {
+                    name: CLOCK_NAME,
+                    first_segment,
+                    from_height: FROM_HEIGHT,
+                };
                 system_upgrader_tx(
-                    vec![registry_selector()],
+                    vec![registry_selector(), committee_selector()],
                     Instruction::Cancel {
                         name: CLOCK_NAME,
                         first_segment,
                         from_height: FROM_HEIGHT,
+                        approvals: approvals_for(&proposal, &[1, 2], VALID_UNTIL),
                     },
                 )
             }
 
             fn install_tx(name: SystemProgramName, segments: &[AccountId]) -> PublicTransaction {
+                let proposal = Proposal::Install {
+                    name,
+                    first_segment: segments[0],
+                };
                 let selectors = [
                     registry_selector(),
+                    committee_selector(),
                     ProgramShardSelector::new(
                         AccountId::from_system_program_name(&name),
                         PROGRAM_LOADER_ACCOUNT_ID,
@@ -290,6 +397,7 @@ mod inner {
                     Instruction::Install {
                         name,
                         first_segment: segments[0],
+                        approvals: approvals_for(&proposal, &[1, 2], VALID_UNTIL),
                     },
                 )
             }
@@ -350,7 +458,15 @@ mod inner {
                     (AccountId::from_system_program_name(&name), fee(), false),
                 ]);
                 let err = state
-                    .transition_from_public_transaction(&schedule_tx_with(name, ids[0]), 1, 0)
+                    .transition_from_public_transaction(
+                        &schedule_tx_with(
+                            name,
+                            ids[0],
+                            approvals_for(&schedule_proposal(name, ids[0]), &[1, 2], VALID_UNTIL),
+                        ),
+                        1,
+                        0,
+                    )
                     .expect_err("only registered system programs can be scheduled");
                 assert!(
                     err.to_string().contains("system program is not registered"),
@@ -532,6 +648,11 @@ mod inner {
                     name: CLOCK_NAME,
                     first_segment: ids[0],
                     from_height: FROM_HEIGHT,
+                    approvals: approvals_for(
+                        &schedule_proposal(CLOCK_NAME, ids[0]),
+                        &[1, 2],
+                        VALID_UNTIL,
+                    ),
                 })
                 .unwrap();
                 let message = public_transaction::Message::try_new(
@@ -607,6 +728,74 @@ mod inner {
                 assert_eq!(
                     state.get_program_image_id(clock_account_id()),
                     Some(clock().id())
+                );
+            }
+
+            fn refused_schedule(approvals: Vec<Approval>, block: u64, expected: &str) {
+                let (mut state, ids) = staged();
+                let err = state
+                    .transition_from_public_transaction(
+                        &schedule_tx_with(CLOCK_NAME, ids[0], approvals),
+                        block,
+                        0,
+                    )
+                    .expect_err("the approvals don't authorize this schedule");
+                assert!(err.to_string().contains(expected), "got: {err}");
+                assert_eq!(schedule(&state), None);
+            }
+
+            #[test]
+            fn a_schedule_below_the_approval_threshold_is_refused() {
+                let (_, ids) = staged();
+                refused_schedule(
+                    approvals_for(&schedule_proposal(CLOCK_NAME, ids[0]), &[1], VALID_UNTIL),
+                    1,
+                    "fewer approvals than the threshold",
+                );
+            }
+
+            #[test]
+            fn an_approval_from_outside_the_committee_is_refused() {
+                let (_, ids) = staged();
+                refused_schedule(
+                    approvals_for(&schedule_proposal(CLOCK_NAME, ids[0]), &[1, 9], VALID_UNTIL),
+                    1,
+                    "does not accredit",
+                );
+            }
+
+            #[test]
+            fn a_duplicate_approver_is_refused() {
+                let (_, ids) = staged();
+                refused_schedule(
+                    approvals_for(&schedule_proposal(CLOCK_NAME, ids[0]), &[1, 1], VALID_UNTIL),
+                    1,
+                    "the same key approved twice",
+                );
+            }
+
+            #[test]
+            fn an_approval_for_another_action_is_refused() {
+                let (_, ids) = staged();
+                let cancel = Proposal::Cancel {
+                    name: CLOCK_NAME,
+                    first_segment: ids[0],
+                    from_height: FROM_HEIGHT,
+                };
+                refused_schedule(
+                    approvals_for(&cancel, &[1, 2], VALID_UNTIL),
+                    1,
+                    "should verify against its signer",
+                );
+            }
+
+            #[test]
+            fn an_expired_approval_is_refused() {
+                let (_, ids) = staged();
+                refused_schedule(
+                    approvals_for(&schedule_proposal(CLOCK_NAME, ids[0]), &[1, 2], 3),
+                    4,
+                    "",
                 );
             }
 

@@ -19,13 +19,15 @@ use lee_core::{
 };
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
-    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder,
+    config::{self, MultiNodeTestContextConfig},
 };
 use testnet_initial_state::{PublicAccountPrivateInitialData, initial_pub_accounts_private_keys};
 use tokio::test;
 
-/// Blocks between scheduling and the upgrade's height.
+/// Blocks between scheduling and the upgrade's height, and the approvals' lifetime.
 const UPGRADE_DELAY: u64 = 5;
+const APPROVAL_LIFETIME: u64 = 30;
 
 fn fast_blocks() -> SequencerPartialConfig {
     SequencerPartialConfig {
@@ -75,6 +77,47 @@ async fn submit(
     .await
 }
 
+/// Approvals of `proposal` by every sequencer in a two-node zone, the whole committee.
+async fn committee_approvals(
+    ctx: &TestContext,
+    proposal: &system_upgrader_core::Proposal,
+    valid_until: u64,
+) -> Result<Vec<system_upgrader_core::Approval>> {
+    use sequencer_stake_core::ed25519_dalek::{Signer as _, SigningKey};
+
+    let committee = get_account_view(ctx, committee_selector()).await?;
+    let channel_id = sequencer_stake_core::SequencerStakeConfig::from_bytes(
+        committee.data.shard(programs::sequencer_stake_account_id()),
+    )
+    .and_then(|config| config.channel_id)
+    .context("the committee config has no channel id")?;
+    let message = system_upgrader_core::approval_message(channel_id, proposal, valid_until);
+
+    [
+        config::SEQUENCER_SIGNING_KEY,
+        *config::sequencer_signing_key_from_seed(1).to_bytes(),
+    ]
+    .iter()
+    .map(|secret| {
+        let key = SigningKey::from_bytes(secret);
+        Ok(system_upgrader_core::Approval {
+            signer: sequencer_stake_core::SequencerKey::new(key.verifying_key().to_bytes())
+                .context("a sequencer key is a curve point")?,
+            valid_until,
+            signature: key.sign(&message).to_bytes().to_vec(),
+        })
+    })
+    .collect()
+}
+
+fn committee_selector() -> ProgramShardSelector {
+    let stake_program = programs::sequencer_stake_account_id();
+    ProgramShardSelector::new(
+        sequencer_stake_core::sequencer_stake_config_account_id(stake_program),
+        stake_program,
+    )
+}
+
 async fn image_id(ctx: &TestContext, program: AccountId) -> Result<ProgramId> {
     let header = get_account_view(
         ctx,
@@ -86,10 +129,10 @@ async fn image_id(ctx: &TestContext, program: AccountId) -> Result<ProgramId> {
     Ok(header.image_id)
 }
 
-/// The new code is uploaded and the producer schedules `bridge`'s upgrade, and from the upgrade's
-/// height `bridge` runs it while blocks keep coming.
+/// The new code is uploaded, the committee approves `bridge`'s upgrade and the producer schedules
+/// it, and from the upgrade's height `bridge` runs it while blocks keep coming.
 #[test]
-async fn a_scheduled_system_upgrade_goes_live_at_its_height() -> Result<()> {
+async fn an_approved_system_upgrade_goes_live_at_its_height() -> Result<()> {
     let new_code = test_programs::data_writer();
     let user_elf = new_code.user_elf()?;
     let keys: Vec<PrivateKey> = (0..program_loader_core::segment_count(&user_elf))
@@ -104,8 +147,12 @@ async fn a_scheduled_system_upgrade_goes_live_at_its_height() -> Result<()> {
     let bridge = programs::bridge_account_id();
     let ctx = MultiZoneTestContextBuilder::default()
         .with_zone(
-            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
-                .with_sequencer_partial_config(fast_blocks()),
+            // Two sequencers: the approval threshold needs both.
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
+                num_nodes: 2,
+                ..MultiNodeTestContextConfig::default()
+            })
+            .with_sequencer_partial_config(fast_blocks()),
         )
         .build()
         .await?;
@@ -140,10 +187,17 @@ async fn a_scheduled_system_upgrade_goes_live_at_its_height() -> Result<()> {
         .await?;
     }
 
-    // The producer includes the `Schedule`. Until approval tooling lands, the test hands it to the
-    // node directly.
+    // The committee approves the upgrade, and the producer includes the approved `Schedule`.
+    // Until approval tooling lands, the test hands it to the node directly.
     let now = ctx.sequencer_client().get_last_block_id().await?;
     let from_height = now.saturating_add(UPGRADE_DELAY);
+    let proposal = system_upgrader_core::Proposal::Schedule {
+        name: programs::BRIDGE_NAME,
+        first_segment: segment_ids[0],
+        from_height,
+    };
+    let approvals =
+        committee_approvals(&ctx, &proposal, now.saturating_add(APPROVAL_LIFETIME)).await?;
     let schedule = LeeTransaction::Public(lee::PublicTransaction::new(
         lee::public_transaction::Message::try_new(
             lee_core::program::SYSTEM_UPGRADER_ACCOUNT_ID,
@@ -153,12 +207,14 @@ async fn a_scheduled_system_upgrade_goes_live_at_its_height() -> Result<()> {
                     lee_core::program::SYSTEM_UPGRADER_ACCOUNT_ID,
                 ),
                 ProgramShardSelector::new(bridge, PROGRAM_LOADER_ACCOUNT_ID),
+                committee_selector(),
             ],
             vec![],
             system_upgrader_core::Instruction::Schedule {
                 name: programs::BRIDGE_NAME,
                 first_segment: segment_ids[0],
                 from_height,
+                approvals,
             },
         )?,
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),

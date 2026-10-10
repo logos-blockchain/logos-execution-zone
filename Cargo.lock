@@ -12276,6 +12276,7 @@ version = "0.1.0"
 dependencies = [
  "borsh",
  "lee_core",
+ "sequencer_stake_core",
 ]
 
 [[package]]
@@ -12284,6 +12285,7 @@ version = "0.1.0"
 dependencies = [
  "borsh",
  "lee_core",
+ "sequencer_stake_core",
  "system_upgrader_core",
 ]
 
