@@ -1,15 +1,18 @@
 //! Conversions between `indexer_service_protocol` types and `lee/lee_core` types.
 
+use std::collections::BTreeMap;
+
 use lee_core::account::Nonce;
 
 use crate::{
-    Account, AccountData, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId,
-    BlockIngestError, Ciphertext, Commitment, CommitmentSetDigest, CrossZoneHalt,
-    DeferredPublicEffect, EncryptedAccountData, EphemeralPublicKey, EventRecord, FeeDeclaration,
-    HashType, IndexerStatus, IndexerSyncState, Nullifier, PeerHealth, PeerStatus,
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, ProgramShardSelector,
-    Proof, PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Selector, ShardData,
-    Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
+    Account, AccountData, AccountId, Actor, ActorState, BedrockStatus, Block, BlockBody,
+    BlockHeader, BlockId, BlockIngestError, BoundaryStep, Ciphertext, Commitment,
+    CommitmentSetDigest, CrossZoneHalt, Delivery, EncryptedNote, EphemeralPublicKey, EventRecord,
+    FeeDeclaration, HashType, IndexerStatus, IndexerSyncState, MessageEnvelope, Nullifier, PdaSeed,
+    PeerHealth, PeerStatus, PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
+    Proof, PublicAccountEvidence, PublicExecutionContext, PublicKey, PublicMessage,
+    PublicTransaction, RecoveryBinding, RootCall, SealedCast, Selector, Signature, StallReason,
+    Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -42,25 +45,23 @@ impl From<lee_core::account::Account> for Account {
     }
 }
 
-impl TryFrom<Account> for lee_core::account::Account {
-    type Error = lee_core::account::data::DataTooBigError;
-
-    fn try_from(value: Account) -> Result<Self, Self::Error> {
+impl From<Account> for lee_core::account::Account {
+    fn from(value: Account) -> Self {
         let Account { nonce, data } = value;
 
-        Ok(Self {
+        Self {
             nonce: Nonce(nonce),
-            data: data.try_into()?,
-        })
+            data: data.into(),
+        }
     }
 }
 
 impl From<lee_core::account::AccountData> for AccountData {
     fn from(value: lee_core::account::AccountData) -> Self {
-        let lee_core::account::AccountData { shards } = value;
+        let lee_core::account::AccountData { actor_states } = value;
 
         Self {
-            shards: shards
+            actor_states: actor_states
                 .into_iter()
                 .map(|(program, data)| (program.into(), data.into()))
                 .collect(),
@@ -68,24 +69,22 @@ impl From<lee_core::account::AccountData> for AccountData {
     }
 }
 
-impl TryFrom<AccountData> for lee_core::account::AccountData {
-    type Error = lee_core::account::data::DataTooBigError;
+impl From<AccountData> for lee_core::account::AccountData {
+    fn from(value: AccountData) -> Self {
+        let AccountData { actor_states } = value;
 
-    fn try_from(value: AccountData) -> Result<Self, Self::Error> {
-        let AccountData { shards } = value;
-
-        Ok(Self {
-            shards: shards
+        Self {
+            actor_states: actor_states
                 .into_iter()
-                .map(|(program, data)| Ok((program.into(), data.try_into()?)))
-                .collect::<Result<_, Self::Error>>()?,
-        })
+                .map(|(program, data)| (program.into(), data.into()))
+                .collect(),
+        }
     }
 }
 
-impl From<lee_core::account::ProgramShardSelector> for ProgramShardSelector {
-    fn from(value: lee_core::account::ProgramShardSelector) -> Self {
-        let lee_core::account::ProgramShardSelector {
+impl From<lee_core::account::Actor> for Actor {
+    fn from(value: lee_core::account::Actor) -> Self {
+        let lee_core::account::Actor {
             account_id,
             program_account_id,
         } = value;
@@ -97,9 +96,9 @@ impl From<lee_core::account::ProgramShardSelector> for ProgramShardSelector {
     }
 }
 
-impl From<ProgramShardSelector> for lee_core::account::ProgramShardSelector {
-    fn from(value: ProgramShardSelector) -> Self {
-        let ProgramShardSelector {
+impl From<Actor> for lee_core::account::Actor {
+    fn from(value: Actor) -> Self {
+        let Actor {
             account_id,
             program_account_id,
         } = value;
@@ -111,17 +110,15 @@ impl From<ProgramShardSelector> for lee_core::account::ProgramShardSelector {
     }
 }
 
-impl From<lee_core::account::ShardData> for ShardData {
-    fn from(value: lee_core::account::ShardData) -> Self {
+impl From<lee_core::account::ActorState> for ActorState {
+    fn from(value: lee_core::account::ActorState) -> Self {
         Self(value.into_inner())
     }
 }
 
-impl TryFrom<ShardData> for lee_core::account::ShardData {
-    type Error = lee_core::account::data::DataTooBigError;
-
-    fn try_from(value: ShardData) -> Result<Self, Self::Error> {
-        Self::try_from(value.0)
+impl From<ActorState> for lee_core::account::ActorState {
+    fn from(value: ActorState) -> Self {
+        Self::from(value.0)
     }
 }
 
@@ -242,29 +239,23 @@ impl From<Proof> for lee::privacy_preserving_transaction::circuit::Proof {
 }
 
 // ============================================================================
-// EncryptedAccountData conversions
+// EncryptedNote conversions
 // ============================================================================
 
-impl From<lee::privacy_preserving_transaction::message::EncryptedAccountData>
-    for EncryptedAccountData
-{
-    fn from(value: lee::privacy_preserving_transaction::message::EncryptedAccountData) -> Self {
+impl From<lee_core::EncryptedNote> for EncryptedNote {
+    fn from(value: lee_core::EncryptedNote) -> Self {
         Self {
             ciphertext: value.ciphertext.into(),
             epk: value.epk.into(),
-            view_tag: value.view_tag,
         }
     }
 }
 
-impl From<EncryptedAccountData>
-    for lee::privacy_preserving_transaction::message::EncryptedAccountData
-{
-    fn from(value: EncryptedAccountData) -> Self {
+impl From<EncryptedNote> for lee_core::EncryptedNote {
+    fn from(value: EncryptedNote) -> Self {
         Self {
             ciphertext: value.ciphertext.into(),
             epk: value.epk.into(),
-            view_tag: value.view_tag,
         }
     }
 }
@@ -304,80 +295,222 @@ impl From<FeeDeclaration> for lee::FeeDeclaration {
 
 impl From<lee::public_transaction::Message> for PublicMessage {
     fn from(value: lee::public_transaction::Message) -> Self {
-        let lee::public_transaction::Message {
-            program_account_id,
-            shard_selectors,
+        let lee::TransactionMessage {
+            context,
+            execution: lee::public_transaction::PublicExecution { root, fee },
             nonces,
-            instruction_data,
-            fee,
+            admission_evidence,
         } = value;
         Self {
-            program_account_id: program_account_id.into(),
-            shard_selectors: shard_selectors.into_iter().map(Into::into).collect(),
-            nonces: nonces.iter().map(|x| x.0).collect(),
-            instruction_data,
+            context: context.into(),
+            root: root.into(),
             fee: fee.map(Into::into),
+            nonces: nonce_entries(nonces),
+            admission_evidence: admission_evidence.into_iter().map(Into::into).collect(),
         }
     }
 }
 
-impl From<PublicMessage> for lee::public_transaction::Message {
-    fn from(value: PublicMessage) -> Self {
+impl TryFrom<PublicMessage> for lee::public_transaction::Message {
+    type Error = lee::error::LeeError;
+
+    fn try_from(value: PublicMessage) -> Result<Self, Self::Error> {
         let PublicMessage {
-            program_account_id,
-            shard_selectors,
-            nonces,
-            instruction_data,
+            context,
+            root,
             fee,
+            nonces,
+            admission_evidence,
         } = value;
-        Self::new_preserialized(
-            program_account_id.into(),
-            shard_selectors.into_iter().map(Into::into).collect(),
-            nonces
-                .iter()
-                .map(|x| lee_core::account::Nonce(*x))
+        Ok(Self {
+            context: context.into(),
+            execution: lee::public_transaction::PublicExecution {
+                root: root.into(),
+                fee: fee.map(Into::into),
+            },
+            nonces: nonce_map(nonces)?,
+            admission_evidence: admission_evidence
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, Self::Error>>()?,
+        })
+    }
+}
+
+impl From<lee_core::RootCall> for RootCall {
+    fn from(value: lee_core::RootCall) -> Self {
+        let lee_core::RootCall { to, message } = value;
+        Self {
+            to: to.into(),
+            message,
+        }
+    }
+}
+
+impl From<RootCall> for lee_core::RootCall {
+    fn from(value: RootCall) -> Self {
+        let RootCall { to, message } = value;
+        Self {
+            to: to.into(),
+            message,
+        }
+    }
+}
+
+impl From<lee::PublicAccountEvidence> for PublicAccountEvidence {
+    fn from(value: lee::PublicAccountEvidence) -> Self {
+        match value {
+            lee::PublicAccountEvidence::Key(key) => Self::Key(key.into()),
+            lee::PublicAccountEvidence::Pda { program, seed } => Self::Pda {
+                program: program.into(),
+                seed: seed.into(),
+            },
+        }
+    }
+}
+
+impl TryFrom<PublicAccountEvidence> for lee::PublicAccountEvidence {
+    type Error = lee::error::LeeError;
+
+    fn try_from(value: PublicAccountEvidence) -> Result<Self, Self::Error> {
+        match value {
+            PublicAccountEvidence::Key(key) => Ok(Self::Key(key.try_into()?)),
+            PublicAccountEvidence::Pda { program, seed } => Ok(Self::Pda {
+                program: program.into(),
+                seed: seed.into(),
+            }),
+        }
+    }
+}
+
+impl From<lee_core::program::PdaSeed> for PdaSeed {
+    fn from(value: lee_core::program::PdaSeed) -> Self {
+        Self(*value.as_bytes())
+    }
+}
+
+impl From<PdaSeed> for lee_core::program::PdaSeed {
+    fn from(value: PdaSeed) -> Self {
+        Self::new(value.0)
+    }
+}
+
+impl<S: Into<T>, T> From<lee_core::program::MessageEnvelope<S>> for MessageEnvelope<T> {
+    fn from(value: lee_core::program::MessageEnvelope<S>) -> Self {
+        let lee_core::program::MessageEnvelope { from, to, message } = value;
+        Self {
+            from: from.into(),
+            to: to.into(),
+            message,
+        }
+    }
+}
+
+impl<S: Into<T>, T> From<MessageEnvelope<S>> for lee_core::program::MessageEnvelope<T> {
+    fn from(value: MessageEnvelope<S>) -> Self {
+        let MessageEnvelope { from, to, message } = value;
+        Self {
+            from: from.into(),
+            to: to.into(),
+            message,
+        }
+    }
+}
+
+impl<S: Into<T>, T> From<lee_core::execution_state::Delivery<S>> for Delivery<T> {
+    fn from(value: lee_core::execution_state::Delivery<S>) -> Self {
+        let lee_core::execution_state::Delivery {
+            envelope,
+            inherited_authorizations,
+            inherits_entry_authorizations,
+            pda_seeds,
+        } = value;
+        Self {
+            envelope: envelope.into(),
+            inherited_authorizations: inherited_authorizations
+                .into_iter()
+                .map(Into::into)
                 .collect(),
-            instruction_data,
-            fee.map(Into::into),
-        )
-    }
-}
-
-impl From<lee_core::execution_state::DeferredPublicEffect> for DeferredPublicEffect {
-    fn from(value: lee_core::execution_state::DeferredPublicEffect) -> Self {
-        let lee_core::execution_state::DeferredPublicEffect {
-            program_account_id,
-            shard_program_account_id,
-            data,
-        } = value;
-        Self {
-            program_account_id: program_account_id.into(),
-            shard_program_account_id: shard_program_account_id.into(),
-            data,
+            inherits_entry_authorizations,
+            pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
         }
     }
 }
 
-impl From<DeferredPublicEffect> for lee_core::execution_state::DeferredPublicEffect {
-    fn from(value: DeferredPublicEffect) -> Self {
-        let DeferredPublicEffect {
-            program_account_id,
-            shard_program_account_id,
-            data,
+impl<S: Into<T>, T> From<Delivery<S>> for lee_core::execution_state::Delivery<T> {
+    fn from(value: Delivery<S>) -> Self {
+        let Delivery {
+            envelope,
+            inherited_authorizations,
+            inherits_entry_authorizations,
+            pda_seeds,
         } = value;
         Self {
-            program_account_id: program_account_id.into(),
-            shard_program_account_id: shard_program_account_id.into(),
-            data,
+            envelope: envelope.into(),
+            inherited_authorizations: inherited_authorizations
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            inherits_entry_authorizations,
+            pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
         }
     }
 }
 
-impl From<lee::privacy_preserving_transaction::message::PublicActionWithID> for PublicActionWithID {
-    fn from(value: lee::privacy_preserving_transaction::message::PublicActionWithID) -> Self {
+impl From<lee_core::execution_state::BoundaryStep> for BoundaryStep {
+    fn from(value: lee_core::execution_state::BoundaryStep) -> Self {
+        match value {
+            lee_core::execution_state::BoundaryStep::PrivateToPublic(delivery) => {
+                Self::PrivateToPublic(delivery.into())
+            }
+            lee_core::execution_state::BoundaryStep::PublicToPrivate(cross_message) => {
+                Self::PublicToPrivate(cross_message.into())
+            }
+            lee_core::execution_state::BoundaryStep::EndPrivateSubtree => Self::EndPrivateSubtree,
+            lee_core::execution_state::BoundaryStep::EndPublicSubtree => Self::EndPublicSubtree,
+        }
+    }
+}
+
+impl From<BoundaryStep> for lee_core::execution_state::BoundaryStep {
+    fn from(value: BoundaryStep) -> Self {
+        match value {
+            BoundaryStep::PrivateToPublic(delivery) => Self::PrivateToPublic(delivery.into()),
+            BoundaryStep::PublicToPrivate(cross_message) => {
+                Self::PublicToPrivate(cross_message.into())
+            }
+            BoundaryStep::EndPrivateSubtree => Self::EndPrivateSubtree,
+            BoundaryStep::EndPublicSubtree => Self::EndPublicSubtree,
+        }
+    }
+}
+
+impl From<lee_core::execution_state::PublicExecutionContext> for PublicExecutionContext {
+    fn from(value: lee_core::execution_state::PublicExecutionContext) -> Self {
+        let lee_core::execution_state::PublicExecutionContext {
+            actors,
+            authorized_accounts,
+            cast_promotions,
+        } = value;
         Self {
-            account_id: value.account_id.into(),
-            effects: value.effects.into_iter().map(Into::into).collect(),
+            actors: actors.into_iter().map(Into::into).collect(),
+            authorized_accounts: authorized_accounts.into_iter().map(Into::into).collect(),
+            cast_promotions: cast_promotions.into_iter().collect(),
+        }
+    }
+}
+
+impl From<PublicExecutionContext> for lee_core::execution_state::PublicExecutionContext {
+    fn from(value: PublicExecutionContext) -> Self {
+        let PublicExecutionContext {
+            actors,
+            authorized_accounts,
+            cast_promotions,
+        } = value;
+        Self {
+            actors: actors.into_iter().map(Into::into).collect(),
+            authorized_accounts: authorized_accounts.into_iter().map(Into::into).collect(),
+            cast_promotions: cast_promotions.into_iter().collect(),
         }
     }
 }
@@ -393,34 +526,77 @@ impl From<lee_core::PrivateAction> for PrivateAction {
     }
 }
 
-impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPreservingMessage {
-    fn from(value: lee::privacy_preserving_transaction::message::Message) -> Self {
-        let lee::privacy_preserving_transaction::message::Message {
-            public_actions,
-            nonces,
-            private_actions,
-            block_validity_window,
-            timestamp_validity_window,
-            // Not yet part of this wire protocol; see the `program_image_claims` field doc on
-            // `lee::privacy_preserving_transaction::message::Message`. FFI/wallet plumbing for
-            // address-flexible program dispatch is tracked separately.
-            program_image_claims: _,
-        } = value;
+impl From<lee_core::RecoveryBinding> for RecoveryBinding {
+    fn from(value: lee_core::RecoveryBinding) -> Self {
+        let lee_core::RecoveryBinding { address, note } = value;
         Self {
-            public_actions: public_actions.into_iter().map(Into::into).collect(),
-            nonces: nonces.iter().map(|x| x.0).collect(),
-            private_actions: private_actions.into_iter().map(Into::into).collect(),
-            block_validity_window: block_validity_window.into(),
-            timestamp_validity_window: timestamp_validity_window.into(),
+            address: address.into(),
+            note: note.into(),
         }
     }
 }
 
-impl From<PublicActionWithID> for lee::privacy_preserving_transaction::message::PublicActionWithID {
-    fn from(value: PublicActionWithID) -> Self {
+impl From<RecoveryBinding> for lee_core::RecoveryBinding {
+    fn from(value: RecoveryBinding) -> Self {
+        let RecoveryBinding { address, note } = value;
         Self {
-            account_id: value.account_id.into(),
-            effects: value.effects.into_iter().map(Into::into).collect(),
+            address: address.into(),
+            note: note.into(),
+        }
+    }
+}
+
+impl From<lee_core::SealedCast> for SealedCast {
+    fn from(value: lee_core::SealedCast) -> Self {
+        let lee_core::SealedCast { commitment, note } = value;
+        Self {
+            commitment: commitment.into(),
+            note: note.into(),
+        }
+    }
+}
+
+impl From<SealedCast> for lee_core::SealedCast {
+    fn from(value: SealedCast) -> Self {
+        let SealedCast { commitment, note } = value;
+        Self {
+            commitment: commitment.into(),
+            note: note.into(),
+        }
+    }
+}
+
+impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPreservingMessage {
+    fn from(value: lee::privacy_preserving_transaction::message::Message) -> Self {
+        let lee::TransactionMessage {
+            context,
+            execution:
+                lee_core::ProvenExecution {
+                    boundary,
+                    casts,
+                    recovery_bindings,
+                    public_root,
+                    private_actions,
+                    validity,
+                    // Not yet part of this wire protocol; see the `program_image_claims` field doc
+                    // on `lee_core::ProvenExecution`. FFI/wallet plumbing for address-flexible
+                    // program dispatch is tracked separately.
+                    program_image_claims: _,
+                },
+            nonces,
+            admission_evidence,
+        } = value;
+        Self {
+            context: context.into(),
+            boundary: boundary.into_iter().map(Into::into).collect(),
+            casts: casts.into_iter().map(Into::into).collect(),
+            recovery_bindings: recovery_bindings.into_iter().map(Into::into).collect(),
+            public_root: public_root.map(Into::into),
+            nonces: nonce_entries(nonces),
+            private_actions: private_actions.into_iter().map(Into::into).collect(),
+            block_validity_window: validity.blocks.into(),
+            timestamp_validity_window: validity.timestamps.into(),
+            admission_evidence: admission_evidence.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -441,33 +617,46 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
 
     fn try_from(value: PrivacyPreservingMessage) -> Result<Self, Self::Error> {
         let PrivacyPreservingMessage {
-            public_actions,
+            context,
+            boundary,
+            casts,
+            recovery_bindings,
+            public_root,
             nonces,
             private_actions,
             block_validity_window,
             timestamp_validity_window,
+            admission_evidence,
         } = value;
 
-        let public_actions = public_actions.into_iter().map(Into::into).collect();
         let private_actions = private_actions.into_iter().map(Into::into).collect();
 
         Ok(Self {
-            public_actions,
-            nonces: nonces
-                .iter()
-                .map(|x| lee_core::account::Nonce(*x))
-                .collect(),
-            private_actions,
-            block_validity_window: block_validity_window
-                .try_into()
-                .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
-            timestamp_validity_window: timestamp_validity_window
-                .try_into()
-                .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
-            // Not yet part of this wire protocol; see the corresponding destructure above.
-            // A privacy-preserving tx submitted through this protocol will fail proof
-            // verification for any program not at its bijection address until this is wired.
-            program_image_claims: Vec::new(),
+            context: context.into(),
+            execution: lee_core::ProvenExecution {
+                boundary: boundary.into_iter().map(Into::into).collect(),
+                casts: casts.into_iter().map(Into::into).collect(),
+                recovery_bindings: recovery_bindings.into_iter().map(Into::into).collect(),
+                public_root: public_root.map(Into::into),
+                private_actions,
+                validity: lee_core::program::ValidityWindows {
+                    blocks: block_validity_window
+                        .try_into()
+                        .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
+                    timestamps: timestamp_validity_window
+                        .try_into()
+                        .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
+                },
+                // Not yet part of this wire protocol; see the corresponding destructure above.
+                // A privacy-preserving tx submitted through this protocol will fail proof
+                // verification for any program not at its bijection address until this is wired.
+                program_image_claims: Vec::new(),
+            },
+            nonces: nonce_map(nonces)?,
+            admission_evidence: admission_evidence
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, Self::Error>>()?,
         })
     }
 }
@@ -559,7 +748,7 @@ impl TryFrom<PublicTransaction> for lee::PublicTransaction {
         } = witness_set;
 
         Ok(Self::new(
-            message.into(),
+            message.try_into()?,
             lee::public_transaction::WitnessSet::from_raw_parts(
                 signatures_and_public_keys
                     .into_iter()
@@ -998,6 +1187,20 @@ impl EventRecord {
     }
 }
 
+fn nonce_entries(nonces: BTreeMap<lee::AccountId, Nonce>) -> Vec<(AccountId, u128)> {
+    nonces
+        .into_iter()
+        .map(|(account_id, nonce)| (account_id.into(), nonce.0))
+        .collect()
+}
+
+fn nonce_map(
+    entries: Vec<(AccountId, u128)>,
+) -> Result<BTreeMap<lee::AccountId, Nonce>, lee::error::LeeError> {
+    Ok(lee::nonce_map(entries.into_iter().map(
+        |(account_id, nonce)| (account_id.into(), Nonce(nonce)),
+    ))?)
+}
 #[cfg(test)]
 mod tests {
     use super::*;

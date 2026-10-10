@@ -89,7 +89,7 @@ pub fn AccountPage() -> impl IntoView {
                                 let AccountSummary {
                                     nonce,
                                     balance,
-                                    shards,
+                                    actor_states,
                                 } = acc;
                                 let balance_str = balance.map_or_else(
                                     || "<malformed>".to_owned(),
@@ -123,21 +123,21 @@ pub fn AccountPage() -> impl IntoView {
                                             </div>
                                         </div>
 
-                                        <div class="account-shards">
-                                            <h2>"Shards"</h2>
-                                            {if shards.is_empty() {
-                                                view! { <div class="no-shards">"No shards"</div> }
+                                        <div class="account-actor-states">
+                                            <h2>"ActorStates"</h2>
+                                            {if actor_states.is_empty() {
+                                                view! { <div class="no-actor-states">"No actor states"</div> }
                                                     .into_any()
                                             } else {
                                                 view! {
                                                     <div class="info-grid">
-                                                        {shards
+                                                        {actor_states
                                                             .into_iter()
-                                                            .map(|shard| {
-                                                                let program_str = shard
+                                                            .map(|actor_state| {
+                                                                let program_str = actor_state
                                                                     .program_account_id
                                                                     .to_string();
-                                                                let data_len = shard.len;
+                                                                let data_len = actor_state.len;
                                                                 view! {
                                                                     <div class="info-row">
                                                                         <span class="info-label hash">

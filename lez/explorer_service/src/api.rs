@@ -14,9 +14,9 @@ pub struct SearchResults {
 #[cfg(feature = "ssr")]
 pub type IndexerRpcClient = jsonrpsee::http_client::HttpClient;
 
-/// Get an account's balance, nonce, and per-shard sizes.
+/// Get an account's balance, nonce, and per-actor-state sizes.
 ///
-/// Deliberately not the whole account: shard contents are unbounded and any third
+/// Deliberately not the whole account: actor state contents are unbounded and any third
 /// party can add to them, so a full read can be made to exceed the response cap for
 /// a chosen account permanently. Everything this explorer renders is covered here.
 #[server]

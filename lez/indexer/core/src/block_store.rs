@@ -8,7 +8,7 @@ use common::{
     block::{BedrockStatus, Block, BlockHeader},
     transaction::{LeeTransaction, TxEvents},
 };
-use lee::{Account, AccountId, ProgramShardSelector, V03State};
+use lee::{Account, AccountId, Actor, V03State};
 use lee_core::BlockId;
 use log::warn;
 use logos_blockchain_core::header::HeaderId;
@@ -242,34 +242,33 @@ impl IndexerStore {
         Ok(self.dbio.final_state()?)
     }
 
-    pub async fn account_current_state(&self, account_id: &AccountId) -> Result<Account> {
+    pub async fn account_current_state(&self, account_id: &AccountId) -> Result<Option<Account>> {
         Ok(self
             .current_state
             .read()
             .await
-            .get_account_by_id(*account_id))
+            .get_account_by_id_ref(*account_id)
+            .cloned())
     }
 
-    pub fn account_state_at_block(&self, account_id: &AccountId, block_id: u64) -> Result<Account> {
+    pub fn account_state_at_block(
+        &self,
+        account_id: &AccountId,
+        block_id: u64,
+    ) -> Result<Option<Account>> {
         Ok(self
             .get_state_at_block(block_id)?
-            .get_account_by_id(*account_id))
+            .get_account_by_id_ref(*account_id)
+            .cloned())
     }
 
-    pub async fn account_current_view(&self, selector: ProgramShardSelector) -> Result<Account> {
+    pub async fn account_current_view(&self, actor: Actor) -> Result<Option<Account>> {
         let state = self.current_state.read().await;
-        Ok(project_account(&state, selector))
+        Ok(project_account(&state, actor))
     }
 
-    pub fn account_view_at_block(
-        &self,
-        selector: ProgramShardSelector,
-        block_id: u64,
-    ) -> Result<Account> {
-        Ok(project_account(
-            &self.get_state_at_block(block_id)?,
-            selector,
-        ))
+    pub fn account_view_at_block(&self, actor: Actor, block_id: u64) -> Result<Option<Account>> {
+        Ok(project_account(&self.get_state_at_block(block_id)?, actor))
     }
 
     /// The last successfully applied block, or `None` on a cold store.
@@ -358,12 +357,10 @@ impl IndexerStore {
     }
 }
 
-fn project_account(state: &V03State, selector: ProgramShardSelector) -> Account {
+fn project_account(state: &V03State, actor: Actor) -> Option<Account> {
     state
-        .get_account_by_id_ref(selector.account_id)
-        .map_or_else(Account::default, |account| {
-            account.project([selector.program_account_id])
-        })
+        .get_account_by_id_ref(actor.account_id)
+        .map(|account| account.project([actor.program_account_id]))
 }
 
 // A filter change takes effect at the next ingested block: rows up to the old

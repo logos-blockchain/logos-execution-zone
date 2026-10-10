@@ -1,6 +1,6 @@
 use indexer_service_protocol::{
-    Account, AccountId, AccountSummary, Block, BlockId, EventRecord, EventSubscriptionFilter,
-    GetEventsFilter, HashType, IndexerStatus, ProgramShardSelector, Transaction,
+    Account, AccountId, AccountSummary, Actor, Block, BlockId, EventRecord,
+    EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus, Transaction,
 };
 use jsonrpsee::proc_macros::rpc;
 #[cfg(feature = "server")]
@@ -60,18 +60,19 @@ pub trait Rpc {
     ) -> Result<Option<Block>, ErrorObjectOwned>;
 
     #[method(name = "getAccount")]
-    async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned>;
+    async fn get_account(&self, account_id: AccountId)
+    -> Result<Option<Account>, ErrorObjectOwned>;
 
     #[method(name = "getAccountAtBlock")]
     async fn get_account_at_block(
         &self,
         account_id: AccountId,
         block_id: BlockId,
-    ) -> Result<Account, ErrorObjectOwned>;
+    ) -> Result<Option<Account>, ErrorObjectOwned>;
 
-    /// The account's balance, nonce, and one entry per shard carrying its size only.
+    /// The account's balance, nonce, and one entry per actor state carrying its size only.
     /// Safe to call on any account: unlike `getAccount`, the response does not grow
-    /// with shard contents.
+    /// with actor state contents.
     #[method(name = "getAccountSummary")]
     async fn get_account_summary(
         &self,
@@ -79,17 +80,14 @@ pub trait Rpc {
     ) -> Result<AccountSummary, ErrorObjectOwned>;
 
     #[method(name = "getAccountView")]
-    async fn get_account_view(
-        &self,
-        selector: ProgramShardSelector,
-    ) -> Result<Account, ErrorObjectOwned>;
+    async fn get_account_view(&self, actor: Actor) -> Result<Option<Account>, ErrorObjectOwned>;
 
     #[method(name = "getAccountViewAtBlock")]
     async fn get_account_view_at_block(
         &self,
-        selector: ProgramShardSelector,
+        actor: Actor,
         block_id: BlockId,
-    ) -> Result<Account, ErrorObjectOwned>;
+    ) -> Result<Option<Account>, ErrorObjectOwned>;
 
     #[method(name = "getTransaction")]
     async fn get_transaction(

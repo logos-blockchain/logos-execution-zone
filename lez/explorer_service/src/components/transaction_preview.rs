@@ -32,9 +32,10 @@ pub fn TransactionPreview(transaction: Transaction) -> impl IntoView {
                 witness_set: _,
             } = tx;
             let accounts: BTreeSet<_> = message
-                .shard_selectors
+                .context
+                .actors
                 .iter()
-                .map(|selector| selector.account_id)
+                .map(|actor| actor.account_id)
                 .collect();
             format!("{} accounts involved", accounts.len())
         }
@@ -45,8 +46,8 @@ pub fn TransactionPreview(transaction: Transaction) -> impl IntoView {
                 witness_set: _,
             } = tx;
             format!(
-                "{} public accounts, {} commitments",
-                message.public_actions.len(),
+                "{} public actors, {} commitments",
+                message.context.actors.len(),
                 message.private_actions.len()
             )
         }

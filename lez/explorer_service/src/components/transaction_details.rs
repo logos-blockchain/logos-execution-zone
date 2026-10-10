@@ -1,10 +1,10 @@
 use indexer_service_protocol::{
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, ProgramShardSelector, PublicMessage,
-    PublicTransaction, WitnessSet,
+    AccountId, BoundaryStep, PrivacyPreservingMessage, PrivacyPreservingTransaction,
+    PublicExecutionContext, PublicMessage, PublicTransaction, RootCall, WitnessSet,
 };
 use leptos::prelude::*;
 
-use super::ShardSelectorList;
+use super::ActorList;
 
 /// Public transaction details component
 #[component]
@@ -15,25 +15,24 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
         witness_set,
     } = tx;
     let PublicMessage {
-        program_account_id,
-        shard_selectors,
-        nonces,
-        instruction_data,
+        context,
+        root: RootCall { to, message: data },
         fee,
+        nonces,
+        admission_evidence: _,
     } = message;
+    let public_actors = context.actors;
     let WitnessSet {
         signatures_and_public_keys,
         proof,
     } = witness_set;
 
-    let program_id_str = program_account_id.to_string();
+    let program_id_str = to.program_account_id.to_string();
+    let message_str = format!("{} bytes", data.len());
+    let root_actors = vec![to];
     let proof_len = proof.map_or(0, |p| p.0.len());
     let signatures_count = signatures_and_public_keys.len();
-    let signer_nonces_str = nonces
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
+    let signer_nonces_str = signer_nonces(&nonces);
     let (fee_payer_str, fee_amounts_str) = fee.map_or_else(
         || ("None (exempt)".to_owned(), "None (exempt)".to_owned()),
         |fee| {
@@ -53,10 +52,8 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
                     <span class="info-value hash">{program_id_str}</span>
                 </div>
                 <div class="info-row">
-                    <span class="info-label">"Instruction Data:"</span>
-                    <span class="info-value">
-                        {format!("{} u32 values", instruction_data.len())}
-                    </span>
+                    <span class="info-label">"Message:"</span>
+                    <span class="info-value">{message_str}</span>
                 </div>
                 <div class="info-row">
                     <span class="info-label">"Proof Size:"</span>
@@ -80,8 +77,11 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
                 </div>
             </div>
 
-            <h3>"Accounts"</h3>
-            <ShardSelectorList shard_selectors=shard_selectors />
+            <h3>"Root Actor"</h3>
+            <ActorList actors=root_actors />
+
+            <h3>"Public Actors"</h3>
+            <ActorList actors=public_actors />
         </div>
     }
 }
@@ -95,32 +95,50 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
         witness_set,
     } = tx;
     let PrivacyPreservingMessage {
-        public_actions,
+        context,
+        boundary,
+        casts: _,
+        recovery_bindings: _,
+        public_root: _,
         nonces,
         private_actions,
         block_validity_window,
         timestamp_validity_window,
+        admission_evidence: _,
     } = message;
+    let PublicExecutionContext {
+        actors: public_actors,
+        authorized_accounts,
+        cast_promotions: _,
+    } = context;
     let private_action_count = private_actions.len();
-    let public_account_count = public_actions.len();
-    // One row per effect, in the order settlement folds them: the same shard can appear twice.
-    let public_shard_selectors: Vec<_> = public_actions
-        .into_iter()
-        .flat_map(|action| {
-            action
-                .effects
-                .into_iter()
-                .map(move |effect| ProgramShardSelector {
-                    account_id: action.account_id,
-                    program_account_id: effect.shard_program_account_id,
-                })
-        })
-        .collect();
-    let signer_nonces_str = nonces
+    let public_actor_count = public_actors.len();
+    let authorized_count = authorized_accounts.len();
+    let steps_str = boundary
         .iter()
-        .map(ToString::to_string)
+        .map(|step| match step {
+            BoundaryStep::PrivateToPublic(_) => "PrivateToPublic",
+            BoundaryStep::PublicToPrivate(_) => "PublicToPrivate",
+            BoundaryStep::EndPrivateSubtree => "EndPrivateSubtree",
+            BoundaryStep::EndPublicSubtree => "EndPublicSubtree",
+        })
         .collect::<Vec<_>>()
         .join(", ");
+    // The public actors the private execution called, and those that called into it.
+    let mut delivery_receivers = Vec::new();
+    let mut cross_message_senders = Vec::new();
+    for step in boundary {
+        match step {
+            BoundaryStep::PrivateToPublic(delivery) => {
+                delivery_receivers.push(delivery.envelope.to);
+            }
+            BoundaryStep::PublicToPrivate(cross_message) => {
+                cross_message_senders.push(cross_message.envelope.from);
+            }
+            BoundaryStep::EndPrivateSubtree | BoundaryStep::EndPublicSubtree => {}
+        }
+    }
+    let signer_nonces_str = signer_nonces(&nonces);
     let WitnessSet {
         signatures_and_public_keys: _,
         proof,
@@ -132,10 +150,12 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
             <h2>"Privacy-Preserving Transaction Details"</h2>
             <div class="info-grid">
                 <div class="info-row">
-                    <span class="info-label">"Public Accounts:"</span>
-                    <span class="info-value">
-                        {public_account_count.to_string()}
-                    </span>
+                    <span class="info-label">"Public Actors:"</span>
+                    <span class="info-value">{public_actor_count.to_string()}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">"Authorized Accounts:"</span>
+                    <span class="info-value">{authorized_count.to_string()}</span>
                 </div>
                 <div class="info-row">
                     <span class="info-label">"Private Actions:"</span>
@@ -157,10 +177,28 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
                     <span class="info-label">"Signer Nonces:"</span>
                     <span class="info-value">{signer_nonces_str}</span>
                 </div>
+                <div class="info-row">
+                    <span class="info-label">"Boundary Steps:"</span>
+                    <span class="info-value">{steps_str}</span>
+                </div>
             </div>
 
-            <h3>"Public Effects"</h3>
-            <ShardSelectorList shard_selectors=public_shard_selectors />
+            <h3>"Declared Public Actors"</h3>
+            <ActorList actors=public_actors />
+
+            <h3>"Boundary Public Deliveries"</h3>
+            <ActorList actors=delivery_receivers />
+
+            <h3>"Boundary Private Deliveries"</h3>
+            <ActorList actors=cross_message_senders />
         </div>
     }
+}
+
+fn signer_nonces(nonces: &[(AccountId, u128)]) -> String {
+    nonces
+        .iter()
+        .map(|(account_id, nonce)| format!("{account_id}: {nonce}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }

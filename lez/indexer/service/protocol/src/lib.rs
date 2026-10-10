@@ -103,16 +103,17 @@ pub struct Account {
     pub data: AccountData,
 }
 
-/// An account's balance and program shards.
+/// An account's balance and program actor states.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct AccountData {
-    pub shards: BTreeMap<AccountId, ShardData>,
+    pub actor_states: BTreeMap<AccountId, ActorState>,
 }
 
 impl AccountData {
     #[must_use]
     pub fn balance(&self) -> Option<u128> {
-        let Some(ShardData(data)) = self.shards.get(&AccountId::native_token_program()) else {
+        let Some(ActorState(data)) = self.actor_states.get(&AccountId::native_token_program())
+        else {
             return Some(0);
         };
         if data.is_empty() {
@@ -132,34 +133,34 @@ impl AccountId {
     }
 }
 
-/// An account's balance and nonce with one entry per shard, carrying each shard's
+/// An account's balance and nonce with one entry per actor state, carrying each actor state's
 /// size instead of its bytes.
 ///
-/// Nothing bounds how many shards an account holds or how large each one is, so a
+/// Nothing bounds how many actor states an account holds or how large each one is, so a
 /// whole-account read is not a safe way to enumerate them: any third party can write
-/// its own shard onto any account, and enough of them push the response past the
+/// its own actor state onto any account, and enough of them push the response past the
 /// server's size cap for good. This answers "which programs hold state here, and how
-/// much" in a response whose size follows the shard count alone.
+/// much" in a response whose size follows the actor state count alone.
 ///
-/// `balance` is derived from the native-token shard, so it is `None` exactly when that
-/// shard is encoded non-canonically.
+/// `balance` is derived from the native-token actor state, so it is `None` exactly when that
+/// actor state is encoded non-canonically.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct AccountSummary {
     pub nonce: Nonce,
     pub balance: Option<u128>,
-    pub shards: Vec<ShardSummary>,
+    pub actor_states: Vec<ActorStateSummary>,
 }
 
-/// One program's shard on an account, by size rather than content.
+/// One program's actor state on an account, by size rather than content.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct ShardSummary {
+pub struct ActorStateSummary {
     pub program_account_id: AccountId,
     pub len: u64,
 }
 
-/// Selects one of an account's program shards.
+/// Selects one of an account's program actor states.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct ProgramShardSelector {
+pub struct Actor {
     pub account_id: AccountId,
     pub program_account_id: AccountId,
 }
@@ -244,12 +245,12 @@ pub struct PrivacyPreservingTransaction {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PublicMessage {
-    pub program_account_id: AccountId,
-    pub shard_selectors: Vec<ProgramShardSelector>,
-    pub nonces: Vec<Nonce>,
-    pub instruction_data: InstructionData,
+    pub context: PublicExecutionContext,
+    pub root: RootCall,
     /// The fee declaration, or `None` for a fee-exempt (system) transaction.
     pub fee: Option<FeeDeclaration>,
+    pub nonces: Vec<(AccountId, Nonce)>,
+    pub admission_evidence: Vec<PublicAccountEvidence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -260,22 +261,57 @@ pub struct FeeDeclaration {
     pub max_fee: u128,
 }
 
-pub type InstructionData = Vec<u8>;
-pub type EffectData = Vec<u8>;
+pub type MessageData = Vec<u8>;
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct PdaSeed(
+    #[serde(with = "base64::arr")]
+    #[schemars(with = "String", description = "base64-encoded PDA seed")]
+    pub [u8; 32],
+);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct DeferredPublicEffect {
-    pub program_account_id: AccountId,
-    pub shard_program_account_id: AccountId,
-    pub data: EffectData,
+pub struct MessageEnvelope<S> {
+    pub from: S,
+    pub to: Actor,
+    pub message: MessageData,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct PublicActionWithID {
-    pub account_id: AccountId,
-    /// Ordered: settlement folds these onto the account's shards in this order, so any
-    /// representation of them has to keep it.
-    pub effects: Vec<DeferredPublicEffect>,
+pub struct RootCall {
+    pub to: Actor,
+    pub message: MessageData,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum PublicAccountEvidence {
+    Key(PublicKey),
+    Pda { program: AccountId, seed: PdaSeed },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct Delivery<S> {
+    pub envelope: MessageEnvelope<S>,
+    pub inherited_authorizations: Vec<AccountId>,
+    pub inherits_entry_authorizations: bool,
+    pub pda_seeds: Vec<PdaSeed>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum BoundaryStep {
+    PrivateToPublic(Delivery<Actor>),
+    PublicToPrivate(Delivery<Actor>),
+    EndPrivateSubtree,
+    EndPublicSubtree,
+}
+
+pub type Boundary = Vec<BoundaryStep>;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct PublicExecutionContext {
+    pub actors: Vec<Actor>,
+    pub authorized_accounts: Vec<AccountId>,
+    pub cast_promotions: Vec<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -286,16 +322,21 @@ pub struct PrivateAction {
     // to the nullifier in content. That is, the commitment's plaintext is
     // not necessarily the updated account state of the nullifier's plaintext.
     pub commitment: Commitment,
-    pub encrypted_post_state: EncryptedAccountData,
+    pub encrypted_post_state: EncryptedNote,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PrivacyPreservingMessage {
-    pub public_actions: Vec<PublicActionWithID>,
-    pub nonces: Vec<Nonce>,
+    pub context: PublicExecutionContext,
+    pub boundary: Boundary,
+    pub casts: Vec<SealedCast>,
+    pub recovery_bindings: Vec<RecoveryBinding>,
+    pub public_root: Option<RootCall>,
+    pub nonces: Vec<(AccountId, Nonce)>,
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: ValidityWindow,
     pub timestamp_validity_window: ValidityWindow,
+    pub admission_evidence: Vec<PublicAccountEvidence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -312,13 +353,22 @@ pub struct Proof(
 );
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct EncryptedAccountData {
-    pub ciphertext: Ciphertext,
-    pub epk: EphemeralPublicKey,
-    pub view_tag: ViewTag,
+pub struct RecoveryBinding {
+    pub address: AccountId,
+    pub note: EncryptedNote,
 }
 
-pub type ViewTag = u8;
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct SealedCast {
+    pub commitment: Commitment,
+    pub note: EncryptedNote,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct EncryptedNote {
+    pub ciphertext: Ciphertext,
+    pub epk: EphemeralPublicKey,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct Ciphertext(
@@ -383,7 +433,7 @@ pub struct CommitmentSetDigest(
 );
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct ShardData(
+pub struct ActorState(
     #[serde(with = "base64")]
     #[schemars(with = "String", description = "base64-encoded account data")]
     pub Vec<u8>,

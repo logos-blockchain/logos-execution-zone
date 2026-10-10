@@ -9,9 +9,9 @@ use arc_swap::ArcSwap;
 use futures::StreamExt as _;
 use indexer_core::{IndexerCore, config::IndexerConfig, event_filter::EventFilter};
 use indexer_service_protocol::{
-    Account, AccountId, AccountSummary, Block, BlockId, EventRecord, EventSubscriptionFilter,
-    GetEventsFilter, HashType, IndexerStatus, ProgramShardSelector, Selector, ShardSummary,
-    Transaction, resolve_event_block_range,
+    Account, AccountId, AccountSummary, Actor, ActorStateSummary, Block, BlockId, EventRecord,
+    EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus, Selector, Transaction,
+    resolve_event_block_range,
 };
 use jsonrpsee::{
     SubscriptionSink,
@@ -122,27 +122,30 @@ impl indexer_service_rpc::RpcServer for IndexerService {
             .map(Into::into))
     }
 
-    async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned> {
+    async fn get_account(
+        &self,
+        account_id: AccountId,
+    ) -> Result<Option<Account>, ErrorObjectOwned> {
         Ok(self
             .indexer
             .store
             .account_current_state(&account_id.into())
             .await
             .map_err(db_error)?
-            .into())
+            .map(Into::into))
     }
 
     async fn get_account_at_block(
         &self,
         account_id: AccountId,
         block_id: BlockId,
-    ) -> Result<Account, ErrorObjectOwned> {
+    ) -> Result<Option<Account>, ErrorObjectOwned> {
         Ok(self
             .indexer
             .store
             .account_state_at_block(&account_id.into(), block_id)
             .map_err(db_error)?
-            .into())
+            .map(Into::into))
     }
 
     async fn get_account_summary(
@@ -154,46 +157,44 @@ impl indexer_service_rpc::RpcServer for IndexerService {
             .store
             .account_current_state(&account_id.into())
             .await
-            .map_err(db_error)?;
+            .map_err(db_error)?
+            .unwrap_or_default();
         Ok(AccountSummary {
             nonce: account.nonce.into(),
             balance: account.data.native_balance().ok(),
-            shards: account
+            actor_states: account
                 .data
-                .shards
+                .actor_states
                 .iter()
-                .map(|(program, data)| ShardSummary {
+                .map(|(program, data)| ActorStateSummary {
                     program_account_id: (*program).into(),
-                    len: u64::try_from(data.len()).expect("a shard is capped well under u64"),
+                    len: u64::try_from(data.len()).expect("actor-state length fits in u64"),
                 })
                 .collect(),
         })
     }
 
-    async fn get_account_view(
-        &self,
-        selector: ProgramShardSelector,
-    ) -> Result<Account, ErrorObjectOwned> {
+    async fn get_account_view(&self, actor: Actor) -> Result<Option<Account>, ErrorObjectOwned> {
         Ok(self
             .indexer
             .store
-            .account_current_view(selector.into())
+            .account_current_view(actor.into())
             .await
             .map_err(db_error)?
-            .into())
+            .map(Into::into))
     }
 
     async fn get_account_view_at_block(
         &self,
-        selector: ProgramShardSelector,
+        actor: Actor,
         block_id: BlockId,
-    ) -> Result<Account, ErrorObjectOwned> {
+    ) -> Result<Option<Account>, ErrorObjectOwned> {
         Ok(self
             .indexer
             .store
-            .account_view_at_block(selector.into(), block_id)
+            .account_view_at_block(actor.into(), block_id)
             .map_err(db_error)?
-            .into())
+            .map(Into::into))
     }
 
     async fn get_transaction(
