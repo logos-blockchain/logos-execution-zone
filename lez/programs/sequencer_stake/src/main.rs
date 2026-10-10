@@ -2,302 +2,360 @@ use std::collections::btree_map::Entry;
 
 use lee_core::{
     BlockId,
-    account::{AccountId, ProgramShardSelector},
-    native_token::{self, NATIVE_TOKEN_PROGRAM_ID, custody_transfer},
-    program::{AccountMeta, BlockValidityWindow, ChainedCall, Plan, PlanInput, run_program},
+    account::{AccountId, Actor},
+    native_token::{self, custody_transfer},
+    program::{BlockValidityWindow, Call, ReceiveInput, Response},
 };
 use sequencer_stake_core::{
-    ChannelParams, Instruction, PendingUnstake, SequencerEntry, SequencerKey, SequencerStakeConfig,
+    ChannelParams, Message, PendingUnstake, SequencerEntry, SequencerKey, SequencerStakeConfig,
     SlashApproval, StakeRecord, UNSTAKE_REQUEST_WINDOW,
     ed25519_dalek::{Signature, VerifyingKey},
     sequencer_stake_config_account_id, slash_approval_message, slash_approval_threshold,
     slash_sink_account_id, stake_funds_account_id, stake_funds_seed,
 };
 
-#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
-enum Effect {
-    OpenStake {
-        sequencer_key: SequencerKey,
-        has_record: bool,
-    },
-    RecordStake {
-        sequencer_key: SequencerKey,
-        ownership_account_id: AccountId,
-        amount: u128,
-        has_record: bool,
-    },
-    RequestUnstake {
-        sequencer_key: SequencerKey,
-        amount: u128,
-        destination: AccountId,
-        requested_at: BlockId,
-    },
-    TrackUnstakeRequest {
-        sequencer_key: SequencerKey,
-        ownership_account_id: AccountId,
-        amount: u128,
-    },
-    /// `FinalizeUnstake` carries no signature, so the ownership record is the only thing that
-    /// says this release was ever requested, for this amount, to this destination.
-    ReleaseUnstake {
-        sequencer_key: SequencerKey,
-        amount: u128,
-        destination: AccountId,
-        requested_at: BlockId,
-    },
-    SettleUnstake {
-        sequencer_key: SequencerKey,
-        ownership_account_id: AccountId,
-        amount: u128,
-        exit_delay: u64,
-    },
-    ClearForSlash {
-        sequencer_key: SequencerKey,
-    },
-    ApplySlash {
-        sequencer_key: SequencerKey,
-        ownership_account_id: AccountId,
-        inscription: [u8; 32],
-        approvals: Vec<SlashApproval>,
-        total_staked: u128,
-    },
-    InitChannelParams {
-        channel_params: ChannelParams,
-        channel_id: [u8; 32],
-    },
-}
+lee_core::define_actor_logic!(handle_message);
 
-fn main() {
-    run_program(plan, apply)
-}
-
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "run_program's apply returns None to keep a shard"
-)]
-fn apply(effect: Effect, pre_data: &[u8]) -> Option<Vec<u8>> {
-    Some(match effect {
-        Effect::OpenStake {
+fn handle_message(input: &ReceiveInput, message: Message) -> Response {
+    match message {
+        Message::Stake {
             sequencer_key,
-            has_record,
-        } => {
-            // The stake shard remains after a full exit, so presence is what distinguishes a
-            // new stake from a top-up.
-            assert_eq!(
-                !pre_data.is_empty(),
-                has_record,
-                "stake claims an ownership record this account does not match"
-            );
-            if has_record {
-                let record = StakeRecord::from_bytes(pre_data)
-                    .expect("ownership record should decode as StakeRecord");
-                assert_eq!(
-                    record.sequencer_key, sequencer_key,
-                    "ownership account backs a different sequencer key"
-                );
-                assert!(
-                    record.pending_unstake.is_none(),
-                    "cannot top up while an unstake request is pending"
-                );
-            }
-            StakeRecord {
-                sequencer_key,
-                pending_unstake: None,
-            }
-            .to_bytes()
-        }
-        Effect::RecordStake {
-            sequencer_key,
-            ownership_account_id,
             amount,
             has_record,
-        } => {
-            let mut config = decode_config(pre_data);
-            assert!(
-                amount >= channel_params(&config).minimum_sequencer_stake,
-                "a stake or top-up must add at least the minimum"
-            );
-            match config.entries.entry(sequencer_key) {
-                Entry::Occupied(mut occupied) => {
-                    assert!(
-                        has_record,
-                        "this sequencer key already has an ownership account"
-                    );
-                    let entry = occupied.get_mut();
-                    assert_eq!(
-                        entry.account_id, ownership_account_id,
-                        "config entry points at a different ownership account"
-                    );
-                    entry.total_staked = entry
-                        .total_staked
-                        .checked_add(amount)
-                        .expect("total staked overflow");
-                }
-                Entry::Vacant(vacant) => {
-                    vacant.insert(SequencerEntry {
-                        account_id: ownership_account_id,
-                        total_staked: amount,
-                        total_pending_unstake: 0,
-                    });
-                }
-            }
-            config.to_bytes()
-        }
-        Effect::RequestUnstake {
+            funding,
+        } => stake(input, sequencer_key, amount, has_record, funding),
+        Message::UnstakeRequest {
             sequencer_key,
             amount,
             destination,
             requested_at,
-        } => {
-            let mut record = decode_record(pre_data);
-            assert_eq!(
-                record.sequencer_key, sequencer_key,
-                "ownership account backs a different sequencer key"
-            );
-            assert!(
-                record.pending_unstake.is_none(),
-                "an unstake request is already pending"
-            );
-            record.pending_unstake = Some(PendingUnstake {
+        } => unstake_request(input, sequencer_key, amount, destination, requested_at),
+        Message::FinalizeUnstake { sequencer_key } => finalize_unstake(input, sequencer_key),
+        Message::Slash {
+            sequencer_key,
+            inscription,
+            approvals,
+        } => slash(input, sequencer_key, inscription, &approvals),
+        Message::InitChannelParams { params, channel_id } => {
+            init_channel_params(input, params, channel_id)
+        }
+        Message::RecordStake {
+            sequencer_key,
+            ownership,
+            amount,
+            has_record,
+        } => record_stake(input, sequencer_key, ownership, amount, has_record),
+        Message::TrackUnstakeRequest {
+            sequencer_key,
+            ownership,
+            amount,
+            destination,
+            requested_at,
+        } => track_unstake_request(
+            input,
+            sequencer_key,
+            ownership,
+            PendingUnstake {
                 amount,
                 destination,
                 requested_at,
-            });
-            record.to_bytes()
-        }
-        Effect::TrackUnstakeRequest {
-            sequencer_key,
-            ownership_account_id,
-            amount,
-        } => {
-            let mut config = decode_config(pre_data);
-            let minimum_sequencer_stake = channel_params(&config).minimum_sequencer_stake;
-            let entry = entry_of(&mut config, sequencer_key, ownership_account_id);
-            // Sized against the tracked stake, never the account balance: anyone can
-            // credit any account, so balance can exceed `total_staked`.
-            assert!(
-                entry.allows_unstake_request(amount, minimum_sequencer_stake),
-                "unstake request must be covered by the staked total and leave the key at zero or at/above the minimum"
-            );
-            entry.total_pending_unstake = entry
-                .total_pending_unstake
-                .checked_add(amount)
-                .expect("total pending unstake overflow");
-            config.to_bytes()
-        }
-        Effect::ReleaseUnstake {
-            sequencer_key,
-            amount,
-            destination,
-            requested_at,
-        } => {
-            let mut record = decode_record(pre_data);
-            assert_eq!(
-                record.sequencer_key, sequencer_key,
-                "ownership account backs a different sequencer key"
-            );
-            let pending = record
-                .pending_unstake
-                .take()
-                .expect("no unstake request pending on this account");
-            assert_eq!(
-                pending.amount, amount,
-                "amount does not match the recorded unstake request"
-            );
-            assert_eq!(
-                pending.destination, destination,
-                "destination does not match the recorded unstake request"
-            );
-            assert_eq!(
-                pending.requested_at, requested_at,
-                "request date does not match the recorded unstake request"
-            );
-            record.to_bytes()
-        }
-        Effect::SettleUnstake {
-            sequencer_key,
-            ownership_account_id,
-            amount,
-            exit_delay,
-        } => {
-            let mut config = decode_config(pre_data);
-            assert_eq!(
-                channel_params(&config).exit_delay,
-                exit_delay,
-                "exit delay does not match the channel params"
-            );
-            let entry = entry_of(&mut config, sequencer_key, ownership_account_id);
-            entry.total_staked = entry
-                .total_staked
-                .checked_sub(amount)
-                .expect("total staked underflow");
-            entry.total_pending_unstake = entry
-                .total_pending_unstake
-                .checked_sub(amount)
-                .expect("total pending unstake underflow");
-            if entry.total_staked == 0 {
-                config.entries.remove(&sequencer_key);
-            }
-            config.to_bytes()
-        }
-        Effect::ClearForSlash { sequencer_key } => {
-            let mut record = decode_record(pre_data);
-            assert_eq!(
-                record.sequencer_key, sequencer_key,
-                "ownership account backs a different sequencer key"
-            );
-            // The whole tracked stake burns, including any pending unstake.
-            record.pending_unstake = None;
-            record.to_bytes()
-        }
-        Effect::ApplySlash {
-            sequencer_key,
-            ownership_account_id,
-            inscription,
-            approvals,
-            total_staked,
-        } => {
-            let mut config = decode_config(pre_data);
-            // The approvals are the whole authorization, and accreditation is this config's
-            // own answer.
-            verify_approvals(&config, sequencer_key, inscription, &approvals);
-            let entry = config
-                .entries
-                .remove(&sequencer_key)
-                .expect("slashed key must have a config entry");
-            assert_eq!(
-                entry.account_id, ownership_account_id,
-                "config entry points at a different ownership account"
-            );
-            assert_eq!(
-                entry.total_staked, total_staked,
-                "slash must burn exactly the stake this config tracks"
-            );
-            config.to_bytes()
-        }
-        Effect::InitChannelParams {
-            channel_params,
-            channel_id,
-        } => {
-            let mut config = decode_config(pre_data);
-            assert!(
-                config.channel_params.is_none(),
-                "channel params are already set and cannot be changed"
-            );
-            config.channel_params = Some(channel_params);
-            config.channel_id = Some(channel_id);
-            config.to_bytes()
-        }
-    })
+            },
+        ),
+    }
 }
 
-fn decode_config(pre_data: &[u8]) -> SequencerStakeConfig {
-    SequencerStakeConfig::from_bytes(pre_data)
+fn stake(
+    input: &ReceiveInput,
+    sequencer_key: SequencerKey,
+    amount: u128,
+    has_record: bool,
+    funding: AccountId,
+) -> Response {
+    assert_root_origin(
+        input,
+        "Stake is only invoked as a top-level user transaction",
+    );
+    assert!(input.is_authorized, "must sign for the ownership account");
+    // The stake actor state remains after a full exit, so presence is what distinguishes a
+    // new stake from a top-up.
+    assert_eq!(
+        !input.pre_state.is_empty(),
+        has_record,
+        "stake claims an ownership record this account does not match"
+    );
+    if has_record {
+        let record = decode_record(&input.pre_state);
+        assert_eq!(
+            record.sequencer_key, sequencer_key,
+            "ownership account backs a different sequencer key"
+        );
+    }
+
+    let program = input.receiver.program_account_id;
+    let ownership = input.receiver.account_id;
+    Response::set_state(StakeRecord { sequencer_key }.to_bytes())
+        .send(to_config(
+            program,
+            &Message::RecordStake {
+                sequencer_key,
+                ownership,
+                amount,
+                has_record,
+            },
+        ))
+        .call(
+            Actor::native_balance(funding),
+            &native_token::Message::Transfer {
+                to: stake_funds_account_id(program, &ownership),
+                amount,
+            },
+        )
+}
+
+fn unstake_request(
+    input: &ReceiveInput,
+    sequencer_key: SequencerKey,
+    amount: u128,
+    destination: AccountId,
+    requested_at: BlockId,
+) -> Response {
+    assert_root_origin(
+        input,
+        "UnstakeRequest is only invoked as a top-level user transaction",
+    );
+    assert!(input.is_authorized, "must sign for the ownership account");
+    let record = decode_record(&input.pre_state);
+    assert_eq!(
+        record.sequencer_key, sequencer_key,
+        "ownership account backs a different sequencer key"
+    );
+
+    // The config holds the request; the transfer happens in FinalizeUnstake.
+    Response::keep_state()
+        .block_window(request_window(requested_at))
+        .send(to_config(
+            input.receiver.program_account_id,
+            &Message::TrackUnstakeRequest {
+                sequencer_key,
+                ownership: input.receiver.account_id,
+                amount,
+                destination,
+                requested_at,
+            },
+        ))
+}
+
+/// Unsigned, so the release is sized and addressed only by the config's pending request, and cast
+/// to the destination.
+fn finalize_unstake(input: &ReceiveInput, sequencer_key: SequencerKey) -> Response {
+    assert_root_origin(
+        input,
+        "FinalizeUnstake is only invoked as a top-level user transaction",
+    );
+    assert_config_account(input);
+    let mut config = decode_config(&input.pre_state);
+    let exit_delay = channel_params(&config).exit_delay;
+    let entry = config
+        .entries
+        .get_mut(&sequencer_key)
+        .expect("staked key must already have a config entry");
+    let pending = entry
+        .pending_unstake
+        .take()
+        .expect("no unstake request pending for this key");
+    entry.total_staked = entry
+        .total_staked
+        .checked_sub(pending.amount)
+        .expect("total staked underflow");
+    let ownership = entry.account_id;
+    if entry.total_staked == 0 {
+        config.entries.remove(&sequencer_key);
+    }
+
+    let program = input.receiver.program_account_id;
+    Response::set_state(config.to_bytes())
+        .block_window(pending.releasable_at(exit_delay)..)
+        .send(custody_transfer(
+            stake_funds_account_id(program, &ownership),
+            stake_funds_seed(&ownership),
+            pending.destination,
+            pending.amount,
+        ))
+}
+
+fn slash(
+    input: &ReceiveInput,
+    sequencer_key: SequencerKey,
+    inscription: [u8; 32],
+    approvals: &[SlashApproval],
+) -> Response {
+    assert_root_origin(
+        input,
+        "Slash is only invoked as a top-level user transaction",
+    );
+    assert_config_account(input);
+    let mut config = decode_config(&input.pre_state);
+    // The approvals are the whole authorization, and accreditation is this config's
+    // own answer.
+    verify_approvals(&config, sequencer_key, inscription, approvals);
+    // The whole tracked stake burns, including any pending unstake.
+    let entry = config
+        .entries
+        .remove(&sequencer_key)
+        .expect("slashed key must have a config entry");
+
+    let program = input.receiver.program_account_id;
+    Response::set_state(config.to_bytes()).send(custody_transfer(
+        stake_funds_account_id(program, &entry.account_id),
+        stake_funds_seed(&entry.account_id),
+        slash_sink_account_id(program),
+        entry.total_staked,
+    ))
+}
+
+fn init_channel_params(
+    input: &ReceiveInput,
+    params: ChannelParams,
+    channel_id: [u8; 32],
+) -> Response {
+    assert_root_origin(
+        input,
+        "InitChannelParams is only invoked as a top-level user transaction",
+    );
+    assert_config_account(input);
+
+    // A zero timeframe would leave round robin unable to move off index 0, and
+    // a zero minimum would accredit every key that ever staked a nonzero amount.
+    assert!(
+        params.posting_timeframe > 0,
+        "posting_timeframe must be non-zero"
+    );
+    // A timeout above the timeframe never fires: the turn ends first.
+    assert!(
+        params.posting_timeout > 0 && params.posting_timeout <= params.posting_timeframe,
+        "posting_timeout must be non-zero and no longer than posting_timeframe"
+    );
+    assert!(
+        params.minimum_sequencer_stake > 0,
+        "minimum_sequencer_stake must be non-zero"
+    );
+    assert!(params.exit_delay > 0, "exit_delay must be non-zero");
+
+    let mut config = decode_config(&input.pre_state);
+    assert!(
+        config.channel_params.is_none(),
+        "channel params are already set and cannot be changed"
+    );
+    config.channel_params = Some(params);
+    config.channel_id = Some(channel_id);
+    Response::set_state(config.to_bytes())
+}
+
+fn record_stake(
+    input: &ReceiveInput,
+    sequencer_key: SequencerKey,
+    ownership: AccountId,
+    amount: u128,
+    has_record: bool,
+) -> Response {
+    assert_bookkeeping(input);
+    let mut config = decode_config(&input.pre_state);
+    assert!(
+        amount >= channel_params(&config).minimum_sequencer_stake,
+        "a stake or top-up must add at least the minimum"
+    );
+    match config.entries.entry(sequencer_key) {
+        Entry::Occupied(mut occupied) => {
+            assert!(
+                has_record,
+                "this sequencer key already has an ownership account"
+            );
+            let entry = occupied.get_mut();
+            assert_eq!(
+                entry.account_id, ownership,
+                "config entry points at a different ownership account"
+            );
+            assert!(
+                entry.pending_unstake.is_none(),
+                "cannot top up while an unstake request is pending"
+            );
+            entry.total_staked = entry
+                .total_staked
+                .checked_add(amount)
+                .expect("total staked overflow");
+        }
+        Entry::Vacant(vacant) => {
+            vacant.insert(SequencerEntry {
+                account_id: ownership,
+                total_staked: amount,
+                pending_unstake: None,
+            });
+        }
+    }
+    Response::set_state(config.to_bytes())
+}
+
+fn track_unstake_request(
+    input: &ReceiveInput,
+    sequencer_key: SequencerKey,
+    ownership: AccountId,
+    pending: PendingUnstake,
+) -> Response {
+    assert_bookkeeping(input);
+    let mut config = decode_config(&input.pre_state);
+    let minimum_sequencer_stake = channel_params(&config).minimum_sequencer_stake;
+    let entry = entry_of(&mut config, sequencer_key, ownership);
+    assert!(
+        entry.pending_unstake.is_none(),
+        "an unstake request is already pending"
+    );
+    // Sized against the tracked stake, never the account balance: anyone can
+    // credit any account, so balance can exceed `total_staked`.
+    assert!(
+        entry.allows_unstake_request(pending.amount, minimum_sequencer_stake),
+        "unstake request must be covered by the staked total and leave the key at zero or at/above the minimum"
+    );
+    entry.pending_unstake = Some(pending);
+    Response::set_state(config.to_bytes())
+}
+
+fn assert_root_origin(input: &ReceiveInput, message: &str) {
+    assert!(input.from.is_none(), "{message}");
+}
+
+/// Other accounts also hold this program's actor states, so the config is pinned by address.
+fn assert_config_account(input: &ReceiveInput) {
+    assert_eq!(
+        input.receiver.account_id,
+        sequencer_stake_config_account_id(input.receiver.program_account_id),
+        "not the sequencer_stake config account"
+    );
+}
+
+fn assert_bookkeeping(input: &ReceiveInput) {
+    assert_config_account(input);
+    // This program sends bookkeeping only from an ownership actor, filling `ownership` from
+    // that receiver, so the named account is the one whose operation sent it.
+    assert!(
+        input.from_own_program(),
+        "stake bookkeeping is only sent by this program's ownership accounts"
+    );
+}
+
+fn to_config(program: AccountId, message: &Message) -> Call {
+    Call::new(
+        Actor::new(sequencer_stake_config_account_id(program), program),
+        message,
+    )
+}
+
+fn decode_config(pre_state: &[u8]) -> SequencerStakeConfig {
+    SequencerStakeConfig::from_bytes(pre_state)
         .expect("config account data should decode as SequencerStakeConfig")
 }
 
-fn decode_record(pre_data: &[u8]) -> StakeRecord {
-    StakeRecord::from_bytes(pre_data).expect("ownership account should decode as StakeRecord")
+fn decode_record(pre_state: &[u8]) -> StakeRecord {
+    StakeRecord::from_bytes(pre_state).expect("ownership account should decode as StakeRecord")
 }
 
 fn entry_of(
@@ -365,125 +423,6 @@ const fn channel_id(config: &SequencerStakeConfig) -> [u8; 32] {
         .expect("genesis sets the channel id before any stake exists")
 }
 
-/// Other accounts also hold this program's shards, so the config is pinned by address.
-fn assert_config_account(config_account: &AccountMeta, self_account_id: AccountId) {
-    assert_eq!(
-        config_account.account_id,
-        sequencer_stake_config_account_id(self_account_id),
-        "not the sequencer_stake config account"
-    );
-}
-
-fn assert_funds_account(self_account_id: AccountId, ownership: &AccountMeta, funds: &AccountMeta) {
-    assert_eq!(
-        funds.account_id,
-        stake_funds_account_id(self_account_id, &ownership.account_id),
-        "not the stake funds account of this ownership account"
-    );
-}
-
-fn plan(input: &PlanInput, instruction: Instruction) -> Plan {
-    match instruction {
-        Instruction::Stake {
-            sequencer_key,
-            amount,
-            has_record,
-        } => {
-            assert!(
-                input.caller_account_id.is_none(),
-                "Stake is only invoked as a top-level user transaction"
-            );
-            stake(input, sequencer_key, amount, has_record)
-        }
-        Instruction::UnstakeRequest {
-            sequencer_key,
-            amount,
-            destination,
-            requested_at,
-        } => {
-            assert!(
-                input.caller_account_id.is_none(),
-                "UnstakeRequest is only invoked as a top-level user transaction"
-            );
-            unstake_request(input, sequencer_key, amount, destination, requested_at)
-        }
-        Instruction::FinalizeUnstake {
-            sequencer_key,
-            amount,
-            requested_at,
-            exit_delay,
-        } => {
-            assert!(
-                input.caller_account_id.is_none(),
-                "FinalizeUnstake is only invoked as a top-level user transaction"
-            );
-            finalize_unstake(input, sequencer_key, amount, requested_at, exit_delay)
-        }
-        Instruction::InitChannelParams { params, channel_id } => {
-            assert!(
-                input.caller_account_id.is_none(),
-                "InitChannelParams is only invoked as a top-level user transaction"
-            );
-            init_channel_params(input, params, channel_id)
-        }
-        Instruction::Slash {
-            sequencer_key,
-            inscription,
-            approvals,
-            total_staked,
-        } => {
-            assert!(
-                input.caller_account_id.is_none(),
-                "Slash is only invoked as a top-level user transaction"
-            );
-            slash(input, sequencer_key, inscription, approvals, total_staked)
-        }
-    }
-}
-
-fn stake(input: &PlanInput, sequencer_key: SequencerKey, amount: u128, has_record: bool) -> Plan {
-    let self_account_id = input.self_account_id;
-    let [funding_account, ownership_account, funds_account, config_account] =
-        <&[_; 4]>::try_from(input.accounts.as_slice()).expect(
-            "Stake requires a funding account, an ownership account, the stake funds account, and the config account",
-        );
-
-    assert!(
-        ownership_account.is_authorized,
-        "must sign for the ownership account"
-    );
-    assert_funds_account(self_account_id, ownership_account, funds_account);
-    assert_config_account(config_account, self_account_id);
-
-    let mut plan = Plan::new(input);
-    plan.effect(
-        ownership_account,
-        &Effect::OpenStake {
-            sequencer_key,
-            has_record,
-        },
-    );
-    plan.effect(
-        config_account,
-        &Effect::RecordStake {
-            sequencer_key,
-            ownership_account_id: ownership_account.account_id,
-            amount,
-            has_record,
-        },
-    );
-
-    plan.call(ChainedCall::new(
-        NATIVE_TOKEN_PROGRAM_ID,
-        vec![
-            ProgramShardSelector::native_balance(funding_account.account_id),
-            ProgramShardSelector::native_balance(funds_account.account_id),
-        ],
-        &native_token::Instruction::Transfer { amount },
-    ));
-    plan
-}
-
 /// The blocks an `UnstakeRequest` dated `requested_at` may land in, so the date is never
 /// earlier than the block that records it.
 fn request_window(requested_at: BlockId) -> BlockValidityWindow {
@@ -492,174 +431,6 @@ fn request_window(requested_at: BlockId) -> BlockValidityWindow {
         .expect("a request window is never empty")
 }
 
-fn unstake_request(
-    input: &PlanInput,
-    sequencer_key: SequencerKey,
-    amount: u128,
-    destination: AccountId,
-    requested_at: BlockId,
-) -> Plan {
-    let self_account_id = input.self_account_id;
-    let [ownership_account, config_account] = <&[_; 2]>::try_from(input.accounts.as_slice())
-        .expect("UnstakeRequest requires the ownership account and the config account");
-
-    assert!(
-        ownership_account.is_authorized,
-        "must sign for the ownership account"
-    );
-    assert_config_account(config_account, self_account_id);
-
-    // Only data changes here; the transfer happens in FinalizeUnstake.
-    let mut plan = Plan::new(input);
-    plan.block_window(request_window(requested_at));
-    plan.effect(
-        ownership_account,
-        &Effect::RequestUnstake {
-            sequencer_key,
-            amount,
-            destination,
-            requested_at,
-        },
-    );
-    plan.effect(
-        config_account,
-        &Effect::TrackUnstakeRequest {
-            sequencer_key,
-            ownership_account_id: ownership_account.account_id,
-            amount,
-        },
-    );
-    plan
-}
-
-fn finalize_unstake(
-    input: &PlanInput,
-    sequencer_key: SequencerKey,
-    amount: u128,
-    requested_at: BlockId,
-    exit_delay: u64,
-) -> Plan {
-    let self_account_id = input.self_account_id;
-    let [ownership_account, funds_account, destination_account, config_account] =
-        <&[_; 4]>::try_from(input.accounts.as_slice()).expect(
-            "FinalizeUnstake requires the ownership account, the stake funds account, a destination account, and the config account",
-        );
-
-    assert_funds_account(self_account_id, ownership_account, funds_account);
-    assert_config_account(config_account, self_account_id);
-    let ownership_id = ownership_account.account_id;
-
-    // No signature check: already authorized back in UnstakeRequest. That is exactly why the
-    // release below may only be sized and addressed by what the record turns out to hold.
-    let mut plan = Plan::new(input);
-    plan.block_window(requested_at.saturating_add(exit_delay)..);
-    plan.effect(
-        ownership_account,
-        &Effect::ReleaseUnstake {
-            sequencer_key,
-            amount,
-            destination: destination_account.account_id,
-            requested_at,
-        },
-    );
-    plan.effect(
-        config_account,
-        &Effect::SettleUnstake {
-            sequencer_key,
-            ownership_account_id: ownership_id,
-            amount,
-            exit_delay,
-        },
-    );
-    plan.call(custody_transfer(
-        funds_account.account_id,
-        stake_funds_seed(&ownership_id),
-        destination_account.account_id,
-        amount,
-    ));
-    plan
-}
-
-fn init_channel_params(
-    input: &PlanInput,
-    channel_params: ChannelParams,
-    channel_id: [u8; 32],
-) -> Plan {
-    let [config_account] = <&[_; 1]>::try_from(input.accounts.as_slice())
-        .expect("InitChannelParams requires the config account");
-    assert_config_account(config_account, input.self_account_id);
-
-    // A zero timeframe would leave round robin unable to move off index 0, and
-    // a zero minimum would accredit every key that ever staked a nonzero amount.
-    assert!(
-        channel_params.posting_timeframe > 0,
-        "posting_timeframe must be non-zero"
-    );
-    // A timeout above the timeframe never fires: the turn ends first.
-    assert!(
-        channel_params.posting_timeout > 0
-            && channel_params.posting_timeout <= channel_params.posting_timeframe,
-        "posting_timeout must be non-zero and no longer than posting_timeframe"
-    );
-    assert!(
-        channel_params.minimum_sequencer_stake > 0,
-        "minimum_sequencer_stake must be non-zero"
-    );
-    assert!(channel_params.exit_delay > 0, "exit_delay must be non-zero");
-
-    let mut plan = Plan::new(input);
-    plan.effect(
-        config_account,
-        &Effect::InitChannelParams {
-            channel_params,
-            channel_id,
-        },
-    );
-    plan
-}
-
-fn slash(
-    input: &PlanInput,
-    sequencer_key: SequencerKey,
-    inscription: [u8; 32],
-    approvals: Vec<SlashApproval>,
-    total_staked: u128,
-) -> Plan {
-    let self_account_id = input.self_account_id;
-    let [ownership_account, funds_account, sink_account, config_account] =
-        <&[_; 4]>::try_from(input.accounts.as_slice()).expect(
-            "Slash requires the ownership account, the stake funds account, the slash sink, and the config account",
-        );
-
-    assert_funds_account(self_account_id, ownership_account, funds_account);
-    assert_eq!(
-        sink_account.account_id,
-        slash_sink_account_id(self_account_id),
-        "third account must be the slash sink PDA"
-    );
-    assert_config_account(config_account, self_account_id);
-    let ownership_id = ownership_account.account_id;
-
-    let mut plan = Plan::new(input);
-    plan.effect(ownership_account, &Effect::ClearForSlash { sequencer_key });
-    plan.effect(
-        config_account,
-        &Effect::ApplySlash {
-            sequencer_key,
-            ownership_account_id: ownership_id,
-            inscription,
-            approvals,
-            total_staked,
-        },
-    );
-    plan.call(custody_transfer(
-        funds_account.account_id,
-        stake_funds_seed(&ownership_id),
-        sink_account.account_id,
-        total_staked,
-    ));
-    plan
-}
 
 #[cfg(test)]
 mod tests {

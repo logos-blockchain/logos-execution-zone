@@ -1,7 +1,7 @@
 //! Persistent fee market state, stored in the fee-state account's data.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::account::Fee;
+use lee_core::account::{AccountId, Balance, Fee};
 
 use crate::{BlockFeeSummary, market};
 
@@ -20,6 +20,17 @@ pub struct FeeState {
     pub payout_carry: u128,
     /// Block height; an increment at 2^64 - 1 is a consensus fault.
     pub height: u64,
+    /// The distribution awaiting its inbox balance read; set and cleared within one transaction.
+    pub pending: Option<PendingDistribution>,
+}
+
+/// What a distribution pays once the inbox balance is confirmed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PendingDistribution {
+    pub revenue_base: Balance,
+    pub revenue_tip: Balance,
+    pub payout: Balance,
+    pub producer: AccountId,
 }
 
 impl FeeState {
@@ -33,6 +44,7 @@ impl FeeState {
             window: [0; market::SMOOTHING_WINDOW],
             payout_carry: 0,
             height: 0,
+            pending: None,
         }
     }
 

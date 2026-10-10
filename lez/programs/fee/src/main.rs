@@ -1,139 +1,116 @@
 use fee_core::{
-    BlockFeeSummary, Instruction, fee_escrow_seed, fee_inbox_seed, market, state::FeeState,
+    Message, compute_fee_escrow_account_id, compute_fee_inbox_account_id,
+    compute_fee_state_account_id, fee_escrow_seed, fee_inbox_seed, market,
+    state::{FeeState, PendingDistribution},
 };
 use lee_core::{
-    account::Balance,
-    native_token::{NATIVE_TOKEN_PROGRAM_ID, custody_transfer, decode_balance},
-    program::{Plan, PlanInput, run_program},
+    account::Actor,
+    native_token::{
+        Message as NativeMessage, NATIVE_TOKEN_PROGRAM_ID, custody_transfer, decode_balance,
+    },
+    program::{ReceiveInput, Response, StateReply},
 };
 
-#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
-enum Effect {
-    /// The inbox belongs to the native token program, so this only inspects it.
-    InboxHolds {
-        revenue_base: Balance,
-        revenue_tip: Balance,
-    },
-    ApplyBlock {
-        summary: BlockFeeSummary,
-        payout: Balance,
-    },
-}
+lee_core::define_actor_logic!(raw handle_message);
 
-fn main() {
-    run_program(plan, apply)
-}
+fn handle_message(input: &ReceiveInput) -> Response {
+    assert_eq!(
+        input.receiver.account_id,
+        compute_fee_state_account_id(input.receiver.program_account_id),
+        "Invalid fee state account"
+    );
+    if input
+        .from
+        .is_some_and(|from| from.program_account_id == NATIVE_TOKEN_PROGRAM_ID)
+    {
+        let NativeMessage::StateReply(reply) =
+            borsh::from_slice(&input.message).expect("a native message must decode")
+        else {
+            panic!("The native program sends the fee program only state replies");
+        };
+        return pay_out(input, &reply);
+    }
+    assert!(
+        input.from.is_none(),
+        "Fee program is only invoked as a top-level system transaction"
+    );
+    let fee_account_id = input.receiver.program_account_id;
+    let inbox = compute_fee_inbox_account_id(fee_account_id);
 
-fn apply(effect: Effect, pre_data: &[u8]) -> Option<Vec<u8>> {
-    match effect {
-        Effect::InboxHolds {
-            revenue_base,
-            revenue_tip,
+    match borsh::from_slice(&input.message).expect("a fee message must decode") {
+        Message::Distribute {
+            summary,
+            payout,
+            producer,
         } => {
-            let claimed = revenue_base
-                .checked_add(revenue_tip)
-                .expect("block revenue fits u128");
-            let collected =
-                decode_balance(pre_data).expect("the inbox selects its native balance shard");
-            assert_eq!(
-                collected, claimed,
-                "inbox balance must equal the block's revenue"
-            );
-            None
-        }
-        Effect::ApplyBlock { summary, payout } => {
-            let mut fee_state = FeeState::from_bytes(pre_data);
+            if summary.gas_used_exec > market::MAX_GAS_EXEC
+                || summary.gas_used_stor > market::MAX_GAS_STOR
+            {
+                panic!("Block fee summary exceeds per-block gas caps");
+            }
+
+            let mut fee_state = FeeState::from_bytes(&input.pre_state);
             assert_eq!(
                 fee_state.apply_block(&summary),
                 payout,
                 "payout must be the one this block's market update produces"
             );
-            Some(fee_state.to_bytes())
+            fee_state.pending = Some(PendingDistribution {
+                revenue_base: summary.revenue_base,
+                revenue_tip: summary.revenue_tip,
+                payout,
+                producer,
+            });
+            Response::set_state(fee_state.to_bytes())
+                .call(Actor::native_balance(inbox), &NativeMessage::ReadState)
+        }
+        Message::Refund { amount, payer } => {
+            Response::keep_state().send(custody_transfer(inbox, fee_inbox_seed(), payer, amount))
         }
     }
 }
 
-/// Every balance leaves a fee PDA through a chained authenticated transfer the PDA's seed
-/// authorizes.
-fn plan(input: &PlanInput, instruction: Instruction) -> Plan {
-    assert!(
-        input.caller_account_id.is_none(),
-        "Fee program is only invoked as a top-level system transaction"
+fn pay_out(input: &ReceiveInput, reply: &StateReply) -> Response {
+    let fee_account_id = input.receiver.program_account_id;
+    let inbox = compute_fee_inbox_account_id(fee_account_id);
+    assert_eq!(
+        input.from,
+        Some(Actor::native_balance(inbox)),
+        "The reply must read the fee inbox"
+    );
+    let mut fee_state = FeeState::from_bytes(&input.pre_state);
+    let PendingDistribution {
+        revenue_base,
+        revenue_tip,
+        payout,
+        producer,
+    } = fee_state
+        .pending
+        .take()
+        .expect("A reply must answer a pending distribution");
+    assert_eq!(
+        decode_balance(&reply.state).expect("the inbox holds a canonical balance"),
+        revenue_base
+            .checked_add(revenue_tip)
+            .expect("block revenue fits u128"),
+        "The inbox must hold exactly this block's revenue"
     );
 
-    match instruction {
-        Instruction::Distribute { summary, payout } => distribute(input, summary, payout),
-        Instruction::Refund { amount } => refund(input, amount),
-    }
-}
-
-fn distribute(input: &PlanInput, summary: BlockFeeSummary, payout: Balance) -> Plan {
-    let self_account_id = input.self_account_id;
-    let Ok([pre_state, pre_escrow, pre_inbox, pre_producer]) =
-        <&[_; 4]>::try_from(input.accounts.as_slice())
-    else {
-        panic!("Distribute requires exactly 4 accounts");
-    };
-    if pre_state.account_id != fee_core::compute_fee_state_account_id(self_account_id)
-        || pre_escrow.account_id != fee_core::compute_fee_escrow_account_id(self_account_id)
-        || pre_inbox.account_id != fee_core::compute_fee_inbox_account_id(self_account_id)
-    {
-        panic!("Invalid input accounts");
-    }
-    if summary.gas_used_exec > market::MAX_GAS_EXEC || summary.gas_used_stor > market::MAX_GAS_STOR
-    {
-        panic!("Block fee summary exceeds per-block gas caps");
-    }
-    summary
-        .revenue_base
-        .checked_add(summary.revenue_tip)
-        .expect("block revenue fits u128");
-
-    let mut plan = Plan::new(input);
-    // Before the transfers below: they drain the inbox this measures.
-    plan.inspect(
-        pre_inbox,
-        NATIVE_TOKEN_PROGRAM_ID,
-        &Effect::InboxHolds {
-            revenue_base: summary.revenue_base,
-            revenue_tip: summary.revenue_tip,
-        },
-    );
-    plan.effect(pre_state, &Effect::ApplyBlock { summary, payout });
-
-    let inbox = pre_inbox.account_id;
-    let escrow = pre_escrow.account_id;
-    let producer = pre_producer.account_id;
+    let escrow = compute_fee_escrow_account_id(fee_account_id);
     // Order matters: the escrow receives the base before it pays out of it.
-    for (from, seed, to, amount) in [
-        (inbox, fee_inbox_seed(), escrow, summary.revenue_base),
-        (inbox, fee_inbox_seed(), producer, summary.revenue_tip),
+    [
+        (inbox, fee_inbox_seed(), escrow, revenue_base),
+        (inbox, fee_inbox_seed(), producer, revenue_tip),
         (escrow, fee_escrow_seed(), producer, payout),
-    ] {
-        if amount > 0 {
-            plan.call(custody_transfer(from, seed, to, amount));
-        }
-    }
-    plan
-}
-
-fn refund(input: &PlanInput, amount: Balance) -> Plan {
-    let Ok([pre_inbox, pre_payer]) = <&[_; 2]>::try_from(input.accounts.as_slice()) else {
-        panic!("Refund requires exactly 2 accounts");
-    };
-    assert!(
-        pre_inbox.account_id == fee_core::compute_fee_inbox_account_id(input.self_account_id),
-        "Invalid inbox account"
-    );
-
-    let mut plan = Plan::new(input);
-    plan.call(custody_transfer(
-        pre_inbox.account_id,
-        fee_inbox_seed(),
-        pre_payer.account_id,
-        amount,
-    ));
-    plan
+    ]
+    .into_iter()
+    .filter(|&(.., amount)| amount > 0)
+    .fold(
+        Response::set_state(fee_state.to_bytes()),
+        |response, (from, seed, to, amount)| {
+            response.send(custody_transfer(from, seed, to, amount))
+        },
+    )
 }
 
 #[cfg(test)]
