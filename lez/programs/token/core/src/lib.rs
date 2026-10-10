@@ -1,78 +1,73 @@
 //! This crate contains core data structures and utilities for the Token Program.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::account::{AccountId, ShardData};
+use lee_core::account::{AccountId, Actor, ActorState};
 use serde::{Deserialize, Serialize};
 
 pub const TOKEN_NAME: [u8; 5] = *b"token";
 
-/// Token Program Instruction.
-///
-/// All inputs select this program's shard. "Empty" and "initialized" refer to that shard.
-#[derive(BorshSerialize, BorshDeserialize)]
-pub enum Instruction {
-    /// Transfer tokens from sender to recipient.
-    ///
-    /// Required accounts:
-    /// - Sender's Token Holding account (initialized, authorized),
-    /// - Recipient's Token Holding account (initialized or empty).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum Message {
     Transfer {
-        amount_to_transfer: u128,
+        to: AccountId,
+        descriptor: TokenDescriptor,
+        amount: u128,
+        notify: Option<Notify>,
+    },
+    Credit {
+        descriptor: TokenDescriptor,
+        amount: u128,
+        notify: Option<Notify>,
+    },
+    EnsureHolding {
         descriptor: TokenDescriptor,
     },
-
-    /// Create a new fungible token definition without metadata.
-    ///
-    /// Required accounts:
-    /// - Token Definition account (empty),
-    /// - Token Holding account (empty).
-    NewFungibleDefinition { name: String, total_supply: u128 },
-
-    /// Create a new fungible or non-fungible token definition with metadata.
-    ///
-    /// Required accounts:
-    /// - Token Definition account (empty),
-    /// - Token Holding account (empty),
-    /// - Token Metadata account (empty).
-    NewDefinitionWithMetadata {
-        new_definition: NewTokenDefinition,
-        /// Boxed to avoid large enum variant size.
-        metadata: Box<NewTokenMetadata>,
-    },
-
-    /// Initialize a token holding account for a given token definition.
-    ///
-    /// Required accounts:
-    /// - Token Definition account (initialized),
-    /// - Token Holding account,
-    InitializeAccount { kind: TokenKind },
-
-    /// Burn tokens from the holder's account.
-    ///
-    /// Required accounts:
-    /// - Token Definition account (initialized),
-    /// - Token Holding account (initialized, authorized).
     Burn {
-        amount_to_burn: u128,
+        descriptor: TokenDescriptor,
+        amount: u128,
+        definition: AccountId,
+    },
+    PrintNft {
+        printed: AccountId,
+        definition_id: AccountId,
+    },
+    NewDefinition {
+        definition: NewTokenDefinition,
+        holding: AccountId,
+        metadata: Option<(AccountId, NewTokenMetadata)>,
+    },
+    Mint {
+        to: AccountId,
+        amount: u128,
+    },
+    BurnSupply {
+        definition_id: AccountId,
+        kind: TokenKind,
+        amount: u128,
+    },
+    AssertKind {
         kind: TokenKind,
     },
-
-    /// Mint new tokens to the holder's account.
-    ///
-    /// Required accounts:
-    /// - Token Definition account (initialized, authorized),
-    /// - Token Holding account (initialized or empty).
-    Mint { amount_to_mint: u128 },
-
-    /// Print a new NFT from the master copy.
-    ///
-    /// Required accounts:
-    /// - NFT Master Token Holding account (initialized, authorized),
-    /// - NFT Printed Copy Token Holding account (empty).
-    PrintNft { definition_id: AccountId },
+    Create(ActorState),
+    Notification(Notification),
 }
 
-#[derive(BorshSerialize, BorshDeserialize)]
+/// The target is called from the credit and inherits its grants: a transfer casts its credit, so
+/// the target inherits none of the transfer's grants.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Notify {
+    pub to: Actor,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Notification {
+    pub descriptor: TokenDescriptor,
+    pub amount: u128,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum NewTokenDefinition {
     Fungible {
         name: String,
@@ -98,15 +93,15 @@ pub enum TokenDefinition {
     },
 }
 
-impl TryFrom<&ShardData> for TokenDefinition {
+impl TryFrom<&ActorState> for TokenDefinition {
     type Error = std::io::Error;
 
-    fn try_from(data: &ShardData) -> Result<Self, Self::Error> {
+    fn try_from(data: &ActorState) -> Result<Self, Self::Error> {
         Self::try_from_slice(data.as_ref())
     }
 }
 
-impl From<&TokenDefinition> for ShardData {
+impl From<&TokenDefinition> for ActorState {
     fn from(definition: &TokenDefinition) -> Self {
         // Using size_of_val as size hint for Vec allocation
         let mut data = Vec::with_capacity(std::mem::size_of_val(definition));
@@ -114,7 +109,7 @@ impl From<&TokenDefinition> for ShardData {
         BorshSerialize::serialize(definition, &mut data)
             .expect("Serialization to Vec should not fail");
 
-        Self::try_from(data).expect("Token definition encoded data should fit into ShardData")
+        Self::from(data)
     }
 }
 
@@ -143,6 +138,14 @@ pub struct TokenDescriptor {
 }
 
 impl TokenDescriptor {
+    #[must_use]
+    pub const fn fungible(definition_id: AccountId) -> Self {
+        Self {
+            definition_id,
+            kind: TokenKind::Fungible,
+        }
+    }
+
     #[must_use]
     pub const fn zeroized(&self) -> TokenHolding {
         match self.kind {
@@ -199,15 +202,15 @@ impl TokenHolding {
     }
 }
 
-impl TryFrom<&ShardData> for TokenHolding {
+impl TryFrom<&ActorState> for TokenHolding {
     type Error = std::io::Error;
 
-    fn try_from(data: &ShardData) -> Result<Self, Self::Error> {
+    fn try_from(data: &ActorState) -> Result<Self, Self::Error> {
         Self::try_from_slice(data.as_ref())
     }
 }
 
-impl From<&TokenHolding> for ShardData {
+impl From<&TokenHolding> for ActorState {
     fn from(holding: &TokenHolding) -> Self {
         // Using size_of_val as size hint for Vec allocation
         let mut data = Vec::with_capacity(std::mem::size_of_val(holding));
@@ -215,11 +218,11 @@ impl From<&TokenHolding> for ShardData {
         BorshSerialize::serialize(holding, &mut data)
             .expect("Serialization to Vec should not fail");
 
-        Self::try_from(data).expect("Token holding encoded data should fit into ShardData")
+        Self::from(data)
     }
 }
 
-#[derive(Clone, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct NewTokenMetadata {
     /// Metadata standard.
     pub standard: MetadataStandard,
@@ -250,15 +253,15 @@ pub enum MetadataStandard {
     Expanded,
 }
 
-impl TryFrom<&ShardData> for TokenMetadata {
+impl TryFrom<&ActorState> for TokenMetadata {
     type Error = std::io::Error;
 
-    fn try_from(data: &ShardData) -> Result<Self, Self::Error> {
+    fn try_from(data: &ActorState) -> Result<Self, Self::Error> {
         Self::try_from_slice(data.as_ref())
     }
 }
 
-impl From<&TokenMetadata> for ShardData {
+impl From<&TokenMetadata> for ActorState {
     fn from(metadata: &TokenMetadata) -> Self {
         // Using size_of_val as size hint for Vec allocation
         let mut data = Vec::with_capacity(std::mem::size_of_val(metadata));
@@ -266,8 +269,13 @@ impl From<&TokenMetadata> for ShardData {
         BorshSerialize::serialize(metadata, &mut data)
             .expect("Serialization to Vec should not fail");
 
-        Self::try_from(data).expect("Token metadata encoded data should fit into ShardData")
+        Self::from(data)
     }
+}
+
+#[must_use]
+pub fn same_asset(holding: TokenKind, descriptor: TokenKind) -> bool {
+    holding == descriptor || (holding != TokenKind::Fungible && descriptor != TokenKind::Fungible)
 }
 
 #[must_use]

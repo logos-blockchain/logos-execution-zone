@@ -1,6 +1,1 @@
-use associated_token_account_program::{apply, plan};
-use lee_core::program::run_program;
-
-fn main() {
-    run_program(plan, apply)
-}
+lee_core::define_actor_logic!(associated_token_account_program::handle_message);

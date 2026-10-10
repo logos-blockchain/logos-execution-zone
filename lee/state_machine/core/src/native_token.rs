@@ -1,55 +1,51 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::{
-    account::{AccountId, Balance, ProgramShardSelector, ShardData},
-    program::{
-        AccountMeta, ApplyInput, ApplyOutput, ChainedCall, InstructionData, PdaSeed, PlanInput,
-        PlanOutput, ShardEffect,
-    },
+    account::{AccountId, Actor, ActorState, Balance},
+    program::{Call, PdaSeed, ReceiveInput, Response, StateReply, Transition},
 };
 
-/// Hardcoded native token shard address.
+/// Hardcoded native token program address.
 pub const NATIVE_TOKEN_PROGRAM_ID: AccountId = AccountId::new([0; 32]);
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub enum Instruction {
-    Transfer { amount: Balance },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub enum Effect {
-    Debit(Balance),
+pub enum Message {
+    Transfer { to: AccountId, amount: Balance },
     Credit(Balance),
+    ReadState,
+    StateReply(StateReply),
 }
 
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
 pub enum TransferError {
-    #[error("native transfer instruction does not decode")]
-    InvalidInstruction,
-    #[error("native transfer takes a sender and a recipient row, both selecting the native shard")]
-    InvalidInputs,
+    #[error("native transfer message does not decode")]
+    InvalidMessage,
     #[error("native transfer sender {account_id} is not authorized")]
     UnauthorizedSender { account_id: AccountId },
-    #[error("native effect does not decode")]
-    InvalidEffect,
+    #[error("native credit to {account_id} was not sent by a native transfer")]
+    ForeignCredit { account_id: AccountId },
     #[error(transparent)]
     InvalidBalance(#[from] InvalidBalanceEncoding),
     #[error("sender {account_id} holds less than the transferred amount")]
     InsufficientBalance { account_id: AccountId },
     #[error("recipient {account_id} balance overflows")]
     BalanceOverflow { account_id: AccountId },
+    #[error("native balance {account_id} consumes no state replies")]
+    UnexpectedReply { account_id: AccountId },
+    #[error("native balance {account_id} was read with no one to reply to")]
+    UnroutableRead { account_id: AccountId },
 }
 
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
-#[error("native balance shard is not a canonical encoding")]
+#[error("native balance actor state is not a canonical encoding")]
 pub struct InvalidBalanceEncoding;
 
 #[must_use]
-pub fn encode_balance(balance: Balance) -> ShardData {
+pub fn encode_balance(balance: Balance) -> ActorState {
     if balance == 0 {
-        ShardData::empty()
+        ActorState::empty()
     } else {
-        ShardData::try_from(balance.to_le_bytes().to_vec()).expect("an encoded balance is 16 bytes")
+        ActorState::from(balance.to_le_bytes().to_vec())
     }
 }
 
@@ -66,79 +62,52 @@ pub fn decode_balance(data: &[u8]) -> Result<Balance, InvalidBalanceEncoding> {
     }
 }
 
-pub fn plan(
-    caller_account_id: Option<AccountId>,
-    accounts: &[AccountMeta],
-    instruction_data: &InstructionData,
-) -> Result<PlanOutput, TransferError> {
-    let Ok(Instruction::Transfer { amount }) = borsh::from_slice(instruction_data) else {
-        return Err(TransferError::InvalidInstruction);
+pub fn handle_message(input: &ReceiveInput) -> Result<Transition, TransferError> {
+    let Ok(message) = borsh::from_slice::<Message>(&input.message) else {
+        return Err(TransferError::InvalidMessage);
     };
+    let account_id = input.receiver.account_id;
+    let response = match message {
+        Message::Transfer { to, amount } => {
+            debit(input, amount)?.cast(Actor::native_balance(to), &Message::Credit(amount))
+        }
+        Message::Credit(amount) => {
+            if !input.from_own_program() {
+                return Err(TransferError::ForeignCredit { account_id });
+            }
+            let post = decode_balance(&input.pre_state)?
+                .checked_add(amount)
+                .ok_or(TransferError::BalanceOverflow { account_id })?;
+            Response::set_state(encode_balance(post))
+        }
+        Message::ReadState => {
+            let reader = input
+                .from
+                .ok_or(TransferError::UnroutableRead { account_id })?;
+            Response::keep_state().call(reader, &Message::StateReply(StateReply::from(input)))
+        }
+        Message::StateReply(_) => return Err(TransferError::UnexpectedReply { account_id }),
+    };
+    Ok(response.into_transition(input.clone()))
+}
 
-    let [sender, recipient] = accounts else {
-        return Err(TransferError::InvalidInputs);
-    };
-    if sender.program_account_id != NATIVE_TOKEN_PROGRAM_ID
-        || recipient.program_account_id != NATIVE_TOKEN_PROGRAM_ID
-        || sender.account_id == recipient.account_id
-    {
-        return Err(TransferError::InvalidInputs);
+fn debit(input: &ReceiveInput, amount: Balance) -> Result<Response, TransferError> {
+    let account_id = input.receiver.account_id;
+    if !input.is_authorized {
+        return Err(TransferError::UnauthorizedSender { account_id });
     }
-    if !sender.is_authorized {
-        return Err(TransferError::UnauthorizedSender {
-            account_id: sender.account_id,
-        });
-    }
-
-    Ok(PlanOutput::new(PlanInput {
-        self_account_id: NATIVE_TOKEN_PROGRAM_ID,
-        caller_account_id,
-        accounts: accounts.to_vec(),
-        instruction_data: instruction_data.clone(),
-    })
-    .with_effects(vec![
-        ShardEffect::new(sender, &Effect::Debit(amount)),
-        ShardEffect::new(recipient, &Effect::Credit(amount)),
-    ]))
+    let post = decode_balance(&input.pre_state)?
+        .checked_sub(amount)
+        .ok_or(TransferError::InsufficientBalance { account_id })?;
+    Ok(Response::set_state(encode_balance(post)))
 }
 
-pub fn apply(input: &ApplyInput) -> Result<ShardData, TransferError> {
-    let Ok(effect) = borsh::from_slice::<Effect>(&input.effect_data) else {
-        return Err(TransferError::InvalidEffect);
-    };
-    let account_id = input.selector.account_id;
-    let balance = decode_balance(&input.pre_data)?;
-    let post = match effect {
-        Effect::Debit(amount) => balance
-            .checked_sub(amount)
-            .ok_or(TransferError::InsufficientBalance { account_id })?,
-        Effect::Credit(amount) => balance
-            .checked_add(amount)
-            .ok_or(TransferError::BalanceOverflow { account_id })?,
-    };
-
-    Ok(encode_balance(post))
-}
-
-pub fn apply_output(input: &ApplyInput) -> Result<ApplyOutput, TransferError> {
-    Ok(ApplyOutput::new(input.clone(), Some(apply(input)?)))
-}
-
-/// A chained transfer out of an account the caller holds under `seed`.
+/// A transfer out of an account the caller holds under `seed`.
 #[must_use]
-pub fn custody_transfer(
-    from: AccountId,
-    seed: PdaSeed,
-    to: AccountId,
-    amount: Balance,
-) -> ChainedCall {
-    ChainedCall::new(
-        NATIVE_TOKEN_PROGRAM_ID,
-        vec![
-            ProgramShardSelector::native_balance(from),
-            ProgramShardSelector::native_balance(to),
-        ],
-        &Instruction::Transfer { amount },
+pub fn custody_transfer(from: AccountId, seed: PdaSeed, to: AccountId, amount: Balance) -> Call {
+    Call::new(
+        Actor::native_balance(from),
+        &Message::Transfer { to, amount },
     )
     .with_pda_seeds(vec![seed])
 }

@@ -1,34 +1,9 @@
-use lee_core::{
-    account::ShardData,
-    program::{AccountMeta, Plan},
-};
-use token_core::{TokenDefinition, TokenDescriptor, TokenKind};
+use lee_core::account::ActorState;
+use token_core::{TokenDefinition, TokenDescriptor, TokenHolding, TokenKind, same_asset};
 
-use crate::Effect;
-
-pub fn initialize_account(
-    plan: &mut Plan,
-    definition_account: &AccountMeta,
-    account_to_initialize: &AccountMeta,
-    kind: TokenKind,
-) {
-    // The definition decides what the holding becomes, and the holding's `apply` never sees it.
-    // The guard on the definition is what turns the instruction's claimed kind into a fact.
-    plan.effect(definition_account, &Effect::CheckHoldingKind(kind));
-    plan.effect(
-        account_to_initialize,
-        &Effect::InitializeHolding {
-            descriptor: TokenDescriptor {
-                definition_id: definition_account.account_id,
-                kind,
-            },
-            is_authorized: account_to_initialize.is_authorized,
-        },
-    );
-}
-
-pub fn check_holding_kind(pre_data: &ShardData, kind: TokenKind) {
-    let definition = TokenDefinition::try_from(pre_data).expect("Definition account must be valid");
+pub fn check_holding_kind(pre_state: &ActorState, kind: TokenKind) {
+    let definition =
+        TokenDefinition::try_from(pre_state).expect("Definition account must be valid");
 
     assert_eq!(
         TokenKind::from_definition(&definition),
@@ -38,15 +13,23 @@ pub fn check_holding_kind(pre_data: &ShardData, kind: TokenKind) {
 }
 
 #[must_use]
-pub fn initialize_holding(
-    pre_data: &ShardData,
+pub fn ensure_holding(
+    pre_state: &ActorState,
     descriptor: &TokenDescriptor,
     is_authorized: bool,
-) -> ShardData {
-    assert!(
-        pre_data.is_empty() || is_authorized,
-        "Only Uninitialized or authorized accounts can be initialized"
-    );
+) -> Option<ActorState> {
+    if !pre_state.is_empty() {
+        if TokenHolding::try_from(pre_state).is_ok_and(|holding| {
+            holding.definition_id() == descriptor.definition_id
+                && same_asset(holding.kind(), descriptor.kind)
+        }) {
+            return None;
+        }
+        assert!(
+            is_authorized,
+            "Only Uninitialized or authorized accounts can be initialized"
+        );
+    }
 
-    ShardData::from(&descriptor.zeroized())
+    Some(ActorState::from(&descriptor.zeroized()))
 }
