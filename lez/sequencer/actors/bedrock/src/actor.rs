@@ -117,6 +117,9 @@ impl BedrockActor {
 
         let zone_sdk_config = SequencerConfig {
             resubmit_interval: *resubmit_interval,
+            // Zero disables the pending-tx expiry, recovering the pre-expiry sdk behavior.
+            // TODO: set a sensible value.
+            stale_refund_slots: 0,
             ..SequencerConfig::new(FundingConfig {
                 funding_pk: *funding_pk,
                 // Withdraw change goes back to the funding key.
