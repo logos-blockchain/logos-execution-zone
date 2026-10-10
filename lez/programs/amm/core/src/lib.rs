@@ -2,94 +2,50 @@
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, ShardData},
+    account::{AccountId, Actor, ActorState},
     program::PdaSeed,
 };
+use token_core::{Notify, TokenDescriptor};
 
 pub const AMM_NAME: [u8; 3] = *b"amm";
 
-/// AMM Program Instruction.
-///
-/// The pool uses this program's shard. Vaults, holdings, and the liquidity token definition
-/// use the token program's shards.
 #[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
-pub enum Instruction {
-    /// Initializes a new Pool (or re-initializes an inactive Pool).
-    ///
-    /// Required accounts:
-    /// - AMM Pool
-    /// - Vault Holding Account for Token A
-    /// - Vault Holding Account for Token B
-    /// - Pool Liquidity Token Definition
-    /// - User Holding Account for Token A (authorized)
-    /// - User Holding Account for Token B (authorized)
-    /// - User Holding Account for Pool Liquidity
+pub enum Message {
     NewDefinition {
         token_a_amount: u128,
         token_b_amount: u128,
         token_program_id: AccountId,
         definition_token_a_id: AccountId,
         definition_token_b_id: AccountId,
-        pool_is_empty: bool,
+        user_a: AccountId,
+        user_b: AccountId,
+        user_lp: AccountId,
     },
-
-    /// Adds liquidity to the Pool.
-    ///
-    /// Required accounts:
-    /// - AMM Pool (initialized)
-    /// - Vault Holding Account for Token A (initialized)
-    /// - Vault Holding Account for Token B (initialized)
-    /// - Pool Liquidity Token Definition (initialized)
-    /// - User Holding Account for Token A (authorized)
-    /// - User Holding Account for Token B (authorized)
-    /// - User Holding Account for Pool Liquidity
     AddLiquidity {
         max_amount_to_add_token_a: u128,
         max_amount_to_add_token_b: u128,
-        token_program_id: AccountId,
-        definition_token_a_id: AccountId,
-        definition_token_b_id: AccountId,
         amount_to_add_token_a: u128,
         amount_to_add_token_b: u128,
         amount_liquidity: u128,
+        user_a: AccountId,
+        user_b: AccountId,
+        user_lp: AccountId,
     },
-
-    /// Removes liquidity from the Pool.
-    ///
-    /// Required accounts:
-    /// - AMM Pool (initialized)
-    /// - Vault Holding Account for Token A (initialized)
-    /// - Vault Holding Account for Token B (initialized)
-    /// - Pool Liquidity Token Definition (initialized)
-    /// - User Holding Account for Token A (initialized)
-    /// - User Holding Account for Token B (initialized)
-    /// - User Holding Account for Pool Liquidity (authorized)
     RemoveLiquidity {
         remove_liquidity_amount: u128,
-        token_program_id: AccountId,
-        definition_token_a_id: AccountId,
-        definition_token_b_id: AccountId,
         amount_to_remove_token_a: u128,
         amount_to_remove_token_b: u128,
+        user_a: AccountId,
+        user_b: AccountId,
+        user_lp: AccountId,
     },
+}
 
-    /// Exchanges exactly `amount_in` of the input token for exactly `amount_out` of the output
-    /// token, if the pool can afford the offer at its live reserves. The pool keeps whatever its
-    /// full quote would have paid beyond `amount_out`.
-    ///
-    /// Required accounts:
-    /// - AMM Pool (initialized)
-    /// - Vault Holding Account for the input token (initialized)
-    /// - Vault Holding Account for the output token (initialized)
-    /// - User Holding Account for the input token (authorized)
-    /// - User Holding Account for the output token
-    Swap {
-        token_program_id: AccountId,
-        definition_id_in: AccountId,
-        definition_id_out: AccountId,
-        amount_in: u128,
-        amount_out: u128,
-    },
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SwapRequest {
+    pub definition_id_out: AccountId,
+    pub min_amount_out: u128,
+    pub payout: AccountId,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -144,15 +100,15 @@ impl PoolDefinition {
     }
 }
 
-impl TryFrom<&ShardData> for PoolDefinition {
+impl TryFrom<&ActorState> for PoolDefinition {
     type Error = std::io::Error;
 
-    fn try_from(data: &ShardData) -> Result<Self, Self::Error> {
+    fn try_from(data: &ActorState) -> Result<Self, Self::Error> {
         Self::try_from_slice(data.as_ref())
     }
 }
 
-impl From<&PoolDefinition> for ShardData {
+impl From<&PoolDefinition> for ActorState {
     fn from(definition: &PoolDefinition) -> Self {
         // Using size_of_val as size hint for Vec allocation
         let mut data = Vec::with_capacity(std::mem::size_of_val(definition));
@@ -160,7 +116,7 @@ impl From<&PoolDefinition> for ShardData {
         BorshSerialize::serialize(definition, &mut data)
             .expect("Serialization to Vec should not fail");
 
-        Self::try_from(data).expect("Token definition encoded data should fit into ShardData")
+        Self::from(data)
     }
 }
 
@@ -188,7 +144,7 @@ pub fn compute_pool_pda(
 
 // Include the token program so different token programs derive different pools.
 #[must_use]
-fn compute_pool_pda_seed(
+pub fn compute_pool_pda_seed(
     definition_token_a_id: AccountId,
     definition_token_b_id: AccountId,
     token_program_id: AccountId,
@@ -305,4 +261,23 @@ pub fn liquidity_minted(
 #[must_use]
 pub fn withdrawal_share(reserve: u128, liquidity_amount: u128, supply: u128) -> Option<u128> {
     reserve.checked_mul(liquidity_amount)?.checked_div(supply)
+}
+
+#[must_use]
+pub fn swap_transfer(
+    pool: Actor,
+    input_vault: AccountId,
+    descriptor_in: TokenDescriptor,
+    amount_in: u128,
+    request: SwapRequest,
+) -> token_core::Message {
+    token_core::Message::Transfer {
+        to: input_vault,
+        descriptor: descriptor_in,
+        amount: amount_in,
+        notify: Some(Notify {
+            to: pool,
+            payload: borsh::to_vec(&request).expect("borsh serialization is infallible"),
+        }),
+    }
 }
