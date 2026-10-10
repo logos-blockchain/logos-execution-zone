@@ -11213,6 +11213,7 @@ dependencies = [
  "sequencer_stake_core",
  "sequencer_storage_actor",
  "system_accounts",
+ "system_upgrader_core",
  "tempfile",
  "testnet_initial_state",
  "thiserror 2.0.18",
@@ -11276,6 +11277,7 @@ dependencies = [
  "borsh",
  "bytesize",
  "common",
+ "hex",
  "jsonrpsee",
  "kameo",
  "lee",
@@ -11286,6 +11288,7 @@ dependencies = [
  "sequencer_rpc_server_actor_metrics",
  "sequencer_service_protocol",
  "sequencer_service_rpc",
+ "system_upgrader_core",
  "thiserror 2.0.18",
  "tokio",
 ]

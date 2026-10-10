@@ -72,6 +72,7 @@ mod faults;
 pub mod fees;
 pub mod gossip;
 pub mod logging;
+pub mod system_approvals;
 pub mod task_group;
 
 /// Failed production attempts before a cross-zone dispatch is given up on.
@@ -206,6 +207,8 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     finalized_config: MsgId,
     /// Channel sequence of the last thing `BedrockActor` handed us.
     applied_seq: Option<sequencer_bedrock_actor::protocol::ChannelSeq>,
+    /// Committee approvals of `system_upgrader` changes, until a threshold builds one.
+    system_approvals: system_approvals::SystemApprovals,
 }
 
 /// A funded channel config, from the moment zone-sdk funds it to the moment it
@@ -558,6 +561,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             config_draft: None,
             finalized_config,
             applied_seq: None,
+            system_approvals: system_approvals::SystemApprovals::default(),
         };
 
         sequencer_core_metrics::record_chain_height(sequencer_core.chain_height().await);
@@ -1865,12 +1869,20 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // At most one `system_upgrader` transaction, directly before the fee: a due `Apply` first,
         // then approved changes handed to the node, the first that fits and applies. Untried
         // changes go back to the mempool.
+        let approved = committee_discovery::read_config(&working_state)
+            .map(|committee| self.system_approvals.ready(&committee, new_block_height))
+            .unwrap_or_default();
         let mut candidates = build_upgrade_apply_txs(&working_state, new_block_height)
             .into_iter()
-            .map(|tx| (TransactionOrigin::Sequencer, tx))
-            .chain(upgrade_candidates)
+            .map(|tx| (TransactionOrigin::Sequencer, tx, None))
+            .chain(build_approved_txs(&working_state, approved))
+            .chain(
+                upgrade_candidates
+                    .into_iter()
+                    .map(|(origin, tx)| (origin, tx, None)),
+            )
             .collect::<VecDeque<_>>();
-        while let Some((origin, tx)) = candidates.pop_front() {
+        while let Some((origin, tx, proposal)) = candidates.pop_front() {
             let block_size = borsh::to_vec(&HashableBlockData {
                 block_id: new_block_height,
                 transactions: [
@@ -1919,8 +1931,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 break;
             }
             warn!("system_upgrader transaction {} failed to apply", tx.hash());
+            // An approved change that no longer applies (already carried out, or invalid) is
+            // dropped; one that applied stays until a later attempt finds it done.
+            if let Some(proposal) = proposal {
+                self.system_approvals.remove(&proposal);
+            }
         }
-        for (origin, tx) in candidates {
+        for (origin, tx, _) in candidates {
             if !matches!(origin, TransactionOrigin::Sequencer) {
                 self.mempool.push_front((origin, tx));
             }
@@ -1978,6 +1995,24 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     #[must_use]
     pub const fn storage_ref(&self) -> &ActorRef<S> {
         &self.storage_ref
+    }
+
+    /// Verifies a committee member's approval of a `system_upgrader` change against the head's
+    /// committee, and keeps it until a threshold of approvals lets the producer build the change.
+    pub async fn submit_system_approval(
+        &mut self,
+        signed: system_upgrader_core::SignedApproval,
+    ) -> Result<()> {
+        let (committee, next_block) = {
+            let chain = self.chain.lock().await;
+            let committee = committee_discovery::read_config(chain.head_state())
+                .context("the head state has no committee config")?;
+            let next_block = chain
+                .head_tip()
+                .map_or(GENESIS_BLOCK_ID, |tip| tip.block_id.saturating_add(1));
+            (committee, next_block)
+        };
+        self.system_approvals.add(signed, &committee, next_block)
     }
 
     pub async fn chain_height(&self) -> u64 {
@@ -2933,6 +2968,62 @@ fn build_upgrade_apply_txs(
                     );
                 })
                 .ok()
+        })
+        .collect()
+}
+
+/// The `Schedule`, `Cancel` or `Install` carrying out each approved proposal, with the proposal.
+fn build_approved_txs(
+    state: &lee::V03State,
+    approved: Vec<(
+        system_upgrader_core::Proposal,
+        Vec<system_upgrader_core::Approval>,
+    )>,
+) -> Vec<(
+    TransactionOrigin,
+    LeeTransaction,
+    Option<system_upgrader_core::Proposal>,
+)> {
+    use lee_core::program::{PROGRAM_LOADER_ACCOUNT_ID, SYSTEM_UPGRADER_ACCOUNT_ID};
+    use system_upgrader_core::{Instruction, Proposal};
+
+    let registry = ProgramShardSelector::new(
+        system_upgrader_core::registry_account_id(),
+        SYSTEM_UPGRADER_ACCOUNT_ID,
+    );
+    let committee = ProgramShardSelector::new(
+        system_accounts::sequencer_stake_config_account_id(),
+        programs::sequencer_stake_account_id(),
+    );
+    approved
+        .into_iter()
+        .filter_map(|(proposal, approvals)| {
+            let header = |name| {
+                ProgramShardSelector::new(
+                    AccountId::from_system_program_name(name),
+                    PROGRAM_LOADER_ACCOUNT_ID,
+                )
+            };
+            let selectors = match &proposal {
+                Proposal::Schedule { name, .. } => Ok(vec![registry, header(name), committee]),
+                Proposal::Cancel { .. } => Ok(vec![registry, committee]),
+                Proposal::Install {
+                    name,
+                    first_segment,
+                } => segment_chain_selectors(state, *first_segment).map(|chain| {
+                    [registry, committee, header(name)]
+                        .into_iter()
+                        .chain(chain)
+                        .collect()
+                }),
+            };
+            selectors
+                .and_then(|selectors| {
+                    system_upgrader_tx(selectors, Instruction::approved(proposal, approvals))
+                })
+                .map_err(|err| warn!("Skipping an approved system_upgrader change: {err:#}"))
+                .ok()
+                .map(|tx| (TransactionOrigin::Sequencer, tx, Some(proposal)))
         })
         .collect()
 }

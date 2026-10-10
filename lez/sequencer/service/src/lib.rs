@@ -120,8 +120,9 @@ impl SequencerHandle {
     }
 
     /// Hands the executor an approved `system_upgrader` transaction, past the RPC and gossip
-    /// entry points that refuse them. The producer includes it in the slot before the fee. Until
-    /// approval tooling lands, this is how tests reach `Schedule`, `Cancel` and `Install`.
+    /// entry points that refuse them. The producer includes it in the slot before the fee.
+    /// Approvals normally arrive through `submitSystemApproval` instead, and the producer builds
+    /// the transaction itself.
     pub async fn submit_system_upgrader_tx(
         &self,
         transaction: common::transaction::LeeTransaction,

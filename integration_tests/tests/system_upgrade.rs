@@ -129,8 +129,9 @@ async fn image_id(ctx: &TestContext, program: AccountId) -> Result<ProgramId> {
     Ok(header.image_id)
 }
 
-/// The new code is uploaded, the committee approves `bridge`'s upgrade and the producer schedules
-/// it, and from the upgrade's height `bridge` runs it while blocks keep coming.
+/// The new code is uploaded, the committee's approvals of `bridge`'s upgrade are submitted to the
+/// sequencers and the producer schedules it, and from the upgrade's height `bridge` runs it while
+/// blocks keep coming.
 #[test]
 async fn an_approved_system_upgrade_goes_live_at_its_height() -> Result<()> {
     let new_code = test_programs::data_writer();
@@ -187,8 +188,8 @@ async fn an_approved_system_upgrade_goes_live_at_its_height() -> Result<()> {
         .await?;
     }
 
-    // The committee approves the upgrade, and the producer includes the approved `Schedule`.
-    // Until approval tooling lands, the test hands it to the node directly.
+    // The committee approves the upgrade. Without gossip yet, each approval goes to every
+    // sequencer, and whichever produces next builds the `Schedule` from them.
     let now = ctx.sequencer_client().get_last_block_id().await?;
     let from_height = now.saturating_add(UPGRADE_DELAY);
     let proposal = system_upgrader_core::Proposal::Schedule {
@@ -198,40 +199,22 @@ async fn an_approved_system_upgrade_goes_live_at_its_height() -> Result<()> {
     };
     let approvals =
         committee_approvals(&ctx, &proposal, now.saturating_add(APPROVAL_LIFETIME)).await?;
-    let schedule = LeeTransaction::Public(lee::PublicTransaction::new(
-        lee::public_transaction::Message::try_new(
-            lee_core::program::SYSTEM_UPGRADER_ACCOUNT_ID,
-            vec![
-                ProgramShardSelector::new(
-                    system_upgrader_core::registry_account_id(),
-                    lee_core::program::SYSTEM_UPGRADER_ACCOUNT_ID,
-                ),
-                ProgramShardSelector::new(bridge, PROGRAM_LOADER_ACCOUNT_ID),
-                committee_selector(),
-            ],
-            vec![],
-            system_upgrader_core::Instruction::Schedule {
-                name: programs::BRIDGE_NAME,
-                first_segment: segment_ids[0],
-                from_height,
-                approvals,
-            },
-        )?,
-        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
-    ));
-    let schedule_hash = schedule.hash();
-    ctx.default_sequencer_component()
-        .sequencer_handle
-        .submit_system_upgrader_tx(schedule)
-        .await?;
-    wait_until("the Schedule to be included", || async {
-        Ok(ctx
-            .sequencer_client()
-            .get_transaction(schedule_hash)
-            .await?
-            .is_some())
-    })
-    .await?;
+    let (channel_id, _) = ctx.zones_iter().next().context("the test has a zone")?;
+    for sequencer in ctx
+        .sequencer_components_iter(*channel_id)
+        .context("the zone has sequencers")?
+    {
+        for approval in &approvals {
+            let signed = system_upgrader_core::SignedApproval {
+                proposal,
+                approval: approval.clone(),
+            };
+            sequencer
+                .sequencer_client
+                .submit_system_approval(hex::encode(borsh::to_vec(&signed)?))
+                .await?;
+        }
+    }
     if ctx.sequencer_client().get_last_block_id().await? < from_height {
         assert_eq!(
             image_id(&ctx, bridge).await?,
