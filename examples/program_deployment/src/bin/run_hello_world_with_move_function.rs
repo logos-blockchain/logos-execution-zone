@@ -1,11 +1,10 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use clap::{Parser, Subcommand};
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, ProgramShardSelector, PublicTransaction,
-    privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
-    public_transaction,
+    AccountId, Actor, PublicTransaction, privacy_preserving_transaction::circuit::ProgramCatalog,
+    program::Program, public_transaction,
 };
 use program_deployment::deploy_program;
 use sequencer_service_rpc::RpcClient as _;
@@ -30,10 +29,10 @@ use wallet::{AccountIdentity, WalletCore};
 //     <funded payer account_id> \
 //     write-public Ds8q5PjLcKwwV97Zi7duhRVF9uwA2PuYMoLL7FwCzsXE Hola
 
+// The guest's `Message::Write(data)`, `Message::MoveData { data, to }` and `Message::Append(data)`,
+// borsh-encoded as a variant index followed by the fields.
 const WRITE_FUNCTION_ID: u8 = 0;
 const MOVE_DATA_FUNCTION_ID: u8 = 1;
-
-type Instruction = (u8, Vec<u8>);
 
 #[derive(Parser, Debug)]
 struct Cli {
@@ -69,17 +68,18 @@ enum Command {
     },
 }
 
-async fn shard_bytes(
+async fn actor_state_bytes(
     wallet_core: &WalletCore,
     account_id: AccountId,
     program_account_id: AccountId,
 ) -> Vec<u8> {
     wallet_core
-        .get_account_view(ProgramShardSelector::new(account_id, program_account_id))
+        .get_account_view(Actor::new(account_id, program_account_id))
         .await
         .unwrap()
+        .unwrap_or_default()
         .data
-        .shard(program_account_id)
+        .actor_state(program_account_id)
         .as_ref()
         .to_vec()
 }
@@ -98,24 +98,19 @@ async fn main() {
     let program_account_id = deploy_program(&mut wallet_core, bytecode, cli.payer)
         .await
         .unwrap();
-    let program_with_dependencies =
-        ProgramWithDependencies::new(program, program_account_id, HashMap::new());
+    let programs = ProgramCatalog::from([(program_account_id, program)]);
 
     match cli.command {
         Command::WritePublic {
             account_id,
             greeting,
         } => {
-            let instruction: Instruction = (WRITE_FUNCTION_ID, greeting.into_bytes());
-            let account_id = account_id.parse().unwrap();
-            let nonces = vec![];
-            let message = public_transaction::Message::try_new(
-                program_account_id,
-                vec![ProgramShardSelector::new(account_id, program_account_id)],
-                nonces,
-                instruction,
-            )
-            .unwrap();
+            let message = (WRITE_FUNCTION_ID, greeting.into_bytes());
+            let account = Actor::new(account_id.parse().unwrap(), program_account_id);
+            let nonces = BTreeMap::new();
+            let message =
+                public_transaction::Message::try_new(account, vec![account], nonces, message)
+                    .unwrap();
             let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
             let tx = PublicTransaction::new(message, witness_set);
 
@@ -130,17 +125,16 @@ async fn main() {
             account_id,
             greeting,
         } => {
-            let instruction: Instruction = (WRITE_FUNCTION_ID, greeting.into_bytes());
-            let account_id = account_id.parse().unwrap();
-            let accounts = vec![
-                AccountIdentity::PrivateOwned(account_id).select_program_shard(program_account_id),
-            ];
+            let message = (WRITE_FUNCTION_ID, greeting.into_bytes());
+            let account = AccountIdentity::PrivateOwned(account_id.parse().unwrap())
+                .select_program_actor_state(program_account_id);
 
             wallet_core
                 .send_privacy_preserving_tx(
-                    accounts,
-                    Program::serialize_instruction(instruction).unwrap(),
-                    &program_with_dependencies,
+                    vec![account],
+                    0,
+                    Program::serialize_message(message).unwrap(),
+                    &programs,
                 )
                 .await
                 .unwrap();
@@ -148,17 +142,16 @@ async fn main() {
         Command::MoveDataPublicToPublic { from, to } => {
             let from = from.parse().unwrap();
             let to = to.parse().unwrap();
-            let moved = shard_bytes(&wallet_core, from, program_account_id).await;
-            let instruction: Instruction = (MOVE_DATA_FUNCTION_ID, moved);
-            let nonces = vec![];
+            let moved = actor_state_bytes(&wallet_core, from, program_account_id).await;
+            let source = Actor::new(from, program_account_id);
+            let destination = Actor::new(to, program_account_id);
+            let message = (MOVE_DATA_FUNCTION_ID, moved, to);
+            let nonces = BTreeMap::new();
             let message = public_transaction::Message::try_new(
-                program_account_id,
-                vec![
-                    ProgramShardSelector::new(from, program_account_id),
-                    ProgramShardSelector::new(to, program_account_id),
-                ],
+                source,
+                vec![source, destination],
                 nonces,
-                instruction,
+                message,
             )
             .unwrap();
             let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
@@ -174,19 +167,20 @@ async fn main() {
         Command::MoveDataPublicToPrivate { from, to } => {
             let from = from.parse().unwrap();
             let to = to.parse().unwrap();
-            let moved = shard_bytes(&wallet_core, from, program_account_id).await;
-            let instruction: Instruction = (MOVE_DATA_FUNCTION_ID, moved);
-
-            let accounts = vec![
-                AccountIdentity::Public(from).select_program_shard(program_account_id),
-                AccountIdentity::PrivateOwned(to).select_program_shard(program_account_id),
-            ];
+            let moved = actor_state_bytes(&wallet_core, from, program_account_id).await;
+            let source =
+                AccountIdentity::Public(from).select_program_actor_state(program_account_id);
+            let destination =
+                AccountIdentity::PrivateOwned(to).select_program_actor_state(program_account_id);
+            let accounts = vec![source, destination];
+            let message = (MOVE_DATA_FUNCTION_ID, moved, to);
 
             wallet_core
                 .send_privacy_preserving_tx(
                     accounts,
-                    Program::serialize_instruction(instruction).unwrap(),
-                    &program_with_dependencies,
+                    0,
+                    Program::serialize_message(message).unwrap(),
+                    &programs,
                 )
                 .await
                 .unwrap();

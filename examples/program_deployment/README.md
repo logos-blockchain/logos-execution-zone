@@ -48,7 +48,7 @@ export EXAMPLE_PROGRAMS_BUILD_DIR=$(pwd)/target/riscv32im-risc0-zkvm-elf/docker
 
 # 3. Hello world example
 
-The Hello world program appends its instruction bytes to its own shard on the input account.
+The Hello world program appends its instruction bytes to its own actor state on the input account.
 
 ## Navigate to the example directory
 All remaining commands must be run from:
@@ -115,60 +115,50 @@ Example output:
 ```json
 {
   "balance": 0,
-  "shards": {
+  "actor_states": {
     "<hello_world program account ID>": "486f6c61206d756e646f21"
   },
   "nonce": 0
 }
 ```
-The `shards` map contains hex-encoded data, keyed by program account ID. Decode the Hello World shard:
+The `actor_states` map contains hex-encoded data, keyed by program account ID. Decode the Hello World actor state:
 ```bash
 echo 486f6c61206d756e646f21 | xxd -r -p
 ```
 You should see `Hola mundo!`.
 
-Without `--raw`, the wallet prints each shard separately and decodes recognized token data as JSON.
+Without `--raw`, the wallet prints each actor state separately and decodes recognized token data as JSON.
 
 # 5. Understanding `hello_world.rs`
 
-[hello_world.rs](methods/guest/src/bin/hello_world.rs) handles an execution call with one input account. It appends the greeting to its own shard and leaves the balance unchanged:
+[hello_world.rs](methods/guest/src/bin/hello_world.rs) handles a message sent to one actor: an account paired with this program. It appends the greeting to its own actor state and leaves the balance unchanged:
 
 ```rust
-let mut bytes = pre_state.shard_of(self_account_id).clone().into_inner();
-bytes.extend_from_slice(&greeting);
-let new_data = bytes.try_into().expect("Data should fit within the allowed limits");
-let post_state = ShardStateDiff::new(pre_state, new_data);
+fn handle_message(input: &ReceiveInput, greeting: Vec<u8>) -> Response {
+    let mut bytes = input.pre_state.to_vec();
+    bytes.extend(greeting);
+    Response::set_state(bytes)
+}
 ```
 
-It returns the proposed change with:
+`define_actor_logic!` decodes the greeting, calls the handler and writes the returned `Response`:
 
 ```rust
-ProgramOutput::new(
-    self_account_id,
-    caller_account_id,
-    instruction_data,
-    vec![post_state],
-)
-.write();
+lee_core::define_actor_logic!(handle_message);
 ```
 
 # 6. Understanding `run_hello_world.rs`
 
-The [public runner](src/bin/run_hello_world.rs) loads the wallet and guest binary, selects the program's shard on the supplied account, and submits a public transaction:
+The [public runner](src/bin/run_hello_world.rs) loads the wallet and guest binary, selects the program's actor state on the supplied account, and submits a public transaction:
 
 ```rust
-let message = Message::try_new(
-    program.id().into(),
-    vec![ProgramShardSelector::new(account_id, program.id().into())],
-    vec![],
-    greeting,
-)
-.unwrap();
-let witness_set = WitnessSet::for_message(&message, &[]);
+let hello = Actor::new(account_id, program_account_id);
+let message = Message::try_new(hello, vec![hello], nonces, greeting).unwrap();
+let witness_set = WitnessSet::for_message(&message, &signing_keys);
 let tx = PublicTransaction::new(message, witness_set);
 ```
 
-The runner supplies no signatures or nonces. Hello World writes its own shard without checking account authorization.
+The runner supplies no signatures or nonces. Hello World writes its own actor state without checking account authorization.
 
 # 7. Private execution of the Hello world example
 
@@ -209,7 +199,7 @@ cargo run --bin run_hello_world_private \
 > - This command may take a few minutes to complete. A ZK proof of the Hello world program execution and the privacy preserving circuit are being generated. Depending on the machine this can take from 30 seconds to 4 minutes.
 > - We are passing the same `hello_world.bin` binary as in the previous case with public executions. This is because the program is the same, it is the privacy context of the input account that's different.
 > - Because this program executes privately, the local machine runs the program and generate the proof of execution.
-> - The program writes to its own shard on the private account.
+> - The program writes to its own actor state on the private account.
 
 ### Syncing the new private account values
 The `run_hello_world` script submitted a transaction and it was (hopefully) accepted by the node. On chain there is now a commitment to the new private account values, and the account data is stored encrypted. However, the local client hasn’t updated its private state yet. That’s why, if you try to get the private account values now, it still reads the old values from local storage instead.
@@ -235,7 +225,7 @@ should show something similar to
 ```json
 {
   "balance": 0,
-  "shards": {
+  "actor_states": {
     "<hello_world program account ID>": "486f6c61206d756e646f21"
   },
   "nonce": 236788677072686551559312843688143377080
@@ -244,36 +234,34 @@ should show something similar to
 
 ## The `run_hello_world_private.rs` runner
 
-The [private runner](src/bin/run_hello_world_private.rs) selects the same program shard. The wallet prepares the private account witnesses, executes the program, generates proofs, and submits the transaction:
+The [private runner](src/bin/run_hello_world_private.rs) selects the same program actor state. The wallet prepares the private account witnesses, executes the program, generates proofs, and submits the transaction:
 
 ```rust
-let accounts = vec![
-    AccountIdentity::PrivateOwned(account_id).select_program_shard(program.id().into()),
-];
+let account =
+    AccountIdentity::PrivateOwned(account_id).select_program_actor_state(program_account_id);
 
 wallet_core
     .send_privacy_preserving_tx(
-        accounts,
-        Program::serialize_instruction(greeting).unwrap(),
-        &program.into(),
+        vec![account],
+        0,
+        Program::serialize_message(greeting).unwrap(),
+        &programs,
     )
     .await
     .unwrap();
 ```
 
 # 8. Account authorization mechanism
-The Hello World program does not check `is_authorized` before writing its shard.
+The Hello World program does not check `is_authorized` before writing its actor state.
 For regular accounts, authorization comes from:
 
 - a transaction signature for a public account;
 - knowledge of the authorization secret key (`ask`) for a private account.
 
-Programs receive the result in `AccountInput::is_authorized`. The authorized Hello World example checks it before writing:
+Programs receive the result in `ReceiveInput::is_authorized`. The authorized Hello World example checks it before writing:
 
 ```rust
-if !pre_state.is_authorized {
-    panic!("Missing required authorization");
-}
+assert!(input.is_authorized, "Missing required authorization");
 ```
 
 # 9. Public execution of the Hello world with authorization example
@@ -285,7 +273,7 @@ wallet deploy-program $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world_with_authorization
 ```
 
 ### Create a new public account
-Create a new account for this example. You can also reuse the previous account: each program writes its own shard.
+Create a new account for this example. You can also reuse the previous account: each program writes its own actor state.
 ```bash
 wallet account new public
 ```
@@ -305,7 +293,7 @@ cargo run --bin run_hello_world_with_authorization \
 
 # 10. Understanding `run_hello_world_with_authorization.rs`
 
-The [authorized runner](src/bin/run_hello_world_with_authorization.rs) selects the program's shard as before. It also:
+The [authorized runner](src/bin/run_hello_world_with_authorization.rs) selects the program's actor state as before. It also:
 
 - loads the account's signing key;
 - includes the account's current nonce in the message;
@@ -330,9 +318,9 @@ You should see something like the following **on the node logs**.
 # 11. Public and private account interaction example
 Previous examples only operated on public or private accounts independently. Those minimal programs were useful to introduce basic concepts, but they couldn't demonstrate how different types of accounts interact within a single program invocation.
 The "Hello world with move function" introduces two operations that require one or two input accounts:
-- `write`: appends bytes to the program's shard on one account.
-- `move_data`: moves all bytes from the program's shard on one account to its shard on another.
-This example moves data between the program's shards on public and private accounts.
+- `write`: appends bytes to the program's actor state on one account.
+- `move_data`: moves all bytes from the program's actor state on one account to its actor state on another.
+This example moves data between the program's actor states on public and private accounts.
 
 > [!NOTE]
 > The program logic is completely agnostic to whether input accounts are public or private. It always executes the same way.
@@ -392,9 +380,9 @@ wallet account sync-private
 wallet account get --scope all --account-id Private/8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU
 ```
 
-and check that the shard data decodes to `mundo!` and `Hola` respectively.
+and check that the actor state data decodes to `mundo!` and `Hola` respectively.
 
-Now move the program's shard data from the public account to the private account.
+Now move the program's actor state data from the public account to the private account.
 
 ```bash
 cargo run --bin run_hello_world_with_move_function \
@@ -402,7 +390,7 @@ cargo run --bin run_hello_world_with_move_function \
     move-data-public-to-private 95iNQMbmxMRY6jULiHYkCzCkYKPEuysvBh5kEHayDxLs 8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU
 ```
 
-After succeeding, repeat the get and sync commands. The program's shard should be empty on the public account and contain `Holamundo!` on the private account.
+After succeeding, repeat the get and sync commands. The program's actor state should be empty on the public account and contain `Holamundo!` on the private account.
 
 # 12. Program composition: tail calls
 Programs can chain calls to other programs when they return. This is the tail call or chained call mechanism. It is used by programs that depend on other programs.
@@ -418,7 +406,7 @@ As before, let's start by deploying the program
 wallet deploy-program $EXAMPLE_PROGRAMS_BUILD_DIR/simple_tail_call.bin
 ```
 
-We'll reuse public account `BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9`; its Hello World shard contains `Hola mundo!`.
+We'll reuse public account `BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9`; its Hello World actor state contains `Hola mundo!`.
 
 Let's run the tail call program
 
@@ -439,7 +427,7 @@ You should se an output similar to
 ```json
 {
   "balance": 0,
-  "shards": {
+  "actor_states": {
     "<hello_world program account ID>": "486f6c61206d756e646f2148656c6c6f2066726f6d207461696c2063616c6c"
   },
   "nonce": 0
@@ -459,7 +447,7 @@ Hola mundo!Hello from tail call
 There's support for tail calls in privacy preserving executions too. The `run_hello_world_through_tail_call_private.rs` runner walks you through the process of invoking such an execution.
 The only difference is that, since the execution is local, the runner will need both programs: the `simple_tail_call` and it's dependency `hello_world`.
 
-Use the private account `8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU` created in the previous example. This call writes its `hello_world` shard.
+Use the private account `8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU` created in the previous example. This call writes its `hello_world` actor state.
 
 You can test the privacy tail calls with
 ```bash
@@ -480,20 +468,20 @@ wallet account get --scope all --account-id Private/8vzkK7vsdrS2gdPhLk72La8X4FJk
 
 # 13. Program derived accounts: authorizing accounts through tail calls
 
-## Program shards and account authorization
+## Program actor states and account authorization
 
-Each account has a balance, a nonce, and program shards. A program can modify its own shard on any account. It can read another program's shard when that shard is selected as an input.
+Each account has a nonce and program actor states; its balance is the native token program's actor state. A program can modify its own actor state on any account.
 
-A `ProgramShardSelector` identifies an account and optionally a program shard. Omitting the program selects the balance without shard data.
+An `Actor` pairs an account with a program and addresses that program's actor state on the account. `Actor::native_balance` addresses the balance.
 
-Account authorization allows a program to debit the balance. Programs may also require authorization before changing their own shard.
+Account authorization allows a program to debit the balance. Programs may also require authorization before changing their own actor state.
 
 Regular public accounts are authorized by a signature; regular private accounts by knowledge of `ask`.
 
 Public and private PDAs are bound to an authority account and a seed. During a chained call, the authority program supplies the seed to authorize its PDAs for that call and its descendants.
 
 ## Running the example
-[tail_call_with_pda.rs](methods/guest/src/bin/tail_call_with_pda.rs) calls Hello World with Authorization on its PDA, passing the seed to authorize the account. The callee writes its own shard; `tail_call_with_pda` remains the PDA's authority.
+[tail_call_with_pda.rs](methods/guest/src/bin/tail_call_with_pda.rs) calls Hello World with Authorization on its PDA, passing the seed to authorize the account. The callee writes its own actor state; `tail_call_with_pda` remains the PDA's authority.
 
 Deploy the program:
 ```bash
@@ -523,7 +511,7 @@ Output:
 ```json
 {
   "balance": 0,
-  "shards": {
+  "actor_states": {
     "<hello_world_with_authorization program account ID>": "48656c6c6f2066726f6d207461696c2063616c6c20776974682050726f6772616d2044657269766564204163636f756e74204944"
   },
   "nonce": 0

@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
+
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, ProgramShardSelector, PublicTransaction,
+    AccountId, Actor, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
 use program_deployment::deploy_program;
@@ -55,8 +57,8 @@ async fn main() {
         .parse()
         .unwrap();
 
-    // Deploy both programs through `program_loader`; `simple_tail_call` reads the callee's
-    // address from its own instruction data.
+    // Deploy both programs through `program_loader`; `simple_tail_call` reads the callee actor
+    // from its own message.
     let caller_bytecode: Vec<u8> = std::fs::read(caller_path).unwrap();
     let caller_account_id = deploy_program(&mut wallet_core, caller_bytecode, payer)
         .await
@@ -66,17 +68,13 @@ async fn main() {
         .await
         .unwrap();
 
-    let instruction_data = callee_account_id;
-    let nonces = vec![];
+    let nonces = BTreeMap::new();
     let signing_keys = [];
-    // The caller only needs the account ID; the callee selects its shard.
-    let message = Message::try_new(
-        caller_account_id,
-        vec![ProgramShardSelector::native_balance(account_id)],
-        nonces,
-        instruction_data,
-    )
-    .unwrap();
+    // The caller's actor receives the message and sends the greeting to the callee's actor on the
+    // same account, so both are declared.
+    let caller = Actor::new(account_id, caller_account_id);
+    let callee = Actor::new(account_id, callee_account_id);
+    let message = Message::try_new(caller, vec![caller, callee], nonces, callee).unwrap();
     let witness_set = WitnessSet::for_message(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 

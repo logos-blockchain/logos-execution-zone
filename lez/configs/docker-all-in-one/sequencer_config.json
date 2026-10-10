@@ -23,26 +23,34 @@
     "genesis": [
         {
             "supply_account": {
-                "account_id": "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV",
+                "recipient": {
+                    "identified": {
+                        "key": "b6eb0e598cb1fbcb8ffbb13bd9deef0e4ad4c6bb39382873f7b509e05f3214fa"
+                    }
+                },
                 "balance": 10000
             }
         },
         {
             "supply_account": {
-                "account_id": "7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo",
+                "recipient": {
+                    "identified": {
+                        "key": "97f49d1c817434bdefbeef2fa856d1602de6ca4ed6f72c6f3853be7e6fe97f47"
+                    }
+                },
                 "balance": 20000
             }
         },
         {
-            "supply_account": {
-                "account_id": "61EsoYN6gvTLkveh1YSTMG3yJkncpHy5EGmxhSK4ew29",
-                "balance": 10000
+            "supply_private_account": {
+                "address": "44KVvzvh2ephQU9aR5snboGUXKgS1FnPYh1W4KZKwmhm",
+                "balance": 10000000000000
             }
         },
         {
-            "supply_account": {
-                "account_id": "3m6HQmCgmAvsxZtxAHPqqEqoBG4335fCG8TzxigyW7rE",
-                "balance": 20000
+            "supply_private_account": {
+                "address": "478hD6LXFTYu5gRRkWkCyXPRsWgCwAfRredoCUfxr5b9",
+                "balance": 20000000000000
             }
         }
     ],

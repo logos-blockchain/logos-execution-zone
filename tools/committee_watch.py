@@ -93,15 +93,15 @@ def program_account_id(pid: list[int]) -> str:
 
 
 def stake_config(repo: str, sequencer: str) -> dict:
-    """Read the stake program's config shard."""
+    """Read the stake program's config actor state."""
     pid = program_id(repo)
     program = program_account_id(pid)
     account = rpc(
         sequencer,
         "getAccountView",
         [{"account_id": pda(pid, CONFIG_SEED), "program_account_id": program}],
-    )
-    return decode_stake_config(bytes(account["data"]["shards"][program]))
+    ) or {"nonce": 0, "data": {"actor_states": {}}}
+    return decode_stake_config(bytes(account["data"]["actor_states"][program]))
 
 
 class Reader:
@@ -136,11 +136,11 @@ def decode_stake_config(data: bytes) -> dict:
     entries = {}
     for _ in range(r.u32()):
         key = r.take(32).hex()
-        entries[key] = {
-            "owner": b58encode(r.take(32)),
-            "staked": r.u128(),
-            "pending": r.u128(),
-        }
+        entries[key] = {"owner": b58encode(r.take(32)), "staked": r.u128(), "pending": 0}
+        # `pending_unstake: Option<PendingUnstake>` — amount, destination, requested_at.
+        if r.take(1)[0]:
+            entries[key]["pending"] = r.u128()
+            r.take(32 + 8)
     for e in entries.values():
         e["net"] = max(e["staked"] - e["pending"], 0)
     return {

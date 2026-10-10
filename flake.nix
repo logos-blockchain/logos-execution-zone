@@ -205,7 +205,7 @@
               cargoExtraArgs = "-p indexer_ffi";
               postInstall = ''
                 mkdir -p $out/include
-                cp lez/indexer/ffi/indexer_ffi.h $out/include/
+                cp lez/indexer/ffi/indexer_ffi.h lez/ffi_types/ffi_types.h $out/include/
               ''
               + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
                 install_name_tool -id @rpath/libindexer_ffi.dylib $out/lib/libindexer_ffi.dylib

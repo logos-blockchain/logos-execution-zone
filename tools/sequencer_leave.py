@@ -3,8 +3,8 @@
 
 Takes the node's home so it can read the key, looks the key up in the live
 stake config to find the ownership account holding its stake, and submits the
-unstake request. The seat is released a finality later, and the balance moves
-when a sequencer includes the FinalizeUnstake.
+unstake request. The seat is released a finality later, and the FinalizeUnstake
+a sequencer includes casts the balance to the destination, which receives it later.
 
     tools/sequencer_leave.py ~/lez-nodes/seq-3
     tools/sequencer_leave.py ~/lez-nodes/seq-3 --destination <account>
@@ -38,7 +38,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("home", help="path to the node's home")
     ap.add_argument("--destination", default=DEFAULT_DESTINATION,
-                    help="account credited once FinalizeUnstake runs")
+                    help="account the FinalizeUnstake payout is cast to")
     ap.add_argument("--amount", type=int, help="defaults to the whole stake")
     ap.add_argument("--wallet", help="defaults to the home's own wallet, else the debug one")
     ap.add_argument("--config", default=DEFAULT_CONFIG)
@@ -91,8 +91,8 @@ def main() -> None:
          "--destination", args.destination],
         cwd=repo,
     ).strip())
-    print("\nThe seat goes a finality later; the balance moves when a sequencer "
-          "includes the FinalizeUnstake.")
+    print("\nThe seat goes a finality later; the FinalizeUnstake a sequencer "
+          "includes casts the balance to the destination to receive.")
 
 
 if __name__ == "__main__":

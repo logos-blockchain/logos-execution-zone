@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
+
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, ProgramShardSelector, PublicTransaction,
+    AccountId, Actor, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
 use program_deployment::deploy_program;
@@ -62,15 +64,10 @@ async fn main() {
     // Construct the public transaction
     // No nonces nor signing keys are needed for this example. Check out the
     // `run_hello_world_with_authorization` on how to use them.
-    let nonces = vec![];
+    let nonces = BTreeMap::new();
     let signing_keys = [];
-    let message = Message::try_new(
-        program_account_id,
-        vec![ProgramShardSelector::new(account_id, program_account_id)],
-        nonces,
-        greeting,
-    )
-    .unwrap();
+    let hello = Actor::new(account_id, program_account_id);
+    let message = Message::try_new(hello, vec![hello], nonces, greeting).unwrap();
     let witness_set = WitnessSet::for_message(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 
