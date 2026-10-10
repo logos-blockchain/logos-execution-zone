@@ -908,10 +908,6 @@ void free_ffi_transaction_opt(struct FfiOption_FfiTransaction *val);
  */
 void free_ffi_transaction_vec(struct FfiVec_FfiTransaction *val);
 
-bool is_ok(const enum OperationStatus *self);
-
-bool is_error(const enum OperationStatus *self);
-
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus

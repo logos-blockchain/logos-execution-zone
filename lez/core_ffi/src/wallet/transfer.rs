@@ -1,0 +1,594 @@
+//! Token transfer functions.
+
+use std::{
+    ffi::{CStr, CString, c_char},
+    ptr,
+};
+
+use lee::AccountId;
+use wallet::{
+    AccountIdentity, account::AccountIdWithPrivacy, cli::CliAccountMention,
+    program_facades::native_token_transfer::NativeTokenTransfer,
+};
+
+use crate::{
+    error::{FfiOperationError, print_error},
+    primitives::types::{FfiBytes32, FfiIdentifier, FfiPrivateAccountKeys},
+    wallet::{
+        block_on,
+        lifecycle::get_wallet,
+        map_execution_error,
+        types::{FfiTransferResult, WalletHandle},
+    },
+};
+
+fn optional_c_str(ptr: *const c_char) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+    let c_str = unsafe { CStr::from_ptr(ptr) };
+    c_str.to_str().ok().map(str::to_owned)
+}
+
+/// Send a public token transfer.
+///
+/// Transfers tokens from one public account to another on the network.
+///
+/// Program shards are unchanged. If the wallet holds `to`'s key, it also signs for that account.
+///
+/// # Parameters
+/// - `handle`: Valid wallet handle
+/// - `from`: Source account ID (must be owned by this wallet)
+/// - `to`: Destination account ID
+/// - `amount`: Amount to transfer as little-endian [u8; 16]
+/// - `out_result`: Output pointer for transfer result
+///
+/// # Returns
+/// - `Success` if the transfer was submitted successfully
+/// - `InsufficientFunds` if the source account doesn't have enough balance
+/// - `KeyNotFound` if the source account's signing key is not in this wallet
+/// - Error code on other failures
+///
+/// # Memory
+/// The result must be freed with `wallet_ffi_free_transfer_result()`.
+///
+/// # Safety
+/// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+/// - `from` must be a valid pointer to a `FfiBytes32` struct
+/// - `to` must be a valid pointer to a `FfiBytes32` struct
+/// - `amount` must be a valid pointer to a `[u8; 16]` array
+/// - `out_result` must be a valid pointer to a `FfiTransferResult` struct
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn wallet_ffi_transfer_public(
+    handle: *mut WalletHandle,
+    from: *const FfiBytes32,
+    to: *const FfiBytes32,
+    amount: *const [u8; 16],
+    out_result: *mut FfiTransferResult,
+) -> FfiOperationError {
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    if from.is_null() || to.is_null() || amount.is_null() || out_result.is_null() {
+        print_error("Null pointer argument");
+        return FfiOperationError::NullPointer;
+    }
+
+    let wallet = match wrapper.core.lock() {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return FfiOperationError::InternalError;
+        }
+    };
+
+    let from_id = AccountId::new(unsafe { (*from).data });
+    let to_id = AccountId::new(unsafe { (*to).data });
+    let amount = u128::from_le_bytes(unsafe { *amount });
+
+    let transfer = NativeTokenTransfer(&wallet);
+
+    match block_on(transfer.send_public_transfer(
+        AccountIdentity::Public(from_id),
+        AccountIdentity::Public(to_id),
+        amount,
+    )) {
+        Ok(tx_hash) => {
+            let tx_hash = CString::new(tx_hash.to_string())
+                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
+
+            unsafe {
+                (*out_result).tx_hash = tx_hash;
+                (*out_result).success = true;
+            }
+            FfiOperationError::Success
+        }
+        Err(e) => {
+            print_error(format!("Transfer failed: {e:?}"));
+            unsafe {
+                (*out_result).tx_hash = ptr::null_mut();
+                (*out_result).success = false;
+            }
+            map_execution_error(e)
+        }
+    }
+}
+
+/// Send a shielded token transfer.
+///
+/// Transfers tokens from a public account to a private account.
+///
+/// # Parameters
+/// - `handle`: Valid wallet handle
+/// - `from`: Source account ID (must be owned by this wallet)
+/// - `to_keys`: Destination account keys
+/// - `to_identifier`: Identifier for the recipient's private account
+/// - `amount`: Amount to transfer as little-endian [u8; 16]
+/// - `out_result`: Output pointer for transfer result
+///
+/// # Returns
+/// - `Success` if the transfer was submitted successfully
+/// - `InsufficientFunds` if the source account doesn't have enough balance
+/// - `KeyNotFound` if the source account's signing key is not in this wallet
+/// - Error code on other failures
+///
+/// # Memory
+/// The result must be freed with `wallet_ffi_free_transfer_result()`.
+///
+/// # Safety
+/// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+/// - `from` must be a valid pointer to a `FfiBytes32` struct
+/// - `to_keys` must be a valid pointer to a `FfiPrivateAccountKeys` struct
+/// - `amount` must be a valid pointer to a `[u8; 16]` array
+/// - `out_result` must be a valid pointer to a `FfiTransferResult` struct
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
+    handle: *mut WalletHandle,
+    from: *const FfiBytes32,
+    to_keys: *const FfiPrivateAccountKeys,
+    to_identifier: *const FfiIdentifier,
+    amount: *const [u8; 16],
+    key_path: *const c_char,
+    out_result: *mut FfiTransferResult,
+) -> FfiOperationError {
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    if from.is_null()
+        || to_keys.is_null()
+        || to_identifier.is_null()
+        || amount.is_null()
+        || out_result.is_null()
+    {
+        print_error("Null pointer argument");
+        return FfiOperationError::NullPointer;
+    }
+
+    let wallet = match wrapper.core.lock() {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return FfiOperationError::InternalError;
+        }
+    };
+
+    let from_id = AccountId::new(unsafe { (*from).data });
+    let to_npk = unsafe { (*to_keys).npk() };
+    let to_vpk = match unsafe { (*to_keys).vpk() } {
+        Ok(vpk) => vpk,
+        Err(e) => {
+            print_error("Invalid viewing key");
+            return e.into();
+        }
+    };
+    let to_identifier = lee_core::Identifier::new(unsafe { (*to_identifier).data });
+    let amount = u128::from_le_bytes(unsafe { *amount });
+    let from_mention = optional_c_str(key_path).map_or_else(
+        || CliAccountMention::Id(AccountIdWithPrivacy::Public(from_id)),
+        CliAccountMention::KeyPath,
+    );
+
+    let transfer = NativeTokenTransfer(&wallet);
+
+    match block_on(transfer.send_shielded_transfer_to_outer_account(
+        from_mention.into_public_identity(from_id, true),
+        to_npk,
+        to_vpk,
+        to_identifier,
+        amount,
+    )) {
+        Ok((tx_hash, _shared_key)) => {
+            let tx_hash = CString::new(tx_hash.to_string())
+                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
+
+            unsafe {
+                (*out_result).tx_hash = tx_hash;
+                (*out_result).success = true;
+            }
+            FfiOperationError::Success
+        }
+        Err(e) => {
+            print_error(format!("Transfer failed: {e:?}"));
+            unsafe {
+                (*out_result).tx_hash = ptr::null_mut();
+                (*out_result).success = false;
+            }
+            map_execution_error(e)
+        }
+    }
+}
+
+/// Send a deshielded token transfer.
+///
+/// Transfers tokens from a private account to a public account.
+///
+/// # Parameters
+/// - `handle`: Valid wallet handle
+/// - `from`: Source account ID (must be owned by this wallet)
+/// - `to`: Destination account ID
+/// - `amount`: Amount to transfer as little-endian [u8; 16]
+/// - `out_result`: Output pointer for transfer result
+///
+/// # Returns
+/// - `Success` if the transfer was submitted successfully
+/// - `InsufficientFunds` if the source account doesn't have enough balance
+/// - `KeyNotFound` if the source account's signing key is not in this wallet
+/// - Error code on other failures
+///
+/// # Memory
+/// The result must be freed with `wallet_ffi_free_transfer_result()`.
+///
+/// # Safety
+/// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+/// - `from` must be a valid pointer to a `FfiBytes32` struct
+/// - `to` must be a valid pointer to a `FfiBytes32` struct
+/// - `amount` must be a valid pointer to a `[u8; 16]` array
+/// - `out_result` must be a valid pointer to a `FfiTransferResult` struct
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn wallet_ffi_transfer_deshielded(
+    handle: *mut WalletHandle,
+    from: *const FfiBytes32,
+    to: *const FfiBytes32,
+    amount: *const [u8; 16],
+    out_result: *mut FfiTransferResult,
+) -> FfiOperationError {
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    if from.is_null() || to.is_null() || amount.is_null() || out_result.is_null() {
+        print_error("Null pointer argument");
+        return FfiOperationError::NullPointer;
+    }
+
+    let wallet = match wrapper.core.lock() {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return FfiOperationError::InternalError;
+        }
+    };
+
+    let from_id = AccountId::new(unsafe { (*from).data });
+    let to_id = AccountId::new(unsafe { (*to).data });
+    let amount = u128::from_le_bytes(unsafe { *amount });
+    let transfer = NativeTokenTransfer(&wallet);
+
+    match block_on(transfer.send_deshielded_transfer(from_id, to_id, amount)) {
+        Ok((tx_hash, _shared_key)) => {
+            let tx_hash = CString::new(tx_hash.to_string())
+                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
+
+            unsafe {
+                (*out_result).tx_hash = tx_hash;
+                (*out_result).success = true;
+            }
+            FfiOperationError::Success
+        }
+        Err(e) => {
+            print_error(format!("Transfer failed: {e:?}"));
+            unsafe {
+                (*out_result).tx_hash = ptr::null_mut();
+                (*out_result).success = false;
+            }
+            map_execution_error(e)
+        }
+    }
+}
+
+/// Send a private token transfer.
+///
+/// Transfers tokens from a private account to another private account.
+///
+/// # Parameters
+/// - `handle`: Valid wallet handle
+/// - `from`: Source account ID (must be owned by this wallet)
+/// - `to_keys`: Destination account keys
+/// - `to_identifier`: Identifier for the recipient's private account
+/// - `amount`: Amount to transfer as little-endian [u8; 16]
+/// - `out_result`: Output pointer for transfer result
+///
+/// # Returns
+/// - `Success` if the transfer was submitted successfully
+/// - `InsufficientFunds` if the source account doesn't have enough balance
+/// - `KeyNotFound` if the source account's signing key is not in this wallet
+/// - Error code on other failures
+///
+/// # Memory
+/// The result must be freed with `wallet_ffi_free_transfer_result()`.
+///
+/// # Safety
+/// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+/// - `from` must be a valid pointer to a `FfiBytes32` struct
+/// - `to_keys` must be a valid pointer to a `FfiPrivateAccountKeys` struct
+/// - `amount` must be a valid pointer to a `[u8; 16]` array
+/// - `out_result` must be a valid pointer to a `FfiTransferResult` struct
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn wallet_ffi_transfer_private(
+    handle: *mut WalletHandle,
+    from: *const FfiBytes32,
+    to_keys: *const FfiPrivateAccountKeys,
+    to_identifier: *const FfiIdentifier,
+    amount: *const [u8; 16],
+    out_result: *mut FfiTransferResult,
+) -> FfiOperationError {
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    if from.is_null()
+        || to_keys.is_null()
+        || to_identifier.is_null()
+        || amount.is_null()
+        || out_result.is_null()
+    {
+        print_error("Null pointer argument");
+        return FfiOperationError::NullPointer;
+    }
+
+    let wallet = match wrapper.core.lock() {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return FfiOperationError::InternalError;
+        }
+    };
+
+    let from_id = AccountId::new(unsafe { (*from).data });
+    let to_npk = unsafe { (*to_keys).npk() };
+    let to_vpk = match unsafe { (*to_keys).vpk() } {
+        Ok(vpk) => vpk,
+        Err(e) => {
+            print_error("Invalid viewing key");
+            return e.into();
+        }
+    };
+    let to_identifier = lee_core::Identifier::new(unsafe { (*to_identifier).data });
+    let amount = u128::from_le_bytes(unsafe { *amount });
+    let transfer = NativeTokenTransfer(&wallet);
+
+    match block_on(transfer.send_private_transfer_to_outer_account(
+        from_id,
+        to_npk,
+        to_vpk,
+        to_identifier,
+        amount,
+    )) {
+        Ok((tx_hash, _shared_key)) => {
+            let tx_hash = CString::new(tx_hash.to_string())
+                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
+
+            unsafe {
+                (*out_result).tx_hash = tx_hash;
+                (*out_result).success = true;
+            }
+            FfiOperationError::Success
+        }
+        Err(e) => {
+            print_error(format!("Transfer failed: {e:?}"));
+            unsafe {
+                (*out_result).tx_hash = ptr::null_mut();
+                (*out_result).success = false;
+            }
+            map_execution_error(e)
+        }
+    }
+}
+
+/// Send a shielded token transfer to an owned private account.
+///
+/// Transfers tokens from a public account to a private account that is owned
+/// by this wallet. Unlike `wallet_ffi_transfer_shielded` which sends to a
+/// foreign account using NPK/VPK keys, this variant takes a destination
+/// account ID that must belong to this wallet.
+///
+/// # Parameters
+/// - `handle`: Valid wallet handle
+/// - `from`: Source public account ID (must be owned by this wallet)
+/// - `to`: Destination private account ID (must be owned by this wallet)
+/// - `amount`: Amount to transfer as little-endian [u8; 16]
+/// - `out_result`: Output pointer for transfer result
+///
+/// # Returns
+/// - `Success` if the transfer was submitted successfully
+/// - `InsufficientFunds` if the source account doesn't have enough balance
+/// - `KeyNotFound` if either account's keys are not in this wallet
+/// - Error code on other failures
+///
+/// # Memory
+/// The result must be freed with `wallet_ffi_free_transfer_result()`.
+///
+/// # Safety
+/// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+/// - `from` must be a valid pointer to a `FfiBytes32` struct
+/// - `to` must be a valid pointer to a `FfiBytes32` struct
+/// - `amount` must be a valid pointer to a `[u8; 16]` array
+/// - `out_result` must be a valid pointer to a `FfiTransferResult` struct
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn wallet_ffi_transfer_shielded_owned(
+    handle: *mut WalletHandle,
+    from: *const FfiBytes32,
+    to: *const FfiBytes32,
+    amount: *const [u8; 16],
+    key_path: *const c_char,
+    out_result: *mut FfiTransferResult,
+) -> FfiOperationError {
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    if from.is_null() || to.is_null() || amount.is_null() || out_result.is_null() {
+        print_error("Null pointer argument");
+        return FfiOperationError::NullPointer;
+    }
+
+    let wallet = match wrapper.core.lock() {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return FfiOperationError::InternalError;
+        }
+    };
+
+    let from_id = AccountId::new(unsafe { (*from).data });
+    let to_id = AccountId::new(unsafe { (*to).data });
+    let amount = u128::from_le_bytes(unsafe { *amount });
+    let from_mention = optional_c_str(key_path).map_or_else(
+        || CliAccountMention::Id(AccountIdWithPrivacy::Public(from_id)),
+        CliAccountMention::KeyPath,
+    );
+
+    let transfer = NativeTokenTransfer(&wallet);
+
+    match block_on(transfer.send_shielded_transfer(
+        from_mention.into_public_identity(from_id, true),
+        to_id,
+        amount,
+    )) {
+        Ok((tx_hash, _shared_key)) => {
+            let tx_hash = CString::new(tx_hash.to_string())
+                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
+
+            unsafe {
+                (*out_result).tx_hash = tx_hash;
+                (*out_result).success = true;
+            }
+            FfiOperationError::Success
+        }
+        Err(e) => {
+            print_error(format!("Transfer failed: {e:?}"));
+            unsafe {
+                (*out_result).tx_hash = ptr::null_mut();
+                (*out_result).success = false;
+            }
+            map_execution_error(e)
+        }
+    }
+}
+
+/// Send a private token transfer to an owned private account.
+///
+/// Transfers tokens from a private account to another private account that is
+/// owned by this wallet. Unlike `wallet_ffi_transfer_private` which sends to a
+/// foreign account using NPK/VPK keys, this variant takes a destination
+/// account ID that must belong to this wallet.
+///
+/// # Parameters
+/// - `handle`: Valid wallet handle
+/// - `from`: Source private account ID (must be owned by this wallet)
+/// - `to`: Destination private account ID (must be owned by this wallet)
+/// - `amount`: Amount to transfer as little-endian [u8; 16]
+/// - `out_result`: Output pointer for transfer result
+///
+/// # Returns
+/// - `Success` if the transfer was submitted successfully
+/// - `InsufficientFunds` if the source account doesn't have enough balance
+/// - `KeyNotFound` if either account's keys are not in this wallet
+/// - Error code on other failures
+///
+/// # Memory
+/// The result must be freed with `wallet_ffi_free_transfer_result()`.
+///
+/// # Safety
+/// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+/// - `from` must be a valid pointer to a `FfiBytes32` struct
+/// - `to` must be a valid pointer to a `FfiBytes32` struct
+/// - `amount` must be a valid pointer to a `[u8; 16]` array
+/// - `out_result` must be a valid pointer to a `FfiTransferResult` struct
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn wallet_ffi_transfer_private_owned(
+    handle: *mut WalletHandle,
+    from: *const FfiBytes32,
+    to: *const FfiBytes32,
+    amount: *const [u8; 16],
+    out_result: *mut FfiTransferResult,
+) -> FfiOperationError {
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    if from.is_null() || to.is_null() || amount.is_null() || out_result.is_null() {
+        print_error("Null pointer argument");
+        return FfiOperationError::NullPointer;
+    }
+
+    let wallet = match wrapper.core.lock() {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return FfiOperationError::InternalError;
+        }
+    };
+
+    let from_id = AccountId::new(unsafe { (*from).data });
+    let to_id = AccountId::new(unsafe { (*to).data });
+    let amount = u128::from_le_bytes(unsafe { *amount });
+    let transfer = NativeTokenTransfer(&wallet);
+
+    match block_on(transfer.send_private_transfer_to_owned_account(from_id, to_id, amount)) {
+        Ok((tx_hash, _shared_keys)) => {
+            let tx_hash = CString::new(tx_hash.to_string())
+                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
+
+            unsafe {
+                (*out_result).tx_hash = tx_hash;
+                (*out_result).success = true;
+            }
+            FfiOperationError::Success
+        }
+        Err(e) => {
+            print_error(format!("Transfer failed: {e:?}"));
+            unsafe {
+                (*out_result).tx_hash = ptr::null_mut();
+                (*out_result).success = false;
+            }
+            map_execution_error(e)
+        }
+    }
+}
+
+/// Free a transfer result returned by `wallet_ffi_transfer_public`.
+///
+/// # Safety
+/// The result must be either null or a valid result from a transfer function.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn wallet_ffi_free_transfer_result(result: *mut FfiTransferResult) {
+    if result.is_null() {
+        return;
+    }
+
+    unsafe {
+        let result = &*result;
+        if !result.tx_hash.is_null() {
+            drop(CString::from_raw(result.tx_hash));
+        }
+    }
+}

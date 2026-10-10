@@ -1,15 +1,12 @@
 #[derive(Debug, Default, PartialEq, Eq)]
 #[repr(C)]
-pub enum OperationStatus {
+pub enum PrimitiveOperationStatus {
     #[default]
     Ok = 0x0,
-    NullPointer = 0x1,
-    InitializationError = 0x2,
-    ClientError = 0x3,
-    InvalidArgument = 0x4,
+    CastError = 0x1,
 }
 
-impl OperationStatus {
+impl PrimitiveOperationStatus {
     #[must_use]
     pub fn is_ok(&self) -> bool {
         *self == Self::Ok
