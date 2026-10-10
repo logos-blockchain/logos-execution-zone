@@ -5,6 +5,7 @@ use lee_core::account::AccountId;
 use sha2::{Digest as _, digest::FixedOutput as _};
 
 use super::{message::Message, witness_set::WitnessSet};
+use crate::InvalidTransaction;
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PrivacyPreservingTransaction {
@@ -39,6 +40,15 @@ impl PrivacyPreservingTransaction {
         hasher.finalize_fixed().into()
     }
 
+    pub fn check_stateless(&self) -> Result<Vec<AccountId>, InvalidTransaction> {
+        let signers = self.signer_account_ids();
+        self.message.check_signers(&signers)?;
+        if !self.witness_set.signatures_are_valid_for(&self.message) {
+            return Err(InvalidTransaction::Signature);
+        }
+        Ok(signers)
+    }
+
     pub(crate) fn signer_account_ids(&self) -> Vec<AccountId> {
         self.witness_set
             .signatures_and_public_keys()
@@ -53,12 +63,7 @@ impl PrivacyPreservingTransaction {
             .signer_account_ids()
             .into_iter()
             .collect::<HashSet<_>>();
-        acc_set.extend(
-            self.message
-                .public_actions
-                .iter()
-                .map(|action| action.account_id),
-        );
+        acc_set.extend(self.message.public_account_ids());
 
         acc_set.into_iter().collect()
     }

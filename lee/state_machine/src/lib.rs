@@ -5,24 +5,31 @@
 
 pub use fees::{FeeDeclaration, SignedMessage, is_fee_authorized};
 pub use lee_core::{
-    GENESIS_BLOCK_ID, SharedSecretKey,
-    account::{
-        Account, AccountData, AccountId, Balance, Cycles, Fee, Gas, ProgramShardSelector, ShardData,
-    },
+    DummyOutput, EncryptedNote, GENESIS_BLOCK_ID, MessageWitness, ProvingInput, Recipient,
+    RecipientEncryption, RecoveryBinding, RootCall, SealedCast, SenderPresentation,
+    SharedSecretKey,
+    account::{Account, AccountData, AccountId, Actor, ActorState, Balance, Cycles, Fee, Gas},
     encryption::EphemeralPublicKey,
+    execution_state::{
+        Boundary, BoundaryStep, Delivery, Placement, PredictedCrossMessages,
+        PublicExecutionContext, TransactionEntry,
+    },
     native_token,
-    program::{AccountMeta, ProgramId},
+    program::{Call, Cast, MessageBody, MessageData, MessageEnvelope, ProgramId, Publication},
 };
 pub use privacy_preserving_circuit::{
     PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
 };
 pub use privacy_preserving_transaction::{
     PrivacyPreservingTransaction,
-    circuit::{ProvingInput, execute_and_prove},
+    circuit::{Simulation, execute_and_prove, execute_and_prove_with_cross_messages},
 };
 pub use public_transaction::PublicTransaction;
 pub use signature::{PrivateKey, PublicKey, Signature};
 pub use state::V03State;
+pub use transaction_message::{
+    InvalidTransaction, PublicAccountEvidence, TransactionMessage, nonce_map,
+};
 pub use validated_state_diff::{ExecutionCharge, ValidatedStateDiff};
 
 pub mod encoding;
@@ -36,6 +43,7 @@ mod signature;
 mod state;
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
+mod transaction_message;
 mod validated_state_diff;
 
 /// Not a guarantee: a `[profile.release] debug-assertions = true` override slips past this.

@@ -4,7 +4,10 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::account::AccountId;
 use sha2::{Digest as _, digest::FixedOutput as _};
 
-use crate::public_transaction::{Message, WitnessSet};
+use crate::{
+    InvalidTransaction,
+    public_transaction::{Message, WitnessSet},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PublicTransaction {
@@ -45,9 +48,28 @@ impl PublicTransaction {
             .signer_account_ids()
             .into_iter()
             .collect::<HashSet<_>>();
-        acc_set.extend(self.message.shard_selectors.iter().map(|p| p.account_id));
+        acc_set.insert(self.message.execution.root.to.account_id);
+        acc_set.extend(
+            self.message
+                .context
+                .actors
+                .iter()
+                .map(|actor| actor.account_id),
+        );
 
         acc_set.into_iter().collect()
+    }
+
+    pub fn check_stateless(&self) -> Result<Vec<AccountId>, InvalidTransaction> {
+        if !self.message.context.cast_promotions.is_empty() {
+            return Err(InvalidTransaction::PublicCastPromotions);
+        }
+        let signers = self.signer_account_ids();
+        self.message.check_signers(&signers)?;
+        if !self.witness_set.is_valid_for(&self.message) {
+            return Err(InvalidTransaction::Signature);
+        }
+        Ok(signers)
     }
 
     #[must_use]

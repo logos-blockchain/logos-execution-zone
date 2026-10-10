@@ -1,111 +1,98 @@
+use std::collections::BTreeMap;
+
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{Nonce, ProgramShardSelector},
-    program::InstructionData,
+    RootCall,
+    account::{Actor, Nonce},
+    execution_state::PublicExecutionContext,
+    program::MessageData,
 };
-use sha2::{Digest as _, Sha256};
 
-use crate::{AccountId, error::LeeError, fees::FeeDeclaration, program::Program};
+use crate::{
+    AccountId, PublicAccountEvidence, TransactionMessage, error::LeeError, fees::FeeDeclaration,
+    program::Program,
+};
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Public/\x00\x00\x00\x00\x00\x00\x00";
 
-#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct Message {
-    pub program_account_id: AccountId,
-    pub shard_selectors: Vec<ProgramShardSelector>,
-    pub nonces: Vec<Nonce>,
-    pub instruction_data: InstructionData,
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PublicExecution {
+    pub root: RootCall,
     /// The fee declaration, or `None` for a fee-exempt (system) transaction.
     pub fee: Option<FeeDeclaration>,
 }
 
-impl std::fmt::Debug for Message {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self {
-            program_account_id,
-            shard_selectors,
-            nonces,
-            instruction_data,
-            fee,
-        } = self;
-        f.debug_struct("Message")
-            .field("program_account_id", program_account_id)
-            .field("shard_selectors", shard_selectors)
-            .field("nonces", nonces)
-            .field("instruction_data", instruction_data)
-            .field("fee", fee)
-            .finish()
-    }
-}
+pub type Message = TransactionMessage<PublicExecution>;
 
 impl Message {
+    #[must_use]
+    pub fn new(
+        to: Actor,
+        message: MessageData,
+        public_actors: impl IntoIterator<Item = Actor>,
+        nonces: BTreeMap<AccountId, Nonce>,
+        fee: Option<FeeDeclaration>,
+        admission_evidence: Vec<PublicAccountEvidence>,
+    ) -> Self {
+        Self {
+            context: PublicExecutionContext::new(public_actors, nonces.keys().copied()),
+            execution: PublicExecution {
+                root: RootCall { to, message },
+                fee,
+            },
+            nonces,
+            admission_evidence,
+        }
+    }
+
     /// Builds a fee-exempt message (`fee: None`). Correct for system
     /// transactions (clock, deposits, dispatches); charged transactions use
     /// [`Self::try_new_with_fees`].
-    pub fn try_new<T: BorshSerialize>(
-        program_account_id: AccountId,
-        shard_selectors: Vec<ProgramShardSelector>,
-        nonces: Vec<Nonce>,
-        instruction: T,
+    pub fn try_new(
+        to: Actor,
+        public_actors: impl IntoIterator<Item = Actor>,
+        nonces: BTreeMap<AccountId, Nonce>,
+        message: impl BorshSerialize,
     ) -> Result<Self, LeeError> {
-        let instruction_data = Program::serialize_instruction(instruction)?;
-
         Ok(Self::new_preserialized(
-            program_account_id,
-            shard_selectors,
+            to,
+            Program::serialize_message(message)?,
+            public_actors,
             nonces,
-            instruction_data,
             None,
         ))
     }
 
-    pub fn try_new_with_fees<T: BorshSerialize>(
-        program_account_id: AccountId,
-        shard_selectors: Vec<ProgramShardSelector>,
-        nonces: Vec<Nonce>,
-        instruction: T,
+    pub fn try_new_with_fees(
+        to: Actor,
+        public_actors: impl IntoIterator<Item = Actor>,
+        nonces: BTreeMap<AccountId, Nonce>,
+        message: impl BorshSerialize,
         fee: FeeDeclaration,
     ) -> Result<Self, LeeError> {
-        let instruction_data = Program::serialize_instruction(instruction)?;
-
         Ok(Self::new_preserialized(
-            program_account_id,
-            shard_selectors,
+            to,
+            Program::serialize_message(message)?,
+            public_actors,
             nonces,
-            instruction_data,
             Some(fee),
         ))
     }
 
     #[must_use]
-    pub const fn new_preserialized(
-        program_account_id: AccountId,
-        shard_selectors: Vec<ProgramShardSelector>,
-        nonces: Vec<Nonce>,
-        instruction_data: InstructionData,
+    pub fn new_preserialized(
+        to: Actor,
+        message: MessageData,
+        public_actors: impl IntoIterator<Item = Actor>,
+        nonces: BTreeMap<AccountId, Nonce>,
         fee: Option<FeeDeclaration>,
     ) -> Self {
-        Self {
-            program_account_id,
-            shard_selectors,
-            nonces,
-            instruction_data,
-            fee,
-        }
+        Self::new(to, message, public_actors, nonces, fee, Vec::new())
     }
 
     #[must_use]
     pub fn hash(&self) -> [u8; 32] {
-        let mut bytes = Vec::with_capacity(
-            PREFIX
-                .len()
-                .checked_add(self.to_bytes().len())
-                .expect("length overflow"),
-        );
-        bytes.extend_from_slice(PREFIX);
-        bytes.extend_from_slice(&self.to_bytes());
-
-        Sha256::digest(bytes).into()
+        self.hash_under(PREFIX)
     }
 }
 
@@ -115,7 +102,7 @@ impl crate::fees::SignedMessage for Message {
     }
 
     fn payer(&self) -> Option<AccountId> {
-        self.fee.map(|fee| fee.payer)
+        self.execution.fee.map(|fee| fee.payer)
     }
 }
 

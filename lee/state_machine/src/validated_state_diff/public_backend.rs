@@ -1,149 +1,116 @@
+use std::collections::BTreeSet;
+
 use lee_core::{
-    BlockId, Commitment, Timestamp,
-    account::{AccountId, Cycles, ProgramShardSelector, ShardData},
-    execution_state::{ApplyPublicEffects, Backend, ExecutionState},
+    Commitment,
+    account::{AccountId, Actor, ActorState, Cycles},
+    execution_state::{ExecutionEnvironment, ExecutionError, Placement, TransitionView},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
-    program::{
-        ApplyInput, ApplyOutput, PROGRAM_LOADER_ACCOUNT_ID, PlanInput, PlanOutput, ProgramEvent,
-        TransactionEvent,
-    },
+    program::{MessageBody, PROGRAM_LOADER_ACCOUNT_ID, ReceiveInput, Transition},
 };
 use log::debug;
 
-use super::{Applier, charge, load_program, loader_shard, plan_program_loader, remaining};
+use super::{catch_program_loader_panic, load_program, loader_actor_state};
 use crate::{
-    V03State, ensure,
+    V03State,
     error::{InvalidProgramBehaviorError, LeeError},
 };
 
 pub(super) struct PublicBackend<'state> {
     state: &'state V03State,
-    block_id: BlockId,
-    timestamp: Timestamp,
     cycle_budget: Cycles,
     cycles_used: &'state mut Cycles,
-    events: Vec<TransactionEvent>,
-    new_commitments: Vec<Commitment>,
+    program_commitments: Vec<Commitment>,
+    cast_promotions: BTreeSet<u64>,
+    evidence: BTreeSet<AccountId>,
 }
 
 impl<'state> PublicBackend<'state> {
     pub(super) const fn new(
         state: &'state V03State,
-        block_id: BlockId,
-        timestamp: Timestamp,
         cycle_budget: Cycles,
         cycles_used: &'state mut Cycles,
+        cast_promotions: BTreeSet<u64>,
+        evidence: BTreeSet<AccountId>,
     ) -> Self {
         Self {
             state,
-            block_id,
-            timestamp,
             cycle_budget,
             cycles_used,
-            events: Vec::new(),
-            new_commitments: Vec::new(),
+            program_commitments: Vec::new(),
+            cast_promotions,
+            evidence,
         }
     }
 
-    pub(super) fn into_outputs(self) -> (Vec<TransactionEvent>, Vec<Commitment>) {
-        (self.events, self.new_commitments)
+    pub(super) const fn state(&self) -> &'state V03State {
+        self.state
+    }
+
+    pub(super) fn finish(self) -> Result<Vec<Commitment>, LeeError> {
+        if let Some(&index) = self.cast_promotions.first() {
+            return Err(ExecutionError::UnreachedCastPromotion { index }.into());
+        }
+        Ok(self.program_commitments)
     }
 }
 
-impl Backend for PublicBackend<'_> {
-    type Call = (AccountId, Applier);
+impl ExecutionEnvironment for PublicBackend<'_> {
     type Error = LeeError;
-    type PublicEffects = ApplyPublicEffects;
 
-    fn plan(
+    fn handle_message(
         &mut self,
-        input: &PlanInput,
-        execution: &ExecutionState<'_>,
-    ) -> Result<(PlanOutput, Self::Call), LeeError> {
+        input: &ReceiveInput,
+        view: &TransitionView<'_>,
+    ) -> Result<Transition, LeeError> {
         let state = self.state;
-        let self_account_id = input.self_account_id;
-        debug!(
-            "Program {self_account_id:?} accounts: {:?}, instruction_data: {:?}",
-            input.accounts, input.instruction_data
-        );
-        let (plan, applier) = if self_account_id == PROGRAM_LOADER_ACCOUNT_ID {
+        let program_account_id = input.receiver.program_account_id;
+        debug!("Program {program_account_id:?} input: {input:?}");
+        let transition = if program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
             // `program_loader` runs as Rust, not a guest ELF, so there is no session to charge.
-            const ABSENT: &ShardData = &ShardData::empty();
-            let (plan, new_commitment) = plan_program_loader(input, |account_id| {
-                loader_shard(execution, state, account_id).unwrap_or(ABSENT)
+            const ABSENT: &ActorState = &ActorState::empty();
+            let (transition, new_commitment) = catch_program_loader_panic(|| {
+                program_loader_core::handle_message(input, |account_id| {
+                    loader_actor_state(view, state, account_id).unwrap_or(ABSENT)
+                })
             })?;
-            self.new_commitments.extend(new_commitment);
-            (plan, Applier::Loader)
-        } else if self_account_id == NATIVE_TOKEN_PROGRAM_ID {
-            let plan = native_token::plan(
-                input.caller_account_id,
-                &input.accounts,
-                &input.instruction_data,
-            )
-            .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?;
-            (plan, Applier::Native)
+            self.program_commitments.extend(new_commitment);
+            transition
+        } else if program_account_id == NATIVE_TOKEN_PROGRAM_ID {
+            native_token::handle_message(input)
+                .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?
         } else {
-            let program = load_program(self_account_id, |account_id| {
-                loader_shard(execution, state, account_id)
+            let program = load_program(program_account_id, |account_id| {
+                loader_actor_state(view, state, account_id)
             })
             .ok_or(LeeError::UnknownProgram {
-                chained: input.caller_account_id.is_some(),
+                at_root: view.at_root(),
             })?;
-            let (plan, call_cycles) =
-                program.plan(input, remaining(self.cycle_budget, *self.cycles_used))?;
-            charge(self.cycles_used, call_cycles);
-            (plan, Applier::Guest(program))
+            program.handle_message_metered(input, self.cycle_budget, self.cycles_used)?
         };
-        debug!("Program {self_account_id:?} plan: {plan:?}");
-        Ok((plan, (self_account_id, applier)))
+        debug!("Program {program_account_id:?} transition: {transition:?}");
+        Ok(transition)
     }
 
-    fn apply(
-        &mut self,
-        (_, applier): &mut Self::Call,
-        input: &ApplyInput,
-    ) -> Result<ApplyOutput, LeeError> {
-        applier.apply(input, self.cycle_budget, self.cycles_used)
-    }
-
-    fn complete(
-        &mut self,
-        (self_account_id, _): Self::Call,
-        events: Vec<ProgramEvent>,
-        execution: &ExecutionState<'_>,
-    ) -> Result<(), LeeError> {
-        ensure!(
-            execution
-                .block_validity_window()
-                .is_valid_for(self.block_id)
-                && execution
-                    .timestamp_validity_window()
-                    .is_valid_for(self.timestamp),
-            LeeError::OutOfValidityWindow
-        );
-
-        // Write all the output event data into a proper event struct,
-        // marking its emitter program.
-        self.events
-            .extend(events.into_iter().map(|event| TransactionEvent {
-                account_id: self_account_id,
-                event,
-            }));
-        Ok(())
-    }
-
-    fn public_shard(
-        &mut self,
-        shard_selector: ProgramShardSelector,
-    ) -> Result<ShardData, LeeError> {
+    fn public_actor_state(&mut self, actor: Actor) -> Result<ActorState, LeeError> {
         Ok(self
             .state
-            .get_account_by_id_ref(shard_selector.account_id)
-            .map_or_else(ShardData::empty, |account| {
-                account
-                    .data
-                    .shard(shard_selector.program_account_id)
-                    .clone()
+            .get_account_by_id_ref(actor.account_id)
+            .map_or_else(ActorState::empty, |account| {
+                account.data.actor_state(actor.program_account_id).clone()
             }))
+    }
+
+    fn admits(&mut self, account_id: AccountId) -> Result<bool, LeeError> {
+        Ok(self.state.get_account_by_id_ref(account_id).is_some()
+            || self.evidence.contains(&account_id))
+    }
+
+    fn promote(
+        &mut self,
+        placement: Placement,
+        index: u64,
+        _body: &MessageBody,
+    ) -> Result<bool, LeeError> {
+        Ok(placement == Placement::Public && self.cast_promotions.remove(&index))
     }
 }

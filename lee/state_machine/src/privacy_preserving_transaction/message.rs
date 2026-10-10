@@ -1,125 +1,43 @@
-use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::{
-    Commitment, CommitmentSetDigest, Nullifier, PrivacyPreservingCircuitOutput, PrivateAction,
-    ProgramImageClaim,
-    account::Nonce,
-    execution_state::DeferredPublicEffect,
-    program::{BlockValidityWindow, TimestampValidityWindow},
-};
-pub use lee_core::{EncryptedAccountData, ViewTag};
-use sha2::{Digest as _, Sha256};
+use std::collections::{BTreeMap, HashSet};
 
-use crate::AccountId;
+pub use lee_core::EncryptedNote;
+use lee_core::{PrivacyPreservingCircuitOutput, ProvenExecution, account::Nonce};
+
+use crate::{AccountId, TransactionMessage};
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct PublicActionWithID {
-    pub account_id: AccountId,
-    pub effects: Vec<DeferredPublicEffect>,
-}
-
-#[derive(Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct Message {
-    pub public_actions: Vec<PublicActionWithID>,
-    pub nonces: Vec<Nonce>,
-    pub private_actions: Vec<PrivateAction>,
-    pub block_validity_window: BlockValidityWindow,
-    pub timestamp_validity_window: TimestampValidityWindow,
-    /// See [`ProgramImageClaim`]: the sequencer checks each one against real chain state before
-    /// accepting the proof.
-    pub program_image_claims: Vec<ProgramImageClaim>,
-}
-
-impl std::fmt::Debug for Message {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        struct HexDigest<'arr>(&'arr [u8; 32]);
-        impl std::fmt::Debug for HexDigest<'_> {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}", hex::encode(self.0))
-            }
-        }
-        let private_actions: Vec<_> = self
-            .private_actions
-            .iter()
-            .map(|a| {
-                (
-                    &a.nullifier,
-                    HexDigest(&a.root),
-                    &a.commitment,
-                    &a.encrypted_post_state,
-                )
-            })
-            .collect();
-        f.debug_struct("Message")
-            .field("public_actions", &self.public_actions)
-            .field("nonces", &self.nonces)
-            .field("private_actions", &private_actions)
-            .field("block_validity_window", &self.block_validity_window)
-            .field("timestamp_validity_window", &self.timestamp_validity_window)
-            .field("program_image_claims", &self.program_image_claims)
-            .finish()
-    }
-}
+pub type Message = TransactionMessage<ProvenExecution>;
 
 impl Message {
     #[must_use]
-    pub fn from_circuit_output(nonces: Vec<Nonce>, output: PrivacyPreservingCircuitOutput) -> Self {
-        let public_actions = output
-            .public_actions
-            .into_iter()
-            .map(|action| PublicActionWithID {
-                account_id: action.account_id,
-                effects: action.effects,
-            })
-            .collect();
+    pub fn from_circuit_output(
+        nonces: BTreeMap<AccountId, Nonce>,
+        output: PrivacyPreservingCircuitOutput,
+    ) -> Self {
+        let PrivacyPreservingCircuitOutput { context, execution } = output;
         Self {
-            public_actions,
+            context,
+            execution,
             nonces,
-            private_actions: output.private_actions,
-            block_validity_window: output.block_validity_window,
-            timestamp_validity_window: output.timestamp_validity_window,
-            program_image_claims: output.program_image_claims,
+            admission_evidence: Vec::new(),
         }
-    }
-
-    #[must_use]
-    pub fn commitments(&self) -> Vec<Commitment> {
-        self.private_actions
-            .iter()
-            .map(|action| action.commitment)
-            .collect()
-    }
-
-    #[must_use]
-    pub fn nullifiers(&self) -> Vec<(Nullifier, CommitmentSetDigest)> {
-        self.private_actions
-            .iter()
-            .map(|action| (action.nullifier, action.root))
-            .collect()
     }
 
     #[must_use]
     pub fn public_account_ids(&self) -> Vec<AccountId> {
-        self.public_actions
+        let mut seen = HashSet::new();
+        self.context
+            .actors
             .iter()
-            .map(|action| action.account_id)
+            .map(|actor| actor.account_id)
+            .filter(|account_id| seen.insert(*account_id))
             .collect()
     }
 
     #[must_use]
     pub fn hash(&self) -> [u8; 32] {
-        let msg = self.to_bytes();
-        let mut bytes = Vec::with_capacity(
-            PREFIX
-                .len()
-                .checked_add(msg.len())
-                .expect("length overflow"),
-        );
-        bytes.extend_from_slice(PREFIX);
-        bytes.extend_from_slice(&msg);
-
-        Sha256::digest(bytes).into()
+        self.hash_under(PREFIX)
     }
 }
 
