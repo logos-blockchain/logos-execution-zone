@@ -21,11 +21,13 @@ keycard_wallet.workspace = true
 programs.workspace = true
 system_accounts.workspace = true
 associated_token_account_core.workspace = true
+sequencer_stake_core.workspace = true
 program_loader_core.workspace = true
 risc0-binfmt.workspace = true
 risc0-zkos-v1compat.workspace = true
 
 bip39.workspace = true
+borsh.workspace = true
 rpassword = "7"
 zeroize.workspace = true
 
