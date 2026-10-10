@@ -270,6 +270,30 @@ mod inner {
                 )
             }
 
+            fn install_tx(name: SystemProgramName, segments: &[AccountId]) -> PublicTransaction {
+                let selectors = [
+                    registry_selector(),
+                    ProgramShardSelector::new(
+                        AccountId::from_system_program_name(&name),
+                        PROGRAM_LOADER_ACCOUNT_ID,
+                    ),
+                ]
+                .into_iter()
+                .chain(
+                    segments
+                        .iter()
+                        .map(|id| ProgramShardSelector::new(*id, PROGRAM_LOADER_ACCOUNT_ID)),
+                )
+                .collect();
+                system_upgrader_tx(
+                    selectors,
+                    Instruction::Install {
+                        name,
+                        first_segment: segments[0],
+                    },
+                )
+            }
+
             fn registry(state: &V03State) -> Registry {
                 Registry::from_bytes(
                     state
@@ -534,6 +558,56 @@ mod inner {
                     "got: {err}"
                 );
                 assert_eq!(schedule(&state), None);
+            }
+
+            #[test]
+            fn installing_a_new_system_program_deploys_it_mutable() {
+                let (mut state, ids) = staged();
+                let name = SystemProgramName::new(b"new_system_program");
+                let program = AccountId::from_system_program_name(&name);
+
+                state
+                    .transition_from_public_transaction(&install_tx(name, &ids), 1, 0)
+                    .expect("a new system program installs");
+                assert_eq!(
+                    state.get_program_image_id(program),
+                    Some(ping_receiver().id())
+                );
+                let header = lee_core::program::ProgramHeader::from_loader_shard(
+                    state
+                        .get_account_by_id(program)
+                        .data
+                        .shard(PROGRAM_LOADER_ACCOUNT_ID),
+                )
+                .unwrap();
+                assert!(
+                    !header.immutable,
+                    "an installed system program is upgradable"
+                );
+                assert_eq!(
+                    registry(&state).programs.get(&name),
+                    Some(&None),
+                    "an installed system program is registered, with nothing pending"
+                );
+            }
+
+            #[test]
+            fn installing_over_an_existing_system_program_is_refused() {
+                let (mut state, ids) = staged();
+
+                let err = state
+                    .transition_from_public_transaction(&install_tx(CLOCK_NAME, &ids), 1, 0)
+                    .expect_err("clock is already registered");
+                assert!(
+                    err.to_string()
+                        .contains("system program is already registered")
+                        || err.to_string().contains("header target already deployed"),
+                    "got: {err}"
+                );
+                assert_eq!(
+                    state.get_program_image_id(clock_account_id()),
+                    Some(clock().id())
+                );
             }
 
             #[test]

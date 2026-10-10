@@ -488,8 +488,9 @@ fn get_program_via_does_not_follow_a_link_to_a_header() {
     assert_eq!(get_program_via(program_account, lookup), None);
 }
 
-/// `system_upgrader` changes only by protocol upgrade and encodes `UpdateHeader` (for `Apply`)
-/// itself, so its encoding is fixed for as long as it is deployed.
+/// `system_upgrader` changes only by protocol upgrade and encodes `UpdateHeader` (for `Apply`) and
+/// `CreateHeader` (for `Install`) itself, so these encodings are fixed for as long as it is
+/// deployed.
 #[test]
 fn system_upgrader_instruction_encodings_are_pinned() {
     let first_segment = AccountId::new([9; 32]);
@@ -500,6 +501,14 @@ fn system_upgrader_instruction_encodings_are_pinned() {
         bytes
     };
 
+    assert_eq!(
+        borsh::to_vec(&LoaderInstruction::CreateHeader {
+            first_segment,
+            immutable: false,
+        })
+        .unwrap(),
+        encoded(1)
+    );
     assert_eq!(
         borsh::to_vec(&LoaderInstruction::UpdateHeader {
             first_segment,

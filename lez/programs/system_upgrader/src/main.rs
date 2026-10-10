@@ -4,7 +4,7 @@
 //! `Schedule` records the new segment chain and the block it applies from in the registry; `Apply`
 //! checks and clears that record, then has the program loader point the program's header at the
 //! new chain, authorized through the program's PDA seed. `Cancel` clears a pending record without
-//! upgrading.
+//! upgrading, and `Install` deploys a new system program the same way.
 
 use lee_core::{
     account::{AccountId, ProgramShardSelector},
@@ -22,6 +22,7 @@ enum Effect {
     Schedule(SystemProgramName, ScheduledUpgrade),
     Consume(SystemProgramName, ScheduledUpgrade),
     RequireMutableHeader,
+    Register(SystemProgramName),
 }
 
 fn main() {
@@ -62,6 +63,14 @@ fn apply(effect: Effect, pre_data: &[u8]) -> Option<Vec<u8>> {
                 .expect("system program has no program header");
             assert!(!header.immutable, "system program is immutable");
             None
+        }
+        Effect::Register(name) => {
+            let mut registry = Registry::from_bytes(pre_data).expect("registry decodes");
+            assert!(
+                registry.programs.insert(name, None).is_none(),
+                "system program is already registered"
+            );
+            Some(registry.to_bytes())
         }
     }
 }
@@ -160,6 +169,33 @@ fn plan(input: &PlanInput, instruction: Instruction) -> Plan {
                     },
                 ),
             );
+            plan
+        }
+        Instruction::Install {
+            name,
+            first_segment,
+        } => {
+            let [registry, header, segments @ ..] = input.accounts.as_slice() else {
+                panic!("Install requires the registry, the header and the chain");
+            };
+            require_registry(registry);
+            require_system_program(header, &name);
+            assert_eq!(
+                header.program_account_id, PROGRAM_LOADER_ACCOUNT_ID,
+                "the second account must select the system program's header"
+            );
+
+            let mut plan = Plan::new(input);
+            plan.effect(registry, &Effect::Register(name));
+            plan.call(loader_call(
+                &name,
+                header,
+                segments,
+                &LoaderInstruction::CreateHeader {
+                    first_segment,
+                    immutable: false,
+                },
+            ));
             plan
         }
     }
