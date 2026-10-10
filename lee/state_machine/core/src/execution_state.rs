@@ -1,121 +1,198 @@
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque, hash_map::Entry};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry};
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, PublicAction,
-    WitnessKind,
-    account::{AccountData, AccountId, ProgramShardSelector, ShardData},
+    PrivateWitness, RootCall, SenderPresentation,
+    account::{AccountData, AccountId, Actor, ActorState},
     program::{
-        AccountMeta, ApplyInput, ApplyOutput, BlockValidityWindow, ChainedCall, EffectData,
-        ExecutionValidationError, InstructionData, InvalidWindow, MAX_NUMBER_CHAINED_CALLS,
-        PdaSeed, PlanInput, PlanOutput, ProgramEvent, ShardEffect, TimestampValidityWindow,
-        validate_apply_output, validate_plan,
+        Call, Cast, InvalidWindow, MessageBody, MessageData, MessageEnvelope,
+        PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ReceiveInput, Transition,
+        ValidityWindows,
     },
 };
 
-#[derive(Clone, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub enum TransactionEntry<R> {
+    Call(RootCall),
+    Cast(R),
+}
+
+impl<R> TransactionEntry<R> {
+    #[must_use]
+    pub fn map<T>(self, cast: impl FnOnce(R) -> T) -> TransactionEntry<T> {
+        match self {
+            Self::Call(call) => TransactionEntry::Call(call),
+            Self::Cast(record) => TransactionEntry::Cast(cast(record)),
+        }
+    }
+}
+
+impl TransactionEntry<MessageBody> {
+    #[must_use]
+    pub const fn destination(&self) -> Actor {
+        match self {
+            Self::Call(call) => call.to,
+            Self::Cast(body) => body.to,
+        }
+    }
+}
+
+#[derive(Clone, Default, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-pub struct RootCall {
-    pub program_account_id: AccountId,
-    pub shard_selectors: Vec<ProgramShardSelector>,
-    pub instruction_data: InstructionData,
-    pub authorized_accounts: Vec<AccountId>,
+pub struct PublicExecutionContext {
+    pub actors: BTreeSet<Actor>,
+    pub authorized_accounts: BTreeSet<AccountId>,
+    pub cast_promotions: BTreeSet<u64>,
 }
 
-pub trait PublicEffectMode {
-    type Account;
-    const DEFER: bool;
+impl PublicExecutionContext {
+    pub fn new(
+        actors: impl IntoIterator<Item = Actor>,
+        authorized_accounts: impl IntoIterator<Item = AccountId>,
+    ) -> Self {
+        Self {
+            actors: actors.into_iter().collect(),
+            authorized_accounts: authorized_accounts.into_iter().collect(),
+            ..Self::default()
+        }
+    }
 
-    fn select(applied: (AccountId, AccountData), journal: PublicAction) -> Self::Account;
-}
-
-/// Applies public effects and returns touched shards in root account order.
-/// Cleared shards remain present as empty values.
-pub enum ApplyPublicEffects {}
-
-impl PublicEffectMode for ApplyPublicEffects {
-    type Account = (AccountId, AccountData);
-
-    const DEFER: bool = false;
-
-    fn select(applied: (AccountId, AccountData), _journal: PublicAction) -> Self::Account {
-        applied
+    #[must_use]
+    pub fn runs_publicly(&self, actor: Actor) -> bool {
+        self.actors.contains(&actor)
     }
 }
 
-/// Collects public effects for settlement, grouped in root account order.
-/// Each account's effects remain in execution order.
-pub enum DeferPublicEffects {}
-
-impl PublicEffectMode for DeferPublicEffects {
-    type Account = PublicAction;
-
-    const DEFER: bool = true;
-
-    fn select(_applied: (AccountId, AccountData), journal: PublicAction) -> Self::Account {
-        journal
-    }
+pub struct WholeTransaction<'witnesses> {
+    execution: Execution<'witnesses, WholeScope>,
+    scope: WholeScope,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, BorshSerialize, BorshDeserialize)]
-pub struct DeferredPublicEffect {
-    pub program_account_id: AccountId,
-    pub shard_program_account_id: AccountId,
-    pub data: EffectData,
+pub struct PrivatePart<'witnesses> {
+    execution: Execution<'witnesses, PrivateScope>,
+    scope: PrivateScope,
 }
 
-/// How a traversal runs the programs it reaches. A call's plan and the apply of each of its effects
-/// go through the same [`Backend::Call`], so each effect is applied by the code that planned it.
-pub trait Backend {
-    type PublicEffects: PublicEffectMode;
-    type Call;
+pub struct PublicPart {
+    execution: Execution<'static, PublicScope>,
+    scope: PublicScope,
+}
+
+pub struct PublicOutcome {
+    pub validity: ValidityWindows,
+    pub accounts: BTreeMap<AccountId, AccountData>,
+    pub events: Vec<(Actor, ProgramEvent)>,
+    pub casts: Vec<MessageBody>,
+}
+
+pub struct WholeTransactionOutcome {
+    pub public: PublicOutcome,
+    pub predicted_cross_messages: PredictedCrossMessages,
+}
+
+pub struct PrivatePartOutcome {
+    pub validity: ValidityWindows,
+    pub private_accounts: HashMap<AccountId, AccountData>,
+    pub boundary: Boundary,
+    pub casts: Vec<MessageBody>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct Delivery<S> {
+    pub envelope: MessageEnvelope<S>,
+    pub inherited_authorizations: BTreeSet<AccountId>,
+    pub inherits_entry_authorizations: bool,
+    pub pda_seeds: BTreeSet<PdaSeed>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub enum BoundaryStep {
+    PrivateToPublic(Delivery<Actor>),
+    PublicToPrivate(Delivery<Actor>),
+    EndPrivateSubtree,
+    EndPublicSubtree,
+}
+
+pub type Boundary = Vec<BoundaryStep>;
+
+pub type PredictedCrossMessages = Vec<Vec<Delivery<Actor>>>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Placement {
+    Public,
+    Private,
+}
+
+pub trait ExecutionEnvironment {
     type Error: From<ExecutionError>;
 
-    fn plan(
+    fn handle_message(
         &mut self,
-        input: &PlanInput,
-        execution: &ExecutionState<'_>,
-    ) -> Result<(PlanOutput, Self::Call), Self::Error>;
+        input: &ReceiveInput,
+        view: &TransitionView<'_>,
+    ) -> Result<Transition, Self::Error>;
 
-    fn apply(
-        &mut self,
-        call: &mut Self::Call,
-        input: &ApplyInput,
-    ) -> Result<ApplyOutput, Self::Error>;
+    /// Returns [`ExecutionError::PublicActorStateUnavailable`] by default.
+    fn public_actor_state(&mut self, actor: Actor) -> Result<ActorState, Self::Error> {
+        Err(ExecutionError::PublicActorStateUnavailable { actor }.into())
+    }
 
-    fn complete(
-        &mut self,
-        call: Self::Call,
-        events: Vec<ProgramEvent>,
-        execution: &ExecutionState<'_>,
-    ) -> Result<(), Self::Error>;
+    /// Returns [`ExecutionError::MissingSenderPresentation`] by default.
+    fn present(&mut self, sender: Actor) -> Result<SenderPresentation, Self::Error> {
+        Err(ExecutionError::MissingSenderPresentation { sender }.into())
+    }
 
-    /// Returns [`ExecutionError::PublicShardUnavailable`] by default.
-    /// Backends with public state override this method.
-    fn public_shard(
+    /// Admits no account by default.
+    fn admits(&mut self, _account_id: AccountId) -> Result<bool, Self::Error> {
+        Ok(false)
+    }
+
+    /// Publishes every candidate Cast by default.
+    fn promote(
         &mut self,
-        shard_selector: ProgramShardSelector,
-    ) -> Result<ShardData, Self::Error> {
-        Err(ExecutionError::PublicShardUnavailable { shard_selector }.into())
+        _placement: Placement,
+        _index: u64,
+        _body: &MessageBody,
+    ) -> Result<bool, Self::Error> {
+        Ok(false)
+    }
+}
+
+pub struct TransitionView<'execution> {
+    accounts: &'execution HashMap<AccountId, AccountEntry>,
+    at_root: bool,
+}
+
+impl TransitionView<'_> {
+    #[must_use]
+    pub const fn at_root(&self) -> bool {
+        self.at_root
+    }
+
+    #[must_use]
+    pub fn runs_privately(&self, account_id: AccountId) -> bool {
+        self.accounts
+            .get(&account_id)
+            .is_some_and(AccountEntry::is_private)
+    }
+
+    #[must_use]
+    pub fn staged_state(&self, actor: Actor) -> Option<&ActorState> {
+        self.accounts
+            .get(&actor.account_id)?
+            .staged(actor.program_account_id)
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutionError {
-    #[error("No public shard was supplied for {shard_selector:?}")]
-    PublicShardUnavailable {
-        shard_selector: ProgramShardSelector,
-    },
+    #[error("No public actor state was supplied for {actor:?}")]
+    PublicActorStateUnavailable { actor: Actor },
 
     #[error("Two witnesses derive the same private account {account_id}")]
     DuplicateWitness { account_id: AccountId },
-
-    #[error("Private witness {account_id} is not an input of the root call")]
-    WitnessNotInRoot { account_id: AccountId },
-
-    #[error("Authorization secret key does not derive the nullifier key of {account_id}")]
-    InvalidAuthorizationKey { account_id: AccountId },
 
     #[error(
         "Two different accounts resolved under the same (program, seed) in one transaction: existing {existing}, new {account_id}"
@@ -125,456 +202,1152 @@ pub enum ExecutionError {
         account_id: AccountId,
     },
 
-    #[error("Chain of calls is too long")]
-    MaxChainedCallsExceeded,
+    #[error("The public member {account_id} of a private PDA family is declared")]
+    PublicFamilyMemberDeclared { account_id: AccountId },
 
-    #[error("Chained call named account {account_id}, which is not an input of the root call")]
-    UnknownAccount { account_id: AccountId },
+    #[error("Alias {alias} is a declared account or names two different accounts")]
+    AliasCollision { alias: AccountId },
 
-    #[error("Invalid program behavior in program {program_account_id}: {source}")]
-    ExecutionValidation {
-        program_account_id: AccountId,
-        #[source]
-        source: ExecutionValidationError,
-    },
-
-    #[error("There should be non empty intersection in the program output block validity windows")]
-    EmptyBlockWindowIntersection,
+    #[error("No presentation was supplied for a message from {sender:?}")]
+    MissingSenderPresentation { sender: Actor },
 
     #[error(
-        "There should be non empty intersection in the program output timestamp validity windows"
+        "The program loader runs only in a wholly public execution, but {actor:?} was reached in a private or mixed one"
     )]
-    EmptyTimestampWindowIntersection,
+    LoaderOutsidePublicExecution { actor: Actor },
+
+    #[error("A delivery named {actor:?}, which is neither a declared public actor nor private")]
+    UndeclaredActor { actor: Actor },
+
+    #[error("A delivery named {actor:?}, whose account is declared public but not admitted")]
+    UnadmittedPublicActor { actor: Actor },
+
+    #[error("Cast promotion {index} selects a candidate the execution never emitted")]
+    UnreachedCastPromotion { index: u64 },
+
+    #[error(
+        "Program {program_account_id} echoed an input it was not given: expected {expected:?}, actual {actual:?}"
+    )]
+    TransitionInputMismatch {
+        program_account_id: AccountId,
+        expected: Box<ReceiveInput>,
+        actual: Box<ReceiveInput>,
+    },
+
+    #[error("There should be non empty intersection in the program output validity windows")]
+    EmptyValidityWindowIntersection,
+
+    #[error("Account {account_id} is declared public but has a private witness")]
+    PublicAndPrivate { account_id: AccountId },
+
+    #[error("No predicted cross messages were supplied for public delivery {index}")]
+    MissingPredictedCrossMessages { index: usize },
+
+    #[error(
+        "Predicted cross messages were supplied for public deliveries the execution never produced"
+    )]
+    UnusedPredictedCrossMessages,
+
+    #[error("Predicted cross message sender {actor:?} is not a declared public actor")]
+    UndeclaredCrossMessageSender { actor: Actor },
+
+    #[error("Boundary step {index} does not match the execution")]
+    BoundaryMismatch { index: usize },
+
+    #[error("The cross message at boundary step {index} does not match the executed delivery")]
+    CrossMessageMismatch { index: usize },
+
+    #[error("Boundary was not consumed exactly by the execution")]
+    IncompleteBoundary,
 }
 
-enum Origin {
+enum AccountEntry {
     Public {
         is_authorized: bool,
-        observed: BTreeSet<AccountId>,
-        deferred: Vec<DeferredPublicEffect>,
+        loaded: BTreeMap<AccountId, ActorState>,
     },
-    Private(usize),
+    Private {
+        witness_index: usize,
+        data: AccountData,
+    },
 }
 
-struct AccountEntry {
-    data: AccountData,
-    origin: Origin,
+impl AccountEntry {
+    const fn is_private(&self) -> bool {
+        matches!(self, Self::Private { .. })
+    }
+
+    fn staged(&self, program_account_id: AccountId) -> Option<&ActorState> {
+        match self {
+            Self::Public { loaded, .. } => loaded.get(&program_account_id),
+            Self::Private { data, .. } => Some(data.actor_state(program_account_id)),
+        }
+    }
+
+    fn stage(&mut self, program_account_id: AccountId, state: ActorState) {
+        match self {
+            Self::Public { loaded, .. } => {
+                loaded.insert(program_account_id, state);
+            }
+            Self::Private { data, .. } => data.set_actor_state(program_account_id, state),
+        }
+    }
 }
 
-struct PendingCall {
-    call: ChainedCall,
-    caller_account_id: Option<AccountId>,
-    grants: HashSet<AccountId>,
+enum Item<C> {
+    Deliver(Box<Delivery<Sender>>),
+    Resume(C),
 }
 
-pub struct ExecutionOutcome<P: PublicEffectMode> {
-    pub block_validity_window: BlockValidityWindow,
-    pub timestamp_validity_window: TimestampValidityWindow,
-    pub public: Vec<P::Account>,
-    pub private_accounts: HashMap<AccountId, AccountData>,
+#[derive(Clone, Copy)]
+enum Sender {
+    Root { from: Option<Actor> },
+    Call(Actor),
 }
 
-pub struct ExecutionState<'witnesses> {
+impl Sender {
+    const fn actor(self) -> Option<Actor> {
+        match self {
+            Self::Call(actor) => Some(actor),
+            Self::Root { .. } => None,
+        }
+    }
+
+    const fn source(self) -> Option<Actor> {
+        match self {
+            Self::Root { from } => from,
+            Self::Call(actor) => Some(actor),
+        }
+    }
+
+    const fn issuer(self) -> Option<AccountId> {
+        match self {
+            Self::Call(actor) => Some(actor.program_account_id),
+            Self::Root { .. } => None,
+        }
+    }
+}
+
+impl<S> Delivery<S> {
+    fn with_from<T>(&self, from: T) -> Delivery<T> {
+        Delivery {
+            envelope: MessageEnvelope {
+                from,
+                to: self.envelope.to,
+                message: self.envelope.message.clone(),
+            },
+            inherited_authorizations: self.inherited_authorizations.clone(),
+            inherits_entry_authorizations: self.inherits_entry_authorizations,
+            pda_seeds: self.pda_seeds.clone(),
+        }
+    }
+}
+
+impl Delivery<Sender> {
+    const fn entry(envelope: MessageEnvelope<Sender>) -> Self {
+        Self {
+            envelope,
+            inherited_authorizations: BTreeSet::new(),
+            inherits_entry_authorizations: true,
+            pda_seeds: BTreeSet::new(),
+        }
+    }
+
+    const fn sent(
+        from: Actor,
+        to: Actor,
+        message: MessageData,
+        inherited_authorizations: BTreeSet<AccountId>,
+        inherits_entry_authorizations: bool,
+        pda_seeds: BTreeSet<PdaSeed>,
+    ) -> Self {
+        Self {
+            envelope: MessageEnvelope {
+                from: Sender::Call(from),
+                to,
+                message,
+            },
+            inherited_authorizations,
+            inherits_entry_authorizations,
+            pda_seeds,
+        }
+    }
+}
+
+struct Execution<'witnesses, S: Scope> {
     witnesses: &'witnesses [PrivateWitness],
-    root_order: Vec<AccountId>,
+    context: PublicExecutionContext,
     accounts: HashMap<AccountId, AccountEntry>,
+    aliases: HashMap<AccountId, AccountId>,
     pda_family_binding: HashMap<(AccountId, PdaSeed), AccountId>,
-    pending: VecDeque<PendingCall>,
-    block_validity_window: BlockValidityWindow,
-    timestamp_validity_window: TimestampValidityWindow,
+    pending: Vec<Item<S::Continuation>>,
+    validity: ValidityWindows,
+    events: Vec<(Actor, ProgramEvent)>,
+    casts: Vec<MessageBody>,
+    candidates: Candidates,
+    admitted: HashSet<AccountId>,
 }
 
-impl<'witnesses> ExecutionState<'witnesses> {
-    pub fn initialize(
-        root: RootCall,
+#[derive(Default)]
+struct Candidates {
+    public: u64,
+    private: u64,
+}
+
+impl Candidates {
+    const fn next(&mut self, placement: Placement) -> u64 {
+        let counter = match placement {
+            Placement::Public => &mut self.public,
+            Placement::Private => &mut self.private,
+        };
+        let index = *counter;
+        *counter = index
+            .checked_add(1)
+            .expect("bounded by the Casts one transaction emits");
+        index
+    }
+}
+
+trait Scope: Sized {
+    type Continuation;
+    type Outcome;
+
+    const EMITS_EVENTS: bool;
+    const CHECKS_ADMISSION: bool;
+
+    fn executes_transaction_root(runs_publicly: bool) -> bool;
+
+    fn admits_loader(execution: &Execution<'_, Self>) -> bool;
+
+    fn start_without_transaction_root(
+        &mut self,
+        execution: &mut Execution<'_, Self>,
+    ) -> Result<(), ExecutionError>;
+
+    fn deliver_to_public<E: ExecutionEnvironment>(
+        &mut self,
+        execution: &mut Execution<'_, Self>,
+        delivery: Delivery<Sender>,
+        environment: &mut E,
+    ) -> Result<(), E::Error>;
+
+    fn deliver_to_private<E: ExecutionEnvironment>(
+        &mut self,
+        execution: &mut Execution<'_, Self>,
+        delivery: Delivery<Sender>,
+        environment: &mut E,
+    ) -> Result<(), E::Error>;
+
+    fn resume(
+        &mut self,
+        execution: &mut Execution<'_, Self>,
+        continuation: Self::Continuation,
+    ) -> Result<(), ExecutionError>;
+
+    fn finish(self, execution: Execution<'_, Self>) -> Result<Self::Outcome, ExecutionError>;
+}
+
+#[derive(Default)]
+struct WholeScope {
+    predicted_cross_messages: PredictedCrossMessages,
+    open: Vec<usize>,
+}
+
+enum WholeContinuation {
+    EndPublicSubtree,
+}
+
+struct PrivateScope {
+    predicted_cross_messages: PredictedCrossMessages,
+    next_group: usize,
+    boundary: Boundary,
+}
+
+enum PrivateContinuation {
+    EndPublicSubtree,
+    EndPrivateSubtree,
+}
+
+struct PublicScope {
+    boundary: Boundary,
+    cursor: usize,
+}
+
+enum PublicContinuation {
+    EndPublicSubtree,
+    EndPrivateSubtree,
+    ReplayProvenCalls { at_root: bool },
+}
+
+impl<'witnesses> WholeTransaction<'witnesses> {
+    pub fn new(
+        context: PublicExecutionContext,
+        root: TransactionEntry<MessageBody>,
         witnesses: &'witnesses [PrivateWitness],
     ) -> Result<Self, ExecutionError> {
-        let RootCall {
-            program_account_id,
-            shard_selectors,
-            instruction_data,
-            authorized_accounts,
-        } = root;
+        let mut scope = WholeScope::default();
+        let execution = Execution::start(context, witnesses, Some(root), &mut scope)?;
+        Ok(Self { execution, scope })
+    }
 
+    pub fn execute<E: ExecutionEnvironment>(
+        self,
+        environment: &mut E,
+    ) -> Result<WholeTransactionOutcome, E::Error> {
+        self.execution.run(self.scope, environment)
+    }
+}
+
+impl<'witnesses> PrivatePart<'witnesses> {
+    pub fn new(
+        context: PublicExecutionContext,
+        root: TransactionEntry<MessageBody>,
+        witnesses: &'witnesses [PrivateWitness],
+        predicted_cross_messages: PredictedCrossMessages,
+    ) -> Result<Self, ExecutionError> {
+        let mut scope = PrivateScope {
+            predicted_cross_messages,
+            next_group: 0,
+            boundary: Boundary::new(),
+        };
+        let execution = Execution::start(context, witnesses, Some(root), &mut scope)?;
+        Ok(Self { execution, scope })
+    }
+
+    pub fn execute<E: ExecutionEnvironment>(
+        self,
+        environment: &mut E,
+    ) -> Result<PrivatePartOutcome, E::Error> {
+        self.execution.run(self.scope, environment)
+    }
+}
+
+impl PublicPart {
+    pub fn new(
+        context: PublicExecutionContext,
+        root: Option<RootCall>,
+        boundary: Boundary,
+    ) -> Result<Self, ExecutionError> {
+        let mut scope = PublicScope {
+            boundary,
+            cursor: 0,
+        };
+        let execution =
+            Execution::start(context, &[], root.map(TransactionEntry::Call), &mut scope)?;
+        Ok(Self { execution, scope })
+    }
+
+    pub fn execute<E: ExecutionEnvironment>(
+        self,
+        environment: &mut E,
+    ) -> Result<PublicOutcome, E::Error> {
+        self.execution.run(self.scope, environment)
+    }
+}
+
+impl Scope for WholeScope {
+    type Continuation = WholeContinuation;
+    type Outcome = WholeTransactionOutcome;
+
+    const CHECKS_ADMISSION: bool = true;
+    const EMITS_EVENTS: bool = true;
+
+    fn executes_transaction_root(_runs_publicly: bool) -> bool {
+        true
+    }
+
+    fn admits_loader(execution: &Execution<'_, Self>) -> bool {
+        execution.witnesses.is_empty()
+    }
+
+    fn start_without_transaction_root(
+        &mut self,
+        _execution: &mut Execution<'_, Self>,
+    ) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+
+    // The root and each Call from a private transition start a public subtree, whose deliveries
+    // into private actors form one group of predicted cross messages.
+    fn deliver_to_public<E: ExecutionEnvironment>(
+        &mut self,
+        execution: &mut Execution<'_, Self>,
+        delivery: Delivery<Sender>,
+        environment: &mut E,
+    ) -> Result<(), E::Error> {
+        if execution.opens_public_subtree(&delivery) {
+            self.open.push(self.predicted_cross_messages.len());
+            self.predicted_cross_messages.push(Vec::new());
+            execution
+                .pending
+                .push(Item::Resume(WholeContinuation::EndPublicSubtree));
+        }
+        execution.process_actor_message(delivery, environment)
+    }
+
+    fn deliver_to_private<E: ExecutionEnvironment>(
+        &mut self,
+        execution: &mut Execution<'_, Self>,
+        delivery: Delivery<Sender>,
+        environment: &mut E,
+    ) -> Result<(), E::Error> {
+        execution.require_private(delivery.envelope.to)?;
+        if let Some(cross_message) = execution.cross_message(&delivery) {
+            let group = *self
+                .open
+                .last()
+                .expect("a public sender runs within an open call");
+            self.predicted_cross_messages[group].push(cross_message);
+        }
+        execution.process_actor_message(delivery, environment)
+    }
+
+    fn resume(
+        &mut self,
+        _execution: &mut Execution<'_, Self>,
+        continuation: WholeContinuation,
+    ) -> Result<(), ExecutionError> {
+        match continuation {
+            WholeContinuation::EndPublicSubtree => {
+                self.open.pop();
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(
+        self,
+        execution: Execution<'_, Self>,
+    ) -> Result<WholeTransactionOutcome, ExecutionError> {
+        Ok(WholeTransactionOutcome {
+            public: execution.public(),
+            predicted_cross_messages: self.predicted_cross_messages,
+        })
+    }
+}
+
+impl PrivateScope {
+    // Each cross message still inheriting its entry's authorizations re-enters with the private
+    // grants withheld from the public call it answers; a predicted grant over a private account is
+    // never authority.
+    fn deliver_predicted_cross_messages(
+        &mut self,
+        execution: &mut Execution<'_, Self>,
+        withheld: &BTreeSet<AccountId>,
+    ) -> Result<(), ExecutionError> {
+        let index = self.next_group;
+        let cross_messages = self
+            .predicted_cross_messages
+            .get(index)
+            .ok_or(ExecutionError::MissingPredictedCrossMessages { index })?;
+        step_past(&mut self.next_group);
+        for cross_message in cross_messages.iter().rev() {
+            let sender = cross_message.envelope.from;
+            if !execution.context.runs_publicly(sender) {
+                return Err(ExecutionError::UndeclaredCrossMessageSender { actor: sender });
+            }
+            let mut delivery = execution.disclose(cross_message, Sender::Call(sender));
+            if delivery.inherits_entry_authorizations {
+                delivery.inherited_authorizations.extend(withheld);
+            }
+            execution.pending.push(Item::Deliver(Box::new(delivery)));
+        }
+        Ok(())
+    }
+}
+
+impl Scope for PrivateScope {
+    type Continuation = PrivateContinuation;
+    type Outcome = PrivatePartOutcome;
+
+    const CHECKS_ADMISSION: bool = false;
+    const EMITS_EVENTS: bool = false;
+
+    fn executes_transaction_root(runs_publicly: bool) -> bool {
+        !runs_publicly
+    }
+
+    fn admits_loader(_execution: &Execution<'_, Self>) -> bool {
+        false
+    }
+
+    fn start_without_transaction_root(
+        &mut self,
+        execution: &mut Execution<'_, Self>,
+    ) -> Result<(), ExecutionError> {
+        self.deliver_predicted_cross_messages(execution, &BTreeSet::new())
+    }
+
+    fn deliver_to_public<E: ExecutionEnvironment>(
+        &mut self,
+        execution: &mut Execution<'_, Self>,
+        delivery: Delivery<Sender>,
+        _environment: &mut E,
+    ) -> Result<(), E::Error> {
+        let sender = delivery
+            .envelope
+            .from
+            .actor()
+            .expect("only a Call from a private transition crosses into public execution");
+        self.boundary.push(BoundaryStep::PrivateToPublic(
+            execution.disclose(&delivery, sender),
+        ));
+        execution
+            .pending
+            .push(Item::Resume(PrivateContinuation::EndPublicSubtree));
+        let withheld = delivery
+            .inherited_authorizations
+            .iter()
+            .copied()
+            .filter(|account_id| execution.is_private(account_id))
+            .collect();
+        Ok(self.deliver_predicted_cross_messages(execution, &withheld)?)
+    }
+
+    fn deliver_to_private<E: ExecutionEnvironment>(
+        &mut self,
+        execution: &mut Execution<'_, Self>,
+        delivery: Delivery<Sender>,
+        environment: &mut E,
+    ) -> Result<(), E::Error> {
+        execution.require_private(delivery.envelope.to)?;
+        if let Some(cross_message) = execution.cross_message(&delivery) {
+            self.boundary
+                .push(BoundaryStep::PublicToPrivate(cross_message));
+            execution
+                .pending
+                .push(Item::Resume(PrivateContinuation::EndPrivateSubtree));
+        }
+        execution.process_actor_message(delivery, environment)
+    }
+
+    fn resume(
+        &mut self,
+        _execution: &mut Execution<'_, Self>,
+        continuation: PrivateContinuation,
+    ) -> Result<(), ExecutionError> {
+        self.boundary.push(match continuation {
+            PrivateContinuation::EndPublicSubtree => BoundaryStep::EndPublicSubtree,
+            PrivateContinuation::EndPrivateSubtree => BoundaryStep::EndPrivateSubtree,
+        });
+        Ok(())
+    }
+
+    fn finish(self, execution: Execution<'_, Self>) -> Result<PrivatePartOutcome, ExecutionError> {
+        if self.predicted_cross_messages.len() > self.next_group {
+            return Err(ExecutionError::UnusedPredictedCrossMessages);
+        }
+        Ok(execution.private_part(self.boundary))
+    }
+}
+
+impl PublicScope {
+    fn end_subtree(&mut self, marker: &BoundaryStep) -> Result<(), ExecutionError> {
+        if self.boundary.get(self.cursor) != Some(marker) {
+            return Err(ExecutionError::BoundaryMismatch { index: self.cursor });
+        }
+        step_past(&mut self.cursor);
+        Ok(())
+    }
+
+    fn replay_proven_calls(
+        &mut self,
+        execution: &mut Execution<'_, Self>,
+        at_root: bool,
+    ) -> Result<(), ExecutionError> {
+        match (self.boundary.get(self.cursor), at_root) {
+            (Some(BoundaryStep::PrivateToPublic(proven)), _) => {
+                let delivery = proven.with_from(Sender::Call(proven.envelope.from));
+                step_past(&mut self.cursor);
+                execution
+                    .pending
+                    .push(Item::Resume(PublicContinuation::ReplayProvenCalls {
+                        at_root,
+                    }));
+                execution
+                    .pending
+                    .push(Item::Resume(PublicContinuation::EndPublicSubtree));
+                execution.pending.push(Item::Deliver(Box::new(delivery)));
+                Ok(())
+            }
+            (None, true) | (Some(BoundaryStep::EndPrivateSubtree), false) => Ok(()),
+            (
+                None
+                | Some(
+                    BoundaryStep::PublicToPrivate(_)
+                    | BoundaryStep::EndPrivateSubtree
+                    | BoundaryStep::EndPublicSubtree,
+                ),
+                _,
+            ) => Err(ExecutionError::BoundaryMismatch { index: self.cursor }),
+        }
+    }
+}
+
+impl Scope for PublicScope {
+    type Continuation = PublicContinuation;
+    type Outcome = PublicOutcome;
+
+    const CHECKS_ADMISSION: bool = true;
+    const EMITS_EVENTS: bool = true;
+
+    fn executes_transaction_root(runs_publicly: bool) -> bool {
+        runs_publicly
+    }
+
+    fn admits_loader(_execution: &Execution<'_, Self>) -> bool {
+        false
+    }
+
+    fn start_without_transaction_root(
+        &mut self,
+        execution: &mut Execution<'_, Self>,
+    ) -> Result<(), ExecutionError> {
+        execution
+            .pending
+            .push(Item::Resume(PublicContinuation::ReplayProvenCalls {
+                at_root: true,
+            }));
+        Ok(())
+    }
+
+    fn deliver_to_public<E: ExecutionEnvironment>(
+        &mut self,
+        execution: &mut Execution<'_, Self>,
+        delivery: Delivery<Sender>,
+        environment: &mut E,
+    ) -> Result<(), E::Error> {
+        execution.process_actor_message(delivery, environment)
+    }
+
+    fn deliver_to_private<E: ExecutionEnvironment>(
+        &mut self,
+        execution: &mut Execution<'_, Self>,
+        delivery: Delivery<Sender>,
+        _environment: &mut E,
+    ) -> Result<(), E::Error> {
+        let to = delivery.envelope.to;
+        if execution.accounts.contains_key(&to.account_id) {
+            return Err(ExecutionError::UndeclaredActor { actor: to }.into());
+        }
+        let index = self.cursor;
+        let Some(BoundaryStep::PublicToPrivate(predicted)) = self.boundary.get(index) else {
+            return Err(ExecutionError::BoundaryMismatch { index }.into());
+        };
+        // The live grants are the disclosed part of the authority the proven transition ran under.
+        let live = delivery
+            .envelope
+            .from
+            .actor()
+            .map(|sender| delivery.with_from(sender));
+        if live.as_ref() != Some(predicted) {
+            return Err(ExecutionError::CrossMessageMismatch { index }.into());
+        }
+        step_past(&mut self.cursor);
+        execution
+            .pending
+            .push(Item::Resume(PublicContinuation::EndPrivateSubtree));
+        execution
+            .pending
+            .push(Item::Resume(PublicContinuation::ReplayProvenCalls {
+                at_root: false,
+            }));
+        Ok(())
+    }
+
+    fn resume(
+        &mut self,
+        execution: &mut Execution<'_, Self>,
+        continuation: PublicContinuation,
+    ) -> Result<(), ExecutionError> {
+        match continuation {
+            PublicContinuation::EndPublicSubtree => {
+                self.end_subtree(&BoundaryStep::EndPublicSubtree)
+            }
+            PublicContinuation::EndPrivateSubtree => {
+                self.end_subtree(&BoundaryStep::EndPrivateSubtree)
+            }
+            PublicContinuation::ReplayProvenCalls { at_root } => {
+                self.replay_proven_calls(execution, at_root)
+            }
+        }
+    }
+
+    fn finish(self, execution: Execution<'_, Self>) -> Result<PublicOutcome, ExecutionError> {
+        if self.cursor != self.boundary.len() {
+            return Err(ExecutionError::IncompleteBoundary);
+        }
+        Ok(execution.public())
+    }
+}
+
+impl<'witnesses, S: Scope> Execution<'witnesses, S> {
+    fn start(
+        context: PublicExecutionContext,
+        witnesses: &'witnesses [PrivateWitness],
+        root: Option<TransactionEntry<MessageBody>>,
+        scope: &mut S,
+    ) -> Result<Self, ExecutionError> {
         let mut witness_index = HashMap::with_capacity(witnesses.len());
-        let mut witness_ids = Vec::with_capacity(witnesses.len());
         let mut pda_family_binding = HashMap::new();
+        let mut openings = Vec::new();
         for (index, witness) in witnesses.iter().enumerate() {
             let account_id = witness.account_id();
             if witness_index.insert(account_id, index).is_some() {
                 return Err(ExecutionError::DuplicateWitness { account_id });
             }
-            witness_ids.push(account_id);
-            match &witness.kind {
-                WitnessKind::Pda {
-                    binding: (program, seed),
-                } => bind_family(&mut pda_family_binding, *program, *seed, account_id)?,
-                WitnessKind::Regular { ask: Some(ask) } => {
-                    let derived = NullifierSecretKey::from(ask);
-                    let linked = match &witness.nullifier {
-                        NullifierWitness::Update { nsk, .. } => derived == *nsk,
-                        NullifierWitness::Init { npk, .. } => {
-                            NullifierPublicKey::from(&derived) == *npk
-                        }
-                    };
-                    if !linked {
-                        return Err(ExecutionError::InvalidAuthorizationKey { account_id });
-                    }
-                }
-                WitnessKind::Regular { ask: None } => {}
+            openings.extend(
+                witness
+                    .openings
+                    .iter()
+                    .map(|factor| (account_id.blinded(factor), account_id)),
+            );
+            if let Some((program, seed)) = witness.pda_binding() {
+                bind_family(&mut pda_family_binding, program, seed, account_id)?;
             }
         }
 
-        let mut accounts = HashMap::new();
-        let mut root_order = Vec::new();
-        for shard_selector in &shard_selectors {
-            let account_id = shard_selector.account_id;
-            let Entry::Vacant(vacant) = accounts.entry(account_id) else {
-                continue;
-            };
-            let entry = if let Some(&index) = witness_index.get(&account_id) {
-                AccountEntry {
-                    data: match &witnesses[index].nullifier {
-                        NullifierWitness::Init { .. } => AccountData::default(),
-                        NullifierWitness::Update { account, .. } => account.data.clone(),
+        let mut accounts: HashMap<AccountId, AccountEntry> = witness_index
+            .iter()
+            .map(|(&account_id, &index)| {
+                (
+                    account_id,
+                    AccountEntry::Private {
+                        witness_index: index,
+                        data: witnesses[index].predecessor().data.clone(),
                     },
-                    origin: Origin::Private(index),
-                }
-            } else {
-                AccountEntry {
-                    data: AccountData::default(),
-                    origin: Origin::Public {
-                        is_authorized: authorized_accounts.contains(&account_id),
-                        observed: BTreeSet::new(),
-                        deferred: Vec::new(),
-                    },
-                }
-            };
-            vacant.insert(entry);
-            root_order.push(account_id);
+                )
+            })
+            .collect();
+        for actor in &context.actors {
+            let account_id = actor.account_id;
+            if witness_index.contains_key(&account_id) {
+                return Err(ExecutionError::PublicAndPrivate { account_id });
+            }
+            accounts
+                .entry(account_id)
+                .or_insert_with(|| AccountEntry::Public {
+                    is_authorized: context.authorized_accounts.contains(&account_id),
+                    loaded: BTreeMap::new(),
+                });
         }
-        if let Some(account_id) = witness_ids
-            .into_iter()
-            .find(|account_id| !accounts.contains_key(account_id))
+        // Public seed grants land only at declared, proof-bound addresses, so none can conflict.
+        if let Some(account_id) = pda_family_binding
+            .keys()
+            .map(|(program, seed)| AccountId::for_public_pda(program, seed))
+            .find(|account_id| {
+                context
+                    .actors
+                    .iter()
+                    .any(|actor| actor.account_id == *account_id)
+            })
         {
-            return Err(ExecutionError::WitnessNotInRoot { account_id });
+            return Err(ExecutionError::PublicFamilyMemberDeclared { account_id });
         }
 
-        Ok(Self {
+        let root = root
+            .filter(|root| S::executes_transaction_root(context.runs_publicly(root.destination())));
+
+        let mut execution = Self {
             witnesses,
-            root_order,
+            context,
             accounts,
+            aliases: HashMap::new(),
             pda_family_binding,
-            pending: VecDeque::from([PendingCall {
-                call: ChainedCall {
-                    program_account_id,
-                    shard_selectors,
-                    instruction_data,
-                    pda_seeds: Vec::new(),
-                },
-                caller_account_id: None,
-                grants: HashSet::new(),
-            }]),
-            block_validity_window: BlockValidityWindow::new_unbounded(),
-            timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
-        })
+            pending: Vec::new(),
+            validity: ValidityWindows::new_unbounded(),
+            events: Vec::new(),
+            casts: Vec::new(),
+            candidates: Candidates::default(),
+            admitted: HashSet::new(),
+        };
+        for (alias, account_id) in openings {
+            execution.register_alias(alias, account_id)?;
+        }
+        match root {
+            Some(root) => {
+                let (from, to, message) = match root {
+                    TransactionEntry::Call(RootCall { to, message }) => (None, to, message),
+                    TransactionEntry::Cast(MessageBody { from, to, message }) => {
+                        (Some(from), to, message)
+                    }
+                };
+                execution
+                    .pending
+                    .push(Item::Deliver(Box::new(Delivery::entry(MessageEnvelope {
+                        from: Sender::Root { from },
+                        to,
+                        message,
+                    }))));
+            }
+            None => scope.start_without_transaction_root(&mut execution)?,
+        }
+        Ok(execution)
     }
 
-    fn prepare_call(
-        &mut self,
-        PendingCall {
-            call,
-            caller_account_id,
-            mut grants,
-        }: PendingCall,
-    ) -> Result<(PlanInput, HashSet<AccountId>), ExecutionError> {
-        let ChainedCall {
-            program_account_id,
-            shard_selectors,
-            instruction_data,
-            pda_seeds,
-        } = call;
-        let authorized_pdas = compute_public_authorized_pdas(caller_account_id, &pda_seeds);
-        let mut accounts = Vec::with_capacity(shard_selectors.len());
-        for shard_selector in shard_selectors {
-            let account_id = shard_selector.account_id;
-            let is_authorized = self.authorize(
-                caller_account_id,
-                &pda_seeds,
-                &authorized_pdas,
-                &mut grants,
-                account_id,
-            )?;
-            accounts.push(AccountMeta::new(
-                account_id,
-                is_authorized,
-                shard_selector.program_account_id,
-            ));
+    fn run<E: ExecutionEnvironment>(
+        mut self,
+        mut scope: S,
+        environment: &mut E,
+    ) -> Result<S::Outcome, E::Error> {
+        while let Some(item) = self.pending.pop() {
+            match item {
+                Item::Deliver(delivery) => self.deliver(&mut scope, *delivery, environment)?,
+                Item::Resume(continuation) => scope.resume(&mut self, continuation)?,
+            }
         }
+        Ok(scope.finish(self)?)
+    }
 
-        Ok((
-            PlanInput {
-                self_account_id: program_account_id,
-                caller_account_id,
-                accounts,
-                instruction_data,
-            },
-            grants,
-        ))
+    // Placement is positive: a declared public actor runs publicly, a private witness's account
+    // runs privately, and in a public part any other destination must be the next predicted
+    // cross message.
+    fn deliver<E: ExecutionEnvironment>(
+        &mut self,
+        scope: &mut S,
+        mut delivery: Delivery<Sender>,
+        environment: &mut E,
+    ) -> Result<(), E::Error> {
+        let to = delivery.envelope.to;
+        // No code upgrade may land between a proof's image claims and the transitions it covers.
+        if to.program_account_id == PROGRAM_LOADER_ACCOUNT_ID && !S::admits_loader(self) {
+            return Err(ExecutionError::LoaderOutsidePublicExecution { actor: to }.into());
+        }
+        if self.context.runs_publicly(to) {
+            if S::CHECKS_ADMISSION {
+                self.admit(&delivery, environment)?;
+            }
+            // Each public subtree's private callbacks start out inheriting what its entry withheld.
+            if self.opens_public_subtree(&delivery) {
+                delivery.inherits_entry_authorizations = true;
+            }
+            scope.deliver_to_public(self, delivery, environment)
+        } else {
+            scope.deliver_to_private(self, delivery, environment)
+        }
+    }
+
+    fn admit<E: ExecutionEnvironment>(
+        &mut self,
+        delivery: &Delivery<Sender>,
+        environment: &mut E,
+    ) -> Result<(), E::Error> {
+        let to = delivery.envelope.to;
+        let seeded = delivery.envelope.from.issuer().is_some_and(|issuer| {
+            delivery
+                .pda_seeds
+                .iter()
+                .any(|seed| AccountId::for_public_pda(&issuer, seed) == to.account_id)
+        });
+        if self.admitted.contains(&to.account_id) || seeded || environment.admits(to.account_id)? {
+            self.admitted.insert(to.account_id);
+            return Ok(());
+        }
+        Err(ExecutionError::UnadmittedPublicActor { actor: to }.into())
+    }
+
+    fn opens_public_subtree(&self, delivery: &Delivery<Sender>) -> bool {
+        delivery
+            .envelope
+            .from
+            .actor()
+            .is_none_or(|sender| !self.context.runs_publicly(sender))
+    }
+
+    fn is_private(&self, account_id: &AccountId) -> bool {
+        self.accounts
+            .get(account_id)
+            .is_some_and(AccountEntry::is_private)
+    }
+
+    fn resolve(&self, actor: Actor) -> Actor {
+        self.aliases
+            .get(&actor.account_id)
+            .map_or(actor, |&account_id| {
+                Actor::new(account_id, actor.program_account_id)
+            })
+    }
+
+    fn register_alias(
+        &mut self,
+        alias: AccountId,
+        account_id: AccountId,
+    ) -> Result<(), ExecutionError> {
+        if self.accounts.contains_key(&alias)
+            || *self.aliases.entry(alias).or_insert(account_id) != account_id
+        {
+            return Err(ExecutionError::AliasCollision { alias });
+        }
+        Ok(())
+    }
+
+    fn require_private(&self, actor: Actor) -> Result<(), ExecutionError> {
+        if self.is_private(&self.resolve(actor).account_id) {
+            Ok(())
+        } else {
+            Err(ExecutionError::UndeclaredActor { actor })
+        }
+    }
+
+    // No public handler can observe a grant over a private account, so a boundary or prediction
+    // discloses only the other grants; the private part restores the withheld ones on re-entry.
+    fn disclose<F, T>(&self, delivery: &Delivery<F>, from: T) -> Delivery<T> {
+        let mut disclosed = delivery.with_from(from);
+        disclosed
+            .inherited_authorizations
+            .retain(|account_id| !self.is_private(account_id));
+        disclosed
+    }
+
+    // A private delivery from a declared public actor is where the execution crosses into a proven
+    // transition: a whole transaction collects it into the innermost open public Call's predicted
+    // cross messages, a private part records it.
+    fn cross_message(&self, delivery: &Delivery<Sender>) -> Option<Delivery<Actor>> {
+        delivery
+            .envelope
+            .from
+            .actor()
+            .filter(|&sender| self.context.runs_publicly(sender))
+            .map(|sender| self.disclose(delivery, sender))
+    }
+
+    fn process_actor_message<E: ExecutionEnvironment>(
+        &mut self,
+        delivery: Delivery<Sender>,
+        environment: &mut E,
+    ) -> Result<(), E::Error> {
+        let actor = self.resolve(delivery.envelope.to);
+        let (is_authorized, authorizations) = self.authorize(actor, &delivery)?;
+        let entry = self
+            .accounts
+            .get_mut(&actor.account_id)
+            .expect("an authorized actor has an entry");
+        if let AccountEntry::Public { loaded, .. } = entry
+            && !loaded.contains_key(&actor.program_account_id)
+        {
+            loaded.insert(
+                actor.program_account_id,
+                environment.public_actor_state(actor)?,
+            );
+        }
+        let input = ReceiveInput {
+            receiver: actor,
+            from: delivery.envelope.from.source(),
+            is_authorized,
+            pre_state: entry
+                .staged(actor.program_account_id)
+                .expect("a delivered actor's state is loaded")
+                .clone(),
+            message: delivery.envelope.message,
+        };
+
+        let view = TransitionView {
+            accounts: &self.accounts,
+            at_root: matches!(delivery.envelope.from, Sender::Root { .. }),
+        };
+        let transition = environment.handle_message(&input, &view)?;
+        if transition.input != input {
+            return Err(ExecutionError::TransitionInputMismatch {
+                program_account_id: actor.program_account_id,
+                expected: Box::new(input),
+                actual: Box::new(transition.input),
+            }
+            .into());
+        }
+        self.validity = self
+            .validity
+            .intersect(transition.response.validity)
+            .map_err(|InvalidWindow| ExecutionError::EmptyValidityWindowIntersection)?;
+
+        if let Some(data) = transition.response.post_state {
+            self.accounts
+                .get_mut(&actor.account_id)
+                .expect("an authorized actor has an entry")
+                .stage(actor.program_account_id, data);
+        }
+        if S::EMITS_EVENTS {
+            self.events.extend(
+                transition
+                    .response
+                    .events
+                    .into_iter()
+                    .map(|event| (actor, event)),
+            );
+        }
+        let reached = delivery.envelope.to;
+        let call_reply = |to: Actor| (input.from == Some(to)).then_some(reached);
+        let mut sent = transition
+            .response
+            .calls
+            .into_iter()
+            .map(
+                |Call {
+                     to,
+                     message,
+                     pda_seeds,
+                 }| {
+                    Ok(Delivery::sent(
+                        self.sender(actor, call_reply(to), environment)?,
+                        to,
+                        message,
+                        authorizations.clone(),
+                        delivery.inherits_entry_authorizations,
+                        pda_seeds,
+                    ))
+                },
+            )
+            .collect::<Result<Vec<_>, E::Error>>()?;
+        for Cast { to, message } in transition.response.casts {
+            let body = MessageBody {
+                from: self.sender(actor, None, environment)?,
+                to,
+                message,
+            };
+            let promoted = self.context.runs_publicly(to) || {
+                let placement = if self.is_private(&actor.account_id) {
+                    Placement::Private
+                } else {
+                    Placement::Public
+                };
+                environment.promote(placement, self.candidates.next(placement), &body)?
+            };
+            if promoted {
+                // A promoted Cast keeps transaction credentials but inherits no authorization.
+                sent.push(Delivery::sent(
+                    body.from,
+                    body.to,
+                    body.message,
+                    BTreeSet::new(),
+                    false,
+                    BTreeSet::new(),
+                ));
+            } else {
+                self.casts.push(body);
+            }
+        }
+        self.pending
+            .extend(sent.into_iter().rev().map(Box::new).map(Item::Deliver));
+        Ok(())
+    }
+
+    // A private Call back to its sender preserves the reached address for authentication.
+    // Every private Cast uses the prover's presentation: the reached address may have been
+    // confined to a private Call and must not be published implicitly by a Cast reply.
+    fn sender<E: ExecutionEnvironment>(
+        &mut self,
+        actor: Actor,
+        call_reply: Option<Actor>,
+        environment: &mut E,
+    ) -> Result<Actor, E::Error> {
+        if !self.is_private(&actor.account_id) {
+            return Ok(actor);
+        }
+        if let Some(reached) = call_reply {
+            return Ok(reached);
+        }
+        match environment.present(actor)? {
+            SenderPresentation::Canonical => Ok(actor),
+            SenderPresentation::Blinded(factor) => {
+                let alias = actor.account_id.blinded(&factor);
+                self.register_alias(alias, actor.account_id)?;
+                Ok(Actor::new(alias, actor.program_account_id))
+            }
+        }
     }
 
     fn authorize(
         &mut self,
-        caller_account_id: Option<AccountId>,
-        pda_seeds: &[PdaSeed],
-        authorized_pdas: &HashMap<AccountId, PdaSeed>,
-        grants: &mut HashSet<AccountId>,
-        account_id: AccountId,
-    ) -> Result<bool, ExecutionError> {
+        actor: Actor,
+        delivery: &Delivery<Sender>,
+    ) -> Result<(bool, BTreeSet<AccountId>), ExecutionError> {
+        let account_id = actor.account_id;
+        let issuer = delivery.envelope.from.issuer();
         let entry = self
             .accounts
             .get(&account_id)
-            .ok_or(ExecutionError::UnknownAccount { account_id })?;
-        let (credential, granted) = match entry.origin {
-            Origin::Public { is_authorized, .. } => (
-                is_authorized,
-                public_seed_grant(caller_account_id, authorized_pdas, account_id),
+            .ok_or(ExecutionError::UndeclaredActor { actor })?;
+        let (credential, granted) = match entry {
+            AccountEntry::Public { is_authorized, .. } => (
+                *is_authorized,
+                issuer.and_then(|issuer| {
+                    delivery
+                        .pda_seeds
+                        .iter()
+                        .find(|seed| AccountId::for_public_pda(&issuer, seed) == account_id)
+                        .map(|seed| (issuer, *seed))
+                }),
             ),
-            Origin::Private(index) => {
-                let witness = &self.witnesses[index];
+            AccountEntry::Private { witness_index, .. } => {
+                let witness = &self.witnesses[*witness_index];
                 (
-                    matches!(witness.kind, WitnessKind::Regular { ask: Some(_) }),
-                    private_seed_grant(caller_account_id, pda_seeds, witness),
+                    witness.kind.is_authorized(),
+                    private_seed_grant(issuer, &delivery.pda_seeds, witness),
                 )
             }
         };
+        let mut authorizations = delivery.inherited_authorizations.clone();
         if let Some((program, seed)) = granted {
             bind_family(&mut self.pda_family_binding, program, seed, account_id)?;
-            grants.insert(account_id);
+            authorizations.insert(account_id);
         }
-        Ok(credential || grants.contains(&account_id))
+        Ok((
+            credential || authorizations.contains(&account_id),
+            authorizations,
+        ))
     }
 
-    fn bind_plan(&mut self, input: &PlanInput, plan: &PlanOutput) -> Result<(), ExecutionError> {
-        validate_plan(input, plan).map_err(|source| ExecutionError::ExecutionValidation {
-            program_account_id: input.self_account_id,
-            source,
-        })?;
-        let block = self
-            .block_validity_window
-            .intersect(plan.block_validity_window)
-            .map_err(|InvalidWindow| ExecutionError::EmptyBlockWindowIntersection)?;
-        let timestamp = self
-            .timestamp_validity_window
-            .intersect(plan.timestamp_validity_window)
-            .map_err(|InvalidWindow| ExecutionError::EmptyTimestampWindowIntersection)?;
-
-        self.block_validity_window = block;
-        self.timestamp_validity_window = timestamp;
-        Ok(())
-    }
-
-    fn apply_input<B: Backend>(
-        &mut self,
-        program_account_id: AccountId,
-        ShardEffect { selector, data }: ShardEffect,
-        backend: &mut B,
-    ) -> Result<ApplyInput, B::Error> {
-        let entry = self
-            .accounts
-            .get_mut(&selector.account_id)
-            .expect("every effect selects an input of the call");
-        if let Origin::Public { observed, .. } = &mut entry.origin
-            && !observed.contains(&selector.program_account_id)
-        {
-            let shard = backend.public_shard(selector)?;
-            observed.insert(selector.program_account_id);
-            entry.data.set_shard(selector.program_account_id, shard);
-        }
-        Ok(ApplyInput {
-            self_account_id: program_account_id,
-            selector,
-            pre_data: entry.data.shard(selector.program_account_id).clone(),
-            effect_data: data,
-        })
-    }
-
-    fn accept_apply_output(
-        &mut self,
-        input: &ApplyInput,
-        output: &ApplyOutput,
-    ) -> Result<(), ExecutionError> {
-        validate_apply_output(input, output).map_err(|source| {
-            ExecutionError::ExecutionValidation {
-                program_account_id: input.self_account_id,
-                source,
-            }
-        })?;
-        self.accounts
-            .get_mut(&output.input.selector.account_id)
-            .expect("every effect selects an input of the call")
-            .data
-            .apply_output(output);
-        Ok(())
-    }
-
-    pub fn run<B: Backend>(
-        mut self,
-        backend: &mut B,
-    ) -> Result<ExecutionOutcome<B::PublicEffects>, B::Error> {
-        let mut prepared_calls = 0;
-        while let Some(pending) = self.pending.pop_front() {
-            if prepared_calls > MAX_NUMBER_CHAINED_CALLS {
-                return Err(ExecutionError::MaxChainedCallsExceeded.into());
-            }
-            prepared_calls = prepared_calls
-                .checked_add(1)
-                .expect("bounded by MAX_NUMBER_CHAINED_CALLS");
-
-            let (input, grants) = self.prepare_call(pending)?;
-            let (plan, mut call) = backend.plan(&input, &self)?;
-            self.bind_plan(&input, &plan)?;
-            let PlanOutput {
-                effects,
-                chained_calls,
-                events,
-                ..
-            } = plan;
-            for effect in effects {
-                if B::PublicEffects::DEFER
-                    && let Origin::Public { deferred, .. } = &mut self
-                        .accounts
-                        .get_mut(&effect.selector.account_id)
-                        .expect("every effect selects an input of the call")
-                        .origin
-                {
-                    deferred.push(DeferredPublicEffect {
-                        program_account_id: input.self_account_id,
-                        shard_program_account_id: effect.selector.program_account_id,
-                        data: effect.data,
-                    });
-                    continue;
-                }
-                let apply_input = self.apply_input(input.self_account_id, effect, backend)?;
-                let output = backend.apply(&mut call, &apply_input)?;
-                self.accept_apply_output(&apply_input, &output)?;
-            }
-            for chained_call in chained_calls.into_iter().rev() {
-                self.pending.push_front(PendingCall {
-                    call: chained_call,
-                    caller_account_id: Some(input.self_account_id),
-                    grants: grants.clone(),
-                });
-            }
-            backend.complete(call, events, &self)?;
-        }
-        Ok(self.finish())
-    }
-
-    #[must_use]
-    pub const fn block_validity_window(&self) -> BlockValidityWindow {
-        self.block_validity_window
-    }
-
-    #[must_use]
-    pub const fn timestamp_validity_window(&self) -> TimestampValidityWindow {
-        self.timestamp_validity_window
-    }
-
-    #[must_use]
-    pub fn pending_shard(
-        &self,
-        account_id: AccountId,
-        program_account_id: AccountId,
-    ) -> Option<&ShardData> {
-        let entry = self.accounts.get(&account_id)?;
-        match &entry.origin {
-            Origin::Public { observed, .. } if !observed.contains(&program_account_id) => None,
-            Origin::Public { .. } | Origin::Private(_) => {
-                Some(entry.data.shard(program_account_id))
-            }
-        }
-    }
-
-    fn finish<P: PublicEffectMode>(self) -> ExecutionOutcome<P> {
-        let Self {
-            root_order,
-            mut accounts,
-            block_validity_window,
-            timestamp_validity_window,
-            ..
-        } = self;
-
-        let mut public = Vec::new();
-        let mut private_accounts = HashMap::new();
-        for account_id in root_order {
-            let AccountEntry { data, origin } = accounts
-                .remove(&account_id)
-                .expect("every root account has an entry");
-            match origin {
-                Origin::Public {
-                    is_authorized,
-                    observed,
-                    deferred,
-                } => {
-                    let mut post = data;
-                    for program in observed {
-                        post.shards.entry(program).or_default();
-                    }
-                    public.push(P::select(
-                        (account_id, post),
-                        PublicAction {
-                            account_id,
-                            is_authorized,
-                            effects: deferred,
+    fn public(self) -> PublicOutcome {
+        PublicOutcome {
+            validity: self.validity,
+            accounts: self
+                .accounts
+                .into_iter()
+                .filter_map(|(account_id, entry)| match entry {
+                    AccountEntry::Public { loaded, .. } => Some((
+                        account_id,
+                        AccountData {
+                            actor_states: loaded,
                         },
-                    ));
-                }
-                Origin::Private(_) => {
-                    private_accounts.insert(account_id, data);
-                }
-            }
+                    )),
+                    AccountEntry::Private { .. } => None,
+                })
+                .collect(),
+            events: self.events,
+            casts: self.casts,
         }
+    }
 
-        ExecutionOutcome {
-            block_validity_window,
-            timestamp_validity_window,
-            public,
-            private_accounts,
+    fn private_part(self, boundary: Boundary) -> PrivatePartOutcome {
+        PrivatePartOutcome {
+            validity: self.validity,
+            private_accounts: self
+                .accounts
+                .into_iter()
+                .filter_map(|(account_id, entry)| match entry {
+                    AccountEntry::Private { data, .. } => Some((account_id, data)),
+                    AccountEntry::Public { .. } => None,
+                })
+                .collect(),
+            boundary,
+            casts: self.casts,
         }
     }
 }
 
-fn compute_public_authorized_pdas(
-    caller_account_id: Option<AccountId>,
-    pda_seeds: &[PdaSeed],
-) -> HashMap<AccountId, PdaSeed> {
-    let Some(caller) = caller_account_id else {
-        return HashMap::new();
-    };
-    pda_seeds
-        .iter()
-        .map(|seed| (AccountId::for_public_pda(&caller, seed), *seed))
-        .collect()
-}
-
-fn public_seed_grant(
-    caller_account_id: Option<AccountId>,
-    authorized_pdas: &HashMap<AccountId, PdaSeed>,
-    account_id: AccountId,
-) -> Option<(AccountId, PdaSeed)> {
-    let caller = caller_account_id?;
-    authorized_pdas.get(&account_id).map(|seed| (caller, *seed))
+const fn step_past(position: &mut usize) {
+    *position = position
+        .checked_add(1)
+        .expect("bounded by the length of what it indexes");
 }
 
 fn private_seed_grant(
-    caller_account_id: Option<AccountId>,
-    pda_seeds: &[PdaSeed],
+    issuer: Option<AccountId>,
+    pda_seeds: &BTreeSet<PdaSeed>,
     witness: &PrivateWitness,
 ) -> Option<(AccountId, PdaSeed)> {
     witness
         .pda_binding()
-        .filter(|&(program, seed)| Some(program) == caller_account_id && pda_seeds.contains(&seed))
+        .filter(|&(program, seed)| Some(program) == issuer && pda_seeds.contains(&seed))
 }
 
 fn bind_family(
