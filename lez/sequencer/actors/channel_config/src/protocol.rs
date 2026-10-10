@@ -1,10 +1,13 @@
 use kameo::Reply;
 use logos_blockchain_binary_codec::canonical::{BinaryDecodeExt as _, BinaryEncode as _};
 use logos_blockchain_core::{
-    mantle::{ops::channel::MsgId, transactions::Ops},
+    mantle::{
+        ops::channel::{ChannelKeyIndex, MsgId},
+        transactions::Ops,
+    },
     proofs::channel_multi_sig_proof::IndexedSignature,
 };
-use logos_blockchain_key_management_system_service::keys::Ed25519PublicKey;
+use logos_blockchain_key_management_system_service::keys::{Ed25519PublicKey, Ed25519Signature};
 
 /// Tags the two message shapes on the wire. A draft is a whole
 /// transaction; a signature is worthless without the one it was signed over,
@@ -123,7 +126,8 @@ impl Wire {
             Self::Draft(draft) => (DRAFT, draft.tx.encode().into_vec()),
             Self::Signature(signature) => {
                 let mut bytes = signature.tx_hash.to_vec();
-                bytes.extend_from_slice(&signature.signature.encode());
+                bytes.extend_from_slice(&signature.signature.signature.encode());
+                bytes.extend_from_slice(&signature.signature.channel_key_index.encode());
                 (SIGNATURE, bytes)
             }
         };
@@ -145,10 +149,14 @@ impl Wire {
             })),
             SIGNATURE => {
                 let (tx_hash, rest) = payload.split_at_checked(32)?;
+                let (rest, signature) = Ed25519Signature::decode(rest).ok()?;
 
                 Some(Self::Signature(Signature {
                     tx_hash: tx_hash.try_into().ok()?,
-                    signature: IndexedSignature::decode_all(rest).ok()?,
+                    signature: IndexedSignature::new(
+                        ChannelKeyIndex::decode_all(rest).ok()?,
+                        signature,
+                    ),
                 }))
             }
             _ => None,
