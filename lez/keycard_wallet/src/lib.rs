@@ -211,8 +211,14 @@ impl KeycardWallet {
         path: &str,
         message: &[u8; 32],
     ) -> Result<(Signature, PublicKey), KeycardWalletError> {
+        // `SIGN` for BIP340_SCHNORR takes 64 bytes: the message plus a tweak the card adds to
+        // its already-derived key before signing. The card already applies LEE's key protocol (to
+        // obtain the Schnorr secret key), so the signing key here is already `ssk` — a
+        // nonzero tweak would double-tweak it and sign with the wrong key. Zero leaves it correct.
+        let mut data = [0_u8; 64];
+        data[..32].copy_from_slice(message);
         let resp = self.command_set.sign_with_path_and_algo(
-            message,
+            &data,
             path,
             sign_p2::BIP340_SCHNORR,
             false,
