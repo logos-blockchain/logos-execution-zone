@@ -20,17 +20,19 @@ pub const ML_KEM_768_CIPHERTEXT_LEN: usize = 1088;
 /// a floor.
 pub const MAX_CIPHERTEXT_PADDING: u32 = 8 * 1024;
 
+const ACCOUNT_KEY_DOMAIN: &[u8; 20] = b"LEE/v0.3/KDF-SHA256/";
+const MAX_KEY_DOMAIN_LEN: usize = 29;
+
 pub type Scalar = [u8; 32];
 
-#[derive(Serialize, Deserialize, Clone, Copy)]
+#[derive(Serialize, Deserialize, Clone, Copy, BorshSerialize, BorshDeserialize)]
 pub struct EphemeralSecretKey(pub [u8; 32]);
 
 impl EphemeralSecretKey {
     /// Derives an ephemeral secret key from OS randomness and account-specific values.
     ///
-    /// For updates, `nonce` carries `nsk`-derived entropy, making `esk` strong even
-    /// with a compromised RNG. For inits, `nonce` is deterministic, so `random_seed`
-    /// is the sole entropy source.
+    /// `nonce` carries `nsk`-derived entropy for every transition, an initialization's included,
+    /// making `esk` strong even with a compromised RNG.
     #[must_use]
     pub fn new(
         account_id: &crate::account::AccountId,
@@ -76,48 +78,14 @@ impl std::fmt::Debug for Ciphertext {
     }
 }
 
-pub type ViewTag = u8;
-
-/// Encrypted private-account note for one output.
 #[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(
     any(feature = "host", test),
     derive(Debug, Clone, Default, PartialEq, Eq)
 )]
-pub struct EncryptedAccountData {
+pub struct EncryptedNote {
     pub ciphertext: Ciphertext,
     pub epk: EphemeralPublicKey,
-    pub view_tag: ViewTag,
-}
-
-impl EncryptedAccountData {
-    #[must_use]
-    pub fn compute_view_tag(npk: &crate::NullifierPublicKey, vpk: &ViewingPublicKey) -> ViewTag {
-        const PREFIX: &[u8; 18] = b"/LEE/v0.3/ViewTag/";
-        let mut bytes = [0_u8; 18 + 32 + ViewingPublicKey::LEN];
-        bytes[0..18].copy_from_slice(PREFIX);
-        bytes[18..50].copy_from_slice(&npk.to_byte_array());
-        bytes[50..].copy_from_slice(vpk.to_bytes());
-        Impl::hash_bytes(&bytes).as_bytes()[0]
-    }
-}
-
-#[cfg(feature = "host")]
-impl EncryptedAccountData {
-    #[must_use]
-    pub fn new(
-        ciphertext: Ciphertext,
-        npk: &crate::NullifierPublicKey,
-        vpk: &ViewingPublicKey,
-        epk: EphemeralPublicKey,
-    ) -> Self {
-        let view_tag = Self::compute_view_tag(npk, vpk);
-        Self {
-            ciphertext,
-            epk,
-            view_tag,
-        }
-    }
 }
 
 impl EncryptionScheme {
@@ -144,45 +112,17 @@ impl EncryptionScheme {
         // Both variants produce the same header length — see PrivateAccountKind::to_header_bytes.
         let mut buffer = kind.to_header_bytes().to_vec();
         buffer.extend_from_slice(&account.to_bytes());
-        if let Some(pad_to_len) = pad_to_len {
-            assert!(
-                pad_to_len <= MAX_CIPHERTEXT_PADDING,
-                "ciphertext padding exceeds the maximum"
-            );
-            let pad_to_len = usize::try_from(pad_to_len).expect("pad length fits in usize");
-            if pad_to_len > buffer.len() {
-                buffer.resize(pad_to_len, 0);
-            }
-        }
-        Self::symmetric_transform(&mut buffer, shared_secret, nullifier);
+        pad_to_floor(&mut buffer, pad_to_len);
+        apply_keystream(
+            &mut buffer,
+            ACCOUNT_KEY_DOMAIN,
+            shared_secret,
+            &nullifier.to_byte_array(),
+        );
         Ciphertext(buffer)
     }
 
-    fn symmetric_transform(
-        buffer: &mut [u8],
-        shared_secret: &SharedSecretKey,
-        nullifier: &Nullifier,
-    ) {
-        let key = Self::kdf(shared_secret, nullifier);
-        let mut cipher = ChaCha20::new(&key.into(), &[0; 12].into());
-        cipher.apply_keystream(buffer);
-    }
-
-    fn kdf(shared_secret: &SharedSecretKey, nullifier: &Nullifier) -> [u8; 32] {
-        const PREFIX: &[u8; 20] = b"LEE/v0.3/KDF-SHA256/";
-        let mut bytes = [0_u8; 20 + 32 + 32];
-        bytes[0..20].copy_from_slice(PREFIX);
-        bytes[20..52].copy_from_slice(&shared_secret.0);
-        bytes[52..84].copy_from_slice(&nullifier.to_byte_array());
-
-        Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap()
-    }
-
     #[cfg(feature = "host")]
-    #[expect(
-        clippy::print_stdout,
-        reason = "This is the current way to debug things. TODO: fix later"
-    )]
     #[must_use]
     pub fn decrypt(
         ciphertext: &Ciphertext,
@@ -191,7 +131,12 @@ impl EncryptionScheme {
     ) -> Option<(PrivateAccountKind, Account)> {
         use std::io::Cursor;
         let mut buffer = ciphertext.0.clone();
-        Self::symmetric_transform(&mut buffer, shared_secret, nullifier);
+        apply_keystream(
+            &mut buffer,
+            ACCOUNT_KEY_DOMAIN,
+            shared_secret,
+            &nullifier.to_byte_array(),
+        );
 
         if buffer.len() < PrivateAccountKind::HEADER_LEN {
             return None;
@@ -202,20 +147,57 @@ impl EncryptionScheme {
 
         let mut cursor = Cursor::new(&buffer[PrivateAccountKind::HEADER_LEN..]);
         Account::from_cursor(&mut cursor)
-            .inspect_err(|err| {
-                println!(
-                    "Failed to decode {ciphertext:?} \n
-                      with secret {:?} ,\n
-                      nullifier {nullifier:?} ,\n
-                      with error {err:?}",
-                    shared_secret.0
-                );
-            })
             .ok()
             .map(|account| (kind, account))
     }
 }
 
+pub(crate) fn note_key(
+    domain: &[u8],
+    shared_secret: &SharedSecretKey,
+    binding: &[u8; 32],
+) -> [u8; 32] {
+    let mut preimage = [0_u8; MAX_KEY_DOMAIN_LEN + 32 + 32];
+    let (head, tail) = preimage.split_at_mut(domain.len());
+    head.copy_from_slice(domain);
+    let (secret, tail) = tail.split_at_mut(32);
+    secret.copy_from_slice(&shared_secret.0);
+    tail[..32].copy_from_slice(binding);
+    let len = domain
+        .len()
+        .checked_add(64)
+        .expect("a key domain fits the preimage");
+    Impl::hash_bytes(&preimage[..len])
+        .as_bytes()
+        .try_into()
+        .expect("SHA-256 output is 32 bytes")
+}
+
+pub(crate) fn apply_keystream(
+    buffer: &mut [u8],
+    domain: &[u8],
+    shared_secret: &SharedSecretKey,
+    binding: &[u8; 32],
+) {
+    ChaCha20::new(
+        &note_key(domain, shared_secret, binding).into(),
+        &[0; 12].into(),
+    )
+    .apply_keystream(buffer);
+}
+
+pub(crate) fn pad_to_floor(buffer: &mut Vec<u8>, pad_to_len: Option<u32>) {
+    if let Some(pad_to_len) = pad_to_len {
+        assert!(
+            pad_to_len <= MAX_CIPHERTEXT_PADDING,
+            "ciphertext padding exceeds the maximum"
+        );
+        let pad_to_len = usize::try_from(pad_to_len).expect("pad length fits in usize");
+        if pad_to_len > buffer.len() {
+            buffer.resize(pad_to_len, 0);
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

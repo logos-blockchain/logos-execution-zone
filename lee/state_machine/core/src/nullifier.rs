@@ -1,77 +1,14 @@
-use base58::{FromBase58 as _, ToBase58 as _};
 use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
-use serde_with::{DeserializeFromStr, SerializeDisplay};
 
-use crate::{Commitment, account::AccountId, encryption::ViewingPublicKey};
+use crate::{
+    Commitment,
+    account::{Account, AccountId},
+    encryption::ViewingPublicKey,
+};
 
 const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00";
-
-/// 256-bit opaque private-account identifier.
-#[derive(
-    Copy,
-    Clone,
-    SerializeDisplay,
-    DeserializeFromStr,
-    PartialEq,
-    Eq,
-    Hash,
-    PartialOrd,
-    Ord,
-    BorshSerialize,
-    BorshDeserialize,
-    derive_more::Debug,
-    derive_more::Display,
-    derive_more::AsRef,
-)]
-#[debug("{}", value.to_base58())]
-#[display("{}", value.to_base58())]
-pub struct Identifier {
-    #[as_ref([u8])]
-    value: [u8; 32],
-}
-
-impl Identifier {
-    pub const ZERO: Self = Self { value: [0; 32] };
-
-    #[must_use]
-    pub const fn new(value: [u8; 32]) -> Self {
-        Self { value }
-    }
-
-    #[must_use]
-    pub const fn value(&self) -> &[u8; 32] {
-        &self.value
-    }
-
-    #[must_use]
-    pub const fn into_value(self) -> [u8; 32] {
-        self.value
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum IdentifierError {
-    #[error("invalid base58: {0:?}")]
-    InvalidBase58(base58::FromBase58Error),
-    #[error("invalid length: expected 32 bytes, got {0}")]
-    InvalidLength(usize),
-}
-
-impl std::str::FromStr for Identifier {
-    type Err = IdentifierError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let bytes = s.from_base58().map_err(IdentifierError::InvalidBase58)?;
-        if bytes.len() != 32 {
-            return Err(IdentifierError::InvalidLength(bytes.len()));
-        }
-        let mut value = [0_u8; 32];
-        value.copy_from_slice(&bytes);
-        Ok(Self { value })
-    }
-}
 
 #[derive(
     Debug,
@@ -90,19 +27,14 @@ impl std::str::FromStr for Identifier {
 pub struct NullifierPublicKey(pub [u8; 32]);
 
 impl AccountId {
-    /// Derives an [`AccountId`] for a regular (non-PDA) private account from the nullifier public
-    /// key and identifier.
+    /// Derives an [`AccountId`] for a regular (non-PDA) private account from the nullifier and
+    /// viewing public keys.
     #[must_use]
-    pub fn for_regular_private_account(
-        npk: &NullifierPublicKey,
-        vpk: &ViewingPublicKey,
-        identifier: Identifier,
-    ) -> Self {
-        let mut bytes = [0_u8; 32 + 32 + ViewingPublicKey::LEN + 32];
+    pub fn for_regular_private_account(npk: &NullifierPublicKey, vpk: &ViewingPublicKey) -> Self {
+        let mut bytes = [0_u8; 32 + 32 + ViewingPublicKey::LEN];
         bytes[0..32].copy_from_slice(PRIVATE_ACCOUNT_ID_PREFIX);
         bytes[32..64].copy_from_slice(&npk.0);
-        bytes[64..64 + ViewingPublicKey::LEN].copy_from_slice(vpk.to_bytes());
-        bytes[64 + ViewingPublicKey::LEN..].copy_from_slice(identifier.value());
+        bytes[64..].copy_from_slice(vpk.to_bytes());
 
         Self::new(
             Impl::hash_bytes(&bytes)
@@ -113,9 +45,9 @@ impl AccountId {
     }
 }
 
-impl From<(&NullifierPublicKey, &ViewingPublicKey, Identifier)> for AccountId {
-    fn from((npk, vpk, identifier): (&NullifierPublicKey, &ViewingPublicKey, Identifier)) -> Self {
-        Self::for_regular_private_account(npk, vpk, identifier)
+impl From<(&NullifierPublicKey, &ViewingPublicKey)> for AccountId {
+    fn from((npk, vpk): (&NullifierPublicKey, &ViewingPublicKey)) -> Self {
+        Self::for_regular_private_account(npk, vpk)
     }
 }
 
@@ -202,13 +134,22 @@ impl Nullifier {
         Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
     }
 
-    /// Computes a nullifier for an account initialization.
-    // TODO: Accept account_id by value as it's Copy
+    /// The nullifier every initialization of `account_id` spends: its fixed empty predecessor's
+    /// update nullifier, which only the holder of `nsk` can derive.
     #[must_use]
-    pub fn for_account_initialization(account_id: &AccountId) -> Self {
-        const INIT_PREFIX: &[u8; 32] = b"/LEE/v0.3/Nullifier/Initialize/\x00";
-        let mut bytes = INIT_PREFIX.to_vec();
-        bytes.extend_from_slice(account_id.value());
+    pub fn for_account_initialization(account_id: &AccountId, nsk: &NullifierSecretKey) -> Self {
+        Self::for_account_update(&Commitment::new(account_id, &Account::default()), nsk)
+    }
+
+    /// Computes the nullifier that spends a privately received message.
+    #[must_use]
+    pub fn for_message(nsk: &NullifierSecretKey, commitment: &Commitment, position: u64) -> Self {
+        const MESSAGE_PREFIX: &[u8; 32] = b"/LEE/v0.3/Nullifier/Message/\x00\x00\x00\x00";
+        let mut bytes = [0; 104];
+        bytes[..32].copy_from_slice(MESSAGE_PREFIX);
+        bytes[32..64].copy_from_slice(nsk);
+        bytes[64..96].copy_from_slice(&commitment.to_byte_array());
+        bytes[96..].copy_from_slice(&position.to_le_bytes());
         Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
     }
 

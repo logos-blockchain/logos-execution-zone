@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     Nullifier,
     account::{Account, AccountId},
+    program::MessageBody,
 };
 
 /// A commitment to all zero data.
@@ -79,25 +80,50 @@ impl Commitment {
         bytes.extend_from_slice(commitment_seed);
         Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
     }
+
+    /// Commits to a message body.
+    #[must_use]
+    pub fn for_message(body: &MessageBody) -> Self {
+        const MESSAGE_PREFIX: &[u8; 32] = b"/LEE/v0.3/Commitment/Message/\x00\x00\x00";
+        let mut bytes = [0; 64];
+        bytes[..32].copy_from_slice(MESSAGE_PREFIX);
+        bytes[32..].copy_from_slice(&body_digest(body));
+        Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
+    }
+
+    /// Commits to a sealed message body under the randomness that hides it.
+    #[must_use]
+    pub fn for_sealed_message(body: &MessageBody, rho: &[u8; 32]) -> Self {
+        const SEALED_PREFIX: &[u8; 32] = b"/LEE/v0.3/Commitment/Sealed/\x00\x00\x00\x00";
+        let mut bytes = [0; 96];
+        bytes[..32].copy_from_slice(SEALED_PREFIX);
+        bytes[32..64].copy_from_slice(&body_digest(body));
+        bytes[64..].copy_from_slice(rho);
+        Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
+    }
 }
 
 pub type CommitmentSetDigest = [u8; 32];
 
-pub type MembershipProof = (usize, Vec<[u8; 32]>);
+pub type MembershipProof = (u64, Vec<[u8; 32]>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("A membership proof's position does not fit its path")]
+pub struct InvalidMembershipProof;
 
 /// Computes the resulting digest for the given membership proof and corresponding commitment.
-#[must_use]
 pub fn compute_digest_for_path(
     commitment: &Commitment,
-    proof: &MembershipProof,
-) -> CommitmentSetDigest {
+    position: u64,
+    path: &[[u8; 32]],
+) -> Result<CommitmentSetDigest, InvalidMembershipProof> {
     let value_bytes = commitment.to_byte_array();
     let mut result: [u8; 32] = Impl::hash_bytes(&value_bytes)
         .as_bytes()
         .try_into()
         .unwrap();
-    let mut level_index = proof.0;
-    for node in &proof.1 {
+    let mut level_index = position;
+    for node in path {
         let mut bytes = [0_u8; 64];
         let is_left_child = level_index & 1 == 0;
         if is_left_child {
@@ -110,7 +136,18 @@ pub fn compute_digest_for_path(
         result = Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap();
         level_index >>= 1;
     }
-    result
+    // A bit above the path's depth would give one leaf a second position.
+    if level_index != 0 {
+        return Err(InvalidMembershipProof);
+    }
+    Ok(result)
+}
+
+fn body_digest(body: &MessageBody) -> [u8; 32] {
+    Impl::hash_bytes(&borsh::to_vec(body).expect("borsh serialization is infallible"))
+        .as_bytes()
+        .try_into()
+        .unwrap()
 }
 
 #[cfg(test)]

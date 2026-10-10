@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 use lee::{Account, AccountId};
-use lee_core::Identifier;
 use serde::{Deserialize, Serialize};
 
 use crate::key_management::{
@@ -257,48 +256,34 @@ impl KeyTree<ChildKeysPrivate> {
         self.generate_new_node_layered()
     }
 
-    /// Register an additional identifier on an existing private key node, inserting the derived
-    /// `AccountId` into `account_id_map`. Returns `None` if the node does not exist or the
-    /// `AccountId` is already registered.
-    pub fn register_identifier_on_node(
-        &mut self,
-        cci: &ChainIndex,
-        identifier: Identifier,
-    ) -> Option<lee::AccountId> {
-        let node = self.key_map.get(cci)?;
-        let account_id = lee::AccountId::for_regular_private_account(
-            &node.value.0.nullifier_public_key,
-            &node.value.0.viewing_public_key,
-            identifier,
-        );
-        if self.account_id_map.contains_key(&account_id) {
-            return None;
-        }
-        self.account_id_map.insert(account_id, cci.clone());
-        Some(account_id)
-    }
-
     /// Cleanup of non-initialized accounts in a private tree.
     ///
-    /// If account has no synced entries, removes it, stops at first initialized account.
+    /// Removes a node whose accounts are all uninitialized and none of them `awaited`, as a pending
+    /// message awaits the account it credits; stops at the first node in use.
     ///
     /// Walks through tree in layers of same depth using `ChainIndex::chain_ids_at_depth()`.
     ///
     /// Chain must be parsed for accounts beforehand.
     ///
     /// Slow, maintains tree consistency.
-    pub fn cleanup_tree_remove_uninit_layered(&mut self, depth: u32) {
+    pub fn cleanup_tree_remove_uninit_layered(
+        &mut self,
+        depth: u32,
+        awaited: &std::collections::HashSet<AccountId>,
+    ) {
         let depth = usize::try_from(depth).expect("Depth is expected to fit in usize");
         'outer: for i in (1..depth).rev() {
             println!("Cleanup of tree at depth {i}");
             for id in ChainIndex::chain_ids_at_depth(i) {
                 if let Some(node) = self.key_map.get(&id).cloned() {
-                    if node.value.1.is_empty()
-                        || node
-                            .value
-                            .1
-                            .iter()
-                            .all(|(_, acc)| acc == &lee::Account::default())
+                    if node
+                        .value
+                        .1
+                        .iter()
+                        .all(|(_, acc)| acc == &lee::Account::default())
+                        && !node
+                            .account_ids()
+                            .any(|account_id| awaited.contains(&account_id))
                     {
                         let account_ids = node.account_ids();
                         self.key_map.remove(&id);

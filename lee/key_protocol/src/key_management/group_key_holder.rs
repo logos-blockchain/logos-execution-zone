@@ -1,6 +1,6 @@
 use aes_gcm::{Aes256Gcm, KeyInit as _, aead::Aead as _};
 use lee_core::{
-    Identifier, SharedSecretKey,
+    SharedSecretKey,
     encryption::{EphemeralPublicKey, ML_KEM_768_CIPHERTEXT_LEN, ViewingPublicKey},
     program::{PdaSeed, ProgramId},
 };
@@ -135,7 +135,7 @@ impl GroupKeyHolder {
     ///
     /// Uses a distinct domain separator from `derive_keys_for_pda` to prevent cross-domain
     /// key collisions. The `derivation_seed` should be a stable, unique 32-byte value
-    /// (e.g. derived deterministically from the account's identifier).
+    /// (e.g. derived deterministically from the account's derivation id).
     #[must_use]
     pub fn derive_keys_for_shared_account(&self, derivation_seed: &[u8; 32]) -> PrivateKeyHolder {
         const PREFIX: &[u8; 32] = b"/LEE/v0.3/GroupKeyDerivation/SHA";
@@ -146,19 +146,16 @@ impl GroupKeyHolder {
         SecretSpendingKey(hasher.finalize_fixed().into()).produce_private_key_holder(None)
     }
 
-    /// Derive keys for a shared regular account from its `identifier`.
+    /// Derive keys for a shared regular account from its wallet-local `derivation_id`.
     ///
     /// Computes the derivation seed via the `SharedAccountTag` domain separator, then delegates
     /// to [`Self::derive_keys_for_shared_account`].
     #[must_use]
-    pub fn derive_regular_shared_account_keys_from_identifier(
-        &self,
-        identifier: Identifier,
-    ) -> PrivateKeyHolder {
+    pub fn derive_regular_shared_account_keys(&self, derivation_id: &[u8; 32]) -> PrivateKeyHolder {
         const PREFIX: &[u8; 32] = b"/LEE/v0.3/SharedAccountTag/\x00\x00\x00\x00\x00";
         let mut hasher = sha2::Sha256::new();
         hasher.update(PREFIX);
-        hasher.update(identifier.value());
+        hasher.update(derivation_id);
         let derivation_seed: [u8; 32] = hasher.finalize().into();
         self.derive_keys_for_shared_account(&derivation_seed)
     }
