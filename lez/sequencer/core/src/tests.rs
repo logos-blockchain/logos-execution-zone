@@ -91,6 +91,7 @@ fn checkpoint_at(tip: MsgId) -> Checkpoint {
         lib_slot: Slot::from(0),
         channel_notes: Vec::new(),
         finalized_config: MsgId::root(),
+        funding: Vec::new(),
     }
 }
 
