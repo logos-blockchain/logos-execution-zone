@@ -3,11 +3,9 @@ use clap::Subcommand;
 use lee::AccountId;
 
 use crate::{
-    AccDecodeData::Decode,
-    AccountIdentity, WalletCore,
-    account::AccountIdWithPrivacy,
+    WalletCore,
     cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
-    program_facades::amm::{Amm, QuoteAmount},
+    program_facades::amm::{Amm, Payout, QuoteAmount},
 };
 
 /// Represents generic CLI subcommand for a wallet working with amm program.
@@ -16,8 +14,6 @@ pub enum AmmProgramAgnosticSubcommand {
     /// Produce a new pool.
     ///
     /// `user_holding_a` and `user_holding_b` must be owned.
-    ///
-    /// Only public execution allowed.
     New {
         /// Either 32 byte base58 account id string with privacy prefix or a label.
         #[arg(long)]
@@ -33,13 +29,11 @@ pub enum AmmProgramAgnosticSubcommand {
         #[arg(long)]
         balance_b: u128,
     },
-    /// Pay exactly `amount-in` of the `from` holding's token for exactly `amount-out` of the
-    /// pool's other token.
+    /// Pay exactly `amount-in` of the `from` holding's token for whatever the pool's price pays
+    /// in its other token when the swap settles.
     ///
-    /// The pool accepts the offer if its price when the swap settles pays at least `amount-out`,
-    /// and keeps whatever more it would have paid for its liquidity providers. Otherwise the swap
-    /// fails and nothing moves. `from` must be owned; either holding may be private, but both
-    /// amounts are public in the pool's reserves.
+    /// If that is less than `min-amount-out`, the swap fails and nothing moves. `from` must be
+    /// owned; either holding may be private, but both amounts are public in the pool's reserves.
     Swap {
         /// `pool` - valid 32 byte base58 string WITHOUT privacy prefix.
         #[arg(long)]
@@ -53,7 +47,11 @@ pub enum AmmProgramAgnosticSubcommand {
         #[arg(long)]
         amount_in: u128,
         #[arg(long)]
-        amount_out: u128,
+        min_amount_out: u128,
+        /// Leave a private `to`'s payout pending for a later transaction to receive, at the price
+        /// the swap settles at, instead of proving it in this one at today's price.
+        #[arg(long)]
+        live: bool,
     },
     /// Estimate a swap from the pool's current reserves.
     ///
@@ -78,8 +76,6 @@ pub enum AmmProgramAgnosticSubcommand {
     /// Add liquidity.
     ///
     /// `user_holding_a` and `user_holding_b` must be owned.
-    ///
-    /// Only public execution allowed.
     AddLiquidity {
         /// Either 32 byte base58 account id string with privacy prefix or a label.
         #[arg(long)]
@@ -100,8 +96,6 @@ pub enum AmmProgramAgnosticSubcommand {
     /// Remove liquidity.
     ///
     /// `user_holding_lp` must be owned.
-    ///
-    /// Only public execution allowed.
     RemoveLiquidity {
         /// Either 32 byte base58 account id string with privacy prefix or a label.
         #[arg(long)]
@@ -128,36 +122,19 @@ impl AmmProgramAgnosticSubcommand {
         user_holding_lp: CliAccountMention,
         balance_a: u128,
         balance_b: u128,
-        wallet_core: &WalletCore,
+        wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
-        let a_id = user_holding_a.resolve(wallet_core.storage())?;
-        let b_id = user_holding_b.resolve(wallet_core.storage())?;
-        let lp_id = user_holding_lp.resolve(wallet_core.storage())?;
-        match (a_id, b_id, lp_id) {
-            (
-                AccountIdWithPrivacy::Public(a),
-                AccountIdWithPrivacy::Public(b),
-                AccountIdWithPrivacy::Public(lp),
-            ) => {
-                let (pool_id, tx_hash) = Amm(wallet_core)
-                    .send_new_pool(
-                        user_holding_a.into_public_identity(a, true),
-                        user_holding_b.into_public_identity(b, true),
-                        user_holding_lp.into_public_identity(lp, true),
-                        balance_a,
-                        balance_b,
-                    )
-                    .await?;
-                println!("Pool account is {pool_id}");
-                wallet_core
-                    .poll_and_finalize_public_transaction(tx_hash)
-                    .await
-            }
-            _ => {
-                // ToDo: Implement after private multi-chain calls is available
-                anyhow::bail!("Only public execution allowed for Amm calls");
-            }
-        }
+        let storage = wallet_core.storage();
+        let [a, b, lp] = [
+            user_holding_a.signer(storage)?,
+            user_holding_b.signer(storage)?,
+            user_holding_lp.signer(storage)?,
+        ];
+        let (pool_id, tx_hash, _) = Amm(wallet_core)
+            .send_new_pool(a, b, lp, balance_a, balance_b)
+            .await?;
+        println!("Pool account is {pool_id}");
+        wallet_core.finish_transaction(tx_hash).await
     }
 
     async fn handle_swap(
@@ -165,46 +142,29 @@ impl AmmProgramAgnosticSubcommand {
         from: CliAccountMention,
         to: CliAccountMention,
         amount_in: u128,
-        amount_out: u128,
+        min_amount_out: u128,
+        live: bool,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
-        let user_input = match from.resolve(wallet_core.storage())? {
-            AccountIdWithPrivacy::Public(account_id) => from.into_public_identity(account_id, true),
-            AccountIdWithPrivacy::Private(account_id) => private_identity(wallet_core, account_id)?,
-        };
-        let user_output = match to.resolve(wallet_core.storage())? {
-            AccountIdWithPrivacy::Public(account_id) => to.into_public_identity(account_id, false),
-            AccountIdWithPrivacy::Private(account_id) => private_identity(wallet_core, account_id)?,
-        };
-        let private_accounts: Vec<AccountId> = [&user_input, &user_output]
-            .into_iter()
-            .filter(|identity| identity.is_private())
-            .map(AccountIdentity::account_id)
-            .collect();
-
+        let storage = wallet_core.storage();
+        let user_input = from.signer(storage)?;
+        let user_output = to.unsigned(storage)?;
         println!(
-            "Paying exactly {amount_in} from {} for exactly {amount_out} into {} through pool {pool}",
+            "Paying exactly {amount_in} from {} for at least {min_amount_out} into {} through pool {pool}",
             user_input.account_id(),
             user_output.account_id()
         );
-        let (tx_hash, secrets) = Amm(wallet_core)
-            .send_swap(pool, user_input, user_output, amount_in, amount_out)
+        let (tx_hash, _) = Amm(wallet_core)
+            .send_swap(
+                pool,
+                user_input,
+                user_output,
+                amount_in,
+                min_amount_out,
+                if live { Payout::Live } else { Payout::Exact },
+            )
             .await?;
-
-        if private_accounts.is_empty() {
-            wallet_core
-                .poll_and_finalize_public_transaction(tx_hash)
-                .await
-        } else {
-            let decode: Vec<_> = secrets
-                .into_iter()
-                .zip(private_accounts)
-                .map(|(secret, account_id)| Decode(secret, account_id))
-                .collect();
-            wallet_core
-                .poll_and_finalize_pp_transaction(tx_hash, &decode)
-                .await
-        }
+        wallet_core.finish_transaction(tx_hash).await
     }
 
     async fn handle_quote(
@@ -236,36 +196,18 @@ impl AmmProgramAgnosticSubcommand {
         min_amount_lp: u128,
         max_amount_a: u128,
         max_amount_b: u128,
-        wallet_core: &WalletCore,
+        wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
-        let a_id = user_holding_a.resolve(wallet_core.storage())?;
-        let b_id = user_holding_b.resolve(wallet_core.storage())?;
-        let lp_id = user_holding_lp.resolve(wallet_core.storage())?;
-        match (a_id, b_id, lp_id) {
-            (
-                AccountIdWithPrivacy::Public(a),
-                AccountIdWithPrivacy::Public(b),
-                AccountIdWithPrivacy::Public(lp),
-            ) => {
-                let tx_hash = Amm(wallet_core)
-                    .send_add_liquidity(
-                        user_holding_a.into_public_identity(a, true),
-                        user_holding_b.into_public_identity(b, true),
-                        user_holding_lp.into_public_identity(lp, true),
-                        min_amount_lp,
-                        max_amount_a,
-                        max_amount_b,
-                    )
-                    .await?;
-                wallet_core
-                    .poll_and_finalize_public_transaction(tx_hash)
-                    .await
-            }
-            _ => {
-                // ToDo: Implement after private multi-chain calls is available
-                anyhow::bail!("Only public execution allowed for Amm calls");
-            }
-        }
+        let storage = wallet_core.storage();
+        let [a, b, lp] = [
+            user_holding_a.signer(storage)?,
+            user_holding_b.signer(storage)?,
+            user_holding_lp.signer(storage)?,
+        ];
+        let (tx_hash, _) = Amm(wallet_core)
+            .send_add_liquidity(a, b, lp, min_amount_lp, max_amount_a, max_amount_b)
+            .await?;
+        wallet_core.finish_transaction(tx_hash).await
     }
 
     async fn handle_remove_liquidity(
@@ -275,36 +217,18 @@ impl AmmProgramAgnosticSubcommand {
         balance_lp: u128,
         min_amount_a: u128,
         min_amount_b: u128,
-        wallet_core: &WalletCore,
+        wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
-        let a_id = user_holding_a.resolve(wallet_core.storage())?;
-        let b_id = user_holding_b.resolve(wallet_core.storage())?;
-        let lp_id = user_holding_lp.resolve(wallet_core.storage())?;
-        match (a_id, b_id, lp_id) {
-            (
-                AccountIdWithPrivacy::Public(a),
-                AccountIdWithPrivacy::Public(b),
-                AccountIdWithPrivacy::Public(lp),
-            ) => {
-                let tx_hash = Amm(wallet_core)
-                    .send_remove_liquidity(
-                        a,
-                        b,
-                        user_holding_lp.into_public_identity(lp, true),
-                        balance_lp,
-                        min_amount_a,
-                        min_amount_b,
-                    )
-                    .await?;
-                wallet_core
-                    .poll_and_finalize_public_transaction(tx_hash)
-                    .await
-            }
-            _ => {
-                // ToDo: Implement after private multi-chain calls is available
-                anyhow::bail!("Only public execution allowed for Amm calls");
-            }
-        }
+        let storage = wallet_core.storage();
+        let [a, b, lp] = [
+            user_holding_a.unsigned(storage)?,
+            user_holding_b.unsigned(storage)?,
+            user_holding_lp.signer(storage)?,
+        ];
+        let (tx_hash, _) = Amm(wallet_core)
+            .send_remove_liquidity(a, b, lp, balance_lp, min_amount_a, min_amount_b)
+            .await?;
+        wallet_core.finish_transaction(tx_hash).await
     }
 }
 
@@ -336,8 +260,12 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                 from,
                 to,
                 amount_in,
-                amount_out,
-            } => Self::handle_swap(pool, from, to, amount_in, amount_out, wallet_core).await,
+                min_amount_out,
+                live,
+            } => {
+                Self::handle_swap(pool, from, to, amount_in, min_amount_out, live, wallet_core)
+                    .await
+            }
             Self::Quote {
                 pool,
                 token_definition,
@@ -386,10 +314,4 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
             }
         }
     }
-}
-
-fn private_identity(wallet_core: &WalletCore, account_id: AccountId) -> Result<AccountIdentity> {
-    wallet_core
-        .resolve_private_account(account_id)
-        .ok_or_else(|| anyhow::anyhow!("No keys for private account {account_id}"))
 }

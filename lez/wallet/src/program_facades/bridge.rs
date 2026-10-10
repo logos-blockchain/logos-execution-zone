@@ -13,21 +13,24 @@ impl Bridge<'_> {
         bedrock_account_pk: [u8; 32],
     ) -> Result<HashType, ExecutionFailureKind> {
         let bridge_account_id = system_accounts::bridge_account_id();
-        let instruction = bridge_core::Instruction::Withdraw {
+        let message = bridge_core::Message::Withdraw {
             amount,
             bedrock_account_pk,
         };
-        let instruction_data =
-            Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let message = Program::serialize_message(message).expect("Message should serialize");
+        // The sender's signature authorizes the sender's own actor under the bridge program.
+        let root = AccountIdentity::Public(sender_account_id)
+            .select_program_actor_state(programs::bridge_account_id());
 
         self.0
             .send_pub_tx(
                 vec![
+                    root,
                     AccountIdentity::Public(sender_account_id).balance(),
                     AccountIdentity::PublicNoSign(bridge_account_id).balance(),
                 ],
-                instruction_data,
-                programs::bridge_account_id(),
+                0,
+                message,
             )
             .await
     }

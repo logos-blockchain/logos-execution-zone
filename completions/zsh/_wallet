@@ -99,7 +99,6 @@ _wallet_auth_transfer() {
                         '--to-label[To account label (alternative to --to)]:label:' \
                         '--to-npk[Destination nullifier public key (for foreign private accounts)]:npk:' \
                         '--to-vpk[Destination viewing public key (for foreign private accounts)]:vpk:' \
-                        '--to-identifier[Identifier for the recipient private account]:identifier:' \
                         '--amount[Amount of native tokens to send]:amount:'
                     ;;
             esac
@@ -246,7 +245,6 @@ _wallet_token() {
                         '--to-label[To account label (alternative to --to)]:label:' \
                         '--to-npk[Destination nullifier public key (for foreign private accounts)]:npk:' \
                         '--to-vpk[Destination viewing public key (for foreign private accounts)]:vpk:' \
-                        '--to-identifier[Identifier for the recipient private account]:identifier:' \
                         '--amount[Amount of tokens to send]:amount:'
                     ;;
                 burn)
@@ -265,7 +263,6 @@ _wallet_token() {
                         '--holder-label[Holder account label (alternative to --holder)]:label:' \
                         '--holder-npk[Holder nullifier public key (for foreign private accounts)]:npk:' \
                         '--holder-vpk[Holder viewing public key (for foreign private accounts)]:vpk:' \
-                        '--holder-identifier[Identifier for the holder private account]:identifier:' \
                         '--amount[Amount of tokens to mint]:amount:'
                     ;;
             esac

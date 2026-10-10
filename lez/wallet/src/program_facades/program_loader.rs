@@ -1,12 +1,12 @@
 use anyhow::{Context as _, Result, bail};
 use common::HashType;
-use lee::{AccountId, ProgramShardSelector, program::Program};
+use lee::{AccountId, Actor, program::Program};
 use lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
-use program_loader_core::{Instruction, MAX_PROGRAM_SEGMENTS, MAX_SEGMENT_DATA_LEN};
+use program_loader_core::{MAX_PROGRAM_SEGMENTS, MAX_SEGMENT_DATA_LEN, Message};
 
-use crate::{AccountIdentity, AccountMention, ExecutionFailureKind, WalletCore};
+use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
 
-/// Facade for `program_loader`'s `WriteSegment`/`CreateHeader`/`UpdateHeader` instructions.
+/// Facade for `program_loader`'s `WriteSegment`/`CreateHeader`/`UpdateHeader` messages.
 ///
 /// Every account (segment, header) is caller-supplied — no key generation happens here. Callers
 /// create accounts first via the ordinary `account new public` flow, the same way every other
@@ -14,24 +14,26 @@ use crate::{AccountIdentity, AccountMention, ExecutionFailureKind, WalletCore};
 pub struct ProgramLoader<'wallet>(pub &'wallet WalletCore);
 
 impl ProgramLoader<'_> {
-    /// Sends a `program_loader` instruction over `accounts`, paid by `payer` if given.
+    /// Sends a `program_loader` message to `target`'s loader actor, paid by `payer` if given.
     ///
-    /// A deploy's account list holds nothing but the brand-new accounts it is claiming, so there
-    /// is never a funded account for self-pay to find: `payer` names a separately-funded account
-    /// that co-signs without joining the instruction's account list (see
-    /// [`WalletCore::send_pub_tx_with_pre_check`]).
+    /// A deploy's actor is a brand-new account it is claiming, so there is never a funded account
+    /// for self-pay to find: `payer` names a separately-funded account that co-signs without
+    /// joining the message's actor list (see [`WalletCore::send_pub_tx_with_pre_check`]).
     async fn send(
         &self,
-        accounts: Vec<AccountMention>,
-        instruction_data: lee_core::program::InstructionData,
+        target: AccountId,
+        message: &Message,
         payer: Option<AccountId>,
     ) -> Result<HashType, ExecutionFailureKind> {
+        let root =
+            AccountIdentity::Public(target).select_program_actor_state(PROGRAM_LOADER_ACCOUNT_ID);
+        let message = Program::serialize_message(message).expect("Message should serialize");
         self.0
-            .send_pub_tx_paid_by(accounts, instruction_data, PROGRAM_LOADER_ACCOUNT_ID, payer)
+            .send_pub_tx_paid_by(vec![root], 0, message, payer)
             .await
     }
 
-    /// Writes one bytecode segment to `target`'s empty loader shard.
+    /// Writes one bytecode segment to `target`'s empty loader actor state.
     /// `next_segment`, if given, must already contain a valid segment.
     /// See [`Self::send`] for `payer`.
     pub async fn write_segment(
@@ -44,14 +46,12 @@ impl ProgramLoader<'_> {
         if let Some(next_segment_id) = next_segment {
             let next_segment_acc = self
                 .0
-                .get_account_view(ProgramShardSelector::new(
-                    next_segment_id,
-                    PROGRAM_LOADER_ACCOUNT_ID,
-                ))
+                .get_account_view(Actor::new(next_segment_id, PROGRAM_LOADER_ACCOUNT_ID))
                 .await
-                .map_err(ExecutionFailureKind::SequencerError)?;
+                .map_err(ExecutionFailureKind::SequencerError)?
+                .unwrap_or_default();
             if program_loader_core::ProgramSegment::from_bytes(
-                next_segment_acc.data.shard(PROGRAM_LOADER_ACCOUNT_ID),
+                next_segment_acc.data.actor_state(PROGRAM_LOADER_ACCOUNT_ID),
             )
             .is_none()
             {
@@ -59,75 +59,56 @@ impl ProgramLoader<'_> {
             }
         }
 
-        let instruction = Instruction::WriteSegment {
-            bytecode,
-            next_segment,
-        };
-        let instruction_data =
-            Program::serialize_instruction(instruction).expect("Instruction should serialize");
-
-        let mut accounts =
-            vec![AccountIdentity::Public(target).select_program_shard(PROGRAM_LOADER_ACCOUNT_ID)];
-        accounts.extend(next_segment.map(|id| {
-            AccountIdentity::PublicNoSign(id).select_program_shard(PROGRAM_LOADER_ACCOUNT_ID)
-        }));
-
-        self.send(accounts, instruction_data, payer).await
+        self.send(
+            target,
+            &Message::WriteSegment {
+                bytecode,
+                next_segment,
+            },
+            payer,
+        )
+        .await
     }
 
-    /// Creates a program header in `target`'s empty loader shard.
-    /// `chain_segment_ids` lists the chain in order, including `first_segment`,
-    /// so the loader can verify it and compute the image ID. See [`Self::send`] for `payer`.
+    /// Creates a program header in `target`'s empty loader actor state; the loader walks the chain
+    /// from `first_segment` to compute the image ID. See [`Self::send`] for `payer`.
     pub async fn create_header(
         &self,
         target: AccountId,
         first_segment: AccountId,
-        chain_segment_ids: &[AccountId],
         immutable: bool,
         payer: Option<AccountId>,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let instruction = Instruction::CreateHeader {
-            first_segment,
-            immutable,
-        };
-        let instruction_data =
-            Program::serialize_instruction(instruction).expect("Instruction should serialize");
-
-        let mut accounts =
-            vec![AccountIdentity::Public(target).select_program_shard(PROGRAM_LOADER_ACCOUNT_ID)];
-        accounts.extend(chain_segment_ids.iter().copied().map(|id| {
-            AccountIdentity::PublicNoSign(id).select_program_shard(PROGRAM_LOADER_ACCOUNT_ID)
-        }));
-
-        self.send(accounts, instruction_data, payer).await
+        self.send(
+            target,
+            &Message::CreateHeader {
+                first_segment,
+                immutable,
+            },
+            payer,
+        )
+        .await
     }
 
     /// Rewrites an existing header at `header` — an ordinary `is_authorized`-gated data
-    /// mutation, so `header`'s own (still-authorized) key must sign. Same
-    /// `chain_segment_ids`/`image_id` handling as [`Self::create_header`]; see [`Self::send`] for
-    /// `payer`.
+    /// mutation, so `header`'s own (still-authorized) key must sign. Same `image_id` handling as
+    /// [`Self::create_header`]; see [`Self::send`] for `payer`.
     pub async fn update_header(
         &self,
         header: AccountId,
         first_segment: AccountId,
-        chain_segment_ids: &[AccountId],
         immutable: bool,
         payer: Option<AccountId>,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let instruction = Instruction::UpdateHeader {
-            first_segment,
-            immutable,
-        };
-        let instruction_data =
-            Program::serialize_instruction(instruction).expect("Instruction should serialize");
-
-        let mut accounts =
-            vec![AccountIdentity::Public(header).select_program_shard(PROGRAM_LOADER_ACCOUNT_ID)];
-        accounts.extend(chain_segment_ids.iter().copied().map(|id| {
-            AccountIdentity::PublicNoSign(id).select_program_shard(PROGRAM_LOADER_ACCOUNT_ID)
-        }));
-
-        self.send(accounts, instruction_data, payer).await
+        self.send(
+            header,
+            &Message::UpdateHeader {
+                first_segment,
+                immutable,
+            },
+            payer,
+        )
+        .await
     }
 
     /// Chunks `bytecode` into `segments.len()` pieces (must match exactly — this never
@@ -203,23 +184,23 @@ impl ProgramLoader<'_> {
                 .await
                 .with_context(|| format!("failed to upload segment {i}"))?;
             self.0
-                .poll_and_finalize_public_transaction(tx_hash)
+                .await_inclusion(tx_hash)
                 .await
                 .with_context(|| format!("segment {i} transaction did not finalize"))?;
         }
 
         let first_segment = segments[0];
         let tx_hash = if update_existing_header {
-            self.update_header(header, first_segment, segments, immutable, payer)
+            self.update_header(header, first_segment, immutable, payer)
                 .await
                 .context("failed to update header")?
         } else {
-            self.create_header(header, first_segment, segments, immutable, payer)
+            self.create_header(header, first_segment, immutable, payer)
                 .await
                 .context("failed to create header")?
         };
         self.0
-            .poll_and_finalize_public_transaction(tx_hash)
+            .await_inclusion(tx_hash)
             .await
             .context("header transaction did not finalize")?;
 
@@ -242,11 +223,12 @@ impl ProgramLoader<'_> {
             }
             let account = self
                 .0
-                .get_account_view(ProgramShardSelector::new(id, PROGRAM_LOADER_ACCOUNT_ID))
+                .get_account_view(Actor::new(id, PROGRAM_LOADER_ACCOUNT_ID))
                 .await
-                .with_context(|| format!("failed to fetch segment account {id}"))?;
+                .with_context(|| format!("failed to fetch segment account {id}"))?
+                .unwrap_or_default();
             let segment = program_loader_core::ProgramSegment::from_bytes(
-                account.data.shard(PROGRAM_LOADER_ACCOUNT_ID),
+                account.data.actor_state(PROGRAM_LOADER_ACCOUNT_ID),
             )
             .with_context(|| format!("account {id} does not hold a valid program segment"))?;
             chain.push(id);

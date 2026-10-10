@@ -48,7 +48,7 @@ impl WalletSubcommand for BridgeSubcommand {
                     .await?;
 
                 wallet_core
-                    .poll_and_finalize_public_transaction(tx_hash)
+                    .finish_transaction(tx_hash)
                     .await
                     .context("Transaction finalization error")
             }

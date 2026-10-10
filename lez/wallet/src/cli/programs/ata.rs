@@ -1,12 +1,10 @@
 use anyhow::Result;
 use clap::Subcommand;
-use lee::{AccountId, ProgramShardSelector};
+use lee::{AccountId, Actor};
 use token_core::TokenHolding;
 
 use crate::{
-    AccDecodeData::Decode,
     WalletCore,
-    account::AccountIdWithPrivacy,
     cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
     program_facades::ata::Ata,
 };
@@ -88,106 +86,6 @@ impl AtaSubcommand {
         SubcommandReturnValue::Empty
     }
 
-    async fn handle_create(
-        owner: CliAccountMention,
-        token_definition: AccountId,
-        wallet_core: &mut WalletCore,
-    ) -> Result<SubcommandReturnValue> {
-        let owner_resolved = owner.resolve(wallet_core.storage())?;
-        let definition_id = token_definition;
-
-        match owner_resolved {
-            AccountIdWithPrivacy::Public(owner_id) => {
-                let tx_hash = Ata(wallet_core)
-                    .send_create(owner.into_public_identity(owner_id, true), definition_id)
-                    .await?;
-                wallet_core
-                    .poll_and_finalize_public_transaction(tx_hash)
-                    .await
-            }
-            AccountIdWithPrivacy::Private(owner_id) => {
-                let (tx_hash, secret) = Ata(wallet_core)
-                    .send_create_private_owner(owner_id, definition_id)
-                    .await?;
-
-                wallet_core
-                    .poll_and_finalize_pp_transaction(tx_hash, &[Decode(secret, owner_id)])
-                    .await
-            }
-        }
-    }
-
-    async fn handle_send(
-        from: CliAccountMention,
-        token_definition: AccountId,
-        to: AccountId,
-        amount: u128,
-        wallet_core: &mut WalletCore,
-    ) -> Result<SubcommandReturnValue> {
-        let from_resolved = from.resolve(wallet_core.storage())?;
-        let definition_id = token_definition;
-        let to_id = to;
-
-        match from_resolved {
-            AccountIdWithPrivacy::Public(from_id) => {
-                let tx_hash = Ata(wallet_core)
-                    .send_transfer(
-                        from.into_public_identity(from_id, true),
-                        definition_id,
-                        to_id,
-                        amount,
-                    )
-                    .await?;
-                wallet_core
-                    .poll_and_finalize_public_transaction(tx_hash)
-                    .await
-            }
-            AccountIdWithPrivacy::Private(from_id) => {
-                let (tx_hash, secret) = Ata(wallet_core)
-                    .send_transfer_private_owner(from_id, definition_id, to_id, amount)
-                    .await?;
-
-                wallet_core
-                    .poll_and_finalize_pp_transaction(tx_hash, &[Decode(secret, from_id)])
-                    .await
-            }
-        }
-    }
-
-    async fn handle_burn(
-        holder: CliAccountMention,
-        token_definition: AccountId,
-        amount: u128,
-        wallet_core: &mut WalletCore,
-    ) -> Result<SubcommandReturnValue> {
-        let holder_resolved = holder.resolve(wallet_core.storage())?;
-        let definition_id = token_definition;
-
-        match holder_resolved {
-            AccountIdWithPrivacy::Public(holder_id) => {
-                let tx_hash = Ata(wallet_core)
-                    .send_burn(
-                        holder.into_public_identity(holder_id, true),
-                        definition_id,
-                        amount,
-                    )
-                    .await?;
-                wallet_core
-                    .poll_and_finalize_public_transaction(tx_hash)
-                    .await
-            }
-            AccountIdWithPrivacy::Private(holder_id) => {
-                let (tx_hash, secret) = Ata(wallet_core)
-                    .send_burn_private_owner(holder_id, definition_id, amount)
-                    .await?;
-
-                wallet_core
-                    .poll_and_finalize_pp_transaction(tx_hash, &[Decode(secret, holder_id)])
-                    .await
-            }
-        }
-    }
-
     async fn handle_list(
         owner: AccountId,
         token_definition: Vec<AccountId>,
@@ -202,9 +100,10 @@ impl AtaSubcommand {
                 &associated_token_account_core::compute_ata_seed(owner, *def, token_program_id),
             );
             let account = wallet_core
-                .get_account_view(ProgramShardSelector::new(ata_id, token_program_id))
-                .await?;
-            let holding = account.data.shard(token_program_id);
+                .get_account_view(Actor::new(ata_id, token_program_id))
+                .await?
+                .unwrap_or_default();
+            let holding = account.data.actor_state(token_program_id);
 
             if holding.is_empty() {
                 println!("No ATA for definition {def}");
@@ -238,18 +137,34 @@ impl WalletSubcommand for AtaSubcommand {
             Self::Create {
                 owner,
                 token_definition,
-            } => Self::handle_create(owner, token_definition, wallet_core).await,
+            } => {
+                let owner = owner.signer(wallet_core.storage())?;
+                let (tx_hash, _) = Ata(wallet_core).create(owner, token_definition).await?;
+                wallet_core.finish_transaction(tx_hash).await
+            }
             Self::Send {
                 from,
                 token_definition,
                 to,
                 amount,
-            } => Self::handle_send(from, token_definition, to, amount, wallet_core).await,
+            } => {
+                let owner = from.signer(wallet_core.storage())?;
+                let (tx_hash, _) = Ata(wallet_core)
+                    .transfer(owner, token_definition, to, amount)
+                    .await?;
+                wallet_core.finish_transaction(tx_hash).await
+            }
             Self::Burn {
                 holder,
                 token_definition,
                 amount,
-            } => Self::handle_burn(holder, token_definition, amount, wallet_core).await,
+            } => {
+                let owner = holder.signer(wallet_core.storage())?;
+                let (tx_hash, _) = Ata(wallet_core)
+                    .burn(owner, token_definition, amount)
+                    .await?;
+                wallet_core.finish_transaction(tx_hash).await
+            }
             Self::List {
                 owner,
                 token_definition,

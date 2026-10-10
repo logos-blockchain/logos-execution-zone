@@ -1,16 +1,17 @@
-use std::collections::HashMap;
-
-use amm_core::{PoolDefinition, compute_liquidity_token_pda, compute_pool_pda, compute_vault_pda};
+use amm_core::{
+    PoolDefinition, SwapRequest, compute_liquidity_token_pda, compute_pool_pda,
+    compute_pool_pda_seed, compute_vault_pda_seed, swap_transfer,
+};
 use common::HashType;
 use lee::{
-    AccountId, privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
+    AccountId, Actor, privacy_preserving_transaction::circuit::ProgramCatalog, program::Program,
 };
-use lee_core::{SharedSecretKey, account::ShardData};
-use token_core::TokenHolding;
+use lee_core::SharedSecretKey;
+use token_core::{TokenDescriptor, TokenHolding};
 
 use crate::{
-    AccountIdentity, AccountMention, ExecutionFailureKind, WalletCore,
-    program_facades::{shard, token_holding},
+    AccountIdentity, AccountMention, CastDelivery, ExecutionFailureKind, WalletCore,
+    program_facades::{actor_state, token_holding},
 };
 pub struct Amm<'wallet>(pub &'wallet WalletCore);
 
@@ -26,33 +27,23 @@ struct Route {
     definition_token_a_id: AccountId,
     definition_token_b_id: AccountId,
     pool_id: AccountId,
-    vault_a_id: AccountId,
-    vault_b_id: AccountId,
 }
 
 impl Route {
     async fn resolve(
         wallet: &WalletCore,
-        user_holding_a: AccountId,
-        user_holding_b: AccountId,
+        user_holding_a: &AccountIdentity,
+        user_holding_b: &AccountIdentity,
     ) -> Result<Self, ExecutionFailureKind> {
         let amm_program_id = programs::amm_account_id();
         let token_program_id = programs::token_account_id();
 
-        let definition_token_a_id = token_holding(
-            wallet,
-            &AccountIdentity::PublicNoSign(user_holding_a),
-            token_program_id,
-        )
-        .await?
-        .definition_id();
-        let definition_token_b_id = token_holding(
-            wallet,
-            &AccountIdentity::PublicNoSign(user_holding_b),
-            token_program_id,
-        )
-        .await?
-        .definition_id();
+        let definition_token_a_id = token_holding(wallet, user_holding_a, token_program_id)
+            .await?
+            .definition_id();
+        let definition_token_b_id = token_holding(wallet, user_holding_b, token_program_id)
+            .await?
+            .definition_id();
 
         let pool_id = compute_pool_pda(
             amm_program_id,
@@ -67,115 +58,56 @@ impl Route {
             definition_token_a_id,
             definition_token_b_id,
             pool_id,
-            vault_a_id: compute_vault_pda(amm_program_id, pool_id, definition_token_a_id),
-            vault_b_id: compute_vault_pda(amm_program_id, pool_id, definition_token_b_id),
         })
     }
 
+    // The pool's actor is the root; the user holdings follow the pool's own token actors. A
+    // withdrawal pays out to the token holdings and burns the liquidity one; otherwise the token
+    // holdings fund the pool and the liquidity holding receives.
     fn liquidity_accounts(
         &self,
         user_holding_a: AccountIdentity,
         user_holding_b: AccountIdentity,
         user_holding_lp: AccountIdentity,
+        withdrawing: bool,
     ) -> Vec<AccountMention> {
+        let pda = |seed| AccountIdentity::PublicPda {
+            program: self.amm_program_id,
+            seed,
+        };
+        let [a, b, lp] = [user_holding_a, user_holding_b, user_holding_lp]
+            .map(|holding| holding.select_program_actor_state(self.token_program_id));
+        let [a, b, lp] = if withdrawing {
+            [a.receiving(), b.receiving(), lp]
+        } else {
+            [a, b, lp.receiving()]
+        };
         vec![
-            AccountIdentity::PublicNoSign(self.pool_id).select_program_shard(self.amm_program_id),
-            AccountIdentity::PublicNoSign(self.vault_a_id)
-                .select_program_shard(self.token_program_id),
-            AccountIdentity::PublicNoSign(self.vault_b_id)
-                .select_program_shard(self.token_program_id),
+            pda(compute_pool_pda_seed(
+                self.definition_token_a_id,
+                self.definition_token_b_id,
+                self.token_program_id,
+            ))
+            .select_program_actor_state(self.amm_program_id),
+            pda(compute_vault_pda_seed(
+                self.pool_id,
+                self.definition_token_a_id,
+            ))
+            .select_program_actor_state(self.token_program_id),
+            pda(compute_vault_pda_seed(
+                self.pool_id,
+                self.definition_token_b_id,
+            ))
+            .select_program_actor_state(self.token_program_id),
             AccountIdentity::PublicNoSign(compute_liquidity_token_pda(
                 self.amm_program_id,
                 self.pool_id,
             ))
-            .select_program_shard(self.token_program_id),
-            user_holding_a.select_program_shard(self.token_program_id),
-            user_holding_b.select_program_shard(self.token_program_id),
-            user_holding_lp.select_program_shard(self.token_program_id),
+            .select_program_actor_state(self.token_program_id),
+            a,
+            b,
+            lp,
         ]
-    }
-
-    async fn pool_shard(&self, wallet: &WalletCore) -> Result<ShardData, ExecutionFailureKind> {
-        shard(
-            wallet,
-            &AccountIdentity::PublicNoSign(self.pool_id),
-            self.amm_program_id,
-        )
-        .await
-    }
-
-    fn add_liquidity(
-        &self,
-        pool: &PoolDefinition,
-        min_amount_liquidity: u128,
-        max_amount_to_add_token_a: u128,
-        max_amount_to_add_token_b: u128,
-    ) -> Result<amm_core::Instruction, ExecutionFailureKind> {
-        let ideal_a =
-            amm_core::ideal_deposit(pool.reserve_a, pool.reserve_b, max_amount_to_add_token_b)
-                .ok_or_else(unpriceable)?;
-        let ideal_b =
-            amm_core::ideal_deposit(pool.reserve_b, pool.reserve_a, max_amount_to_add_token_a)
-                .ok_or_else(unpriceable)?;
-        let amount_to_add_token_a = ideal_a.min(max_amount_to_add_token_a);
-        let amount_to_add_token_b = ideal_b.min(max_amount_to_add_token_b);
-        let amount_liquidity = amm_core::liquidity_minted(
-            pool.liquidity_pool_supply,
-            amount_to_add_token_a,
-            amount_to_add_token_b,
-            pool.reserve_a,
-            pool.reserve_b,
-        )
-        .ok_or_else(unpriceable)?;
-        if amount_liquidity < min_amount_liquidity {
-            return Err(outside_limit());
-        }
-
-        Ok(amm_core::Instruction::AddLiquidity {
-            max_amount_to_add_token_a,
-            max_amount_to_add_token_b,
-            token_program_id: self.token_program_id,
-            definition_token_a_id: self.definition_token_a_id,
-            definition_token_b_id: self.definition_token_b_id,
-            amount_to_add_token_a,
-            amount_to_add_token_b,
-            amount_liquidity,
-        })
-    }
-
-    fn remove_liquidity(
-        &self,
-        pool: &PoolDefinition,
-        remove_liquidity_amount: u128,
-        min_amount_to_remove_token_a: u128,
-        min_amount_to_remove_token_b: u128,
-    ) -> Result<amm_core::Instruction, ExecutionFailureKind> {
-        let amount_to_remove_token_a = amm_core::withdrawal_share(
-            pool.reserve_a,
-            remove_liquidity_amount,
-            pool.liquidity_pool_supply,
-        )
-        .ok_or_else(unpriceable)?;
-        let amount_to_remove_token_b = amm_core::withdrawal_share(
-            pool.reserve_b,
-            remove_liquidity_amount,
-            pool.liquidity_pool_supply,
-        )
-        .ok_or_else(unpriceable)?;
-        if amount_to_remove_token_a < min_amount_to_remove_token_a
-            || amount_to_remove_token_b < min_amount_to_remove_token_b
-        {
-            return Err(outside_limit());
-        }
-
-        Ok(amm_core::Instruction::RemoveLiquidity {
-            remove_liquidity_amount,
-            token_program_id: self.token_program_id,
-            definition_token_a_id: self.definition_token_a_id,
-            definition_token_b_id: self.definition_token_b_id,
-            amount_to_remove_token_a,
-            amount_to_remove_token_b,
-        })
     }
 }
 
@@ -187,37 +119,25 @@ impl Amm<'_> {
         user_holding_lp: AccountIdentity,
         balance_a: u128,
         balance_b: u128,
-    ) -> Result<(AccountId, HashType), ExecutionFailureKind> {
-        let route = Route::resolve(
-            self.0,
-            public_id(&user_holding_a)?,
-            public_id(&user_holding_b)?,
-        )
-        .await?;
+    ) -> Result<(AccountId, HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
+        let route = Route::resolve(self.0, &user_holding_a, &user_holding_b).await?;
 
-        // The branch between creating the LP definition and minting more of it.
-        let pool_is_empty = route.pool_shard(self.0).await?.is_empty();
-
-        let instruction = amm_core::Instruction::NewDefinition {
+        let accounts =
+            route.liquidity_accounts(user_holding_a, user_holding_b, user_holding_lp, false);
+        let [user_a, user_b, user_lp] = user_ids(&accounts);
+        let message = amm_core::Message::NewDefinition {
             token_a_amount: balance_a,
             token_b_amount: balance_b,
             token_program_id: route.token_program_id,
             definition_token_a_id: route.definition_token_a_id,
             definition_token_b_id: route.definition_token_b_id,
-            pool_is_empty,
+            user_a,
+            user_b,
+            user_lp,
         };
-        let instruction_data =
-            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
-        let tx_hash = self
-            .0
-            .send_pub_tx(
-                route.liquidity_accounts(user_holding_a, user_holding_b, user_holding_lp),
-                instruction_data,
-                route.amm_program_id,
-            )
-            .await?;
-        Ok((route.pool_id, tx_hash))
+        let (tx_hash, secrets) = self.send_liquidity(accounts, &message).await?;
+        Ok((route.pool_id, tx_hash, secrets))
     }
 
     pub async fn send_swap(
@@ -226,39 +146,42 @@ impl Amm<'_> {
         user_input: AccountIdentity,
         user_output: AccountIdentity,
         amount_in: u128,
-        amount_out: u128,
+        min_amount_out: u128,
+        payout: Payout,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let pool = pool_definition(self.0, pool_id).await?;
         let source = token_holding(self.0, &user_input, pool.token_program_id).await?;
-        let offer = SwapOffer::new(
+        let (mut accounts, transfer) = swap(
             pool_id,
             &pool,
-            user_input.account_id(),
+            user_input,
             &source,
+            user_output,
             amount_in,
-            amount_out,
+            min_amount_out,
         )?;
-        let instruction_data = Program::serialize_instruction(offer.instruction)
-            .expect("Instruction should serialize");
-
-        if user_input.is_private() || user_output.is_private() {
-            self.0
-                .send_privacy_preserving_tx(
-                    offer.accounts(user_input, user_output),
-                    instruction_data,
-                    &amm_with_token_dependency(),
-                )
-                .await
-        } else {
-            self.0
-                .send_pub_tx(
-                    offer.accounts(user_input, user_output),
-                    instruction_data,
-                    programs::amm_account_id(),
-                )
-                .await
-                .map(|tx_hash| (tx_hash, Vec::new()))
-        }
+        let message = Program::serialize_message(transfer).expect("Message should serialize");
+        let (cross_messages, casts) = match payout {
+            // A live payout is published: its recipient takes no part beyond what publication
+            // needs, and the swap's one public excursion delivers nothing into private execution.
+            Payout::Live => {
+                let (declared, casts) = self.0.cast_destination(accounts.remove(1))?;
+                accounts.extend(declared);
+                (Some(vec![Vec::new()]), casts)
+            }
+            // An exact payout is derived from today's reserves, and settlement refuses any other.
+            Payout::Exact => (None, CastDelivery::default()),
+        };
+        self.0
+            .send_tx(
+                accounts,
+                0,
+                message,
+                &amm_with_token_dependency(),
+                cross_messages,
+                casts,
+            )
+            .await
     }
 
     pub async fn quote(
@@ -282,61 +205,61 @@ impl Amm<'_> {
         min_amount_liquidity: u128,
         max_amount_to_add_token_a: u128,
         max_amount_to_add_token_b: u128,
-    ) -> Result<HashType, ExecutionFailureKind> {
-        let route = Route::resolve(
-            self.0,
-            public_id(&user_holding_a)?,
-            public_id(&user_holding_b)?,
-        )
-        .await?;
+    ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
+        let route = Route::resolve(self.0, &user_holding_a, &user_holding_b).await?;
         let pool = pool_definition(self.0, route.pool_id).await?;
-        let instruction = route.add_liquidity(
+        let accounts =
+            route.liquidity_accounts(user_holding_a, user_holding_b, user_holding_lp, false);
+        let message = add_liquidity(
             &pool,
             min_amount_liquidity,
             max_amount_to_add_token_a,
             max_amount_to_add_token_b,
+            user_ids(&accounts),
         )?;
-        let instruction_data =
-            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
-        self.0
-            .send_pub_tx(
-                route.liquidity_accounts(user_holding_a, user_holding_b, user_holding_lp),
-                instruction_data,
-                route.amm_program_id,
-            )
-            .await
+        self.send_liquidity(accounts, &message).await
     }
 
     pub async fn send_remove_liquidity(
         &self,
-        user_holding_a: AccountId,
-        user_holding_b: AccountId,
+        user_holding_a: AccountIdentity,
+        user_holding_b: AccountIdentity,
         user_holding_lp: AccountIdentity,
         remove_liquidity_amount: u128,
         min_amount_to_remove_token_a: u128,
         min_amount_to_remove_token_b: u128,
-    ) -> Result<HashType, ExecutionFailureKind> {
-        let route = Route::resolve(self.0, user_holding_a, user_holding_b).await?;
+    ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
+        let route = Route::resolve(self.0, &user_holding_a, &user_holding_b).await?;
         let pool = pool_definition(self.0, route.pool_id).await?;
-        let instruction = route.remove_liquidity(
+        let accounts =
+            route.liquidity_accounts(user_holding_a, user_holding_b, user_holding_lp, true);
+        let message = remove_liquidity(
             &pool,
             remove_liquidity_amount,
             min_amount_to_remove_token_a,
             min_amount_to_remove_token_b,
+            user_ids(&accounts),
         )?;
-        let instruction_data =
-            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
+        self.send_liquidity(accounts, &message).await
+    }
+
+    // The pool is the root.
+    async fn send_liquidity(
+        &self,
+        accounts: Vec<AccountMention>,
+        message: &amm_core::Message,
+    ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
+        let message = Program::serialize_message(message).expect("Message should serialize");
         self.0
-            .send_pub_tx(
-                route.liquidity_accounts(
-                    AccountIdentity::PublicNoSign(user_holding_a),
-                    AccountIdentity::PublicNoSign(user_holding_b),
-                    user_holding_lp,
-                ),
-                instruction_data,
-                route.amm_program_id,
+            .send_tx(
+                accounts,
+                0,
+                message,
+                &amm_with_token_dependency(),
+                None,
+                CastDelivery::default(),
             )
             .await
     }
@@ -354,77 +277,150 @@ pub struct Estimate {
     pub amount_out: u128,
 }
 
-// The trader's exact terms and the pool's vaults for them. Nothing here reads or checks the
-// pool's reserves: settlement decides whether the pool can afford the offer.
-struct SwapOffer {
-    pool_id: AccountId,
-    token_program_id: AccountId,
-    input_vault_id: AccountId,
-    output_vault_id: AccountId,
-    instruction: amm_core::Instruction,
+// Whether a private `to` receives an exact-input payout later, at the price the swap settles at,
+// or in the swap itself, at today's price.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Payout {
+    Live,
+    Exact,
 }
 
-impl SwapOffer {
-    fn new(
-        pool_id: AccountId,
-        pool: &PoolDefinition,
-        source_id: AccountId,
-        source: &TokenHolding,
-        amount_in: u128,
-        amount_out: u128,
-    ) -> Result<Self, ExecutionFailureKind> {
-        // The wallet proves private swaps with the built-in token program only, so both paths
-        // refuse any other rather than one of them failing late.
-        if pool.token_program_id != programs::token_account_id() {
-            return Err(ExecutionFailureKind::TransactionBuildError(
-                lee::error::LeeError::InvalidInput(format!(
-                    "Pool {pool_id} uses token program {}, which this wallet cannot swap through",
-                    pool.token_program_id
-                )),
-            ));
-        }
-        let TokenHolding::Fungible { definition_id, .. } = source else {
-            return Err(ExecutionFailureKind::AccountDataError(source_id));
-        };
-        let (input, output) = pool
-            .sides(*definition_id)
-            .ok_or(ExecutionFailureKind::AccountDataError(source_id))?;
-        Ok(Self {
-            pool_id,
-            token_program_id: pool.token_program_id,
-            input_vault_id: input.vault_id,
-            output_vault_id: output.vault_id,
-            instruction: amm_core::Instruction::Swap {
-                token_program_id: pool.token_program_id,
-                definition_id_in: input.definition_id,
-                definition_id_out: output.definition_id,
-                amount_in,
-                amount_out,
-            },
-        })
+// The trader's terms and the pool's vaults for them. Nothing here reads or checks the pool's
+// reserves: settlement decides whether the live quote meets the minimum.
+fn swap(
+    pool_id: AccountId,
+    pool: &PoolDefinition,
+    user_input: AccountIdentity,
+    source: &TokenHolding,
+    user_output: AccountIdentity,
+    amount_in: u128,
+    min_amount_out: u128,
+) -> Result<(Vec<AccountMention>, token_core::Message), ExecutionFailureKind> {
+    // The wallet proves private swaps with the built-in token program only, so both paths
+    // refuse any other rather than one of them failing late.
+    if pool.token_program_id != programs::token_account_id() {
+        return Err(ExecutionFailureKind::TransactionBuildError(
+            lee::error::LeeError::InvalidInput(format!(
+                "Pool {pool_id} uses token program {}, which this wallet cannot swap through",
+                pool.token_program_id
+            )),
+        ));
+    }
+    let source_id = user_input.account_id();
+    let TokenHolding::Fungible { definition_id, .. } = source else {
+        return Err(ExecutionFailureKind::AccountDataError(source_id));
+    };
+    let (input, output) = pool
+        .sides(*definition_id)
+        .ok_or(ExecutionFailureKind::AccountDataError(source_id))?;
+
+    // The token transfer into the input vault that notifies the pool with the request.
+    let transfer = swap_transfer(
+        Actor::new(pool_id, programs::amm_account_id()),
+        input.vault_id,
+        TokenDescriptor::fungible(input.definition_id),
+        amount_in,
+        SwapRequest {
+            definition_id_out: output.definition_id,
+            min_amount_out,
+            payout: user_output.account_id(),
+        },
+    );
+    // The trader's input holding is the root. Only the payer signs: a public recipient is named
+    // without a signature; a private one keeps its keys so the proof can create or update it.
+    let accounts = vec![
+        user_input.select_program_actor_state(pool.token_program_id),
+        user_output
+            .without_signing()
+            .select_program_actor_state(pool.token_program_id)
+            .receiving(),
+        AccountIdentity::PublicNoSign(pool_id)
+            .select_program_actor_state(programs::amm_account_id()),
+        AccountIdentity::PublicNoSign(input.vault_id)
+            .select_program_actor_state(pool.token_program_id),
+        AccountIdentity::PublicNoSign(output.vault_id)
+            .select_program_actor_state(pool.token_program_id),
+    ];
+    Ok((accounts, transfer))
+}
+
+fn add_liquidity(
+    pool: &PoolDefinition,
+    min_amount_liquidity: u128,
+    max_amount_to_add_token_a: u128,
+    max_amount_to_add_token_b: u128,
+    [user_a, user_b, user_lp]: [AccountId; 3],
+) -> Result<amm_core::Message, ExecutionFailureKind> {
+    let ideal_a =
+        amm_core::ideal_deposit(pool.reserve_a, pool.reserve_b, max_amount_to_add_token_b)
+            .ok_or_else(unpriceable)?;
+    let ideal_b =
+        amm_core::ideal_deposit(pool.reserve_b, pool.reserve_a, max_amount_to_add_token_a)
+            .ok_or_else(unpriceable)?;
+    let amount_to_add_token_a = ideal_a.min(max_amount_to_add_token_a);
+    let amount_to_add_token_b = ideal_b.min(max_amount_to_add_token_b);
+    let amount_liquidity = amm_core::liquidity_minted(
+        pool.liquidity_pool_supply,
+        amount_to_add_token_a,
+        amount_to_add_token_b,
+        pool.reserve_a,
+        pool.reserve_b,
+    )
+    .ok_or_else(unpriceable)?;
+    if amount_liquidity < min_amount_liquidity {
+        return Err(outside_limit());
     }
 
-    // Only the payer signs. A public recipient is named without a signature; a private one keeps
-    // its keys so the proof can create or update it.
-    fn accounts(
-        &self,
-        user_input: AccountIdentity,
-        user_output: AccountIdentity,
-    ) -> Vec<AccountMention> {
-        let user_output = user_output
-            .public_account_id()
-            .map_or(user_output, AccountIdentity::PublicNoSign);
-        vec![
-            AccountIdentity::PublicNoSign(self.pool_id)
-                .select_program_shard(programs::amm_account_id()),
-            AccountIdentity::PublicNoSign(self.input_vault_id)
-                .select_program_shard(self.token_program_id),
-            AccountIdentity::PublicNoSign(self.output_vault_id)
-                .select_program_shard(self.token_program_id),
-            user_input.select_program_shard(self.token_program_id),
-            user_output.select_program_shard(self.token_program_id),
-        ]
+    Ok(amm_core::Message::AddLiquidity {
+        max_amount_to_add_token_a,
+        max_amount_to_add_token_b,
+        amount_to_add_token_a,
+        amount_to_add_token_b,
+        amount_liquidity,
+        user_a,
+        user_b,
+        user_lp,
+    })
+}
+
+fn remove_liquidity(
+    pool: &PoolDefinition,
+    remove_liquidity_amount: u128,
+    min_amount_to_remove_token_a: u128,
+    min_amount_to_remove_token_b: u128,
+    [user_a, user_b, user_lp]: [AccountId; 3],
+) -> Result<amm_core::Message, ExecutionFailureKind> {
+    let amount_to_remove_token_a = amm_core::withdrawal_share(
+        pool.reserve_a,
+        remove_liquidity_amount,
+        pool.liquidity_pool_supply,
+    )
+    .ok_or_else(unpriceable)?;
+    let amount_to_remove_token_b = amm_core::withdrawal_share(
+        pool.reserve_b,
+        remove_liquidity_amount,
+        pool.liquidity_pool_supply,
+    )
+    .ok_or_else(unpriceable)?;
+    if amount_to_remove_token_a < min_amount_to_remove_token_a
+        || amount_to_remove_token_b < min_amount_to_remove_token_b
+    {
+        return Err(outside_limit());
     }
+
+    Ok(amm_core::Message::RemoveLiquidity {
+        remove_liquidity_amount,
+        amount_to_remove_token_a,
+        amount_to_remove_token_b,
+        user_a,
+        user_b,
+        user_lp,
+    })
+}
+
+// The three user holdings of a liquidity operation; the pool addresses each at its token program.
+fn user_ids(accounts: &[AccountMention]) -> [AccountId; 3] {
+    [4, 5, 6].map(|index| accounts[index].actor().account_id)
 }
 
 fn estimate(
@@ -458,7 +454,7 @@ async fn pool_definition(
     wallet: &WalletCore,
     pool_id: AccountId,
 ) -> Result<PoolDefinition, ExecutionFailureKind> {
-    let data = shard(
+    let data = actor_state(
         wallet,
         &AccountIdentity::PublicNoSign(pool_id),
         programs::amm_account_id(),
@@ -467,15 +463,11 @@ async fn pool_definition(
     PoolDefinition::try_from(&data).map_err(|_err| ExecutionFailureKind::AccountDataError(pool_id))
 }
 
-fn amm_with_token_dependency() -> ProgramWithDependencies {
-    let token = programs::token();
-    let amm = programs::amm();
-    let amm_id = programs::amm_account_id();
-    ProgramWithDependencies::new(
-        amm,
-        amm_id,
-        HashMap::from([(programs::token_account_id(), token)]),
-    )
+fn amm_with_token_dependency() -> ProgramCatalog {
+    ProgramCatalog::from([
+        (programs::amm_account_id(), programs::amm()),
+        (programs::token_account_id(), programs::token()),
+    ])
 }
 
 fn unpriceable() -> ExecutionFailureKind {
@@ -490,11 +482,6 @@ fn outside_limit() -> ExecutionFailureKind {
     ))
 }
 
-fn public_id(identity: &AccountIdentity) -> Result<AccountId, ExecutionFailureKind> {
-    identity
-        .public_account_id()
-        .ok_or(ExecutionFailureKind::KeyNotFoundError)
-}
 
 #[cfg(test)]
 mod tests {

@@ -21,7 +21,8 @@ pub enum ProgramLoaderSubcommand {
     /// Write one bytecode segment. Low-level primitive: `Deploy`/`Update` handle a whole
     /// program's segments in one call.
     WriteSegment {
-        /// The account to write the segment to; its `program_loader` shard must still be empty.
+        /// The account to write the segment to; its `program_loader` actor state must still be
+        /// empty.
         #[arg(long)]
         target: CliAccountMention,
         /// File containing this segment's raw bytecode chunk.
@@ -39,7 +40,8 @@ pub enum ProgramLoaderSubcommand {
     /// Create a new program header pointing at an already-uploaded segment chain. Low-level
     /// primitive: `Deploy` handles segment upload + header creation together.
     CreateHeader {
-        /// The account to write the header to; its `program_loader` shard must still be empty.
+        /// The account to write the header to; its `program_loader` actor state must still be
+        /// empty.
         #[arg(long)]
         target: CliAccountMention,
         /// The first segment of the chain this header should point at. The rest of the chain is
@@ -78,11 +80,12 @@ pub enum ProgramLoaderSubcommand {
         /// Path to the program's compiled ELF binary.
         #[arg(long)]
         elf: PathBuf,
-        /// The account to create the header at; its `program_loader` shard must still be empty.
+        /// The account to create the header at; its `program_loader` actor state must still be
+        /// empty.
         #[arg(long)]
         header: CliAccountMention,
         /// The accounts to write segments to, in chain order (first chunk first); each one's
-        /// `program_loader` shard must still be empty.
+        /// `program_loader` actor state must still be empty.
         #[arg(long, num_args = 1..)]
         segments: Vec<CliAccountMention>,
         /// Whether the deployed program self-declares as immutable (not protocol-enforced).
@@ -105,7 +108,7 @@ pub enum ProgramLoaderSubcommand {
         #[arg(long)]
         header: CliAccountMention,
         /// The accounts to write the new segments to, in chain order; each one's
-        /// `program_loader` shard must still be empty.
+        /// `program_loader` actor state must still be empty.
         #[arg(long, num_args = 1..)]
         segments: Vec<CliAccountMention>,
         /// Whether the deployed program self-declares as immutable (not protocol-enforced).
@@ -124,7 +127,7 @@ impl ProgramLoaderSubcommand {
         bytecode_file: PathBuf,
         next_segment: Option<AccountId>,
         payer: Option<CliAccountMention>,
-        wallet_core: &WalletCore,
+        wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let target_id = resolve_public(&target, wallet_core)?;
         let payer_id = payer
@@ -143,9 +146,7 @@ impl ProgramLoaderSubcommand {
             .await?;
 
         println!("Segment uploaded at {target_id}");
-        wallet_core
-            .poll_and_finalize_public_transaction(tx_hash)
-            .await
+        wallet_core.finish_transaction(tx_hash).await
     }
 
     async fn handle_create_header(
@@ -153,31 +154,23 @@ impl ProgramLoaderSubcommand {
         first_segment: AccountId,
         immutable: bool,
         payer: Option<CliAccountMention>,
-        wallet_core: &WalletCore,
+        wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let target_id = resolve_public(&target, wallet_core)?;
         let payer_id = payer
             .as_ref()
             .map(|p| resolve_public(p, wallet_core))
             .transpose()?;
-        let chain_segment_ids = ProgramLoader(wallet_core)
+        ProgramLoader(wallet_core)
             .resolve_chain(first_segment)
             .await?;
 
         let tx_hash = ProgramLoader(wallet_core)
-            .create_header(
-                target_id,
-                first_segment,
-                &chain_segment_ids,
-                immutable,
-                payer_id,
-            )
+            .create_header(target_id, first_segment, immutable, payer_id)
             .await?;
 
         println!("Header uploaded at {target_id}");
-        wallet_core
-            .poll_and_finalize_public_transaction(tx_hash)
-            .await
+        wallet_core.finish_transaction(tx_hash).await
     }
 
     async fn handle_update_header(
@@ -185,31 +178,23 @@ impl ProgramLoaderSubcommand {
         first_segment: AccountId,
         immutable: bool,
         payer: Option<CliAccountMention>,
-        wallet_core: &WalletCore,
+        wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let header_id = resolve_public(&header, wallet_core)?;
         let payer_id = payer
             .as_ref()
             .map(|p| resolve_public(p, wallet_core))
             .transpose()?;
-        let chain_segment_ids = ProgramLoader(wallet_core)
+        ProgramLoader(wallet_core)
             .resolve_chain(first_segment)
             .await?;
 
         let tx_hash = ProgramLoader(wallet_core)
-            .update_header(
-                header_id,
-                first_segment,
-                &chain_segment_ids,
-                immutable,
-                payer_id,
-            )
+            .update_header(header_id, first_segment, immutable, payer_id)
             .await?;
 
         println!("Header {header_id} updated");
-        wallet_core
-            .poll_and_finalize_public_transaction(tx_hash)
-            .await
+        wallet_core.finish_transaction(tx_hash).await
     }
 
     async fn handle_deploy(

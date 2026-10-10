@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use itertools::Itertools as _;
 use key_protocol::key_management::{KeyChain, key_tree::chain_index::ChainIndex};
-use lee::{Account, AccountId, ProgramShardSelector, PublicKey};
+use lee::{Account, AccountId, Actor, PublicKey};
 use lee_core::{account::AccountIdError, native_token::NATIVE_TOKEN_PROGRAM_ID};
 use token_core::{TokenDefinition, TokenHolding};
 
@@ -17,7 +17,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub enum ReadScope {
     Balance,
-    Shard(AccountId),
+    ActorState(AccountId),
     All,
 }
 
@@ -28,7 +28,7 @@ impl FromStr for ReadScope {
         match s {
             "balance" => Ok(Self::Balance),
             "all" => Ok(Self::All),
-            _ => AccountId::from_str(s).map(Self::Shard),
+            _ => AccountId::from_str(s).map(Self::ActorState),
         }
     }
 }
@@ -112,8 +112,7 @@ pub enum NewSubcommand {
         /// Label to assign to the new account.
         label: Option<Label>,
     },
-    /// Single-account convenience: creates a key node and auto-registers one account with a random
-    /// identifier.
+    /// Creates a key node and registers its private account.
     Private {
         #[arg(long)]
         /// Chain index of a parent node.
@@ -138,14 +137,13 @@ pub enum NewSubcommand {
         #[arg(long, requires = "pda")]
         /// Program ID as hex string.
         program_id: Option<String>,
-        #[arg(long)]
-        /// Identifier selecting the shared account.
+        #[arg(long, conflicts_with = "pda")]
+        /// Derivation id selecting the shared regular account, as a 64-character hex string.
         /// Co-owners must supply the same value to derive the same account.
         /// Defaults to a random value if not specified.
-        identifier: Option<lee_core::Identifier>,
+        derivation_id: Option<String>,
     },
-    /// Recommended for receiving from multiple senders: creates a key node (npk + vpk) without
-    /// registering any account.
+    /// Creates a key node and prints its npk and vpk, for senders who address its account by keys.
     PrivateAccountsKey {
         #[arg(long)]
         /// Chain index of a parent node.
@@ -231,7 +229,7 @@ impl NewSubcommand {
         pda: bool,
         seed: Option<String>,
         program_id: Option<String>,
-        identifier: Option<lee_core::Identifier>,
+        derivation_id: Option<String>,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         if let Some(label) = &label {
@@ -258,19 +256,16 @@ impl NewSubcommand {
             }
 
             wallet_core
-                .create_shared_pda_account(
-                    group.clone(),
-                    pda_seed,
-                    pid,
-                    crate::cli::identifier_or_random(identifier),
-                )
+                .create_shared_pda_account(group.clone(), pda_seed, pid)
                 .await?
         } else {
+            let derivation_id = match derivation_id {
+                Some(hex) => <[u8; 32] as hex::FromHex>::from_hex(hex)
+                    .context("Derivation id must be 32 bytes of hex")?,
+                None => rand::random(),
+            };
             wallet_core
-                .create_shared_regular_account_with_identifier(
-                    group.clone(),
-                    crate::cli::identifier_or_random(identifier),
-                )
+                .create_shared_regular_account(group.clone(), derivation_id)
                 .await?
         };
 
@@ -329,7 +324,7 @@ impl WalletSubcommand for NewSubcommand {
                 pda,
                 seed,
                 program_id,
-                identifier,
+                derivation_id,
             } => {
                 Self::handle_private_gms(
                     &group,
@@ -337,7 +332,7 @@ impl WalletSubcommand for NewSubcommand {
                     pda,
                     seed,
                     program_id,
-                    identifier,
+                    derivation_id,
                     wallet_core,
                 )
                 .await
@@ -365,26 +360,27 @@ impl AccountSubcommand {
 
         let account = match resolved {
             AccountIdWithPrivacy::Public(id) => match &scope {
-                ReadScope::All => wallet_core.get_account_public(id).await?,
-                ReadScope::Balance => {
-                    wallet_core
-                        .get_account_view(ProgramShardSelector::native_balance(id))
-                        .await?
-                }
-                ReadScope::Shard(program) => {
-                    wallet_core
-                        .get_account_view(ProgramShardSelector::new(id, *program))
-                        .await?
-                }
+                ReadScope::All => wallet_core
+                    .get_account_public(id)
+                    .await?
+                    .unwrap_or_default(),
+                ReadScope::Balance => wallet_core
+                    .get_account_view(Actor::native_balance(id))
+                    .await?
+                    .unwrap_or_default(),
+                ReadScope::ActorState(program) => wallet_core
+                    .get_account_view(Actor::new(id, *program))
+                    .await?
+                    .unwrap_or_default(),
             },
             AccountIdWithPrivacy::Private(id) => {
-                let Some(found) = wallet_core.storage().key_chain().private_account(id) else {
+                let Some(account) = wallet_core.private_account_state(id) else {
                     anyhow::bail!("Private account with id {id} not found in storage");
                 };
                 match &scope {
-                    ReadScope::All => found.account.clone(),
-                    ReadScope::Balance => found.account.project([NATIVE_TOKEN_PROGRAM_ID]),
-                    ReadScope::Shard(program) => found.account.project([*program]),
+                    ReadScope::All => account.clone(),
+                    ReadScope::Balance => account.project([NATIVE_TOKEN_PROGRAM_ID]),
+                    ReadScope::ActorState(program) => account.project([*program]),
                 }
             }
         };
@@ -438,7 +434,7 @@ impl AccountSubcommand {
 
         let balance_read = match &scope {
             ReadScope::All | ReadScope::Balance => true,
-            ReadScope::Shard(program) => *program == NATIVE_TOKEN_PROGRAM_ID,
+            ReadScope::ActorState(program) => *program == NATIVE_TOKEN_PROGRAM_ID,
         };
         print_account_details(&account, "", balance_read);
 
@@ -506,10 +502,10 @@ impl AccountSubcommand {
                 )
             );
             match wallet_core
-                .get_account_view(ProgramShardSelector::native_balance(id))
+                .get_account_view(Actor::native_balance(id))
                 .await
             {
-                Ok(account) => print_account_details(&account, "  ", true),
+                Ok(account) => print_account_details(&account.unwrap_or_default(), "  ", true),
                 Err(e) => println!("  Error fetching account: {e}"),
             }
         }
@@ -524,13 +520,9 @@ impl AccountSubcommand {
                     chain_index.as_ref()
                 )
             );
-            match wallet_core.storage().key_chain().private_account(id) {
-                Some(found) => {
-                    print_account_details(
-                        &found.account.project([NATIVE_TOKEN_PROGRAM_ID]),
-                        "  ",
-                        true,
-                    );
+            match wallet_core.private_account_state(id) {
+                Some(account) => {
+                    print_account_details(&account.project([NATIVE_TOKEN_PROGRAM_ID]), "  ", true);
                 }
                 None => println!("  Not found in local storage"),
             }
@@ -637,9 +629,6 @@ pub enum ImportSubcommand {
         /// Chain index.
         #[arg(long)]
         chain_index: Option<ChainIndex>,
-        /// Identifier. Defaults to zero if not specified.
-        #[arg(long)]
-        identifier: Option<lee_core::Identifier>,
     },
 }
 
@@ -668,22 +657,19 @@ impl WalletSubcommand for ImportSubcommand {
                 key_chain_json,
                 account_state,
                 chain_index,
-                identifier,
             } => {
                 let key_chain: KeyChain = serde_json::from_str(&key_chain_json)
                     .map_err(|err| anyhow::anyhow!("Invalid key chain JSON: {err}"))?;
                 let account = lee::Account::from(account_state);
-                let identifier = identifier.unwrap_or(lee_core::Identifier::ZERO);
                 let account_id = lee::AccountId::from((
                     &key_chain.nullifier_public_key,
                     &key_chain.viewing_public_key,
-                    identifier,
                 ));
 
                 wallet_core
                     .storage_mut()
                     .key_chain_mut()
-                    .add_imported_private_account(key_chain, chain_index, identifier, account);
+                    .add_imported_private_account(key_chain, chain_index, account);
 
                 wallet_core.store_persistent_data()?;
 
@@ -708,7 +694,7 @@ fn print_account_details(account: &Account, indent: &str, balance_read: bool) {
     let token_prog_id = programs::token_account_id();
     for (program, data) in account
         .data
-        .shards
+        .actor_states
         .iter()
         .filter(|(program, data)| **program != NATIVE_TOKEN_PROGRAM_ID && !data.is_empty())
     {

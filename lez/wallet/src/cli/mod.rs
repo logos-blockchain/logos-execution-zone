@@ -5,13 +5,12 @@ use bip39::Mnemonic;
 use clap::{Parser, Subcommand};
 use common::HashType;
 use derive_more::Display;
-use futures::TryFutureExt as _;
-use lee_core::BlockId;
-use sequencer_service_rpc::RpcClient as _;
+use lee::PublicKey;
+use lee_core::{BlockId, NullifierPublicKey, PrivateAccountKind, encryption::ViewingPublicKey};
 
 pub use crate::helperfunctions::{read_mnemonic, read_pin};
 use crate::{
-    WalletCore,
+    AccountIdentity, WalletCore,
     account::{AccountIdWithPrivacy, Label},
     cli::{
         account::AccountSubcommand,
@@ -20,6 +19,7 @@ use crate::{
         group::GroupSubcommand,
         keycard::KeycardSubcommand,
         network::NetworkAlias,
+        pending::PendingSubcommand,
         programs::{
             amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand, bridge::BridgeSubcommand,
             native_token_transfer::AuthTransferSubcommand, program_loader::ProgramLoaderSubcommand,
@@ -37,6 +37,7 @@ pub mod config;
 pub mod group;
 pub mod keycard;
 pub mod network;
+pub mod pending;
 pub mod programs;
 pub mod statistics;
 
@@ -76,6 +77,9 @@ pub enum Command {
     /// Group key management (create, invite, join, derive keys).
     #[command(subcommand)]
     Group(GroupSubcommand),
+    /// Pending messages cast to this wallet's accounts (list, receive).
+    #[command(subcommand)]
+    Pending(PendingSubcommand),
     /// Check the wallet can connect to the node and builtin local programs
     /// match the remote versions.
     CheckHealth,
@@ -185,6 +189,38 @@ impl CliAccountMention {
             Self::Id(_) | Self::Label(_) => crate::AccountIdentity::PublicNoSign(account_id),
         }
     }
+
+    // An account that signs where public, with its keycard when named by a key path.
+    pub(crate) fn signer(self, storage: &Storage) -> Result<AccountIdentity> {
+        match self {
+            Self::KeyPath(key_path) => Ok(AccountIdentity::PublicKeycard {
+                account_id: lee::AccountId::from(&keycard_public_key(&key_path)?),
+                key_path,
+            }),
+            Self::Id(_) | Self::Label(_) => self.stored(storage, AccountIdentity::Public),
+        }
+    }
+
+    // An account that does not sign; a keycard's public key admits its account on first use.
+    pub(crate) fn unsigned(self, storage: &Storage) -> Result<AccountIdentity> {
+        match self {
+            Self::KeyPath(key_path) => Ok(AccountIdentity::PublicForeign(keycard_public_key(
+                &key_path,
+            )?)),
+            Self::Id(_) | Self::Label(_) => self.stored(storage, AccountIdentity::PublicNoSign),
+        }
+    }
+
+    fn stored(
+        &self,
+        storage: &Storage,
+        public: fn(lee::AccountId) -> AccountIdentity,
+    ) -> Result<AccountIdentity> {
+        Ok(match self.resolve(storage)? {
+            AccountIdWithPrivacy::Public(account_id) => public(account_id),
+            AccountIdWithPrivacy::Private(account_id) => AccountIdentity::PrivateOwned(account_id),
+        })
+    }
 }
 
 impl FromStr for CliAccountMention {
@@ -270,6 +306,9 @@ pub async fn execute_subcommand(
                 .await?
         }
         Command::Group(group_subcommand) => group_subcommand.handle_subcommand(wallet_core).await?,
+        Command::Pending(pending_subcommand) => {
+            pending_subcommand.handle_subcommand(wallet_core).await?
+        }
         Command::Keycard(keycard_subcommand) => {
             keycard_subcommand.handle_subcommand(wallet_core).await?
         }
@@ -294,7 +333,7 @@ pub async fn execute_subcommand(
             let mnemonic = read_mnemonic_from_stdin()?;
             let password = read_password_from_stdin()?;
             wallet_core.restore_storage(&mnemonic, &password)?;
-            execute_keys_restoration(wallet_core, depth).await?;
+            wallet_core.restore_keys(depth).await?;
 
             SubcommandReturnValue::Empty
         }
@@ -320,11 +359,6 @@ pub async fn execute_continuous_run(wallet_core: &mut WalletCore) -> Result<()> 
     }
 }
 
-#[must_use]
-pub fn identifier_or_random(identifier: Option<lee_core::Identifier>) -> lee_core::Identifier {
-    identifier.unwrap_or_else(|| lee_core::Identifier::new(rand::random()))
-}
-
 pub fn read_password_from_stdin() -> Result<String> {
     let mut password = String::new();
 
@@ -341,8 +375,8 @@ pub fn read_password_from_stdin() -> Result<String> {
 /// - Line 1: npk as hex (64 chars, 32 bytes).
 /// - Line 2: vpk as hex (2368 chars, 1184 bytes).
 ///
-/// Returns `(npk_bytes, vpk_bytes)`.
-pub fn read_keys_file(path: &str) -> Result<(Vec<u8>, Vec<u8>)> {
+/// Returns `(npk, vpk)`.
+pub fn read_keys_file(path: &str) -> Result<(NullifierPublicKey, ViewingPublicKey)> {
     let content = std::fs::read_to_string(path).with_context(|| {
         format!("wallet::cli::read_keys_file: failed to read keys file: {path}")
     })?;
@@ -353,31 +387,65 @@ pub fn read_keys_file(path: &str) -> Result<(Vec<u8>, Vec<u8>)> {
     let vpk_hex = lines.next().ok_or_else(|| {
         anyhow::anyhow!("wallet::cli::read_keys_file: keys file is missing vpk (line 2)")
     })?;
-    let npk = hex::decode(npk_hex.trim())
-        .context("wallet::cli::read_keys_file: npk in keys file must be valid hex")?;
-    let vpk = hex::decode(vpk_hex.trim())
-        .context("wallet::cli::read_keys_file: vpk in keys file must be valid hex")?;
-    Ok((npk, vpk))
+    decode_npk_vpk(npk_hex.trim(), vpk_hex.trim())
+}
+
+// The destination a command names: an account, a private account's public keys or a keys file
+// holding them, or the public key of a public account not used yet.
+pub(crate) fn destination(
+    storage: &Storage,
+    account: Option<CliAccountMention>,
+    npk: Option<String>,
+    vpk: Option<String>,
+    keys_file: Option<String>,
+    public_key: Option<PublicKey>,
+) -> Result<AccountIdentity> {
+    if let Some(public_key) = public_key {
+        return Ok(AccountIdentity::PublicForeign(public_key));
+    }
+    let (npk, vpk) = match (account, npk, vpk, keys_file) {
+        (Some(account), None, None, None) => return account.unsigned(storage),
+        (None, Some(npk), Some(vpk), None) => decode_npk_vpk(&npk, &vpk)?,
+        (None, None, None, Some(path)) => read_keys_file(&path)?,
+        (None, None, None, None) => {
+            anyhow::bail!("Provide either account account_id of receiver or their public keys")
+        }
+        (_, Some(_), None, _) | (_, None, Some(_), _) => {
+            anyhow::bail!("List of public keys is uncomplete")
+        }
+        (Some(_), _, _, _) | (None, Some(_), Some(_), Some(_)) => anyhow::bail!(
+            "Provide only one variant: either account account_id of receiver or their public keys"
+        ),
+    };
+    Ok(AccountIdentity::PrivateForeign {
+        npk,
+        vpk,
+        kind: PrivateAccountKind::Regular,
+    })
+}
+
+fn keycard_public_key(key_path: &str) -> Result<PublicKey> {
+    Ok(
+        keycard_wallet::KeycardWallet::get_public_key_for_path_with_connect(
+            &read_pin()?,
+            key_path,
+        )?,
+    )
 }
 
 pub(crate) fn decode_npk_vpk(
     npk_hex: &str,
     vpk_hex: &str,
-) -> Result<(
-    lee_core::NullifierPublicKey,
-    lee_core::encryption::ViewingPublicKey,
-)> {
+) -> Result<(NullifierPublicKey, ViewingPublicKey)> {
     let npk_bytes: [u8; 32] = hex::decode(npk_hex)
         .context("npk must be valid hex")?
         .try_into()
         .map_err(|v: Vec<u8>| anyhow::anyhow!("npk must be exactly 32 bytes, got {}", v.len()))?;
 
-    let vpk = lee_core::encryption::ViewingPublicKey::from_bytes(
-        hex::decode(vpk_hex).context("vpk must be valid hex")?,
-    )
-    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let vpk = ViewingPublicKey::from_bytes(hex::decode(vpk_hex).context("vpk must be valid hex")?)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    Ok((lee_core::NullifierPublicKey(npk_bytes), vpk))
+    Ok((NullifierPublicKey(npk_bytes), vpk))
 }
 
 pub fn read_mnemonic_from_stdin() -> Result<Mnemonic> {
@@ -390,38 +458,6 @@ pub fn read_mnemonic_from_stdin() -> Result<Mnemonic> {
     Mnemonic::from_str(phrase.trim()).context("Invalid mnemonic phrase")
 }
 
-pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) -> Result<()> {
-    wallet_core
-        .storage
-        .key_chain_mut()
-        .generate_trees_for_depth(depth);
-
-    println!(
-        "Public tree generated\n\
-         Private tree generated"
-    );
-
-    wallet_core.sync_to_latest_block().await?;
-
-    let leader_client = wallet_core.helm_owned();
-
-    wallet_core
-        .storage
-        .key_chain_mut()
-        .cleanup_trees_remove_uninit_layered(depth, |account_id| {
-            leader_client.get_account(account_id).map_err(Into::into)
-        })
-        .await?;
-
-    println!(
-        "Public tree cleaned up\n\
-         Private tree cleaned up"
-    );
-
-    wallet_core.store_persistent_data()?;
-
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {

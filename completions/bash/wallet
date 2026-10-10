@@ -114,10 +114,10 @@ _wallet() {
                         --to-label)
                             _wallet_complete_account_label "$cur"
                             ;;
-                        --to-npk | --to-vpk | --to-identifier | --amount)
+                        --to-npk | --to-vpk | --amount)
                             ;; # no specific completion
                         *)
-                            COMPREPLY=($(compgen -W "--from --from-label --to --to-label --to-npk --to-vpk --to-identifier --amount" -- "$cur"))
+                            COMPREPLY=($(compgen -W "--from --from-label --to --to-label --to-npk --to-vpk --amount" -- "$cur"))
                             ;;
                     esac
                     ;;
@@ -268,10 +268,10 @@ _wallet() {
                         --to-label)
                             _wallet_complete_account_label "$cur"
                             ;;
-                        --to-npk | --to-vpk | --to-identifier | --amount)
+                        --to-npk | --to-vpk | --amount)
                             ;; # no specific completion
                         *)
-                            COMPREPLY=($(compgen -W "--from --from-label --to --to-label --to-npk --to-vpk --to-identifier --amount" -- "$cur"))
+                            COMPREPLY=($(compgen -W "--from --from-label --to --to-label --to-npk --to-vpk --amount" -- "$cur"))
                             ;;
                     esac
                     ;;
@@ -310,10 +310,10 @@ _wallet() {
                         --holder-label)
                             _wallet_complete_account_label "$cur"
                             ;;
-                        --holder-npk | --holder-vpk | --holder-identifier | --amount)
+                        --holder-npk | --holder-vpk | --amount)
                             ;; # no specific completion
                         *)
-                            COMPREPLY=($(compgen -W "--definition --definition-label --holder --holder-label --holder-npk --holder-vpk --holder-identifier --amount" -- "$cur"))
+                            COMPREPLY=($(compgen -W "--definition --definition-label --holder --holder-label --holder-npk --holder-vpk --amount" -- "$cur"))
                             ;;
                     esac
                     ;;

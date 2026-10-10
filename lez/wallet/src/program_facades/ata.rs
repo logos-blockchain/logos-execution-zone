@@ -1,265 +1,142 @@
-use std::collections::HashMap;
-
-use associated_token_account_core::{
-    AtaContents, compute_ata_seed, get_associated_token_account_id,
-};
+use associated_token_account_core::{Message, ata_of};
 use common::HashType;
-use lee::{
-    AccountId, privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
-};
+use lee::{AccountId, privacy_preserving_transaction::circuit::ProgramCatalog, program::Program};
 use lee_core::SharedSecretKey;
 use token_core::{TokenDefinition, TokenDescriptor, TokenKind};
 
 use crate::{
-    AccountIdentity, ExecutionFailureKind, WalletCore,
-    program_facades::{shard, token_holding},
+    AccountIdentity, AccountMention, CastDelivery, ExecutionFailureKind, WalletCore,
+    program_facades::{actor_state, token_holding},
 };
 
 pub struct Ata<'wallet>(pub &'wallet WalletCore);
 
+// Each ATA operation runs the owner's actor under the ATA program as the root, followed by the
+// token actors it reaches.
 impl Ata<'_> {
-    pub async fn send_create(
+    pub async fn create(
         &self,
         owner: AccountIdentity,
         definition_id: AccountId,
-    ) -> Result<HashType, ExecutionFailureKind> {
-        let owner_id = owner
-            .public_account_id()
-            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-
-        let ata_program_id = programs::ata_account_id();
+    ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let token_program_id = programs::token_account_id();
-        let ata_id = get_associated_token_account_id(
-            &ata_program_id,
-            &compute_ata_seed(owner_id, definition_id, token_program_id),
-        );
-        let (kind, contents) =
-            create_proposal(self.0, definition_id, ata_id, token_program_id).await?;
-        let instruction = associated_token_account_core::Instruction::Create {
-            token_program_id,
-            kind,
-            contents,
-        };
-        let instruction_data =
-            Program::serialize_instruction(instruction).expect("Instruction should serialize");
-
-        self.0
-            .send_pub_tx(
-                vec![
-                    owner.balance(),
-                    AccountIdentity::PublicNoSign(definition_id)
-                        .select_program_shard(token_program_id),
-                    AccountIdentity::PublicNoSign(ata_id).select_program_shard(token_program_id),
-                ],
-                instruction_data,
-                ata_program_id,
-            )
-            .await
+        let kind = definition_kind(self.0, definition_id, token_program_id).await?;
+        let (owner_mention, ata) = owner_and_ata(owner, definition_id);
+        self.send(
+            vec![
+                owner_mention,
+                ata,
+                AccountIdentity::PublicNoSign(definition_id)
+                    .select_program_actor_state(token_program_id),
+            ],
+            &Message::Create {
+                token_program_id,
+                definition_id,
+                kind,
+            },
+        )
+        .await
     }
 
-    pub async fn send_transfer(
+    pub async fn transfer(
         &self,
         owner: AccountIdentity,
         definition_id: AccountId,
         recipient_id: AccountId,
         amount: u128,
-    ) -> Result<HashType, ExecutionFailureKind> {
-        let owner_id = owner
-            .public_account_id()
-            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-
-        let ata_program_id = programs::ata_account_id();
+    ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let token_program_id = programs::token_account_id();
-        let sender_ata_id = get_associated_token_account_id(
-            &ata_program_id,
-            &compute_ata_seed(owner_id, definition_id, token_program_id),
-        );
-        let instruction = associated_token_account_core::Instruction::Transfer {
-            token_program_id,
-            descriptor: TokenDescriptor {
-                definition_id,
-                kind: holding_kind(self.0, sender_ata_id, token_program_id).await?,
+        let (owner_mention, ata) = owner_and_ata(owner, definition_id);
+        let kind = holding_kind(self.0, ata.identity.account_id(), token_program_id).await?;
+        self.send(
+            vec![
+                owner_mention,
+                ata,
+                AccountIdentity::PublicNoSign(recipient_id)
+                    .select_program_actor_state(token_program_id),
+            ],
+            &Message::Transfer {
+                token_program_id,
+                to: recipient_id,
+                descriptor: TokenDescriptor {
+                    definition_id,
+                    kind,
+                },
+                amount,
             },
-            amount,
-        };
-        let instruction_data =
-            Program::serialize_instruction(instruction).expect("Instruction should serialize");
-
-        self.0
-            .send_pub_tx(
-                vec![
-                    owner.balance(),
-                    AccountIdentity::PublicNoSign(sender_ata_id)
-                        .select_program_shard(token_program_id),
-                    AccountIdentity::PublicNoSign(recipient_id)
-                        .select_program_shard(token_program_id),
-                ],
-                instruction_data,
-                ata_program_id,
-            )
-            .await
+        )
+        .await
     }
 
-    pub async fn send_burn(
+    pub async fn burn(
         &self,
         owner: AccountIdentity,
         definition_id: AccountId,
         amount: u128,
-    ) -> Result<HashType, ExecutionFailureKind> {
-        let owner_id = owner
-            .public_account_id()
-            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-
-        let ata_program_id = programs::ata_account_id();
+    ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let token_program_id = programs::token_account_id();
-        let holder_ata_id = get_associated_token_account_id(
-            &ata_program_id,
-            &compute_ata_seed(owner_id, definition_id, token_program_id),
-        );
-        let instruction = associated_token_account_core::Instruction::Burn {
-            token_program_id,
-            kind: holding_kind(self.0, holder_ata_id, token_program_id).await?,
-            amount,
-        };
-        let instruction_data =
-            Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let (owner_mention, ata) = owner_and_ata(owner, definition_id);
+        let kind = holding_kind(self.0, ata.identity.account_id(), token_program_id).await?;
+        self.send(
+            vec![
+                owner_mention,
+                ata,
+                AccountIdentity::PublicNoSign(definition_id)
+                    .select_program_actor_state(token_program_id),
+            ],
+            &Message::Burn {
+                token_program_id,
+                descriptor: TokenDescriptor {
+                    definition_id,
+                    kind,
+                },
+                amount,
+            },
+        )
+        .await
+    }
 
+    async fn send(
+        &self,
+        accounts: Vec<AccountMention>,
+        message: &Message,
+    ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         self.0
-            .send_pub_tx(
-                vec![
-                    owner.balance(),
-                    AccountIdentity::PublicNoSign(holder_ata_id)
-                        .select_program_shard(token_program_id),
-                    AccountIdentity::PublicNoSign(definition_id)
-                        .select_program_shard(token_program_id),
-                ],
-                instruction_data,
-                ata_program_id,
+            .send_tx(
+                accounts,
+                0,
+                Program::serialize_message(message).expect("Message should serialize"),
+                &ProgramCatalog::from([
+                    (programs::ata_account_id(), programs::ata()),
+                    (programs::token_account_id(), programs::token()),
+                ]),
+                None,
+                CastDelivery::default(),
             )
             .await
     }
+}
 
-    pub async fn send_create_private_owner(
-        &self,
-        owner_id: AccountId,
-        definition_id: AccountId,
-    ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let ata_program_id = programs::ata_account_id();
-        let token_program_id = programs::token_account_id();
-        let ata_id = get_associated_token_account_id(
-            &ata_program_id,
-            &compute_ata_seed(owner_id, definition_id, token_program_id),
-        );
-
-        let (kind, contents) =
-            create_proposal(self.0, definition_id, ata_id, token_program_id).await?;
-        let instruction = associated_token_account_core::Instruction::Create {
-            token_program_id,
-            kind,
-            contents,
-        };
-        let instruction_data =
-            Program::serialize_instruction(instruction).expect("Instruction should serialize");
-
-        let accounts = vec![
-            self.0
-                .resolve_private_account(owner_id)
-                .ok_or(ExecutionFailureKind::KeyNotFoundError)?
-                .balance(),
-            AccountIdentity::Public(definition_id).select_program_shard(token_program_id),
-            AccountIdentity::Public(ata_id).select_program_shard(token_program_id),
-        ];
-
-        self.0
-            .send_privacy_preserving_tx(accounts, instruction_data, &ata_with_token_dependency())
-            .await
-            .map(|(hash, mut secrets)| {
-                let secret = secrets.pop().expect("expected owner's secret");
-                (hash, secret)
-            })
-    }
-
-    pub async fn send_transfer_private_owner(
-        &self,
-        owner_id: AccountId,
-        definition_id: AccountId,
-        recipient_id: AccountId,
-        amount: u128,
-    ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let ata_program_id = programs::ata_account_id();
-        let token_program_id = programs::token_account_id();
-        let sender_ata_id = get_associated_token_account_id(
-            &ata_program_id,
-            &compute_ata_seed(owner_id, definition_id, token_program_id),
-        );
-
-        let instruction = associated_token_account_core::Instruction::Transfer {
-            token_program_id,
-            descriptor: TokenDescriptor {
-                definition_id,
-                kind: holding_kind(self.0, sender_ata_id, token_program_id).await?,
-            },
-            amount,
-        };
-        let instruction_data =
-            Program::serialize_instruction(instruction).expect("Instruction should serialize");
-
-        let accounts = vec![
-            self.0
-                .resolve_private_account(owner_id)
-                .ok_or(ExecutionFailureKind::KeyNotFoundError)?
-                .balance(),
-            AccountIdentity::Public(sender_ata_id).select_program_shard(token_program_id),
-            AccountIdentity::Public(recipient_id).select_program_shard(token_program_id),
-        ];
-
-        self.0
-            .send_privacy_preserving_tx(accounts, instruction_data, &ata_with_token_dependency())
-            .await
-            .map(|(hash, mut secrets)| {
-                let secret = secrets.pop().expect("expected owner's secret");
-                (hash, secret)
-            })
-    }
-
-    pub async fn send_burn_private_owner(
-        &self,
-        owner_id: AccountId,
-        definition_id: AccountId,
-        amount: u128,
-    ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let ata_program_id = programs::ata_account_id();
-        let token_program_id = programs::token_account_id();
-        let holder_ata_id = get_associated_token_account_id(
-            &ata_program_id,
-            &compute_ata_seed(owner_id, definition_id, token_program_id),
-        );
-
-        let instruction = associated_token_account_core::Instruction::Burn {
-            token_program_id,
-            kind: holding_kind(self.0, holder_ata_id, token_program_id).await?,
-            amount,
-        };
-        let instruction_data =
-            Program::serialize_instruction(instruction).expect("Instruction should serialize");
-
-        let accounts = vec![
-            self.0
-                .resolve_private_account(owner_id)
-                .ok_or(ExecutionFailureKind::KeyNotFoundError)?
-                .balance(),
-            AccountIdentity::Public(holder_ata_id).select_program_shard(token_program_id),
-            AccountIdentity::Public(definition_id).select_program_shard(token_program_id),
-        ];
-
-        self.0
-            .send_privacy_preserving_tx(accounts, instruction_data, &ata_with_token_dependency())
-            .await
-            .map(|(hash, mut secrets)| {
-                let secret = secrets.pop().expect("expected owner's secret");
-                (hash, secret)
-            })
-    }
+// The owner's actor under the ATA program and the owner's ATA holding under the token program.
+fn owner_and_ata(
+    owner: AccountIdentity,
+    definition_id: AccountId,
+) -> (AccountMention, AccountMention) {
+    let token_program_id = programs::token_account_id();
+    let (_, seed) = ata_of(
+        programs::ata_account_id(),
+        owner.account_id(),
+        definition_id,
+        token_program_id,
+    );
+    (
+        owner.select_program_actor_state(programs::ata_account_id()),
+        AccountIdentity::PublicPda {
+            program: programs::ata_account_id(),
+            seed,
+        }
+        .select_program_actor_state(token_program_id),
+    )
 }
 
 async fn holding_kind(
@@ -276,44 +153,18 @@ async fn holding_kind(
     .kind())
 }
 
-async fn create_proposal(
+async fn definition_kind(
     wallet: &WalletCore,
     definition_id: AccountId,
-    ata_id: AccountId,
     token_program_id: AccountId,
-) -> Result<(TokenKind, AtaContents), ExecutionFailureKind> {
-    let definition_shard = shard(
+) -> Result<TokenKind, ExecutionFailureKind> {
+    let definition_actor_state = actor_state(
         wallet,
         &AccountIdentity::PublicNoSign(definition_id),
         token_program_id,
     )
     .await?;
-    let definition = TokenDefinition::try_from(&definition_shard)
+    let definition = TokenDefinition::try_from(&definition_actor_state)
         .map_err(|_err| ExecutionFailureKind::AccountDataError(definition_id))?;
-    let kind = TokenKind::from_definition(&definition);
-
-    let ata_shard = shard(
-        wallet,
-        &AccountIdentity::PublicNoSign(ata_id),
-        token_program_id,
-    )
-    .await?;
-    let contents = associated_token_account_core::classify(
-        &ata_shard,
-        &TokenDescriptor {
-            definition_id,
-            kind,
-        },
-    );
-
-    Ok((kind, contents))
-}
-
-fn ata_with_token_dependency() -> ProgramWithDependencies {
-    let token = programs::token();
-    let mut deps = HashMap::new();
-    deps.insert(programs::token_account_id(), token);
-    let ata = programs::ata();
-    let ata_id = programs::ata_account_id();
-    ProgramWithDependencies::new(ata, ata_id, deps)
+    Ok(TokenKind::from_definition(&definition))
 }
