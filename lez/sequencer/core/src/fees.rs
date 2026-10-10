@@ -22,7 +22,7 @@ pub enum Error {
         fee_reserve: u128,
     },
 
-    #[error("payer {payer:?} holds a native balance shard that is not canonically encoded")]
+    #[error("payer {payer:?} holds a native balance actor state that is not canonically encoded")]
     PayerBalanceMalformed { payer: AccountId },
 
     #[error("transaction fee classification failed")]

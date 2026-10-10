@@ -77,7 +77,7 @@ pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, Class
     }
 
     // a non-exempt user public transaction must declare a fee
-    let Some(fee) = public_tx.message().fee else {
+    let Some(fee) = public_tx.message().execution.fee else {
         return Err(ClassifyError::MissingFeeDeclaration);
     };
 

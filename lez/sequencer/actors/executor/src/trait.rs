@@ -1,8 +1,9 @@
 use common::{block::Block, transaction::LeeTransaction};
 use kameo::{Actor, message::Message, reply::DelegatedReply};
 use lee_core::{
-    BlockId, CommitmentSetDigest, MembershipProof,
+    BlockId, EncryptedNote, MembershipProof,
     account::{Balance, Nonce},
+    program::Publication,
 };
 
 use crate::{
@@ -11,9 +12,9 @@ use crate::{
     protocol::{
         ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
         GetAccountView, GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
-        GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetProofsAndRoot,
-        GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
-        Transaction,
+        GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetMessagePath,
+        GetProofsAndRoot, GetPublications, GetRecoveryBinding, GetTransaction, ProduceBlock,
+        ProofsAndRoot, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, Transaction,
     },
 };
 
@@ -27,9 +28,12 @@ pub trait ExecutorActorTrait:
     + Message<GetAccountBalance, Reply = Balance>
     + Message<GetTransaction, Reply = Result<Option<(LeeTransaction, BlockId)>>>
     + Message<GetAccountNonces, Reply = Vec<Nonce>>
-    + Message<GetProofsAndRoot, Reply = (Vec<Option<MembershipProof>>, CommitmentSetDigest)>
+    + Message<GetProofsAndRoot, Reply = ProofsAndRoot>
     + Message<GetAccount, Reply = GetAccountReply>
     + Message<GetAccountView, Reply = GetAccountReply>
+    + Message<GetPublications, Reply = Vec<(u64, Publication)>>
+    + Message<GetMessagePath, Reply = Option<MembershipProof>>
+    + Message<GetRecoveryBinding, Reply = Option<EncryptedNote>>
     + Message<GetChannelId, Reply = Result<ChannelId>>
     + Message<GetCrossZoneDeadLetters, Reply = Result<GetCrossZoneDeadLettersReply>>
     + Message<RequeueCrossZoneDeadLetter, Reply = Result<RequeueCrossZoneDeadLetterReply>>

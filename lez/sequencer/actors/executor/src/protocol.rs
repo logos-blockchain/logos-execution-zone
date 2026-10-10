@@ -3,8 +3,8 @@ use std::ops::RangeInclusive;
 use common::{HashType, transaction::LeeTransaction};
 use kameo::Reply;
 use lee_core::{
-    BlockId, Commitment,
-    account::{Account, AccountId, ProgramShardSelector},
+    BlockId, Commitment, CommitmentSetDigest, MembershipProof,
+    account::{Account, AccountId, Actor},
 };
 pub use sequencer_storage_actor::protocol::{CrossZoneMessageKey, DeadLetterRequeue};
 
@@ -110,19 +110,40 @@ pub struct GetAccountNonces {
 
 pub struct GetProofsAndRoot {
     pub commitments: Vec<Commitment>,
+    pub message_position: Option<u64>,
 }
+
+/// The membership paths of the requested commitments and message, and the root they reach.
+pub type ProofsAndRoot = (
+    Vec<Option<MembershipProof>>,
+    Option<MembershipProof>,
+    CommitmentSetDigest,
+);
 
 pub struct GetAccount {
     pub account_id: AccountId,
 }
 
 pub struct GetAccountView {
-    pub shard_selector: ProgramShardSelector,
+    pub actor_state_selector: Actor,
 }
 
 #[derive(Reply)]
 pub struct GetAccountReply {
-    pub account: Account,
+    pub account: Option<Account>,
+}
+
+pub struct GetPublications {
+    pub from_position: u64,
+    pub limit: u32,
+}
+
+pub struct GetMessagePath {
+    pub position: u64,
+}
+
+pub struct GetRecoveryBinding {
+    pub address: AccountId,
 }
 
 pub struct GetChannelId;

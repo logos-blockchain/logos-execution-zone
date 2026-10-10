@@ -7,11 +7,12 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, ensure};
+use borsh::{BorshDeserialize, BorshSerialize};
 use bytesize::ByteSize;
 use common::config::BasicAuth;
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use humantime_serde;
-use lee::{AccountId, PublicKey, Signature};
+use lee::{AccountId, PublicAccountEvidence, PublicKey, Signature};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
 pub use sequencer_stake_core::ChannelParams;
@@ -40,21 +41,46 @@ pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 =
 #[serde(rename_all = "snake_case")]
 pub enum GenesisAction {
     SupplyAccount {
-        account_id: AccountId,
+        recipient: DepositRecipient,
         balance: u64,
     },
+    /// Credits a private address with a pending native credit, published under the recovery
+    /// binding the initial state pins for it; its owner receives it.
+    SupplyPrivateAccount { address: AccountId, balance: u64 },
     /// Funds a holder's holding PDA at genesis with one replayable genesis
     /// credit; the balance-only PDA needs no claim.
-    SupplyBridgeLockHolding {
-        holder: AccountId,
-        amount: u64,
-    },
+    SupplyBridgeLockHolding { holder: AccountId, amount: u64 },
     /// Stakes `sequencer_key` at genesis.
     StakeSequencer {
         sequencer_key: sequencer_stake_core::SequencerKey,
         ownership_public_key: PublicKey,
         stake_signature: Signature,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DepositRecipient {
+    Existing(AccountId),
+    Identified(PublicAccountEvidence),
+}
+
+impl DepositRecipient {
+    #[must_use]
+    pub fn account_id(&self) -> AccountId {
+        match self {
+            Self::Existing(account_id) => *account_id,
+            Self::Identified(evidence) => evidence.account_id(),
+        }
+    }
+
+    #[must_use]
+    pub const fn evidence(&self) -> Option<&PublicAccountEvidence> {
+        match self {
+            Self::Existing(_) => None,
+            Self::Identified(evidence) => Some(evidence),
+        }
+    }
 }
 
 /// Sequencer p2p gossip configuration. Absent (`None`) disables gossip

@@ -1,7 +1,7 @@
 #![allow(dead_code, reason = "TODO")]
 
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{BTreeMap, HashSet, VecDeque},
     path::Path,
     sync::Arc,
     time::{Duration, Instant},
@@ -16,13 +16,15 @@ use chain_state::{
 use common::{
     HashType,
     block::{BedrockStatus, Block, BlockMeta, HashableBlockData},
-    transaction::{LeeTransaction, TxEvents, clock_invocation, fee_invocation},
+    transaction::{FeePayee, LeeTransaction, TxEvents, clock_invocation, fee_invocation},
 };
-use config::{GenesisAction, SequencerConfig};
+use config::{DepositRecipient, GenesisAction, SequencerConfig};
 use cross_zone_inbox_core::CrossZoneMessage;
 use futures::StreamExt as _;
 use kameo::actor::{ActorRef, Spawn as _};
-use lee::{AccountId, ProgramShardSelector, PublicTransaction, public_transaction::Message};
+use lee::{
+    AccountId, Actor, PublicAccountEvidence, PublicTransaction, public_transaction::Message,
+};
 use lee_core::GENESIS_BLOCK_ID;
 use log::{debug, error, info, warn};
 use logos_blockchain_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
@@ -172,7 +174,31 @@ impl From<TransactionOrigin> for sequencer_core_metrics::TransactionOrigin {
 
 #[derive(Clone, Debug, BorshDeserialize)]
 struct DepositMetadata {
-    recipient_id: lee::AccountId,
+    recipient: DepositRecipient,
+}
+
+/// Whom a bridge deposit credits.
+enum Credited<'recipient> {
+    /// A public account, declared with any admission evidence it carries.
+    Public(&'recipient DepositRecipient),
+    /// A private address, left undeclared so its credit is published under its recovery binding.
+    Private(AccountId),
+}
+
+impl Credited<'_> {
+    fn account_id(&self) -> AccountId {
+        match self {
+            Self::Public(recipient) => recipient.account_id(),
+            Self::Private(address) => *address,
+        }
+    }
+
+    const fn evidence(&self) -> Option<&PublicAccountEvidence> {
+        match self {
+            Self::Public(recipient) => recipient.evidence(),
+            Self::Private(_) => None,
+        }
+    }
 }
 
 pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
@@ -1637,7 +1663,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // itself. Draining here also subsumes the old
         // startup replay.
         //
-        // Skip deposits whose receipt has a nonempty bridge shard.
+        // Skip deposits whose receipt has a nonempty bridge actor state.
         // Reverting a block also reverts its receipts, allowing those deposits to be retried.
         let pending_deposits: VecDeque<LeeTransaction> = self
             .storage_ref
@@ -1670,14 +1696,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             self.bedrock_signing_key.public_key().to_bytes(),
         )
         .expect("our own Bedrock public key is a valid Ed25519 public key");
-        let producer_account = committee_discovery::read_config(&working_state)
-            .and_then(|config| {
-                config
-                    .entries
-                    .get(&own_sequencer_key)
-                    .map(|entry| entry.account_id)
-            })
-            .context("no stake entry for our own sequencer key; aborting block production")?;
+        let payee = reward_payee(&working_state, own_sequencer_key)?;
 
         let opening = chain_state::apply::opening_fee_state(&working_state);
         let mut summary = fee_core::BlockFeeSummary::default();
@@ -1687,7 +1706,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let placeholder_fee_lee_tx = LeeTransaction::Public(fee_invocation(
             fee_core::BlockFeeSummary::default(),
             0,
-            producer_account,
+            payee,
         ));
         let clock_tx = clock_invocation(new_block_height, new_block_timestamp);
         let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
@@ -1858,7 +1877,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let fee_tx = fee_invocation(
             summary,
             chain_state::apply::block_payout(&opening, &summary),
-            producer_account,
+            payee,
         );
         working_state
             .transition_from_public_transaction(&fee_tx, new_block_height, new_block_timestamp)
@@ -2176,7 +2195,7 @@ fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> boo
     let receipt_id = bridge_core::deposit_receipt_account_id(bridge_program_id, deposit_op_id.0);
     state
         .get_account_by_id_ref(receipt_id)
-        .is_some_and(|receipt| !receipt.data.shard(bridge_program_id).is_empty())
+        .is_some_and(|receipt| !receipt.data.actor_state(bridge_program_id).is_empty())
 }
 
 /// Whether a cross-zone delivery is already on the chain we are building on.
@@ -2197,10 +2216,34 @@ fn dispatch_already_delivered(state: &lee::V03State, message: &CrossZoneMessage)
         message.src_block_id,
     );
     state.get_account_by_id_ref(shard_id).is_some_and(|shard| {
-        cross_zone_inbox_core::SeenShard::from_bytes(shard.data.shard(inbox_program_id).as_ref())
-            .is_ok_and(|seen| {
-                seen.binds(&message.src_block_hash) && seen.contains(message.src_tx_index)
-            })
+        cross_zone_inbox_core::SeenShard::from_bytes(
+            shard.data.actor_state(inbox_program_id).as_ref(),
+        )
+        .is_ok_and(|seen| {
+            seen.binds(&message.src_block_hash) && seen.contains(message.src_tx_index)
+        })
+    })
+}
+
+/// How the fee transaction pays this sequencer's stake ownership account, refusing production while
+/// neither public state nor a recovery binding lets it be paid.
+fn reward_payee(
+    state: &lee::V03State,
+    own_sequencer_key: sequencer_stake_core::SequencerKey,
+) -> Result<FeePayee> {
+    let producer_account = committee_discovery::read_config(state)
+        .and_then(|config| {
+            config
+                .entries
+                .get(&own_sequencer_key)
+                .map(|entry| entry.account_id)
+        })
+        .context("no stake entry for our own sequencer key; aborting block production")?;
+    FeePayee::for_producer(state, producer_account).with_context(|| {
+        format!(
+            "our reward account {producer_account} is neither in public state nor bound to a \
+             recovery note, so its fees cannot be paid; bind it before producing"
+        )
     })
 }
 
@@ -2380,7 +2423,7 @@ fn build_genesis_state(
     // Config txs seed the config accounts by transaction, so every node
     // reconstructs them by replaying the genesis block. Every cross-zone config
     // is initialized: each builtin has a user-callable InitConfig, so an empty
-    // config shard would be left for whoever calls it first. The inbox's is
+    // config actor state would be left for whoever calls it first. The inbox's is
     // receiving-zones-only.
     // The self-stake is appended here, so every index below is an index into
     // this list, not into `config.genesis`.
@@ -2412,17 +2455,27 @@ fn build_genesis_state(
         .filter_map(|(index, action)| {
             let index = u64::try_from(index).expect("genesis action count fits in u64");
             match action {
-                GenesisAction::SupplyAccount {
-                    account_id,
-                    balance,
-                } => Some(build_supply_account_genesis_transaction(
-                    account_id,
-                    *balance,
-                    genesis_deposit_op_id(index),
-                )),
+                GenesisAction::SupplyAccount { recipient, balance } => {
+                    Some(build_supply_account_genesis_transaction(
+                        recipient,
+                        *balance,
+                        genesis_deposit_op_id(index),
+                    ))
+                }
+                GenesisAction::SupplyPrivateAccount { address, balance } => Some(
+                    bridge_deposit_tx(
+                        genesis_deposit_op_id(index),
+                        &Credited::Private(*address),
+                        *balance,
+                    )
+                    .expect("Failed to serialize genesis deposit instruction"),
+                ),
                 GenesisAction::SupplyBridgeLockHolding { holder, amount } => {
                     Some(build_supply_account_genesis_transaction(
-                        &cross_zone::bridge_lock_holding_account_id(*holder),
+                        &DepositRecipient::Identified(PublicAccountEvidence::Pda {
+                            program: programs::bridge_lock_account_id(),
+                            seed: bridge_lock_core::holding_seed(&holder.into_value()),
+                        }),
                         *amount,
                         genesis_deposit_op_id(index),
                     ))
@@ -2463,7 +2516,7 @@ fn build_genesis_state(
     .chain(std::iter::once(fee_invocation(
         genesis_summary,
         genesis_payout,
-        producer,
+        FeePayee::Present(producer),
     )))
     .chain(std::iter::once(clock_invocation(GENESIS_BLOCK_ID, 0)))
     .collect();
@@ -2504,9 +2557,9 @@ fn founding_stakes(genesis: &[GenesisAction]) -> Vec<FoundingStake> {
                     signature: stake_signature.clone(),
                 })
             }
-            GenesisAction::SupplyAccount { .. } | GenesisAction::SupplyBridgeLockHolding { .. } => {
-                None
-            }
+            GenesisAction::SupplyAccount { .. }
+            | GenesisAction::SupplyPrivateAccount { .. }
+            | GenesisAction::SupplyBridgeLockHolding { .. } => None,
         })
         .collect()
 }
@@ -2596,30 +2649,39 @@ pub fn genesis_stake_message(
     let funding_nonce = u128::try_from(index).expect("founding sequencer count fits in u128");
 
     let sequencer_stake_program_id = programs::sequencer_stake_account_id();
-    Message::try_new(
-        sequencer_stake_program_id,
-        vec![
-            ProgramShardSelector::native_balance(genesis_stake_funding_account()),
-            ProgramShardSelector::new(ownership_id, sequencer_stake_program_id),
-            ProgramShardSelector::native_balance(system_accounts::stake_funds_account_id(
-                &ownership_id,
-            )),
-            ProgramShardSelector::new(
-                system_accounts::sequencer_stake_config_account_id(),
-                sequencer_stake_program_id,
-            ),
-        ],
-        vec![
-            lee_core::account::Nonce(funding_nonce),
-            lee_core::account::Nonce(0),
-        ],
-        sequencer_stake_core::Instruction::Stake {
-            sequencer_key,
-            amount,
-            has_record: false,
-        },
-    )
-    .expect("Failed to build genesis Stake message")
+    let ownership = Actor::new(ownership_id, sequencer_stake_program_id);
+    Message {
+        admission_evidence: vec![PublicAccountEvidence::Pda {
+            program: sequencer_stake_program_id,
+            seed: sequencer_stake_core::stake_funds_seed(&ownership_id),
+        }],
+        ..Message::try_new(
+            ownership,
+            vec![
+                ownership,
+                Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
+                Actor::native_balance(genesis_stake_funding_account()),
+                Actor::new(
+                    system_accounts::sequencer_stake_config_account_id(),
+                    sequencer_stake_program_id,
+                ),
+            ],
+            BTreeMap::from([
+                (
+                    genesis_stake_funding_account(),
+                    lee_core::account::Nonce(funding_nonce),
+                ),
+                (ownership_id, lee_core::account::Nonce(0)),
+            ]),
+            sequencer_stake_core::Message::Stake {
+                sequencer_key,
+                amount,
+                has_record: false,
+                funding: genesis_stake_funding_account(),
+            },
+        )
+        .expect("Failed to build genesis Stake message")
+    }
 }
 
 /// Signs the founding sequencer at `index`'s genesis `Stake`, for an operator
@@ -2643,15 +2705,15 @@ fn build_init_channel_params_transaction(
     channel_params: config::ChannelParams,
     channel_id: [u8; 32],
 ) -> PublicTransaction {
-    let sequencer_stake_program_id = programs::sequencer_stake_account_id();
+    let config = Actor::new(
+        system_accounts::sequencer_stake_config_account_id(),
+        programs::sequencer_stake_account_id(),
+    );
     let message = Message::try_new(
-        sequencer_stake_program_id,
-        vec![ProgramShardSelector::new(
-            system_accounts::sequencer_stake_config_account_id(),
-            sequencer_stake_program_id,
-        )],
-        vec![],
-        sequencer_stake_core::Instruction::InitChannelParams {
+        config,
+        vec![config],
+        BTreeMap::new(),
+        sequencer_stake_core::Message::InitChannelParams {
             params: channel_params,
             channel_id,
         },
@@ -2675,6 +2737,8 @@ fn build_stake_genesis_transactions(
 
     let funding_key = lee::PrivateKey::try_new(GENESIS_STAKE_FUNDING_KEY).unwrap();
     let funding_public_key = lee::PublicKey::new_from_private_key(&funding_key);
+    let funding =
+        DepositRecipient::Identified(PublicAccountEvidence::Key(funding_public_key.clone()));
     let amount = u64::try_from(minimum_stake).expect("minimum sequencer stake exceeds u64");
 
     // One deposit per stake, so no total has to fit `u64`. They precede the
@@ -2683,7 +2747,7 @@ fn build_stake_genesis_transactions(
         .iter()
         .map(|stake| {
             build_supply_account_genesis_transaction(
-                &genesis_stake_funding_account(),
+                &funding,
                 amount,
                 genesis_deposit_op_id(stake.genesis_index),
             )
@@ -2720,7 +2784,9 @@ fn bridge_lock_holdings(
 ) -> impl Iterator<Item = (lee::AccountId, u64)> + '_ {
     genesis.iter().filter_map(|action| match action {
         GenesisAction::SupplyBridgeLockHolding { holder, amount } => Some((*holder, *amount)),
-        GenesisAction::SupplyAccount { .. } | GenesisAction::StakeSequencer { .. } => None,
+        GenesisAction::SupplyAccount { .. }
+        | GenesisAction::SupplyPrivateAccount { .. }
+        | GenesisAction::StakeSequencer { .. } => None,
     })
 }
 
@@ -2752,31 +2818,65 @@ fn genesis_deposit_op_id(index: u64) -> [u8; 32] {
 }
 
 fn build_supply_account_genesis_transaction(
-    account_id: &AccountId,
+    recipient: &DepositRecipient,
     amount: u64,
     op_id: [u8; 32],
 ) -> PublicTransaction {
-    let bridge_program_id = programs::bridge_account_id();
-    let receipt_id = bridge_core::deposit_receipt_account_id(bridge_program_id, op_id);
+    bridge_deposit_tx(op_id, &Credited::Public(recipient), amount)
+        .expect("Failed to serialize genesis deposit instruction")
+}
 
-    let message = Message::try_new(
-        bridge_program_id,
-        vec![
-            ProgramShardSelector::native_balance(system_accounts::bridge_account_id()),
-            ProgramShardSelector::native_balance(*account_id),
-            ProgramShardSelector::new(receipt_id, bridge_program_id),
-        ],
-        Vec::new(),
-        bridge_core::Instruction::Deposit {
-            l1_deposit_op_id: op_id,
-            recipient_id: *account_id,
-            amount,
-        },
-    )
-    .expect("Failed to serialize genesis deposit instruction");
+fn bridge_deposit_tx(
+    op_id: [u8; 32],
+    credited: &Credited<'_>,
+    amount: u64,
+) -> Result<PublicTransaction, lee::error::LeeError> {
+    let receipt = bridge_receipt_actor(op_id);
+    let recipient_id = credited.account_id();
+    let message = Message {
+        admission_evidence: std::iter::once(PublicAccountEvidence::Pda {
+            program: programs::bridge_account_id(),
+            seed: bridge_core::deposit_receipt_seed(op_id),
+        })
+        .chain(credited.evidence().cloned())
+        .collect(),
+        ..Message::try_new(
+            receipt,
+            bridge_deposit_actors(receipt, credited),
+            BTreeMap::new(),
+            bridge_core::Message::Deposit {
+                l1_deposit_op_id: op_id,
+                recipient_id,
+                amount,
+            },
+        )?
+    };
     let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(Vec::new());
 
-    PublicTransaction::new(message, witness_set)
+    Ok(PublicTransaction::new(message, witness_set))
+}
+
+/// The deposit-receipt actor a `Deposit` for `op_id` is addressed to.
+fn bridge_receipt_actor(op_id: [u8; 32]) -> Actor {
+    let bridge_program_id = programs::bridge_account_id();
+    Actor::new(
+        bridge_core::deposit_receipt_account_id(bridge_program_id, op_id),
+        bridge_program_id,
+    )
+}
+
+/// The receipt, then the bridge custody and the public recipient the deposit's transfer moves
+/// balance between. A private recipient is not declared: its credit is published to it.
+fn bridge_deposit_actors(receipt: Actor, credited: &Credited<'_>) -> Vec<Actor> {
+    let custody = Actor::native_balance(system_accounts::bridge_account_id());
+    match credited {
+        Credited::Public(recipient) => vec![
+            receipt,
+            custody,
+            Actor::native_balance(recipient.account_id()),
+        ],
+        Credited::Private(_) => vec![receipt, custody],
+    }
 }
 
 fn pending_deposit_event_record(deposit: &DepositInfo) -> PendingDepositEventRecord {
@@ -2792,78 +2892,53 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
     let metadata = DepositMetadata::try_from_slice(&event.metadata)
         .context("Failed to decode finalized Bedrock deposit metadata")?;
 
-    let bridge_program_id = programs::bridge_account_id();
-    // The receipt PDA carries the exactly-once check: the program reads it to
-    // detect a replay, so it must be in the tx's account list.
-    let receipt_id =
-        bridge_core::deposit_receipt_account_id(bridge_program_id, event.deposit_op_id.0);
-
-    let message = Message::try_new(
-        bridge_program_id,
-        vec![
-            ProgramShardSelector::native_balance(system_accounts::bridge_account_id()),
-            ProgramShardSelector::native_balance(metadata.recipient_id),
-            ProgramShardSelector::new(receipt_id, bridge_program_id),
-        ],
-        Vec::new(),
-        bridge_core::Instruction::Deposit {
-            l1_deposit_op_id: event.deposit_op_id.0,
-            recipient_id: metadata.recipient_id,
-            amount: event.amount,
-        },
-    )
-    .context("Failed to build bridge deposit message")?;
-
-    let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(Vec::new());
-    Ok(LeeTransaction::Public(PublicTransaction::new(
-        message,
-        witness_set,
-    )))
+    // The receipt PDA carries the exactly-once check: the deposit is addressed to it,
+    // and its own actor state detects a replay.
+    Ok(LeeTransaction::Public(
+        bridge_deposit_tx(
+            event.deposit_op_id.0,
+            &Credited::Public(&metadata.recipient),
+            event.amount,
+        )
+        .context("Failed to build bridge deposit message")?,
+    ))
 }
 
 /// A `FinalizeUnstake` for every release whose exit delay has passed in `state`.
 fn build_finalize_unstake_txs(state: &lee::V03State) -> VecDeque<LeeTransaction> {
-    let Some(params) = committee_discovery::channel_params(state) else {
-        return VecDeque::new();
-    };
     committee_discovery::finalize_unstake_candidates(state)
         .into_iter()
-        .filter_map(|(ownership_id, sequencer_key, pending)| {
-            build_finalize_unstake_tx(ownership_id, sequencer_key, pending, params.exit_delay)
+        .filter_map(|(ownership_id, sequencer_key, destination)| {
+            build_finalize_unstake_tx(state, ownership_id, sequencer_key, destination)
                 .map_err(|err| warn!("Failed to build FinalizeUnstake tx: {:#}", anyhow!(err)))
                 .ok()
         })
         .collect()
 }
 
-// Unsigned: FinalizeUnstake needs no authorization, per the program.
+// Unsigned: FinalizeUnstake needs no authorization, per the program. The payout destination is
+// declared only when settlement admits it as public.
 fn build_finalize_unstake_tx(
+    state: &lee::V03State,
     ownership_id: AccountId,
     sequencer_key: sequencer_stake_core::SequencerKey,
-    pending: sequencer_stake_core::PendingUnstake,
-    exit_delay: u64,
+    destination: AccountId,
 ) -> Result<LeeTransaction> {
-    let sequencer_stake_program_id = programs::sequencer_stake_account_id();
+    let config = Actor::new(
+        system_accounts::sequencer_stake_config_account_id(),
+        programs::sequencer_stake_account_id(),
+    );
+    let admitted = state.get_account_by_id_ref(destination).is_some();
     let message = Message::try_new(
-        sequencer_stake_program_id,
-        vec![
-            ProgramShardSelector::new(ownership_id, sequencer_stake_program_id),
-            ProgramShardSelector::native_balance(system_accounts::stake_funds_account_id(
-                &ownership_id,
-            )),
-            ProgramShardSelector::native_balance(pending.destination),
-            ProgramShardSelector::new(
-                system_accounts::sequencer_stake_config_account_id(),
-                sequencer_stake_program_id,
-            ),
-        ],
-        vec![],
-        sequencer_stake_core::Instruction::FinalizeUnstake {
-            sequencer_key,
-            amount: pending.amount,
-            requested_at: pending.requested_at,
-            exit_delay,
-        },
+        config,
+        [
+            config,
+            Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
+        ]
+        .into_iter()
+        .chain(admitted.then_some(Actor::native_balance(destination))),
+        BTreeMap::new(),
+        sequencer_stake_core::Message::FinalizeUnstake { sequencer_key },
     )
     .context("Failed to build FinalizeUnstake message")?;
 
@@ -2891,26 +2966,27 @@ fn resubmittable_txs(block: &Block) -> Vec<LeeTransaction> {
 
 #[must_use]
 fn is_sequencer_only_tx(tx: &LeeTransaction) -> bool {
-    matches!(tx, LeeTransaction::Public(tx)
-        if is_sequencer_only_program(tx.message().program_account_id))
+    let Some((to, _)) = tx.public_call() else {
+        return false;
+    };
+    is_sequencer_only_program(to.program_account_id)
 }
 
 /// The cross-zone message an inbox dispatch delivers, or `None` if `tx` is not
 /// a dispatch.
 #[must_use]
 fn extract_cross_zone_dispatch(tx: &LeeTransaction) -> Option<CrossZoneMessage> {
-    let LeeTransaction::Public(tx) = tx else {
-        return None;
-    };
-
-    let message = tx.message();
-    if message.program_account_id != programs::cross_zone_inbox_account_id() {
+    let (to, message) = tx.public_call()?;
+    if to.program_account_id != programs::cross_zone_inbox_account_id() {
         return None;
     }
 
-    match borsh::from_slice::<cross_zone_inbox_core::Instruction>(&message.instruction_data) {
-        Ok(cross_zone_inbox_core::Instruction::Dispatch(msg)) => Some(msg),
-        Ok(cross_zone_inbox_core::Instruction::InitConfig(_)) | Err(_) => None,
+    match borsh::from_slice::<cross_zone_inbox_core::Message>(message) {
+        Ok(cross_zone_inbox_core::Message::Dispatch(msg)) => Some(msg),
+        Ok(
+            cross_zone_inbox_core::Message::Mark(_) | cross_zone_inbox_core::Message::InitConfig(_),
+        )
+        | Err(_) => None,
     }
 }
 
@@ -3008,44 +3084,30 @@ async fn settle_reconstructed_deliveries<S: StorageActorTrait>(
 
 #[must_use]
 fn extract_bridge_deposit_id(tx: &LeeTransaction) -> Option<HashType> {
-    let LeeTransaction::Public(tx) = tx else {
-        return None;
-    };
-
-    let message = tx.message();
-    if message.program_account_id != programs::bridge_account_id() {
+    let (to, message) = tx.public_call()?;
+    if to.program_account_id != programs::bridge_account_id() {
         return None;
     }
 
-    let instruction =
-        borsh::from_slice::<bridge_core::Instruction>(&message.instruction_data).ok()?;
-
-    match instruction {
-        bridge_core::Instruction::Deposit {
+    match borsh::from_slice::<bridge_core::Message>(message).ok()? {
+        bridge_core::Message::Deposit {
             l1_deposit_op_id, ..
         } => Some(HashType(l1_deposit_op_id)),
-        bridge_core::Instruction::Withdraw { .. } => None,
+        bridge_core::Message::Withdraw { .. } => None,
     }
 }
 
 #[must_use]
 fn extract_bridge_withdraw_data(tx: &LeeTransaction) -> Option<WithdrawArg> {
-    let LeeTransaction::Public(tx) = tx else {
-        return None;
-    };
-
-    let message = tx.message();
-    if message.program_account_id != programs::bridge_account_id() {
+    let (to, message) = tx.public_call()?;
+    if to.program_account_id != programs::bridge_account_id() {
         return None;
     }
 
-    let instruction =
-        borsh::from_slice::<bridge_core::Instruction>(&message.instruction_data).ok()?;
-
-    let bridge_core::Instruction::Withdraw {
+    let bridge_core::Message::Withdraw {
         amount,
         bedrock_account_pk,
-    } = instruction
+    } = borsh::from_slice::<bridge_core::Message>(message).ok()?
     else {
         return None;
     };

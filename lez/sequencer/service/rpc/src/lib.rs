@@ -5,9 +5,9 @@ pub use jsonrpsee::types::ErrorObjectOwned;
 #[cfg(feature = "client")]
 pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
 use sequencer_service_protocol::{
-    Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
-    CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, FeeStateQuote, HashType, LeeTransaction,
-    MembershipProof, Nonce, ProgramId, ProgramShardSelector,
+    Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
+    CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, EncryptedNote, FeeStateQuote, HashType,
+    LeeTransaction, MembershipProof, Nonce, ProgramId, Publication,
 };
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
@@ -81,22 +81,50 @@ pub trait Rpc {
         account_ids: Vec<AccountId>,
     ) -> Result<Vec<Nonce>, ErrorObjectOwned>;
 
-    /// Returns the account's nonce and the selected shard; its balance is the shard at the
-    /// native token program.
+    /// Returns the account's nonce and the selected actor state; its balance is the actor state at
+    /// the native token program.
     #[method(name = "getAccountView")]
     async fn get_account_view(
         &self,
-        shard_selector: ProgramShardSelector,
-    ) -> Result<Account, ErrorObjectOwned>;
+        actor_state_selector: Actor,
+    ) -> Result<Option<Account>, ErrorObjectOwned>;
+
+    #[method(name = "getPublications")]
+    async fn get_publications(
+        &self,
+        from_position: u64,
+        limit: u32,
+    ) -> Result<Vec<(u64, Publication)>, ErrorObjectOwned>;
+
+    #[method(name = "getMessagePath")]
+    async fn get_message_path(
+        &self,
+        position: u64,
+    ) -> Result<Option<MembershipProof>, ErrorObjectOwned>;
+
+    #[method(name = "getRecoveryBinding")]
+    async fn get_recovery_binding(
+        &self,
+        address: AccountId,
+    ) -> Result<Option<EncryptedNote>, ErrorObjectOwned>;
 
     #[method(name = "getProofsAndRoot")]
     async fn get_proofs_and_root(
         &self,
         commitments: Vec<Commitment>,
-    ) -> Result<(Vec<Option<MembershipProof>>, CommitmentSetDigest), ErrorObjectOwned>;
+        message_position: Option<u64>,
+    ) -> Result<
+        (
+            Vec<Option<MembershipProof>>,
+            Option<MembershipProof>,
+            CommitmentSetDigest,
+        ),
+        ErrorObjectOwned,
+    >;
 
     #[method(name = "getAccount")]
-    async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned>;
+    async fn get_account(&self, account_id: AccountId)
+    -> Result<Option<Account>, ErrorObjectOwned>;
 
     #[method(name = "getProgramIds")]
     async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>, ErrorObjectOwned>;

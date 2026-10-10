@@ -14,9 +14,9 @@ use log::{error, warn};
 use sequencer_executor_actor::ExecutorActorTrait;
 use sequencer_gossip_actor::protocol::PublishTransaction;
 use sequencer_service_protocol::{
-    Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
-    CrossZoneDeadLetter, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, FeeStateQuote,
-    HashType, MembershipProof, Nonce, ProgramId, ProgramShardSelector,
+    Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
+    CrossZoneDeadLetter, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, EncryptedNote,
+    FeeStateQuote, HashType, MembershipProof, Nonce, ProgramId, Publication,
 };
 
 pub struct Service<E: ExecutorActorTrait> {
@@ -82,8 +82,8 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             // watcher; a user must not invoke them top-level, or anyone could forge
             // an inbound cross-zone delivery. Chained user calls are already rejected
             // by the inbox guest's caller-is-none assertion.
-            if let LeeTransaction::Public(public_tx) = &authenticated_tx
-                && sequencer_core::is_sequencer_only_program(public_tx.message().program_account_id)
+            if let Some((to, _)) = authenticated_tx.public_call()
+                && sequencer_core::is_sequencer_only_program(to.program_account_id)
             {
                 return Err(ErrorObjectOwned::owned(
                     ErrorCode::InvalidParams.code(),
@@ -202,26 +202,76 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
 
     async fn get_account_view(
         &self,
-        shard_selector: ProgramShardSelector,
-    ) -> Result<Account, ErrorObjectOwned> {
+        actor_state_selector: Actor,
+    ) -> Result<Option<Account>, ErrorObjectOwned> {
         self.executor_ref
-            .ask(sequencer_executor_actor::protocol::GetAccountView { shard_selector })
+            .ask(sequencer_executor_actor::protocol::GetAccountView {
+                actor_state_selector,
+            })
             .await
             .map(|reply| reply.account)
+            .map_err(map_infallible_error)
+    }
+
+    async fn get_publications(
+        &self,
+        from_position: u64,
+        limit: u32,
+    ) -> Result<Vec<(u64, Publication)>, ErrorObjectOwned> {
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::GetPublications {
+                from_position,
+                limit,
+            })
+            .await
+            .map_err(map_infallible_error)
+    }
+
+    async fn get_message_path(
+        &self,
+        position: u64,
+    ) -> Result<Option<MembershipProof>, ErrorObjectOwned> {
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::GetMessagePath { position })
+            .await
+            .map_err(map_infallible_error)
+    }
+
+    async fn get_recovery_binding(
+        &self,
+        address: AccountId,
+    ) -> Result<Option<EncryptedNote>, ErrorObjectOwned> {
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::GetRecoveryBinding { address })
+            .await
             .map_err(map_infallible_error)
     }
 
     async fn get_proofs_and_root(
         &self,
         commitments: Vec<Commitment>,
-    ) -> Result<(Vec<Option<MembershipProof>>, CommitmentSetDigest), ErrorObjectOwned> {
+        message_position: Option<u64>,
+    ) -> Result<
+        (
+            Vec<Option<MembershipProof>>,
+            Option<MembershipProof>,
+            CommitmentSetDigest,
+        ),
+        ErrorObjectOwned,
+    > {
         self.executor_ref
-            .ask(sequencer_executor_actor::protocol::GetProofsAndRoot { commitments })
+            .ask(sequencer_executor_actor::protocol::GetProofsAndRoot {
+                commitments,
+                message_position,
+            })
             .await
             .map_err(map_infallible_error)
     }
 
-    async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned> {
+    async fn get_account(
+        &self,
+        account_id: AccountId,
+    ) -> Result<Option<Account>, ErrorObjectOwned> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetAccount { account_id })
             .await

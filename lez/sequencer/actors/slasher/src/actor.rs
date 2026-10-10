@@ -3,12 +3,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::Context as _;
 use common::transaction::LeeTransaction;
 use kameo::{
-    Actor,
     actor::ActorRef,
     message::{Context, Message},
 };
 use lee::{
-    AccountId, ProgramShardSelector, PublicTransaction, public_transaction::Message as LeeMessage,
+    AccountId, Actor, PublicAccountEvidence, PublicTransaction,
+    public_transaction::Message as LeeMessage,
 };
 use log::{debug, error, warn};
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
@@ -218,7 +218,7 @@ impl<S: StorageActorTrait> SlasherActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> Actor for SlasherActor<S> {
+impl<S: StorageActorTrait> kameo::Actor for SlasherActor<S> {
     type Args = Self;
     type Error = Error;
 
@@ -305,7 +305,7 @@ impl<S: StorageActorTrait> Message<Propose> for SlasherActor<S> {
             if approvals.len() < threshold {
                 continue;
             }
-            match build_slash_tx(entry.account_id, offence, approvals, entry.total_staked) {
+            match build_slash_tx(entry.account_id, offence, approvals) {
                 Ok(tx) => {
                     proposed.push(tx);
                     proposed_for.insert(offence.offender);
@@ -394,33 +394,33 @@ pub fn build_slash_tx(
     ownership_id: AccountId,
     offence: &Offence,
     approvals: Vec<SlashApproval>,
-    total_staked: u128,
 ) -> anyhow::Result<LeeTransaction> {
     let program_id = programs::sequencer_stake_account_id();
-    let message = LeeMessage::try_new(
+    let config = Actor::new(
+        system_accounts::sequencer_stake_config_account_id(),
         program_id,
-        vec![
-            ProgramShardSelector::new(ownership_id, program_id),
-            ProgramShardSelector::native_balance(system_accounts::stake_funds_account_id(
-                &ownership_id,
-            )),
-            ProgramShardSelector::native_balance(sequencer_stake_core::slash_sink_account_id(
-                program_id,
-            )),
-            ProgramShardSelector::new(
-                system_accounts::sequencer_stake_config_account_id(),
-                program_id,
-            ),
-        ],
-        vec![],
-        sequencer_stake_core::Instruction::Slash {
-            sequencer_key: offence.offender,
-            inscription: offence.inscription,
-            approvals,
-            total_staked,
-        },
-    )
-    .context("Failed to build a Slash message")?;
+    );
+    let message = LeeMessage {
+        admission_evidence: vec![PublicAccountEvidence::Pda {
+            program: program_id,
+            seed: sequencer_stake_core::slash_sink_seed(),
+        }],
+        ..LeeMessage::try_new(
+            config,
+            vec![
+                config,
+                Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
+                Actor::native_balance(sequencer_stake_core::slash_sink_account_id(program_id)),
+            ],
+            std::collections::BTreeMap::new(),
+            sequencer_stake_core::Message::Slash {
+                sequencer_key: offence.offender,
+                inscription: offence.inscription,
+                approvals,
+            },
+        )
+        .context("Failed to build a Slash message")?
+    };
 
     Ok(LeeTransaction::Public(PublicTransaction::new(
         message,

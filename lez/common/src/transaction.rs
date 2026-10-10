@@ -1,5 +1,7 @@
+use std::collections::BTreeMap;
+
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee::{AccountId, ProgramShardSelector, V03State, ValidatedStateDiff};
+use lee::{AccountId, Actor, V03State, ValidatedStateDiff};
 use lee_core::{
     BlockId, Timestamp, account::Balance, native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::TransactionEvent,
@@ -29,6 +31,15 @@ impl<'de> Deserialize<'de> for LeeTransaction {
 
 impl LeeTransaction {
     #[must_use]
+    pub const fn public_call(&self) -> Option<(Actor, &[u8])> {
+        let Self::Public(tx) = self else {
+            return None;
+        };
+        let root = &tx.message().execution.root;
+        Some((root.to, root.message.as_slice()))
+    }
+
+    #[must_use]
     pub fn hash(&self) -> HashType {
         HashType(match self {
             Self::Public(tx) => tx.hash(),
@@ -54,32 +65,11 @@ impl LeeTransaction {
 
     // TODO: Introduce type-safe wrapper around checked transaction, e.g. AuthenticatedTransaction
     pub fn transaction_stateless_check(self) -> Result<Self, TransactionMalformationError> {
-        // Stateless checks here
-        let has_duplicate_signers = |keys: &[(lee::Signature, lee::PublicKey)]| {
-            let unique: std::collections::HashSet<AccountId> =
-                keys.iter().map(|(_, pk)| AccountId::from(pk)).collect();
-            unique.len() != keys.len()
+        match &self {
+            Self::Public(tx) => tx.check_stateless()?,
+            Self::PrivacyPreserving(tx) => tx.check_stateless()?,
         };
-        match self {
-            Self::Public(tx) => {
-                if has_duplicate_signers(tx.witness_set().signatures_and_public_keys()) {
-                    Err(TransactionMalformationError::DuplicateSigner)
-                } else if tx.witness_set().is_valid_for(tx.message()) {
-                    Ok(Self::Public(tx))
-                } else {
-                    Err(TransactionMalformationError::InvalidSignature)
-                }
-            }
-            Self::PrivacyPreserving(tx) => {
-                if has_duplicate_signers(tx.witness_set().signatures_and_public_keys()) {
-                    Err(TransactionMalformationError::DuplicateSigner)
-                } else if tx.witness_set().signatures_are_valid_for(tx.message()) {
-                    Ok(Self::PrivacyPreserving(tx))
-                } else {
-                    Err(TransactionMalformationError::InvalidSignature)
-                }
-            }
-        }
+        Ok(self)
     }
 
     /// Validates the transaction against the current state and returns the resulting diff
@@ -129,7 +119,7 @@ impl LeeTransaction {
         let diff = self
             .validate_on_state(state, block_id, timestamp)
             .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
-        drop(state.apply_state_diff(diff));
+        state.apply_state_diff(diff)?;
         Ok(self)
     }
 
@@ -149,7 +139,7 @@ impl LeeTransaction {
         let diff = self
             .compute_state_diff(state, block_id, timestamp)
             .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
-        Ok(state.apply_state_diff(diff))
+        state.apply_state_diff(diff)
     }
 }
 
@@ -175,10 +165,8 @@ pub enum TxKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 pub enum TransactionMalformationError {
-    #[error("Invalid signature(-s)")]
-    InvalidSignature,
-    #[error("Duplicate signer in witness set")]
-    DuplicateSigner,
+    #[error(transparent)]
+    Invalid(#[from] lee::InvalidTransaction),
     #[error("Failed to decode transaction with hash: {tx:?}")]
     FailedToDecode { tx: HashType },
     #[error("Transaction size {size} exceeds maximum allowed size of {max} bytes")]
@@ -197,19 +185,51 @@ pub struct TxEvents {
     pub events: Vec<TransactionEvent>,
 }
 
+/// How a [`fee_invocation`] pays the block's producer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeePayee {
+    /// Declared, so the producer's credits execute at once.
+    Present(AccountId),
+    /// Undeclared, so the producer's credits are published under its recovery binding.
+    Bound(AccountId),
+}
+
+impl FeePayee {
+    /// Pays `producer` at once when its account is present and under its recovery binding when it
+    /// has one; `None` when `state` offers neither.
+    #[must_use]
+    pub fn for_producer(state: &V03State, producer: AccountId) -> Option<Self> {
+        if state.get_account_by_id_ref(producer).is_some() {
+            Some(Self::Present(producer))
+        } else {
+            state
+                .recovery_binding(producer)
+                .map(|_| Self::Bound(producer))
+        }
+    }
+
+    #[must_use]
+    pub const fn producer(self) -> AccountId {
+        match self {
+            Self::Present(producer) | Self::Bound(producer) => producer,
+        }
+    }
+}
+
 /// Builds the clock transaction required exactly once, at the end of each block.
 ///
 /// Uses the header's ID and timestamp so followers reconstruct the same transaction.
 /// The clock checks that the proposed block ID advances its stored ID by one.
 #[must_use]
 pub fn clock_invocation(block_id: BlockId, timestamp: Timestamp) -> lee::PublicTransaction {
+    let clock_program_id = programs::clock_account_id();
     let message = lee::public_transaction::Message::try_new(
-        programs::clock_account_id(),
+        Actor::new(clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID, clock_program_id),
         clock_core::CLOCK_PROGRAM_ACCOUNT_IDS
-            .map(|id| ProgramShardSelector::new(id, programs::clock_account_id()))
+            .map(|id| Actor::new(id, clock_program_id))
             .to_vec(),
-        vec![],
-        clock_core::Instruction {
+        BTreeMap::new(),
+        clock_core::Message::Tick {
             timestamp,
             block_id,
         },
@@ -243,23 +263,24 @@ pub fn is_system_injection(tx: &LeeTransaction) -> bool {
     {
         return false;
     }
-    let message = public_tx.message();
-    if message.program_account_id == programs::bridge_account_id() {
+    let lee::RootCall { to, message } = &public_tx.message().execution.root;
+    let program_account_id = to.program_account_id;
+    if program_account_id == programs::bridge_account_id() {
         return matches!(
-            borsh::from_slice::<bridge_core::Instruction>(&message.instruction_data),
-            Ok(bridge_core::Instruction::Deposit { .. })
+            borsh::from_slice::<bridge_core::Message>(message),
+            Ok(bridge_core::Message::Deposit { .. })
         );
     }
-    if message.program_account_id == programs::cross_zone_inbox_account_id() {
+    if program_account_id == programs::cross_zone_inbox_account_id() {
         return matches!(
-            borsh::from_slice::<cross_zone_inbox_core::Instruction>(&message.instruction_data),
-            Ok(cross_zone_inbox_core::Instruction::Dispatch(_))
+            borsh::from_slice::<cross_zone_inbox_core::Message>(message),
+            Ok(cross_zone_inbox_core::Message::Dispatch(_))
         );
     }
-    if message.program_account_id == programs::ping_sender_account_id() {
+    if program_account_id == programs::ping_sender_account_id() {
         return matches!(
-            borsh::from_slice::<ping_core::SenderInstruction>(&message.instruction_data),
-            Ok(ping_core::SenderInstruction::Send { .. })
+            borsh::from_slice::<ping_core::SenderMessage>(message),
+            Ok(ping_core::SenderMessage::Send { .. })
         );
     }
     false
@@ -274,16 +295,15 @@ pub fn is_system_injection(tx: &LeeTransaction) -> bool {
 /// [`is_system_injection`]'s empty-witness shape.
 #[must_use]
 pub fn is_cross_zone_lock(tx: &LeeTransaction) -> bool {
-    let LeeTransaction::Public(public_tx) = tx else {
+    let Some((to, message)) = tx.public_call() else {
         return false;
     };
-    let message = public_tx.message();
-    if message.program_account_id != programs::bridge_lock_account_id() {
+    if to.program_account_id != programs::bridge_lock_account_id() {
         return false;
     }
     matches!(
-        borsh::from_slice::<bridge_lock_core::Instruction>(&message.instruction_data),
-        Ok(bridge_lock_core::Instruction::Lock { .. })
+        borsh::from_slice::<bridge_lock_core::Message>(message),
+        Ok(bridge_lock_core::Message::Lock { .. })
     )
 }
 
@@ -295,17 +315,17 @@ pub fn is_cross_zone_lock(tx: &LeeTransaction) -> bool {
 /// separately funded payer no staker holds.
 #[must_use]
 pub fn is_sequencer_stake_operation(tx: &LeeTransaction) -> bool {
-    let LeeTransaction::Public(public_tx) = tx else {
+    let Some((to, _)) = tx.public_call() else {
         return false;
     };
-    public_tx.message().program_account_id == programs::sequencer_stake_account_id()
+    to.program_account_id == programs::sequencer_stake_account_id()
 }
 
 /// Returns the canonical Fee Program invocation transaction for the given block fee summary.
 ///
 /// Every valid block must contain exactly one occurrence of this transaction as its
 /// second-to-last transaction, immediately before the clock invocation. The producer
-/// account rides as the fourth account so the guest can pay it.
+/// account rides in the message so the guest can pay it.
 ///
 /// `payout` is the producer's smoothed share, proposed here and required by the fee-state
 /// effect to equal what the real state's own market update returns; derive it with
@@ -314,21 +334,29 @@ pub fn is_sequencer_stake_operation(tx: &LeeTransaction) -> bool {
 pub fn fee_invocation(
     summary: fee_core::BlockFeeSummary,
     payout: Balance,
-    producer: lee::AccountId,
+    payee: FeePayee,
 ) -> lee::PublicTransaction {
-    let fee_program_id = programs::fee_account_id();
-    // Select the fee state shard and balances for the escrow, inbox, and producer.
-    let shard_selectors = vec![
-        ProgramShardSelector::new(system_accounts::fee_state_account_id(), fee_program_id),
-        ProgramShardSelector::native_balance(system_accounts::fee_escrow_account_id()),
-        ProgramShardSelector::native_balance(system_accounts::fee_inbox_account_id()),
-        ProgramShardSelector::native_balance(producer),
-    ];
+    let fee_state = fee_state_actor();
+    // The fee state, the balances of the escrow and inbox, and a present producer's balance.
+    let public_actors = [
+        fee_state,
+        Actor::native_balance(system_accounts::fee_escrow_account_id()),
+        Actor::native_balance(system_accounts::fee_inbox_account_id()),
+    ]
+    .into_iter()
+    .chain(match payee {
+        FeePayee::Present(producer) => Some(Actor::native_balance(producer)),
+        FeePayee::Bound(_) => None,
+    });
     let message = lee::public_transaction::Message::try_new(
-        fee_program_id,
-        shard_selectors,
-        vec![],
-        fee_core::Instruction::Distribute { summary, payout },
+        fee_state,
+        public_actors,
+        BTreeMap::new(),
+        fee_core::Message::Distribute {
+            summary,
+            payout,
+            producer: payee.producer(),
+        },
     )
     .expect("Fee invocation message should always be constructable");
     lee::PublicTransaction::new(
@@ -337,15 +365,33 @@ pub fn fee_invocation(
     )
 }
 
-/// The producer account credited by [`fee_invocation`].
+/// The payee of a [`fee_invocation`]: its producer, present when the transaction declares it.
 #[must_use]
-pub fn fee_invocation_producer(fee_tx: &lee::PublicTransaction) -> Option<lee::AccountId> {
-    fee_tx
-        .message()
-        .shard_selectors
-        // the producer is the fourth shard selector `fee_invocation` builds
-        .get(3)
-        .map(|shard_selector| shard_selector.account_id)
+pub fn fee_invocation_payee(fee_tx: &lee::PublicTransaction) -> Option<FeePayee> {
+    let Ok(fee_core::Message::Distribute { producer, .. }) =
+        borsh::from_slice(&fee_tx.message().execution.root.message)
+    else {
+        return None;
+    };
+    Some(
+        if fee_tx
+            .message()
+            .context
+            .actors
+            .contains(&Actor::native_balance(producer))
+        {
+            FeePayee::Present(producer)
+        } else {
+            FeePayee::Bound(producer)
+        },
+    )
+}
+
+fn fee_state_actor() -> Actor {
+    Actor::new(
+        system_accounts::fee_state_account_id(),
+        programs::fee_account_id(),
+    )
 }
 
 /// Validates that the block reward target is not a restricted system account.
@@ -373,14 +419,15 @@ pub fn validate_reward_target(target: AccountId) -> Result<(), String> {
 /// accounts, and instruction the invocation needs.
 #[must_use]
 pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_transaction::Message {
+    let inbox = Actor::native_balance(system_accounts::fee_inbox_account_id());
     lee::public_transaction::Message::try_new(
-        NATIVE_TOKEN_PROGRAM_ID,
-        vec![
-            ProgramShardSelector::native_balance(payer),
-            ProgramShardSelector::native_balance(system_accounts::fee_inbox_account_id()),
-        ],
-        vec![],
-        lee_core::native_token::Instruction::Transfer { amount },
+        Actor::native_balance(payer),
+        vec![Actor::native_balance(payer), inbox],
+        BTreeMap::new(),
+        lee_core::native_token::Message::Transfer {
+            to: inbox.account_id,
+            amount,
+        },
     )
     .expect("Fee reserve message should always be constructable")
 }
@@ -388,14 +435,16 @@ pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_tra
 /// The fee refund: return `amount` from the fee inbox to `payer`.
 #[must_use]
 pub fn fee_refund_invocation(payer: AccountId, amount: u128) -> lee::public_transaction::Message {
+    let fee_state = fee_state_actor();
     lee::public_transaction::Message::try_new(
-        programs::fee_account_id(),
+        fee_state,
         vec![
-            ProgramShardSelector::native_balance(system_accounts::fee_inbox_account_id()),
-            ProgramShardSelector::native_balance(payer),
+            fee_state,
+            Actor::native_balance(system_accounts::fee_inbox_account_id()),
+            Actor::native_balance(payer),
         ],
-        vec![],
-        fee_core::Instruction::Refund { amount },
+        BTreeMap::new(),
+        fee_core::Message::Refund { amount, payer },
     )
     .expect("Fee refund message should always be constructable")
 }
@@ -468,19 +517,17 @@ fn validate_bridge_account_modification(
 
 /// Rejects a diff that writes system state a user transaction may not: the
 /// clock and fee accounts never, the bridge only by a deposit's debit, and any
-/// account's inbox shard only by a dispatch.
+/// account's inbox actor state only by a dispatch.
 pub fn validate_user_state_modification(
     tx: &LeeTransaction,
     state: &V03State,
     diff: &ValidatedStateDiff,
 ) -> Result<(), lee::error::LeeError> {
     validate_no_restricted_account_modification(state, diff)?;
-    let injected_program = match tx {
-        LeeTransaction::Public(public_tx) if is_system_injection(tx) => {
-            Some(public_tx.message().program_account_id)
-        }
-        LeeTransaction::Public(_) | LeeTransaction::PrivacyPreserving(_) => None,
-    };
+    let injected_program = tx
+        .public_call()
+        .filter(|_| is_system_injection(tx))
+        .map(|(to, _)| to.program_account_id);
     if injected_program != Some(programs::bridge_account_id()) {
         validate_bridge_account_modification(state, diff, matches!(tx, LeeTransaction::Public(_)))?;
     }
@@ -490,14 +537,19 @@ pub fn validate_user_state_modification(
     Ok(())
 }
 
-/// Rejects a diff that changes any account's cross-zone inbox shard.
+/// Rejects a diff that changes any account's cross-zone inbox actor state.
 fn validate_no_inbox_state_modification(
     state: &V03State,
     diff: &ValidatedStateDiff,
 ) -> Result<(), lee::error::LeeError> {
     let inbox = programs::cross_zone_inbox_account_id();
     let modified = diff.public_diff().iter().any(|(account_id, post)| {
-        state.get_account_by_id(*account_id).data.shards.get(&inbox) != post.data.shards.get(&inbox)
+        state
+            .get_account_by_id(*account_id)
+            .data
+            .actor_states
+            .get(&inbox)
+            != post.data.actor_states.get(&inbox)
     });
     if modified {
         Err(lee::error::LeeError::InvalidInput(
@@ -517,10 +569,10 @@ fn validate_no_inbox_state_modification(
 fn bridge_balance_only_increased(pre: &lee::Account, post: &lee::Account) -> bool {
     fn non_native(
         account: &lee::Account,
-    ) -> impl Iterator<Item = (&lee::AccountId, &lee::ShardData)> {
+    ) -> impl Iterator<Item = (&lee::AccountId, &lee::ActorState)> {
         account
             .data
-            .shards
+            .actor_states
             .iter()
             .filter(|(program, _)| **program != NATIVE_TOKEN_PROGRAM_ID)
     }

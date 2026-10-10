@@ -1,7 +1,7 @@
 //! Discovery process for the `sequencer_stake` committee.
 
 use log::warn;
-use sequencer_stake_core::{PendingUnstake, SequencerKey, SequencerStakeConfig, StakeRecord};
+use sequencer_stake_core::{SequencerKey, SequencerStakeConfig};
 
 /// Signatures a `ChannelConfigOp` must carry: two thirds of the accredited
 /// keys, capped at `committee_size - 1`, floored at one.
@@ -81,12 +81,12 @@ pub fn committee_update(
     (desired != live || stale_threshold).then_some(desired)
 }
 
-/// Ownership-account id + pending-release details for every release that may
-/// land in the block after the one the clock in `state` holds.
+/// Ownership-account id, sequencer key and payout destination for every release that may land in
+/// the block after the one the clock in `state` holds.
 #[must_use]
 pub fn finalize_unstake_candidates(
     state: &lee::V03State,
-) -> Vec<(lee::AccountId, SequencerKey, PendingUnstake)> {
+) -> Vec<(lee::AccountId, SequencerKey, lee::AccountId)> {
     let Some(config) = read_config(state) else {
         return Vec::new();
     };
@@ -100,14 +100,13 @@ pub fn finalize_unstake_candidates(
 
     config
         .entries
-        .into_values()
-        .filter_map(|entry| {
-            let record = stake_record(state, entry.account_id)?;
-            let pending = record.pending_unstake?;
+        .into_iter()
+        .filter_map(|(sequencer_key, entry)| {
+            let pending = entry.pending_unstake?;
             (next_block_id >= pending.releasable_at(params.exit_delay)).then_some((
                 entry.account_id,
-                record.sequencer_key,
-                pending,
+                sequencer_key,
+                pending.destination,
             ))
         })
         .collect()
@@ -117,7 +116,7 @@ pub fn finalize_unstake_candidates(
 pub(crate) fn clock_block_id(state: &lee::V03State) -> Option<u64> {
     let clock = state.get_account_by_id(system_accounts::clock_account_ids()[0]);
     borsh::from_slice::<clock_core::ClockAccountData>(
-        clock.data.shard(programs::clock_account_id()),
+        clock.data.actor_state(programs::clock_account_id()),
     )
     .ok()
     .map(|clock| clock.block_id)
@@ -135,8 +134,12 @@ pub(crate) fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig>
         return None;
     };
     let sequencer_stake_program_id = programs::sequencer_stake_account_id();
-    let config =
-        SequencerStakeConfig::from_bytes(account.data.shard(sequencer_stake_program_id).as_ref());
+    let config = SequencerStakeConfig::from_bytes(
+        account
+            .data
+            .actor_state(sequencer_stake_program_id)
+            .as_ref(),
+    );
     if config.is_none() {
         warn!("sequencer_stake config account did not decode as SequencerStakeConfig");
     }
@@ -149,13 +152,6 @@ pub(crate) fn channel_params(state: &lee::V03State) -> Option<crate::config::Cha
     read_config(state)?.channel_params
 }
 
-/// The `StakeRecord` an ownership account carries: which key it backs, plus
-/// whatever release is pending against it.
-fn stake_record(state: &lee::V03State, ownership_id: lee::AccountId) -> Option<StakeRecord> {
-    let account = state.get_account_by_id_ref(ownership_id)?;
-    let sequencer_stake_program_id = programs::sequencer_stake_account_id();
-    StakeRecord::from_bytes(account.data.shard(sequencer_stake_program_id).as_ref())
-}
 
 #[cfg(test)]
 mod tests {

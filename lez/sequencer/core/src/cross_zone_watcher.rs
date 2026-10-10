@@ -646,10 +646,7 @@ async fn record_block_deliveries<S: StorageActorTrait>(
         let LeeTransaction::Public(public_tx) = tx else {
             continue;
         };
-        let message = public_tx.message();
-        let Some(emission) =
-            extract_emission(message.program_account_id, &message.instruction_data)
-        else {
+        let Some(emission) = extract_emission(public_tx) else {
             continue;
         };
 
@@ -677,7 +674,7 @@ async fn record_block_deliveries<S: StorageActorTrait>(
                 src_block_id: block.header.block_id,
                 src_block_hash: block_hash.0,
                 src_tx_index,
-                src_account_id: message.program_account_id,
+                src_account_id: emission.source,
             },
             emission.target_account_id,
             &emission.target_accounts,

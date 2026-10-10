@@ -15,6 +15,7 @@ actor = [
   "dep:futures",
   "dep:hex",
   "dep:kameo",
+  "dep:lee",
   "dep:libp2p",
   "dep:log",
   "dep:logos-blockchain-key-management-system-service",
@@ -29,6 +30,7 @@ mdns = ["actor"]
 
 [dependencies]
 common.workspace = true
+lee = { workspace = true, optional = true }
 sequencer_channel_config_actor = { workspace = true, optional = true }
 sequencer_core = { workspace = true, optional = true }
 sequencer_slasher_actor = { workspace = true, optional = true }

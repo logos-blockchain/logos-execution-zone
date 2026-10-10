@@ -3,8 +3,11 @@ use std::collections::HashMap;
 use key_protocol::key_management::{
     KeyChain, key_tree::chain_index::ChainIndex, secret_holders::SecretSpendingKey,
 };
-use lee::{Account, AccountId, PrivateKey, PublicKey, V03State, program::Program};
-use lee_core::Identifier;
+use lee::{
+    Account, AccountId, PrivateKey, PublicKey, Recipient, RecoveryBinding, V03State,
+    program::Program,
+};
+use lee_core::PrivateAccountKind;
 use serde::{Deserialize, Serialize};
 
 const PRIVATE_KEY_PUB_ACC_A: [u8; 32] = [
@@ -32,20 +35,10 @@ const SSK_PRIV_ACC_B: [u8; 32] = [
 const PUB_ACC_A_INITIAL_BALANCE: u128 = 10_000_000_000_000;
 const PUB_ACC_B_INITIAL_BALANCE: u128 = 20_000_000_000_000;
 
-const PRIV_ACC_A_INITIAL_BALANCE: u128 = 10_000_000_000_000;
-const PRIV_ACC_B_INITIAL_BALANCE: u128 = 20_000_000_000_000;
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublicAccountPublicInitialData {
     pub account_id: AccountId,
     pub balance: u128,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PrivateAccountPublicInitialData {
-    pub npk: lee_core::NullifierPublicKey,
-    pub vpk: lee_core::encryption::ViewingPublicKey,
-    pub account: lee_core::account::Account,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -59,17 +52,24 @@ pub struct PrivateAccountPrivateInitialData {
     pub account: lee_core::account::Account,
     pub key_chain: KeyChain,
     pub chain_index: Option<ChainIndex>,
-    pub identifier: lee_core::Identifier,
+    pub kind: PrivateAccountKind,
 }
 
 impl PrivateAccountPrivateInitialData {
     #[must_use]
     pub fn account_id(&self) -> lee::AccountId {
-        lee::AccountId::for_regular_private_account(
-            &self.key_chain.nullifier_public_key,
-            &self.key_chain.viewing_public_key,
-            self.identifier,
-        )
+        self.recipient().account_id()
+    }
+
+    /// The public material a sender binds to this account's canonical address.
+    #[must_use]
+    pub fn recipient(&self) -> Recipient {
+        Recipient {
+            npk: self.key_chain.nullifier_public_key,
+            vpk: self.key_chain.viewing_public_key.clone(),
+            kind: self.kind.clone(),
+            opening: None,
+        }
     }
 }
 
@@ -105,54 +105,38 @@ fn key_chain_from_ssk(ssk: [u8; 32]) -> KeyChain {
     }
 }
 
-fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialData> {
+/// The testnet's private accounts. They start uninitialized: genesis funds them with pending
+/// credits that their owners receive.
+#[must_use]
+pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialData> {
     let key_chain_1 = key_chain_from_ssk(SSK_PRIV_ACC_A);
     let key_chain_2 = key_chain_from_ssk(SSK_PRIV_ACC_B);
 
     vec![
         PrivateAccountPrivateInitialData {
-            account: Account::funded(PRIV_ACC_A_INITIAL_BALANCE),
+            account: Account::default(),
             key_chain: key_chain_1,
             chain_index: None,
-            identifier: Identifier::ZERO,
+            kind: PrivateAccountKind::Regular,
         },
         PrivateAccountPrivateInitialData {
-            account: Account::funded(PRIV_ACC_B_INITIAL_BALANCE),
+            account: Account::default(),
             key_chain: key_chain_2,
             chain_index: None,
-            identifier: Identifier::ZERO,
+            kind: PrivateAccountKind::Regular,
         },
     ]
 }
 
-fn initial_commitments() -> Vec<PrivateAccountPublicInitialData> {
-    initial_priv_accounts_private_keys()
-        .into_iter()
-        .map(|data| PrivateAccountPublicInitialData {
-            npk: data.key_chain.nullifier_public_key,
-            vpk: data.key_chain.viewing_public_key.clone(),
-            account: data.account,
-        })
-        .collect()
-}
-
-fn initial_private_accounts() -> Vec<(lee_core::Commitment, lee_core::Nullifier)> {
-    initial_commitments()
-        .iter()
-        .map(|init_comm_data| {
-            let npk = &init_comm_data.npk;
-            let account_id = lee::AccountId::for_regular_private_account(
-                npk,
-                &init_comm_data.vpk,
-                Identifier::ZERO,
-            );
-
-            (
-                lee_core::Commitment::new(&account_id, &init_comm_data.account),
-                lee_core::Nullifier::for_account_initialization(&account_id),
-            )
-        })
-        .collect()
+/// The recovery bindings of the private accounts' canonical addresses.
+///
+/// Generated once under fresh encapsulation randomness by `regenerate_genesis_recovery_bindings`
+/// and pinned, so every node builds the same genesis and genesis credits to these addresses
+/// publish.
+#[must_use]
+pub fn initial_recovery_bindings() -> Vec<RecoveryBinding> {
+    borsh::from_slice(include_bytes!("genesis_recovery_bindings.bin"))
+        .expect("the pinned recovery bindings decode")
 }
 
 #[must_use]
@@ -250,7 +234,7 @@ fn initial_programs(cross_zone: bool) -> Vec<(AccountId, Program)> {
 pub fn initial_state(cross_zone: bool) -> V03State {
     lee::V03State::new()
         .with_public_accounts(initial_public_accounts())
-        .with_private_accounts(initial_private_accounts())
+        .with_recovery_bindings(initial_recovery_bindings())
         .with_named_programs(initial_programs(cross_zone))
 }
 
