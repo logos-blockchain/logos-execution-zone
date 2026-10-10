@@ -274,7 +274,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_by_hash(
 ///
 /// # Returns
 ///
-/// A `PointerResult<FfiAccount, OperationStatus>` indicating success or failure.
+/// A `PointerResult<FfiOption<FfiAccount>, OperationStatus>` indicating success or failure.
 ///
 /// # Safety
 ///
@@ -284,7 +284,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_by_hash(
 pub unsafe extern "C" fn sequencer_ffi_query_account(
     sequencer: *const SequencerServiceFFI,
     account_id: FfiAccountId,
-) -> PointerResult<FfiAccount, OperationStatus> {
+) -> PointerResult<FfiOption<FfiAccount>, OperationStatus> {
     if sequencer.is_null() {
         log::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(OperationStatus::NullPointer);
@@ -306,7 +306,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_account(
             log::error!("Failed to query account: {e:#}");
             PointerResult::from_error(OperationStatus::ClientError)
         },
-        |account| PointerResult::from_value(account.account.into()),
+        |account| PointerResult::from_value(account.account.map(FfiAccount::from).into()),
     )
 }
 

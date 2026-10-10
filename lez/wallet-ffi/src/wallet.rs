@@ -9,7 +9,7 @@ use std::{
 };
 
 use bip39::Mnemonic;
-use wallet::{cli::execute_keys_restoration, WalletCore};
+use wallet::WalletCore;
 
 use crate::{
     block_on, c_str_to_string,
@@ -322,7 +322,7 @@ pub unsafe extern "C" fn wallet_ffi_restore_data(
     };
 
     if res == WalletFfiError::Success {
-        match block_on(execute_keys_restoration(&mut wallet, depth)) {
+        match block_on(wallet.restore_keys(depth)) {
             Ok(()) => WalletFfiError::Success,
             Err(err) => {
                 print_error(format!("Failed to restore wallet data: {err}"));

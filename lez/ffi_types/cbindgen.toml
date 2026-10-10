@@ -1,0 +1,27 @@
+language = "C"
+cpp_compat = true
+include_guard = "FFI_TYPES_H"
+
+[export]
+include = [
+  "FfiAccountIdList",
+  "FfiActorList",
+  "FfiBoundaryStepList",
+  "FfiBytes32",
+  "FfiBytes64",
+  "FfiCastPromotionList",
+  "FfiEncryptedAccountData",
+  "FfiFeeDeclaration",
+  "FfiMessageDataList",
+  "FfiNonceList",
+  "FfiPdaSeedList",
+  "FfiPrivateActionList",
+  "FfiPublicExecutionContext",
+  "FfiPublicAccountEvidenceList",
+  "FfiRecoveryBindingList",
+  "FfiRootCall",
+  "FfiSealedCastList",
+  "FfiSignaturePubKeyList",
+  "FfiU128",
+  "FfiVecU8",
+]

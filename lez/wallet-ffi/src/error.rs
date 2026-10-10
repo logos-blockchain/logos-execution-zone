@@ -47,6 +47,8 @@ pub enum WalletFfiError {
     InvalidBytecode = 17,
     /// Fee payer cannot fund the fee reserve.
     PayerCannotFund = 18,
+    /// No pending message of this wallet is published at the position.
+    MessageNotFound = 19,
     /// Internal error (catch-all).
     InternalError = 99,
 }

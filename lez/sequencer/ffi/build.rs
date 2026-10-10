@@ -1,14 +1,6 @@
-use std::env;
+#[path = "../../ffi_types/endpoint_header.rs"]
+mod endpoint_header;
 
 fn main() {
-    let crate_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    println!("cargo:rerun-if-changed=src/");
-    cbindgen::Builder::new()
-        .with_crate(crate_dir)
-        .with_language(cbindgen::Language::C)
-        .with_cpp_compat(true)
-        .with_pragma_once(true)
-        .generate()
-        .expect("Unable to generate bindings")
-        .write_to_file("sequencer_ffi.h");
+    endpoint_header::write("sequencer_ffi.h");
 }

@@ -1,29 +1,34 @@
 use std::collections::BTreeMap;
 
-use lee::{Account, AccountData, AccountId, ShardData};
+use lee::{Account, AccountData, AccountId, ActorState};
 
 use crate::{
     OperationStatus,
-    api::types::{FfiAccountId, FfiBytes32, FfiU128, FfiVec, vectors::FfiVecU8},
+    api::types::{FfiAccountId, FfiOption, FfiU128, FfiVec, vectors::FfiVecU8},
 };
 
 #[repr(C)]
 pub struct FfiAccountData {
-    /// Account shards keys.
+    /// Account actor state keys.
     pub account_data_keys: FfiVec<FfiAccountId>,
-    /// Account shards values (guaranteed to have same amount of entries as `account_data_keys`).
+    /// Account actor state values (guaranteed to have same amount of entries as
+    /// `account_data_keys`).
     pub account_data_values: FfiVec<FfiVecU8>,
 }
 
 impl From<AccountData> for FfiAccountData {
     fn from(value: AccountData) -> Self {
-        let AccountData { shards } = value;
+        let AccountData { actor_states } = value;
 
-        let acc_data_keys = shards.keys().copied().map(Into::into).collect::<Vec<_>>();
-        let acc_data_values = shards
+        let acc_data_keys = actor_states
+            .keys()
+            .copied()
+            .map(Into::into)
+            .collect::<Vec<_>>();
+        let acc_data_values = actor_states
             .values()
             .cloned()
-            .map(ShardData::into_inner)
+            .map(ActorState::into_inner)
             .map(Into::into)
             .collect::<Vec<_>>();
 
@@ -51,21 +56,10 @@ impl TryFrom<FfiAccountData> for AccountData {
             return Err(OperationStatus::CastError);
         }
 
-        let mut values_std = vec![];
-
-        for raw_shard in values_std_raw {
-            let shard: ShardData = raw_shard.try_into().map_err(|e| {
-                log::error!("Failed to cast `FfiAccount` into `Account`, err: {e}");
-                OperationStatus::CastError
-            })?;
-
-            values_std.push(shard);
-        }
-
         Ok(Self {
-            shards: keys_std
+            actor_states: keys_std
                 .into_iter()
-                .zip(values_std)
+                .zip(values_std_raw.into_iter().map(ActorState::from))
                 .collect::<BTreeMap<_, _>>(),
         })
     }
@@ -84,12 +78,6 @@ pub struct FfiAccount {
 }
 
 // Helper functions to convert between Rust and FFI types
-
-impl From<&lee::AccountId> for FfiBytes32 {
-    fn from(id: &lee::AccountId) -> Self {
-        Self::from_account_id(id)
-    }
-}
 
 impl From<lee::Account> for FfiAccount {
     fn from(value: lee::Account) -> Self {
@@ -118,16 +106,15 @@ impl TryFrom<FfiAccount> for Account {
     }
 }
 
-/// Frees the resources associated with the given ffi account.
+/// Frees the resources associated with the given ffi account option.
 ///
 /// Takes ownership of the whole allocation produced by a `query_*` call: the
-/// outer `Box<FfiAccount>` (the `PointerResult.value` pointer) *and* its inner
-/// data buffer. Passing the struct by value previously freed only the inner
-/// buffer and leaked the outer box.
+/// outer `Box<FfiOption<FfiAccount>>` (the `PointerResult.value` pointer), the
+/// inner `Box<FfiAccount>` (when present) and its data buffer.
 ///
 /// # Arguments
 ///
-/// - `val`: The `*mut FfiAccount` returned in `PointerResult.value`.
+/// - `val`: The `*mut FfiOption<FfiAccount>` returned in `PointerResult.value`.
 ///
 /// # Returns
 ///
@@ -136,22 +123,24 @@ impl TryFrom<FfiAccount> for Account {
 /// # Safety
 ///
 /// The caller must ensure that:
-/// - `val` is a pointer to an `FfiAccount` produced by this library and not yet freed.
+/// - `val` is a pointer to an `FfiOption<FfiAccount>` produced by this library and not yet freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sequencer_ffi_free_ffi_account(val: *mut FfiAccount) {
+pub unsafe extern "C" fn sequencer_ffi_free_ffi_account_opt(val: *mut FfiOption<FfiAccount>) {
     if val.is_null() {
         log::error!("Trying to free a null pointer. Exiting");
         return;
     }
-    // Reclaim the outer box, then convert to drop the inner data buffer.
-    let boxed = unsafe { Box::from_raw(val) };
+    // Reclaim the outer box, then the inner account box (if any), converting it to drop its data.
+    let opt = unsafe { Box::from_raw(val) };
+    if opt.is_some {
+        let account = unsafe { Box::from_raw(opt.value) };
+        let orig_val_res: Result<Account, OperationStatus> = (*account)
+            .try_into()
+            .inspect_err(|_| log::error!("Failed to cast `FfiAccount` into `Account`"));
 
-    let orig_val_res: Result<Account, OperationStatus> = (*boxed)
-        .try_into()
-        .inspect_err(|_| log::error!("Failed to cast `FfiAccount` into `Account`"));
-
-    if let Ok(orig_val) = orig_val_res {
-        drop(orig_val);
+        if let Ok(orig_val) = orig_val_res {
+            drop(orig_val);
+        }
     }
 }
 

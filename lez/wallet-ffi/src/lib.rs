@@ -48,6 +48,7 @@ pub mod generic_transaction;
 pub mod keys;
 pub mod label;
 pub mod pda;
+pub mod pending;
 pub mod program_deployment;
 pub mod sync;
 pub mod transfer;
@@ -91,6 +92,7 @@ pub(crate) fn map_execution_error(e: ExecutionFailureKind) -> FfiError {
         )) if error.message().contains("Incorrect fee") => FfiError::PayerCannotFund,
         ExecutionFailureKind::InsufficientFundsError => FfiError::InsufficientFunds,
         ExecutionFailureKind::KeyNotFoundError => FfiError::KeyNotFound,
+        ExecutionFailureKind::StorageError(_) => FfiError::StorageError,
         ExecutionFailureKind::SequencerError(_) | ExecutionFailureKind::SequencerClientError(_) => {
             FfiError::NetworkError
         }

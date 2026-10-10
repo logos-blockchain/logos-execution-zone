@@ -1,0 +1,22 @@
+[package]
+edition = "2024"
+license = { workspace = true }
+name = "ffi_types"
+version = "0.1.0"
+
+[dependencies]
+common.workspace = true
+indexer_service_protocol.workspace = true
+lee.workspace = true
+lee_core.workspace = true
+
+[build-dependencies]
+cbindgen.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.cargo-machete]
+ignored = [
+  "cbindgen",
+] # machete does not recognize this for build dep and complains.

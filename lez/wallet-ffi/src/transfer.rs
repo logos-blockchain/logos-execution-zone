@@ -6,16 +6,19 @@ use std::{
 };
 
 use lee::AccountId;
+use lee_core::PrivateAccountKind;
 use wallet::{
-    account::AccountIdWithPrivacy, cli::CliAccountMention,
-    program_facades::native_token_transfer::NativeTokenTransfer, AccountIdentity,
+    account::AccountIdWithPrivacy,
+    cli::CliAccountMention,
+    program_facades::{native_token_transfer::NativeTokenTransfer, CreditDelivery},
+    AccountIdentity,
 };
 
 use crate::{
     block_on,
     error::{print_error, WalletFfiError},
     map_execution_error,
-    types::{FfiBytes32, FfiIdentifier, FfiTransferResult, WalletHandle},
+    types::{FfiBytes32, FfiTransferResult, WalletHandle},
     wallet::get_wallet,
     FfiPrivateAccountKeys,
 };
@@ -32,7 +35,8 @@ fn optional_c_str(ptr: *const c_char) -> Option<String> {
 ///
 /// Transfers tokens from one public account to another on the network.
 ///
-/// Program shards are unchanged. If the wallet holds `to`'s key, it also signs for that account.
+/// Program actor states are unchanged. If the wallet holds `to`'s key, it also signs for that
+/// account.
 ///
 /// # Parameters
 /// - `handle`: Valid wallet handle
@@ -88,12 +92,13 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.send_public_transfer(
+    match block_on(transfer.transfer(
         AccountIdentity::Public(from_id),
         AccountIdentity::Public(to_id),
         amount,
+        CreditDelivery::Automatic,
     )) {
-        Ok(tx_hash) => {
+        Ok((tx_hash, _)) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
 
@@ -122,7 +127,6 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
 /// - `handle`: Valid wallet handle
 /// - `from`: Source account ID (must be owned by this wallet)
 /// - `to_keys`: Destination account keys
-/// - `to_identifier`: Identifier for the recipient's private account
 /// - `amount`: Amount to transfer as little-endian [u8; 16]
 /// - `out_result`: Output pointer for transfer result
 ///
@@ -146,7 +150,6 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
     handle: *mut WalletHandle,
     from: *const FfiBytes32,
     to_keys: *const FfiPrivateAccountKeys,
-    to_identifier: *const FfiIdentifier,
     amount: *const [u8; 16],
     key_path: *const c_char,
     out_result: *mut FfiTransferResult,
@@ -156,12 +159,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
         Err(e) => return e,
     };
 
-    if from.is_null()
-        || to_keys.is_null()
-        || to_identifier.is_null()
-        || amount.is_null()
-        || out_result.is_null()
-    {
+    if from.is_null() || to_keys.is_null() || amount.is_null() || out_result.is_null() {
         print_error("Null pointer argument");
         return WalletFfiError::NullPointer;
     }
@@ -183,7 +181,6 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
             return e;
         }
     };
-    let to_identifier = lee_core::Identifier::new(unsafe { (*to_identifier).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
     let from_mention = optional_c_str(key_path).map_or_else(
         || CliAccountMention::Id(AccountIdWithPrivacy::Public(from_id)),
@@ -192,14 +189,17 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.send_shielded_transfer_to_outer_account(
+    match block_on(transfer.transfer(
         from_mention.into_public_identity(from_id, true),
-        to_npk,
-        to_vpk,
-        to_identifier,
+        AccountIdentity::PrivateForeign {
+            npk: to_npk,
+            vpk: to_vpk,
+            kind: PrivateAccountKind::Regular,
+        },
         amount,
+        CreditDelivery::Automatic,
     )) {
-        Ok((tx_hash, _shared_key)) => {
+        Ok((tx_hash, _)) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
 
@@ -277,8 +277,13 @@ pub unsafe extern "C" fn wallet_ffi_transfer_deshielded(
     let amount = u128::from_le_bytes(unsafe { *amount });
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.send_deshielded_transfer(from_id, to_id, amount)) {
-        Ok((tx_hash, _shared_key)) => {
+    match block_on(transfer.transfer(
+        AccountIdentity::PrivateOwned(from_id),
+        AccountIdentity::PublicNoSign(to_id),
+        amount,
+        CreditDelivery::Automatic,
+    )) {
+        Ok((tx_hash, _)) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
 
@@ -307,7 +312,6 @@ pub unsafe extern "C" fn wallet_ffi_transfer_deshielded(
 /// - `handle`: Valid wallet handle
 /// - `from`: Source account ID (must be owned by this wallet)
 /// - `to_keys`: Destination account keys
-/// - `to_identifier`: Identifier for the recipient's private account
 /// - `amount`: Amount to transfer as little-endian [u8; 16]
 /// - `out_result`: Output pointer for transfer result
 ///
@@ -331,7 +335,6 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
     handle: *mut WalletHandle,
     from: *const FfiBytes32,
     to_keys: *const FfiPrivateAccountKeys,
-    to_identifier: *const FfiIdentifier,
     amount: *const [u8; 16],
     out_result: *mut FfiTransferResult,
 ) -> WalletFfiError {
@@ -340,12 +343,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
         Err(e) => return e,
     };
 
-    if from.is_null()
-        || to_keys.is_null()
-        || to_identifier.is_null()
-        || amount.is_null()
-        || out_result.is_null()
-    {
+    if from.is_null() || to_keys.is_null() || amount.is_null() || out_result.is_null() {
         print_error("Null pointer argument");
         return WalletFfiError::NullPointer;
     }
@@ -367,18 +365,20 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
             return e;
         }
     };
-    let to_identifier = lee_core::Identifier::new(unsafe { (*to_identifier).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.send_private_transfer_to_outer_account(
-        from_id,
-        to_npk,
-        to_vpk,
-        to_identifier,
+    match block_on(transfer.transfer(
+        AccountIdentity::PrivateOwned(from_id),
+        AccountIdentity::PrivateForeign {
+            npk: to_npk,
+            vpk: to_vpk,
+            kind: PrivateAccountKind::Regular,
+        },
         amount,
+        CreditDelivery::Automatic,
     )) {
-        Ok((tx_hash, _shared_key)) => {
+        Ok((tx_hash, _)) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
 
@@ -465,12 +465,13 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded_owned(
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.send_shielded_transfer(
+    match block_on(transfer.transfer(
         from_mention.into_public_identity(from_id, true),
-        to_id,
+        AccountIdentity::PrivateOwned(to_id),
         amount,
+        CreditDelivery::Automatic,
     )) {
-        Ok((tx_hash, _shared_key)) => {
+        Ok((tx_hash, _)) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
 
@@ -551,8 +552,13 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private_owned(
     let amount = u128::from_le_bytes(unsafe { *amount });
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.send_private_transfer_to_owned_account(from_id, to_id, amount)) {
-        Ok((tx_hash, _shared_keys)) => {
+    match block_on(transfer.transfer(
+        AccountIdentity::PrivateOwned(from_id),
+        AccountIdentity::PrivateOwned(to_id),
+        amount,
+        CreditDelivery::Automatic,
+    )) {
+        Ok((tx_hash, _)) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
 

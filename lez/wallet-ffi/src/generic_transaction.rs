@@ -5,11 +5,12 @@ use std::{
 
 use common::HashType;
 use lee::{
-    privacy_preserving_transaction::circuit::{Dependency, ProgramKind, ProgramWithDependencies},
+    privacy_preserving_transaction::circuit::{Dependency, ProgramCatalog, ProgramKind},
     program::Program,
     AccountId, ProgramId,
 };
 use lee_core::{program::ProgramHeader, MembershipProof};
+use wallet::AccountMention;
 
 use crate::{
     block_on,
@@ -118,22 +119,27 @@ impl TryFrom<&FfiMembershipProof> for MembershipProof {
             let hash = unsafe { value.path.add(i).as_ref() }.ok_or(WalletFfiError::NullPointer)?;
             path.push(hash.data);
         }
-        Ok((value.index, path))
+        let index =
+            u64::try_from(value.index).map_err(|_err| WalletFfiError::InvalidTypeConversion)?;
+        Ok((index, path))
     }
 }
 
-impl From<MembershipProof> for FfiMembershipProof {
-    fn from(value: MembershipProof) -> Self {
+impl TryFrom<MembershipProof> for FfiMembershipProof {
+    type Error = WalletFfiError;
+
+    fn try_from(value: MembershipProof) -> Result<Self, Self::Error> {
         let (index, path) = value;
+        let index = usize::try_from(index).map_err(|_err| WalletFfiError::InvalidTypeConversion)?;
         let ffi_path: Vec<FfiBytes32> = path.into_iter().map(FfiBytes32::from).collect();
         let path_len = ffi_path.len();
         let path_ptr = Box::into_raw(ffi_path.into_boxed_slice()) as *const FfiBytes32;
 
-        Self {
+        Ok(Self {
             index,
             path: path_ptr,
             path_len,
-        }
+        })
     }
 }
 
@@ -150,25 +156,19 @@ pub struct FfiDependency {
 }
 
 #[repr(C)]
-/// Every program an execution may dispatch, root included, each paired with the account it is
-/// deployed at, plus the address the top-level call is dispatched to.
-///
-/// The root is the entry supplied at `self_account_id`; a shadow root dispatches at its derived
-/// address instead. `programs` is empty for native execution, which has no bytecode to supply.
+/// Every program an execution may dispatch, each paired with the account it is deployed at.
+/// `programs` is empty for native execution, which has no bytecode to supply.
 ///
 /// Intended to be created manually.
-pub struct FfiProgramWithDependencies {
-    pub self_account_id: FfiBytes32,
+pub struct FfiProgramCatalog {
     pub programs: *const FfiDependency,
     pub programs_size: usize,
 }
 
-impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
+impl TryFrom<&FfiProgramCatalog> for ProgramCatalog {
     type Error = WalletFfiError;
 
-    fn try_from(value: &FfiProgramWithDependencies) -> Result<Self, Self::Error> {
-        let supplied_root = AccountId::from(value.self_account_id);
-        let mut self_account_id = supplied_root;
+    fn try_from(value: &FfiProgramCatalog) -> Result<Self, Self::Error> {
         let mut programs = HashMap::new();
 
         // Alignment will be different, we need to read elements one-by-one
@@ -177,9 +177,6 @@ impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
                 unsafe { value.programs.add(i).as_ref() }.ok_or(WalletFfiError::NullPointer)?;
             let program: Program = (&entry.program).try_into()?;
             let account_id = ffi_account_id(&program, entry.kind, entry.account_id);
-            if AccountId::from(entry.account_id) == supplied_root {
-                self_account_id = account_id;
-            }
             let kind = match entry.kind {
                 FfiProgramKind::ProgramDisclosed => ProgramKind::Disclosed,
                 FfiProgramKind::ProgramShadow => ProgramKind::Shadow,
@@ -192,12 +189,7 @@ impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
             programs.insert(account_id, Dependency { program, kind });
         }
 
-        // Built field-wise rather than through `new`, which would insert a root program the
-        // native execution path must not be given.
-        Ok(Self {
-            self_account_id,
-            programs,
-        })
+        Ok(Self { programs })
     }
 }
 
@@ -260,8 +252,8 @@ fn ffi_account_id(program: &Program, kind: FfiProgramKind, supplied: FfiBytes32)
 /// # Parameters
 /// - `handle`: Valid pointer to wallet handle
 /// - `account_mentions`: Valid pointer to list of `FfiAccountMention`
-/// - `instruction_data`: Valid pointer to instruction data bytes
-/// - `program_account_id`: Account id the target program is deployed at
+/// - `root_mention`: Index into `account_mentions` of the actor the message is delivered to
+/// - `message`: Valid pointer to the message bytes
 /// - `payer`: Fee payer, or null to self-pay from the first funded signing account in
 ///   `account_mentions` (the first signing account if none is funded). May be one of those signing
 ///   accounts, or any other public account whose signing key the wallet holds (it co-signs without
@@ -275,7 +267,7 @@ fn ffi_account_id(program: &Program, kind: FfiProgramKind, supplied: FfiBytes32)
 /// # Safety
 /// - `handle` must be a valid pointer
 /// - `account_mentions` must be a valid pointer
-/// - `instruction_data` must be a valid pointer
+/// - `message` must be a valid pointer
 /// - `payer` must be null or a valid pointer to a `FfiBytes32`
 /// - `out_result` must be a valid pointer
 #[no_mangle]
@@ -283,9 +275,9 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
     handle: *mut WalletHandle,
     account_mentions: *const FfiAccountMention,
     account_mentions_size: usize,
-    instruction_data: *const u8,
-    instruction_data_size: usize,
-    program_account_id: FfiBytes32,
+    root_mention: usize,
+    message: *const u8,
+    message_size: usize,
     payer: *const FfiBytes32,
     out_result: *mut FfiTransactionResult,
 ) -> WalletFfiError {
@@ -299,8 +291,8 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
         return WalletFfiError::NullPointer;
     }
 
-    if instruction_data.is_null() {
-        print_error("Null input pointer for instruction data");
+    if message.is_null() {
+        print_error("Null input pointer for message");
         return WalletFfiError::NullPointer;
     }
 
@@ -317,29 +309,18 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
         }
     };
 
-    let accounts_ffi = std::slice::from_raw_parts(account_mentions, account_mentions_size);
-    let instruction_data = std::slice::from_raw_parts(instruction_data, instruction_data_size);
-
-    let mut accounts = Vec::with_capacity(account_mentions_size);
-
-    for ffi_acc in accounts_ffi {
-        match ffi_acc.try_into() {
-            Ok(v) => accounts.push(v),
-            Err(err) => {
-                print_error("Failed to convert FfiAccountMention into AccountMention");
-                return err;
-            }
-        }
-    }
+    let message = std::slice::from_raw_parts(message, message_size).to_vec();
+    let accounts = match mentions(std::slice::from_raw_parts(
+        account_mentions,
+        account_mentions_size,
+    )) {
+        Ok(v) => v,
+        Err(err) => return err,
+    };
 
     let payer = unsafe { read_optional_account_id(payer) };
 
-    match block_on(wallet.send_pub_tx_paid_by(
-        accounts,
-        instruction_data.to_vec(),
-        AccountId::from(program_account_id),
-        payer,
-    )) {
+    match block_on(wallet.send_pub_tx_paid_by(accounts, root_mention, message, payer)) {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(std::ptr::null_mut(), std::ffi::CString::into_raw);
@@ -366,7 +347,9 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
 /// # Parameters
 /// - `handle`: Valid pointer to wallet handle
 /// - `account_mentions`: Valid pointer to list of `FfiAccountMention`
-/// - `instruction_data`: Valid pointer to instruction data bytes
+/// - `root_mention`: Index into `account_mentions` of the actor the message is delivered to
+/// - `message`: Valid pointer to the message bytes
+/// - `programs`: Valid pointer to the catalog of programs the transaction may run
 /// - `out_result`: Valid pointer to `FfiTransactionResult`
 ///
 /// # Returns
@@ -376,16 +359,18 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
 /// # Safety
 /// - `handle` must be a valid pointer
 /// - `account_mentions` must be a valid pointer
-/// - `instruction_data` must be a valid pointer
+/// - `message` must be a valid pointer
+/// - `programs` must be a valid pointer
 /// - `out_result` must be a valid pointer
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
     handle: *mut WalletHandle,
     account_mentions: *const FfiAccountMention,
     account_mentions_size: usize,
-    instruction_data: *const u8,
-    instruction_data_size: usize,
-    program_with_dependencies: *const FfiProgramWithDependencies,
+    root_mention: usize,
+    message: *const u8,
+    message_size: usize,
+    programs: *const FfiProgramCatalog,
     out_result: *mut FfiTransactionResult,
 ) -> WalletFfiError {
     let wrapper = match get_wallet(handle) {
@@ -398,8 +383,13 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
         return WalletFfiError::NullPointer;
     }
 
-    if instruction_data.is_null() {
-        print_error("Null input pointer for instruction data");
+    if message.is_null() {
+        print_error("Null input pointer for message");
+        return WalletFfiError::NullPointer;
+    }
+
+    if programs.is_null() {
+        print_error("Null input pointer for the program catalog");
         return WalletFfiError::NullPointer;
     }
 
@@ -416,28 +406,21 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
         }
     };
 
-    let accounts_ffi = std::slice::from_raw_parts(account_mentions, account_mentions_size);
-    let instruction_data = std::slice::from_raw_parts(instruction_data, instruction_data_size);
-
-    let mut accounts = Vec::with_capacity(account_mentions_size);
-
-    for ffi_acc in accounts_ffi {
-        match ffi_acc.try_into() {
-            Ok(v) => accounts.push(v),
-            Err(err) => {
-                print_error("Failed to convert FfiAccountMention into AccountMention");
-                return err;
-            }
-        }
-    }
-
-    let program = match unsafe { &*program_with_dependencies }.try_into() {
+    let message = std::slice::from_raw_parts(message, message_size).to_vec();
+    let accounts = match mentions(std::slice::from_raw_parts(
+        account_mentions,
+        account_mentions_size,
+    )) {
         Ok(v) => v,
         Err(err) => return err,
     };
 
-    match block_on(wallet.send_privacy_preserving_tx(accounts, instruction_data.to_vec(), &program))
-    {
+    let programs = match unsafe { &*programs }.try_into() {
+        Ok(v) => v,
+        Err(err) => return err,
+    };
+
+    match block_on(wallet.send_privacy_preserving_tx(accounts, root_mention, message, &programs)) {
         Ok((tx_hash, secrets)) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(std::ptr::null_mut(), std::ffi::CString::into_raw);
@@ -467,6 +450,14 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
             map_execution_error(e)
         }
     }
+}
+
+fn mentions(mentions: &[FfiAccountMention]) -> Result<Vec<AccountMention>, WalletFfiError> {
+    mentions
+        .iter()
+        .map(AccountMention::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .inspect_err(|_| print_error("Failed to convert FfiAccountMention into AccountMention"))
 }
 
 /// Poll transaction for its status.

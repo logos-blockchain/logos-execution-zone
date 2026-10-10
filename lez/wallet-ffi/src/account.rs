@@ -3,18 +3,17 @@
 use std::{ffi::c_char, ptr, str::FromStr as _};
 
 use key_protocol::key_management::{key_tree::chain_index::ChainIndex, KeyChain};
-use lee::{AccountId, ProgramShardSelector};
+use lee::{AccountId, Actor};
 use wallet::account::{AccountIdWithPrivacy, HumanReadableAccount};
 
 use crate::{
     block_on, c_str_to_string,
     error::{print_error, WalletFfiError},
     types::{
-        FfiAccount, FfiAccountList, FfiAccountListEntry, FfiBytes32, FfiPrivateAccountKeys,
-        FfiShard, WalletHandle,
+        FfiAccount, FfiAccountList, FfiAccountListEntry, FfiActorState, FfiBytes32,
+        FfiPrivateAccountKeys, WalletHandle,
     },
     wallet::get_wallet,
-    FfiIdentifier,
 };
 
 /// Create a new public account.
@@ -68,14 +67,8 @@ pub unsafe extern "C" fn wallet_ffi_create_account_public(
 /// Create a new private account, storing a default account entry in local storage.
 ///
 /// This is the private-account equivalent of `wallet_ffi_create_account_public`.
-/// It generates a key node, assigns a random identifier, and inserts a default
-/// account record so the account can immediately be used.
-///
-/// The identifier is chosen at random and is not encoded in the mnemonic seed.
-/// Once the account is initialized, the identifier is embedded in the encrypted
-/// transaction payload and can be recovered by running `sync-private` from the
-/// same mnemonic. An account that was created locally but has never been initialized
-/// cannot be recovered from the seed alone.
+/// It generates a key node and inserts a default record for its account, whose ID the node's
+/// keys alone determine, so the account can immediately be used.
 ///
 /// # Parameters
 /// - `handle`: Valid wallet handle
@@ -123,8 +116,7 @@ pub unsafe extern "C" fn wallet_ffi_create_account_private(
 /// Create a new private key node.
 ///
 /// Returns the nullifier public key (npk) and viewing public key (vpk) to share with
-/// senders. Account IDs are discovered later via sync when senders initialize accounts
-/// under this key.
+/// senders, who address the node's account by them.
 ///
 /// # Parameters
 /// - `handle`: Valid wallet handle
@@ -405,7 +397,8 @@ pub unsafe extern "C" fn wallet_ffi_get_account_public(
     let account_id = AccountId::new(unsafe { (*account_id).data });
 
     let account = match block_on(wallet.get_account_public(account_id)) {
-        Ok(a) => a,
+        Ok(Some(a)) => a,
+        Ok(None) => return WalletFfiError::AccountNotFound,
         Err(e) => {
             print_error(format!("Failed to get account: {e}"));
             return WalletFfiError::NetworkError;
@@ -507,19 +500,20 @@ pub unsafe extern "C" fn wallet_ffi_get_account_view(
 
     if program_account_id.is_null() {
         print_error(
-            "A shard selector must name a program account id; pass the native token program's \
-             id for the balance shard"
+            "An actor state selector must name a program account id; pass the native token program's \
+             id for the balance actor state"
                 .to_owned(),
         );
         return WalletFfiError::NullPointer;
     }
-    let shard_selector = ProgramShardSelector::new(
+    let actor_state_selector = Actor::new(
         account_id,
         AccountId::new(unsafe { (*program_account_id).data }),
     );
 
-    let account = match block_on(wallet.get_account_view(shard_selector)) {
-        Ok(a) => a,
+    let account = match block_on(wallet.get_account_view(actor_state_selector)) {
+        Ok(Some(a)) => a,
+        Ok(None) => return WalletFfiError::AccountNotFound,
         Err(e) => {
             print_error(format!("Failed to get account: {e}"));
             return WalletFfiError::NetworkError;
@@ -547,17 +541,25 @@ pub unsafe extern "C" fn wallet_ffi_free_account_data(account: *mut FfiAccount) 
 
     unsafe {
         let account = &*account;
-        if account.shards.is_null() || account.shards_len == 0 {
+        if account.actor_states.is_null() || account.actor_states_len == 0 {
             return;
         }
-        let shards = std::slice::from_raw_parts_mut(account.shards.cast_mut(), account.shards_len);
-        for shard in shards.iter() {
-            if !shard.data.is_null() && shard.data_len > 0 {
-                let slice = std::slice::from_raw_parts_mut(shard.data.cast_mut(), shard.data_len);
+        let actor_states = std::slice::from_raw_parts_mut(
+            account.actor_states.cast_mut(),
+            account.actor_states_len,
+        );
+        for actor_state in actor_states.iter() {
+            if !actor_state.data.is_null() && actor_state.data_len > 0 {
+                let slice = std::slice::from_raw_parts_mut(
+                    actor_state.data.cast_mut(),
+                    actor_state.data_len,
+                );
                 drop(Box::from_raw(std::ptr::from_mut::<[u8]>(slice)));
             }
         }
-        drop(Box::from_raw(std::ptr::from_mut::<[FfiShard]>(shards)));
+        drop(Box::from_raw(std::ptr::from_mut::<[FfiActorState]>(
+            actor_states,
+        )));
     }
 }
 
@@ -625,7 +627,6 @@ pub unsafe extern "C" fn wallet_ffi_import_public_account(
 /// - `handle`: Valid wallet handle
 /// - `key_chain_json`: JSON-encoded `key_protocol::key_management::KeyChain`
 /// - `chain_index`: Optional chain index string (for example `/0/1`, `NULL` if unknown)
-/// - `identifier`: Identifier for this private account as 32 opaque bytes
 /// - `account_state_json`: JSON-encoded `wallet::account::HumanReadableAccount`
 ///
 /// # Returns
@@ -635,25 +636,18 @@ pub unsafe extern "C" fn wallet_ffi_import_public_account(
 /// # Safety
 /// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
 /// - `key_chain_json` must be a valid pointer to a null-terminated C string
-/// - `identifier` must be a valid pointer to a `FfiIdentifier` struct
 /// - `account_state_json` must be a valid pointer to a null-terminated C string
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_import_private_account(
     handle: *mut WalletHandle,
     key_chain_json: *const c_char,
     chain_index: *const c_char,
-    identifier: *const FfiIdentifier,
     account_state_json: *const c_char,
 ) -> WalletFfiError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
     };
-
-    if identifier.is_null() {
-        print_error("Null pointer for identifier");
-        return WalletFfiError::NullPointer;
-    }
 
     let key_chain_json = match c_str_to_string(key_chain_json, "key_chain_json") {
         Ok(value) => value,
@@ -710,12 +704,10 @@ pub unsafe extern "C" fn wallet_ffi_import_private_account(
         Some(parsed_chain_index)
     };
 
-    let identifier = lee_core::Identifier::new(unsafe { (*identifier).data });
-
     wallet
         .storage_mut()
         .key_chain_mut()
-        .add_imported_private_account(key_chain, chain_index, identifier, account);
+        .add_imported_private_account(key_chain, chain_index, account);
 
     match wallet.store_persistent_data() {
         Ok(()) => WalletFfiError::Success,

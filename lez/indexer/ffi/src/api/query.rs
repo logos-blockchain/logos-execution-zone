@@ -241,7 +241,7 @@ pub unsafe extern "C" fn query_block_by_hash(
 ///
 /// # Returns
 ///
-/// A `PointerResult<FfiAccount, OperationStatus>` indicating success or failure.
+/// A `PointerResult<FfiOption<FfiAccount>, OperationStatus>` indicating success or failure.
 ///
 /// # Safety
 ///
@@ -251,7 +251,7 @@ pub unsafe extern "C" fn query_block_by_hash(
 pub unsafe extern "C" fn query_account(
     indexer: *const IndexerServiceFFI,
     account_id: FfiAccountId,
-) -> PointerResult<FfiAccount, OperationStatus> {
+) -> PointerResult<FfiOption<FfiAccount>, OperationStatus> {
     if indexer.is_null() {
         log::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(OperationStatus::NullPointer);
@@ -277,7 +277,11 @@ pub unsafe extern "C" fn query_account(
                 log::error!("Failed to query account: {e:#}");
                 PointerResult::from_error(OperationStatus::ClientError)
             },
-            |account| PointerResult::from_value(account.into()),
+            |account| {
+                PointerResult::from_value(account.map_or_else(FfiOption::from_none, |account| {
+                    FfiOption::from_value(FfiAccount::from(account))
+                }))
+            },
         )
 }
 

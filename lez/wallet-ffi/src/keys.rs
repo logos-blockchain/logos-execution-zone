@@ -361,6 +361,7 @@ pub unsafe extern "C" fn wallet_ffi_free_account_identity(
             kind: _,
             account_id: _,
             key_path,
+            public_key: _,
             authority: _,
             seed: _,
             authorization_secret_key: _,
@@ -368,7 +369,6 @@ pub unsafe extern "C" fn wallet_ffi_free_account_identity(
             nullifier_public_key: _,
             viewing_public_key,
             viewing_public_key_len,
-            identifier: _,
         } = *account_identity;
 
         if !viewing_public_key.is_null() {
