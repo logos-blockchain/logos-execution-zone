@@ -1,22 +1,31 @@
+use std::{borrow::Cow, collections::BTreeSet};
+
 use borsh::{BorshDeserialize, BorshSerialize};
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
-    Nullifier, NullifierPublicKey, NullifierSecretKey,
-    account::{Account, AccountId},
+    AuthorizationSecretKey, Commitment, CommitmentSetDigest, InvalidMembershipProof,
+    MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
+    account::{Account, AccountId, Actor, Nonce},
     compute_digest_for_path,
-    encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
-    execution_state::{DeferredPublicEffect, RootCall},
+    encryption::{EncryptedNote, ViewingPublicKey},
+    execution_state::{Boundary, PredictedCrossMessages, PublicExecutionContext, TransactionEntry},
     program::{
-        ApplyOutput, BlockValidityWindow, PdaSeed, PlanOutput, ProgramHeader, ProgramId,
-        TimestampValidityWindow, immutable_mirror_commitment,
+        MessageBody, MessageData, PdaSeed, PrivateAccountKind, ProgramHeader, ProgramId, Response,
+        ValidityWindows, immutable_mirror_commitment,
     },
+    recovery::{RecipientEncryption, RecoveryBinding},
+    sealing::SealedCast,
 };
 
 /// `circuit_io` is shared by host and guest, so this can't live in the host-only `error` module.
 #[derive(Debug, thiserror::Error)]
-#[error("an undisclosed program claim requires an immutable header")]
-pub struct UndisclosedHeaderNotImmutable;
+pub enum InvalidProgramImageWitness {
+    #[error("an undisclosed program claim requires an immutable header")]
+    MutableHeader,
+    #[error(transparent)]
+    Membership(#[from] InvalidMembershipProof),
+}
 
 /// Untrusted circuit input claiming a program's real `image_id`, used for `env::verify` in place
 /// of a header's address.
@@ -57,8 +66,9 @@ impl ProgramImageWitness {
     }
 
     /// # Errors
-    /// Returns an error if `Self::Undisclosed`'s header isn't immutable.
-    pub fn to_claim(&self) -> Result<ProgramImageClaim, UndisclosedHeaderNotImmutable> {
+    /// Returns an error if `Self::Undisclosed`'s header isn't immutable or its membership proof's
+    /// position does not fit its path.
+    pub fn to_claim(&self) -> Result<ProgramImageClaim, InvalidProgramImageWitness> {
         Ok(match self {
             Self::Disclosed {
                 account_id,
@@ -70,14 +80,14 @@ impl ProgramImageWitness {
             Self::Undisclosed {
                 account_id,
                 program_header,
-                membership_proof,
+                membership_proof: (position, path),
             } => {
                 if !program_header.immutable {
-                    return Err(UndisclosedHeaderNotImmutable);
+                    return Err(InvalidProgramImageWitness::MutableHeader);
                 }
                 let commitment = immutable_mirror_commitment(*account_id, program_header);
                 ProgramImageClaim::Undisclosed {
-                    root: compute_digest_for_path(&commitment, membership_proof),
+                    root: compute_digest_for_path(&commitment, *position, path)?,
                 }
             }
         })
@@ -101,68 +111,154 @@ pub struct ShadowProgramWitness {
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
-pub struct PrivacyPreservingCircuitInput {
-    pub root: RootCall,
+#[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
+pub struct MessageWitness {
+    pub body: MessageBody,
+    pub position: u64,
+    pub rho: Option<[u8; 32]>,
+    pub path: Vec<[u8; 32]>,
+    pub filler: DummyOutput,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct RootCall {
+    pub to: Actor,
+    pub message: MessageData,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum InvalidMessageEvidence {
+    #[error("A received message's position does not fit its membership path")]
+    NoncanonicalPosition,
+    #[error("A privately received message must reach a witnessed private account")]
+    UnwitnessedDestination,
+}
+
+/// Inputs for proving a transaction's private part.
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct ProvingInput {
+    pub root: TransactionEntry<MessageWitness>,
+    pub context: PublicExecutionContext,
     /// One witness for each private account used by the transaction.
     pub private_witnesses: Vec<PrivateWitness>,
     pub dummy_inputs: Vec<DummyInput>,
     /// Minimum length of each note the guest encrypts, capped at `MAX_CIPHERTEXT_PADDING`.
     /// `dummy_inputs` carry their own ciphertexts and are checked against it, not padded.
     pub ciphertext_padding: Option<u32>,
+    pub recoveries: Vec<RecipientEncryption>,
+    pub private_cast_promotions: BTreeSet<u64>,
+}
+
+impl ProvingInput {
+    #[must_use]
+    pub fn public_root(&self) -> Option<RootCall> {
+        match &self.root {
+            TransactionEntry::Call(call) => {
+                self.context.runs_publicly(call.to).then(|| call.clone())
+            }
+            TransactionEntry::Cast(_) => None,
+        }
+    }
+}
+
+impl MessageWitness {
+    /// # Errors
+    /// Returns an error if a received message's evidence does not fit it.
+    pub fn spend(
+        &self,
+        witnesses: &[PrivateWitness],
+    ) -> Result<(Nullifier, CommitmentSetDigest), InvalidMessageEvidence> {
+        let to = self.body.to;
+        let commitment = self.rho.as_ref().map_or_else(
+            || Commitment::for_message(&self.body),
+            |rho| Commitment::for_sealed_message(&self.body, rho),
+        );
+        let root = compute_digest_for_path(&commitment, self.position, &self.path)
+            .map_err(|InvalidMembershipProof| InvalidMessageEvidence::NoncanonicalPosition)?;
+        let receiver = witnesses
+            .iter()
+            .find(|witness| {
+                let account_id = witness.account_id();
+                account_id == to.account_id
+                    || witness
+                        .openings
+                        .iter()
+                        .any(|opening| account_id.blinded(opening) == to.account_id)
+            })
+            .ok_or(InvalidMessageEvidence::UnwitnessedDestination)?;
+        Ok((
+            Nullifier::for_message(&receiver.kind.nsk(), &commitment, self.position),
+            root,
+        ))
+    }
+}
+
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct PrivacyPreservingCircuitInput {
+    pub input: ProvingInput,
     /// Real `image_id`s for every address-deployed program invoked in the call graph, keyed by
     /// account id.
     pub program_image_witnesses: Vec<ProgramImageWitness>,
     /// Identities of every shadow program invoked in the call graph.
     pub shadow_program_witnesses: Vec<ShadowProgramWitness>,
-    /// One entry per scheduled guest call, in traversal order.
-    pub calls: Vec<ProvenCall>,
-}
-
-/// One scheduled guest call's transcript: its plan output, and the apply outputs of the private
-/// effects that planner emitted, in effect order.
-///
-/// Native-token calls are recomputed from the protocol's own implementation, so they carry no
-/// receipt and have no transcript.
-#[derive(Clone, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-pub struct ProvenCall {
-    pub plan: PlanOutput,
-    pub private_apply_outputs: Vec<ApplyOutput>,
+    pub responses: Vec<Response>,
+    /// Per private transition: Calls other than replies to `input.from`, then every Cast, in
+    /// their respective vector orders before descendants execute. Call replies preserve the
+    /// reached address and consume no entry. Public emissions consume none. Missing or surplus
+    /// entries are rejected.
+    pub sender_presentations: Vec<SenderPresentation>,
+    /// One per durable Cast of private execution, in the order it publishes them.
+    pub cast_seals: Vec<RecipientEncryption>,
+    pub predicted_cross_messages: PredictedCrossMessages,
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub struct PrivateWitness {
     pub vpk: ViewingPublicKey,
     pub random_seed: [u8; 32],
-    pub identifier: Identifier,
     pub kind: WitnessKind,
     pub nullifier: NullifierWitness,
+    pub openings: BTreeSet<[u8; 32]>,
+}
+
+#[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+pub enum SenderPresentation {
+    Canonical,
+    Blinded([u8; 32]),
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub enum WitnessKind {
     /// Standalone private account. The `account_id` is derived as
-    /// `AccountId::for_regular_private_account(&npk, vpk, identifier)` and matched against
-    /// the handle's `account_id`. An honest authorized account's `npk` for Id computation gets
-    /// derived from the supplied `ask`.
-    Regular { ask: Option<AuthorizationSecretKey> },
-    /// A private PDA with its authority's account ID and seed.
-    Pda { binding: (AccountId, PdaSeed) },
+    /// `AccountId::for_regular_private_account(&npk, vpk)` from the key's `npk` and matched
+    /// against the addressed actor's `account_id`.
+    Regular(RegularKey),
+    /// A private PDA with its authority's account ID and seed, held by `nsk`.
+    Pda {
+        nsk: NullifierSecretKey,
+        binding: (AccountId, PdaSeed),
+    },
+}
+
+/// The key a regular private account's witness holds: an authorization key also authorizes the
+/// account's spending, a nullifier key only proves control of its state.
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+pub enum RegularKey {
+    Authorized(AuthorizationSecretKey),
+    Nullifying(NullifierSecretKey),
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub enum NullifierWitness {
-    /// Initializes a private account without a membership proof.
+    /// Initializes a private account from the fixed empty predecessor, which needs no membership
+    /// proof, anchored at a known commitment-set root.
     Init {
-        npk: NullifierPublicKey,
         commitment_root: CommitmentSetDigest,
     },
-    /// Update of a private account: existing on-chain commitment, with membership proof. `npk`
-    /// is derived from `nsk`.
+    /// Update of a private account: existing on-chain commitment, with membership proof.
     Update {
         account: Account,
-        view_tag: ViewTag,
-        nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
     },
 }
@@ -173,12 +269,33 @@ pub enum NullifierWitness {
 pub struct DummyInput {
     /// The seed used for generating the dummy nullifier.
     pub nullifier_seed: [u8; 32],
-    /// The seed used for generating the dummy commitment.
-    pub commitment_seed: [u8; 32],
-    /// The dummy ciphertext, epk, and view tag.
-    pub note: EncryptedAccountData,
     /// The dummy root.
     pub commitment_root: CommitmentSetDigest,
+    /// The dummy commitment and note.
+    pub output: DummyOutput,
+}
+
+/// The output of an action that creates no account state: a dummy commitment and note.
+#[derive(BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
+pub struct DummyOutput {
+    /// The seed used for generating the dummy commitment.
+    pub commitment_seed: [u8; 32],
+    /// The dummy ciphertext and epk.
+    pub note: EncryptedNote,
+}
+
+#[cfg(any(feature = "host", test))]
+impl Default for DummyOutput {
+    fn default() -> Self {
+        Self {
+            commitment_seed: [0; 32],
+            note: EncryptedNote {
+                epk: crate::EphemeralPublicKey(vec![0; crate::ML_KEM_768_CIPHERTEXT_LEN]),
+                ..EncryptedNote::default()
+            },
+        }
+    }
 }
 
 impl PrivateWitness {
@@ -190,32 +307,87 @@ impl PrivateWitness {
     #[must_use]
     pub const fn pda_binding(&self) -> Option<(AccountId, PdaSeed)> {
         match self.kind {
-            WitnessKind::Pda { binding } => Some(binding),
-            WitnessKind::Regular { .. } => None,
+            WitnessKind::Pda { binding, .. } => Some(binding),
+            WitnessKind::Regular(_) => None,
         }
     }
 
     /// Derives the account ID from this witness.
     #[must_use]
     pub fn account_id(&self) -> AccountId {
-        let npk = self.nullifier.npk();
-        match self.kind {
-            WitnessKind::Regular { .. } => {
-                AccountId::for_regular_private_account(&npk, &self.vpk, self.identifier)
-            }
-            WitnessKind::Pda {
-                binding: (program, seed),
-            } => AccountId::for_private_pda(&program, &seed, &npk, &self.vpk, self.identifier),
+        let npk = NullifierPublicKey::from(&self.kind.nsk());
+        AccountId::for_private_account(&npk, &self.vpk, &self.kind.account_kind())
+    }
+
+    /// The state this witness's transition starts from: the fixed empty account when it
+    /// initializes.
+    #[must_use]
+    pub(crate) fn predecessor(&self) -> Cow<'_, Account> {
+        match &self.nullifier {
+            NullifierWitness::Init { .. } => Cow::Owned(Account::default()),
+            NullifierWitness::Update { account, .. } => Cow::Borrowed(account),
+        }
+    }
+
+    /// The nullifier this witness's transition spends, the commitment-set root anchoring it, and
+    /// the nonce its successor takes. An initialization spends its fixed predecessor's nullifier
+    /// like any update; only that predecessor may omit membership.
+    pub fn transition(
+        &self,
+    ) -> Result<(Nullifier, CommitmentSetDigest, Nonce), InvalidMembershipProof> {
+        let nsk = self.kind.nsk();
+        let predecessor = self.predecessor();
+        let commitment = Commitment::new(&self.account_id(), &predecessor);
+        let root = match &self.nullifier {
+            NullifierWitness::Init { commitment_root } => *commitment_root,
+            NullifierWitness::Update {
+                membership_proof: (position, path),
+                ..
+            } => compute_digest_for_path(&commitment, *position, path)?,
+        };
+        Ok((
+            Nullifier::for_account_update(&commitment, &nsk),
+            root,
+            predecessor.nonce.private_account_nonce_increment(&nsk),
+        ))
+    }
+}
+
+impl WitnessKind {
+    /// The nullifier key holding the witnessed account.
+    #[must_use]
+    pub fn nsk(&self) -> NullifierSecretKey {
+        match self {
+            Self::Regular(key) => key.nsk(),
+            Self::Pda { nsk, .. } => *nsk,
+        }
+    }
+
+    /// Whether the witness authorizes its account's spending.
+    #[must_use]
+    pub const fn is_authorized(&self) -> bool {
+        matches!(self, Self::Regular(RegularKey::Authorized(_)))
+    }
+
+    #[must_use]
+    pub const fn account_kind(&self) -> PrivateAccountKind {
+        match *self {
+            Self::Regular(_) => PrivateAccountKind::Regular,
+            Self::Pda {
+                binding: (account_id, seed),
+                ..
+            } => PrivateAccountKind::Pda { account_id, seed },
         }
     }
 }
 
-impl NullifierWitness {
+impl RegularKey {
+    /// The nullifier key this key holds: derived from an authorization key.
     #[must_use]
-    pub fn npk(&self) -> NullifierPublicKey {
+    pub fn nsk(&self) -> NullifierSecretKey {
         match self {
-            Self::Init { npk, .. } => *npk,
-            Self::Update { nsk, .. } => NullifierPublicKey::from(nsk),
+            Self::Authorized(ask) => NullifierSecretKey::from(ask),
+            Self::Nullifying(nsk) => *nsk,
         }
     }
 }
@@ -232,33 +404,40 @@ pub struct PrivateAction {
     // to the nullifier in content. That is, the commitment's plaintext is
     // not necessarily the updated account state of the nullifier's plaintext.
     pub commitment: Commitment,
-    pub encrypted_post_state: EncryptedAccountData,
-}
-
-/// A public account's root-authorization bit and the effects the execution deferred to
-/// settlement, in the order its traversal emitted them.
-#[derive(Clone, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-pub struct PublicAction {
-    pub account_id: AccountId,
-    pub is_authorized: bool,
-    pub effects: Vec<DeferredPublicEffect>,
+    pub encrypted_post_state: EncryptedNote,
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq, Default))]
+#[cfg_attr(
+    any(feature = "host", test),
+    derive(Debug, Clone, PartialEq, Eq, Default)
+)]
 pub struct PrivacyPreservingCircuitOutput {
-    pub public_actions: Vec<PublicAction>,
+    pub context: PublicExecutionContext,
+    pub execution: ProvenExecution,
+}
+
+#[derive(BorshSerialize, BorshDeserialize)]
+#[cfg_attr(
+    any(feature = "host", test),
+    derive(Debug, Clone, PartialEq, Eq, Default)
+)]
+pub struct ProvenExecution {
+    pub boundary: Boundary,
+    pub casts: Vec<SealedCast>,
+    pub recovery_bindings: Vec<RecoveryBinding>,
+    /// How the transaction starts, as far as the proof reveals it: a public Call, or `None` for a
+    /// private Call or a received message, whose spend is an ordinary private action.
+    pub public_root: Option<RootCall>,
     pub private_actions: Vec<PrivateAction>,
-    pub block_validity_window: BlockValidityWindow,
-    pub timestamp_validity_window: TimestampValidityWindow,
-    /// Unchanged echo of [`PrivacyPreservingCircuitInput::program_image_claims`] — what the
+    pub validity: ValidityWindows,
+    /// Claims derived from [`PrivacyPreservingCircuitInput::program_image_witnesses`] — what the
     /// receipt actually commits to, so the sequencer can check it against real chain state.
     pub program_image_claims: Vec<ProgramImageClaim>,
 }
 
 #[cfg(any(feature = "host", test))]
-impl PrivacyPreservingCircuitOutput {
+impl ProvenExecution {
     #[must_use]
     pub fn commitments(&self) -> Vec<Commitment> {
         self.private_actions

@@ -1,8 +1,8 @@
 use std::{collections::BTreeMap, fmt::Display, str::FromStr};
 
+pub use actor_state::ActorState;
 use base58::{FromBase58 as _, ToBase58 as _};
 use borsh::{BorshDeserialize, BorshSerialize};
-pub use data::ShardData;
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
@@ -10,10 +10,9 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 use crate::{
     NullifierSecretKey,
     native_token::{InvalidBalanceEncoding, NATIVE_TOKEN_PROGRAM_ID, decode_balance},
-    program::ApplyOutput,
 };
 
-pub mod data;
+pub mod actor_state;
 
 #[derive(Copy, Debug, Default, Clone, Eq, PartialEq)]
 pub struct Nonce(pub u128);
@@ -24,16 +23,6 @@ impl Nonce {
             .0
             .checked_add(1)
             .expect("Overflow when incrementing nonce");
-    }
-
-    #[must_use]
-    pub fn private_account_nonce_init(account_id: &AccountId) -> Self {
-        let mut bytes: [u8; 64] = [0_u8; 64];
-        bytes[..32].copy_from_slice(account_id.value());
-        let result: [u8; 32] = Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap();
-        let result = result.first_chunk::<16>().unwrap();
-
-        Self(u128::from_le_bytes(*result))
     }
 
     #[must_use]
@@ -110,8 +99,8 @@ pub struct Account {
 
 impl Account {
     #[must_use]
-    pub fn with_shard(mut self, program: AccountId, data: ShardData) -> Self {
-        self.data.set_shard(program, data);
+    pub fn with_actor_state(mut self, program: AccountId, data: ActorState) -> Self {
+        self.data.set_actor_state(program, data);
         self
     }
 }
@@ -127,91 +116,87 @@ impl Account {
 
     #[must_use]
     pub fn funded(balance: Balance) -> Self {
-        Self::default().with_shard(
+        Self::default().with_actor_state(
             NATIVE_TOKEN_PROGRAM_ID,
             crate::native_token::encode_balance(balance),
         )
     }
 }
 
-/// An account's program shards, including its native balance at [`NATIVE_TOKEN_PROGRAM_ID`].
+/// An account's program actor states, including its native balance at [`NATIVE_TOKEN_PROGRAM_ID`].
 #[derive(
     Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 #[serde(deny_unknown_fields)]
 pub struct AccountData {
-    pub shards: BTreeMap<AccountId, ShardData>,
+    pub actor_states: BTreeMap<AccountId, ActorState>,
 }
 
 impl AccountData {
     #[must_use]
-    pub fn shard(&self, program: AccountId) -> &ShardData {
-        const EMPTY: &ShardData = &ShardData::empty();
-        self.shards.get(&program).unwrap_or(EMPTY)
+    pub fn actor_state(&self, program: AccountId) -> &ActorState {
+        const EMPTY: &ActorState = &ActorState::empty();
+        self.actor_states.get(&program).unwrap_or(EMPTY)
     }
 
-    pub fn set_shard(&mut self, program: AccountId, data: ShardData) {
+    pub fn set_actor_state(&mut self, program: AccountId, data: ActorState) {
         if data.is_empty() {
-            self.shards.remove(&program);
+            self.actor_states.remove(&program);
         } else {
-            self.shards.insert(program, data);
+            self.actor_states.insert(program, data);
         }
     }
 
     #[must_use]
-    pub fn with_shard(mut self, program: AccountId, data: ShardData) -> Self {
-        self.set_shard(program, data);
+    pub fn with_actor_state(mut self, program: AccountId, data: ActorState) -> Self {
+        self.set_actor_state(program, data);
         self
     }
 
     pub fn native_balance(&self) -> Result<Balance, InvalidBalanceEncoding> {
-        decode_balance(self.shard(NATIVE_TOKEN_PROGRAM_ID))
+        decode_balance(self.actor_state(NATIVE_TOKEN_PROGRAM_ID))
     }
 
-    pub fn apply_output(&mut self, output: &ApplyOutput) {
-        if let Some(data) = &output.post_data {
-            self.set_shard(output.input.selector.program_account_id, data.clone());
-        }
-    }
-
-    /// Returns the requested shards, with empty data for missing shards.
+    /// Returns the requested actor states, with empty data for missing actor states.
     #[must_use]
     pub fn project(&self, program_account_ids: impl IntoIterator<Item = AccountId>) -> Self {
         Self {
-            shards: program_account_ids
+            actor_states: program_account_ids
                 .into_iter()
-                .map(|program| (program, self.shard(program).clone()))
+                .map(|program| (program, self.actor_state(program).clone()))
                 .collect(),
         }
     }
 
-    /// Updates the supplied shards. Empty data removes a shard.
+    /// Updates the supplied actor states. Empty data removes an actor state.
     pub fn update(&mut self, projection: &Self) {
-        for (program, data) in &projection.shards {
-            self.set_shard(*program, data.clone());
+        for (program, data) in &projection.actor_states {
+            self.set_actor_state(*program, data.clone());
         }
     }
 }
 
-/// Selects one of an account's program shards.
+/// One account's actor state under one program: the state one handler owns.
 #[derive(
     Debug,
     Copy,
     Clone,
     Eq,
     PartialEq,
+    Ord,
+    PartialOrd,
     Hash,
     Serialize,
     Deserialize,
     BorshSerialize,
     BorshDeserialize,
 )]
-pub struct ProgramShardSelector {
+pub struct Actor {
     pub account_id: AccountId,
     pub program_account_id: AccountId,
 }
 
-impl ProgramShardSelector {
+impl Actor {
     #[must_use]
     pub const fn new(account_id: AccountId, program_account_id: AccountId) -> Self {
         Self {

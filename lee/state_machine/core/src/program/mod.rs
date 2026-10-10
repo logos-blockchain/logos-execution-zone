@@ -1,20 +1,32 @@
-use std::{borrow::Borrow, collections::HashSet};
+use std::collections::BTreeSet;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::guest::env;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    BlockId, Commitment, Identifier, NullifierPublicKey, Timestamp,
-    account::{Account, AccountId, ProgramShardSelector, ShardData},
+    BlockId, Commitment, EncryptedNote, NullifierPublicKey, SealedCast, Timestamp,
+    account::{Account, AccountId, Actor, ActorState},
     encryption::ViewingPublicKey,
 };
+
+#[macro_export]
+macro_rules! define_actor_logic {
+    (raw $handler:path $(,)?) => {
+        fn main() {
+            $crate::program::run_actor_with($handler)
+        }
+    };
+    ($handler:path $(,)?) => {
+        fn main() {
+            $crate::program::run_actor($handler)
+        }
+    };
+}
 
 /// The well-known dispatch address of the program loader: a native (non-guest) pseudo-program
 /// that runs its `Instruction` variants as Rust rather than interpreting a guest ELF.
 pub const PROGRAM_LOADER_ACCOUNT_ID: AccountId = AccountId::new([0xFE; 32]);
-
-pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
 /// Hard cap on a deployed program's segment chain length, bounding a resolution walk.
 pub const MAX_PROGRAM_SEGMENTS: usize = 20;
@@ -51,100 +63,7 @@ impl AccountId {
     }
 }
 
-/// Borsh-encoded program instruction bytes.
-pub type InstructionData = Vec<u8>;
-pub type EffectData = Vec<u8>;
-
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct AccountMeta {
-    pub account_id: AccountId,
-    pub is_authorized: bool,
-    pub program_account_id: AccountId,
-}
-
-impl AccountMeta {
-    #[must_use]
-    pub const fn new(
-        account_id: AccountId,
-        is_authorized: bool,
-        program_account_id: AccountId,
-    ) -> Self {
-        Self {
-            account_id,
-            is_authorized,
-            program_account_id,
-        }
-    }
-
-    #[must_use]
-    pub const fn native_balance(account_id: AccountId, is_authorized: bool) -> Self {
-        Self::new(
-            account_id,
-            is_authorized,
-            crate::native_token::NATIVE_TOKEN_PROGRAM_ID,
-        )
-    }
-}
-
-impl From<&AccountMeta> for ProgramShardSelector {
-    fn from(account: &AccountMeta) -> Self {
-        Self {
-            account_id: account.account_id,
-            program_account_id: account.program_account_id,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct ShardEffect {
-    pub selector: ProgramShardSelector,
-    pub data: EffectData,
-}
-
-impl ShardEffect {
-    #[must_use]
-    pub fn new<E: BorshSerialize>(account: &AccountMeta, effect: &E) -> Self {
-        Self {
-            selector: account.into(),
-            data: borsh::to_vec(effect).expect("borsh serialization is infallible"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct ApplyInput {
-    pub self_account_id: AccountId,
-    pub selector: ProgramShardSelector,
-    pub pre_data: ShardData,
-    pub effect_data: EffectData,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct ApplyOutput {
-    pub input: ApplyInput,
-    pub post_data: Option<ShardData>,
-    pub chained_calls: Vec<ChainedCall>,
-}
-
-impl ApplyOutput {
-    #[must_use]
-    pub const fn new(input: ApplyInput, post_data: Option<ShardData>) -> Self {
-        Self {
-            input,
-            post_data,
-            chained_calls: Vec::new(),
-        }
-    }
-}
-
-/// Struct encoding the input to an LEE program.
-#[derive(Debug, Clone, Eq, PartialEq, BorshSerialize, BorshDeserialize)]
-pub struct PlanInput {
-    pub self_account_id: AccountId,
-    pub caller_account_id: Option<AccountId>,
-    pub accounts: Vec<AccountMeta>,
-    pub instruction_data: InstructionData,
-}
+pub type MessageData = Vec<u8>;
 
 /// A 32-byte seed used to compute a *Program-Derived `AccountId`* (PDA).
 ///
@@ -192,34 +111,25 @@ impl AsRef<[u8]> for PdaSeed {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(PartialOrd, Ord))]
 pub enum PrivateAccountKind {
-    Regular(Identifier),
+    Regular,
     Pda {
         account_id: AccountId,
         seed: PdaSeed,
-        identifier: Identifier,
     },
 }
 
 impl PrivateAccountKind {
-    /// Borsh layout (integers little-endian, variant index is u8; `ident` is `Identifier`'s
-    /// opaque 32-byte encoding):
+    /// Borsh layout (variant index is u8):
     ///
     /// ```text
-    /// Regular(ident):                 0x00 || ident (32) || [0u8; 64]
-    /// Pda { account_id, seed, ident }: 0x01 || account_id (32) || seed (32) || ident (32)
+    /// Regular:                  0x00 || [0u8; 64]
+    /// Pda { account_id, seed }: 0x01 || account_id (32) || seed (32)
     /// ```
     ///
     /// Both variants are zero-padded to the same length so all ciphertexts are the same size,
     /// preventing observers from distinguishing `Regular` from `Pda` via ciphertext length.
-    /// `HEADER_LEN` equals the borsh size of the largest variant (`Pda`): 1 + 32 + 32 + 32 = 97.
-    pub const HEADER_LEN: usize = 97;
-
-    #[must_use]
-    pub const fn identifier(&self) -> Identifier {
-        match self {
-            Self::Regular(identifier) | Self::Pda { identifier, .. } => *identifier,
-        }
-    }
+    /// `HEADER_LEN` equals the borsh size of the largest variant (`Pda`): 1 + 32 + 32 = 65.
+    pub const HEADER_LEN: usize = 65;
 
     #[must_use]
     pub fn to_header_bytes(&self) -> [u8; Self::HEADER_LEN] {
@@ -292,30 +202,26 @@ impl AccountId {
     }
 
     /// Derives an [`AccountId`] for a private PDA from the owning program's account ID, seed,
-    /// nullifier public key, and identifier.
+    /// nullifier public key and viewing public key.
     ///
     /// Unlike public PDAs ([`AccountId::for_public_pda`]), this includes the `npk` in the
     /// derivation, making the address unique per group of controllers sharing viewing keys.
-    /// The `identifier` further diversifies the address, so a single `(account_id, seed, npk)`
-    /// tuple controls a family of 2^256 addresses.
     #[must_use]
     pub fn for_private_pda(
         account_id: &Self,
         seed: &PdaSeed,
         npk: &NullifierPublicKey,
         vpk: &ViewingPublicKey,
-        identifier: Identifier,
     ) -> Self {
         use risc0_zkvm::sha::{Impl, Sha256 as _};
         const PRIVATE_PDA_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/PrivatePDA/\x00";
 
-        let mut bytes = [0_u8; 32 + 32 + 32 + 32 + ViewingPublicKey::LEN + 32];
+        let mut bytes = [0_u8; 32 + 32 + 32 + 32 + ViewingPublicKey::LEN];
         bytes[0..32].copy_from_slice(PRIVATE_PDA_PREFIX);
         bytes[32..64].copy_from_slice(account_id.as_ref());
         bytes[64..96].copy_from_slice(&seed.0);
         bytes[96..128].copy_from_slice(&npk.to_byte_array());
-        bytes[128..128 + ViewingPublicKey::LEN].copy_from_slice(vpk.to_bytes());
-        bytes[128 + ViewingPublicKey::LEN..].copy_from_slice(identifier.value());
+        bytes[128..].copy_from_slice(vpk.to_bytes());
         Self::new(
             Impl::hash_bytes(&bytes)
                 .as_bytes()
@@ -332,52 +238,243 @@ impl AccountId {
         kind: &PrivateAccountKind,
     ) -> Self {
         match kind {
-            PrivateAccountKind::Regular(identifier) => {
-                Self::for_regular_private_account(npk, vpk, *identifier)
+            PrivateAccountKind::Regular => Self::for_regular_private_account(npk, vpk),
+            PrivateAccountKind::Pda { account_id, seed } => {
+                Self::for_private_pda(account_id, seed, npk, vpk)
             }
-            PrivateAccountKind::Pda {
-                account_id,
-                seed,
-                identifier,
-            } => Self::for_private_pda(account_id, seed, npk, vpk, *identifier),
+        }
+    }
+
+    /// Derives an address that names this account without revealing it to anyone lacking `factor`.
+    #[must_use]
+    pub fn blinded(self, factor: &[u8; 32]) -> Self {
+        use risc0_zkvm::sha::{Impl, Sha256 as _};
+        const BLINDED_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/Blinded/\x00\x00\x00\x00";
+
+        let mut bytes = [0; 96];
+        bytes[0..32].copy_from_slice(BLINDED_PREFIX);
+        bytes[32..64].copy_from_slice(self.as_ref());
+        bytes[64..].copy_from_slice(factor);
+        Self::new(
+            Impl::hash_bytes(&bytes)
+                .as_bytes()
+                .try_into()
+                .expect("Hash output must be exactly 32 bytes long"),
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct MessageEnvelope<S> {
+    pub from: S,
+    pub to: Actor,
+    pub message: MessageData,
+}
+
+pub type MessageBody = MessageEnvelope<Actor>;
+
+#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
+pub enum Publication {
+    Clear {
+        body: MessageBody,
+        recovery: EncryptedNote,
+    },
+    Sealed(SealedCast),
+}
+
+impl Publication {
+    #[must_use]
+    pub fn commitment(&self) -> Commitment {
+        match self {
+            Self::Clear { body, .. } => Commitment::for_message(body),
+            Self::Sealed(sealed) => sealed.commitment,
         }
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct ChainedCall {
-    /// The account ID of the program to execute.
-    pub program_account_id: AccountId,
-    /// Selects the callee's inputs from the current execution state.
-    pub shard_selectors: Vec<ProgramShardSelector>,
-    /// The instruction data to pass.
-    pub instruction_data: InstructionData,
-    /// PDA seeds authorized for the callee. For each seed, the callee is authorized to
-    /// mutate the `AccountId` derived from `(caller_account_id, seed)`, regardless of
-    /// whether the account is public or private.
-    pub pda_seeds: Vec<PdaSeed>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct Call {
+    pub to: Actor,
+    pub message: MessageData,
+    pub pda_seeds: BTreeSet<PdaSeed>,
 }
 
-impl ChainedCall {
-    /// Creates a new chained call serializing the given instruction.
-    pub fn new<I: BorshSerialize>(
-        program_account_id: AccountId,
-        shard_selectors: Vec<ProgramShardSelector>,
-        instruction: &I,
-    ) -> Self {
+impl Call {
+    pub fn new<M: BorshSerialize>(to: Actor, message: &M) -> Self {
         Self {
-            program_account_id,
-            shard_selectors,
-            instruction_data: borsh::to_vec(instruction)
-                .expect("borsh serialization is infallible"),
-            pda_seeds: Vec::new(),
+            to,
+            message: borsh::to_vec(message).expect("borsh serialization is infallible"),
+            pda_seeds: BTreeSet::new(),
         }
     }
 
     #[must_use]
-    pub fn with_pda_seeds(mut self, pda_seeds: Vec<PdaSeed>) -> Self {
-        self.pda_seeds = pda_seeds;
+    pub fn with_pda_seeds(mut self, pda_seeds: impl IntoIterator<Item = PdaSeed>) -> Self {
+        self.pda_seeds = pda_seeds.into_iter().collect();
         self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct Cast {
+    pub to: Actor,
+    pub message: MessageData,
+}
+
+impl Cast {
+    pub fn new<M: BorshSerialize>(to: Actor, message: &M) -> Self {
+        Self {
+            to,
+            message: borsh::to_vec(message).expect("borsh serialization is infallible"),
+        }
+    }
+}
+
+pub trait Sendable {
+    fn send_into(self, calls: &mut Vec<Call>, casts: &mut Vec<Cast>);
+}
+
+impl Sendable for Call {
+    fn send_into(self, calls: &mut Vec<Call>, _casts: &mut Vec<Cast>) {
+        calls.push(self);
+    }
+}
+
+impl Sendable for Cast {
+    fn send_into(self, _calls: &mut Vec<Call>, casts: &mut Vec<Cast>) {
+        casts.push(self);
+    }
+}
+
+/// The scheduled input of one transition, echoed whole in the journal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ReceiveInput {
+    pub receiver: Actor,
+    /// The actor that sent this message, at the address it presented; `None` when the transaction
+    /// itself submitted it.
+    pub from: Option<Actor>,
+    pub is_authorized: bool,
+    pub pre_state: ActorState,
+    pub message: MessageData,
+}
+
+impl ReceiveInput {
+    /// Whether the message came from another actor of the receiver's own program.
+    #[must_use]
+    pub fn from_own_program(&self) -> bool {
+        self.from
+            .is_some_and(|from| from.program_account_id == self.receiver.program_account_id)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct StateReply {
+    pub state: ActorState,
+}
+
+impl From<&ReceiveInput> for StateReply {
+    fn from(input: &ReceiveInput) -> Self {
+        Self {
+            state: input.pre_state.clone(),
+        }
+    }
+}
+
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+#[must_use = "a Transition does nothing unless committed"]
+pub struct Transition {
+    pub input: ReceiveInput,
+    pub response: Response,
+}
+
+impl Transition {
+    pub fn commit(&self) {
+        env::commit_slice(&crate::to_borsh_frame(self));
+    }
+}
+
+/// What a handler returns. `None` keeps the actor state, empty data clears it, other data replaces
+/// it.
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+#[must_use]
+pub struct Response {
+    pub post_state: Option<ActorState>,
+    pub calls: Vec<Call>,
+    pub casts: Vec<Cast>,
+    pub events: Vec<ProgramEvent>,
+    pub validity: ValidityWindows,
+}
+
+impl Response {
+    pub const fn keep_state() -> Self {
+        Self {
+            post_state: None,
+            calls: Vec::new(),
+            casts: Vec::new(),
+            events: Vec::new(),
+            validity: ValidityWindows::new_unbounded(),
+        }
+    }
+
+    pub fn set_state(data: impl Into<ActorState>) -> Self {
+        Self {
+            post_state: Some(data.into()),
+            ..Self::keep_state()
+        }
+    }
+
+    pub fn call<M: BorshSerialize>(self, to: Actor, message: &M) -> Self {
+        self.send(Call::new(to, message))
+    }
+
+    pub fn cast<M: BorshSerialize>(self, to: Actor, message: &M) -> Self {
+        self.send(Cast::new(to, message))
+    }
+
+    pub fn send(mut self, message: impl Sendable) -> Self {
+        message.send_into(&mut self.calls, &mut self.casts);
+        self
+    }
+
+    pub fn event(mut self, event: ProgramEvent) -> Self {
+        self.events.push(event);
+        self
+    }
+
+    pub fn block_window<W: Into<BlockValidityWindow>>(mut self, window: W) -> Self {
+        self.validity.blocks = window.into();
+        self
+    }
+
+    pub fn try_block_window<W: TryInto<BlockValidityWindow, Error = InvalidWindow>>(
+        mut self,
+        window: W,
+    ) -> Result<Self, InvalidWindow> {
+        self.validity.blocks = window.try_into()?;
+        Ok(self)
+    }
+
+    pub fn timestamp_window<W: Into<TimestampValidityWindow>>(mut self, window: W) -> Self {
+        self.validity.timestamps = window.into();
+        self
+    }
+
+    pub fn try_timestamp_window<W: TryInto<TimestampValidityWindow, Error = InvalidWindow>>(
+        mut self,
+        window: W,
+    ) -> Result<Self, InvalidWindow> {
+        self.validity.timestamps = window.try_into()?;
+        Ok(self)
+    }
+
+    pub const fn into_transition(self, input: ReceiveInput) -> Transition {
+        Transition {
+            input,
+            response: self,
+        }
     }
 }
 
@@ -433,6 +530,13 @@ impl ProgramSegment {
 
 pub type BlockValidityWindow = ValidityWindow<BlockId>;
 pub type TimestampValidityWindow = ValidityWindow<Timestamp>;
+
+#[derive(Clone, Copy, Default, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+pub struct ValidityWindows {
+    pub blocks: BlockValidityWindow,
+    pub timestamps: TimestampValidityWindow,
+}
 
 #[derive(Clone, Copy, Default, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
@@ -539,6 +643,28 @@ impl<T> From<std::ops::RangeFull> for ValidityWindow<T> {
     }
 }
 
+impl ValidityWindows {
+    #[must_use]
+    pub const fn new_unbounded() -> Self {
+        Self {
+            blocks: ValidityWindow::new_unbounded(),
+            timestamps: ValidityWindow::new_unbounded(),
+        }
+    }
+
+    pub fn intersect(self, other: Self) -> Result<Self, InvalidWindow> {
+        Ok(Self {
+            blocks: self.blocks.intersect(other.blocks)?,
+            timestamps: self.timestamps.intersect(other.timestamps)?,
+        })
+    }
+
+    #[must_use]
+    pub fn is_valid_at(&self, block_id: BlockId, timestamp: Timestamp) -> bool {
+        self.blocks.is_valid_for(block_id) && self.timestamps.is_valid_for(timestamp)
+    }
+}
+
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
 #[error("Invalid window")]
 pub struct InvalidWindow;
@@ -554,104 +680,6 @@ pub struct ProgramEvent {
     pub data: Vec<u8>,
 }
 
-#[derive(Clone, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-#[must_use = "PlanOutput does nothing unless written"]
-pub struct PlanOutput {
-    pub input: PlanInput,
-    pub effects: Vec<ShardEffect>,
-    /// The list of chained calls to other programs.
-    pub chained_calls: Vec<ChainedCall>,
-    /// The block ID window where the program output is valid.
-    pub block_validity_window: BlockValidityWindow,
-    /// The timestamp window where the program output is valid.
-    pub timestamp_validity_window: TimestampValidityWindow,
-    /// A vector of event data. Dropped for private transaction for function
-    /// privacy.
-    pub events: Vec<ProgramEvent>,
-}
-
-impl PlanOutput {
-    pub const fn new(input: PlanInput) -> Self {
-        Self {
-            input,
-            effects: Vec::new(),
-            chained_calls: Vec::new(),
-            block_validity_window: ValidityWindow::new_unbounded(),
-            timestamp_validity_window: ValidityWindow::new_unbounded(),
-            events: Vec::new(),
-        }
-    }
-
-    pub fn with_effects(mut self, effects: Vec<ShardEffect>) -> Self {
-        self.effects = effects;
-        self
-    }
-
-    pub fn with_chained_calls(mut self, chained_calls: Vec<ChainedCall>) -> Self {
-        self.chained_calls = chained_calls;
-        self
-    }
-
-    pub fn with_events(mut self, events: Vec<ProgramEvent>) -> Self {
-        self.events = events;
-        self
-    }
-
-    /// Sets the block ID validity window from an infallible range conversion (`1..`, `..5`, `..`).
-    pub fn with_block_validity_window<W: Into<BlockValidityWindow>>(mut self, window: W) -> Self {
-        self.block_validity_window = window.into();
-        self
-    }
-
-    /// Sets the block ID validity window from a fallible range conversion (`1..5`).
-    /// Returns `Err` if the range is empty.
-    pub fn try_with_block_validity_window<
-        W: TryInto<BlockValidityWindow, Error = InvalidWindow>,
-    >(
-        mut self,
-        window: W,
-    ) -> Result<Self, InvalidWindow> {
-        self.block_validity_window = window.try_into()?;
-        Ok(self)
-    }
-
-    /// Sets the timestamp validity window from an infallible range conversion.
-    pub fn with_timestamp_validity_window<W: Into<TimestampValidityWindow>>(
-        mut self,
-        window: W,
-    ) -> Self {
-        self.timestamp_validity_window = window.into();
-        self
-    }
-
-    /// Sets the timestamp validity window from a fallible range conversion (`4..7`).
-    /// Returns `Err` if the range is empty.
-    pub fn try_with_timestamp_validity_window<
-        W: TryInto<TimestampValidityWindow, Error = InvalidWindow>,
-    >(
-        mut self,
-        window: W,
-    ) -> Result<Self, InvalidWindow> {
-        self.timestamp_validity_window = window.try_into()?;
-        Ok(self)
-    }
-}
-
-#[derive(Clone, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-#[must_use = "a GuestOutput does nothing unless written"]
-pub enum GuestOutput {
-    Plan(PlanOutput),
-    Apply(ApplyOutput),
-}
-
-impl GuestOutput {
-    pub fn write(&self) {
-        env::commit_slice(&crate::to_borsh_frame(self));
-    }
-}
-
 /// A struct holding an event-output of a program.
 #[cfg(feature = "host")]
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -660,116 +688,6 @@ pub struct TransactionEvent {
     pub account_id: AccountId,
     /// Program event-data with selector.
     pub event: ProgramEvent,
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum ExecutionValidationError {
-    #[error("Account shard selectors are not unique")]
-    AccountShardSelectorsNotUnique,
-
-    #[error("An effect selects {selector:?}, which is not an input of the call")]
-    EffectOutsideInputs { selector: ProgramShardSelector },
-
-    #[error(
-        "A program's apply echoed an input it was not given: expected {expected:?}, actual {actual:?}"
-    )]
-    ApplyInputMismatch {
-        expected: Box<ApplyInput>,
-        actual: Box<ApplyInput>,
-    },
-
-    #[error(
-        "A program's plan echoed an input it was not given: expected {expected:?}, actual {actual:?}"
-    )]
-    PlanInputMismatch {
-        expected: Box<PlanInput>,
-        actual: Box<PlanInput>,
-    },
-
-    #[error(
-        "Program {executing_account_id} wrote data on a shard selector of {account_id} that does not name it"
-    )]
-    ForeignShardWrite {
-        account_id: AccountId,
-        executing_account_id: AccountId,
-    },
-
-    #[error("A program's apply returned chained calls, which are not supported")]
-    ChainedCallsFromApply,
-}
-
-/// Discriminates which entrypoint a single guest invocation is for. Written by the (trusted)
-/// orchestrator only.
-///
-/// `Plan` is index 0 and must stay index 0; future variants are appended only, never
-/// inserted or reordered. An unrecognized discriminant is a decode error: no capability probe
-/// exists in this model, so an unknown required operation must not count as success.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub enum CallKind {
-    Plan,
-    Apply,
-}
-
-pub enum ProgramCall<T> {
-    Plan(PlanInput, T),
-    Apply(ApplyInput),
-}
-
-#[must_use = "a Plan does nothing unless written"]
-pub struct Plan {
-    output: PlanOutput,
-}
-
-impl Plan {
-    pub fn new(input: &PlanInput) -> Self {
-        Self {
-            output: PlanOutput::new(input.clone()),
-        }
-    }
-
-    /// The plan as built so far, so a program can assert what it emitted without a zkVM.
-    pub const fn output(&self) -> &PlanOutput {
-        &self.output
-    }
-
-    pub fn effect<E: BorshSerialize>(&mut self, account: &AccountMeta, effect: &E) {
-        self.inspect(account, self.output.input.self_account_id, effect);
-    }
-
-    pub fn inspect<E: BorshSerialize>(
-        &mut self,
-        account: &AccountMeta,
-        owner: AccountId,
-        guard: &E,
-    ) {
-        assert_eq!(
-            account.program_account_id, owner,
-            "An effect on {} names the shard of {}, not of {owner}",
-            account.account_id, account.program_account_id
-        );
-        self.output.effects.push(ShardEffect::new(account, guard));
-    }
-
-    pub fn call(&mut self, call: ChainedCall) {
-        self.output.chained_calls.push(call);
-    }
-
-    pub fn event(&mut self, event: ProgramEvent) {
-        self.output.events.push(event);
-    }
-
-    pub fn block_window<W: Into<BlockValidityWindow>>(&mut self, window: W) {
-        self.output.block_validity_window = window.into();
-    }
-
-    pub fn timestamp_window<W: Into<TimestampValidityWindow>>(&mut self, window: W) {
-        self.output.timestamp_validity_window = window.into();
-    }
-
-    pub fn write(self) -> ! {
-        GuestOutput::Plan(self.output).write();
-        env::exit(0)
-    }
 }
 
 /// Reads first 4 bytes indicating the length in bytes of the program input bytes.
@@ -784,87 +702,41 @@ pub fn read_input_frame() -> Vec<u8> {
     payload
 }
 
-/// Reads a single LEE guest invocation, dispatching on `CallKind`.
-#[must_use]
-pub fn read_program_call<T: BorshDeserialize>() -> ProgramCall<T> {
-    let call_kind: CallKind =
-        borsh::from_slice(&read_input_frame()).expect("call kind must decode from borsh");
-    let payload = read_input_frame();
-
-    match call_kind {
-        CallKind::Plan => {
-            let input: PlanInput =
-                borsh::from_slice(&payload).expect("guest input must be valid borsh");
-            let instruction = borsh::from_slice(&input.instruction_data)
-                .expect("instruction must decode from borsh");
-            ProgramCall::Plan(input, instruction)
-        }
-        CallKind::Apply => ProgramCall::Apply(
-            borsh::from_slice(&payload).expect("apply input must be valid borsh"),
-        ),
-    }
+/// Handles one delivery, then exits. A panic fails the transaction.
+#[doc(hidden)]
+pub fn run_actor<M: BorshDeserialize>(
+    handle_message: impl FnOnce(&ReceiveInput, M) -> Response,
+) -> ! {
+    run_actor_with(|input| {
+        let message = borsh::from_slice(&input.message).expect("message must decode from borsh");
+        handle_message(input, message)
+    })
 }
 
-/// Handles one plan or apply call, then exits.
-///
-/// `plan` uses instruction data and account metadata to produce effects and chained calls.
-/// `apply` receives one effect and its shard's current data (`&[u8]` or `&ShardData`).
-/// Missing shards are empty. Return `None` to keep data, or `Some(data)` to replace it.
-/// Only the program's own shards may be replaced; empty data clears them.
-/// A panic fails the transaction.
-pub fn run_program<I, E, P, D>(
-    plan: impl FnOnce(&PlanInput, I) -> Plan,
-    apply: impl FnOnce(E, &P) -> Option<D>,
-) -> !
-where
-    I: BorshDeserialize,
-    E: BorshDeserialize,
-    P: ?Sized,
-    ShardData: Borrow<P>,
-    D: TryInto<ShardData, Error: std::fmt::Debug>,
-{
-    match read_program_call::<I>() {
-        ProgramCall::Plan(input, instruction) => plan(&input, instruction).write(),
-        ProgramCall::Apply(input) => {
-            let effect = borsh::from_slice(&input.effect_data)
-                .expect("a program only applies effects it planned");
-            match apply(effect, input.pre_data.borrow()) {
-                Some(data) => apply_write(
-                    input,
-                    data.try_into()
-                        .expect("an applied shard fits within the data limit"),
-                ),
-                None => apply_keep(input),
-            }
-        }
-    }
+/// [`run_actor`] for a handler that decodes the message itself, e.g. by sender.
+#[doc(hidden)]
+pub fn run_actor_with(handle_message: impl FnOnce(&ReceiveInput) -> Response) -> ! {
+    let input: ReceiveInput =
+        borsh::from_slice(&read_input_frame()).expect("receive input must be valid borsh");
+    handle_message(&input).into_transition(input).commit();
+    env::exit(0)
 }
 
 #[must_use]
-pub fn write_once(pre_data: &[u8], data: Vec<u8>) -> Vec<u8> {
+pub fn write_once(pre_state: &[u8], data: Vec<u8>) -> Vec<u8> {
     assert!(
-        pre_data.is_empty() || *pre_data == *data,
-        "shard already holds different data"
+        pre_state.is_empty() || *pre_state == *data,
+        "actor state already holds different data"
     );
     data
-}
-
-pub fn apply_keep(input: ApplyInput) -> ! {
-    GuestOutput::Apply(ApplyOutput::new(input, None)).write();
-    env::exit(0)
-}
-
-pub fn apply_write(input: ApplyInput, data: ShardData) -> ! {
-    GuestOutput::Apply(ApplyOutput::new(input, Some(data))).write();
-    env::exit(0)
 }
 
 #[must_use]
 pub fn get_program_via<'state>(
     account_id: AccountId,
-    loader_shard: impl Fn(AccountId) -> Option<&'state ShardData>,
+    loader_actor_state: impl Fn(AccountId) -> Option<&'state ActorState>,
 ) -> Option<(ProgramId, Vec<u8>)> {
-    let header = ProgramHeader::from_bytes(loader_shard(account_id)?)?;
+    let header = ProgramHeader::from_bytes(loader_actor_state(account_id)?)?;
 
     let mut elf = Vec::new();
     let mut next = Some(header.program_first_segment);
@@ -874,41 +746,12 @@ pub fn get_program_via<'state>(
         if segment_count > MAX_PROGRAM_SEGMENTS {
             return None;
         }
-        let segment = ProgramSegment::from_bytes(loader_shard(segment_id)?)?;
+        let segment = ProgramSegment::from_bytes(loader_actor_state(segment_id)?)?;
         elf.extend_from_slice(&segment.bytecode);
         next = segment.next_segment;
     }
 
     Some((header.image_id, elf))
-}
-
-pub fn validate_plan(
-    expected: &PlanInput,
-    output: &PlanOutput,
-) -> Result<(), ExecutionValidationError> {
-    if output.input != *expected {
-        return Err(ExecutionValidationError::PlanInputMismatch {
-            expected: Box::new(expected.clone()),
-            actual: Box::new(output.input.clone()),
-        });
-    }
-
-    let mut named = HashSet::new();
-    for account in &expected.accounts {
-        if !named.insert(ProgramShardSelector::from(account)) {
-            return Err(ExecutionValidationError::AccountShardSelectorsNotUnique);
-        }
-    }
-
-    for effect in &output.effects {
-        if !named.contains(&effect.selector) {
-            return Err(ExecutionValidationError::EffectOutsideInputs {
-                selector: effect.selector,
-            });
-        }
-    }
-
-    Ok(())
 }
 
 /// Builds the `Commitment` mirroring an immutable header's finalized `ProgramHeader` into private
@@ -919,40 +762,13 @@ pub fn immutable_mirror_commitment(
     program_header: &ProgramHeader,
 ) -> Commitment {
     let mirror_account_id = AccountId::for_immutable_mirror(header_account_id);
-    let mirrored_account = Account::default().with_shard(
+    let mirrored_account = Account::default().with_actor_state(
         PROGRAM_LOADER_ACCOUNT_ID,
-        ShardData::try_from(program_header.to_bytes())
-            .expect("program header must fit under DATA_MAX_LENGTH"),
+        ActorState::from(program_header.to_bytes()),
     );
     Commitment::new(&mirror_account_id, &mirrored_account)
 }
 
-/// Checks that the output repeats the scheduled input exactly, then verifies
-/// that any write targets the executing program's shard and that no chained calls are returned.
-pub fn validate_apply_output(
-    expected: &ApplyInput,
-    output: &ApplyOutput,
-) -> Result<(), ExecutionValidationError> {
-    if output.input != *expected {
-        return Err(ExecutionValidationError::ApplyInputMismatch {
-            expected: Box::new(expected.clone()),
-            actual: Box::new(output.input.clone()),
-        });
-    }
-    if output.post_data.is_some()
-        && output.input.selector.program_account_id != output.input.self_account_id
-    {
-        return Err(ExecutionValidationError::ForeignShardWrite {
-            account_id: output.input.selector.account_id,
-            executing_account_id: output.input.self_account_id,
-        });
-    }
-    if !output.chained_calls.is_empty() {
-        return Err(ExecutionValidationError::ChainedCallsFromApply);
-    }
-
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests;
