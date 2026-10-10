@@ -1,92 +1,59 @@
-use cross_zone_outbox_core::Instruction as OutboxInstruction;
-use lee_core::{
-    account::{AccountId, ProgramShardSelector},
-    program::{AccountMeta, ChainedCall, Plan, PlanInput, run_program, write_once},
-};
-use ping_core::{SenderInstruction, outbox_bytes, read_outbox, sender_config_account_id};
+use cross_zone_outbox_core::Message as OutboxMessage;
+use lee_core::program::{ReceiveInput, Response, write_once};
+use ping_core::{SenderMessage, outbox_bytes, read_outbox, sender_config_account_id};
 
-#[derive(Clone, Copy, borsh::BorshSerialize, borsh::BorshDeserialize)]
-enum Effect {
-    OutboxIs(AccountId),
-    InitConfig(AccountId),
-}
+lee_core::define_actor_logic!(handle_message);
 
-fn main() {
-    run_program(plan, apply)
-}
-
-fn apply(effect: Effect, pre_data: &[u8]) -> Option<Vec<u8>> {
-    match effect {
-        Effect::OutboxIs(outbox_account_id) => {
-            let pinned = read_outbox(pre_data).expect("config account holds an outbox program id");
-            assert_eq!(
-                pinned, outbox_account_id,
-                "the emission names a program the ping-sender config does not pin as its outbox"
-            );
-            None
-        }
-        // Genesis is replayed onto seeded state during multi-sequencer reconstruction, so
-        // a written config must already pin exactly this outbox.
-        Effect::InitConfig(outbox_account_id) => Some(write_once(
-            pre_data,
-            outbox_bytes(outbox_account_id).to_vec(),
-        )),
-    }
-}
-
-fn plan(input: &PlanInput, instruction: SenderInstruction) -> Plan {
+fn handle_message(input: &ReceiveInput, message: SenderMessage) -> Response {
     assert!(
-        input.caller_account_id.is_none(),
+        input.from.is_none(),
         "ping_sender is only invoked as a top-level user transaction"
     );
+    assert_config_account(input);
 
-    let mut plan = Plan::new(input);
-    let self_account_id = input.self_account_id;
-    let accounts = &input.accounts;
-    match instruction {
-        SenderInstruction::Send {
+    match message {
+        SenderMessage::Send {
+            outbox,
             target_zone,
             target_account_id,
             target_accounts,
             payload,
             ordinal,
         } => {
-            let [config, outbox] = <&[_; 2]>::try_from(accounts.as_slice())
-                .expect("Send requires the config and outbox accounts");
-            assert_config_account(config, self_account_id);
-
-            // The outbox program arrives as the outbox handle's own shard selector, which is
-            // transaction-chosen; the config effect is what pins it.
-            plan.effect(config, &Effect::OutboxIs(outbox.program_account_id));
-            plan.call(ChainedCall::new(
-                outbox.program_account_id,
-                vec![ProgramShardSelector::from(outbox)],
-                &OutboxInstruction::Emit {
+            // The outbox actor is transaction-chosen; the config is what pins its program.
+            let pinned =
+                read_outbox(&input.pre_state).expect("config account holds an outbox program id");
+            assert_eq!(
+                pinned, outbox.program_account_id,
+                "the emission names a program the ping-sender config does not pin as its outbox"
+            );
+            Response::keep_state().call(
+                outbox,
+                &OutboxMessage::Emit {
                     target_zone,
                     target_account_id,
                     target_accounts,
                     payload,
                     ordinal,
                 },
-            ));
+            )
         }
-        SenderInstruction::InitConfig { outbox_account_id } => {
-            let [config] = <&[_; 1]>::try_from(accounts.as_slice())
-                .expect("InitConfig requires the config account");
-            assert_config_account(config, self_account_id);
-            plan.effect(config, &Effect::InitConfig(outbox_account_id));
-        }
+        // Genesis is replayed onto seeded state during multi-sequencer reconstruction, so
+        // a written config must already pin exactly this outbox.
+        SenderMessage::InitConfig { outbox_account_id } => Response::set_state(write_once(
+            &input.pre_state,
+            outbox_bytes(outbox_account_id).to_vec(),
+        )),
     }
-    plan
 }
 
 /// Pinned rather than caller-named: the address is what makes the config's answer this
 /// program's own.
-fn assert_config_account(config: &AccountMeta, self_account_id: AccountId) {
+fn assert_config_account(input: &ReceiveInput) {
     assert_eq!(
-        config.account_id,
-        sender_config_account_id(self_account_id),
-        "first account must be the ping-sender config PDA"
+        input.receiver.account_id,
+        sender_config_account_id(input.receiver.program_account_id),
+        "the receiver must be the ping-sender config PDA"
     );
 }
 

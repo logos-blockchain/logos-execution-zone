@@ -9,6 +9,8 @@
 //! own block-reading, emission-extraction, delivery-building, and trust model; a
 //! shared trait is best lifted from that first real adapter, not from this one.
 
+use std::collections::BTreeMap;
+
 pub use acceptance::{
     CommitteeFloorState, FloorVerdict, KEPT_FLOOR_READ_FAILURES, Link, OffChain,
     STUCK_SLOT_ALERT_PASSES, ScreenRefusal, StallState, alerts_at, equivocation_report,
@@ -16,11 +18,13 @@ pub use acceptance::{
 };
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer};
 use cross_zone_inbox_core::{
-    CrossZoneMessage, InboxConfig, Instruction, ZoneId, inbox_config_account_id,
-    inbox_seen_shard_account_id,
+    CrossZoneMessage, InboxConfig, Message, ZoneId, inbox_config_account_id,
+    inbox_seen_shard_account_id, inbox_seen_shard_seed,
 };
-use cross_zone_marker_core::inbox_source_marker_account_id;
-use lee_core::account::{AccountId, Balance, ProgramShardSelector};
+use lee_core::{
+    account::{AccountId, Actor, Balance},
+    program::PdaSeed,
+};
 
 pub mod acceptance;
 #[cfg(any(test, feature = "test-utils"))]
@@ -29,9 +33,10 @@ pub mod test_utils;
 /// The cross-zone emission fields a watcher or verifier reads off a source
 /// transaction, common to every emitter program.
 pub struct Emission {
+    pub source: AccountId,
     pub target_zone: ZoneId,
     pub target_account_id: AccountId,
-    pub target_accounts: Vec<ProgramShardSelector>,
+    pub target_accounts: Vec<Actor>,
     pub payload: Vec<u8>,
 }
 
@@ -66,38 +71,41 @@ pub fn is_sequencer_only_program(account_id: AccountId) -> bool {
 /// watcher and verifier both use this so they agree on what a given source tx
 /// emits.
 #[must_use]
-pub fn extract_emission(account_id: AccountId, instruction_data: &[u8]) -> Option<Emission> {
-    if account_id == programs::ping_sender_account_id() {
+pub fn extract_emission(tx: &lee::PublicTransaction) -> Option<Emission> {
+    let lee::RootCall { to, message } = &tx.message().execution.root;
+    if to.program_account_id == programs::ping_sender_account_id() {
         // Not every transaction to an emitter emits: `InitConfig` is one of its
-        // instructions, so a non-`Send` decode is an ordinary non-emitting tx.
-        let Ok(ping_core::SenderInstruction::Send {
+        // messages, so a non-`Send` decode is an ordinary non-emitting tx.
+        let Ok(ping_core::SenderMessage::Send {
             target_zone,
             target_account_id,
             target_accounts,
             payload,
             ..
-        }) = borsh::from_slice(instruction_data)
+        }) = borsh::from_slice(message)
         else {
             return None;
         };
         Some(Emission {
+            source: to.program_account_id,
             target_zone,
             target_account_id,
             target_accounts,
             payload,
         })
-    } else if account_id == programs::bridge_lock_account_id() {
-        let Ok(bridge_lock_core::Instruction::Lock {
+    } else if to.program_account_id == programs::bridge_lock_account_id() {
+        let Ok(bridge_lock_core::Message::Lock {
             target_zone,
             target_account_id,
             target_accounts,
             payload,
             ..
-        }) = borsh::from_slice(instruction_data)
+        }) = borsh::from_slice(message)
         else {
             return None;
         };
         Some(Emission {
+            source: to.program_account_id,
             target_zone,
             target_account_id,
             target_accounts,
@@ -113,33 +121,35 @@ pub fn extract_emission(account_id: AccountId, instruction_data: &[u8]) -> Optio
 fn build_inbox_dispatch_tx(
     inbox_id: AccountId,
     msg: &CrossZoneMessage,
-    target_shard_selectors: Vec<ProgramShardSelector>,
+    target_accounts: Vec<Actor>,
 ) -> lee::PublicTransaction {
-    // Select the inbox's config and seen shards, and the source marker's account ID.
-    let mut shard_selectors = Vec::with_capacity(target_shard_selectors.len().saturating_add(3));
-    shard_selectors.push(ProgramShardSelector::new(
-        inbox_config_account_id(inbox_id),
-        inbox_id,
-    ));
-    shard_selectors.push(ProgramShardSelector::new(
+    // The inbox's config and seen actors, then the target's coordinator the delivery
+    // lands on, then the target's own actors the delivery reaches. Declared here
+    // rather than by the guest, since a guest cannot conjure an actor; both the
+    // watcher and the verifier build it through this one function.
+    let config = Actor::new(inbox_config_account_id(inbox_id), inbox_id);
+    let mut public_actors = Vec::with_capacity(target_accounts.len().saturating_add(3));
+    public_actors.push(config);
+    public_actors.push(Actor::new(
         inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
         inbox_id,
     ));
-    // Declared here rather than derived by the guest, since a guest cannot
-    // conjure an account. Both the watcher and the verifier build it through this
-    // one function, so they cannot disagree about the source a target will see.
-    shard_selectors.push(ProgramShardSelector::native_balance(
-        inbox_source_marker_account_id(inbox_id, &msg.src_zone, msg.src_account_id),
-    ));
-    shard_selectors.extend(target_shard_selectors);
+    public_actors.push(Actor::new(msg.target_account_id, msg.target_account_id));
+    public_actors.extend(target_accounts);
 
-    let message = lee::public_transaction::Message::try_new(
-        inbox_id,
-        shard_selectors,
-        vec![],
-        Instruction::Dispatch(msg.clone()),
-    )
-    .expect("inbox dispatch instruction must serialize");
+    let message = lee::public_transaction::Message {
+        admission_evidence: vec![lee::PublicAccountEvidence::Pda {
+            program: inbox_id,
+            seed: inbox_seen_shard_seed(&msg.src_zone, msg.src_block_id),
+        }],
+        ..lee::public_transaction::Message::try_new(
+            config,
+            public_actors,
+            BTreeMap::new(),
+            Message::Dispatch(msg.clone()),
+        )
+        .expect("inbox dispatch message must serialize")
+    };
 
     lee::PublicTransaction::new(
         message,
@@ -156,7 +166,7 @@ fn build_inbox_dispatch_tx(
 pub fn build_dispatch_from_emission(
     source: &EmissionSource,
     target_account_id: AccountId,
-    target_accounts: &[ProgramShardSelector],
+    target_accounts: &[Actor],
     payload: Vec<u8>,
 ) -> lee::PublicTransaction {
     let msg = CrossZoneMessage {
@@ -183,11 +193,10 @@ pub fn build_dispatch_from_emission(
 /// Replaying this seeds the same account on every node.
 #[must_use]
 pub fn build_inbox_init_config_tx(self_zone: ZoneId) -> lee::PublicTransaction {
-    let inbox_id = programs::cross_zone_inbox_account_id();
     genesis_public_tx(
-        inbox_id,
-        vec![inbox_config_account_id(inbox_id)],
-        Instruction::InitConfig(InboxConfig { self_zone }),
+        programs::cross_zone_inbox_account_id(),
+        cross_zone_inbox_core::inbox_config_seed(),
+        Message::InitConfig(InboxConfig { self_zone }),
     )
 }
 
@@ -280,8 +289,8 @@ pub fn build_wrapped_token_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::
         .collect();
     genesis_public_tx(
         wrapped_token_id,
-        vec![wrapped_token_core::config_account_id(wrapped_token_id)],
-        wrapped_token_core::Instruction::InitConfig(wrapped_token_core::WrappedTokenConfig {
+        wrapped_token_core::config_seed(),
+        wrapped_token_core::Message::InitConfig(wrapped_token_core::WrappedTokenConfig {
             minter: programs::cross_zone_inbox_account_id(),
             governance: cross_zone.source_governance,
             authority: cross_zone.source_authority,
@@ -290,29 +299,27 @@ pub fn build_wrapped_token_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::
     )
 }
 
-/// The genesis transaction that pins the outbox `ping_sender` chains into,
+/// The genesis transaction that pins the outbox `ping_sender` sends to,
 /// without importing the outbox id into the guest.
 #[must_use]
 pub fn build_ping_sender_init_config_tx() -> lee::PublicTransaction {
-    let ping_sender_id = programs::ping_sender_account_id();
     genesis_public_tx(
-        ping_sender_id,
-        vec![ping_core::sender_config_account_id(ping_sender_id)],
-        ping_core::SenderInstruction::InitConfig {
+        programs::ping_sender_account_id(),
+        ping_core::sender_config_seed(),
+        ping_core::SenderMessage::InitConfig {
             outbox_account_id: programs::cross_zone_outbox_account_id(),
         },
     )
 }
 
-/// The genesis transaction that pins the outbox `bridge_lock` chains into and the
+/// The genesis transaction that pins the outbox `bridge_lock` emits through and the
 /// wrapped token it mints, without importing either id into the guest.
 #[must_use]
 pub fn build_bridge_lock_init_config_tx() -> lee::PublicTransaction {
-    let bridge_lock_id = programs::bridge_lock_account_id();
     genesis_public_tx(
-        bridge_lock_id,
-        vec![bridge_lock_core::config_account_id(bridge_lock_id)],
-        bridge_lock_core::Instruction::InitConfig {
+        programs::bridge_lock_account_id(),
+        bridge_lock_core::config_seed(),
+        bridge_lock_core::Message::InitConfig {
             outbox_account_id: programs::cross_zone_outbox_account_id(),
             target_account_id: programs::wrapped_token_account_id(),
         },
@@ -339,8 +346,8 @@ pub fn build_ping_receiver_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::
         .collect();
     genesis_public_tx(
         receiver_id,
-        vec![ping_core::receiver_config_account_id(receiver_id)],
-        ping_core::ReceiverInstruction::InitConfig(ping_core::ReceiverConfig {
+        ping_core::receiver_config_seed(),
+        ping_core::ReceiverMessage::InitConfig(ping_core::ReceiverConfig {
             deliverer: programs::cross_zone_inbox_account_id(),
             governance: cross_zone.source_governance,
             authority: cross_zone.source_authority,
@@ -349,20 +356,19 @@ pub fn build_ping_receiver_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::
     )
 }
 
-/// Builds an unsigned, sequencer-origin genesis transaction invoking `instruction`
-/// on `account_id` over `account_ids`.
-fn genesis_public_tx<I: borsh::BorshSerialize>(
-    account_id: AccountId,
-    account_ids: Vec<AccountId>,
-    instruction: I,
+/// Builds an unsigned, sequencer-origin genesis transaction sending `message` to `program`'s
+/// config PDA under `seed`, the only actor an `InitConfig` touches.
+fn genesis_public_tx<M: borsh::BorshSerialize>(
+    program: AccountId,
+    seed: PdaSeed,
+    message: M,
 ) -> lee::PublicTransaction {
-    let shard_selectors = account_ids
-        .into_iter()
-        .map(|id| ProgramShardSelector::new(id, account_id))
-        .collect();
-    let message =
-        lee::public_transaction::Message::try_new(account_id, shard_selectors, vec![], instruction)
-            .expect("genesis instruction must serialize");
+    let root = Actor::new(AccountId::for_public_pda(&program, &seed), program);
+    let message = lee::public_transaction::Message {
+        admission_evidence: vec![lee::PublicAccountEvidence::Pda { program, seed }],
+        ..lee::public_transaction::Message::try_new(root, [root], BTreeMap::new(), message)
+            .expect("genesis message must serialize")
+    };
     lee::PublicTransaction::new(
         message,
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),

@@ -1,41 +1,116 @@
 use bridge_lock_core::{
-    Instruction, config_account_id, config_bytes, escrow_account_id, holding_account_id,
-    holding_seed, read_config,
+    Message, config_account_id, config_bytes, escrow_account_id, holding_account_id, holding_seed,
+    read_config,
 };
-use cross_zone_outbox_core::Instruction as OutboxInstruction;
+use cross_zone_outbox_core::Message as OutboxMessage;
 use lee_core::{
-    account::{AccountId, ProgramShardSelector},
+    account::Actor,
     native_token::custody_transfer,
-    program::{AccountMeta, ChainedCall, Plan, PlanInput, run_program, write_once},
+    program::{ReceiveInput, Response, write_once},
 };
-use wrapped_token_core::{Instruction as WrappedInstruction, MAX_MINT_AMOUNT};
+use wrapped_token_core::{MAX_MINT_AMOUNT, Message as WrappedMessage};
 
-#[derive(Clone, Copy, borsh::BorshSerialize, borsh::BorshDeserialize)]
-enum Effect {
-    // Nothing releases an escrow, so an emission steered off the pinned route burns the
-    // holder's balance with no compensating mint anywhere. This is all that stands between.
-    Route {
-        outbox_account_id: AccountId,
-        target_account_id: AccountId,
-    },
-    InitConfig {
-        outbox_account_id: AccountId,
-        target_account_id: AccountId,
-    },
-}
+lee_core::define_actor_logic!(handle_message);
 
-fn main() {
-    run_program(plan, apply)
-}
+fn handle_message(input: &ReceiveInput, message: Message) -> Response {
+    let program = input.receiver.program_account_id;
+    match message {
+        Message::Lock {
+            outbox,
+            amount,
+            target_zone,
+            target_account_id,
+            target_accounts,
+            payload,
+            ordinal,
+        } => {
+            assert_top_level(input);
 
-fn apply(effect: Effect, pre_data: &[u8]) -> Option<Vec<u8>> {
-    match effect {
-        Effect::Route {
+            // Value conservation: the escrow debit is only sound if the message mints what it
+            // locks.
+            let WrappedMessage::Mint {
+                recipient,
+                amount: mint_amount,
+            } = decode_mint(&payload)
+            else {
+                panic!("bridge_lock payload must be a wrapped-token mint");
+            };
+            assert_eq!(
+                mint_amount, amount,
+                "locked amount must equal the wrapped mint amount"
+            );
+
+            // `target_zone` is not checkable here, so a lock aimed at a zone that will not route
+            // it still burns.
+            let expected_accounts = vec![
+                Actor::new(
+                    wrapped_token_core::config_account_id(target_account_id),
+                    target_account_id,
+                ),
+                Actor::new(
+                    wrapped_token_core::holding_account_id(target_account_id, &recipient),
+                    target_account_id,
+                ),
+            ];
+            assert_eq!(
+                target_accounts, expected_accounts,
+                "target accounts must be the mint's config and the recipient's holding, under the \
+                 wrapped token's own actor state"
+            );
+            assert!(
+                amount <= MAX_MINT_AMOUNT,
+                "locked amount exceeds what the wrapped token will mint"
+            );
+            // A zero lock would emit a real dispatch and zero-mint into any
+            // recipient's wrapped holding.
+            assert!(amount > 0, "locked amount must be positive");
+
+            // The holder's signature authorizes its own account only, which is why a lock is
+            // received there; the derivation pins the debit target to a genuine bridge-lock
+            // holding.
+            assert!(input.is_authorized, "holder must authorize the lock");
+            let holder = input.receiver.account_id.into_value();
+
+            // The outbox actor's program, not a new message field, carries the proposed route.
+            // The config checks it before the debit and the emission are delivered, as the read
+            // it replaces did.
+            Response::keep_state()
+                .call(
+                    Actor::new(config_account_id(program), program),
+                    &Message::CheckRoute {
+                        outbox_account_id: outbox.program_account_id,
+                        target_account_id,
+                    },
+                )
+                .send(custody_transfer(
+                    holding_account_id(program, &holder),
+                    holding_seed(&holder),
+                    escrow_account_id(program),
+                    amount,
+                ))
+                .call(
+                    outbox,
+                    &OutboxMessage::Emit {
+                        target_zone,
+                        target_account_id,
+                        target_accounts,
+                        payload,
+                        ordinal,
+                    },
+                )
+        }
+        // Nothing releases an escrow, so an emission steered off the pinned route burns the
+        // holder's balance with no compensating mint anywhere. This is all that stands between.
+        Message::CheckRoute {
             outbox_account_id,
             target_account_id,
         } => {
-            let (outbox, target) =
-                read_config(pre_data).expect("config account holds an outbox and a mint target");
+            assert!(
+                input.from_own_program(),
+                "the route is only checked for a lock of bridge_lock's own"
+            );
+            let (outbox, target) = read_config(&input.pre_state)
+                .expect("config account holds an outbox and a mint target");
             assert_eq!(
                 outbox, outbox_account_id,
                 "bridge_lock only emits through the outbox it is pinned to"
@@ -44,199 +119,37 @@ fn apply(effect: Effect, pre_data: &[u8]) -> Option<Vec<u8>> {
                 target, target_account_id,
                 "bridge_lock only mints through the wrapped token it is pinned to"
             );
-            None
+            Response::keep_state()
         }
-        // A written shard must already pin exactly these programs rather than being refused,
+        // A written actor state must already pin exactly these programs rather than being refused,
         // because genesis is replayed onto seeded state during multi-sequencer reconstruction.
-        Effect::InitConfig {
+        Message::InitConfig {
             outbox_account_id,
             target_account_id,
-        } => Some(write_once(
-            pre_data,
-            config_bytes(outbox_account_id, target_account_id).to_vec(),
-        )),
+        } => {
+            assert_top_level(input);
+            assert_eq!(
+                input.receiver.account_id,
+                config_account_id(program),
+                "the receiver must be the bridge-lock config PDA"
+            );
+            Response::set_state(write_once(
+                &input.pre_state,
+                config_bytes(outbox_account_id, target_account_id).to_vec(),
+            ))
+        }
     }
 }
 
-fn plan(input: &PlanInput, instruction: Instruction) -> Plan {
+fn assert_top_level(input: &ReceiveInput) {
     assert!(
-        input.caller_account_id.is_none(),
+        input.from.is_none(),
         "bridge_lock is only invoked as a top-level user transaction"
     );
-
-    let mut plan = Plan::new(input);
-    let self_account_id = input.self_account_id;
-    let accounts = &input.accounts;
-    match instruction {
-        Instruction::Lock {
-            amount,
-            target_zone,
-            target_account_id,
-            target_accounts,
-            payload,
-            ordinal,
-        } => lock(
-            &mut plan,
-            self_account_id,
-            accounts,
-            amount,
-            target_zone,
-            target_account_id,
-            target_accounts,
-            payload,
-            ordinal,
-        ),
-        Instruction::InitConfig {
-            outbox_account_id,
-            target_account_id,
-        } => init_config(
-            &mut plan,
-            self_account_id,
-            accounts,
-            outbox_account_id,
-            target_account_id,
-        ),
-    }
-    plan
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the emission fields are passed through verbatim"
-)]
-fn lock(
-    plan: &mut Plan,
-    self_account_id: AccountId,
-    accounts: &[AccountMeta],
-    amount: u128,
-    target_zone: [u8; 32],
-    target_account_id: AccountId,
-    target_accounts: Vec<ProgramShardSelector>,
-    payload: Vec<u8>,
-    ordinal: u32,
-) {
-    // Only the config input needs this program's shard.
-    let [config, holder, holding, escrow, outbox] = <&[AccountMeta; 5]>::try_from(accounts)
-        .expect("Lock requires config, holder, holding, escrow, and outbox accounts");
-
-    // Pinned rather than caller-named: chaining elsewhere would debit the escrow
-    // and leave no record of what it was for.
-    assert_eq!(
-        config.account_id,
-        config_account_id(self_account_id),
-        "first account must be the bridge-lock config PDA"
-    );
-
-    // Value conservation: the escrow debit is only sound if the message mints what it locks.
-    let WrappedInstruction::Mint {
-        recipient,
-        amount: mint_amount,
-    } = decode_mint(&payload)
-    else {
-        panic!("bridge_lock payload must be a wrapped-token mint");
-    };
-    assert_eq!(
-        mint_amount, amount,
-        "locked amount must equal the wrapped mint amount"
-    );
-
-    // The outbox handle's program, not a new instruction field, carries the proposed route.
-    // Effects apply before any chained call, so this lands before the debit, as the read it
-    // replaces did.
-    plan.effect(
-        config,
-        &Effect::Route {
-            outbox_account_id: outbox.program_account_id,
-            target_account_id,
-        },
-    );
-
-    // `target_zone` is not checkable here, so a lock aimed at a zone that will not route it
-    // still burns.
-    let expected_accounts = vec![
-        ProgramShardSelector::new(
-            wrapped_token_core::config_account_id(target_account_id),
-            target_account_id,
-        ),
-        ProgramShardSelector::new(
-            wrapped_token_core::holding_account_id(target_account_id, &recipient),
-            target_account_id,
-        ),
-    ];
-    assert_eq!(
-        target_accounts, expected_accounts,
-        "target accounts must be the mint's config and the recipient's holding, under the \
-         wrapped token's own shard"
-    );
-    assert!(
-        amount <= MAX_MINT_AMOUNT,
-        "locked amount exceeds what the wrapped token will mint"
-    );
-    // A zero lock would emit a real dispatch and zero-mint into any
-    // recipient's wrapped holding.
-    assert!(amount > 0, "locked amount must be positive");
-
-    assert!(holder.is_authorized, "holder must authorize the lock");
-    // The signature gates the debit; the derivation pins the debit target to a
-    // genuine bridge-lock holding.
-    assert_eq!(
-        holding.account_id,
-        holding_account_id(self_account_id, &holder.account_id.into_value()),
-        "third account must be the holder's bridge-lock holding PDA"
-    );
-    assert_eq!(
-        escrow.account_id,
-        escrow_account_id(self_account_id),
-        "fourth account must be the escrow PDA"
-    );
-
-    plan.call(custody_transfer(
-        holding.account_id,
-        holding_seed(&holder.account_id.into_value()),
-        escrow.account_id,
-        amount,
-    ));
-    plan.call(ChainedCall::new(
-        outbox.program_account_id,
-        vec![ProgramShardSelector::from(outbox)],
-        &OutboxInstruction::Emit {
-            target_zone,
-            target_account_id,
-            target_accounts,
-            payload,
-            ordinal,
-        },
-    ));
-}
-
-/// Writes the outbox program and the mint target into the config PDA exactly once
-/// at genesis.
-fn init_config(
-    plan: &mut Plan,
-    self_account_id: AccountId,
-    accounts: &[AccountMeta],
-    outbox_account_id: AccountId,
-    target_account_id: AccountId,
-) {
-    let [config] =
-        <&[AccountMeta; 1]>::try_from(accounts).expect("InitConfig requires the config account");
-    assert_eq!(
-        config.account_id,
-        config_account_id(self_account_id),
-        "account must be the bridge-lock config PDA"
-    );
-
-    plan.effect(
-        config,
-        &Effect::InitConfig {
-            outbox_account_id,
-            target_account_id,
-        },
-    );
-}
-
-/// Decodes the cross-zone payload (borsh bytes) into the wrapped-token instruction it carries.
-fn decode_mint(payload: &[u8]) -> WrappedInstruction {
+/// Decodes the cross-zone payload (borsh bytes) into the wrapped-token message it carries.
+fn decode_mint(payload: &[u8]) -> WrappedMessage {
     borsh::from_slice(payload).expect("payload decodes to a wrapped-token instruction")
 }
 

@@ -1,89 +1,140 @@
-use cross_zone_marker_core::inbox_source_marker_account_id;
+use cross_zone_marker_core::{Delivery, inbox_source_marker_account_id};
 use lee_core::{
-    account::AccountId,
-    program::{AccountMeta, Plan, PlanInput, run_program, write_once},
+    account::{AccountId, Actor},
+    program::{Call, ReceiveInput, Response, write_once},
 };
 use wrapped_token_core::{
-    Instruction, MAX_MINT_AMOUNT, SourceEntry, SourcePolicy, WrappedTokenConfig, balance_bytes,
-    config_account_id, holding_account_id, read_balance,
+    MAX_MINT_AMOUNT, Message, SourceEntry, WrappedTokenConfig, ZoneId, balance_bytes,
+    config_account_id, holding_account_id, holding_seed, read_balance,
 };
 
-#[derive(Clone, borsh::BorshSerialize, borsh::BorshDeserialize)]
-enum Effect {
-    Mint {
-        caller_account_id: Option<AccountId>,
-        marker: AccountId,
-        amount: u128,
-    },
-    Credit(u128),
-    InitConfig(WrappedTokenConfig),
-    RenounceAuthority {
-        caller_account_id: Option<AccountId>,
-        authority: AccountId,
-    },
-    UpdateSources {
-        caller_account_id: Option<AccountId>,
-        authority: AccountId,
-        sources: Vec<SourcePolicy>,
-    },
-}
+lee_core::define_actor_logic!(raw handle_message);
 
-fn main() {
-    run_program(plan, apply)
-}
-
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "run_program's apply returns None to keep a shard"
-)]
-fn apply(effect: Effect, pre_data: &[u8]) -> Option<Vec<u8>> {
-    Some(match effect {
-        Effect::Mint {
-            caller_account_id,
-            marker,
-            amount,
-        } => mint_source(pre_data, caller_account_id, marker, amount),
-        // The backstop against accumulation, which the per-mint cap does not bound.
-        Effect::Credit(amount) => balance_bytes(
-            read_balance(pre_data)
-                .checked_add(amount)
-                .expect("wrapped-token balance overflow"),
-        )
-        .to_vec(),
-        // A written shard must already hold exactly this configuration rather than being
-        // refused.
-        Effect::InitConfig(config_value) => write_once(pre_data, config_value.to_bytes()),
-        Effect::RenounceAuthority {
-            caller_account_id,
-            authority,
-        } => {
-            let mut cfg = decode_config(pre_data);
-            assert_governance_caller(&cfg, caller_account_id);
-            let Some(expected) = cfg.authority else {
-                panic!("wrapped-token authority is already renounced");
-            };
-            assert_eq!(
-                authority, expected,
-                "second account must be the configured authority"
-            );
-
-            cfg.authority = None;
-            cfg.to_bytes()
+fn handle_message(input: &ReceiveInput) -> Response {
+    let program = input.receiver.program_account_id;
+    if input.receiver.account_id == program && input.from.is_some() {
+        let delivery: Delivery = borsh::from_slice(&input.message).expect("a delivery decodes");
+        return deliver(input, delivery);
+    }
+    let message: Message =
+        borsh::from_slice(&input.message).expect("message must decode from borsh");
+    match message {
+        Message::Mint { .. } => {
+            panic!("Mint is only callable by the authorized minter (the cross-zone inbox)")
         }
-        Effect::UpdateSources {
-            caller_account_id,
+        Message::MintFrom {
+            deliverer,
+            src_zone,
+            src_account_id,
+            recipient,
+            amount,
+        } => {
+            // Both inputs to the authorization come from the delivery itself: the deliverer is
+            // the runtime's authenticated origin, forwarded only by this token's own program
+            // account, and the source is what the inbox bound to the message.
+            assert!(
+                input.from_own_program(),
+                "Mint is only callable by the authorized minter (the cross-zone inbox)"
+            );
+            assert!(
+                amount <= MAX_MINT_AMOUNT,
+                "mint amount exceeds the per-mint cap"
+            );
+            let mut cfg = decode_config(&input.pre_state);
+            mint_source(&mut cfg, deliverer, &src_zone, src_account_id, amount);
+            Response::set_state(cfg.to_bytes()).send(
+                Call::new(
+                    Actor::new(holding_account_id(program, &recipient), program),
+                    &Message::Credit(amount),
+                )
+                .with_pda_seeds(vec![holding_seed(&recipient)]),
+            )
+        }
+        // The backstop against accumulation, which the per-mint cap does not bound.
+        Message::Credit(amount) => {
+            assert!(
+                input.from_own_program(),
+                "a credit is only sent by this token's config"
+            );
+            Response::set_state(
+                balance_bytes(
+                    read_balance(&input.pre_state)
+                        .checked_add(amount)
+                        .expect("wrapped-token balance overflow"),
+                )
+                .to_vec(),
+            )
+        }
+        Message::InitConfig(config) => {
+            assert!(
+                input.from.is_none(),
+                "InitConfig is a top-level genesis transaction"
+            );
+            assert!(
+                at_config(input),
+                "the receiver must be the wrapped-token config PDA"
+            );
+            // A written actor state must already hold exactly this configuration rather than being
+            // refused.
+            Response::set_state(write_once(&input.pre_state, config.to_bytes()))
+        }
+        Message::RenounceAuthority { authority, via } => {
+            if !at_config(input) {
+                return forward_as_authority(
+                    input,
+                    &Message::RenounceAuthority {
+                        authority: input.receiver.account_id,
+                        via: input.from.map(|from| from.program_account_id),
+                    },
+                    "the configured authority must authorize renouncing it",
+                );
+            }
+            let mut cfg = decode_config(&input.pre_state);
+            assert_authority(
+                input,
+                &cfg,
+                authority,
+                via,
+                "wrapped-token authority is already renounced",
+            );
+            cfg.authority = None;
+            Response::set_state(cfg.to_bytes())
+        }
+        Message::UpdateSources {
             authority,
+            via,
             sources,
         } => {
-            let mut cfg = decode_config(pre_data);
-            assert_governance_caller(&cfg, caller_account_id);
-            let Some(expected) = cfg.authority else {
-                panic!("wrapped-token sources are fixed at genesis: no authority is configured");
-            };
-            assert_eq!(
-                authority, expected,
-                "second account must be the configured authority"
+            if !at_config(input) {
+                return forward_as_authority(
+                    input,
+                    &Message::UpdateSources {
+                        authority: input.receiver.account_id,
+                        via: input.from.map(|from| from.program_account_id),
+                        sources,
+                    },
+                    "the configured authority must authorize a source change",
+                );
+            }
+            let mut cfg = decode_config(&input.pre_state);
+            assert_authority(
+                input,
+                &cfg,
+                authority,
+                via,
+                "wrapped-token sources are fixed at genesis: no authority is configured",
             );
+            // Mint advances the first matching entry, so a duplicated pair would split
+            // one source's policy across entries an auditor reads as two.
+            for (index, policy) in sources.iter().enumerate() {
+                assert!(
+                    !sources[..index].iter().any(|other| {
+                        other.src_zone == policy.src_zone
+                            && other.src_account_id == policy.src_account_id
+                    }),
+                    "UpdateSources lists the same source twice"
+                );
+            }
 
             // The counter is the guest's, never the caller's: a kept source carries its
             // spent allowance over, so an update cannot reset it, and a source removed
@@ -102,41 +153,103 @@ fn apply(effect: Effect, pre_data: &[u8]) -> Option<Vec<u8>> {
                     policy,
                 })
                 .collect();
-            cfg.to_bytes()
+            Response::set_state(cfg.to_bytes())
         }
-    })
+    }
 }
 
-fn decode_config(pre_data: &[u8]) -> WrappedTokenConfig {
-    WrappedTokenConfig::from_bytes(pre_data).expect("config account holds a wrapped-token config")
+/// The token's program account forwards a delivery to its config, naming the program that
+/// sent it.
+fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
+    let Delivery {
+        src_zone,
+        src_account_id,
+        payload,
+    } = delivery;
+    let Message::Mint { recipient, amount } =
+        borsh::from_slice(&payload).expect("delivery payload must decode from borsh")
+    else {
+        panic!("a delivery to wrapped_token must carry a Mint");
+    };
+    let program = input.receiver.program_account_id;
+    Response::keep_state().call(
+        Actor::new(config_account_id(program), program),
+        &Message::MintFrom {
+            deliverer: input
+                .from
+                .expect("a delivery has a sender")
+                .program_account_id,
+            src_zone,
+            src_account_id,
+            recipient,
+            amount,
+        },
+    )
 }
 
-// See `WrappedTokenConfig::governance` for why the chained-caller escape hatch exists.
-fn assert_governance_caller(cfg: &WrappedTokenConfig, caller_account_id: Option<AccountId>) {
+/// The authority's own actor vouches that the authority authorized the change and names the
+/// program that reached it; whether that program may act, and who the authority is, stay the
+/// config's own answer.
+fn forward_as_authority(input: &ReceiveInput, message: &Message, unsigned: &str) -> Response {
+    assert!(input.is_authorized, "{unsigned}");
+    let program = input.receiver.program_account_id;
+    Response::keep_state().call(Actor::new(config_account_id(program), program), message)
+}
+
+fn at_config(input: &ReceiveInput) -> bool {
+    input.receiver.account_id == config_account_id(input.receiver.program_account_id)
+}
+
+fn decode_config(pre_state: &[u8]) -> WrappedTokenConfig {
+    WrappedTokenConfig::from_bytes(pre_state).expect("config account holds a wrapped-token config")
+}
+
+fn assert_authority(
+    input: &ReceiveInput,
+    cfg: &WrappedTokenConfig,
+    authority: AccountId,
+    via: Option<AccountId>,
+    unset: &str,
+) {
+    // This program sends a change only from the authority's own actor, after the authority
+    // authorized it, filling `authority` from that receiver and `via` from its sender's program; so
+    // both are the runtime's word rather than a sender's claim.
     assert!(
-        caller_account_id.is_none() || caller_account_id == cfg.governance,
+        input.from_own_program(),
+        "a change is only forwarded by the authority's own actor"
+    );
+    // See `WrappedTokenConfig::governance` for why the governance escape hatch exists.
+    assert!(
+        via.is_none() || via == cfg.governance,
         "the authority acts at top level, or through the configured governance program"
+    );
+    let Some(expected) = cfg.authority else {
+        panic!("{unset}");
+    };
+    assert_eq!(
+        authority, expected,
+        "the signing account must be the configured authority"
     );
 }
 
 fn mint_source(
-    pre_data: &[u8],
-    caller_account_id: Option<AccountId>,
-    marker: AccountId,
+    cfg: &mut WrappedTokenConfig,
+    deliverer: AccountId,
+    src_zone: &ZoneId,
+    src_account_id: AccountId,
     amount: u128,
-) -> Vec<u8> {
-    let mut cfg = decode_config(pre_data);
+) {
     // The config PDA is genesis-seeded with the authorized minter (the cross-zone
-    // inbox). Pin the caller to it, since the guest cannot import the inbox id.
+    // inbox). Pin the deliverer to it, since the guest cannot import the inbox id.
     assert_eq!(
-        caller_account_id,
-        Some(cfg.minter),
+        deliverer, cfg.minter,
         "Mint is only callable by the authorized minter (the cross-zone inbox)"
     );
     // The inbox vouches only that the message arrived; which peer sent it is this
     // token's own business, and unbacked value is what gets minted if it takes
     // anyone's word for it. The marker's address is the source, so re-deriving it
     // from an authorized pair is the whole check.
+    let marker = inbox_source_marker_account_id(deliverer, src_zone, src_account_id);
     let minter = cfg.minter;
     let source = cfg
         .sources
@@ -160,133 +273,6 @@ fn mint_source(
         assert!(minted <= cap, "mint exceeds this source's lifetime cap");
     }
     source.minted = minted;
-
-    cfg.to_bytes()
-}
-
-fn plan(input: &PlanInput, instruction: Instruction) -> Plan {
-    match instruction {
-        Instruction::Mint { recipient, amount } => mint(input, &recipient, amount),
-        Instruction::InitConfig(config) => init_config(input, config),
-        Instruction::RenounceAuthority => renounce_authority(input),
-        Instruction::UpdateSources { sources } => update_sources(input, sources),
-    }
-}
-
-fn mint(input: &PlanInput, recipient: &[u8; 32], amount: u128) -> Plan {
-    let [marker, config, holding] = <&[AccountMeta; 3]>::try_from(input.accounts.as_slice())
-        .expect("Mint requires the source marker, config, and recipient holding accounts");
-
-    assert_eq!(
-        config.account_id,
-        config_account_id(input.self_account_id),
-        "second account must be the wrapped-token config PDA"
-    );
-    assert_eq!(
-        holding.account_id,
-        holding_account_id(input.self_account_id, recipient),
-        "third account must be the recipient holding PDA"
-    );
-    assert!(
-        amount <= MAX_MINT_AMOUNT,
-        "mint amount exceeds the per-mint cap"
-    );
-
-    let mut plan = Plan::new(input);
-    // Both inputs to the authorization come from the call itself: `caller_account_id` is the
-    // runtime's authenticated value, never an instruction field a peer could choose, and the
-    // marker is the address the inbox bound to the message's real source.
-    plan.effect(
-        config,
-        &Effect::Mint {
-            caller_account_id: input.caller_account_id,
-            marker: marker.account_id,
-            amount,
-        },
-    );
-    plan.effect(holding, &Effect::Credit(amount));
-    plan
-}
-
-fn init_config(input: &PlanInput, config_value: WrappedTokenConfig) -> Plan {
-    assert!(
-        input.caller_account_id.is_none(),
-        "InitConfig is a top-level genesis transaction"
-    );
-
-    let [config] = <&[AccountMeta; 1]>::try_from(input.accounts.as_slice())
-        .expect("InitConfig requires the config account");
-    assert_eq!(
-        config.account_id,
-        config_account_id(input.self_account_id),
-        "account must be the wrapped-token config PDA"
-    );
-
-    let mut plan = Plan::new(input);
-    plan.effect(config, &Effect::InitConfig(config_value));
-    plan
-}
-
-fn renounce_authority(input: &PlanInput) -> Plan {
-    let (config, authority) = governance_accounts(input);
-    assert!(
-        authority.is_authorized,
-        "the configured authority must authorize renouncing it"
-    );
-
-    let mut plan = Plan::new(input);
-    plan.effect(
-        config,
-        &Effect::RenounceAuthority {
-            caller_account_id: input.caller_account_id,
-            authority: authority.account_id,
-        },
-    );
-    plan
-}
-
-/// Replaces the authorized sources, if the config names an authority and that
-/// account authorized this transaction.
-fn update_sources(input: &PlanInput, sources: Vec<SourcePolicy>) -> Plan {
-    let (config, authority) = governance_accounts(input);
-    assert!(
-        authority.is_authorized,
-        "the configured authority must authorize a source change"
-    );
-    // Mint advances the first matching entry, so a duplicated pair would split
-    // one source's policy across entries an auditor reads as two.
-    for (index, policy) in sources.iter().enumerate() {
-        assert!(
-            !sources[..index].iter().any(|other| {
-                other.src_zone == policy.src_zone && other.src_account_id == policy.src_account_id
-            }),
-            "UpdateSources lists the same source twice"
-        );
-    }
-
-    let mut plan = Plan::new(input);
-    plan.effect(
-        config,
-        &Effect::UpdateSources {
-            caller_account_id: input.caller_account_id,
-            authority: authority.account_id,
-            sources,
-        },
-    );
-    plan
-}
-
-// Only the check that does not depend on the config's contents lives here; who may call and
-// who the authority is stay in the config's `apply`.
-fn governance_accounts(input: &PlanInput) -> (&AccountMeta, &AccountMeta) {
-    let [config, authority] = <&[AccountMeta; 2]>::try_from(input.accounts.as_slice())
-        .expect("this instruction requires exactly the config and authority accounts");
-    assert_eq!(
-        config.account_id,
-        config_account_id(input.self_account_id),
-        "first account must be the wrapped-token config PDA"
-    );
-    (config, authority)
 }
 
 #[cfg(test)]

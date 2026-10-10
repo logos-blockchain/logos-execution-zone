@@ -1,8 +1,9 @@
 use std::collections::BTreeSet;
 
 use borsh::{BorshDeserialize, BorshSerialize};
+pub use cross_zone_marker_core::Delivery;
 use lee_core::{
-    account::{AccountId, Balance, data::DATA_MAX_LENGTH},
+    account::{AccountId, Balance},
     program::PdaSeed,
 };
 use serde::{Deserialize, Serialize};
@@ -100,8 +101,8 @@ pub struct CrossZoneConfig {
     /// a source, so its compromise is theft rather than delay.
     #[serde(default)]
     pub source_authority: Option<AccountId>,
-    /// Program allowed to act on the source authority's behalf through a chained
-    /// call, seeded into every target's config at genesis. Needed only for a PDA
+    /// Program allowed to act on the source authority's behalf by message, seeded
+    /// into every target's config at genesis. Needed only for a PDA
     /// authority, which cannot sign; unset means the authority acts at top level.
     #[serde(default)]
     pub source_governance: Option<AccountId>,
@@ -132,7 +133,7 @@ pub struct CrossZoneMessage {
 /// This inbox's own zone id.
 ///
 /// It no longer decides who may deliver what. Each target program authorizes its
-/// own sources against the marker the inbox passes, so the only thing the inbox
+/// own sources against the marker it derives from the delivery, so the only thing the inbox
 /// still needs to know is which zone it is, to refuse a message addressed to
 /// itself.
 #[derive(
@@ -159,11 +160,6 @@ impl InboxConfig {
 ///
 /// Indices, not message keys: the shard's address already binds
 /// `(src_zone, src_block_id)`, so a key stored inside it adds nothing.
-///
-/// A shard costs an account plus a 36-byte header and breaks even against a
-/// shared shard at about five deliveries. What that buys is saturation
-/// resistance: at 32 bytes per delivery one peer block could overflow the
-/// account, and the guest's only answer is a panic that costs the message.
 #[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct SeenShard {
     /// Recomputed hash of the peer block this shard records deliveries from.
@@ -174,29 +170,6 @@ pub struct SeenShard {
 }
 
 impl SeenShard {
-    /// Deliveries one shard can hold before it exceeds `DATA_MAX_LENGTH`.
-    ///
-    /// Borsh is 32 bytes of hash, a 4-byte count, then 4 bytes per index, so
-    /// this is exactly the `DATA_MAX_LENGTH` an account may carry.
-    ///
-    /// Out of reach only because of the L1 inscription cap: a block inscribes as
-    /// one op near 1.75 MiB and a minimal emitting transaction is about 257
-    /// bytes, capping a peer block near 7,100 deliveries. Raising that L1 cap
-    /// past roughly 6.3 MiB puts this back in reach.
-    pub const MAX_DELIVERIES: usize = {
-        let remaining_bytes = DATA_MAX_LENGTH.as_u64() - 36;
-        let count = remaining_bytes
-            .checked_div(4)
-            .expect("division is well-defined");
-        #[expect(
-            clippy::as_conversions,
-            clippy::cast_possible_truncation,
-            reason = "usize::try_from is not yet const-stable; the value is tiny and always fits"
-        )]
-        let count = count as usize;
-        count
-    };
-
     /// Decodes a shard from account data; empty data is an unclaimed shard.
     pub fn from_bytes(bytes: &[u8]) -> borsh::io::Result<Self> {
         if bytes.is_empty() {
@@ -240,9 +213,10 @@ impl SeenShard {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub enum Instruction {
+pub enum Message {
     /// Delivers a finalized peer message to its target program.
     Dispatch(CrossZoneMessage),
+    Mark(CrossZoneMessage),
     /// Initializes the inbox config account at genesis.
     InitConfig(InboxConfig),
 }
@@ -281,7 +255,7 @@ pub fn inbox_config_account_id(inbox_id: AccountId) -> AccountId {
 
 /// Seed of the config PDA the guest initializes at genesis.
 #[must_use]
-const fn inbox_config_seed() -> PdaSeed {
+pub const fn inbox_config_seed() -> PdaSeed {
     PdaSeed::new(INBOX_CONFIG_SEED)
 }
 
@@ -300,7 +274,7 @@ pub fn inbox_seen_shard_account_id(
 /// One shard per peer block, so a peer cannot accumulate deliveries from many
 /// blocks into one account.
 #[must_use]
-fn inbox_seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
+pub fn inbox_seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let mut bytes = [0_u8; 72];
