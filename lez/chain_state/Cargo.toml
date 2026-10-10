@@ -28,6 +28,8 @@ tokio.workspace = true
 default = []
 # In-process guest execution with a memoized memory image, via `lee`.
 prove = ["lee/prove"]
+# Mutable access to the head state, for other crates' tests.
+test-utils = []
 
 [dev-dependencies]
 testnet_initial_state.workspace = true

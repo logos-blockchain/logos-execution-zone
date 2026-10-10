@@ -5619,6 +5619,7 @@ dependencies = [
  "risc0-binfmt",
  "risc0-zkos-v1compat",
  "risc0-zkvm",
+ "rpds",
  "semver",
  "serde_with",
  "sha2 0.10.9",
