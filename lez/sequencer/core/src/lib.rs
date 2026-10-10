@@ -3266,6 +3266,15 @@ fn load_or_create_key_bytes(path: &Path) -> Result<[u8; ED25519_SECRET_KEY_SIZE]
     }
 }
 
+/// Load an existing signing key; fails rather than creating one.
+pub fn load_signing_key(path: &Path) -> Result<Ed25519Key> {
+    let bytes: [u8; ED25519_SECRET_KEY_SIZE] = std::fs::read(path)
+        .with_context(|| format!("Failed to read the signing key at {}", path.display()))?
+        .try_into()
+        .map_err(|_bytes| anyhow!("Found key with incorrect length"))?;
+    Ok(Ed25519Key::from_bytes(&bytes))
+}
+
 /// Load signing key from file or generate a new one if it doesn't exist.
 pub fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
     Ok(Ed25519Key::from_bytes(&load_or_create_key_bytes(path)?))
