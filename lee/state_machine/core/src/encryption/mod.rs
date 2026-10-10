@@ -229,7 +229,7 @@ mod tests {
     fn encrypt_same_length_for_account_and_pda() {
         let account = Account::default();
         let secret = SharedSecretKey([0_u8; 32]);
-        let nullifier = Nullifier::for_account_initialization(&AccountId::new([0_u8; 32]));
+        let nullifier = Nullifier::for_account_initialization(AccountId::new([0_u8; 32]));
 
         let account_ct = EncryptionScheme::encrypt(
             &account,
@@ -270,7 +270,7 @@ mod tests {
     #[test]
     fn encrypt_pads_short_plaintext_to_requested_length() {
         let secret = SharedSecretKey([0_u8; 32]);
-        let nullifier = Nullifier::for_account_initialization(&AccountId::new([0_u8; 32]));
+        let nullifier = Nullifier::for_account_initialization(AccountId::new([0_u8; 32]));
         let kind = PrivateAccountKind::Regular(Identifier::ZERO);
 
         for data_len in [0, 10, 100, 300] {
@@ -292,7 +292,7 @@ mod tests {
     #[test]
     fn encrypt_leaves_plaintext_longer_than_the_pad_alone() {
         let secret = SharedSecretKey([0_u8; 32]);
-        let nullifier = Nullifier::for_account_initialization(&AccountId::new([0_u8; 32]));
+        let nullifier = Nullifier::for_account_initialization(AccountId::new([0_u8; 32]));
         let kind = PrivateAccountKind::Regular(Identifier::ZERO);
         let account = account_with_data(1000);
         let base = plaintext_len(&account);
@@ -326,7 +326,7 @@ mod tests {
             seed: PdaSeed::new([2_u8; 32]),
             identifier: Identifier::new([9; 32]),
         };
-        let nullifier = Nullifier::for_account_initialization(&AccountId::new([7_u8; 32]));
+        let nullifier = Nullifier::for_account_initialization(AccountId::new([7_u8; 32]));
 
         let ct = EncryptionScheme::encrypt(&account, &kind, &sender_ss, &nullifier, Some(PAD));
         assert_eq!(
@@ -354,7 +354,7 @@ mod tests {
             &Account::default(),
             &PrivateAccountKind::Regular(Identifier::ZERO),
             &SharedSecretKey([0_u8; 32]),
-            &Nullifier::for_account_initialization(&AccountId::new([0_u8; 32])),
+            &Nullifier::for_account_initialization(AccountId::new([0_u8; 32])),
             Some(MAX_CIPHERTEXT_PADDING.saturating_add(1)),
         );
     }
@@ -376,7 +376,7 @@ mod tests {
             b"shard record".to_vec().try_into().unwrap(),
         );
         let kind = PrivateAccountKind::Regular(Identifier::ZERO);
-        let nullifier = Nullifier::for_account_initialization(&AccountId::new([7_u8; 32]));
+        let nullifier = Nullifier::for_account_initialization(AccountId::new([7_u8; 32]));
 
         let ct = EncryptionScheme::encrypt(&account, &kind, &sender_ss, &nullifier, None);
         let (decoded_kind, decoded_account) =
@@ -395,7 +395,7 @@ mod tests {
         );
 
         // Wrong nullifier must not decrypt correctly.
-        let wrong_nullifier = Nullifier::for_account_initialization(&AccountId::new([9; 32]));
+        let wrong_nullifier = Nullifier::for_account_initialization(AccountId::new([9; 32]));
         let bad_via_nlf = EncryptionScheme::decrypt(&ct, &receiver_ss, &wrong_nullifier);
         assert!(
             bad_via_nlf.is_none_or(|(_, a)| a.data.native_balance() != Ok(999)),
