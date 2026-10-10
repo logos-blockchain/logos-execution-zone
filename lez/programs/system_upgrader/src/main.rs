@@ -3,7 +3,8 @@
 //! Owns every system program's address as a PDA and upgrades a system program in two steps:
 //! `Schedule` records the new segment chain and the block it applies from in the registry; `Apply`
 //! checks and clears that record, then has the program loader point the program's header at the
-//! new chain, authorized through the program's PDA seed.
+//! new chain, authorized through the program's PDA seed. `Cancel` clears a pending record without
+//! upgrading.
 
 use lee_core::{
     account::{AccountId, ProgramShardSelector},
@@ -136,6 +137,29 @@ fn plan(input: &PlanInput, instruction: Instruction) -> Plan {
                     immutable: false,
                 },
             ));
+            plan
+        }
+        Instruction::Cancel {
+            name,
+            first_segment,
+            from_height,
+        } => {
+            let [registry] = input.accounts.as_slice() else {
+                panic!("Cancel requires the registry");
+            };
+            require_registry(registry);
+
+            let mut plan = Plan::new(input);
+            plan.effect(
+                registry,
+                &Effect::Consume(
+                    name,
+                    ScheduledUpgrade {
+                        first_segment,
+                        from_height,
+                    },
+                ),
+            );
             plan
         }
     }

@@ -259,6 +259,17 @@ mod inner {
                 )
             }
 
+            fn cancel_tx(first_segment: AccountId) -> PublicTransaction {
+                system_upgrader_tx(
+                    vec![registry_selector()],
+                    Instruction::Cancel {
+                        name: CLOCK_NAME,
+                        first_segment,
+                        from_height: FROM_HEIGHT,
+                    },
+                )
+            }
+
             fn registry(state: &V03State) -> Registry {
                 Registry::from_bytes(
                     state
@@ -386,6 +397,75 @@ mod inner {
                     state.get_account_by_id(system_upgrader_account_id()),
                     header_before
                 );
+            }
+
+            #[test]
+            fn a_cancelled_upgrade_never_applies_and_frees_the_system_program() {
+                let (mut state, ids) = staged();
+                state
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
+                    .unwrap();
+
+                state
+                    .transition_from_public_transaction(&cancel_tx(ids[0]), 2, 0)
+                    .expect("the pending upgrade is cancelled");
+                assert_eq!(schedule(&state), None);
+
+                state
+                    .transition_from_public_transaction(&apply_tx(&ids), FROM_HEIGHT, 0)
+                    .expect_err("a cancelled upgrade can't apply");
+                assert_eq!(
+                    state.get_program_image_id(clock_account_id()),
+                    Some(clock().id())
+                );
+
+                state
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 3, 0)
+                    .expect("the system program can be scheduled again");
+            }
+
+            #[test]
+            fn an_upgrade_past_its_height_can_still_be_cancelled() {
+                let (mut state, ids) = staged();
+                state
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
+                    .unwrap();
+
+                state
+                    .transition_from_public_transaction(&cancel_tx(ids[0]), FROM_HEIGHT + 1, 0)
+                    .expect("cancelling is valid at any height");
+                assert_eq!(schedule(&state), None);
+            }
+
+            #[test]
+            fn cancelling_a_different_upgrade_is_refused() {
+                let (mut state, ids) = staged();
+                state
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
+                    .unwrap();
+
+                let err = state
+                    .transition_from_public_transaction(
+                        &cancel_tx(AccountId::new([0x77; 32])),
+                        2,
+                        0,
+                    )
+                    .expect_err("only the pending upgrade can be cancelled");
+                assert!(
+                    err.to_string()
+                        .contains("the upgrade does not match the system program's schedule"),
+                    "got: {err}"
+                );
+                assert!(schedule(&state).is_some(), "the pending upgrade is kept");
+            }
+
+            #[test]
+            fn cancelling_with_nothing_scheduled_is_refused() {
+                let (mut state, ids) = staged();
+
+                state
+                    .transition_from_public_transaction(&cancel_tx(ids[0]), 1, 0)
+                    .expect_err("there is nothing to cancel");
             }
 
             #[test]

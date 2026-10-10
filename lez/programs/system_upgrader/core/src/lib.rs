@@ -30,6 +30,14 @@ pub enum Instruction {
         name: SystemProgramName,
         from_height: BlockId,
     },
+    /// Clears `name`'s pending upgrade, at any height, if it is exactly this one.
+    ///
+    /// Accounts: the registry.
+    Cancel {
+        name: SystemProgramName,
+        first_segment: AccountId,
+        from_height: BlockId,
+    },
 }
 
 /// A pending upgrade, stored in the [`Registry`] under the system program's name.
