@@ -8,14 +8,47 @@ use lee_core::BlockId;
 use sequencer_stake_core::{SequencerKey, SequencerStakeConfig, slash_approval_threshold};
 use system_upgrader_core::{Approval, Proposal, SignedApproval};
 
+type ByProposal = BTreeMap<Proposal, BTreeMap<SequencerKey, Approval>>;
+
 /// Verified approvals, by proposal and signer. A signer's newer approval of the same proposal
 /// replaces its older one.
 #[derive(Debug, Default)]
 pub struct SystemApprovals {
-    by_proposal: BTreeMap<Proposal, BTreeMap<SequencerKey, Approval>>,
+    by_proposal: ByProposal,
+    /// Changed since the last [`SystemApprovals::take_changed`].
+    changed: bool,
+}
+
+/// How the pool is persisted, versioned so a later layout can still read this one.
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
+enum PersistedApprovals {
+    V1(ByProposal),
 }
 
 impl SystemApprovals {
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        borsh::to_vec(&PersistedApprovals::V1(self.by_proposal.clone()))
+            .expect("approvals serialize")
+    }
+
+    /// `None` if `bytes` doesn't decode as a persisted pool.
+    #[must_use]
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let PersistedApprovals::V1(by_proposal) = borsh::from_slice(bytes).ok()?;
+        Some(Self {
+            by_proposal,
+            changed: false,
+        })
+    }
+
+    /// Whether the pool changed since the last call, so it needs persisting.
+    pub const fn take_changed(&mut self) -> bool {
+        let changed = self.changed;
+        self.changed = false;
+        changed
+    }
+
     /// Keeps `signed` if it is a valid approval, by an accredited member of `committee`, still
     /// usable at `next_block`.
     pub fn add(
@@ -45,6 +78,7 @@ impl SystemApprovals {
             .entry(proposal)
             .or_default()
             .insert(approval.signer, approval);
+        self.changed = true;
         Ok(())
     }
 
@@ -56,10 +90,13 @@ impl SystemApprovals {
         committee: &SequencerStakeConfig,
         block_id: BlockId,
     ) -> Vec<(Proposal, Vec<Approval>)> {
+        let before: usize = self.by_proposal.values().map(BTreeMap::len).sum();
         self.by_proposal.retain(|_, approvals| {
             approvals.retain(|_, approval| approval.valid_until >= block_id);
             !approvals.is_empty()
         });
+        let after: usize = self.by_proposal.values().map(BTreeMap::len).sum();
+        self.changed |= after != before;
         let threshold = slash_approval_threshold(committee.accredited_committee_members_count());
         self.by_proposal
             .iter()
@@ -81,7 +118,7 @@ impl SystemApprovals {
 
     /// Forgets `proposal`, once its change has been included or has failed.
     pub fn remove(&mut self, proposal: &Proposal) {
-        self.by_proposal.remove(proposal);
+        self.changed |= self.by_proposal.remove(proposal).is_some();
     }
 }
 
@@ -192,6 +229,18 @@ mod tests {
             pool.ready(&committee(), 11).is_empty(),
             "one approval expired at 10"
         );
+    }
+
+    #[test]
+    fn the_pool_round_trips_through_its_bytes() {
+        let mut pool = SystemApprovals::default();
+        pool.add(signed(1, 20), &committee(), 1).unwrap();
+        pool.add(signed(2, 30), &committee(), 1).unwrap();
+        assert!(pool.take_changed());
+        assert!(!pool.take_changed(), "taking clears it");
+
+        let mut restored = SystemApprovals::from_bytes(&pool.to_bytes()).unwrap();
+        assert_eq!(restored.ready(&committee(), 1), pool.ready(&committee(), 1));
     }
 
     #[test]

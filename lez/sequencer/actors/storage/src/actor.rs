@@ -34,11 +34,12 @@ use crate::{
         GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetEventFilter,
         GetFinalSnapshot, GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
         GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,
-        GetTransactionByHash, GetTxHashToBlockIdMapItem, GetZoneAnchor, GetZoneCheckpoint,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutSlashRecordBytes,
-        RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
-        SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
-        WithdrawalReconciliationKey, ZoneAnchorRecord, ZoneCheckpointRecord,
+        GetSystemApprovalsBytes, GetTransactionByHash, GetTxHashToBlockIdMapItem, GetZoneAnchor,
+        GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+        PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
+        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
+        StoreUpdateOutcome, UpdateZoneCheckpoint, WithdrawalReconciliationKey, ZoneAnchorRecord,
+        ZoneCheckpointRecord,
     },
 };
 
@@ -889,6 +890,38 @@ impl Message<PutSlashRecordBytes> for StorageActor {
     ) -> Self::Reply {
         self.db()
             .put(&encoding::SingletonKey, &entities::SlashRecord { bytes })
+            .map_err(Into::into)
+    }
+}
+
+impl Message<GetSystemApprovalsBytes> for StorageActor {
+    type Reply = Result<Option<Vec<u8>>>;
+
+    async fn handle(
+        &mut self,
+        GetSystemApprovalsBytes: GetSystemApprovalsBytes,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self
+            .db()
+            .get::<entities::SystemApprovalsRecord>(&encoding::SingletonKey)?
+            .map(|record| record.bytes))
+    }
+}
+
+impl Message<PutSystemApprovalsBytes> for StorageActor {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        PutSystemApprovalsBytes { bytes }: PutSystemApprovalsBytes,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.db()
+            .put(
+                &encoding::SingletonKey,
+                &entities::SystemApprovalsRecord { bytes },
+            )
             .map_err(Into::into)
     }
 }

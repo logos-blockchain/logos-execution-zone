@@ -49,9 +49,10 @@ use sequencer_storage_actor::{
         DispatchOrigin, DropSettledCrossZoneDispatches, GetAllBlocks, GetBlock,
         GetChannelViewBytes, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
         GetFirstBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
-        GetPendingDepositEvents, GetZoneAnchor, GetZoneCheckpoint, PendingCrossZoneDispatchRecord,
-        PendingDepositEventRecord, RecordDispatchFailure, RequeueDeadLetterDispatch,
-        WithdrawalReconciliationKey, ZoneAnchorRecord, ZoneCheckpointRecord,
+        GetPendingDepositEvents, GetSystemApprovalsBytes, GetZoneAnchor, GetZoneCheckpoint,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RecordDispatchFailure,
+        RequeueDeadLetterDispatch, WithdrawalReconciliationKey, ZoneAnchorRecord,
+        ZoneCheckpointRecord,
     },
 };
 use tokio::sync::Mutex;
@@ -544,6 +545,19 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .expect("Failed to get zone checkpoint")
             .map_or_else(MsgId::root, |checkpoint| checkpoint.finalized_config);
 
+        let system_approvals = storage_ref
+            .ask(GetSystemApprovalsBytes)
+            .await
+            .expect("Failed to read the system_upgrader approvals")
+            .and_then(|bytes| {
+                let approvals = system_approvals::SystemApprovals::from_bytes(&bytes);
+                if approvals.is_none() {
+                    warn!("Dropping persisted system_upgrader approvals that don't decode");
+                }
+                approvals
+            })
+            .unwrap_or_default();
+
         let sequencer_core = Self {
             chain,
             storage_ref,
@@ -561,7 +575,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             config_draft: None,
             finalized_config,
             applied_seq: None,
-            system_approvals: system_approvals::SystemApprovals::default(),
+            system_approvals,
         };
 
         sequencer_core_metrics::record_chain_height(sequencer_core.chain_height().await);
@@ -1942,6 +1956,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 self.mempool.push_front((origin, tx));
             }
         }
+        if let Err(err) = self.persist_system_approvals().await {
+            warn!("{err:#}");
+        }
 
         let fee_tx = fee_invocation(
             summary,
@@ -2012,7 +2029,21 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 .map_or(GENESIS_BLOCK_ID, |tip| tip.block_id.saturating_add(1));
             (committee, next_block)
         };
-        self.system_approvals.add(signed, &committee, next_block)
+        self.system_approvals.add(signed, &committee, next_block)?;
+        self.persist_system_approvals().await
+    }
+
+    /// Writes the approval pool to storage if it changed, so a restart keeps it.
+    async fn persist_system_approvals(&mut self) -> Result<()> {
+        if self.system_approvals.take_changed() {
+            self.storage_ref
+                .ask(sequencer_storage_actor::protocol::PutSystemApprovalsBytes {
+                    bytes: self.system_approvals.to_bytes(),
+                })
+                .await
+                .context("Failed to persist the system_upgrader approvals")?;
+        }
+        Ok(())
     }
 
     pub async fn chain_height(&self) -> u64 {

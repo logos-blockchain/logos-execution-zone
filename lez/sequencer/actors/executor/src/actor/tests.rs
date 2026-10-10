@@ -247,6 +247,10 @@ fn prepare_mock_storage_with_stake(
         .returning(|_, _| Ok(None));
 
     mock_storage
+        .expect_handle_get_system_approvals_bytes()
+        .returning(|_, _| Ok(None));
+
+    mock_storage
         .expect_handle_get_latest_block_meta()
         .returning(move |_, _| Ok(Some(genesis_block_meta.clone())));
 

@@ -28,10 +28,11 @@ use crate::{
         GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetEventFilter, GetFinalSnapshot,
         GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
         GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,
-        GetTransactionByHash, GetZoneAnchor, GetZoneCheckpoint, PendingCrossZoneDispatchRecord,
-        PendingDepositEventRecord, PutSlashRecordBytes, RecordDispatchFailure,
-        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
-        StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
+        GetSystemApprovalsBytes, GetTransactionByHash, GetZoneAnchor, GetZoneCheckpoint,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutSlashRecordBytes,
+        PutSystemApprovalsBytes, RecordDispatchFailure, RequeueDeadLetterDispatch,
+        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome,
+        UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
 
@@ -106,6 +107,18 @@ mockall::mock! {
         pub fn handle_put_slash_record_bytes(
             &mut self,
             msg: PutSlashRecordBytes,
+            ctx: &mut Context<Self, Result<()>>
+        ) -> Result<()>;
+
+        pub fn handle_get_system_approvals_bytes(
+            &mut self,
+            msg: GetSystemApprovalsBytes,
+            ctx: &mut Context<Self, Result<Option<Vec<u8>>>>
+        ) -> Result<Option<Vec<u8>>>;
+
+        pub fn handle_put_system_approvals_bytes(
+            &mut self,
+            msg: PutSystemApprovalsBytes,
             ctx: &mut Context<Self, Result<()>>
         ) -> Result<()>;
 
@@ -404,6 +417,30 @@ impl Message<GetSlashRecordBytes> for MockStorageActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_slash_record_bytes(msg, ctx)
+    }
+}
+
+impl Message<GetSystemApprovalsBytes> for MockStorageActor {
+    type Reply = Result<Option<Vec<u8>>>;
+
+    async fn handle(
+        &mut self,
+        msg: GetSystemApprovalsBytes,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_system_approvals_bytes(msg, ctx)
+    }
+}
+
+impl Message<PutSystemApprovalsBytes> for MockStorageActor {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        msg: PutSystemApprovalsBytes,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_put_system_approvals_bytes(msg, ctx)
     }
 }
 
