@@ -82,9 +82,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             // watcher; a user must not invoke them top-level, or anyone could forge
             // an inbound cross-zone delivery. Chained user calls are already rejected
             // by the inbox guest's caller-is-none assertion.
-            if let LeeTransaction::Public(public_tx) = &authenticated_tx
-                && sequencer_core::is_sequencer_only_program(public_tx.message().program_account_id)
-            {
+            if sequencer_core::is_sequencer_only_tx(&authenticated_tx) {
                 return Err(ErrorObjectOwned::owned(
                     ErrorCode::InvalidParams.code(),
                     "Program is sequencer-only and cannot be invoked by a user transaction"

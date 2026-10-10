@@ -77,32 +77,32 @@ fn base_state() -> V03State {
         (
             programs::cross_zone_inbox_account_id(),
             programs::cross_zone_inbox(),
-            true,
+            false,
         ),
         (
             programs::cross_zone_outbox_account_id(),
             programs::cross_zone_outbox(),
-            true,
+            false,
         ),
         (
             programs::ping_sender_account_id(),
             programs::ping_sender(),
-            true,
+            false,
         ),
         (
             programs::ping_receiver_account_id(),
             programs::ping_receiver(),
-            true,
+            false,
         ),
         (
             programs::bridge_lock_account_id(),
             programs::bridge_lock(),
-            true,
+            false,
         ),
         (
             programs::wrapped_token_account_id(),
             programs::wrapped_token(),
-            true,
+            false,
         ),
     ])
 }

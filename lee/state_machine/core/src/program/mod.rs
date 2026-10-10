@@ -14,6 +14,9 @@ use crate::{
 /// that runs its `Instruction` variants as Rust rather than interpreting a guest ELF.
 pub const PROGRAM_LOADER_ACCOUNT_ID: AccountId = AccountId::new([0xFE; 32]);
 
+/// The fixed address of `system_upgrader`; every system program's address is one of its PDAs.
+pub const SYSTEM_UPGRADER_ACCOUNT_ID: AccountId = AccountId::new([0xFD; 32]);
+
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
 /// Hard cap on a deployed program's segment chain length, bounding a resolution walk.
@@ -33,20 +36,14 @@ impl AccountId {
         Self::new(bytes.try_into().expect("8 u32 words are exactly 32 bytes"))
     }
 
+    /// A system program's address: the `system_upgrader` PDA whose seed is
+    /// [`PdaSeed::for_system_program`] of `name`, so `system_upgrader` can authorize its header
+    /// updates through ordinary PDA authorization.
     #[must_use]
-    pub fn from_builtin_program_name(name: &[u8]) -> Self {
-        use risc0_zkvm::sha::rust_crypto::{Digest as _, Sha256};
-        const BUILTIN_PROGRAM_NAME_PREFIX: &[u8; 32] = b"/LEE-BuiltinProgram/v1/AccountId";
-
-        let mut hasher = Sha256::new();
-        hasher.update(BUILTIN_PROGRAM_NAME_PREFIX);
-        hasher.update(name);
-        Self::new(
-            hasher
-                .finalize()
-                .as_slice()
-                .try_into()
-                .expect("Hash output must be exactly 32 bytes long"),
+    pub fn from_system_program_name(name: &SystemProgramName) -> Self {
+        Self::for_public_pda(
+            &SYSTEM_UPGRADER_ACCOUNT_ID,
+            &PdaSeed::for_system_program(name),
         )
     }
 }
@@ -148,6 +145,43 @@ pub struct PlanInput {
 
 /// A 32-byte seed used to compute a *Program-Derived `AccountId`* (PDA).
 ///
+/// A system program's name: 1 to 32 bytes, zero-padded to 32.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    BorshSerialize,
+    BorshDeserialize,
+)]
+pub struct SystemProgramName([u8; 32]);
+
+impl SystemProgramName {
+    /// Fails to compile, in a constant, for an empty name or one longer than 32 bytes.
+    #[must_use]
+    pub const fn new(name: &[u8]) -> Self {
+        assert!(
+            !name.is_empty() && name.len() <= 32,
+            "a system program name is 1 to 32 bytes"
+        );
+        let mut bytes = [0_u8; 32];
+        let (head, _) = bytes.split_at_mut(name.len());
+        head.copy_from_slice(name);
+        Self(bytes)
+    }
+
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 /// Each program can derive up to `2^256` unique account IDs by choosing different
 /// seeds. PDAs allow programs to control namespaced account identifiers without
 /// collisions between programs.
@@ -171,6 +205,24 @@ impl PdaSeed {
     #[must_use]
     pub const fn new(value: [u8; 32]) -> Self {
         Self(value)
+    }
+
+    #[must_use]
+    pub fn for_system_program(name: &SystemProgramName) -> Self {
+        use risc0_zkvm::sha::rust_crypto::{Digest as _, Sha256};
+        const SYSTEM_PROGRAM_SEED_PREFIX: &[u8; 32] =
+            b"/LEE/SystemUpgrader/v1/Name\x00\x00\x00\x00\x00";
+
+        let mut hasher = Sha256::new();
+        hasher.update(SYSTEM_PROGRAM_SEED_PREFIX);
+        hasher.update(name.as_bytes());
+        Self(
+            hasher
+                .finalize()
+                .as_slice()
+                .try_into()
+                .expect("Hash output must be exactly 32 bytes long"),
+        )
     }
 
     #[must_use]
@@ -435,6 +487,30 @@ impl ProgramSegment {
             LoaderEntry::Header(_) => None,
         }
     }
+}
+
+/// `program_loader`'s instructions, in `lee_core` so guests can build them. Variants are
+/// append-only: `system_upgrader`, which changes only by protocol upgrade, encodes some of them.
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
+pub enum LoaderInstruction {
+    /// Writes a segment to `accounts[0]`'s empty loader shard; the target must be authorized.
+    /// With `next_segment`, `accounts[1]` must be that segment, already written.
+    WriteSegment {
+        bytecode: Vec<u8>,
+        next_segment: Option<AccountId>,
+    },
+    /// Creates a header in `accounts[0]`'s empty loader shard (authorized) for the segment chain
+    /// at `first_segment`, given in `accounts[1..]` in link order; its image ID is computed.
+    CreateHeader {
+        first_segment: AccountId,
+        immutable: bool,
+    },
+    /// Repoints `accounts[0]`'s mutable header (authorized) at the chain at `first_segment`, given
+    /// as for [`LoaderInstruction::CreateHeader`].
+    UpdateHeader {
+        first_segment: AccountId,
+        immutable: bool,
+    },
 }
 
 /// What a loader shard holds. The tag keeps a header and a segment from decoding as each other;

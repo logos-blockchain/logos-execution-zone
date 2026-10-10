@@ -7,7 +7,8 @@
 //! [`apply`] executes the resulting [`ShardEffect`]s.
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use lee_core::program::{
-    LoaderEntry, MAX_PROGRAM_SEGMENTS, ProgramHeader, ProgramSegment, immutable_mirror_commitment,
+    LoaderEntry, LoaderInstruction as Instruction, MAX_PROGRAM_SEGMENTS, ProgramHeader,
+    ProgramSegment, immutable_mirror_commitment,
 };
 use lee_core::{
     Commitment,
@@ -22,43 +23,6 @@ use lee_core::{
 /// against the account's own `DATA_MAX_LENGTH` cap regardless — this just keeps a live deploy's
 /// segments comfortably under it.
 pub const MAX_SEGMENT_DATA_LEN: usize = 96 * 1024;
-
-/// Variants are append-only. Borsh encodes the variant as a leading tag byte, so inserting one
-/// ahead of `WriteSegment` shifts every existing encoding.
-#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
-pub enum Instruction {
-    /// Writes a new segment to the empty loader shard of `accounts[0]`, which must be authorized.
-    ///
-    /// If `next_segment` is `Some`, `accounts[1]` must be that account and contain a valid
-    /// [`ProgramSegment`] in its loader shard. Segments are immutable and linked from tail to head.
-    ///
-    /// Required accounts (1, or 2 if `next_segment` is `Some`).
-    WriteSegment {
-        bytecode: Vec<u8>,
-        next_segment: Option<AccountId>,
-    },
-    /// Creates a header in the empty loader shard of `accounts[0]`, which must be
-    /// `is_authorized`.
-    ///
-    /// `accounts[1..]` supplies the read-only segment chain from `first_segment`, in link order.
-    /// The image ID is computed from that chain.
-    ///
-    /// Required accounts (1 + the segment chain length).
-    CreateHeader {
-        first_segment: AccountId,
-        immutable: bool,
-    },
-    /// Updates the header in `accounts[0]`'s loader shard.
-    ///
-    /// Requires an authorized account and a valid, mutable [`ProgramHeader`].
-    /// Uses the same segment chain and image ID calculation as [`Instruction::CreateHeader`].
-    ///
-    /// Required accounts (1 + the segment chain length).
-    UpdateHeader {
-        first_segment: AccountId,
-        immutable: bool,
-    },
-}
 
 #[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 pub enum Effect {

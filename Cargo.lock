@@ -1773,6 +1773,7 @@ dependencies = [
  "serde_with",
  "sha2 0.10.9",
  "system_accounts",
+ "system_upgrader_core",
  "thiserror 2.0.18",
 ]
 
@@ -4815,6 +4816,7 @@ dependencies = [
  "sequencer_stake_core",
  "serde_json",
  "system_accounts",
+ "system_upgrader_core",
  "tempfile",
  "test_fixtures",
  "test_methods",
@@ -9500,7 +9502,12 @@ dependencies = [
  "lee",
  "lee_core",
  "ping_core",
+ "program_loader_core",
+ "risc0-binfmt",
  "sequencer_stake_core",
+ "system_upgrader_core",
+ "test_guest_core",
+ "test_programs",
  "wrapped_token_core",
 ]
 
@@ -11147,6 +11154,7 @@ dependencies = [
  "serde",
  "serde_json",
  "system_accounts",
+ "system_upgrader_core",
  "tempfile",
  "test_programs",
  "testnet_initial_state",
@@ -11252,6 +11260,7 @@ dependencies = [
  "sequencer_core",
  "sequencer_slasher_actor",
  "sequencer_stake_core",
+ "system_upgrader_core",
  "testnet_initial_state",
  "tokio",
 ]
@@ -12262,6 +12271,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "system_upgrader_core"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "lee_core",
+]
+
+[[package]]
+name = "system_upgrader_program"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "lee_core",
+ "system_upgrader_core",
+]
+
+[[package]]
 name = "tachys"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12679,6 +12705,7 @@ dependencies = [
  "programs",
  "serde",
  "system_accounts",
+ "system_upgrader_core",
 ]
 
 [[package]]

@@ -48,6 +48,7 @@ members = [
   "lez/common",
   "lez/programs",
   "lez/programs/bridge",
+  "lez/programs/system_upgrader",
   "lez/programs/clock",
   "lez/programs/fee",
   "lez/programs/fee/core",
@@ -119,6 +120,7 @@ programs = { path = "lez/programs", default-features = false, features = [
 ] }
 system_accounts = { path = "lez/system_accounts" }
 clock_core = { path = "lez/programs/clock/core" }
+system_upgrader_core = { path = "lez/programs/system_upgrader/core" }
 cross_zone_marker_core = { path = "lez/programs/cross_zone_marker" }
 fee_core = { path = "lez/programs/fee/core" }
 bridge_core = { path = "lez/programs/bridge/core" }

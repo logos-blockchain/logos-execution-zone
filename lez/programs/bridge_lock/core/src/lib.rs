@@ -12,7 +12,8 @@ const ESCROW_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/BridgeLockEscrow/0000/";
 const CONFIG_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/BridgeLockCfg/0000000/";
 const HOLDING_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/BridgeLockHold/000000/";
 
-pub const BRIDGE_LOCK_NAME: [u8; 11] = *b"bridge_lock";
+pub const BRIDGE_LOCK_NAME: lee_core::program::SystemProgramName =
+    lee_core::program::SystemProgramName::new(b"bridge_lock");
 
 /// Variants are append-only. Borsh encodes the variant as a leading tag byte,
 /// so inserting one ahead of `Lock` shifts every existing encoding.
@@ -50,7 +51,7 @@ pub enum Instruction {
 
 #[must_use]
 pub fn bridge_lock_account_id() -> AccountId {
-    AccountId::from_builtin_program_name(&BRIDGE_LOCK_NAME)
+    AccountId::from_system_program_name(&BRIDGE_LOCK_NAME)
 }
 
 /// PDA accumulating all locked balance on this zone.

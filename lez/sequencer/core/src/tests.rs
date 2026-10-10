@@ -5602,3 +5602,105 @@ async fn the_first_finalized_block_is_not_reported() {
     finalize_signed(&mut sequencer, entry_of(&invalid, MsgId::root())).await;
     assert!(!slash_recorded(&sequencer).await);
 }
+
+fn system_upgrader_tx(instruction: &system_upgrader_core::Instruction) -> LeeTransaction {
+    LeeTransaction::Public(lee::PublicTransaction::new(
+        lee::public_transaction::Message::try_new(
+            lee_core::program::SYSTEM_UPGRADER_ACCOUNT_ID,
+            vec![],
+            vec![],
+            instruction,
+        )
+        .unwrap(),
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+    ))
+}
+
+#[test]
+fn every_system_upgrader_tx_is_sequencer_only() {
+    let apply = system_upgrader_tx(&system_upgrader_core::Instruction::Apply {
+        name: programs::CLOCK_NAME,
+        from_height: 1,
+    });
+    let schedule = system_upgrader_tx(&system_upgrader_core::Instruction::Schedule {
+        name: programs::CLOCK_NAME,
+        first_segment: AccountId::new([1; 32]),
+        from_height: 1,
+    });
+
+    assert!(super::is_sequencer_only_tx(&apply));
+    assert!(super::is_sequencer_only_tx(&schedule));
+}
+
+#[test]
+fn a_due_system_upgrade_gets_an_apply() {
+    use lee_core::program::{
+        PROGRAM_LOADER_ACCOUNT_ID, ProgramSegment, SYSTEM_UPGRADER_ACCOUNT_ID,
+    };
+    use system_upgrader_core::{Registry, ScheduledUpgrade, registry_account_id};
+
+    let segment = AccountId::new([0x51; 32]);
+    let upgrade = ScheduledUpgrade {
+        first_segment: segment,
+        from_height: 5,
+    };
+    let genesis = testnet_initial_state::initial_state(false);
+    let mut registry = Registry::from_bytes(
+        genesis
+            .get_account_by_id(registry_account_id())
+            .data
+            .shard(SYSTEM_UPGRADER_ACCOUNT_ID),
+    )
+    .unwrap();
+    registry
+        .programs
+        .insert(programs::CLOCK_NAME, Some(upgrade));
+    let clock = programs::clock_account_id();
+    let state = testnet_initial_state::initial_state(false).with_public_accounts([
+        (
+            registry_account_id(),
+            lee::Account::default().with_shard(
+                SYSTEM_UPGRADER_ACCOUNT_ID,
+                registry.to_bytes().try_into().unwrap(),
+            ),
+        ),
+        (
+            segment,
+            lee::Account::default().with_shard(
+                PROGRAM_LOADER_ACCOUNT_ID,
+                ProgramSegment {
+                    bytecode: vec![1],
+                    next_segment: None,
+                }
+                .to_loader_shard()
+                .try_into()
+                .unwrap(),
+            ),
+        ),
+    ]);
+
+    assert!(
+        super::build_upgrade_apply_txs(&state, 4).is_empty(),
+        "nothing is due before the upgrade's height"
+    );
+    let txs = super::build_upgrade_apply_txs(&state, 5);
+    let [LeeTransaction::Public(apply)] = txs.as_slice() else {
+        panic!("expected one Apply, for clock; got {txs:?}");
+    };
+    assert_eq!(
+        apply.message().shard_selectors,
+        vec![
+            ProgramShardSelector::new(registry_account_id(), SYSTEM_UPGRADER_ACCOUNT_ID),
+            ProgramShardSelector::new(clock, PROGRAM_LOADER_ACCOUNT_ID),
+            ProgramShardSelector::new(segment, PROGRAM_LOADER_ACCOUNT_ID),
+        ]
+    );
+    assert_eq!(
+        borsh::from_slice::<system_upgrader_core::Instruction>(&apply.message().instruction_data)
+            .unwrap(),
+        system_upgrader_core::Instruction::Apply {
+            name: programs::CLOCK_NAME,
+            from_height: 5,
+        }
+    );
+}

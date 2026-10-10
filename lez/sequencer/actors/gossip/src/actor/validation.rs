@@ -59,9 +59,7 @@ pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
         Err(err) => return TxEvaluation::Reject(format!("stateless check failed: {err:?}")),
     };
 
-    if let LeeTransaction::Public(public_tx) = &authenticated
-        && sequencer_core::is_sequencer_only_program(public_tx.message().program_account_id)
-    {
+    if sequencer_core::is_sequencer_only_tx(&authenticated) {
         return TxEvaluation::Reject("sequencer-only program".to_owned());
     }
 
@@ -212,6 +210,29 @@ mod tests {
         assert!(matches!(
             evaluate_transaction(&bytes, 1 << 20),
             TxEvaluation::Accept(_)
+        ));
+    }
+
+    #[test]
+    fn a_system_upgrader_tx_from_a_peer_is_rejected() {
+        let message = lee::public_transaction::Message::try_new(
+            system_upgrader_core::SYSTEM_UPGRADER_ACCOUNT_ID,
+            vec![],
+            vec![],
+            system_upgrader_core::Instruction::Apply {
+                name: system_upgrader_core::SystemProgramName::new(b"clock"),
+                from_height: 1,
+            },
+        )
+        .unwrap();
+        let tx = LeeTransaction::Public(lee::PublicTransaction::new(
+            message,
+            lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        ));
+        let bytes = borsh::to_vec(&tx).unwrap();
+        assert!(matches!(
+            evaluate_transaction(&bytes, 1 << 20),
+            TxEvaluation::Reject(reason) if reason == "sequencer-only program"
         ));
     }
 
