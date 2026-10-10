@@ -58,6 +58,7 @@ default = []
 prove = ["lee/prove", "chain_state/prove"]
 
 [dev-dependencies]
+chain_state = { workspace = true, features = ["test-utils"] }
 cross_zone = { workspace = true, features = ["test-utils"] }
 sequencer_storage_actor = { workspace = true, features = ["actor", "mock"] }
 sequencer_bedrock_actor = { workspace = true, features = ["mock"] }
@@ -66,5 +67,4 @@ test_programs.workspace = true
 program_loader_core.workspace = true
 lee = { workspace = true, features = ["test-utils"] }
 key_protocol.workspace = true
-token_core.workspace = true
 ping_core.workspace = true

@@ -664,7 +664,7 @@ mod tests {
             timestamp,
             transactions: vec![],
         }
-        .into_pending_block(&lee::PrivateKey::try_new([7; 32]).expect("valid key"))
+        .into_pending_block()
     }
 
     #[tokio::test]

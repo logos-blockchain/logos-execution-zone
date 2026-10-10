@@ -7,10 +7,8 @@ on:
       - "**.md"
       - "!.github/workflows/*.yml"
 
+  # No path filter: `ci-ok` must report on docs-only PRs too.
   pull_request:
-    paths-ignore:
-      - "**.md"
-      - "!.github/workflows/*.yml"
 
 # Supersede in-progress runs for a pull request; never cancel a push, so each
 # merge to main/dev keeps its own run.
@@ -26,7 +24,37 @@ permissions:
 name: General
 
 jobs:
+  # Gating `ci-image` alone skips the rest: every costly job chains through it.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - name: Detect non-documentation changes
+        id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          files="$(gh api --paginate \
+            "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            --jq '.[].filename')"
+
+          # An empty list means the API told us nothing, so assume code.
+          if [[ -n "$files" && -z "$(sed '/\.md$/d' <<< "$files")" ]]; then
+            echo "Documentation-only pull request; skipping the code jobs."
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+
   ci-image:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     permissions:
       contents: read
       packages: write
@@ -70,11 +98,14 @@ jobs:
     permissions:
       contents: read
       packages: read
+    # Must not cancel pushes: every merge shares `github.ref` on a push.
     concurrency:
-      group: cucumber-${{ github.ref }}
-      cancel-in-progress: true
+      group: cucumber-${{ github.event.pull_request.number || github.sha }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
   bedrock-resolver-tests:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -104,7 +135,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
 
       - name: Check Rust files are formatted
-        run: cargo +nightly fmt --check
+        # Toolchain pinned in .github/docker/ci.Dockerfile; keep the two in sync.
+        run: cargo +nightly-2026-10-08 fmt --check
 
   fmt-toml:
     needs: ci-image
@@ -258,12 +290,14 @@ jobs:
 
   abort-on-stale-fixtures:
     needs: test-fixtures-tests
-    if: failure()
+    # `failure()` would also fire for an unrelated ancestor failure.
+    if: needs.test-fixtures-tests.result == 'failure'
     runs-on: ubuntu-latest
     permissions:
       actions: write
     steps:
-      - run: gh run cancel ${{ github.run_id }}
+      # No checkout in this job, so `gh` cannot infer the repo from git.
+      - run: gh run cancel ${{ github.run_id }} -R ${{ github.repository }}
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -355,11 +389,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download integration test archive
+        timeout-minutes: 10
         uses: actions/download-artifact@v4
         with:
           name: integration-tests-archive
 
       - name: Download resolved Bedrock node
+        timeout-minutes: 10
         uses: actions/download-artifact@v4
         with:
           name: bedrock-node
@@ -367,6 +403,13 @@ jobs:
 
       - name: Make resolved Bedrock node executable
         run: chmod +x bedrock/.resolved/logos-blockchain-node
+
+      # A shard that runs out of room reports only "error writing file to disk".
+      - name: Report disk headroom before extraction
+        run: |
+          ls -l --block-size=M integration-tests.tar.zst
+          zstd -l integration-tests.tar.zst || true
+          df -h / /tmp /mnt || true
 
       - name: Run tests
         uses: ./.github/actions/run-in-ci-image
@@ -377,6 +420,7 @@ jobs:
             RUST_LOG=info,kameo=warn
             LOGOS_BLOCKCHAIN_NODE_BIN=${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
           run: |
+            # `--retries` names the flaky test, `with_retry` covers a bad runner.
             source .github/scripts/with_retry.sh
             if [[ "${{ matrix.target }}" == "tf_bedrock_builder" || \
                   "${{ matrix.target }}" == "tf_app_deployments" ]]; then
@@ -386,10 +430,14 @@ jobs:
               # allowing TF to use its local build provider.
               cargo fetch --locked
 
-              with_retry 'env -u GITHUB_ACTIONS -u CI cargo nextest run --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
+              with_retry 'env -u GITHUB_ACTIONS -u CI cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
             else
-              with_retry 'cargo nextest run --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
+              with_retry 'cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
             fi
+
+      - name: Report disk headroom after the tests
+        if: always()
+        run: df -h / /tmp /mnt || true
   # `just build-artifacts` drives the host's Docker daemon via `cargo risczero
   # build`, so it goes through the image rather than `container:`.
   artifacts:
@@ -465,3 +513,43 @@ jobs:
             exit 1
           fi
           echo "✅ Dashboards are up to date"
+
+  # The one required status check: `always()` so it reports even when `changes`
+  # skipped everything. A skipped job reports nothing and would block forever.
+  ci-ok:
+    if: always()
+    needs:
+      - changes
+      - ci-image
+      - bedrock-node
+      - cucumber
+      - bedrock-resolver-tests
+      - fmt-rs
+      - fmt-toml
+      - machete
+      - deny
+      - lint
+      - unit-tests
+      - test-fixtures-tests
+      - integration-tests-prebuild
+      - integration-tests
+      - artifacts
+      - dashboards
+    runs-on: ubuntu-latest
+    steps:
+      # Skipped is a pass; everything else, cancelled included, fails.
+      - name: Require every job to have succeeded or been skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          bad="$(jq -r 'to_entries
+            | map(select(.value.result != "success" and .value.result != "skipped"))
+            | .[] | "\(.key): \(.value.result)"' <<< "$NEEDS")"
+
+          if [[ -n "$bad" ]]; then
+            echo "::error::CI is not green:"
+            echo "$bad"
+            exit 1
+          fi
+
+          echo "Every job succeeded or was skipped."

@@ -28,7 +28,7 @@ use crate::{
 
 /// The parent the next block must chain on.
 // `l1_slot` will be added here when the `ChainState` anchor layer lands.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tip {
     pub block_id: u64,
     pub hash: HashType,
@@ -100,9 +100,6 @@ pub fn validate_against_tip(tip: Option<&Tip>, block: &Block) -> Result<(), Bloc
             computed,
             header: block.header.hash,
         });
-    }
-    if !block.has_valid_producer_signature() {
-        return Err(BlockIngestError::InvalidProducerSignature);
     }
 
     match tip {
@@ -519,7 +516,7 @@ mod tests {
         block::HashableBlockData,
         test_utils::{
             create_transaction_native_token_transfer, produce_dummy_block,
-            produce_dummy_empty_transaction, sequencer_sign_key_for_testing, test_fee_declaration,
+            produce_dummy_empty_transaction, producer_account_for_testing, test_fee_declaration,
         },
     };
     use lee::{
@@ -612,21 +609,6 @@ mod tests {
     }
 
     #[test]
-    fn producer_signature_must_verify() {
-        let mut state = initial_state(true);
-        let genesis = produce_dummy_block(1, None, vec![]);
-        // Forge the producer: replace it with a different key and re-hash so
-        // the hash check passes but the signature no longer verifies.
-        let mut forged = genesis;
-        forged.header.producer = lee::PublicKey::new_from_private_key(
-            &lee::PrivateKey::try_new([9_u8; 32]).expect("valid key"),
-        );
-        forged.header.hash = forged.recompute_hash();
-        let err = apply_block(None, &forged, &mut state).expect_err("should reject");
-        assert!(matches!(err, BlockIngestError::InvalidProducerSignature));
-    }
-
-    #[test]
     fn hash_mismatch_detected() {
         let mut state = initial_state(true);
         let mut genesis = produce_dummy_block(1, None, vec![]);
@@ -646,7 +628,7 @@ mod tests {
             timestamp: 0,
             transactions: vec![],
         }
-        .into_pending_block(&sequencer_sign_key_for_testing());
+        .into_pending_block();
         let err = apply_block(None, &block, &mut state).expect_err("should reject");
         assert!(matches!(err, BlockIngestError::EmptyBlock));
     }
@@ -706,7 +688,7 @@ mod tests {
                 LeeTransaction::Public(clock_invocation(1, 100)),
             ],
         }
-        .into_pending_block(&sequencer_sign_key_for_testing());
+        .into_pending_block();
         let err = apply_block(None, &block, &mut state).expect_err("should reject");
         assert!(matches!(err, BlockIngestError::InvalidFeeTransaction));
     }
@@ -726,14 +708,12 @@ mod tests {
                 LeeTransaction::Public(fee_invocation(
                     bad_summary,
                     0,
-                    lee::AccountId::from(&lee::PublicKey::new_from_private_key(
-                        &sequencer_sign_key_for_testing(),
-                    )),
+                    producer_account_for_testing(),
                 )),
                 LeeTransaction::Public(clock_invocation(1, 100)),
             ],
         }
-        .into_pending_block(&sequencer_sign_key_for_testing());
+        .into_pending_block();
         let err = apply_block(None, &block, &mut state).expect_err("should reject");
         assert!(matches!(err, BlockIngestError::InvalidFeeTransaction));
     }
@@ -748,7 +728,7 @@ mod tests {
             timestamp: 50,
             transactions: vec![produce_dummy_empty_transaction()],
         }
-        .into_pending_block(&sequencer_sign_key_for_testing());
+        .into_pending_block();
         let err = apply_block(None, &block, &mut state).expect_err("should reject");
         assert!(matches!(err, BlockIngestError::InvalidClockTransaction));
     }
@@ -792,9 +772,7 @@ mod tests {
         let fees_paid = initial_from - 100 - from_final;
         assert!(fees_paid > 0, "charged transfers must pay a nonzero fee");
 
-        let producer = lee::AccountId::from(&lee::PublicKey::new_from_private_key(
-            &sequencer_sign_key_for_testing(),
-        ));
+        let producer = producer_account_for_testing();
         let escrow = state
             .get_account_by_id(system_accounts::fee_escrow_account_id())
             .data
@@ -1140,6 +1118,6 @@ mod tests {
             timestamp,
             transactions,
         }
-        .into_pending_block(&sequencer_sign_key_for_testing())
+        .into_pending_block()
     }
 }

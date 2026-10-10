@@ -72,6 +72,9 @@ pub struct BedrockActor {
     /// Version of the channel view this actor holds, bumped by every broadcast
     /// update and every publish.
     seq: ChannelSeq,
+    /// zone-sdk's LIB slot when it became ready; its events cover everything
+    /// finalized after it, so [`ReadChannel`] reads no further.
+    ready_lib_slot: Option<Slot>,
 }
 
 impl BedrockActor {
@@ -114,6 +117,9 @@ impl BedrockActor {
 
         let zone_sdk_config = SequencerConfig {
             resubmit_interval: *resubmit_interval,
+            // Zero disables the pending-tx expiry, recovering the pre-expiry sdk behavior.
+            // TODO: set a sensible value.
+            stale_refund_slots: 0,
             ..SequencerConfig::new(FundingConfig {
                 funding_pk: *funding_pk,
                 // Withdraw change goes back to the funding key.
@@ -140,6 +146,7 @@ impl BedrockActor {
             channel_view_rx,
             broker_ref,
             seq,
+            ready_lib_slot: None,
         };
 
         // Wait for cold-start backfill to complete before returning so callers
@@ -148,6 +155,15 @@ impl BedrockActor {
             // Zone SDK sequencer will process ready event internally.
             let event = bedrock.sequencer.next_event().await;
             bedrock.on_event(event).await?;
+        }
+        bedrock.ready_lib_slot = bedrock
+            .sequencer
+            .checkpoint()
+            .map(|checkpoint| checkpoint.lib_slot);
+        if bedrock.ready_lib_slot.is_none() {
+            warn!(
+                "Zone SDK is ready without a checkpoint, so channel reads are not capped at its LIB"
+            );
         }
 
         Ok(bedrock)
@@ -254,7 +270,7 @@ impl BedrockActor {
                     .await
                     .map_err(|err| Error::BrokerPublishFailed(err.erase_message()))
             }
-            Event::Ready | Event::MempoolPending(_) => Ok(()),
+            Event::Ready => Ok(()),
         }
     }
 
@@ -401,8 +417,7 @@ impl Message<CreateChannel> for BedrockActor {
             .bedrock_signing_key
             .sign_payload(mantle_tx.hash().as_signing_bytes().as_ref());
 
-        let mut op_proofs =
-            OpProofs::from([OpProof::ChannelMultiSigProof(genesis_config_proof()?)]);
+        let mut op_proofs = OpProofs::from([OpProof::ChannelMultiSigProof(genesis_config_proof())]);
         op_proofs
             .try_push(OpProof::Ed25519Sig(signature))
             .map_err(|err| Error::TooManyOperationProofs(err.into()))?;
@@ -541,6 +556,8 @@ impl Message<ChangeChannelConfig> for BedrockActor {
         }: ChangeChannelConfig,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        let signatures = IndexedSignatures::try_from_iter(signatures.into_iter().map(Into::into))
+            .map_err(|err| Error::ChannelMultiSigProofAssemblyFailed(err.into()))?;
         self.sequencer
             .handle()
             .submit_channel_config(prepared, signatures)?;
@@ -662,13 +679,16 @@ impl Message<ReadChannel> for BedrockActor {
     ) -> Self::Reply {
         const BATCH_SIZE: Slot = Slot::new(100);
 
-        let lib_slot = self
+        let node_lib_slot = self
             .node
             .consensus_info()
             .await
             .map_err(|err| Error::NodeRequestFailed(err.into()))?
             .cryptarchia_info
             .lib_slot;
+        let lib_slot = self
+            .ready_lib_slot
+            .map_or(node_lib_slot, |ready| ready.min(node_lib_slot));
         let start_slot = after.map_or_else(Slot::genesis, |s| s.strict_add(1.into()));
 
         let node = self.node.clone();
@@ -772,8 +792,8 @@ fn genesis_config_op(
 /// The proof a channel-creating config op carries. No key is accredited before
 /// creation, so Bedrock verifies against a threshold of zero and rejects the
 /// whole creation tx over a proof holding any signature.
-fn genesis_config_proof() -> Result<ChannelMultiSigProof> {
-    ChannelMultiSigProof::try_new(IndexedSignatures::default()).map_err(Into::into)
+const fn genesis_config_proof() -> ChannelMultiSigProof {
+    ChannelMultiSigProof::empty()
 }
 
 /// Whether `checkpoint` records messages published to or observed on the channel.

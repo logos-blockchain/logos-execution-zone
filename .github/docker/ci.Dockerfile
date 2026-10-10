@@ -42,8 +42,9 @@ RUN cd /tmp/toolchain \
     && rustup component add clippy rustfmt \
     && rm -rf /tmp/toolchain
 
-# For `cargo +nightly fmt` in the fmt-rs job.
-RUN rustup toolchain install nightly --profile minimal --component rustfmt
+# For the fmt-rs job. Pinned by date, and the job names the same toolchain: an
+# unpinned `nightly` reformats code that was clean before, on any image rebuild.
+RUN rustup toolchain install nightly-2026-10-08 --profile minimal --component rustfmt
 
 # The bootstrap script only ever drops rzup in $HOME/.risc0/bin, so run it
 # against the build-time HOME and keep just the binary. rzup itself then honours
@@ -83,7 +84,7 @@ RUN curl -L --proto '=https' --tlsv1.2 -sSf \
 # in some CI job that reuses this cached image. pyo3's `auto-initialize` links
 # libpython, and the base image ships python3 without it, so check the .so too.
 RUN cargo --version \
-    && cargo +nightly fmt --version \
+    && cargo +nightly-2026-10-08 fmt --version \
     && cargo clippy --version \
     && ls /usr/lib/*/libpython3*.so \
     && r0vm --version \

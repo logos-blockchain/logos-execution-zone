@@ -2,11 +2,11 @@
 //! (`lez/sequencer/service/docker-compose.devnet.yml`): one sequencer config
 //! all four nodes share, and a key directory per node.
 //!
-//! The shared config carries the genesis that stakes all four block-signing
+//! The shared config carries the genesis that stakes all four Bedrock signing
 //! keys, so the leader opens the channel already accrediting the whole
 //! committee and the followers replay the same chain — the arrangement
 //! `integration_tests/tests/multi_sequencer.rs` drives in-process. What is left
-//! per node is its keys, handed to the binary with `--signing-key`.
+//! per node is its Bedrock signing key, mounted into its home.
 //!
 //! Run via `just regenerate-devnet-configs`, then commit the result. See this
 //! crate's README for what is safe to edit by hand instead.
@@ -65,9 +65,6 @@ fn main() -> Result<()> {
             .expect("hardcoded gossip listen multiaddr is valid"),
         bootstrap_peers: vec![],
     });
-    // Each node is given its own with --signing-key instead.
-    config.signing_key = None;
-
     let signing_keys: Vec<[u8; 32]> = std::iter::repeat_with(random_key).take(NODES).collect();
     let stakes = genesis_sequencer_stakes(&signing_keys, config.bedrock_config.channel_params)
         .context("Failed to build the founding sequencer stakes")?;
@@ -80,7 +77,7 @@ fn main() -> Result<()> {
 
     for (index, signing_key) in signing_keys.iter().enumerate() {
         let dir = devnet_dir.join(format!("seq-{index}"));
-        write_keys(&dir, *signing_key)
+        write_key(&dir, *signing_key)
             .with_context(|| format!("Failed to write the keys for node {index}"))?;
         println!("✅ Wrote {}", dir.display());
     }
@@ -89,10 +86,6 @@ fn main() -> Result<()> {
 }
 
 /// Fresh 32 bytes for one identity.
-///
-/// Minted as a `PrivateKey` rather than straight off the RNG because a node's
-/// key is read back as one through `--signing-key`, and not every 32 bytes are
-/// a valid one — this is the constructor that keeps drawing until they are.
 fn random_key() -> [u8; 32] {
     *PrivateKey::new_os_random().value()
 }
@@ -114,8 +107,8 @@ fn genesis_sequencer_stakes(
             let public_key = Ed25519Key::from_bytes(signing_key).public_key();
             let sequencer_key = SequencerKey::new(public_key.to_bytes())
                 .context("Sequencer signing key is not a valid Ed25519 point")?;
-            // Separate from the signing key: block signing and stake control
-            // are distinct roles.
+            // Separate from the signing key: posting and stake control are
+            // distinct roles.
             let owner = PrivateKey::new_os_random();
             Ok(GenesisAction::StakeSequencer {
                 sequencer_key,
@@ -143,18 +136,12 @@ fn write_config(dir: &Path, config: &SequencerConfig) -> Result<()> {
     Ok(())
 }
 
-/// Writes one node's two identities. Both are the same 32 bytes: the stake in
-/// the shared genesis accredits this key, and it is the Bedrock identity that
-/// has to post under it.
-fn write_keys(dir: &Path, signing_key: [u8; 32]) -> Result<()> {
+/// Writes one node's Bedrock identity, the key the stake in the shared genesis
+/// accredits.
+fn write_key(dir: &Path, bedrock_key: [u8; 32]) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("Failed to create {}", dir.display()))?;
-
-    for name in ["signing_key", "bedrock_signing_key"] {
-        std::fs::write(dir.join(name), signing_key)
-            .with_context(|| format!("Failed to write {name}"))?;
-    }
-
-    Ok(())
+    std::fs::write(dir.join("bedrock_signing_key"), bedrock_key)
+        .context("Failed to write bedrock_signing_key")
 }
 
 /// This crate sits two levels down, at `tools/devnet_configs`.

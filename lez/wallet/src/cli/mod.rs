@@ -21,11 +21,9 @@ use crate::{
         keycard::KeycardSubcommand,
         network::NetworkAlias,
         programs::{
-            amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand, bridge::BridgeSubcommand,
-            native_token_transfer::AuthTransferSubcommand, program_loader::ProgramLoaderSubcommand,
-            token::TokenProgramAgnosticSubcommand,
+            bridge::BridgeSubcommand, native_token_transfer::AuthTransferSubcommand,
+            program_loader::ProgramLoaderSubcommand,
         },
-        statistics::StatisticsSubcommand,
     },
     config::SequencerConnectionData,
     storage::Storage,
@@ -38,7 +36,6 @@ pub mod group;
 pub mod keycard;
 pub mod network;
 pub mod programs;
-pub mod statistics;
 
 pub(crate) trait WalletSubcommand {
     async fn handle_subcommand(self, wallet_core: &mut WalletCore)
@@ -58,15 +55,6 @@ pub enum Command {
     /// Account view and sync subcommand.
     #[command(subcommand)]
     Account(AccountSubcommand),
-    /// Token program interaction subcommand.
-    #[command(subcommand)]
-    Token(TokenProgramAgnosticSubcommand),
-    /// AMM program interaction subcommand.
-    #[command(subcommand)]
-    AMM(AmmProgramAgnosticSubcommand),
-    /// Associated Token Account program interaction subcommand.
-    #[command(subcommand)]
-    Ata(AtaSubcommand),
     /// Bridge program interaction subcommand.
     #[command(subcommand)]
     Bridge(BridgeSubcommand),
@@ -98,9 +86,6 @@ pub enum Command {
     /// Keycard hardware wallet management.
     #[command(subcommand)]
     Keycard(KeycardSubcommand),
-    /// Metrics management.
-    #[command(subcommand)]
-    Statistics(StatisticsSubcommand),
 }
 
 /// To execute commands, env var `LEE_WALLET_HOME_DIR` must be set into directory with config.
@@ -232,13 +217,6 @@ pub async fn execute_subcommand(
                 .get_program_ids()
                 .await
                 .expect("Error fetching program ids");
-            let Some(token_id) = remote_program_ids.get("token") else {
-                panic!("Missing token program ID from remote");
-            };
-            assert!(
-                token_id == &::programs::token().id(),
-                "Local ID for token program is different from remote"
-            );
             let Some(circuit_id) = remote_program_ids.get("privacy_preserving_circuit") else {
                 panic!("Missing privacy preserving circuit ID from remote");
             };
@@ -246,21 +224,11 @@ pub async fn execute_subcommand(
                 circuit_id == &lee::PRIVACY_PRESERVING_CIRCUIT_ID,
                 "Local ID for privacy preserving circuit is different from remote"
             );
-            let Some(amm_id) = remote_program_ids.get("amm") else {
-                panic!("Missing AMM program ID from remote");
-            };
-            assert!(
-                amm_id == &::programs::amm().id(),
-                "Local ID for AMM program is different from remote"
-            );
 
             println!("\u{2705}All looks good!");
 
             SubcommandReturnValue::Empty
         }
-        Command::Token(token_subcommand) => token_subcommand.handle_subcommand(wallet_core).await?,
-        Command::AMM(amm_subcommand) => amm_subcommand.handle_subcommand(wallet_core).await?,
-        Command::Ata(ata_subcommand) => ata_subcommand.handle_subcommand(wallet_core).await?,
         Command::Bridge(bridge_subcommand) => {
             bridge_subcommand.handle_subcommand(wallet_core).await?
         }
@@ -280,10 +248,10 @@ pub async fn execute_subcommand(
             let sequencer_addr: url::Url = network.try_into().context("Invalid sequencer URL")?;
 
             let mut config = wallet_core.config().clone();
-            config.sequencers = vec![SequencerConnectionData {
+            config.sequencer = SequencerConnectionData {
                 sequencer_addr,
                 basic_auth: None,
-            }];
+            };
 
             wallet_core.set_config(config);
             wallet_core.store_config_changes().await?;
@@ -298,17 +266,7 @@ pub async fn execute_subcommand(
 
             SubcommandReturnValue::Empty
         }
-        Command::Statistics(statistics_subcommand) => {
-            statistics_subcommand.handle_subcommand(wallet_core).await?
-        }
     };
-
-    // Kind of a sledgehammer solution, but it is not clear if there is the case to not store
-    // statistics
-    wallet_core
-        .client_rotation()
-        .await
-        .context("Failed to rotate wallet")?;
 
     Ok(subcommand_ret)
 }
@@ -403,13 +361,13 @@ pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) 
 
     wallet_core.sync_to_latest_block().await?;
 
-    let leader_client = wallet_core.helm_owned();
+    let client = wallet_core.client_owned();
 
     wallet_core
         .storage
         .key_chain_mut()
         .cleanup_trees_remove_uninit_layered(depth, |account_id| {
-            leader_client.get_account(account_id).map_err(Into::into)
+            client.get_account(account_id).map_err(Into::into)
         })
         .await?;
 

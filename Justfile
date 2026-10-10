@@ -40,7 +40,7 @@ build-artifact methods_path features="":
 # Format codebase.
 fmt:
     @echo "🎨 Formatting codebase"
-    cargo +nightly fmt
+    cargo +nightly-2026-10-08 fmt
     taplo fmt
 
 # Run tests.
@@ -224,7 +224,6 @@ clean:
     rm -rf lez/sequencer/service/rocksdb*
     rm -rf lez/indexer/service/rocksdb*
     rm -rf lez/wallet/configs/debug/storage.json
-    rm -rf lez/wallet/configs/debug/statistics.json
     rm -rf rocksdb*
     docker compose down -v
     cd bedrock && docker compose down -v && cd ..

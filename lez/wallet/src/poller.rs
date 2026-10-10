@@ -5,7 +5,6 @@ use common::{HashType, block::Block, transaction::LeeTransaction};
 use lee_core::BlockId;
 use log::warn;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
-use tokio::task::JoinSet;
 
 use crate::config::WalletConfig;
 
@@ -87,24 +86,4 @@ impl TxPoller {
             }
         }
     }
-}
-
-pub async fn multi_poll(
-    pollers: Vec<TxPoller>,
-    tx_hash: HashType,
-) -> Result<(LeeTransaction, BlockId)> {
-    let mut set = JoinSet::new();
-
-    for poller in pollers {
-        set.spawn(async move { poller.poll_tx(tx_hash).await });
-    }
-
-    while let Some(res) = set.join_next().await {
-        if let Ok(Ok(tx_res)) = res {
-            return Ok(tx_res);
-        }
-        // There is no point handling failed poll here
-    }
-
-    anyhow::bail!("All pollers failed")
 }

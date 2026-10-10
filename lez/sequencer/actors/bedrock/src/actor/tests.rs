@@ -1,7 +1,6 @@
 use common::{
     HashType,
     block::{Block, HashableBlockData},
-    test_utils::sequencer_sign_key_for_testing,
 };
 use logos_blockchain_core::mantle::{
     SignedOps,
@@ -56,7 +55,7 @@ fn a_custom_tx_yields_its_block() {
         timestamp: 700,
         transactions: Vec::new(),
     }
-    .into_pending_block(&sequencer_sign_key_for_testing());
+    .into_pending_block();
 
     let custom = ChannelUpdateTx::Custom(inscribing_tx(channel, &block));
     let entries = channel_entries(&custom, channel);
@@ -99,12 +98,10 @@ fn the_genesis_config_op_and_its_proof_pass_bedrock_verification() {
     );
     let tx_hash_view = TxHashView::new(TxHash::from([7; 32]));
 
-    let signed = SignedOperation::<_, Unverified, StandardMode>::new(
-        op,
-        super::genesis_config_proof().expect("the proof is well formed"),
-    )
-    .into_preverified(&())
-    .expect("the config is well formed");
+    let signed =
+        SignedOperation::<_, Unverified, StandardMode>::new(op, super::genesis_config_proof())
+            .into_preverified(&())
+            .expect("the config is well formed");
 
     signed
         .verify(&ChannelConfigValidationContext {

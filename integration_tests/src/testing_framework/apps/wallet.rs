@@ -9,12 +9,13 @@ use anyhow::{Context as _, anyhow};
 use async_trait::async_trait;
 use common::HashType;
 use lee::{AccountId, PrivateKey, PublicKey};
+use lee_core::program::InstructionData;
 use tempfile::TempDir;
 use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
 use testing_framework_core::scenario::DynError;
 use tokio::sync::{mpsc, oneshot};
 use wallet::{
-    AccountIdentity, WalletCore,
+    AccountIdentity, AccountMention, WalletCore,
     account::{AccountIdWithPrivacy, Label},
     cli::{
         CliAccountMention, Command, SubcommandReturnValue, account::AccountSubcommand,
@@ -97,6 +98,12 @@ enum WalletRequest {
         from: Label,
         to: Label,
         amount: u128,
+        response: oneshot::Sender<Result<HashType, String>>,
+    },
+    SendProgramTransaction {
+        accounts: Vec<AccountMention>,
+        instruction_data: InstructionData,
+        program_id: AccountId,
         response: oneshot::Sender<Result<HashType, String>>,
     },
     WalletPassword {
@@ -391,6 +398,19 @@ impl WalletActor {
                                 .map_err(|error| error.to_string());
                                 let _unused = response.send(result);
                             }
+                            WalletRequest::SendProgramTransaction {
+                                accounts,
+                                instruction_data,
+                                program_id,
+                                response,
+                            } => {
+                                let result = components
+                                    .wallet
+                                    .send_pub_tx(accounts, instruction_data, program_id)
+                                    .await
+                                    .map_err(|error| format!("{error:?}"));
+                                let _unused = response.send(result);
+                            }
                             WalletRequest::WalletPassword { response } => {
                                 let _unused = response.send(Ok(components.password.clone()));
                             }
@@ -613,6 +633,28 @@ impl LezRuntime {
         .await
     }
 
+    /// Signs and submits a public transaction against an arbitrary program.
+    ///
+    /// `AccountIdentity::Public` entries are signed with the wallet's key for
+    /// that account; `AccountIdentity::PublicNoSign` entries are carried as
+    /// unsigned pre-state accounts. The returned hash only means the
+    /// sequencer's mempool admitted the transaction; whether it executes is
+    /// decided during block building.
+    pub async fn send_program_transaction(
+        &self,
+        accounts: Vec<AccountMention>,
+        instruction_data: InstructionData,
+        program_id: AccountId,
+    ) -> Result<HashType, DynError> {
+        self.request(|response| WalletRequest::SendProgramTransaction {
+            accounts,
+            instruction_data,
+            program_id,
+            response,
+        })
+        .await
+    }
+
     /// Executes an authenticated public transfer using wallet-resolved labels.
     pub async fn public_transfer_by_labels(
         &self,
@@ -721,29 +763,34 @@ impl AppDeployment<AppHostEnv> for WalletApp {
                     .build()
                     .context("failed to create LEZ wallet setup runtime")?;
                 runtime.block_on(async move {
-                    let (wallet, initialized_state_dir, password) = match configured_state_dir {
-                        Some(setup_home) => crate::setup::setup_wallet_at(
-                            std::slice::from_ref(&sequencer_addr),
-                            &public_accounts,
-                            &private_accounts,
-                            WalletConfigOverrides::default(),
-                            &setup_home,
-                        )
-                        .await
-                        .context("failed to set up LEZ wallet")
-                        .map(|(wallet, _, password)| (wallet, None, password)),
-                        None => setup_wallet(
-                            std::slice::from_ref(&sequencer_addr),
-                            &public_accounts,
-                            &private_accounts,
-                            WalletConfigOverrides::default(),
-                        )
-                        .await
-                        .context("failed to set up LEZ wallet")
-                        .map(|(wallet, wallet_state_dir, password)| {
-                            (wallet, Some(wallet_state_dir), password)
-                        }),
-                    }?;
+                    let (wallet, initialized_state_dir, password) = configured_state_dir
+                        .map_or_else(
+                            || {
+                                setup_wallet(
+                                    &sequencer_addr,
+                                    &public_accounts,
+                                    &private_accounts,
+                                    WalletConfigOverrides::default(),
+                                )
+                                .context("failed to set up LEZ wallet")
+                                .map(
+                                    |(wallet, wallet_state_dir, password)| {
+                                        (wallet, Some(wallet_state_dir), password)
+                                    },
+                                )
+                            },
+                            |setup_home| {
+                                crate::setup::setup_wallet_at(
+                                    &sequencer_addr,
+                                    &public_accounts,
+                                    &private_accounts,
+                                    WalletConfigOverrides::default(),
+                                    &setup_home,
+                                )
+                                .context("failed to set up LEZ wallet")
+                                .map(|(wallet, _, password)| (wallet, None, password))
+                            },
+                        )?;
                     let mut wallet = wallet;
                     if initialize_private_account_funding {
                         fund_private_accounts(&mut wallet, &public_accounts, &private_accounts)

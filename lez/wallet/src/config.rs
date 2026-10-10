@@ -7,9 +7,6 @@ use log::warn;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-const DEFAULT_CALLIBRATION_LIMIT: usize = 100;
-const DEFAULT_DISTRIBUTION_LIMIT: usize = 1;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SequencerConnectionData {
     /// Connection data of all known sequencers.
@@ -37,29 +34,11 @@ pub struct GasConfig {
     pub gas_limit_runtime: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MultiSequencerClientConfig {
-    /// Maximum numbers of sequencers to send requests. Client can have AT MOST
-    /// `distribution_limit` active clients.
-    pub distribution_limit: usize,
-    /// Limit number of sequencer polls during callibration, should not be zero.
-    pub calibration_limit: usize,
-}
-
-impl Default for MultiSequencerClientConfig {
-    fn default() -> Self {
-        Self {
-            distribution_limit: DEFAULT_DISTRIBUTION_LIMIT,
-            calibration_limit: DEFAULT_CALLIBRATION_LIMIT,
-        }
-    }
-}
-
 #[optfield::optfield(pub WalletConfigOverrides, rewrap, attrs = (derive(Debug, Default, Clone)))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletConfig {
-    /// Connection data of all known sequencers.
-    pub sequencers: Vec<SequencerConnectionData>,
+    /// Connection data of known sequencer.
+    pub sequencer: SequencerConnectionData,
     /// Sequencer polling duration for new blocks.
     #[serde(with = "humantime_serde")]
     pub seq_poll_timeout: Duration,
@@ -69,8 +48,6 @@ pub struct WalletConfig {
     pub seq_poll_max_retries: u64,
     /// Max amount of blocks to poll in one request.
     pub seq_block_poll_max_amount: u64,
-    #[serde(default = "MultiSequencerClientConfig::default")]
-    pub multi_sequencer_client_config: MultiSequencerClientConfig,
     #[serde(default = "default_gas_limit")]
     pub gas_limit: u64,
 }
@@ -78,15 +55,14 @@ pub struct WalletConfig {
 impl Default for WalletConfig {
     fn default() -> Self {
         Self {
-            sequencers: vec![SequencerConnectionData {
+            sequencer: SequencerConnectionData {
                 sequencer_addr: "https://testnet.lez.logos.co".parse().unwrap(),
                 basic_auth: None,
-            }],
+            },
             seq_poll_timeout: Duration::from_secs(12),
             seq_tx_poll_max_blocks: 5,
             seq_poll_max_retries: 5,
             seq_block_poll_max_amount: 100,
-            multi_sequencer_client_config: MultiSequencerClientConfig::default(),
             gas_limit: default_gas_limit(),
         }
     }
@@ -132,28 +108,26 @@ impl WalletConfig {
 
     pub fn apply_overrides(&mut self, overrides: WalletConfigOverrides) {
         let Self {
-            sequencers,
+            sequencer,
             seq_poll_timeout,
             seq_tx_poll_max_blocks,
             seq_poll_max_retries,
             seq_block_poll_max_amount,
-            multi_sequencer_client_config,
             gas_limit,
         } = self;
 
         let WalletConfigOverrides {
-            sequencers: o_sequencers,
+            sequencer: o_sequencer,
             seq_poll_timeout: o_seq_poll_timeout,
             seq_tx_poll_max_blocks: o_seq_tx_poll_max_blocks,
             seq_poll_max_retries: o_seq_poll_max_retries,
             seq_block_poll_max_amount: o_seq_block_poll_max_amount,
-            multi_sequencer_client_config: o_multi_sequencer_client_config,
             gas_limit: o_gas_limit,
         } = overrides;
 
-        if let Some(v) = o_sequencers {
-            warn!("Overriding wallet config 'sequencers' to {v:?}");
-            *sequencers = v;
+        if let Some(v) = o_sequencer {
+            warn!("Overriding wallet config 'sequencer' to {v:?}");
+            *sequencer = v;
         }
         if let Some(v) = o_seq_poll_timeout {
             warn!("Overriding wallet config 'seq_poll_timeout' to {v:?}");
@@ -170,10 +144,6 @@ impl WalletConfig {
         if let Some(v) = o_seq_block_poll_max_amount {
             warn!("Overriding wallet config 'seq_block_poll_max_amount' to {v}");
             *seq_block_poll_max_amount = v;
-        }
-        if let Some(v) = o_multi_sequencer_client_config {
-            warn!("Overriding wallet config 'multi_sequencer_client_config' to {v:?}");
-            *multi_sequencer_client_config = v;
         }
         if let Some(v) = o_gas_limit {
             warn!("Overriding wallet config 'gas_limit' to {v}");

@@ -5,9 +5,9 @@
 use std::{collections::HashSet, sync::Arc};
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use common::{HashType, block::Block, transaction::TxEvents};
+use common::{block::Block, transaction::TxEvents};
 use lee::V03State;
-use log::warn;
+use log::{error, warn};
 use logos_blockchain_core::mantle::ops::channel::MsgId;
 
 use crate::{
@@ -60,8 +60,12 @@ struct StoredEntry {
 /// `view` is the only unfinalized input. The fold applies every entry whose
 /// block extends the tip so far and skips the rest, so every node holding the
 /// same view derives the same head, and the pin is the view's last entry.
+///
+/// Each entry keeps the head it folded to, so a view that changes past an
+/// entry refolds from there rather than from `final_state`. The states share
+/// structure, so keeping one per entry costs only what each block changed.
 pub struct ChainState {
-    final_state: Arc<V03State>,
+    final_state: V03State,
     final_tip: Option<Tip>,
     /// The newest finalized entry on the message lineage, block or not.
     final_msg: MsgId,
@@ -70,76 +74,88 @@ pub struct ChainState {
 
     /// The unfinalized message lineage, oldest first, chained on `final_msg`.
     view: Vec<ChannelEntry>,
+    /// `folds[i]` is the head after folding `view[..=i]`.
+    folds: Vec<Fold>,
+}
 
-    head_state: Arc<V03State>,
-    /// The blocks the fold applied, in order.
-    head_blocks: Vec<Block>,
+/// The head after folding one view entry.
+struct Fold {
+    state: V03State,
+    tip: Option<Tip>,
+    /// The events of the entry's block, when the fold applied it.
+    applied: Option<Vec<TxEvents>>,
 }
 
 impl ChainState {
     /// Fresh state anchored at the genesis/initial state, no blocks applied.
     #[must_use]
-    pub fn new(initial_state: V03State) -> Self {
+    pub const fn new(initial_state: V03State) -> Self {
         Self::from_final(initial_state, None)
     }
 
     /// State restored from a persisted final tier, with an empty view.
     #[must_use]
-    pub fn from_final(final_state: V03State, final_tip: Option<Tip>) -> Self {
-        let final_state = Arc::new(final_state);
+    pub const fn from_final(final_state: V03State, final_tip: Option<Tip>) -> Self {
         Self {
-            head_state: Arc::clone(&final_state),
             final_state,
             final_tip,
             final_msg: MsgId::root(),
             newly_final: Vec::new(),
             view: Vec::new(),
-            head_blocks: Vec::new(),
+            folds: Vec::new(),
         }
     }
 
     /// State the sequencer builds its next block on.
     #[must_use]
     pub fn head_state(&self) -> &V03State {
-        &self.head_state
+        self.folds
+            .last()
+            .map_or(&self.final_state, |fold| &fold.state)
     }
 
     /// A shared handle on the head state, for callers that need to own it.
     #[must_use]
     pub fn share_head_state(&self) -> Arc<V03State> {
-        Arc::clone(&self.head_state)
+        Arc::new(self.head_state().clone())
     }
 
-    /// Mutable access to the head state, bypassing the fold. For tests.
+    /// The last fold's state, or the final state when the view is empty, for
+    /// tests to mutate.
+    #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn head_state_mut(&mut self) -> &mut V03State {
-        Arc::make_mut(&mut self.head_state)
+        self.folds
+            .last_mut()
+            .map_or(&mut self.final_state, |fold| &mut fold.state)
     }
 
     #[must_use]
-    pub fn final_state(&self) -> &V03State {
+    pub const fn final_state(&self) -> &V03State {
         &self.final_state
     }
 
     /// A shared handle on the final state, for callers that need to own it.
     #[must_use]
     pub fn share_final_state(&self) -> Arc<V03State> {
-        Arc::clone(&self.final_state)
+        Arc::new(self.final_state.clone())
     }
 
     /// Parent the next produced block must chain on.
     #[must_use]
     pub fn head_tip(&self) -> Option<Tip> {
-        self.head_blocks
+        self.folds
             .last()
-            .map(Tip::from)
-            .or_else(|| self.final_tip.clone())
+            .map_or_else(|| self.final_tip.clone(), |fold| fold.tip.clone())
     }
 
     /// The blocks the head holds above the final tier.
-    #[must_use]
-    pub fn head_blocks(&self) -> &[Block] {
-        &self.head_blocks
+    pub fn head_blocks(&self) -> impl Iterator<Item = &Block> {
+        self.view
+            .iter()
+            .zip(&self.folds)
+            .filter(|(_, fold)| fold.applied.is_some())
+            .filter_map(|(entry, _)| entry.block.as_ref())
     }
 
     /// Parent the next inscription must chain on: the view's last entry.
@@ -159,6 +175,33 @@ impl ChainState {
         self.final_msg
     }
 
+    /// The first view entry not chained on the one before it, or on
+    /// `final_msg` for the first. Entries the tier already holds are skipped.
+    #[must_use]
+    pub fn check_for_gaps_in_lineage(&self) -> Option<&ChannelEntry> {
+        let final_id = self.final_tip.as_ref().map(|tip| tip.block_id);
+        let settled = |entry: &ChannelEntry| {
+            entry
+                .block
+                .as_ref()
+                .is_some_and(|block| final_id.is_some_and(|id| block.header.block_id <= id))
+        };
+        let start = self
+            .view
+            .iter()
+            .position(|entry| !settled(entry))
+            .unwrap_or(self.view.len());
+        // The first kept entry chains on the last skipped one, not on `final_msg`.
+        let mut parent = start
+            .checked_sub(1)
+            .map_or(self.final_msg, |prev| self.view[prev].msg);
+        self.view[start..].iter().find(|entry| {
+            let gap = entry.parent != parent;
+            parent = entry.msg;
+            gap
+        })
+    }
+
     #[must_use]
     pub fn view(&self) -> &[ChannelEntry] {
         &self.view
@@ -173,24 +216,16 @@ impl ChainState {
     /// stored without its block: it folds the same either way.
     #[must_use]
     pub fn encode_view(&self) -> Vec<u8> {
-        let applied: HashSet<HashType> = self
-            .head_blocks
-            .iter()
-            .map(|block| block.header.hash)
-            .collect();
         let stored = StoredView {
             final_msg: self.final_msg.into(),
             entries: self
                 .view
                 .iter()
-                .map(|entry| StoredEntry {
+                .zip(&self.folds)
+                .map(|(entry, fold)| StoredEntry {
                     msg: entry.msg.into(),
                     parent: entry.parent.into(),
-                    block: entry
-                        .block
-                        .as_ref()
-                        .filter(|block| applied.contains(&block.header.hash))
-                        .cloned(),
+                    block: entry.block.clone().filter(|_| fold.applied.is_some()),
                 })
                 .collect(),
         };
@@ -210,7 +245,7 @@ impl ChainState {
                 block: entry.block,
             })
             .collect();
-        self.refold();
+        self.fold_from(0);
         Ok(())
     }
 
@@ -250,8 +285,16 @@ impl ChainState {
             }
             parent = entry.msg;
         }
+        // The entries both views hold keep their folds: a `MsgId` commits to
+        // its payload, so the same id carries the same block.
+        let fork = self
+            .view
+            .iter()
+            .zip(&canonical)
+            .take_while(|(held, entry)| held.msg == entry.msg)
+            .count();
         self.view = canonical;
-        self.refold();
+        self.fold_from(fork);
     }
 
     /// Records an inscription of ours, which chains on the pin it was built on.
@@ -262,8 +305,7 @@ impl ChainState {
         let hash = entry.block.as_ref().map(|block| block.header.hash);
         let in_head = |chain: &Self| {
             chain
-                .head_blocks
-                .iter()
+                .head_blocks()
                 .any(|block| Some(block.header.hash) == hash)
         };
         let held_before = in_head(self);
@@ -281,61 +323,101 @@ impl ChainState {
         }
     }
 
-    /// A finalized entry, `parent` when the caller knows it. Returns the final
-    /// tier's outcome for its block, `None` when it carries none. `final_msg`
-    /// moves only on the lineage's next entry; anything else is a re-delivery.
+    /// A finalized entry chained on `parent`. Returns the final tier's outcome
+    /// for its block, `None` when it carries none. `final_msg` moves only to an
+    /// entry chained on it; anything else leaves the view if held, and its
+    /// block still applies to the final tier.
     pub fn apply_finalized(
         &mut self,
         msg: MsgId,
-        parent: Option<MsgId>,
+        parent: MsgId,
         block: Option<&Block>,
     ) -> Option<AcceptOutcome> {
-        // Finality is prefix-monotone: an entry chained on a view entry
-        // finalizes the view up to it.
-        if let Some(parent) = parent
-            && let Some(idx) = self.view.iter().position(|entry| entry.msg == parent)
-        {
-            let ancestors: Vec<ChannelEntry> = self.view[..=idx].to_vec();
-            for ancestor in ancestors {
-                self.apply_finalized(ancestor.msg, None, ancestor.block.as_ref());
-            }
+        // Finality is prefix-monotone: the held entries this one chains on
+        // finalize first, found by parent link since a stale re-report can
+        // sit out of order in the view.
+        if let Some(ancestor) = self.view.iter().find(|entry| entry.msg == parent).cloned() {
+            self.apply_finalized(ancestor.msg, ancestor.parent, ancestor.block.as_ref());
         }
 
-        // The same for the entries before it in the view.
-        if let Some(idx) = self.view.iter().position(|entry| entry.msg == msg)
-            && idx > 0
-        {
-            let earlier: Vec<ChannelEntry> = self.view[..idx].to_vec();
-            for entry in earlier {
-                self.apply_finalized(entry.msg, None, entry.block.as_ref());
+        if parent != self.final_msg {
+            let outcome = self.apply_finalized_redelivery(msg, block);
+            if let (Some(AcceptOutcome::Applied(_)), Some(block)) = (&outcome, block) {
+                error!(
+                    "Block {} in finalized message {msg} extended the final tier",
+                    block.header.block_id
+                );
             }
-        }
-
-        let outcome = block.map(|block| self.apply_final_block(block));
-        let held_at = self.view.iter().position(|entry| entry.msg == msg);
-        let is_next = matches!(outcome, Some(AcceptOutcome::Applied(_)))
-            || parent == Some(self.final_msg)
-            || held_at.is_some();
-        if !is_next {
             return outcome;
         }
 
-        self.final_msg = msg;
+        self.apply_reconstructed(msg, block)
+    }
+
+    /// A finalized entry read in lineage order during reconstruction, so it
+    /// always becomes the final entry.
+    pub fn apply_reconstructed(
+        &mut self,
+        msg: MsgId,
+        block: Option<&Block>,
+    ) -> Option<AcceptOutcome> {
+        let outcome = block.map(|block| self.apply_final_block(block));
+        self.advance_final_msg(msg);
+        outcome
+    }
+
+    /// A finalized entry not chained on `final_msg`: its block applies to the
+    /// final tier, `final_msg` stays, and a held copy leaves the view.
+    pub fn apply_finalized_redelivery(
+        &mut self,
+        msg: MsgId,
+        block: Option<&Block>,
+    ) -> Option<AcceptOutcome> {
+        // TODO: Drop this apply once host failures retry until they succeed (see
+        // `BlockIngestError::is_retryable`) and a store restored with a root `final_msg`
+        // over a held tier is repaired elsewhere.
+        let outcome = block.map(|block| self.apply_final_block(block));
+        let held_at = self.view.iter().position(|entry| entry.msg == msg);
         if let Some(idx) = held_at {
-            self.view.drain(..=idx);
-            self.trim_head();
-        } else {
-            // Its siblings in the view, and everything chained on them, can
-            // never land; entries chained on it stay.
-            let children = self
-                .view
-                .iter()
-                .position(|entry| entry.parent == msg)
-                .unwrap_or(self.view.len());
-            self.view.drain(..children);
-            self.refold();
+            self.view.remove(idx);
+        }
+        // The folds sit on the final tier, so none survives it moving.
+        match held_at {
+            _ if matches!(outcome, Some(AcceptOutcome::Applied(_))) => self.fold_from(0),
+            Some(idx) => self.fold_from(idx),
+            None => {}
         }
         outcome
+    }
+
+    /// Makes `msg` the final entry and keeps only the view entries chained on it.
+    fn advance_final_msg(&mut self, msg: MsgId) {
+        let held = self.view.iter().any(|entry| entry.msg == msg);
+        self.final_msg = msg;
+        let mut lineage = HashSet::from([msg]);
+        let mut kept_any = false;
+        let mut prefix_only = true;
+        let held_len = self.view.len();
+        self.view.retain(|entry| {
+            let keep = lineage.contains(&entry.parent) && lineage.insert(entry.msg);
+            kept_any |= keep;
+            // A dropped entry after a kept one means the drop is not a prefix.
+            prefix_only &= keep || !kept_any;
+            keep
+        });
+        let dropped = held_len.saturating_sub(self.view.len());
+        // The rest of the view keeps its folds only if they sit on the final
+        // tier, which they do when the dropped prefix folded to the final tip.
+        let on_final = held
+            && prefix_only
+            && dropped
+                .checked_sub(1)
+                .is_some_and(|last| self.folds[last].tip == self.final_tip);
+        if on_final {
+            self.folds.drain(..dropped);
+        } else {
+            self.fold_from(0);
+        }
     }
 
     /// Inserts `entry` before a held entry chained on it, when it chains on
@@ -351,62 +433,42 @@ impl ChainState {
             return false;
         }
         self.view.insert(idx, entry.clone());
-        self.refold();
+        self.fold_from(idx);
         true
     }
 
     /// Appends `entry` to the view and folds it onto the head.
     fn push(&mut self, entry: ChannelEntry) {
-        if let Some(block) = &entry.block {
-            let tip = self.head_tip();
-            if let Some(state) = fold_block(tip.as_ref(), block, &self.head_state) {
-                self.head_state = state;
-                self.head_blocks.push(block.clone());
-            }
-        }
+        let idx = self.view.len();
         self.view.push(entry);
+        self.fold_from(idx);
     }
 
-    /// Rebuilds the head by folding `final` over the whole view.
-    fn refold(&mut self) {
-        let mut state = Arc::clone(&self.final_state);
-        let mut tip = self.final_tip.clone();
-        let mut blocks = Vec::new();
-        for block in self.view.iter().filter_map(|entry| entry.block.as_ref()) {
-            if let Some(next) = fold_block(tip.as_ref(), block, &state) {
-                state = next;
-                tip = Some(Tip::from(block));
-                blocks.push(block.clone());
-            }
+    /// Refolds the view from `idx` on, after it changed there.
+    fn fold_from(&mut self, idx: usize) {
+        self.folds.truncate(idx);
+        while let Some(entry) = self.view.get(self.folds.len()) {
+            let fold = self.fold_next(entry);
+            self.folds.push(fold);
         }
-        self.head_state = state;
-        self.head_blocks = blocks;
     }
 
-    /// Drops the head blocks the final tier now holds, or refolds when the
-    /// two tiers disagree about them.
-    fn trim_head(&mut self) {
-        let final_id = self.final_tip.as_ref().map(|tip| tip.block_id);
-        let cut = self
-            .head_blocks
-            .iter()
-            .take_while(|block| final_id.is_some_and(|id| block.header.block_id <= id))
-            .count();
-        let final_hash = self.final_tip.as_ref().map(|tip| tip.hash);
-        let cut_matches = cut
-            .checked_sub(1)
-            .is_none_or(|last| Some(self.head_blocks[last].header.hash) == final_hash);
-        let rest_chains = self
-            .head_blocks
-            .get(cut)
-            .is_none_or(|block| validate_against_tip(self.final_tip.as_ref(), block).is_ok());
-        if !(cut_matches && rest_chains) {
-            self.refold();
-            return;
+    /// The head after folding `entry` onto the current one.
+    fn fold_next(&self, entry: &ChannelEntry) -> Fold {
+        let tip = self.head_tip();
+        if let Some(block) = &entry.block
+            && let Some((state, events)) = fold_block(tip.as_ref(), block, self.head_state())
+        {
+            return Fold {
+                state,
+                tip: Some(Tip::from(block)),
+                applied: Some(events),
+            };
         }
-        self.head_blocks.drain(..cut);
-        if self.head_blocks.is_empty() {
-            self.head_state = Arc::clone(&self.final_state);
+        Fold {
+            state: self.head_state().clone(),
+            tip,
+            applied: None,
         }
     }
 
@@ -427,7 +489,11 @@ impl ChainState {
             }
         }
 
-        match apply_with_retries(self.final_tip.as_ref(), block, &self.final_state) {
+        let applied = match self.folded(block) {
+            Some(folded) => Ok(folded),
+            None => apply_with_retries(self.final_tip.as_ref(), block, &self.final_state),
+        };
+        match applied {
             Ok((state, events)) => {
                 self.final_state = state;
                 self.final_tip = Some(Tip::from(block));
@@ -437,34 +503,51 @@ impl ChainState {
             Err(err) => AcceptOutcome::Parked(err),
         }
     }
+
+    /// The state and events the fold reached by applying `block`, when that
+    /// fold sat on the final tier: `block` extends the final tip, so the head
+    /// it was applied to holds the same chain as the final state.
+    ///
+    /// A block the fold skipped is applied again rather than taken as skipped,
+    /// so a transient failure gets another chance before it parks.
+    fn folded(&self, block: &Block) -> Option<(V03State, Vec<TxEvents>)> {
+        validate_against_tip(self.final_tip.as_ref(), block).ok()?;
+        self.view.iter().zip(&self.folds).find_map(|(entry, fold)| {
+            let events = fold.applied.as_ref()?;
+            let held = entry.block.as_ref()?;
+            (held.header.hash == block.header.hash).then(|| (fold.state.clone(), events.clone()))
+        })
+    }
 }
 
 /// `state` after `block` when it extends `tip`, `None` when the fold skips it.
-fn fold_block(tip: Option<&Tip>, block: &Block, state: &Arc<V03State>) -> Option<Arc<V03State>> {
+fn fold_block(
+    tip: Option<&Tip>,
+    block: &Block,
+    state: &V03State,
+) -> Option<(V03State, Vec<TxEvents>)> {
     validate_against_tip(tip, block).ok()?;
-    match apply_with_retries(tip, block, state) {
-        Ok((next, _)) => Some(next),
-        Err(err) => {
+    apply_with_retries(tip, block, state)
+        .inspect_err(|err| {
             warn!(
                 "Skipping channel block {} ({}): {err}",
                 block.header.block_id, block.header.hash
             );
-            None
-        }
-    }
+        })
+        .ok()
 }
 
 /// Applies `block` on a copy of `state`, retrying a failure that may be transient.
 fn apply_with_retries(
     tip: Option<&Tip>,
     block: &Block,
-    state: &Arc<V03State>,
-) -> Result<(Arc<V03State>, Vec<TxEvents>), BlockIngestError> {
+    state: &V03State,
+) -> Result<(V03State, Vec<TxEvents>), BlockIngestError> {
     let mut attempt = 1;
     loop {
-        let mut scratch = Arc::clone(state);
-        match apply_block(tip, block, Arc::make_mut(&mut scratch)) {
-            Ok(block_events) => return Ok((scratch, block_events)),
+        let mut next = state.clone();
+        match apply_block(tip, block, &mut next) {
+            Ok(block_events) => return Ok((next, block_events)),
             Err(err) if err.is_retryable() && attempt < APPLY_ATTEMPTS => {
                 warn!(
                     "Block {} failed to apply (attempt {attempt}), retrying: {err}",
@@ -560,14 +643,13 @@ mod tests {
         let mut fresh = ChainState::from_final(chain.final_state().clone(), chain.final_tip());
         fresh.final_msg = chain.final_msg;
         fresh.view = chain.view.clone();
-        fresh.refold();
-        let hashes = |blocks: &[Block]| {
-            blocks
-                .iter()
+        fresh.fold_from(0);
+        let hashes = |of: &ChainState| {
+            of.head_blocks()
                 .map(|block| block.header.hash)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(hashes(&fresh.head_blocks), hashes(&chain.head_blocks));
+        assert_eq!(hashes(&fresh), hashes(chain));
         assert_eq!(
             state_bytes(fresh.head_state()),
             state_bytes(chain.head_state()),
@@ -584,15 +666,13 @@ mod tests {
     ) -> Block {
         use common::{
             block::HashableBlockData,
-            test_utils::sequencer_sign_key_for_testing,
+            test_utils::producer_account_for_testing,
             transaction::{LeeTransaction, clock_invocation, fee_invocation},
         };
         let timestamp = id.saturating_mul(100);
         let (summary, payout) = crate::apply::derive_block_summary(state, &txs, id, timestamp)
             .expect("test transactions settle");
-        let producer = lee::AccountId::from(&lee::PublicKey::new_from_private_key(
-            &sequencer_sign_key_for_testing(),
-        ));
+        let producer = producer_account_for_testing();
         let mut transactions = txs;
         transactions.push(LeeTransaction::Public(fee_invocation(
             summary, payout, producer,
@@ -604,7 +684,7 @@ mod tests {
             timestamp,
             transactions,
         }
-        .into_pending_block(&sequencer_sign_key_for_testing())
+        .into_pending_block()
     }
 
     #[test]
@@ -671,6 +751,60 @@ mod tests {
     }
 
     #[test]
+    fn an_adopted_entry_off_the_pin_leaves_a_lineage_gap() {
+        let blocks = chain_of(3);
+        let entries = entries_for(&blocks);
+        let mut chain = ChainState::new(claimed_initial_state());
+        assert!(chain.check_for_gaps_in_lineage().is_none());
+
+        chain.apply_extension(vec![entries[0].clone(), entries[2].clone()]);
+        assert_eq!(
+            chain.check_for_gaps_in_lineage().map(|entry| entry.msg),
+            Some(entries[2].msg)
+        );
+    }
+
+    #[test]
+    fn an_entry_without_a_block_is_no_lineage_gap() {
+        let blocks = chain_of(1);
+        let entries = entries_for(&blocks);
+        let mut chain = ChainState::new(claimed_initial_state());
+        chain.apply_extension(vec![entries[0].clone(), entry(9, entries[0].msg, None)]);
+        assert!(chain.check_for_gaps_in_lineage().is_none());
+    }
+
+    #[test]
+    fn a_conflict_seating_already_final_entries_is_no_lineage_gap() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(4);
+        finalize_all(&mut chain, &blocks[..3]);
+
+        chain.apply_conflict(entries_for(&blocks));
+
+        assert!(chain.check_for_gaps_in_lineage().is_none());
+    }
+
+    #[test]
+    fn a_gap_above_already_final_entries_is_still_found() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(4);
+        finalize_all(&mut chain, &blocks[..2]);
+        let entries = entries_for(&blocks);
+
+        // Entry 3 is missing.
+        chain.apply_conflict(vec![
+            entries[0].clone(),
+            entries[1].clone(),
+            entries[3].clone(),
+        ]);
+
+        assert_eq!(
+            chain.check_for_gaps_in_lineage().map(|entry| entry.msg),
+            Some(entries[3].msg)
+        );
+    }
+
+    #[test]
     fn an_extension_is_appended_as_the_sdk_sends_it() {
         let mut chain = ChainState::new(claimed_initial_state());
         let blocks = chain_of(2);
@@ -728,7 +862,7 @@ mod tests {
         chain.apply_extension(entries_for(&blocks));
         let head_before = state_bytes(chain.head_state());
 
-        let outcome = chain.apply_finalized(msg(2), Some(msg(1)), Some(&blocks[1]));
+        let outcome = chain.apply_finalized(msg(2), msg(1), Some(&blocks[1]));
 
         // Block 1 finalized first, as the parent of the entry that finalized.
         assert!(matches!(outcome, Some(AcceptOutcome::Applied(_))));
@@ -747,7 +881,7 @@ mod tests {
         chain.apply_extension(entries_for(&blocks));
 
         // A different entry on root finalizes, with no block.
-        chain.apply_finalized(msg(20), Some(MsgId::root()), None);
+        chain.apply_finalized(msg(20), MsgId::root(), None);
 
         assert!(chain.view().is_empty());
         assert_eq!(chain.pin(), msg(20));
@@ -760,14 +894,14 @@ mod tests {
         let mut chain = ChainState::new(claimed_initial_state());
         let blocks = chain_of(3);
         chain.apply_extension(entries_for(&blocks));
-        chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0]));
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
 
         // Block 1 again, and a garbage entry the lineage already passed.
         assert!(matches!(
-            chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0])),
+            chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0])),
             Some(AcceptOutcome::AlreadyApplied)
         ));
-        chain.apply_finalized(msg(30), Some(msg(31)), None);
+        chain.apply_finalized(msg(30), msg(31), None);
 
         assert_eq!(chain.final_msg(), msg(1));
         assert_eq!(chain.view().len(), 2);
@@ -776,19 +910,23 @@ mod tests {
     }
 
     #[test]
-    fn a_finalized_block_the_view_never_held_resyncs_the_lineage() {
+    fn a_finalized_block_off_the_lineage_advances_the_tier_not_the_lineage() {
         let mut chain = ChainState::new(claimed_initial_state());
         let blocks = chain_of(2);
-        chain.apply_extension(vec![entry(1, MsgId::root(), Some(&blocks[0]))]);
+        chain.apply_extension(entries_for(&blocks));
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
 
-        // Block 2 on an entry we never saw: the final tier takes it.
-        chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0]));
-        let outcome = chain.apply_finalized(msg(9), Some(msg(8)), Some(&blocks[1]));
+        // Block 2 again, on an entry we never saw.
+        let outcome = chain.apply_finalized(msg(9), msg(8), Some(&blocks[1]));
 
         assert!(matches!(outcome, Some(AcceptOutcome::Applied(_))));
-        assert_eq!(chain.final_msg(), msg(9));
-        assert_eq!(chain.pin(), msg(9));
-        assert_eq!(head_id(&chain), Some(2));
+        assert_eq!(chain.final_tip().unwrap().block_id, 2);
+        assert_eq!(chain.final_msg(), msg(1));
+        assert_eq!(chain.pin(), msg(2));
+        assert!(
+            chain.head_blocks().next().is_none(),
+            "the head drops the now-final block"
+        );
         assert_head_is_the_fold(&chain);
     }
 
@@ -837,7 +975,7 @@ mod tests {
             entry(2, msg(1), Some(&broken)),
             entry(3, msg(2), Some(&blocks[1])),
         ]);
-        chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0]));
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
 
         let mut restored = ChainState::from_final(chain.final_state().clone(), chain.final_tip());
         restored.restore_view(&chain.encode_view()).unwrap();
@@ -861,7 +999,7 @@ mod tests {
         let blocks = chain_of(3);
         chain.apply_extension(entries_for(&blocks[..2]));
 
-        chain.apply_finalized(msg(3), Some(msg(2)), Some(&blocks[2]));
+        chain.apply_finalized(msg(3), msg(2), Some(&blocks[2]));
 
         let ids: Vec<u64> = chain
             .take_newly_final()
@@ -879,7 +1017,7 @@ mod tests {
         chain.apply_extension(entries_for(&blocks[..2]));
 
         // Entry 3 was never adopted, but it chains on entry 2.
-        let outcome = chain.apply_finalized(msg(3), Some(msg(2)), Some(&blocks[2]));
+        let outcome = chain.apply_finalized(msg(3), msg(2), Some(&blocks[2]));
 
         assert!(matches!(outcome, Some(AcceptOutcome::Applied(_))));
         assert_eq!(chain.final_tip().unwrap().block_id, 3);
@@ -893,10 +1031,10 @@ mod tests {
     fn a_block_reinscribed_under_a_new_entry_is_already_final() {
         let mut chain = ChainState::new(claimed_initial_state());
         let blocks = chain_of(1);
-        chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0]));
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
 
         // The same block again, as the next entry on the lineage.
-        let outcome = chain.apply_finalized(msg(2), Some(msg(1)), Some(&blocks[0]));
+        let outcome = chain.apply_finalized(msg(2), msg(1), Some(&blocks[0]));
 
         assert!(matches!(outcome, Some(AcceptOutcome::AlreadyApplied)));
         assert_eq!(chain.final_tip().unwrap().hash, blocks[0].header.hash);
@@ -907,7 +1045,7 @@ mod tests {
     fn a_hash_alias_with_the_wrong_id_is_not_absorbed() {
         let mut chain = ChainState::new(claimed_initial_state());
         let blocks = chain_of(2);
-        chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0]));
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
 
         // Block 1's hash claimed at height 2: the hash no longer matches.
         let mut alias = blocks[0].clone();
@@ -923,7 +1061,7 @@ mod tests {
 
         // Finalized, it parks.
         assert!(matches!(
-            chain.apply_finalized(msg(2), Some(msg(1)), Some(&alias)),
+            chain.apply_finalized(msg(2), msg(1), Some(&alias)),
             Some(AcceptOutcome::Parked(BlockIngestError::HashMismatch { .. }))
         ));
         assert_eq!(chain.final_tip().unwrap().block_id, 1);
@@ -936,17 +1074,37 @@ mod tests {
         let blocks = chain_of(5);
         for (block, n) in blocks[..3].iter().zip(1_u8..) {
             let parent = if n == 1 { MsgId::root() } else { msg(n - 1) };
-            chain.apply_finalized(msg(n), Some(parent), Some(block));
+            chain.apply_finalized(msg(n), parent, Some(block));
         }
         // Entry 5 arrives before entry 4 finalizes.
         chain.apply_extension(vec![entry(5, msg(4), Some(&blocks[4]))]);
         assert_eq!(head_id(&chain), Some(3));
 
-        chain.apply_finalized(msg(4), Some(msg(3)), Some(&blocks[3]));
+        chain.apply_finalized(msg(4), msg(3), Some(&blocks[3]));
 
         assert_eq!(chain.view().len(), 1);
         assert_eq!(chain.pin(), msg(5));
         assert_eq!(head_id(&chain), Some(5));
+        assert_head_is_the_fold(&chain);
+    }
+
+    #[test]
+    fn finalizing_drops_a_stray_entry_listed_after_a_kept_one_from_the_head() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(3);
+        // Entry 3 chains on the root, not on entry 2, yet its block folds on block 2.
+        chain.apply_extension(vec![
+            entry(1, MsgId::root(), Some(&blocks[0])),
+            entry(2, msg(1), Some(&blocks[1])),
+            entry(3, MsgId::root(), Some(&blocks[2])),
+        ]);
+        assert_eq!(head_id(&chain), Some(3));
+
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
+
+        assert_eq!(chain.view().len(), 1);
+        assert_eq!(chain.pin(), msg(2));
+        assert_eq!(head_id(&chain), Some(2));
         assert_head_is_the_fold(&chain);
     }
 
@@ -956,12 +1114,12 @@ mod tests {
         let blocks = chain_of(3);
         for (block, n) in blocks.iter().zip(1_u8..) {
             let parent = if n == 1 { MsgId::root() } else { msg(n - 1) };
-            chain.apply_finalized(msg(n), Some(parent), Some(block));
+            chain.apply_finalized(msg(n), parent, Some(block));
         }
         let foreign = competing_block2(&blocks);
 
         assert!(matches!(
-            chain.apply_finalized(msg(4), Some(msg(3)), Some(&foreign)),
+            chain.apply_finalized(msg(4), msg(3), Some(&foreign)),
             Some(AcceptOutcome::Parked(_))
         ));
         assert_eq!(chain.final_tip().unwrap().hash, blocks[2].header.hash);
@@ -980,7 +1138,7 @@ mod tests {
         ]);
         let head_before = state_bytes(chain.head_state());
 
-        chain.apply_finalized(msg(3), Some(msg(2)), Some(&blocks[1]));
+        chain.apply_finalized(msg(3), msg(2), Some(&blocks[1]));
 
         assert_eq!(chain.final_tip().unwrap().block_id, 2);
         assert_eq!(chain.final_msg(), msg(3));
@@ -995,13 +1153,13 @@ mod tests {
         let mut chain = ChainState::new(claimed_initial_state());
         let blocks = chain_of(2);
         chain.apply_extension(entries_for(&blocks));
-        chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0]));
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
         let rival = competing_block2(&blocks);
 
-        chain.apply_finalized(msg(9), Some(msg(1)), Some(&rival));
+        chain.apply_finalized(msg(9), msg(1), Some(&rival));
 
         assert!(chain.view().is_empty());
-        assert!(chain.head_blocks().is_empty());
+        assert_eq!(chain.head_blocks().count(), 0);
         assert_eq!(chain.head_tip().unwrap().hash, rival.header.hash);
         assert_eq!(
             state_bytes(chain.head_state()),
@@ -1024,7 +1182,7 @@ mod tests {
         assert_eq!(restored.encode_view(), live.encode_view());
 
         for chain in [&mut live, &mut restored] {
-            chain.apply_finalized(msg(2), Some(msg(1)), Some(&bad));
+            chain.apply_finalized(msg(2), msg(1), Some(&bad));
             assert_eq!(chain.final_msg(), msg(2));
             assert_eq!(chain.view().len(), 1);
             assert_eq!(head_id(chain), Some(2));
@@ -1063,7 +1221,7 @@ mod tests {
             chain.record_publish(entry(9, msg(2), Some(&blocks[1]))),
             PublishRecord::Skipped
         );
-        assert_eq!(chain.head_blocks().len(), 2);
+        assert_eq!(chain.head_blocks().count(), 2);
     }
 
     #[test]
@@ -1095,7 +1253,7 @@ mod tests {
         chain.apply_conflict(canonical);
 
         assert_eq!(chain.view().len(), 2);
-        chain.apply_finalized(msg(2), Some(msg(1)), Some(&blocks[1]));
+        chain.apply_finalized(msg(2), msg(1), Some(&blocks[1]));
         assert!(chain.view().is_empty());
         assert_eq!(chain.pin(), msg(2));
     }
@@ -1106,9 +1264,9 @@ mod tests {
         let blocks = chain_of(3);
         chain.apply_extension(entries_for(&blocks));
 
-        // Out of order, with no parent to go on.
-        chain.apply_finalized(msg(3), None, Some(&blocks[2]));
-        chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0]));
+        // Out of order.
+        chain.apply_finalized(msg(3), msg(2), Some(&blocks[2]));
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
 
         assert_eq!(chain.final_tip().unwrap().block_id, 3);
         assert_eq!(
@@ -1123,11 +1281,11 @@ mod tests {
     fn an_invalid_finalized_block_parks_and_the_lineage_moves_past_it() {
         let mut chain = ChainState::new(claimed_initial_state());
         let blocks = chain_of(1);
-        chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0]));
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
 
         let bad = produce_dummy_block(3, Some(blocks[0].header.hash), vec![]);
         assert!(matches!(
-            chain.apply_finalized(msg(2), Some(msg(1)), Some(&bad)),
+            chain.apply_finalized(msg(2), msg(1), Some(&bad)),
             Some(AcceptOutcome::Parked(_))
         ));
         assert_eq!(chain.final_tip().unwrap().block_id, 1);
@@ -1138,12 +1296,12 @@ mod tests {
     fn a_valid_finalized_successor_applies_after_an_invalid_one() {
         let mut chain = ChainState::new(claimed_initial_state());
         let blocks = chain_of(2);
-        chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0]));
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
         let bad = produce_dummy_block(3, Some(blocks[0].header.hash), vec![]);
-        chain.apply_finalized(msg(2), Some(msg(1)), Some(&bad));
+        chain.apply_finalized(msg(2), msg(1), Some(&bad));
 
         assert!(matches!(
-            chain.apply_finalized(msg(3), Some(msg(2)), Some(&blocks[1])),
+            chain.apply_finalized(msg(3), msg(2), Some(&blocks[1])),
             Some(AcceptOutcome::Applied(_))
         ));
         assert_eq!(chain.final_tip().unwrap().block_id, 2);
@@ -1154,15 +1312,248 @@ mod tests {
     fn a_conflicting_finalized_block_at_the_final_tip_parks() {
         let mut chain = ChainState::new(claimed_initial_state());
         let blocks = chain_of(2);
-        chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0]));
-        chain.apply_finalized(msg(2), Some(msg(1)), Some(&blocks[1]));
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
+        chain.apply_finalized(msg(2), msg(1), Some(&blocks[1]));
 
         let block2_prime = produce_dummy_block(2, Some(HashType([9; 32])), vec![]);
         assert!(matches!(
-            chain.apply_finalized(msg(3), Some(msg(1)), Some(&block2_prime)),
+            chain.apply_finalized(msg(3), msg(1), Some(&block2_prime)),
             Some(AcceptOutcome::Parked(_))
         ));
         assert_eq!(chain.final_tip().unwrap().block_id, 2);
+    }
+
+    /// Finalizes `blocks` as entries `1..`, each chained on the one before.
+    fn finalize_all(chain: &mut ChainState, blocks: &[Block]) {
+        let mut parent = MsgId::root();
+        for (block, n) in blocks.iter().zip(1_u8..) {
+            chain.apply_finalized(msg(n), parent, Some(block));
+            parent = msg(n);
+        }
+    }
+
+    #[test]
+    fn a_stale_adopted_entry_finalized_below_the_tier_does_not_rewind_it() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(4);
+        finalize_all(&mut chain, &blocks[..3]);
+
+        // The sdk reports entry 1 as adopted after the tier already passed it.
+        chain.apply_extension(vec![entry(1, MsgId::root(), Some(&blocks[0]))]);
+        assert!(matches!(
+            chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0])),
+            Some(AcceptOutcome::Parked(
+                BlockIngestError::UnexpectedBlockId { .. }
+            ))
+        ));
+        assert_eq!(chain.final_msg(), msg(3));
+        assert!(chain.view().is_empty());
+        assert_eq!(chain.pin(), msg(3));
+
+        // The final tip's own entry, re-adopted and re-finalized.
+        chain.apply_extension(vec![entry(3, msg(2), Some(&blocks[2]))]);
+        assert!(matches!(
+            chain.apply_finalized(msg(3), msg(2), Some(&blocks[2])),
+            Some(AcceptOutcome::AlreadyApplied)
+        ));
+        assert_eq!(chain.final_msg(), msg(3));
+        assert!(chain.view().is_empty());
+
+        chain.apply_extension(vec![entry(4, msg(3), Some(&blocks[3]))]);
+        assert!(matches!(
+            chain.apply_finalized(msg(4), msg(3), Some(&blocks[3])),
+            Some(AcceptOutcome::Applied(_))
+        ));
+        assert_eq!(chain.final_msg(), msg(4));
+        assert_head_is_the_fold(&chain);
+    }
+
+    #[test]
+    fn stale_adopted_entries_in_one_extension_leave_the_view() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(3);
+        finalize_all(&mut chain, &blocks);
+
+        chain.apply_extension(entries_for(&blocks[..2]));
+        chain.apply_finalized(msg(2), msg(1), Some(&blocks[1]));
+
+        assert_eq!(chain.final_msg(), msg(3));
+        assert!(chain.view().is_empty());
+        assert_eq!(chain.pin(), msg(3));
+        assert_eq!(chain.final_tip().unwrap().block_id, 3);
+    }
+
+    #[test]
+    fn a_held_misplaced_block_on_the_final_tier_is_still_next() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(1);
+        finalize_all(&mut chain, &blocks);
+
+        let skips_ahead = produce_dummy_block(3, Some(blocks[0].header.hash), vec![]);
+        chain.apply_extension(vec![entry(2, msg(1), Some(&skips_ahead))]);
+        assert!(matches!(
+            chain.apply_finalized(msg(2), msg(1), Some(&skips_ahead)),
+            Some(AcceptOutcome::Parked(
+                BlockIngestError::UnexpectedBlockId { .. }
+            ))
+        ));
+
+        assert_eq!(chain.final_msg(), msg(2));
+        assert!(chain.view().is_empty());
+    }
+
+    #[test]
+    fn a_held_entry_past_a_gap_is_not_taken_as_final() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(3);
+        finalize_all(&mut chain, &blocks[..1]);
+
+        // Chained on an entry never seen, carrying a block that does not apply.
+        chain.apply_extension(vec![entry(3, msg(2), Some(&blocks[2]))]);
+        assert!(matches!(
+            chain.apply_finalized(msg(3), msg(2), Some(&blocks[2])),
+            Some(AcceptOutcome::Parked(_))
+        ));
+        assert_eq!(chain.final_msg(), msg(1));
+        assert!(chain.view().is_empty());
+
+        // A block past the gap still advances the tier, not the lineage.
+        assert!(matches!(
+            chain.apply_finalized(msg(9), msg(8), Some(&blocks[1])),
+            Some(AcceptOutcome::Applied(_))
+        ));
+        assert_eq!(chain.final_tip().unwrap().block_id, 2);
+        assert_eq!(chain.final_msg(), msg(1));
+    }
+
+    #[test]
+    fn a_late_redelivery_that_now_applies_does_not_rewind_the_lineage() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(2);
+        finalize_all(&mut chain, &blocks[..1]);
+        // Entry 3 chains on entry 2, whose block never reached the tier.
+        chain.apply_finalized(msg(2), msg(1), None);
+        chain.apply_finalized(msg(3), msg(2), None);
+
+        assert!(matches!(
+            chain.apply_finalized(msg(2), msg(1), Some(&blocks[1])),
+            Some(AcceptOutcome::Applied(_))
+        ));
+        assert_eq!(chain.final_tip().unwrap().block_id, 2);
+        assert_eq!(chain.final_msg(), msg(3));
+    }
+
+    #[test]
+    fn a_reconstructed_entry_always_becomes_the_final_entry() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(2);
+
+        assert!(matches!(
+            chain.apply_reconstructed(msg(1), Some(&blocks[0])),
+            Some(AcceptOutcome::Applied(_))
+        ));
+        assert!(chain.apply_reconstructed(msg(2), None).is_none());
+        assert_eq!(chain.final_msg(), msg(2));
+        assert!(matches!(
+            chain.apply_reconstructed(msg(3), Some(&blocks[1])),
+            Some(AcceptOutcome::Applied(_))
+        ));
+        assert_eq!(chain.final_msg(), msg(3));
+        assert_eq!(chain.final_tip().unwrap().block_id, 2);
+    }
+
+    #[test]
+    fn a_reread_below_the_final_entry_keeps_the_lineage_and_the_view() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(3);
+        finalize_all(&mut chain, &blocks[..2]);
+        chain.apply_extension(vec![entry(3, msg(2), Some(&blocks[2]))]);
+
+        // A warm start re-reads entries 1 and 2 before resuming the lineage.
+        for (block, n) in blocks[..2].iter().zip(1_u8..) {
+            chain.apply_finalized_redelivery(msg(n), Some(block));
+        }
+
+        assert_eq!(chain.final_msg(), msg(2));
+        assert_eq!(chain.view().len(), 1);
+        assert_eq!(head_id(&chain), Some(3));
+        assert_head_is_the_fold(&chain);
+    }
+
+    #[test]
+    fn a_stale_reported_entry_behind_a_held_one_does_not_finalize_it() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(4);
+        finalize_all(&mut chain, &blocks[..3]);
+        chain.apply_extension(vec![entry(4, msg(3), Some(&blocks[3]))]);
+
+        let mut restored = ChainState::from_final(chain.final_state().clone(), chain.final_tip());
+        restored.restore_view(&chain.encode_view()).unwrap();
+
+        // After a restart the sdk re-reports the final tip's entry after entry 4.
+        restored.apply_extension(vec![
+            entry(3, msg(2), Some(&blocks[2])),
+            entry(4, msg(3), Some(&blocks[3])),
+        ]);
+        let view: Vec<MsgId> = restored.view().iter().map(|entry| entry.msg).collect();
+        assert_eq!(view, vec![msg(4), msg(3)]);
+
+        assert!(matches!(
+            restored.apply_finalized(msg(3), msg(2), Some(&blocks[2])),
+            Some(AcceptOutcome::AlreadyApplied)
+        ));
+        assert_eq!(
+            restored.final_tip().unwrap().block_id,
+            3,
+            "entry 4 is not final yet"
+        );
+        assert_eq!(restored.final_msg(), msg(3));
+        assert_eq!(restored.pin(), msg(4));
+        assert_eq!(head_id(&restored), Some(4));
+
+        assert!(matches!(
+            restored.apply_finalized(msg(4), msg(3), Some(&blocks[3])),
+            Some(AcceptOutcome::Applied(_))
+        ));
+        assert_eq!(restored.final_msg(), msg(4));
+        assert!(restored.view().is_empty());
+        assert_head_is_the_fold(&restored);
+    }
+
+    #[test]
+    fn a_held_entry_finalizes_past_a_stale_entry_it_chains_on() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(4);
+        finalize_all(&mut chain, &blocks[..3]);
+        chain.apply_extension(vec![entry(4, msg(3), Some(&blocks[3]))]);
+        chain.apply_extension(vec![entry(3, msg(2), Some(&blocks[2]))]);
+
+        // Entry 4 finalizes first, so the walk reaches the stale entry 3.
+        assert!(matches!(
+            chain.apply_finalized(msg(4), msg(3), Some(&blocks[3])),
+            Some(AcceptOutcome::Applied(_))
+        ));
+        assert_eq!(chain.final_msg(), msg(4));
+        assert!(chain.view().is_empty());
+        assert_head_is_the_fold(&chain);
+    }
+
+    #[test]
+    fn a_held_entry_without_a_block_finalizes_as_an_ancestor() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(2);
+        finalize_all(&mut chain, &blocks[..1]);
+        chain.apply_extension(vec![
+            entry(2, msg(1), None),
+            entry(3, msg(2), Some(&blocks[1])),
+        ]);
+
+        assert!(matches!(
+            chain.apply_finalized(msg(3), msg(2), Some(&blocks[1])),
+            Some(AcceptOutcome::Applied(_))
+        ));
+        assert_eq!(chain.final_msg(), msg(3));
+        assert!(chain.view().is_empty());
     }
 
     #[test]
@@ -1190,6 +1581,168 @@ mod tests {
                 .unwrap(),
             INITIAL_TO_BALANCE + 10
         );
+        assert_head_is_the_fold(&chain);
+    }
+
+    /// Marks the fold of `view[idx]` with an account no block creates, so a
+    /// test can tell a kept fold from a recomputed one.
+    fn mark_fold(chain: &mut ChainState, idx: usize) {
+        let state = &mut chain.folds[idx].state;
+        *state = state
+            .clone()
+            .with_public_accounts([(marker(), lee::Account::funded(1))]);
+    }
+
+    fn marker() -> lee::AccountId {
+        lee::AccountId::new([7; 32])
+    }
+
+    fn is_marked(state: &V03State) -> bool {
+        state.get_account_by_id_ref(marker()).is_some()
+    }
+
+    #[test]
+    fn a_conflict_keeps_the_folds_both_views_hold() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(3);
+        chain.apply_extension(entries_for(&blocks));
+        mark_fold(&mut chain, 0);
+
+        let block2_prime = competing_block2(&blocks);
+        chain.apply_conflict(vec![
+            entry(1, MsgId::root(), Some(&blocks[0])),
+            entry(12, msg(1), Some(&block2_prime)),
+        ]);
+
+        assert!(is_marked(&chain.folds[0].state));
+        assert!(is_marked(chain.head_state()));
+        assert_eq!(chain.head_tip().unwrap().hash, block2_prime.header.hash);
+    }
+
+    #[test]
+    fn a_conflict_from_the_first_entry_refolds_everything() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(2);
+        chain.apply_extension(entries_for(&blocks));
+        mark_fold(&mut chain, 0);
+
+        chain.apply_conflict(vec![
+            entry(11, MsgId::root(), Some(&blocks[0])),
+            entry(12, msg(11), Some(&blocks[1])),
+        ]);
+
+        assert!(!is_marked(chain.head_state()));
+        assert_head_is_the_fold(&chain);
+    }
+
+    #[test]
+    fn finalizing_a_folded_block_takes_its_fold() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(2);
+        chain.apply_extension(entries_for(&blocks));
+        mark_fold(&mut chain, 0);
+
+        let outcome = chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
+
+        assert!(matches!(outcome, Some(AcceptOutcome::Applied(_))));
+        assert!(is_marked(chain.final_state()));
+        assert_eq!(chain.view().len(), 1);
+        assert_eq!(head_id(&chain), Some(2));
+    }
+
+    #[test]
+    fn finalizing_an_entry_keeps_the_folds_after_it() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(2);
+        chain.apply_extension(entries_for(&blocks));
+        mark_fold(&mut chain, 1);
+
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
+
+        assert!(!is_marked(chain.final_state()));
+        assert!(is_marked(chain.head_state()));
+        assert_eq!(head_id(&chain), Some(2));
+    }
+
+    #[test]
+    fn a_redelivery_keeps_the_folds_before_the_entry_it_removes() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(2);
+        chain.apply_extension(vec![
+            entry(1, MsgId::root(), Some(&blocks[0])),
+            entry(9, msg(1), None),
+            entry(2, msg(9), Some(&blocks[1])),
+        ]);
+        mark_fold(&mut chain, 0);
+
+        chain.apply_finalized_redelivery(msg(9), None);
+
+        assert_eq!(chain.view().len(), 2);
+        assert!(is_marked(&chain.folds[0].state));
+        assert!(is_marked(chain.head_state()));
+        assert_eq!(head_id(&chain), Some(2));
+    }
+
+    #[test]
+    fn a_publish_inserted_before_its_child_keeps_the_folds_before_it() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(3);
+        chain.apply_extension(vec![
+            entry(1, MsgId::root(), Some(&blocks[0])),
+            entry(3, msg(2), Some(&blocks[2])),
+        ]);
+        mark_fold(&mut chain, 0);
+
+        chain.record_publish(entry(2, msg(1), Some(&blocks[1])));
+
+        assert!(is_marked(&chain.folds[0].state));
+        assert!(is_marked(chain.head_state()));
+        assert_eq!(head_id(&chain), Some(3));
+    }
+
+    #[test]
+    fn a_block_the_fold_skipped_is_applied_again_at_finality() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(2);
+        chain.apply_extension(entries_for(&blocks));
+        // As if block 1 had failed transiently while folding, and block 2,
+        // no longer chaining, had been skipped too.
+        let unfolded = || Fold {
+            state: chain.final_state().clone(),
+            tip: None,
+            applied: None,
+        };
+        chain.folds = vec![unfolded(), unfolded()];
+
+        let outcome = chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
+
+        assert!(matches!(outcome, Some(AcceptOutcome::Applied(_))));
+        assert_eq!(chain.final_tip().unwrap().hash, blocks[0].header.hash);
+        assert_eq!(head_id(&chain), Some(2));
+        assert_head_is_the_fold(&chain);
+    }
+
+    #[test]
+    fn finalizing_blocks_the_fold_skipped_refolds_the_entries_after_them() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(3);
+        chain.apply_extension(entries_for(&blocks));
+        // As if blocks 2 and 3 had failed transiently while folding.
+        let unfolded = || Fold {
+            state: chain.folds[0].state.clone(),
+            tip: chain.folds[0].tip.clone(),
+            applied: None,
+        };
+        let (second, third) = (unfolded(), unfolded());
+        chain.folds[1] = second;
+        chain.folds[2] = third;
+        assert_eq!(head_id(&chain), Some(1));
+
+        chain.apply_finalized(msg(2), msg(1), Some(&blocks[1]));
+
+        assert_eq!(chain.final_tip().unwrap().block_id, 2);
+        assert_eq!(chain.view().len(), 1);
+        assert_eq!(head_id(&chain), Some(3));
         assert_head_is_the_fold(&chain);
     }
 }

@@ -610,6 +610,7 @@ async fn setup_bedrock_actor(
                 lib_slot: Slot::from(0),
                 channel_notes: Vec::new(),
                 finalized_config: MsgId::root(),
+                funding: Vec::new(),
             },
             seq: ChannelSeq::mocked(
                 seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed)

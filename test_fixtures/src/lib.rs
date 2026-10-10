@@ -634,7 +634,7 @@ impl ZoneTestContextBuilder {
         debug!("Test context setup");
 
         let mut sequencer_keys = vec![UnsecuredEd25519Key::from_bytes(
-            &config::SEQUENCER_SIGNING_KEY,
+            &config::BEDROCK_SIGNING_KEY,
         )];
         sequencer_keys.extend((1..mn_config.num_nodes).map(|i| {
             config::sequencer_signing_key_from_seed(
@@ -687,7 +687,6 @@ impl ZoneTestContextBuilder {
 
         let partial_config = sequencer_partial_config.unwrap_or_default();
 
-        let mut sequencer_addrs = vec![];
         let mut sequencer_components = vec![];
 
         // First, need to start a leader.
@@ -705,7 +704,7 @@ impl ZoneTestContextBuilder {
             &initial_public_accounts,
             &initial_private_accounts,
             genesis_transactions.clone(),
-            UnsecuredEd25519Key::from_bytes(&config::SEQUENCER_SIGNING_KEY),
+            UnsecuredEd25519Key::from_bytes(&config::BEDROCK_SIGNING_KEY),
             mn_config.bedrock_channel,
             cross_zone_config.clone(),
             leader_gossip,
@@ -737,12 +736,11 @@ impl ZoneTestContextBuilder {
 
         log::info!("Passed wait untill genesis");
 
-        sequencer_addrs.push(leader_addr);
         sequencer_components.push(leader_components);
 
         // Followers are already accredited by their genesis stakes.
         for sequencer_key in sequencer_keys.into_iter().skip(1) {
-            let (sequencer_addr, sequencer_component) = build_sequencer_components(
+            let (_, sequencer_component) = build_sequencer_components(
                 follower_sequencer_partial_config.unwrap_or(partial_config),
                 bedrock_addr,
                 enable_wallet,
@@ -757,18 +755,16 @@ impl ZoneTestContextBuilder {
             )
             .await?;
 
-            sequencer_addrs.push(sequencer_addr);
             sequencer_components.push(sequencer_component);
         }
 
         let wallet_components = if enable_wallet {
             let (mut wallet, temp_wallet_dir, wallet_password) = setup_wallet(
-                &sequencer_addrs,
+                &leader_addr,
                 &initial_public_accounts,
                 &initial_private_accounts,
                 wallet_config_overrides,
             )
-            .await
             .context("Failed to setup wallet")?;
 
             if use_prebuilt {
@@ -1122,7 +1118,7 @@ pub async fn spawn_channel_observer(
         basic_auth: None,
         channel_id,
         bedrock_signing_key: sequencer_bedrock_actor::config::Ed25519Key::from_bytes(
-            &config::SEQUENCER_BEDROCK_SIGNING_KEY,
+            &config::BEDROCK_SIGNING_KEY,
         ),
         funding_pk: config::bedrock_funding_key(),
         priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),

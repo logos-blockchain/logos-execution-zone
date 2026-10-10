@@ -228,7 +228,8 @@ pub struct GetChannelTipSlot;
 /// Get live channel tip message id.
 pub struct GetChannelTipMessageId;
 
-/// Finalized channel messages from `after` (exclusive) up to LIB.
+/// Finalized channel messages from `after` (exclusive) up to LIB, capped at
+/// zone-sdk's LIB when it became ready.
 pub struct ReadChannel {
     /// Passing [`None`] will read from the channel's genesis.
     pub after: Option<Slot>,

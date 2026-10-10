@@ -1,6 +1,7 @@
 #![expect(clippy::arithmetic_side_effects, reason = "TODO: fix later")]
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use rpds::VectorSync;
 use sha2::{Digest as _, Sha256};
 
 mod default_values;
@@ -11,7 +12,11 @@ type Node = [u8; 32];
 #[cfg_attr(test, derive(Debug))]
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct MerkleTree {
-    nodes: Vec<Node>,
+    #[borsh(
+        serialize_with = "crate::encoding::persistent::serialize_vector",
+        deserialize_with = "crate::encoding::persistent::deserialize_vector"
+    )]
+    nodes: VectorSync<Node>,
     capacity: usize,
     length: usize,
 }

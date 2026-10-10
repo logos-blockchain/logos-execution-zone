@@ -16,7 +16,7 @@ use sequencer_core::{
 };
 use sequencer_stake_core::SequencerKey;
 use url::Url;
-use wallet::config::{MultiSequencerClientConfig, SequencerConnectionData, WalletConfig};
+use wallet::config::{SequencerConnectionData, WalletConfig};
 
 /// Turn length the integration-test channels are created with.
 ///
@@ -42,15 +42,11 @@ pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
 /// The public account for funding the private accounts' balances at genesis.
 pub(crate) const PRIVATE_FUNDER_INDEX: usize = 0;
 
-/// Fixed sequencer signing key; exposed so the fixture generator can reopen the produced store.
-pub const SEQUENCER_SIGNING_KEY: [u8; 32] = [37; 32];
-
-/// Key of the account holding the sequencer's genesis stake. Separate from
-/// [`SEQUENCER_SIGNING_KEY`]: block signing and stake control are distinct roles.
+/// Key of the account holding the sequencer's genesis stake.
 pub const SEQUENCER_STAKE_KEY: [u8; 32] = [55; 32];
 
-/// Bedrock signing key used by the prebuilt dump as first accredited key.
-pub const SEQUENCER_BEDROCK_SIGNING_KEY: [u8; 32] = [77; 32];
+/// Bedrock signing key of the test sequencer, staked in the prebuilt dump.
+pub const BEDROCK_SIGNING_KEY: [u8; 32] = [77; 32];
 
 // Fixed entropy seeds for the default accounts: deterministic so one prebuilt database is reusable,
 // and distinct from the `testnet_initial_state` accounts to avoid depending on / double-funding
@@ -156,7 +152,6 @@ pub fn sequencer_config(
     funding_key: ZkPublicKey,
     genesis_transactions: Vec<GenesisAction>,
     cross_zone: Option<CrossZoneConfig>,
-    signing_key: Option<UnsecuredEd25519Key>,
     gossip: Option<GossipConfig>,
 ) -> Result<SequencerConfig> {
     let SequencerPartialConfig {
@@ -176,7 +171,6 @@ pub fn sequencer_config(
         block_create_timeout,
         retry_pending_blocks_timeout: Duration::from_secs(5),
         genesis: genesis_transactions,
-        signing_key: Some(signing_key.map_or(SEQUENCER_SIGNING_KEY, |key| *key.to_bytes())),
         bedrock_config: BedrockConfig {
             channel_id,
             node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)
@@ -289,27 +283,17 @@ pub fn genesis_from_accounts(
         .collect()
 }
 
-pub fn wallet_config(sequencer_addrs: &[SocketAddr]) -> Result<WalletConfig> {
-    let mut sequencers = vec![];
-
-    for addr in sequencer_addrs {
-        sequencers.push(SequencerConnectionData {
-            sequencer_addr: addr_to_url(UrlProtocol::Http, *addr)
+pub fn wallet_config(sequencer_addr: &SocketAddr) -> Result<WalletConfig> {
+    Ok(WalletConfig {
+        sequencer: SequencerConnectionData {
+            sequencer_addr: addr_to_url(UrlProtocol::Http, *sequencer_addr)
                 .context("Failed to convert sequencer addr to URL")?,
             basic_auth: None,
-        });
-    }
-
-    Ok(WalletConfig {
-        sequencers,
+        },
         seq_poll_timeout: Duration::from_secs(30),
         seq_tx_poll_max_blocks: 15,
         seq_poll_max_retries: 10,
         seq_block_poll_max_amount: 100,
-        multi_sequencer_client_config: MultiSequencerClientConfig {
-            distribution_limit: 1,
-            calibration_limit: 5,
-        },
         gas_limit: wallet::DEFAULT_GAS_LIMIT,
     })
 }
@@ -536,7 +520,6 @@ mod tests {
             bedrock_channel_id(),
             bedrock_funding_key(),
             Vec::new(),
-            None,
             None,
             None,
         )
