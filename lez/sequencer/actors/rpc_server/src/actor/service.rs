@@ -12,7 +12,7 @@ use kameo::{
 };
 use log::{error, warn};
 use sequencer_executor_actor::ExecutorActorTrait;
-use sequencer_gossip_actor::protocol::PublishTransaction;
+use sequencer_gossip_actor::protocol::{PublishSystemApproval, PublishTransaction};
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
     CrossZoneDeadLetter, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, FeeStateQuote,
@@ -23,20 +23,25 @@ pub struct Service<E: ExecutorActorTrait> {
     executor_ref: ActorRef<E>,
     max_block_size: ByteSize,
     gossip: Option<Recipient<PublishTransaction>>,
+    system_approval_gossip: Option<Recipient<PublishSystemApproval>>,
 }
 
 impl<E: ExecutorActorTrait> Service<E> {
     pub fn new(
         executor_ref: ActorRef<E>,
         max_block_size: ByteSize,
-        gossip: Option<Recipient<PublishTransaction>>,
+        gossip: Option<super::GossipPublishers>,
     ) -> Self {
         sequencer_rpc_server_actor_metrics::init();
 
+        let (gossip, system_approval_gossip) = gossip
+            .map(|publishers| (publishers.transactions, publishers.system_approvals))
+            .unzip();
         Self {
             executor_ref,
             max_block_size,
             gossip,
+            system_approval_gossip,
         }
     }
 }
@@ -296,6 +301,32 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             DeadLetterRequeue::NotRetained => CrossZoneDeadLetterRequeue::NotRetained,
         })
     }
+
+    async fn submit_system_approval(&self, approval: String) -> Result<(), ErrorObjectOwned> {
+        let invalid = |message: String| {
+            ErrorObjectOwned::owned(ErrorCode::InvalidParams.code(), message, None::<()>)
+        };
+        let bytes = hex::decode(approval.trim())
+            .map_err(|err| invalid(format!("the approval is not hex: {err}")))?;
+        let signed: system_upgrader_core::SignedApproval = borsh::from_slice(&bytes)
+            .map_err(|err| invalid(format!("the approval does not decode: {err}")))?;
+
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::SubmitSystemApproval {
+                approval: signed.clone(),
+            })
+            .await
+            .map_err(map_executor_error)?;
+
+        // Published only once accepted, like a transaction, so peers aren't fed what this node
+        // refused.
+        if let Some(gossip) = &self.system_approval_gossip
+            && let Err(err) = gossip.tell(PublishSystemApproval(signed)).try_send()
+        {
+            log::warn!("Dropping local approval publish: gossip mailbox full or closed: {err}");
+        }
+        Ok(())
+    }
 }
 
 #[expect(clippy::needless_pass_by_value, reason = "More convenient mapping")]
@@ -322,6 +353,13 @@ fn map_executor_error<M>(
 
     match err {
         SendError::HandlerError(handle_err) => match handle_err {
+            refused @ sequencer_executor_actor::error::Error::SystemApprovalRefused(_) => {
+                ErrorObjectOwned::owned(
+                    ErrorCode::InvalidParams.code(),
+                    format!("{refused:#}"),
+                    None::<()>,
+                )
+            }
             incorrect_fee @ sequencer_executor_actor::error::Error::IncorrectFee(_) => {
                 ErrorObjectOwned::owned(
                     ErrorCode::InvalidParams.code(),

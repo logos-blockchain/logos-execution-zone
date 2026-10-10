@@ -128,4 +128,13 @@ pub trait Rpc {
         &self,
         message_key: HashType,
     ) -> Result<CrossZoneDeadLetterRequeue, ErrorObjectOwned>;
+
+    /// Hands the node a committee member's approval of a `system_upgrader` change: a hex-encoded
+    /// borsh `SignedApproval`, as `approve_system_change` prints it.
+    ///
+    /// The node verifies it against its committee and keeps it until a threshold of approvals lets
+    /// its producer build the change. Safe without authentication: the signature is what proves
+    /// the approval.
+    #[method(name = "submitSystemApproval")]
+    async fn submit_system_approval(&self, approval: String) -> Result<(), ErrorObjectOwned>;
 }

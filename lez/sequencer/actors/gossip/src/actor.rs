@@ -28,10 +28,13 @@ use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519Pu
 use sequencer_channel_config_actor::Wire;
 use sequencer_core::{config::GossipConfig, gossip::AccreditedKeysReceiver};
 use sequencer_slasher_actor::Approval;
+use system_upgrader_core::SignedApproval;
 use tokio::select;
 
 use self::seen_cache::SeenCache;
-use crate::protocol::{GetConnectedPeers, PublishConfig, PublishTransaction, RetryBootstrap};
+use crate::protocol::{
+    GetConnectedPeers, PublishConfig, PublishSystemApproval, PublishTransaction, RetryBootstrap,
+};
 
 mod seen_cache;
 #[cfg(test)]
@@ -82,6 +85,10 @@ pub struct GossipActor {
     approvals_topic: gossipsub::IdentTopic,
     /// Where verified inbound approvals go; the slasher decides what to keep.
     approval_sink: Recipient<Approval>,
+    /// `system_upgrader` approvals ride their own topic too.
+    system_approvals_topic: gossipsub::IdentTopic,
+    /// Hands a verified inbound `system_upgrader` approval to the node's approval pool.
+    submit_system_approval: SystemApprovalSubmit,
     /// The committee the follow path last read.
     accredited_keys_rx: AccreditedKeysReceiver,
     /// Keys with stake on record at head.
@@ -102,6 +109,8 @@ pub struct GossipActor {
     pending_publish: BoundedVecDeque<LeeTransaction>,
     /// Same, for this node's own slash approvals.
     pending_approvals: BoundedVecDeque<Approval>,
+    /// Same, for `system_upgrader` approvals this node accepted.
+    pending_system_approvals: BoundedVecDeque<SignedApproval>,
     /// Same, for this node's own channel-config messages.
     pending_config: BoundedVecDeque<Wire>,
     listen_addrs: Vec<Multiaddr>,
@@ -115,6 +124,11 @@ pub struct GossipActor {
 /// local head state, which drifts, so peers legitimately disagree.
 pub type IngestSubmit =
     Arc<dyn Fn(LeeTransaction) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
+
+/// Hands a gossiped `system_upgrader` approval to the node's approval pool (the executor actor in
+/// production), which checks it against the head's committee.
+pub type SystemApprovalSubmit =
+    Arc<dyn Fn(SignedApproval) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
 
 /// Aborts the watchdog task when dropped, silencing the L1-only warning on
 /// node shutdown.
@@ -137,6 +151,7 @@ impl GossipActor {
         accredited_keys_rx: AccreditedKeysReceiver,
         staked_keys_rx: AccreditedKeysReceiver,
         config_sink: Recipient<Wire>,
+        submit_system_approval: SystemApprovalSubmit,
     ) -> Result<Self> {
         // Reuse the node's L1 bedrock signing key as the libp2p identity. The
         // secret stays in a `Zeroizing` buffer that both `ed25519_from_bytes`
@@ -156,9 +171,14 @@ impl GossipActor {
         // verbatim, so a content digest would make every re-announcement a
         // duplicate the sender itself drops.
         let approvals_topic_hash = Self::get_approvals_topic_for_channel(channel_id).hash();
+        let system_approvals_topic_hash =
+            Self::get_system_approvals_topic_for_channel(channel_id).hash();
         let config_topic_hash = Self::get_config_topic_for_channel(channel_id).hash();
         let message_id_fn = move |msg: &gossipsub::Message| {
-            if msg.topic == approvals_topic_hash || msg.topic == config_topic_hash {
+            if msg.topic == approvals_topic_hash
+                || msg.topic == system_approvals_topic_hash
+                || msg.topic == config_topic_hash
+            {
                 return default_message_id(msg);
             }
             // Undecodable messages still need a message-id, but it must be a
@@ -233,6 +253,13 @@ impl GossipActor {
             .subscribe(&approvals_topic)
             .context("Failed to subscribe to gossip slash approval topic")?;
 
+        let system_approvals_topic = Self::get_system_approvals_topic_for_channel(channel_id);
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .subscribe(&system_approvals_topic)
+            .context("Failed to subscribe to gossip system_upgrader approval topic")?;
+
         let config_topic = Self::get_config_topic_for_channel(channel_id);
         swarm
             .behaviour_mut()
@@ -279,6 +306,8 @@ impl GossipActor {
             topic,
             approvals_topic,
             approval_sink,
+            system_approvals_topic,
+            submit_system_approval,
             accredited_keys_rx,
             staked_keys_rx,
             config_topic,
@@ -289,6 +318,7 @@ impl GossipActor {
             bootstrap,
             pending_publish: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
             pending_approvals: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
+            pending_system_approvals: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
             pending_config: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
             listen_addrs,
             local_peer_id,
@@ -312,6 +342,14 @@ impl GossipActor {
     fn get_approvals_topic_for_channel(channel_id: [u8; 32]) -> gossipsub::IdentTopic {
         gossipsub::IdentTopic::new(format!(
             "/lez/{}/v1/slash-approvals",
+            hex::encode(channel_id)
+        ))
+    }
+
+    /// `system_upgrader` approvals ride their own topic, like slash approvals.
+    fn get_system_approvals_topic_for_channel(channel_id: [u8; 32]) -> gossipsub::IdentTopic {
+        gossipsub::IdentTopic::new(format!(
+            "/lez/{}/v1/system-approvals",
             hex::encode(channel_id)
         ))
     }
@@ -389,6 +427,9 @@ impl GossipActor {
             }) => {
                 if message.topic == self.approvals_topic.hash() {
                     self.on_approval_message(propagation_source, &message_id, &message.data);
+                } else if message.topic == self.system_approvals_topic.hash() {
+                    self.on_system_approval_message(propagation_source, &message_id, &message.data)
+                        .await;
                 } else if message.topic == self.config_topic.hash() {
                     self.on_config_message(
                         propagation_source,
@@ -410,6 +451,11 @@ impl GossipActor {
                 if topic == self.approvals_topic.hash() =>
             {
                 self.flush_pending_approvals();
+            }
+            GossipBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed { topic, .. })
+                if topic == self.system_approvals_topic.hash() =>
+            {
+                self.flush_pending_system_approvals();
             }
             GossipBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed { topic, .. })
                 if topic == self.config_topic.hash() =>
@@ -548,6 +594,69 @@ impl GossipActor {
     fn flush_pending_approvals(&mut self) {
         for approval in self.pending_approvals.drain_all() {
             self.publish_approval(approval);
+        }
+    }
+
+    /// Verifies an inbound `system_upgrader` approval and hands it to the approval pool.
+    async fn on_system_approval_message(
+        &mut self,
+        source: PeerId,
+        message_id: &gossipsub::MessageId,
+        data: &[u8],
+    ) {
+        use self::validation::{SystemApprovalEvaluation, evaluate_system_approval};
+
+        let evaluation = {
+            let accredited_keys = self.accredited_keys_rx.borrow();
+            evaluate_system_approval(data, self.channel_id, accredited_keys.as_ref())
+        };
+        let acceptance = match evaluation {
+            SystemApprovalEvaluation::Reject(reason) => {
+                log::debug!("Rejecting gossiped system_upgrader approval from {source}: {reason}");
+                gossipsub::MessageAcceptance::Reject
+            }
+            SystemApprovalEvaluation::Ignore(reason) => {
+                log::debug!("Ignoring gossiped system_upgrader approval from {source}: {reason}");
+                gossipsub::MessageAcceptance::Ignore
+            }
+            SystemApprovalEvaluation::Accept(signed) => {
+                // The pool's verdict (e.g. expired at this head) doesn't affect the mesh.
+                if let Err(err) = (self.submit_system_approval)(signed).await {
+                    log::debug!("The approval pool refused a gossiped approval: {err:#}");
+                }
+                gossipsub::MessageAcceptance::Accept
+            }
+        };
+
+        _ = self
+            .swarm_mut()
+            .behaviour_mut()
+            .gossipsub
+            .report_message_validation_result(message_id, &source, acceptance);
+    }
+
+    /// Publishes a `system_upgrader` approval this node accepted, queued and retried like a
+    /// transaction.
+    fn publish_system_approval(&mut self, signed: SignedApproval) {
+        let bytes = borsh::to_vec(&signed).expect("approval borsh serialization should not fail");
+        let topic = self.system_approvals_topic.clone();
+        match self
+            .swarm_mut()
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic, bytes)
+        {
+            Ok(_) | Err(gossipsub::PublishError::Duplicate) => {}
+            Err(err) => {
+                log::debug!("Queueing system_upgrader approval publish for retry: {err}");
+                _ = self.pending_system_approvals.push_back(signed);
+            }
+        }
+    }
+
+    fn flush_pending_system_approvals(&mut self) {
+        for signed in self.pending_system_approvals.drain_all() {
+            self.publish_system_approval(signed);
         }
     }
 
@@ -740,6 +849,19 @@ impl Message<Approval> for GossipActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.publish_approval(msg);
+    }
+}
+
+impl Message<PublishSystemApproval> for GossipActor {
+    type Reply = ();
+
+    /// Publish a `system_upgrader` approval this node accepted.
+    async fn handle(
+        &mut self,
+        PublishSystemApproval(signed): PublishSystemApproval,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.publish_system_approval(signed);
     }
 }
 

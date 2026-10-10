@@ -139,6 +139,11 @@ pub struct RequeueCrossZoneDeadLetter {
     pub message_key: CrossZoneMessageKey,
 }
 
+/// A committee member's approval of a `system_upgrader` change, for the producer's pool.
+pub struct SubmitSystemApproval {
+    pub approval: system_upgrader_core::SignedApproval,
+}
+
 #[derive(Reply)]
 pub struct RequeueCrossZoneDeadLetterReply {
     pub outcome: sequencer_storage_actor::protocol::DeadLetterRequeue,

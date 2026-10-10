@@ -27,6 +27,9 @@ pub enum Error {
     #[error("Failed to requeue the cross-zone dead letter")]
     CrossZoneDeadLetterRequeueFailed(#[source] anyhow::Error),
 
+    #[error("Refused the system_upgrader approval: {0:#}")]
+    SystemApprovalRefused(#[source] anyhow::Error),
+
     #[error("Incorrect fee")]
     IncorrectFee(#[source] anyhow::Error),
 }

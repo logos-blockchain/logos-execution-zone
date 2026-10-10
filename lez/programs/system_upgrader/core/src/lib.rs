@@ -55,6 +55,41 @@ pub enum Instruction {
 }
 
 impl Instruction {
+    /// The instruction carrying out `proposal`, with `approvals` of it.
+    #[must_use]
+    pub const fn approved(proposal: Proposal, approvals: Vec<Approval>) -> Self {
+        match proposal {
+            Proposal::Schedule {
+                name,
+                first_segment,
+                from_height,
+            } => Self::Schedule {
+                name,
+                first_segment,
+                from_height,
+                approvals,
+            },
+            Proposal::Cancel {
+                name,
+                first_segment,
+                from_height,
+            } => Self::Cancel {
+                name,
+                first_segment,
+                from_height,
+                approvals,
+            },
+            Proposal::Install {
+                name,
+                first_segment,
+            } => Self::Install {
+                name,
+                first_segment,
+                approvals,
+            },
+        }
+    }
+
     /// The change the committee approves, with its approvals; `None` for `Apply`.
     #[must_use]
     pub fn proposal(&self) -> Option<(Proposal, &[Approval])> {
@@ -103,7 +138,7 @@ impl Instruction {
 
 /// What the committee approves: the change itself, naming the action so an approval for one can't
 /// be used for another.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
 pub enum Proposal {
     Schedule {
         name: SystemProgramName,
@@ -128,6 +163,35 @@ pub struct Approval {
     pub valid_until: BlockId,
     /// Ed25519 signature over [`approval_message`].
     pub signature: Vec<u8>,
+}
+
+impl Approval {
+    /// Whether the signature is `signer`'s over exactly what `system_upgrader` verifies for
+    /// `proposal` on the zone `channel_id`. Says nothing about committee membership.
+    #[must_use]
+    pub fn verify(&self, channel_id: [u8; 32], proposal: &Proposal) -> bool {
+        use sequencer_stake_core::ed25519_dalek::{Signature, VerifyingKey};
+
+        let Ok(key) = VerifyingKey::from_bytes(&self.signer.to_bytes()) else {
+            return false;
+        };
+        let Ok(signature) = Signature::from_slice(&self.signature) else {
+            return false;
+        };
+        key.verify_strict(
+            &approval_message(channel_id, proposal, self.valid_until),
+            &signature,
+        )
+        .is_ok()
+    }
+}
+
+/// One committee member's approval together with the proposal it approves: what an operator
+/// signs offline and hands to the nodes.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SignedApproval {
+    pub proposal: Proposal,
+    pub approval: Approval,
 }
 
 /// A pending upgrade, stored in the [`Registry`] under the system program's name.
@@ -190,4 +254,64 @@ pub fn registry_account_id() -> AccountId {
 #[must_use]
 pub const fn system_upgrader_account_id() -> AccountId {
     SYSTEM_UPGRADER_ACCOUNT_ID
+}
+
+#[cfg(test)]
+mod tests {
+    use sequencer_stake_core::ed25519_dalek::{Signer as _, SigningKey};
+
+    use super::*;
+
+    const CHANNEL_ID: [u8; 32] = [5; 32];
+
+    fn proposal() -> Proposal {
+        Proposal::Schedule {
+            name: SystemProgramName::new(b"clock"),
+            first_segment: AccountId::new([1; 32]),
+            from_height: 10,
+        }
+    }
+
+    fn approval_of(proposal: &Proposal, channel_id: [u8; 32]) -> Approval {
+        let key = SigningKey::from_bytes(&[7; 32]);
+        Approval {
+            signer: SequencerKey::new(key.verifying_key().to_bytes()).unwrap(),
+            valid_until: 20,
+            signature: key
+                .sign(&approval_message(channel_id, proposal, 20))
+                .to_bytes()
+                .to_vec(),
+        }
+    }
+
+    #[test]
+    fn an_approval_verifies_only_for_its_proposal_and_zone() {
+        let approval = approval_of(&proposal(), CHANNEL_ID);
+        assert!(approval.verify(CHANNEL_ID, &proposal()));
+
+        let cancel = Proposal::Cancel {
+            name: SystemProgramName::new(b"clock"),
+            first_segment: AccountId::new([1; 32]),
+            from_height: 10,
+        };
+        assert!(!approval.verify(CHANNEL_ID, &cancel), "another action");
+        assert!(!approval.verify([6; 32], &proposal()), "another zone");
+
+        let mut extended = approval;
+        extended.valid_until = 21;
+        assert!(
+            !extended.verify(CHANNEL_ID, &proposal()),
+            "a changed expiry"
+        );
+    }
+
+    #[test]
+    fn an_approved_instruction_carries_its_proposal() {
+        let approvals = vec![approval_of(&proposal(), CHANNEL_ID)];
+        let instruction = Instruction::approved(proposal(), approvals.clone());
+        assert_eq!(
+            instruction.proposal(),
+            Some((proposal(), approvals.as_slice()))
+        );
+    }
 }

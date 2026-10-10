@@ -24,6 +24,7 @@ programs = { workspace = true, optional = true }
 system_accounts = { workspace = true, optional = true }
 wallet = { workspace = true, optional = true }
 sequencer_stake_core = { workspace = true, optional = true }
+system_upgrader_core = { workspace = true, optional = true }
 
 clap = { workspace = true, features = ["derive", "env"] }
 anyhow.workspace = true
@@ -50,6 +51,11 @@ path = "src/bin/inscribe_garbage.rs"
 required-features = ["inscribe_garbage"]
 
 [[bin]]
+name = "approve_system_change"
+path = "src/bin/approve_system_change.rs"
+required-features = ["approve_system_change"]
+
+[[bin]]
 name = "submit_stake"
 path = "src/bin/submit_stake.rs"
 required-features = ["submit_stake"]
@@ -72,6 +78,8 @@ inscribe_garbage = [
   "dep:borsh",
   "dep:lee",
 ]
+# Needed only by the approve_system_change bin.
+approve_system_change = ["dep:lee", "dep:borsh", "dep:system_upgrader_core"]
 # Needed only by the submit_stake bin.
 submit_stake = [
   "dep:lee",

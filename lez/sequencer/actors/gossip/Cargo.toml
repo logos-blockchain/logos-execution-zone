@@ -28,6 +28,7 @@ actor = [
 mdns = ["actor"]
 
 [dependencies]
+system_upgrader_core.workspace = true
 common.workspace = true
 sequencer_channel_config_actor = { workspace = true, optional = true }
 sequencer_core = { workspace = true, optional = true }
@@ -49,7 +50,6 @@ hex = { workspace = true, optional = true }
 libp2p = { workspace = true, optional = true }
 
 [dev-dependencies]
-system_upgrader_core.workspace = true
 lee = { workspace = true, features = ["test-utils"] }
 logos-blockchain-core.workspace = true
 mempool.workspace = true

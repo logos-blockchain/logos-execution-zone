@@ -13,7 +13,7 @@ use crate::{
         GetAccountView, GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
         GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetProofsAndRoot,
         GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
-        Transaction,
+        SubmitSystemApproval, Transaction,
     },
 };
 
@@ -34,5 +34,6 @@ pub trait ExecutorActorTrait:
     + Message<GetCrossZoneDeadLetters, Reply = Result<GetCrossZoneDeadLettersReply>>
     + Message<RequeueCrossZoneDeadLetter, Reply = Result<RequeueCrossZoneDeadLetterReply>>
     + Message<GetFeeQuote, Reply = FeeStateQuote>
+    + Message<SubmitSystemApproval, Reply = Result<()>>
 {
 }

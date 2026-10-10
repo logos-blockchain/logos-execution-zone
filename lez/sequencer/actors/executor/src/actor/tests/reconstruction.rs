@@ -210,6 +210,8 @@ impl StoredChain {
             .returning(|_msg, _ctx| Ok(None));
         mock.expect_handle_get_slash_record_bytes()
             .returning(|_msg, _ctx| Ok(None));
+        mock.expect_handle_get_system_approvals_bytes()
+            .returning(|_msg, _ctx| Ok(None));
         mock.expect_handle_get_pending_cross_zone_dispatches()
             .returning(move |_msg, _ctx| Ok(pending_dispatches.clone()));
         mock.expect_handle_get_dead_letter_dispatches()
