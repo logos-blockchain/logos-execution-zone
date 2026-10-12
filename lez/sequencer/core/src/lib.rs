@@ -68,7 +68,7 @@ use crate::{
 pub mod committee_discovery;
 pub mod config;
 pub mod cross_zone_watcher;
-mod faults;
+pub mod faults;
 pub mod fees;
 pub mod logging;
 pub mod task_group;

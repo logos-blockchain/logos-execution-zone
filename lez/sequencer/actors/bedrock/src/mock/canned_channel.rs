@@ -14,9 +14,9 @@ use crate::{
     Result,
     error::Error,
     protocol::{
-        AccreditedKeys, ChannelReadStream, ChannelSeq, CreateChannel, HeaderId, MsgId, PreparePin,
-        PreparedPin, PublishBlock, PublishOutcome, PublishPin, ReadChannel, SequencerCheckpoint,
-        Slot, WithdrawArg, ZoneMessage,
+        AccreditedKeys, ChannelReadStream, ChannelSeq, CreateChannel, HeaderId,
+        InitializeChannelPublisher, MsgId, PreparePin, PreparedPin, PublishBlock, PublishOutcome,
+        PublishPin, ReadChannel, SequencerCheckpoint, Slot, WithdrawArg, ZoneMessage,
     },
 };
 
@@ -44,6 +44,8 @@ pub struct CannedChannel {
     pub pins: Arc<Mutex<Vec<Vec<NoteId>>>>,
     /// Channel sequence the last publish left the channel at.
     pub seq: u64,
+    /// [`InitializeChannelPublisher::replayed_up_to`] of the last publisher initialized.
+    pub replayed_up_to: Option<Slot>,
 }
 
 impl CannedChannel {
@@ -86,7 +88,11 @@ impl SharedChannel {
         mock.expect_handle_initialize_channel_publisher()
             .returning({
                 let channel = self.clone();
-                move |_msg, _ctx| Ok(Some(ChannelSeq::mocked(channel.lock().seq)))
+                move |msg: InitializeChannelPublisher, _ctx| {
+                    let mut channel = channel.lock();
+                    channel.replayed_up_to = msg.replayed_up_to;
+                    Ok(Some(ChannelSeq::mocked(channel.seq)))
+                }
             });
         mock.expect_handle_check_channel_exists().returning({
             let channel = self.clone();
