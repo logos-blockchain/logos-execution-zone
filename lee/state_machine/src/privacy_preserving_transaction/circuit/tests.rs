@@ -131,7 +131,7 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
         nonce: sender_nonce,
         ..Account::funded(100)
     };
-    let commitment_sender = Commitment::new(&sender_account_id, &sender_pre_account);
+    let commitment_sender = Commitment::new(sender_account_id, &sender_pre_account);
 
     let recipient_account_id = AccountId::for_regular_private_account(
         &recipient_keys.npk(),
@@ -148,7 +148,7 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
             commitment_set.digest(),
         ),
         (
-            Nullifier::for_account_initialization(&recipient_account_id),
+            Nullifier::for_account_initialization(recipient_account_id),
             DUMMY_COMMITMENT_HASH,
         ),
     ];
@@ -162,8 +162,8 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
         ..Account::funded(balance_to_move)
     };
     let expected_new_commitments = vec![
-        Commitment::new(&sender_account_id, &expected_private_account_1),
-        Commitment::new(&recipient_account_id, &expected_private_account_2),
+        Commitment::new(sender_account_id, &expected_private_account_1),
+        Commitment::new(recipient_account_id, &expected_private_account_2),
     ];
 
     let esk_1 = EphemeralSecretKey::new(
@@ -284,7 +284,7 @@ fn update_note_view_tag_is_the_supplied_value() {
     let identifier = Identifier::new([99; 32]);
     let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
     let account = Account::funded(1);
-    let commitment = Commitment::new(&account_id, &account);
+    let commitment = Commitment::new(account_id, &account);
     let mut commitment_set = CommitmentSet::with_capacity(1);
     commitment_set.extend(std::slice::from_ref(&commitment));
 
@@ -338,7 +338,7 @@ fn note_ciphertext_is_padded_to_the_requested_length() {
         ShardData::try_from(vec![9_u8; 200]).unwrap(),
     );
     let expected_post_data = account.data.clone();
-    let commitment = Commitment::new(&account_id, &account);
+    let commitment = Commitment::new(account_id, &account);
     let mut commitment_set = CommitmentSet::with_capacity(1);
     commitment_set.extend(std::slice::from_ref(&commitment));
 
@@ -655,7 +655,7 @@ fn private_authorized_update_encrypts_regular_kind_with_identifier() {
     );
     let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
     let account = Account::funded(1);
-    let commitment = Commitment::new(&account_id, &account);
+    let commitment = Commitment::new(account_id, &account);
     let mut commitment_set = CommitmentSet::with_capacity(1);
     commitment_set.extend(std::slice::from_ref(&commitment));
 
@@ -689,7 +689,7 @@ fn seeded_regular_account(
 ) -> (AccountId, Account, lee_core::MembershipProof) {
     let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
     let account = Account::funded(1);
-    let commitment = Commitment::new(&account_id, &account);
+    let commitment = Commitment::new(account_id, &account);
     let mut commitment_set = CommitmentSet::with_capacity(1);
     commitment_set.extend(std::slice::from_ref(&commitment));
     let proof = commitment_set.get_proof_for(&commitment).unwrap();
@@ -881,7 +881,7 @@ fn pda_update_attempt(
         derivation_identifier,
     );
     let pda_account = Account::funded(1);
-    let pda_commitment = Commitment::new(&pda_id, &pda_account);
+    let pda_commitment = Commitment::new(pda_id, &pda_account);
     let mut commitment_set = CommitmentSet::with_capacity(1);
     commitment_set.extend(std::slice::from_ref(&pda_commitment));
 

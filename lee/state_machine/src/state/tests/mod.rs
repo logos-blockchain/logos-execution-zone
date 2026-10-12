@@ -80,7 +80,7 @@ impl V03State {
     pub fn with_private_account(mut self, keys: &TestPrivateKeys, account: &Account) -> Self {
         let account_id =
             AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::ZERO);
-        let commitment = Commitment::new(&account_id, account);
+        let commitment = Commitment::new(account_id, account);
         self.private_state.0.extend(&[commitment]);
         self
     }
@@ -409,7 +409,7 @@ fn private_balance_transfer_for_tests(
         &sender_keys.vpk(),
         Identifier::ZERO,
     );
-    let sender_commitment = Commitment::new(&sender_id, sender_private_account);
+    let sender_commitment = Commitment::new(sender_id, sender_private_account);
     let recipient_id = AccountId::for_regular_private_account(
         &recipient_keys.npk(),
         &recipient_keys.vpk(),
@@ -462,7 +462,7 @@ fn deshielded_balance_transfer_for_tests(
         &sender_keys.vpk(),
         Identifier::ZERO,
     );
-    let sender_commitment = Commitment::new(&sender_id, sender_private_account);
+    let sender_commitment = Commitment::new(sender_id, sender_private_account);
 
     let (output, proof) = execute_and_prove(
         ProvingInput {

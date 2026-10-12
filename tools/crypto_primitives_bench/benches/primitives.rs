@@ -53,7 +53,7 @@ fn bench_encryption(c: &mut Criterion) {
         &recipient_kc.viewing_public_key,
         Identifier::ZERO,
     );
-    let nullifier = Nullifier::for_account_initialization(&account_id);
+    let nullifier = Nullifier::for_account_initialization(account_id);
     let (shared, _epk) = SharedSecretKey::encapsulate(&recipient_kc.viewing_public_key);
     let kind = PrivateAccountKind::Regular(Identifier::ZERO);
 

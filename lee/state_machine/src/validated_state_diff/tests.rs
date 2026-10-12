@@ -82,12 +82,12 @@ fn privacy_garbage_proof_is_rejected() {
     let account_id = AccountId::from(&PublicKey::new_from_private_key(
         &PrivateKey::try_new([1_u8; 32]).unwrap(),
     ));
-    let commitment = Commitment::new(&account_id, &Account::default());
+    let commitment = Commitment::new(account_id, &Account::default());
     let message = Message {
         public_actions: vec![],
         nonces: vec![],
         private_actions: vec![PrivateAction {
-            nullifier: Nullifier::for_account_initialization(&account_id),
+            nullifier: Nullifier::for_account_initialization(account_id),
             root: [0; 32],
             commitment,
             encrypted_post_state: EncryptedAccountData {

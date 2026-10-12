@@ -257,10 +257,10 @@ fn private_chained_call(number_of_calls: u32) {
     );
     let to_account_id =
         AccountId::for_regular_private_account(&to_keys.npk(), &to_keys.vpk(), Identifier::ZERO);
-    let from_commitment = Commitment::new(&from_account_id, &from_pre);
-    let to_commitment = Commitment::new(&to_account_id, &to_pre);
-    let from_init_nullifier = Nullifier::for_account_initialization(&from_account_id);
-    let to_init_nullifier = Nullifier::for_account_initialization(&to_account_id);
+    let from_commitment = Commitment::new(from_account_id, &from_pre);
+    let to_commitment = Commitment::new(to_account_id, &to_pre);
+    let from_init_nullifier = Nullifier::for_account_initialization(from_account_id);
+    let to_init_nullifier = Nullifier::for_account_initialization(to_account_id);
     let mut state = V03State::new()
         .with_private_accounts([
             (from_commitment, from_init_nullifier),
@@ -287,13 +287,13 @@ fn private_chained_call(number_of_calls: u32) {
         nonce: from_new_nonce,
         ..Account::funded(initial_balance - u128::from(number_of_calls) * amount)
     };
-    let from_expected_commitment = Commitment::new(&from_account_id, &from_expected_post);
+    let from_expected_commitment = Commitment::new(from_account_id, &from_expected_post);
 
     let to_expected_post = Account {
         nonce: to_new_nonce,
         ..Account::funded(u128::from(number_of_calls) * amount)
     };
-    let to_expected_commitment = Commitment::new(&to_account_id, &to_expected_post);
+    let to_expected_commitment = Commitment::new(to_account_id, &to_expected_post);
 
     // Act
     let (output, proof) = execute_and_prove(

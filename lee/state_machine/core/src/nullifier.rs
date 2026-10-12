@@ -203,9 +203,8 @@ impl Nullifier {
     }
 
     /// Computes a nullifier for an account initialization.
-    // TODO: Accept account_id by value as it's Copy
     #[must_use]
-    pub fn for_account_initialization(account_id: &AccountId) -> Self {
+    pub fn for_account_initialization(account_id: AccountId) -> Self {
         const INIT_PREFIX: &[u8; 32] = b"/LEE/v0.3/Nullifier/Initialize/\x00";
         let mut bytes = INIT_PREFIX.to_vec();
         bytes.extend_from_slice(account_id.value());
@@ -252,7 +251,7 @@ mod tests {
             149, 59, 95, 181, 2, 194, 20, 143, 72, 233, 104, 243, 59, 70, 67, 243, 110, 77, 109,
             132, 139, 111, 51, 125, 128, 92, 107, 46, 252, 4, 20, 149,
         ]);
-        let nullifier = Nullifier::for_account_initialization(&account_id);
+        let nullifier = Nullifier::for_account_initialization(account_id);
         assert_eq!(nullifier, expected_nullifier);
     }
 

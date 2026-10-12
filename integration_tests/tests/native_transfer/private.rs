@@ -649,7 +649,7 @@ async fn init_with_dummy_commitment_root_produces_valid_root() -> Result<()> {
     let (nullifier, digest) = (&action.nullifier, &action.root);
     assert_eq!(
         *nullifier,
-        Nullifier::for_account_initialization(&recipient_account_id)
+        Nullifier::for_account_initialization(recipient_account_id)
     );
     assert_eq!(*digest, expected_digest);
     assert_ne!(*digest, DUMMY_COMMITMENT_HASH);

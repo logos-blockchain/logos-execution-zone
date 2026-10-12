@@ -325,11 +325,11 @@ mod tests {
             ],
             private_actions: vec![PrivateAction {
                 nullifier: Nullifier::for_account_update(
-                    &Commitment::new(&AccountId::new([2; 32]), &Account::default()),
+                    &Commitment::new(AccountId::new([2; 32]), &Account::default()),
                     &[1; 32],
                 ),
                 root: [0xab; 32],
-                commitment: Commitment::new(&AccountId::new([1; 32]), &Account::default()),
+                commitment: Commitment::new(AccountId::new([1; 32]), &Account::default()),
                 encrypted_post_state: EncryptedAccountData {
                     ciphertext: Ciphertext(vec![255, 255, 1, 1, 2, 2]),
                     epk: EphemeralPublicKey(vec![9, 9, 9]),

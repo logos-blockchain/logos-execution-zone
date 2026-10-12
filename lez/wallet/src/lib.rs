@@ -609,7 +609,7 @@ impl WalletCore {
     #[must_use]
     pub fn get_private_account_commitment(&self, account_id: AccountId) -> Option<Commitment> {
         self.private_account_state(account_id)
-            .map(|account| Commitment::new(&account_id, account))
+            .map(|account| Commitment::new(account_id, account))
     }
 
     pub async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>> {

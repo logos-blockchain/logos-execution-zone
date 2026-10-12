@@ -53,22 +53,26 @@ impl std::fmt::Debug for Commitment {
 impl Commitment {
     /// Commits to the account ID and account state.
     /// SHA256(`Comm_DS` || `account_id` || SHA256(borsh(account))).
-    // TODO: Accept account_id by value as it's Copy
     #[must_use]
-    pub fn new(account_id: &AccountId, account: &Account) -> Self {
+    pub fn new(account_id: AccountId, account: &Account) -> Self {
         const COMMITMENT_PREFIX: &[u8; 32] =
             b"/LEE/v0.3/Commitment/\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
 
         let hashed_account: [u8; 32] = Impl::hash_bytes(&account.to_bytes())
             .as_bytes()
             .try_into()
-            .unwrap();
+            .expect("Hash output must be exactly 32 bytes long");
 
         let mut bytes = Vec::new();
         bytes.extend_from_slice(COMMITMENT_PREFIX);
         bytes.extend_from_slice(account_id.value());
         bytes.extend_from_slice(&hashed_account);
-        Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
+        Self(
+            Impl::hash_bytes(&bytes)
+                .as_bytes()
+                .try_into()
+                .expect("Hash output must be exactly 32 bytes long"),
+        )
     }
 
     #[must_use]
@@ -126,7 +130,7 @@ mod tests {
     fn nothing_up_my_sleeve_dummy_commitment() {
         let default_account = Account::default();
         let account_id_null = AccountId::new([0; 32]);
-        let expected_dummy_commitment = Commitment::new(&account_id_null, &default_account);
+        let expected_dummy_commitment = Commitment::new(account_id_null, &default_account);
         assert_eq!(DUMMY_COMMITMENT, expected_dummy_commitment);
     }
 

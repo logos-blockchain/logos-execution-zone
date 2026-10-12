@@ -62,7 +62,7 @@ fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
     };
     let state = V03State::new().with_private_account(&keys, &pre_account);
     let membership_proof = state
-        .get_proof_for_commitment(&Commitment::new(&account_id, &pre_account))
+        .get_proof_for_commitment(&Commitment::new(account_id, &pre_account))
         .expect("the account's commitment must be in state");
 
     let (output, _proof) = execute_and_prove(
@@ -106,7 +106,7 @@ fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
             expected.clone()
         )
     );
-    assert_eq!(action.commitment, Commitment::new(&account_id, &expected));
+    assert_eq!(action.commitment, Commitment::new(account_id, &expected));
 }
 
 #[test]
@@ -127,7 +127,7 @@ fn a_private_account_may_be_read_under_two_shards_in_one_call() {
     };
     let state = V03State::new().with_private_account(&keys, &pre_account);
     let membership_proof = state
-        .get_proof_for_commitment(&Commitment::new(&sender_id, &pre_account))
+        .get_proof_for_commitment(&Commitment::new(sender_id, &pre_account))
         .expect("the account's commitment must be in state");
 
     let (output, _proof) = execute_and_prove(
@@ -175,7 +175,7 @@ fn a_private_account_may_be_read_under_two_shards_in_one_call() {
             expected.clone()
         )
     );
-    assert_eq!(action.commitment, Commitment::new(&sender_id, &expected));
+    assert_eq!(action.commitment, Commitment::new(sender_id, &expected));
 
     let [recipient_action] = <[_; 1]>::try_from(output.public_actions).unwrap();
     assert_eq!(recipient_action.account_id, recipient_id);
@@ -1087,7 +1087,7 @@ fn private_authorized_uninitialized_account() {
     let result = state.transition_from_privacy_preserving_transaction(&tx, 1, 0);
     assert!(result.is_ok());
 
-    let nullifier = Nullifier::for_account_initialization(&account_id);
+    let nullifier = Nullifier::for_account_initialization(account_id);
     assert!(state.private_state.1.contains(&nullifier));
 }
 
@@ -1134,7 +1134,7 @@ fn private_account_claimed_then_used_without_init_flag_should_fail() {
     );
 
     // Verify the account is now initialized (nullifier exists)
-    let nullifier = Nullifier::for_account_initialization(&account_id);
+    let nullifier = Nullifier::for_account_initialization(account_id);
     assert!(state.private_state.1.contains(&nullifier));
 
     let noop_program = crate::test_methods::noop();
@@ -1275,8 +1275,8 @@ fn two_private_pda_family_members_receive_and_spend() {
             .unwrap();
     }
 
-    let commitment_pda_0 = Commitment::new(&alice_pda_0_id, &alice_pda_0_account);
-    let commitment_pda_1 = Commitment::new(&alice_pda_1_id, &alice_pda_1_account);
+    let commitment_pda_0 = Commitment::new(alice_pda_0_id, &alice_pda_0_account);
+    let commitment_pda_1 = Commitment::new(alice_pda_1_id, &alice_pda_1_account);
 
     assert!(state.get_proof_for_commitment(&commitment_pda_0).is_some());
     assert!(state.get_proof_for_commitment(&commitment_pda_1).is_some());
@@ -1363,7 +1363,7 @@ fn two_private_pda_family_members_receive_and_spend() {
         ..Account::funded(0)
     };
     let commitment_pda_1_after_spend =
-        Commitment::new(&alice_pda_1_id, &alice_pda_1_account_after_spend);
+        Commitment::new(alice_pda_1_id, &alice_pda_1_account_after_spend);
     {
         let recipient_account = state.get_account_by_id(recipient_id);
         let recipient_nonce = recipient_account.nonce;
@@ -1427,7 +1427,7 @@ fn a_private_balance_decrease_without_the_credential_is_refused_when_proving() {
         Identifier::ZERO,
     );
     let membership_proof = state
-        .get_proof_for_commitment(&Commitment::new(&sender_id, &sender_account))
+        .get_proof_for_commitment(&Commitment::new(sender_id, &sender_account))
         .expect("sender's commitment must be in state");
 
     let result = execute_and_prove(
