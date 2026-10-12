@@ -524,6 +524,42 @@ async fn a_verified_own_block_settles_its_delivery_records() -> Result<()> {
     Ok(())
 }
 
+/// A deposit whose mint this node already holds final, re-recorded as its L1 event is read again
+/// below the stored anchor. The channel serving the minting block back must settle the record,
+/// as nothing later will ever mint it again.
+#[test]
+async fn a_verified_own_block_settles_its_deposit_records() -> Result<()> {
+    let recipient = testnet_initial_state::initial_public_user_accounts()[0].account_id;
+    let deposit_op_id = [0x1b_u8; 32];
+
+    let genesis = genesis();
+    let block2 = produce_dummy_block(
+        2,
+        Some(genesis.header.hash),
+        vec![deposit_tx(deposit_op_id, recipient, 400)],
+    );
+    let store = CannedStore {
+        pending_deposits: vec![PendingDepositEventRecord {
+            deposit_op_id: HashType(deposit_op_id),
+            source_tx_hash: HashType([0; 32]),
+            amount: 400,
+            metadata: Vec::new(),
+        }],
+        ..with_finalized(finalized_genesis_store(), block2.clone())
+    }
+    .share();
+
+    start(
+        &store,
+        vec![finalized_at(&genesis, 10), finalized_at(&block2, 20)],
+    )
+    .await?;
+
+    assert_eq!(store.lock().anchor, Some(anchor_at(&block2, 20)));
+    assert!(store.lock().pending_deposits.is_empty());
+    Ok(())
+}
+
 /// A deposit whose L1 event was observed (a pending record exists) and whose L2
 /// mint is already contained in a finalized channel block. Reconstruction must
 /// apply the mint exactly once and settle the pending record on the way through,

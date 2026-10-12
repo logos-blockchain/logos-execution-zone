@@ -92,6 +92,14 @@ pub enum ChannelEventKind {
     /// `channel/<channel_id>/finalized_block` topic.
     FinalizedBlock(Arc<FinalizedBlock>),
 
+    /// A deposit that has been finalized on chain since configured `stream_from` arriving to
+    /// `channel/<channel_id>/finalized_deposit` topic.
+    FinalizedDeposit(Arc<DepositInfo>),
+
+    /// A withdrawal that has been finalized on chain since configured `stream_from` arriving to
+    /// `channel/<channel_id>/finalized_withdrawal` topic.
+    FinalizedWithdrawal(Arc<WithdrawInfo>),
+
     /// Events related to the channel publisher arriving to `channel/<channel_id>/publisher/`
     /// topics.
     Publisher(Arc<PublisherEvent>),

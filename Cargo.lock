@@ -11252,6 +11252,7 @@ dependencies = [
  "chain_state",
  "common",
  "futures",
+ "glob",
  "kameo",
  "kameo_actors",
  "lee_core",

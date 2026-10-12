@@ -50,3 +50,5 @@ mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
 rand.workspace = true
+glob.workspace = true
+tokio = { workspace = true, features = ["macros"] }
