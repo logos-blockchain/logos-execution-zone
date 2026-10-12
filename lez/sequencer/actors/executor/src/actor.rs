@@ -694,6 +694,22 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
                     .await
                     .expect("Failed to handle finalized block, Executor cannot recover from that");
             }
+            ChannelEventKind::FinalizedDeposit(deposit) => match &self.state {
+                State::Error(details) => panic!("Actor has encountered an error state: {details}"),
+                State::Bootstrapping(bootstrapping) => {
+                    bootstrapping.on_finalized_deposit(&deposit).await?;
+                }
+                // Online state listens for Publisher events
+                State::Online(_) => {}
+            },
+            ChannelEventKind::FinalizedWithdrawal(withdrawal) => match &self.state {
+                State::Error(details) => panic!("Actor has encountered an error state: {details}"),
+                State::Bootstrapping(bootstrapping) => {
+                    bootstrapping.on_finalized_withdrawal(&withdrawal).await?;
+                }
+                // Online state listens for Publisher events
+                State::Online(_) => {}
+            },
             ChannelEventKind::Publisher(publisher_event) => match &mut self.state {
                 State::Error(details) => panic!("Actor has encountered an error state: {details}"),
                 State::Bootstrapping(_) => {
