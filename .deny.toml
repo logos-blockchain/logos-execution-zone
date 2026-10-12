@@ -19,6 +19,8 @@ ignore = [
   { id = "RUSTSEC-2026-0195", reason = "`quick-xml` v0.31 is pulled transitively by Cucumber's JUnit report writer; this path only serializes XML and does not use the vulnerable `NsReader` namespace parsing path" },
 
   { id = "RUSTSEC-2026-0173", reason = "`proc-macro-error2` is unmaintained; pulled in transitively via `leptos_macro` and `overwatch-derive`, waiting on upstream fix" },
+
+  { id = "RUSTSEC-2024-0449", reason = "`unsafe-libyaml` is unmaintained and used in `serde_yaml` which is deprecated it-self and we transitively depend on it via `logos-` crates, so waiting for an upstream fix" },
 ]
 yanked = "deny"
 unused-ignored-advisory = "deny"

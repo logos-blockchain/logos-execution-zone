@@ -454,11 +454,7 @@ async fn a_submission_carries_exactly_the_threshold_in_index_order() {
     };
 
     assert_eq!(submission.tx_hash, tx.hash().0);
-    let indices: Vec<u16> = submission
-        .signatures
-        .iter()
-        .map(|indexed| indexed.channel_key_index)
-        .collect();
+    let indices: Vec<u16> = submission.signatures.keys().copied().collect();
     assert_eq!(indices, vec![0, 1]);
 }
 
@@ -479,11 +475,7 @@ async fn the_signature_that_meets_the_threshold_wakes_the_submitter() {
         .await
         .expect("the draft has its threshold and must not wait for a turn");
     assert_eq!(submission.tx_hash, tx.hash().0);
-    let indices: Vec<u16> = submission
-        .signatures
-        .iter()
-        .map(|indexed| indexed.channel_key_index)
-        .collect();
+    let indices: Vec<u16> = submission.signatures.keys().copied().collect();
     assert_eq!(indices, vec![0, 1]);
 }
 

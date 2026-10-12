@@ -20,7 +20,7 @@ use sequencer_ffi::{
     api::{
         PointerResult,
         lifecycle::InitializedSequencerServiceFFIResult,
-        query::LastBlockIdResult,
+        query::{ExecutorStatusResult, FfiExecutorState, LastBlockIdResult},
         types::{
             FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiSelector, FfiVec,
             account::FfiAccount,
@@ -43,6 +43,10 @@ use test_fixtures::{
 use wallet::AccountIdentity;
 
 unsafe extern "C" {
+    pub unsafe fn sequencer_ffi_query_executor_status(
+        sequencer: *const SequencerServiceFFI,
+    ) -> ExecutorStatusResult;
+
     pub unsafe fn sequencer_ffi_query_last_block(
         sequencer: *const SequencerServiceFFI,
     ) -> LastBlockIdResult;
@@ -122,6 +126,33 @@ pub fn fast_blocks() -> SequencerPartialConfig {
         block_create_timeout: Duration::from_secs(5),
         priority_fee_percent: 150,
         ..SequencerPartialConfig::default()
+    }
+}
+
+/// Waits until `sequencer` is online, i.e. done bootstrapping from the channel.
+pub fn wait_for_sequencer_ffi_online(sequencer: &SequencerServiceFFI) -> Result<()> {
+    const TIMEOUT: Duration = Duration::from_secs(360);
+
+    let start = std::time::Instant::now();
+    loop {
+        // SAFETY: `sequencer` is a valid reference for the duration of the call.
+        let status = unsafe { sequencer_ffi_query_executor_status(std::ptr::from_ref(sequencer)) };
+        if status.error.is_error() {
+            anyhow::bail!("Failed to query the executor status: {:?}", status.error);
+        }
+        if status.state == FfiExecutorState::Online {
+            return Ok(());
+        }
+
+        let replayed_height = status.has_height.then_some(status.height);
+        if start.elapsed() >= TIMEOUT {
+            anyhow::bail!(
+                "Sequencer FFI did not come online within {TIMEOUT:?}, \
+                 last seen bootstrapping at height {replayed_height:?}"
+            );
+        }
+        log::debug!("Sequencer FFI is still bootstrapping, at height {replayed_height:?}");
+        std::thread::sleep(Duration::from_secs(2));
     }
 }
 
@@ -330,6 +361,16 @@ pub fn joining_setup() -> Result<JoiningSetup> {
     if sequencer_ffi_res.error.is_error() {
         anyhow::bail!("Sequencer FFI error {:?}", sequencer_ffi_res.error);
     }
+
+    // SAFETY: the start succeeded, so the pointer is valid.
+    if let Err(err) = wait_for_sequencer_ffi_online(unsafe { &*sequencer_ffi_res.value }) {
+        // SAFETY: the pointer is valid and not used after this.
+        unsafe {
+            sequencer_ffi_stop_sequencer(sequencer_ffi_res.value);
+        }
+        return Err(err);
+    }
+    log::info!("Joining sequencer is online");
 
     Ok(JoiningSetup {
         ctx,

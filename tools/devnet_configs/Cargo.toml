@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 lee.workspace = true
 sequencer_core.workspace = true
+sequencer_genesis.workspace = true
 sequencer_stake_core.workspace = true
 
 logos-blockchain-key-management-system-service.workspace = true

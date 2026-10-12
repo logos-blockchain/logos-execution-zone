@@ -989,7 +989,7 @@ dependencies = [
  "bitflags 2.12.1",
  "cexpr",
  "clang-sys",
- "itertools 0.11.0",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "regex",
@@ -1100,6 +1100,70 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdeb9d870516001442e364c5220d3574d2da8dc765554b4a617230d33fa58ef5"
 dependencies = [
  "objc2",
+]
+
+[[package]]
+name = "blockchain-test-logos"
+version = "0.0.0"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "blockchain-test-support",
+ "cfgsync-adapter",
+ "cfgsync-artifacts",
+ "flate2",
+ "futures",
+ "hex",
+ "logos-blockchain-binary-codec",
+ "logos-blockchain-blend-service",
+ "logos-blockchain-chain-service",
+ "logos-blockchain-common-http-client",
+ "logos-blockchain-config",
+ "logos-blockchain-core",
+ "logos-blockchain-http-api-common",
+ "logos-blockchain-key-management-system-service",
+ "logos-blockchain-libp2p",
+ "logos-blockchain-network-service",
+ "logos-blockchain-node",
+ "logos-blockchain-sdp-service",
+ "logos-blockchain-tx-service",
+ "logos-blockchain-utils",
+ "rand 0.8.6",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sysinfo",
+ "tar",
+ "tempfile",
+ "testing-framework-app",
+ "testing-framework-core",
+ "testing-framework-runner-compose",
+ "testing-framework-runner-k8s",
+ "testing-framework-runner-local",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "blockchain-test-support"
+version = "0.0.0"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
+dependencies = [
+ "hex",
+ "logos-blockchain-binary-codec",
+ "logos-blockchain-key-management-system-service",
+ "logos-blockchain-libp2p",
+ "num-bigint 0.4.6",
+ "rand 0.8.6",
+ "serde",
+ "testing-framework-core",
+ "testing-framework-tools",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2655,6 +2719,7 @@ dependencies = [
  "lee",
  "logos-blockchain-key-management-system-service",
  "sequencer_core",
+ "sequencer_genesis",
  "sequencer_stake_core",
  "serde_json",
 ]
@@ -4782,6 +4847,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "blockchain-test-logos",
  "borsh",
  "bridge_core",
  "bridge_lock_core",
@@ -4823,7 +4889,6 @@ dependencies = [
  "test_fixtures",
  "test_methods",
  "test_programs",
- "testing-framework",
  "testing-framework-app",
  "testing-framework-core",
  "testnet_initial_state",
@@ -6406,7 +6471,7 @@ checksum = "113b30b4cd05f7c06868fdb2854f66a7b9fece9a48425351cd532e810d74024f"
 [[package]]
 name = "logos-blockchain-api-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "futures",
@@ -6438,7 +6503,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-binary-codec"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "bincode",
  "bytes",
@@ -6454,7 +6519,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-binary-codec-macros"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "hex",
  "proc-macro2",
@@ -6465,7 +6530,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "logos-blockchain-blend-crypto",
  "logos-blockchain-blend-membership",
@@ -6480,7 +6545,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-crypto"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "blake2",
  "logos-blockchain-groth16",
@@ -6495,7 +6560,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-membership"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "logos-blockchain-key-management-system-keys",
  "multiaddr",
@@ -6506,7 +6571,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-message"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "blake2",
  "educe 0.7.6",
@@ -6533,7 +6598,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-network"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "either",
  "futures",
@@ -6554,7 +6619,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-primitives"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "futures",
  "tokio",
@@ -6563,7 +6628,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-proofs"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "ed25519-dalek",
  "generic-array 1.4.3",
@@ -6585,7 +6650,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-provers"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "educe 0.7.6",
@@ -6609,7 +6674,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-scheduling"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "fork_stream",
  "futures",
@@ -6630,7 +6695,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "fork_stream",
@@ -6673,7 +6738,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-chain-broadcast-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "educe 0.7.6",
@@ -6688,7 +6753,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-chain-leader-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "futures",
@@ -6721,7 +6786,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-chain-network-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "backon",
@@ -6755,7 +6820,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-chain-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6839,7 +6904,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-prover"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "rust-rapidsnark",
 ]
@@ -6866,7 +6931,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-common-http-client"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "futures",
  "hex",
@@ -6891,7 +6956,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-config"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "hex",
  "logos-blockchain-binary-codec",
@@ -6906,13 +6971,14 @@ dependencies = [
  "logos-blockchain-utils",
  "num-bigint 0.4.6",
  "rand 0.8.6",
+ "testing-framework-tools",
  "time",
 ]
 
 [[package]]
 name = "logos-blockchain-core"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "ark-ff",
  "bincode",
@@ -6946,7 +7012,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-cryptarchia-engine"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "logos-blockchain-binary-codec",
  "logos-blockchain-log-targets",
@@ -6965,7 +7031,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-cryptarchia-sync"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "bytes",
  "futures",
@@ -6988,7 +7054,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-dynamic-merkle"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "serde",
 ]
@@ -6996,7 +7062,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-groth16"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "ark-bn254",
  "ark-ec",
@@ -7017,7 +7083,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-http-api-common"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "axum 0.7.9",
  "logos-blockchain-core",
@@ -7038,7 +7104,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-key-management-system-keys"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "arbitrary-int",
  "async-trait",
@@ -7070,7 +7136,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-key-management-system-macros"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7080,7 +7146,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-key-management-system-operators"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "logos-blockchain-blend-proofs",
@@ -7098,7 +7164,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-key-management-system-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "logos-blockchain-key-management-system-keys",
@@ -7115,7 +7181,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-ledger"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "educe 0.7.6",
  "logos-blockchain-binary-codec",
@@ -7143,7 +7209,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-libp2p"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "backon",
@@ -7172,7 +7238,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-log-targets"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "logos-blockchain-log-targets-macros",
 ]
@@ -7180,7 +7246,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-log-targets-macros"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7190,7 +7256,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-merkle-tree"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "logos-blockchain-dynamic-merkle",
  "rpds",
@@ -7201,7 +7267,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-mmr"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "ark-ff",
  "logos-blockchain-groth16",
@@ -7215,7 +7281,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-network-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "futures",
@@ -7238,7 +7304,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-node"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "axum 0.7.9",
@@ -7303,7 +7369,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-poc"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "logos-blockchain-circuits-poc-sys",
  "logos-blockchain-circuits-prover",
@@ -7320,7 +7386,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-pol"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "astro-float",
  "logos-blockchain-circuits-pol-sys",
@@ -7340,7 +7406,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-poq"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "logos-blockchain-circuits-poq-sys",
  "logos-blockchain-circuits-prover",
@@ -7358,7 +7424,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-poseidon2"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "ark-bn254",
  "ark-ff",
@@ -7369,7 +7435,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-pow-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "futures",
@@ -7400,7 +7466,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-proofs-error"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "logos-blockchain-circuits-types",
  "logos-blockchain-groth16",
@@ -7411,7 +7477,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-sdp-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "logos-blockchain-chain-service",
@@ -7434,7 +7500,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-services-utils"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "bytes",
@@ -7450,7 +7516,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-storage-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "bytes",
@@ -7473,7 +7539,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-system-sig-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-ctrlc",
  "async-trait",
@@ -7485,7 +7551,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-time-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "futures",
@@ -7508,7 +7574,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-tracing"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "flate2",
  "logos-blockchain-log-targets",
@@ -7516,8 +7582,10 @@ dependencies = [
  "opentelemetry-appender-tracing",
  "opentelemetry-http",
  "opentelemetry-otlp",
+ "opentelemetry-prometheus",
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
+ "prometheus",
  "serde",
  "tokio",
  "tonic",
@@ -7533,12 +7601,13 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-tracing-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "logos-blockchain-log-targets",
  "logos-blockchain-tracing",
  "overwatch",
+ "prometheus",
  "serde",
  "thiserror 2.0.18",
  "time",
@@ -7550,7 +7619,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-tx-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "futures",
@@ -7576,7 +7645,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-utils"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "const-hex",
@@ -7600,7 +7669,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-utxotree"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "ark-ff",
  "logos-blockchain-dynamic-merkle",
@@ -7613,7 +7682,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-version"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "serde",
  "utoipa",
@@ -7622,7 +7691,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-wallet"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
@@ -7641,7 +7710,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-wallet-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "bytes",
@@ -7670,7 +7739,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-zksign"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "logos-blockchain-circuits-prover",
  "logos-blockchain-circuits-signature-sys",
@@ -7690,7 +7759,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-zone-sdk"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fadd-signer-into-zone-message-block#13f0829910f2f05ce0e3c26ed19d48905e538b45"
 dependencies = [
  "async-trait",
  "futures",
@@ -8739,6 +8808,7 @@ dependencies = [
  "js-sys",
  "pin-project-lite",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
@@ -8783,6 +8853,18 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-types",
+]
+
+[[package]]
+name = "opentelemetry-prometheus"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c0359983e7f79cf33c9abd89e5d7ddf67c46c419d0148598022d70e70c01aba"
+dependencies = [
+ "once_cell",
+ "opentelemetry",
+ "opentelemetry_sdk",
+ "prometheus",
 ]
 
 [[package]]
@@ -9518,6 +9600,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "prometheus"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ca5326d8d0b950a9acd87e6a3f94745394f62e4dae1b1ee22b2bc0c394af43a"
+dependencies = [
+ "cfg-if",
+ "fnv",
+ "lazy_static",
+ "memchr",
+ "parking_lot",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "prometheus-client"
 version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9595,7 +9691,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.11.0",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -9608,7 +9704,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.11.0",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -11086,6 +11182,7 @@ dependencies = [
  "futures",
  "kameo",
  "kameo_actors",
+ "lee_core",
  "log",
  "logos-blockchain-binary-codec",
  "logos-blockchain-common-http-client",
@@ -11095,9 +11192,9 @@ dependencies = [
  "mockall",
  "rand 0.8.6",
  "sequencer_actors_common",
- "sequencer_channel_config_actor",
  "sequencer_stake_core",
  "sequencer_storage_actor",
+ "sharding_pool_actor",
  "system_accounts",
  "thiserror 2.0.18",
  "tokio",
@@ -11136,6 +11233,7 @@ dependencies = [
  "hex",
  "humantime-serde",
  "kameo",
+ "kameo_actors",
  "key_protocol",
  "lee",
  "lee_core",
@@ -11154,18 +11252,19 @@ dependencies = [
  "sequencer_bedrock_actor",
  "sequencer_channel_config_actor",
  "sequencer_core_metrics",
+ "sequencer_genesis",
  "sequencer_slasher_actor",
  "sequencer_stake_core",
  "sequencer_storage_actor",
  "serde",
  "serde_json",
+ "sharding_pool_actor",
  "system_accounts",
  "tempfile",
  "test_programs",
  "testnet_initial_state",
  "thiserror 2.0.18",
  "tokio",
- "tokio-retry",
  "url",
 ]
 
@@ -11194,12 +11293,12 @@ dependencies = [
  "fee_core",
  "futures",
  "kameo",
+ "kameo_actors",
  "lee",
  "lee_core",
  "log",
  "logos-blockchain-binary-codec",
  "logos-blockchain-core",
- "logos-blockchain-zone-sdk",
  "mempool",
  "mockall",
  "num-bigint 0.4.6",
@@ -11208,11 +11307,15 @@ dependencies = [
  "programs",
  "sequencer_actors_common",
  "sequencer_bedrock_actor",
+ "sequencer_channel_config_actor",
  "sequencer_core",
+ "sequencer_core_metrics",
  "sequencer_executor_actor_metrics",
+ "sequencer_genesis",
  "sequencer_slasher_actor",
  "sequencer_stake_core",
  "sequencer_storage_actor",
+ "sharding_pool_actor",
  "system_accounts",
  "tempfile",
  "testnet_initial_state",
@@ -11243,6 +11346,27 @@ dependencies = [
  "sequencer_storage_actor",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "sequencer_genesis"
+version = "0.1.0"
+dependencies = [
+ "bridge_core",
+ "chain_state",
+ "common",
+ "cross_zone",
+ "cross_zone_inbox_core",
+ "fee_core",
+ "hex",
+ "lee",
+ "lee_core",
+ "log",
+ "programs",
+ "sequencer_stake_core",
+ "serde",
+ "system_accounts",
+ "testnet_initial_state",
 ]
 
 [[package]]
@@ -11325,6 +11449,7 @@ dependencies = [
  "sequencer_slasher_actor",
  "sequencer_stake_core",
  "sequencer_storage_actor",
+ "sharding_pool_actor",
  "system_accounts",
  "tokio",
  "tokio-util",
@@ -11336,7 +11461,6 @@ name = "sequencer_service_protocol"
 version = "0.1.0"
 dependencies = [
  "common",
- "hex",
  "lee",
  "lee_core",
  "serde",
@@ -11771,6 +11895,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
+]
+
+[[package]]
+name = "sharding_pool_actor"
+version = "0.1.0"
+dependencies = [
+ "env_logger",
+ "kameo",
+ "log",
+ "sequencer_actors_common",
+ "tokio",
 ]
 
 [[package]]
@@ -12437,7 +12572,9 @@ dependencies = [
  "programs",
  "sequencer_bedrock_actor",
  "sequencer_core",
+ "sequencer_genesis",
  "sequencer_service",
+ "sequencer_service_protocol",
  "sequencer_service_rpc",
  "sequencer_stake_core",
  "sequencer_storage_actor",
@@ -12526,53 +12663,6 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "url",
- "uuid",
-]
-
-[[package]]
-name = "testing-framework"
-version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=3926a532b9d96d62747da064161a115a7c0c5a3e#3926a532b9d96d62747da064161a115a7c0c5a3e"
-dependencies = [
- "anyhow",
- "async-trait",
- "cfgsync-adapter",
- "cfgsync-artifacts",
- "flate2",
- "futures",
- "hex",
- "logos-blockchain-binary-codec",
- "logos-blockchain-blend-service",
- "logos-blockchain-chain-service",
- "logos-blockchain-common-http-client",
- "logos-blockchain-config",
- "logos-blockchain-core",
- "logos-blockchain-http-api-common",
- "logos-blockchain-key-management-system-service",
- "logos-blockchain-libp2p",
- "logos-blockchain-network-service",
- "logos-blockchain-node",
- "logos-blockchain-sdp-service",
- "logos-blockchain-tx-service",
- "logos-blockchain-utils",
- "num-bigint 0.4.6",
- "rand 0.8.6",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "serde_yaml",
- "sysinfo",
- "tar",
- "tempfile",
- "testing-framework-app",
- "testing-framework-core",
- "testing-framework-runner-compose",
- "testing-framework-runner-k8s",
- "testing-framework-runner-local",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tracing",
  "uuid",
 ]
 

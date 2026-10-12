@@ -1430,6 +1430,13 @@ mod tests {
             ZoneMessage::Block(ZoneBlock {
                 id: MsgId::from([0; 32]),
                 data: Inscription::try_from(data).expect("test inscription is within bounds"),
+                // The identity point: a valid encoding no test here reads.
+                signer: logos_blockchain_zone_sdk::UnverifiedEd25519PublicKey::from_bytes(&{
+                    let mut identity = [0; 32];
+                    identity[0] = 1;
+                    identity
+                })
+                .expect("the identity point decodes"),
             }),
             Slot::from(slot),
         )

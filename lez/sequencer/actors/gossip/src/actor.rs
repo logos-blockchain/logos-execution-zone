@@ -25,9 +25,9 @@ use libp2p::{
     swarm::{NetworkBehaviour, Swarm, SwarmEvent},
 };
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
-use sequencer_channel_config_actor::Wire;
-use sequencer_core::{config::GossipConfig, gossip::AccreditedKeysReceiver};
-use sequencer_slasher_actor::Approval;
+use sequencer_channel_config_actor::protocol::Wire;
+use sequencer_core::{StakeConfigKeys, config::GossipConfig};
+use sequencer_slasher_actor::protocol::Approval;
 use tokio::select;
 
 use self::seen_cache::SeenCache;
@@ -81,11 +81,12 @@ pub struct GossipActor {
     /// Slash approvals ride their own topic so the tx wire format is untouched.
     approvals_topic: gossipsub::IdentTopic,
     /// Where verified inbound approvals go; the slasher decides what to keep.
+    // TODO: Refeactor sink with a proper actor-style approach
     approval_sink: Recipient<Approval>,
-    /// The committee the follow path last read.
-    accredited_keys_rx: AccreditedKeysReceiver,
+    /// The committee the follow path last read; `None` filters nothing.
+    accredited_keys: Option<HashSet<[u8; 32]>>,
     /// Keys with stake on record at head.
-    staked_keys_rx: AccreditedKeysReceiver,
+    staked_keys: Option<HashSet<[u8; 32]>>,
     /// Channel-config candidates and signatures ride their own topic, so the
     /// transaction wire format is untouched.
     config_topic: gossipsub::IdentTopic,
@@ -123,10 +124,6 @@ pub struct WatchdogGuard(tokio::task::JoinHandle<()>);
 impl GossipActor {
     /// Builds the swarm, binds `listen_addr`, seeds Kademlia and dials
     /// bootstrap peers.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "each topic's inbound sink is a separate wiring point"
-    )]
     pub async fn new(
         config: GossipConfig,
         channel_id: [u8; 32],
@@ -134,8 +131,6 @@ impl GossipActor {
         approval_sink: Recipient<Approval>,
         max_block_size: u64,
         submit: IngestSubmit,
-        accredited_keys_rx: AccreditedKeysReceiver,
-        staked_keys_rx: AccreditedKeysReceiver,
         config_sink: Recipient<Wire>,
     ) -> Result<Self> {
         // Reuse the node's L1 bedrock signing key as the libp2p identity. The
@@ -279,8 +274,8 @@ impl GossipActor {
             topic,
             approvals_topic,
             approval_sink,
-            accredited_keys_rx,
-            staked_keys_rx,
+            accredited_keys: None,
+            staked_keys: None,
             config_topic,
             config_sink,
             seen: SeenCache::new(SEEN_CACHE_CAPACITY),
@@ -499,10 +494,8 @@ impl GossipActor {
     ) {
         use self::validation::{ApprovalEvaluation, evaluate_approval};
 
-        let evaluation = {
-            let accredited_keys = self.accredited_keys_rx.borrow();
-            evaluate_approval(data, self.channel_id, accredited_keys.as_ref())
-        };
+        let evaluation =
+            { evaluate_approval(data, self.channel_id, self.accredited_keys.as_ref()) };
         let acceptance = match evaluation {
             ApprovalEvaluation::Reject(reason) => {
                 log::debug!("Rejecting gossiped slash approval from {source}: {reason}");
@@ -564,11 +557,10 @@ impl GossipActor {
         use self::validation::{ConfigEvaluation, evaluate_config_message};
 
         let evaluation = {
-            let staked_keys = self.staked_keys_rx.borrow();
             evaluate_config_message(
                 data,
                 origin.and_then(inlined_ed25519_key),
-                staked_keys.as_ref(),
+                self.staked_keys.as_ref(),
             )
         };
         let acceptance = match evaluation {
@@ -777,6 +769,19 @@ impl Message<RetryBootstrap> for GossipActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.retry_bootstrap();
+    }
+}
+
+impl Message<StakeConfigKeys> for GossipActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        StakeConfigKeys { accredited, staked }: StakeConfigKeys,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.accredited_keys = Some(accredited);
+        self.staked_keys = Some(staked);
     }
 }
 

@@ -1,4 +1,7 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use common::{
     HashType,
@@ -145,9 +148,29 @@ pub struct GetBlockEvents {
 
 pub struct GetEventFilter;
 
+/// Which program events the store keeps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EventFilter {
+    /// Every event.
+    Archival,
+    /// Only events of the listed programs. Empty keeps nothing.
+    Sources(HashMap<AccountId, SelectorFilter>),
+}
+
+/// Which events of one program the store keeps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectorFilter {
+    /// Every event of the program.
+    All,
+    /// Only events with one of these selectors.
+    Only(HashSet<[u8; 8]>),
+}
+
 pub struct DumpDb;
 
 /// Update everything in the store at once, atomically.
+// TODO: Process orphaned blocks
+// TODO: Experiment with per-actor data types and agnostic storage.
 pub struct AtomicUpdate {
     /// Zone-sdk checkpoint for this event, kept only if it is newer than the
     /// stored one. The rest of the update lands either way.

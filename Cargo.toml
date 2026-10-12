@@ -19,6 +19,7 @@ members = [
   "lez/chain_state",
   "lez/sequencer/core",
   "lez/sequencer/core/metrics",
+  "lez/sequencer/genesis",
   "lez/sequencer/service",
   "lez/sequencer/service/protocol",
   "lez/sequencer/service/rpc",
@@ -32,6 +33,7 @@ members = [
   "lez/sequencer/actors/slasher",
   "lez/sequencer/actors/storage",
   "lez/sequencer/actors/bedrock",
+  "lez/sequencer/actors/sharding_pool",
   "lez/sequencer/ffi",
   "lez/indexer/core",
   "lez/indexer/service",
@@ -91,6 +93,7 @@ storage = { path = "lez/storage" }
 key_protocol = { path = "lee/key_protocol" }
 sequencer_core = { path = "lez/sequencer/core" }
 sequencer_core_metrics = { path = "lez/sequencer/core/metrics" }
+sequencer_genesis = { path = "lez/sequencer/genesis" }
 sequencer_service_protocol = { path = "lez/sequencer/service/protocol" }
 sequencer_service_rpc = { path = "lez/sequencer/service/rpc" }
 sequencer_channel_config_actor = { path = "lez/sequencer/actors/channel_config" }
@@ -103,6 +106,7 @@ sequencer_rpc_server_actor_metrics = { path = "lez/sequencer/actors/rpc_server/m
 sequencer_slasher_actor = { path = "lez/sequencer/actors/slasher" }
 sequencer_storage_actor = { path = "lez/sequencer/actors/storage" }
 sequencer_bedrock_actor = { path = "lez/sequencer/actors/bedrock" }
+sharding_pool_actor = { path = "lez/sequencer/actors/sharding_pool" }
 sequencer_service = { path = "lez/sequencer/service" }
 sequencer_ffi = { path = "lez/sequencer/ffi" }
 indexer_core = { path = "lez/indexer/core" }
@@ -220,15 +224,16 @@ async-stream = "0.3.6"
 strum = { version = "0.28.0", features = ["derive"] }
 mockall = "0.15.0"
 
-logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-binary-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-testing-framework = { package = "testing-framework", git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
+# TODO: Wait for https://github.com/logos-blockchain/logos-blockchain/pull/3797 before merging this
+logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", branch = "arjentix/feat/add-signer-into-zone-message-block" }
+logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", branch = "arjentix/feat/add-signer-into-zone-message-block" }
+logos-blockchain-binary-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", branch = "arjentix/feat/add-signer-into-zone-message-block" }
+logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", branch = "arjentix/feat/add-signer-into-zone-message-block" }
+logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", branch = "arjentix/feat/add-signer-into-zone-message-block" }
+logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", branch = "arjentix/feat/add-signer-into-zone-message-block" }
+logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", branch = "arjentix/feat/add-signer-into-zone-message-block" }
+logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", branch = "arjentix/feat/add-signer-into-zone-message-block" }
+logos-blockchain-testing-framework = { package = "blockchain-test-logos", git = "https://github.com/logos-blockchain/logos-blockchain.git", branch = "arjentix/feat/add-signer-into-zone-message-block" }
 testing-framework-app = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
 testing-framework-core = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
 
