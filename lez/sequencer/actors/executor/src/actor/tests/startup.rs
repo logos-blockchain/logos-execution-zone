@@ -233,10 +233,10 @@ async fn bootstrapping_reaches_a_tip_whose_slot_a_config_change_moved() -> Resul
     Ok(())
 }
 
-/// Bootstrapping records the deposits the channel replay carries; once online, the publisher
-/// reports them instead.
+/// Bootstrapping records the deposits the channel replay carries, and hands the publisher the last
+/// slot it fully replayed, past which the publisher reports them instead.
 #[test]
-async fn bootstrapping_records_replayed_deposits() -> Result<()> {
+async fn bootstrapping_records_replayed_deposits_up_to_the_publisher_handoff() -> Result<()> {
     let (config, _home) = sequencer_config();
     let channel_id = config.bedrock_config.channel_id;
     let genesis = genesis();
@@ -264,6 +264,7 @@ async fn bootstrapping_records_replayed_deposits() -> Result<()> {
         executor.ask(GetStatus).await?,
         ExecutorStatus::Online { .. }
     ));
+    assert_eq!(channel.lock().replayed_up_to, Some(Slot::from(9)));
     executor.ask(deposit_event([2; 32])).await?;
 
     let recorded: Vec<[u8; 32]> = store
@@ -275,7 +276,7 @@ async fn bootstrapping_records_replayed_deposits() -> Result<()> {
     assert_eq!(
         recorded,
         [[1; 32]],
-        "the publisher reports deposits once online"
+        "the publisher reports what follows the handoff"
     );
     Ok(())
 }

@@ -24,7 +24,7 @@ use crate::{
     error::Error,
     protocol::{
         BlockData, BoxStream, ChannelEvent, ChannelEventKind, ChannelId, DepositInfo,
-        FinalizedBlock, Slot, WithdrawInfo, ZoneMessage,
+        Ed25519PublicKey, FinalizedBlock, Slot, WithdrawInfo, ZoneMessage,
     },
 };
 
@@ -189,6 +189,7 @@ impl NodeStream {
                         block,
                         msg_id: zone_block.id,
                         slot,
+                        signer: Ed25519PublicKey::try_from(zone_block.signer).ok(),
                     })),
                 )
                 .await
