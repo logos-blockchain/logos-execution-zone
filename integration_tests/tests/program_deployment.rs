@@ -15,7 +15,7 @@ use test_fixtures::{
 };
 use tokio::test;
 use wallet::{
-    cli::{Command, programs::program_loader::ProgramLoaderSubcommand},
+    cli::{Command, SubcommandReturnValue, programs::program_loader::ProgramLoaderSubcommand},
     config::WalletConfigOverrides,
 };
 
@@ -102,6 +102,120 @@ async fn deploy_and_execute_program() -> Result<()> {
 }
 
 #[test]
+async fn deploy_program_auto_allocates_accounts_and_executes() -> Result<()> {
+    let mut ctx = TestContext::new().await?;
+
+    let deployed = test_programs::data_writer();
+
+    let mut tempfile = tempfile::NamedTempFile::new()?;
+    std::io::Write::write_all(&mut tempfile, deployed.elf())?;
+
+    let accounts_before = ctx
+        .wallet()
+        .storage()
+        .key_chain()
+        .public_account_ids()
+        .count();
+
+    let num_segments = deployed
+        .user_elf()
+        .expect("valid ProgramBinary")
+        .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+        .count();
+
+    // Deploy using the convenience alias Command::DeployProgram with payer: None.
+    // This exercises:
+    // 1. The Command::DeployProgram CLI alias
+    // 2. Auto-allocation of header account (header: None)
+    // 3. Auto-allocation of segment accounts (segments: None)
+    // 4. Auto-detection of funded fee payer from wallet keychain (payer: None)
+    let command = Command::DeployProgram {
+        elf: tempfile.path().to_owned(),
+        payer: None,
+        immutable: true,
+    };
+
+    let sub_ret = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+
+    let account_id = match sub_ret {
+        SubcommandReturnValue::RegisterAccount { account_id } => account_id,
+        other => anyhow::bail!("Expected RegisterAccount, got {other:?}"),
+    };
+
+    // Verify header and segment accounts were generated and saved in the wallet
+    let accounts_after = ctx
+        .wallet()
+        .storage()
+        .key_chain()
+        .public_account_ids()
+        .count();
+    assert_eq!(
+        accounts_after,
+        accounts_before + 1 + num_segments,
+        "Expected {} new accounts (1 header + {} segments) created in wallet",
+        1 + num_segments,
+        num_segments
+    );
+
+    assert!(
+        ctx.wallet()
+            .storage()
+            .key_chain()
+            .public_account_ids()
+            .any(|(id, _)| id == account_id),
+        "Program header account id should exist in wallet keychain"
+    );
+
+    // Verify program execution on-chain to ensure auto-deployed segments and header are fully valid
+    let payer_id = ctx.existing_public_accounts()[0];
+    let target_id = new_account(&mut ctx, false, None).await?;
+
+    let nonces = ctx
+        .wallet_mut()
+        .get_accounts_nonces(&[target_id, payer_id])
+        .await?;
+    let written: Vec<u8> = vec![9; 4];
+    let message = lee::public_transaction::Message::try_new_with_fees(
+        account_id,
+        vec![lee::ProgramShardSelector::new(target_id, account_id)],
+        nonces,
+        written.clone(),
+        common::test_utils::test_fee_declaration(payer_id),
+    )?;
+    let target_key = ctx
+        .wallet()
+        .get_account_public_signing_key(target_id)
+        .unwrap();
+    let payer_key = ctx
+        .wallet()
+        .get_account_public_signing_key(payer_id)
+        .unwrap();
+    let witness_set =
+        lee::public_transaction::WitnessSet::for_message(&message, &[target_key, payer_key]);
+    let transaction = lee::PublicTransaction::new(message, witness_set);
+    let _response = ctx
+        .sequencer_client()
+        .send_transaction(LeeTransaction::Public(transaction))
+        .await?;
+
+    log::info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(2 * TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+
+    let post_state_account = get_account(&ctx, target_id).await?;
+
+    assert_eq!(post_state_account.data.native_balance().unwrap(), 0);
+    assert_eq!(
+        post_state_account.data.shard(account_id).as_ref(),
+        written.as_slice()
+    );
+    assert_eq!(post_state_account.nonce.0, 1);
+
+    log::info!("Successfully executed program deployed via auto-allocation alias");
+
+    Ok(())
+}
+
+#[test]
 async fn deploy_invalid_program_fails() -> Result<()> {
     // Invalid program bytecode is rejected when the wallet decodes it as a `ProgramBinary`
     // before uploading, so the deploy never lands. Shrink the wallet's polling window so the
@@ -128,8 +242,8 @@ async fn deploy_invalid_program_fails() -> Result<()> {
 
     let command = Command::ProgramLoader(ProgramLoaderSubcommand::Deploy {
         elf: tempfile.path().to_owned(),
-        header: public_mention(header_id),
-        segments: vec![public_mention(segment_id)],
+        header: Some(public_mention(header_id)),
+        segments: Some(vec![public_mention(segment_id)]),
         immutable: true,
         payer: None,
     });
