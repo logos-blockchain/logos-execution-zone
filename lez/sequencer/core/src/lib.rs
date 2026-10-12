@@ -30,7 +30,7 @@ pub use logos_blockchain_key_management_system_service::keys::Ed25519PublicKey;
 use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, ZkPublicKey};
 use logos_blockchain_zone_sdk::{
     Slot,
-    sequencer::{DepositInfo, SequencerCheckpoint, WithdrawArg},
+    sequencer::{DepositInfo, SequencerCheckpoint, WithdrawArg, WithdrawInfo},
 };
 use mempool::MemPool;
 use num_bigint::BigUint;
@@ -55,7 +55,8 @@ use sequencer_storage_actor::{
         GetDeadLetterDispatchRetainedCount, GetDeadLetterDispatches, GetLeeState,
         GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetZoneCheckpoint,
         PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RecordDispatchFailure,
-        RequeueDeadLetterDispatch, WithdrawalReconciliationKey, ZoneCheckpointRecord,
+        RequeueDeadLetterDispatch, StoreUpdateOutcome, WithdrawalReconciliationKey,
+        ZoneCheckpointRecord,
     },
 };
 use sharding_pool_actor::ShardingPoolActor;
@@ -316,10 +317,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// Feeds one channel update into the chain state and mirrors it to the
     /// store: finalized entries first, then the view change. Production builds
     /// on this same head.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "one pass folds finalized entries, the view change, and the gauges together"
-    )]
     pub async fn on_channel_update(
         &mut self,
         update: &sequencer_bedrock_actor::protocol::ChannelUpdate,
@@ -367,11 +364,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // A set, because a released note identifies its withdrawal outright: the
         // chain releases a note once, so a repeat here is a re-delivery, not a
         // second withdrawal.
-        let consumed_withdrawals: HashSet<WithdrawalReconciliationKey> = withdrawals
-            .iter()
-            .flat_map(|withdraw| withdraw.op.inputs.iter())
-            .map(withdrawal_reconciliation_key)
-            .collect();
+        let consumed_withdrawals: HashSet<WithdrawalReconciliationKey> =
+            withdrawals.iter().flat_map(released_note_keys).collect();
 
         let own_key = self.channel_signing_key.public_key();
 
@@ -533,18 +527,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             record_pending_dispatch_gauge(&self.storage_ref).await;
         }
 
-        if outcome.accepted_deposits > 0 {
-            log::info!(
-                "Recorded {} Bedrock Deposit event(s); their mints are drained from the store on our next turn",
-                outcome.accepted_deposits
-            );
-        }
-        for withdrawal in &outcome.unmatched_withdrawals {
-            warn!(
-                "Unexpected Bedrock Withdraw event releasing channel note {}: this node published no withdrawal for it",
-                hex::encode(withdrawal.released_note_id)
-            );
-        }
+        log_recorded_deposits(&outcome);
+        log_unmatched_withdrawals(&outcome);
 
         // Rebuild orphaned work: return its user txs to the mempool so the
         // next on-turn production re-includes them on the new head.
@@ -2215,7 +2199,40 @@ pub fn max_transaction_size(state: &lee::V03State) -> Option<u64> {
         .map(|params| params.max_block_size.saturating_sub(config::BLOCK_OVERHEAD))
 }
 
-fn pending_deposit_event_record(deposit: &DepositInfo) -> PendingDepositEventRecord {
+/// Logs the deposits a store update recorded.
+pub fn log_recorded_deposits(outcome: &StoreUpdateOutcome) {
+    if outcome.accepted_deposits > 0 {
+        log::info!(
+            "Recorded {} Bedrock Deposit event(s); their mints are drained from the store on our next turn",
+            outcome.accepted_deposits
+        );
+    }
+}
+
+/// Logs the withdrawals a store update found no local intent for.
+pub fn log_unmatched_withdrawals(outcome: &StoreUpdateOutcome) {
+    for withdrawal in &outcome.unmatched_withdrawals {
+        warn!(
+            "Unexpected Bedrock Withdraw event releasing channel note {}: this node published no withdrawal for it",
+            hex::encode(withdrawal.released_note_id)
+        );
+    }
+}
+
+/// The reconciliation keys of the channel notes `withdrawal` releases.
+pub fn released_note_keys(
+    withdrawal: &WithdrawInfo,
+) -> impl Iterator<Item = WithdrawalReconciliationKey> + '_ {
+    withdrawal
+        .op
+        .inputs
+        .iter()
+        .map(withdrawal_reconciliation_key)
+}
+
+/// The pending record `deposit` leaves until its mint finalizes.
+#[must_use]
+pub fn pending_deposit_event_record(deposit: &DepositInfo) -> PendingDepositEventRecord {
     PendingDepositEventRecord {
         deposit_op_id: HashType(deposit.op_id),
         source_tx_hash: HashType(deposit.tx_hash.0),
