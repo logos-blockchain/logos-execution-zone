@@ -50,6 +50,7 @@ pub struct WalletConfig {
     pub seq_block_poll_max_amount: u64,
     #[serde(default = "default_gas_limit")]
     pub gas_limit: u64,
+    pub indexer_addr: Option<Url>,
 }
 
 impl Default for WalletConfig {
@@ -64,6 +65,7 @@ impl Default for WalletConfig {
             seq_poll_max_retries: 5,
             seq_block_poll_max_amount: 100,
             gas_limit: default_gas_limit(),
+            indexer_addr: None,
         }
     }
 }
@@ -114,6 +116,7 @@ impl WalletConfig {
             seq_poll_max_retries,
             seq_block_poll_max_amount,
             gas_limit,
+            indexer_addr,
         } = self;
 
         let WalletConfigOverrides {
@@ -123,6 +126,7 @@ impl WalletConfig {
             seq_poll_max_retries: o_seq_poll_max_retries,
             seq_block_poll_max_amount: o_seq_block_poll_max_amount,
             gas_limit: o_gas_limit,
+            indexer_addr: o_indexer_addr,
         } = overrides;
 
         if let Some(v) = o_sequencer {
@@ -148,6 +152,10 @@ impl WalletConfig {
         if let Some(v) = o_gas_limit {
             warn!("Overriding wallet config 'gas_limit' to {v}");
             *gas_limit = v;
+        }
+        if let Some(v) = o_indexer_addr {
+            warn!("Overriding wallet config 'indexer_addr' to {v:?}");
+            *indexer_addr = v;
         }
     }
 }

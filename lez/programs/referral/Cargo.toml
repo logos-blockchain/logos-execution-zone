@@ -1,0 +1,12 @@
+[package]
+name = "referral_program"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+lee_core.workspace = true
+referral_core.workspace = true

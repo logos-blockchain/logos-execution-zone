@@ -17,6 +17,7 @@ use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
 use common::{HashType, block::Block, transaction::LeeTransaction};
 use config::WalletConfig;
+use indexer_service_rpc::IndexerClientBuilder;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
     Account, AccountId, PrivacyPreservingTransaction, ProgramId, ProvingInput,
@@ -117,6 +118,12 @@ pub enum ExecutionFailureKind {
     MultiSequencerTransactionSendError,
     #[error("Failed to join a task: {0}")]
     JoinError(#[from] tokio::task::JoinError),
+}
+
+pub struct BuiltPrivateTransaction {
+    pub transaction: PrivacyPreservingTransaction,
+    pub shared_secrets: Vec<SharedSecretKey>,
+    pub input_commitments: Vec<(AccountId, Commitment)>,
 }
 
 pub struct WalletCore {
@@ -571,6 +578,42 @@ impl WalletCore {
         Ok(self.sequencer_client.get_transaction(hash).await?)
     }
 
+    pub async fn commitments_settled(&self, commitments: &[Commitment]) -> Result<bool> {
+        if commitments.is_empty() {
+            return Ok(false);
+        }
+        let (proofs, _root) = self
+            .sequencer_client
+            .get_proofs_and_root(commitments.to_vec())
+            .await?;
+        Ok(proofs.len() == commitments.len() && proofs.iter().all(Option::is_some))
+    }
+
+    pub async fn get_transactions_by_account(
+        &self,
+        account_id: AccountId,
+        offset: u64,
+        limit: u64,
+    ) -> Result<Vec<indexer_service_protocol::Transaction>> {
+        let indexer_addr = self
+            .config
+            .indexer_addr
+            .as_ref()
+            .context("No indexer endpoint is configured")?;
+        let client = IndexerClientBuilder::default()
+            .build(indexer_addr)
+            .context("Failed to create indexer client")?;
+        Ok(indexer_service_rpc::RpcClient::get_transactions_by_account(
+            &client,
+            indexer_service_protocol::AccountId {
+                value: *account_id.value(),
+            },
+            offset,
+            limit,
+        )
+        .await?)
+    }
+
     /// Get public account.
     pub async fn get_account_public(&self, account_id: AccountId) -> Result<Account> {
         Ok(self.sequencer_client.get_account(account_id).await?)
@@ -727,6 +770,29 @@ impl WalletCore {
         program: &ProgramWithDependencies,
         tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
+        let built = self
+            .build_privacy_preserving_tx_with_pre_check(
+                accounts,
+                instruction_data,
+                program,
+                tx_pre_check,
+            )
+            .await?;
+
+        Ok((
+            self.submit_privacy_preserving_transaction(built.transaction)
+                .await?,
+            built.shared_secrets,
+        ))
+    }
+
+    pub async fn build_privacy_preserving_tx_with_pre_check(
+        &self,
+        accounts: Vec<AccountMention>,
+        instruction_data: InstructionData,
+        program: &ProgramWithDependencies,
+        tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
+    ) -> Result<BuiltPrivateTransaction, ExecutionFailureKind> {
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
         tx_pre_check(&acc_manager.selected_shards())?;
@@ -738,6 +804,7 @@ impl WalletCore {
             );
         }
 
+        let input_commitments = acc_manager.private_input_commitments();
         let private_account_keys = acc_manager.private_account_keys();
         let input = ProvingInput {
             shard_selectors: acc_manager.shard_selectors(),
@@ -770,19 +837,26 @@ impl WalletCore {
                 proof,
             );
 
-        let tx = PrivacyPreservingTransaction::new(message, witness_set);
-
         let shared_secrets: Vec<_> = private_account_keys
             .into_iter()
             .map(|keys| keys.ssk)
             .collect();
 
-        let call_res = self
+        Ok(BuiltPrivateTransaction {
+            transaction: PrivacyPreservingTransaction::new(message, witness_set),
+            shared_secrets,
+            input_commitments,
+        })
+    }
+
+    pub async fn submit_privacy_preserving_transaction(
+        &self,
+        tx: PrivacyPreservingTransaction,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        Ok(self
             .sequencer_client
             .send_transaction(LeeTransaction::PrivacyPreserving(tx))
-            .await;
-
-        Ok((call_res?, shared_secrets))
+            .await?)
     }
 
     pub async fn send_pub_tx(

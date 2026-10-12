@@ -399,6 +399,19 @@ impl AccountManager {
             .collect()
     }
 
+    pub fn private_input_commitments(&self) -> Vec<(AccountId, Commitment)> {
+        self.private_states()
+            .filter(|pre| pre.nsk.is_some())
+            .map(|pre| {
+                let account_id = pre.pre_state.account_id;
+                (
+                    account_id,
+                    Commitment::new(&account_id, &pre.pre_state.account),
+                )
+            })
+            .collect()
+    }
+
     pub fn public_account_nonces(&self) -> Vec<Nonce> {
         // Must match the signature order produced by sign_message(): local accounts first,
         // keycard accounts second.

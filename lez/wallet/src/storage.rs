@@ -15,17 +15,19 @@ use lee_core::BlockId;
 
 use crate::{
     account::{AccountIdWithPrivacy, Label},
-    storage::persistent::PersistentStorage,
+    storage::{persistent::PersistentStorage, referral::ReferralStore},
 };
 
 pub mod key_chain;
 mod persistent;
+pub mod referral;
 
 #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 pub struct Storage {
     key_chain: UserKeyChain,
     labels: BTreeMap<Label, AccountIdWithPrivacy>,
     last_synced_block: BlockId,
+    referral: ReferralStore,
 }
 
 impl Storage {
@@ -42,6 +44,7 @@ impl Storage {
                 key_chain: UserKeyChain::new_with_accounts(public_tree, private_tree),
                 labels: BTreeMap::new(),
                 last_synced_block: 0,
+                referral: ReferralStore::default(),
             },
             mnemonic,
         ))
@@ -95,8 +98,18 @@ impl Storage {
         self.key_chain = UserKeyChain::new_with_accounts(public_tree, private_tree);
         self.labels = BTreeMap::new();
         self.last_synced_block = 0;
+        self.referral = ReferralStore::default();
 
         Ok(())
+    }
+
+    #[must_use]
+    pub const fn referral(&self) -> &ReferralStore {
+        &self.referral
+    }
+
+    pub const fn referral_mut(&mut self) -> &mut ReferralStore {
+        &mut self.referral
     }
 
     #[must_use]
@@ -159,6 +172,7 @@ impl Storage {
             key_chain,
             last_synced_block,
             labels,
+            referral,
         } = self;
         let key_chain_data = key_chain.to_persistent();
 
@@ -166,6 +180,7 @@ impl Storage {
             key_chain: key_chain_data,
             last_synced_block: *last_synced_block,
             labels: labels.clone(),
+            referral: referral.clone(),
         }
     }
 
@@ -174,18 +189,22 @@ impl Storage {
             key_chain,
             last_synced_block,
             labels,
+            referral,
         } = persistent;
 
         Ok(Self {
             key_chain: UserKeyChain::from_persistent(key_chain)?,
             last_synced_block,
             labels,
+            referral,
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use lee_core::Identifier;
 
     use super::*;
@@ -223,6 +242,61 @@ mod tests {
 
         storage.set_last_synced_block(42);
 
+        let program_account = lee::AccountId::new([9; 32]);
+        let participant = lee::AccountId::new([5; 32]);
+        let reference = [7; 32];
+        let mut intent = referral::ReferralIntent::new(program_account);
+        intent.registration = Some(referral::PendingRegistration {
+            node: referral_core::NodeId::new([7; 32]),
+            referrer: Some(referral_core::NodeId::new([8; 32])),
+            signature: Some(referral_core::ed25519_dalek::Signature::from_bytes(
+                &[3; 64],
+            )),
+        });
+        intent.invitation = Some(referral_core::Invitation::new(
+            referral_core::NodeId::new([8; 32]),
+            lee_core::NullifierPublicKey([1; 32]),
+            lee_core::encryption::ViewingPublicKey::from_seed(&[2; 32], &[3; 32]),
+        ));
+        storage.referral_mut().intents.insert(participant, intent);
+        storage.referral_mut().record_operation(register_operation(
+            reference,
+            program_account,
+            participant,
+        ));
+        storage
+            .referral_mut()
+            .record_operation(referral::PendingOperation {
+                operation: referral::OperationKind::CashOut {
+                    participant,
+                    index: 3,
+                },
+                ..register_operation([8; 32], program_account, participant)
+            });
+        storage
+            .referral_mut()
+            .record_operation(referral::PendingOperation {
+                operation: referral::OperationKind::CollectCredits {
+                    participant,
+                    notes: vec![lee::AccountId::new([6; 32])],
+                    epoch: 4,
+                    active_digest: [5; 32],
+                },
+                ..register_operation([9; 32], program_account, participant)
+            });
+        storage
+            .referral_mut()
+            .publications
+            .push(referral::Publication {
+                program_account,
+                epoch: 4,
+                active: BTreeSet::from([referral_core::NodeId::new([7; 32])]),
+            });
+        storage
+            .referral_mut()
+            .history_offsets
+            .insert(program_account, 11);
+
         let temp_dir = tempfile::tempdir().unwrap();
         let storage_path = temp_dir.path().join("storage.json");
 
@@ -230,6 +304,32 @@ mod tests {
         let loaded_store = Storage::from_path(&storage_path).unwrap();
 
         assert_eq!(loaded_store, storage);
+    }
+
+    fn register_operation(
+        reference: [u8; 32],
+        program_account: lee::AccountId,
+        participant: lee::AccountId,
+    ) -> referral::PendingOperation {
+        let message = lee::privacy_preserving_transaction::message::Message {
+            nonces: vec![lee_core::account::Nonce::default()],
+            ..lee::privacy_preserving_transaction::message::Message::default()
+        };
+        let witness_set = lee::privacy_preserving_transaction::witness_set::WitnessSet::for_message(
+            &message,
+            lee::privacy_preserving_transaction::circuit::Proof::from_inner(vec![1, 2, 3]),
+            &[],
+        );
+        let transaction = lee::PrivacyPreservingTransaction::new(message, witness_set);
+
+        referral::PendingOperation {
+            reference,
+            program_account,
+            operation: referral::OperationKind::Register { participant },
+            transaction,
+            input_commitments: Vec::new(),
+            status: referral::SubmissionStatus::Pending,
+        }
     }
 
     #[test]

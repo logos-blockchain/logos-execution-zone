@@ -2,6 +2,8 @@ use indexer_service_protocol::{
     Account, AccountId, AccountSummary, Block, BlockId, EventRecord, EventSubscriptionFilter,
     GetEventsFilter, HashType, IndexerStatus, ProgramShardSelector, Transaction,
 };
+#[cfg(feature = "client")]
+pub use jsonrpsee::http_client::HttpClientBuilder as IndexerClientBuilder;
 use jsonrpsee::proc_macros::rpc;
 #[cfg(feature = "server")]
 use jsonrpsee::{core::SubscriptionResult, types::ErrorObjectOwned};
