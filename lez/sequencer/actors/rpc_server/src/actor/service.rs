@@ -402,6 +402,7 @@ fn map_executor_error<M>(
             handle_err @ (sequencer_executor_actor::error::Error::BackgroundTaskFinishedUnexpectedly
             | sequencer_executor_actor::error::Error::StorageRequestFailed(_)
             | sequencer_executor_actor::error::Error::BedrockRequestFailed(_)
+            | sequencer_executor_actor::error::Error::SlasherRequestFailed(_)
             | sequencer_executor_actor::error::Error::CrossZoneDeadLettersUnavailable(_)
             | sequencer_executor_actor::error::Error::CrossZoneDeadLetterRequeueFailed(_)
             | sequencer_executor_actor::error::Error::SequencerStartFailed(_)
