@@ -6,11 +6,15 @@ use anyhow::Result;
 use common::{block::Block, transaction::LeeTransaction};
 use kameo::actor::{ActorRef, Spawn as _};
 use lee_core::BlockId;
+use logos_blockchain_core::{
+    events::DepositRecreatedNotes,
+    mantle::{TxHash, ledger::Inputs, ops::channel::deposit::Metadata},
+};
 use sequencer_bedrock_actor::{
     mock::{CannedChannel, MockBedrockActor, SharedChannel, checkpoint_at, mock_msg_of},
     protocol::{
-        ChannelEntry, ChannelEvent, ChannelEventKind, ChannelSeq, ChannelUpdate, MsgId,
-        PublisherEvent, Slot, ViewChange,
+        ChannelEntry, ChannelEvent, ChannelEventKind, ChannelSeq, ChannelUpdate, DepositInfo,
+        MsgId, PublisherEvent, Slot, ViewChange,
     },
 };
 use sequencer_core::config::SequencerConfig;
@@ -72,6 +76,19 @@ fn entry(block: &Block, parent: &Block) -> ChannelEntry {
         msg: mock_msg_of(block),
         parent: mock_msg_of(parent),
         block: Some(block.clone()),
+    }
+}
+
+/// A finalized L1 deposit identified by `op_id`.
+fn deposit(op_id: [u8; 32]) -> DepositInfo {
+    DepositInfo {
+        tx_hash: TxHash::from(op_id),
+        op_id,
+        channel_id: [0; 32].into(),
+        inputs: Inputs::empty(),
+        notes: DepositRecreatedNotes::default(),
+        amount: 5,
+        metadata: Metadata::try_from(Vec::new()).expect("empty metadata fits"),
     }
 }
 
@@ -213,6 +230,53 @@ async fn bootstrapping_reaches_a_tip_whose_slot_a_config_change_moved() -> Resul
         .await?;
 
     assert_eq!(executor.ask(GetLastBlockId).await?, 1);
+    Ok(())
+}
+
+/// Bootstrapping records the deposits the channel replay carries; once online, the publisher
+/// reports them instead.
+#[test]
+async fn bootstrapping_records_replayed_deposits() -> Result<()> {
+    let (config, _home) = sequencer_config();
+    let channel_id = config.bedrock_config.channel_id;
+    let genesis = genesis();
+    let channel = CannedChannel {
+        tip_slot: Some(Slot::from(10)),
+        tip: Some(mock_msg_of(&genesis)),
+        ..CannedChannel::absent()
+    }
+    .share();
+    let store = SharedStore::default();
+    let executor = start(&config, &store, &channel).await?;
+    let deposit_event = |op_id| ChannelEvent {
+        channel_id,
+        event: ChannelEventKind::FinalizedDeposit(Arc::new(deposit(op_id))),
+    };
+
+    executor.ask(deposit_event([1; 32])).await?;
+    executor
+        .ask(ChannelEvent {
+            channel_id,
+            event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&genesis, 10))),
+        })
+        .await?;
+    assert!(matches!(
+        executor.ask(GetStatus).await?,
+        ExecutorStatus::Online { .. }
+    ));
+    executor.ask(deposit_event([2; 32])).await?;
+
+    let recorded: Vec<[u8; 32]> = store
+        .lock()
+        .pending_deposits
+        .iter()
+        .map(|record| record.deposit_op_id.0)
+        .collect();
+    assert_eq!(
+        recorded,
+        [[1; 32]],
+        "the publisher reports deposits once online"
+    );
     Ok(())
 }
 
