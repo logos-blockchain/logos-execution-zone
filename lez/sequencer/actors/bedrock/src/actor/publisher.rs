@@ -43,7 +43,8 @@ use crate::{
         ChannelEntry, ChannelEvent, ChannelEventKind, ChannelId, ChannelParams, ChannelSeq,
         ChannelUpdate, DeserializeOp as _, Ed25519Key, Ed25519PublicKey, IndexedSignature,
         IndexedSignatures, LiveChannelConfig, MsgId, NoteId, Ops, PreparedConfig, PreparedPin,
-        PublishOutcome, PublisherEvent, SequencerCheckpoint, ViewChange, WithdrawArg, ZkPublicKey,
+        PublishOutcome, PublisherEvent, SequencerCheckpoint, Slot, ViewChange, WithdrawArg,
+        ZkPublicKey,
     },
 };
 
@@ -66,6 +67,8 @@ pub struct Publisher {
     /// Version of the channel view this actor holds, bumped by every broadcast
     /// update and every publish.
     seq: ChannelSeq,
+    /// History finalized up to this slot was replayed by the consumer, so it is left out.
+    replayed_up_to: Option<Slot>,
     broker_ref: ActorRef<Broker<ChannelEvent>>,
 }
 
@@ -75,6 +78,7 @@ impl Publisher {
         config: PublisherConfig,
         node: NodeHttpClient,
         initial_checkpoint: Option<ZoneCheckpointRecord>,
+        replayed_up_to: Option<Slot>,
         broker_ref: ActorRef<Broker<ChannelEvent>>,
     ) -> Result<(Self, ChannelSeq)> {
         let PublisherConfig {
@@ -132,6 +136,7 @@ impl Publisher {
             funding_pk,
             priority_fee_percent,
             seq,
+            replayed_up_to,
             broker_ref,
         };
 
@@ -196,7 +201,13 @@ impl Publisher {
         channel_update: SdkChannelUpdate,
         finalized: Vec<FinalizedTx>,
     ) -> Result<()> {
-        // An L1 block that moved nothing on this channel: it only advances the checkpoint.
+        let finalized: Vec<_> = finalized
+            .into_iter()
+            .filter(|tx| self.replayed_up_to.is_none_or(|up_to| tx.l1_slot > up_to))
+            .collect();
+
+        // An L1 block that moved nothing on this channel the consumer has not seen: it only
+        // advances the checkpoint.
         if matches!(&channel_update, SdkChannelUpdate::Extension { adopted } if adopted.is_empty())
             && finalized.is_empty()
         {

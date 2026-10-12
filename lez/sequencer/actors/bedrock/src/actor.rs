@@ -171,6 +171,7 @@ impl<S: StorageActorTrait> Message<InitializeChannelPublisher> for BedrockActor<
             priority_fee_percent,
             resubmit_interval,
             stale_refund_slots,
+            replayed_up_to,
         }: InitializeChannelPublisher,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
@@ -193,6 +194,7 @@ impl<S: StorageActorTrait> Message<InitializeChannelPublisher> for BedrockActor<
             },
             self.node.clone(),
             initial_checkpoint,
+            replayed_up_to,
             self.broker_ref.clone(),
         )
         .await?;

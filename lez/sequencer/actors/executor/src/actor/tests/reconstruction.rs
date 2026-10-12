@@ -19,7 +19,10 @@ use lee::{
 use ping_core::{ReceiverMessage, ping_record_pda, receiver_config_account_id};
 use sequencer_bedrock_actor::{
     mock::{CannedChannel, mock_msg_of},
-    protocol::{BlockData, ChannelEvent, ChannelEventKind, FinalizedBlock, MsgId, Slot},
+    protocol::{
+        BlockData, ChannelEvent, ChannelEventKind, Ed25519Key, Ed25519PublicKey, FinalizedBlock,
+        MsgId, Slot,
+    },
 };
 use sequencer_storage_actor::{
     mock::{CannedStore, MockStorageActor, SharedStore},
@@ -193,6 +196,7 @@ async fn reconstruction_skips_an_undecodable_inscription() -> Result<()> {
         block: BlockData::Undecodable(b"not a block".to_vec()),
         msg_id: MsgId::from([0xAA_u8; 32]),
         slot: Slot::from(15),
+        signer: None,
     };
     let store = finalized_genesis_store().share();
 
@@ -203,6 +207,109 @@ async fn reconstruction_skips_an_undecodable_inscription() -> Result<()> {
     .await?;
 
     assert_reconstructed(&store, &block2, 20);
+    Ok(())
+}
+
+/// The key that signs the offending inscriptions.
+fn offender() -> Ed25519PublicKey {
+    Ed25519Key::from_bytes(&[3; 32]).public_key()
+}
+
+/// An inscription carrying `payload`, signed by [`offender`] and finalized at `slot`, that does
+/// not decode as a block.
+fn signed_junk_at(payload: &[u8], slot: u64) -> FinalizedBlock {
+    FinalizedBlock {
+        block: BlockData::Undecodable(payload.to_vec()),
+        msg_id: MsgId::from([0xAA_u8; 32]),
+        slot: Slot::from(slot),
+        signer: Some(offender()),
+    }
+}
+
+/// `block`, signed by [`offender`] and finalized at `slot`.
+fn signed_at(block: &Block, slot: u64) -> FinalizedBlock {
+    FinalizedBlock {
+        signer: Some(offender()),
+        ..finalized_at(block, slot)
+    }
+}
+
+/// A block that had to follow the final tip and does not is an offence, as on the follow path.
+#[test]
+async fn reconstruction_reports_a_misplaced_block() -> Result<()> {
+    let genesis = genesis();
+    let skipping_an_id = produce_dummy_block(3, Some(genesis.header.hash), vec![]);
+    let store = finalized_genesis_store().share();
+
+    start(
+        &store,
+        vec![finalized_at(&genesis, 10), signed_at(&skipping_an_id, 20)],
+    )
+    .await?;
+
+    assert!(
+        store.lock().slash_record.is_some(),
+        "the offence is recorded"
+    );
+    Ok(())
+}
+
+#[test]
+async fn reconstruction_reports_an_invalid_block() -> Result<()> {
+    let genesis = genesis();
+    let mut corrupted = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+    corrupted.header.hash = HashType([0xCD_u8; 32]);
+    let store = finalized_genesis_store().share();
+
+    start(
+        &store,
+        vec![finalized_at(&genesis, 10), signed_at(&corrupted, 20)],
+    )
+    .await?;
+
+    assert!(
+        store.lock().slash_record.is_some(),
+        "the offence is recorded"
+    );
+    Ok(())
+}
+
+/// The replay names who signed each inscription, so a joining node judges the junk it carries
+/// as the follow path would.
+#[test]
+async fn reconstruction_reports_an_undecodable_inscription() -> Result<()> {
+    let genesis = genesis();
+    let store = finalized_genesis_store().share();
+
+    start(
+        &store,
+        vec![
+            finalized_at(&genesis, 10),
+            signed_junk_at(b"not a block", 15),
+        ],
+    )
+    .await?;
+
+    assert!(
+        store.lock().slash_record.is_some(),
+        "the offence is recorded"
+    );
+    Ok(())
+}
+
+/// An empty payload is a missed turn, which is not the offence of writing a non-block.
+#[test]
+async fn reconstruction_does_not_report_an_empty_inscription() -> Result<()> {
+    let genesis = genesis();
+    let store = finalized_genesis_store().share();
+
+    start(
+        &store,
+        vec![finalized_at(&genesis, 10), signed_junk_at(b"", 15)],
+    )
+    .await?;
+
+    assert!(store.lock().slash_record.is_none());
     Ok(())
 }
 
@@ -249,6 +356,28 @@ fn final_through(block2: &Block, final_msg: Option<MsgId>, held: &[Block]) -> Sh
         store.channel_view = Some(chain.encode_view());
     }
     store.share()
+}
+
+/// A warm start re-reads history below the stored final entry, where a block that does not apply
+/// had no final tip to follow, so it proves nothing.
+#[test]
+async fn a_reread_block_that_does_not_apply_is_not_reported() -> Result<()> {
+    let [genesis, block2, _] = three_blocks();
+    let skipping_an_id = produce_dummy_block(3, Some(genesis.header.hash), vec![]);
+    let store = final_through(&block2, Some(mock_msg_of(&block2)), &[]);
+
+    start(
+        &store,
+        vec![
+            finalized_at(&genesis, 10),
+            signed_at(&skipping_an_id, 15),
+            finalized_at(&block2, 20),
+        ],
+    )
+    .await?;
+
+    assert!(store.lock().slash_record.is_none());
+    Ok(())
 }
 
 /// A warm start re-reads finalized history the final tier already holds. The
@@ -321,6 +450,7 @@ async fn a_blockless_final_entry_resumes_the_lineage() -> Result<()> {
                 block: BlockData::Undecodable(b"not a block".to_vec()),
                 msg_id: junk,
                 slot: Slot::from(25),
+                signer: None,
             },
             finalized_at(&block3, 30),
         ],

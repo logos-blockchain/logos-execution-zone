@@ -110,6 +110,8 @@ pub struct FinalizedBlock {
     pub block: BlockData,
     pub msg_id: MsgId,
     pub slot: Slot,
+    /// The key that signed the inscription, [`None`] if it is not a valid one.
+    pub signer: Option<Ed25519PublicKey>,
 }
 
 #[derive(Debug, Clone)]
@@ -189,6 +191,9 @@ pub struct InitializeChannelPublisher {
     pub priority_fee_percent: u64,
     pub resubmit_interval: Duration,
     pub stale_refund_slots: u64,
+    /// Last slot the caller has applied everything the `finalized_*` topics carry up to.
+    /// [`None`] if nothing was replayed.
+    pub replayed_up_to: Option<Slot>,
 }
 
 impl ShardingKey for InitializeChannelPublisher {

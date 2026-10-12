@@ -222,6 +222,7 @@ async fn assert_offender_is_slashed(payload: impl Fn(&Block) -> Vec<u8>) -> Resu
             priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
             resubmit_interval: Duration::from_secs(5),
             stale_refund_slots: 0,
+            replayed_up_to: None,
         })
         .await
         .context("Failed to open a publisher for the offender")?;

@@ -12,8 +12,8 @@ use lee_core::BlockId;
 use super::MockStorageActor;
 use crate::protocol::{
     AtomicUpdate, DropSettledCrossZoneDispatches, GetBlock, PendingCrossZoneDispatchRecord,
-    PendingDepositEventRecord, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
-    ZoneAnchorRecord, ZoneCheckpointRecord,
+    PendingDepositEventRecord, PutSlashRecordBytes, SetZoneAnchor, StoreUpdateOutcome,
+    UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
 };
 
 /// What a mocked store holds.
@@ -30,6 +30,7 @@ pub struct CannedStore {
     pub channel_view: Option<Vec<u8>>,
     pub pending_deposits: Vec<PendingDepositEventRecord>,
     pub pending_dispatches: Vec<PendingCrossZoneDispatchRecord>,
+    pub slash_record: Option<Vec<u8>>,
 }
 
 impl CannedStore {
@@ -183,8 +184,17 @@ impl SharedStore {
                     Ok(())
                 }
             });
-        mock.expect_handle_get_slash_record_bytes()
-            .returning(|_msg, _ctx| Ok(None));
+        mock.expect_handle_get_slash_record_bytes().returning({
+            let store = self.clone();
+            move |_msg, _ctx| Ok(store.lock().slash_record.clone())
+        });
+        mock.expect_handle_put_slash_record_bytes().returning({
+            let store = self.clone();
+            move |PutSlashRecordBytes { bytes }, _ctx| {
+                store.lock().slash_record = Some(bytes);
+                Ok(())
+            }
+        });
         mock.expect_handle_get_dead_letter_dispatches()
             .returning(|_msg, _ctx| Ok(Vec::new()));
         mock

@@ -9,9 +9,10 @@ use kameo::actor::ActorRef;
 use log::warn;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
-    protocol::{BlockData, DepositInfo, Ed25519Key, FinalizedBlock, MsgId, Slot, WithdrawInfo},
+    protocol::{BlockData, DepositInfo, Ed25519Key, FinalizedBlock, MsgId, WithdrawInfo},
 };
-use sequencer_core::config::SequencerConfig;
+use sequencer_core::{config::SequencerConfig, faults};
+use sequencer_slasher_actor::protocol::{Report, ReportedOffence};
 use sequencer_storage_actor::{
     StorageActorTrait,
     protocol::{AtomicUpdate, ZoneAnchorRecord},
@@ -105,8 +106,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             }
         };
 
-        self.apply_finalized_entry(finalized.msg_id, block, finalized.slot)
-            .await?;
+        self.apply_finalized_entry(finalized, block).await?;
         self.on_lineage = self.on_lineage || finalized.msg_id == self.stored_final;
         self.replayed_to = Some(finalized.msg_id);
 
@@ -119,11 +119,22 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
                 );
             }
             return Ok(State::Online(
-                online::OnlineState::from_bootstrapping(self).await?,
+                online::OnlineState::from_bootstrapping(self, finalized.slot).await?,
             ));
         }
 
         Ok(State::Bootstrapping(self))
+    }
+
+    /// Hands the slasher an offence the replay proves.
+    async fn report_offence(&self, offence: ReportedOffence) -> Result<()> {
+        self.actors
+            .slasher_ref
+            .ask(Report {
+                offences: vec![offence],
+            })
+            .await?;
+        Ok(())
     }
 
     /// Records a finalized deposit read alongside the finalized blocks.
@@ -157,13 +168,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
     /// Applies one finalized channel entry, moving the final entry to it only on the lineage. A
     /// block the store already holds only settles its deliveries, a block that does not apply is
     /// skipped, like the follow path does. Advances the persisted anchor to a block the store
-    /// holds after this.
+    /// holds after this, and reports the offence the entry proves before that.
     async fn apply_finalized_entry(
         &mut self,
-        msg: MsgId,
+        finalized: &FinalizedBlock,
         entry_block: Option<&Block>,
-        slot: Slot,
     ) -> Result<()> {
+        let msg = finalized.msg_id;
+        let slot = finalized.slot;
         let storage_ref = &self.actors.storage_ref;
         let head_before: HashSet<HashType> = self
             .chain
@@ -171,6 +183,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             .map(|block| block.header.hash)
             .collect();
         let was_empty = self.chain.final_tip().is_none();
+        // A root lineage over a held tier is a store restored without its view.
+        let judgeable = !was_empty && self.chain.final_msg() != MsgId::root();
         let outcome = if self.on_lineage {
             self.chain.apply_reconstructed(msg, entry_block)
         } else {
@@ -188,6 +202,23 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
                 block_id: block.header.block_id,
                 source: err.clone(),
             });
+        }
+
+        let next = judgeable && self.chain.final_msg() == msg;
+        let offence = finalized
+            .signer
+            .and_then(|signer| match (&finalized.block, &outcome) {
+                // An empty payload is a missed turn, not this offence.
+                (BlockData::Undecodable(data), _) if !data.is_empty() => {
+                    Some(faults::not_a_block(msg, signer))
+                }
+                (BlockData::Block(_), Some(outcome)) => {
+                    faults::block_offence(msg, outcome, next, signer)
+                }
+                (BlockData::Undecodable(_) | BlockData::Block(_), _) => None,
+            });
+        if let Some(offence) = offence {
+            self.report_offence(offence).await?;
         }
 
         let newly_final = self.chain.take_newly_final();

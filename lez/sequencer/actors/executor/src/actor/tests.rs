@@ -417,6 +417,7 @@ pub(super) fn finalized_at(block: &Block, slot: u64) -> FinalizedBlock {
         block: BlockData::Block(block.clone()),
         msg_id: mock_msg_of(block),
         slot: Slot::from(slot),
+        signer: None,
     }
 }
 

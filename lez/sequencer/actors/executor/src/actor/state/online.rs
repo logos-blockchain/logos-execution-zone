@@ -9,7 +9,7 @@ use mempool::{MemPool, MemPoolHandle};
 use sequencer_actors_common::SendErrorExt;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
-    protocol::{ChannelId, ChannelSeq, Ed25519Key, Ed25519PublicKey, PublishOutcome},
+    protocol::{ChannelId, ChannelSeq, Ed25519Key, Ed25519PublicKey, PublishOutcome, Slot},
 };
 use sequencer_core::{SequencerCore, TransactionOrigin, config::SequencerConfig};
 use sequencer_storage_actor::{StorageActorTrait, protocol::AtomicUpdate};
@@ -34,11 +34,16 @@ pub struct OnlineState<S: StorageActorTrait, B: BedrockActorTrait> {
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
+    /// Goes online once bootstrapping replayed the channel up to its tip, read at `tip_slot`.
     pub(super) async fn from_bootstrapping(
         bootstrapping_state: bootstrapping::BootstrappingState<S, B>,
+        tip_slot: Slot,
     ) -> Result<Self> {
+        // The tip's slot is replayed only up to the tip; the publisher reports the rest of it.
+        let replayed_up_to = tip_slot.into_inner().checked_sub(1).map(Slot::from);
         Self::start(
             true,
+            replayed_up_to,
             bootstrapping_state.config,
             bootstrapping_state.chain,
             bootstrapping_state.channel_signing_key,
@@ -53,7 +58,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         channel_signing_key: Ed25519Key,
         actors: ActorsBundle<S, B>,
     ) -> Result<Self> {
-        Self::start(true, config, chain, channel_signing_key, actors).await
+        Self::start(true, None, config, chain, channel_signing_key, actors).await
     }
 
     /// Creates the channel, inscribing the stored chain onto it, or a new genesis when the store
@@ -64,7 +69,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         channel_signing_key: Ed25519Key,
         actors: ActorsBundle<S, B>,
     ) -> Result<Self> {
-        Self::start(false, config, chain, channel_signing_key, actors).await
+        Self::start(false, None, config, chain, channel_signing_key, actors).await
     }
 
     pub const fn sequencer(&self) -> &SequencerCore<S, B> {
@@ -93,6 +98,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
 
     async fn start(
         channel_exists: bool,
+        replayed_up_to: Option<Slot>,
         config: SequencerConfig,
         mut chain: ChainState,
         channel_signing_key: Ed25519Key,
@@ -123,6 +129,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                     priority_fee_percent: config.bedrock_config.priority_fee_percent,
                     resubmit_interval: config.retry_pending_blocks_timeout,
                     stale_refund_slots: config.bedrock_config.stale_refund_slots,
+                    replayed_up_to,
                 },
             )
             .await
