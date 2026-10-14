@@ -22,7 +22,7 @@ x-sequencer-node: &sequencer_node
     additional_contexts:
       risc0_base: "service:risc0_base"
     args:
-      FEATURES: mdns
+      FEATURES: prove,mdns
   # Lets a node reach a Bedrock published on the host, on Linux too, for a
   # config pointed there rather than at the compose network.
   extra_hosts:

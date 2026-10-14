@@ -69,16 +69,17 @@ VOLUME /var/lib/sequencer_service
 EXPOSE 3040
 EXPOSE 9000
 
-# Health check (TODO #244: Replace when a real health endpoint is available)
+# Health check (TODO #244: Replace when a real health endpoint is available).
+# JSON-RPC errors come back as HTTP 200, so require a `result`.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl http://localhost:3040 \
+    CMD curl -fsS http://localhost:3040 \
     -H "Content-Type: application/json" \
     -d "{ \
         \"jsonrpc\": \"2.0\", \
         \"method\": \"checkHealth\", \
         \"params\": {}, \
         \"id\": 1 \
-    }" || exit 1
+    }" | grep -q '"result"' || exit 1
 
 # Run the application
 ENV RUST_LOG=info
