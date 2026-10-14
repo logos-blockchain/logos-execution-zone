@@ -1,15 +1,14 @@
 //! Native program deployment and updates through [`PROGRAM_LOADER_ACCOUNT_ID`].
 //!
-//! Instructions only change loader actor states. Writing a fresh segment is permissionless — a
-//! still-empty loader actor state has no prior claim to violate — but a header target must always
-//! be `is_authorized`, whether created or updated, so a real header can't be squatted at an address
-//! some other account id (e.g. a shadow program's) will later resolve to.
+//! Instructions only change loader actor states. Every write target must be `is_authorized`, and
+//! every loader actor state is a tagged [`LoaderEntry`], so a segment and a header can never be
+//! read as each other.
 //!
 //! The loader is protocol code that runs only at public settlement: [`handle_message`] handles each
 //! message against the target's live loader actor state.
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use lee_core::program::{
-    MAX_PROGRAM_SEGMENTS, ProgramHeader, ProgramSegment, immutable_mirror_commitment,
+    LoaderEntry, MAX_PROGRAM_SEGMENTS, ProgramHeader, ProgramSegment, immutable_mirror_commitment,
 };
 use lee_core::{
     Commitment,
@@ -23,8 +22,15 @@ use lee_core::{
 /// This is a client-side batching choice, not a limit enforced by the program.
 pub const MAX_SEGMENT_DATA_LEN: usize = 96 * 1024;
 
+/// Variants are append-only. Borsh encodes the variant as a leading tag byte, so inserting one
+/// ahead of `WriteSegment` shifts every existing encoding.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Message {
+    /// Writes a new segment to the target's empty loader actor state; the target must be
+    /// authorized.
+    ///
+    /// If `next_segment` is `Some`, that account must already hold a valid [`ProgramSegment`].
+    /// Segments are immutable and linked from tail to head.
     WriteSegment {
         bytecode: Vec<u8>,
         next_segment: Option<AccountId>,
@@ -37,6 +43,47 @@ pub enum Message {
         first_segment: AccountId,
         immutable: bool,
     },
+}
+
+/// Why [`build_segments`] refused a program before any segment was uploaded.
+#[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
+pub enum SegmentChainError {
+    #[error("Program bytecode splits into {expected} segment(s) but {actual} were supplied")]
+    CountMismatch { expected: usize, actual: usize },
+    #[error("Program needs {count} segments, over the {MAX_PROGRAM_SEGMENTS}-segment cap")]
+    TooManySegments { count: usize },
+}
+
+/// How many segments [`build_segments`] splits `user_elf` into.
+#[must_use]
+pub const fn segment_count(user_elf: &[u8]) -> usize {
+    user_elf.len().div_ceil(MAX_SEGMENT_DATA_LEN)
+}
+
+/// Splits `user_elf` into a segment chain written to `segment_ids`, each linking to the next.
+/// A deployer's pre-check.
+pub fn build_segments(
+    user_elf: &[u8],
+    segment_ids: &[AccountId],
+) -> Result<Vec<ProgramSegment>, SegmentChainError> {
+    let count = segment_count(user_elf);
+    if count != segment_ids.len() {
+        return Err(SegmentChainError::CountMismatch {
+            expected: count,
+            actual: segment_ids.len(),
+        });
+    }
+    if count > MAX_PROGRAM_SEGMENTS {
+        return Err(SegmentChainError::TooManySegments { count });
+    }
+    Ok(user_elf
+        .chunks(MAX_SEGMENT_DATA_LEN)
+        .enumerate()
+        .map(|(index, chunk)| ProgramSegment {
+            bytecode: chunk.to_vec(),
+            next_segment: segment_ids.get(index.saturating_add(1)).copied(),
+        })
+        .collect())
 }
 
 pub fn handle_message<'state>(
@@ -59,9 +106,13 @@ pub fn handle_message<'state>(
                 input.pre_state.is_empty(),
                 "segment target already deployed"
             );
+            assert!(
+                input.is_authorized,
+                "WriteSegment target must be an authorized account"
+            );
             if let Some(next) = next_segment {
                 assert!(
-                    ProgramSegment::from_bytes(actor_state(next)).is_some(),
+                    ProgramSegment::from_loader_actor_state(actor_state(next)).is_some(),
                     "`next_segment` must already hold a valid segment \u{2014} segments are linked tail-to-head"
                 );
             }
@@ -69,7 +120,7 @@ pub fn handle_message<'state>(
                 bytecode,
                 next_segment,
             };
-            (segment.to_bytes(), None)
+            (segment.to_loader_actor_state(), None)
         }
         Message::CreateHeader {
             first_segment,
@@ -86,7 +137,7 @@ pub fn handle_message<'state>(
             first_segment,
             immutable,
         } => {
-            let old_header = ProgramHeader::from_bytes(&input.pre_state).expect(
+            let old_header = ProgramHeader::from_loader_actor_state(&input.pre_state).expect(
                 "UpdateHeader target must already hold a valid header \u{2014} use CreateHeader to make one",
             );
             assert!(
@@ -129,7 +180,7 @@ fn header_write<'state>(
     let header = build_header(first_segment, immutable, actor_state);
     let new_commitment =
         immutable.then(|| immutable_mirror_commitment(input.receiver.account_id, &header));
-    (header.to_bytes(), new_commitment)
+    (header.to_loader_actor_state(), new_commitment)
 }
 
 fn build_header<'state>(
@@ -157,7 +208,7 @@ fn compute_image_id<'state>(
             segment_count <= MAX_PROGRAM_SEGMENTS,
             "segment chain exceeds the {MAX_PROGRAM_SEGMENTS}-segment cap"
         );
-        let segment = ProgramSegment::from_bytes(actor_state(next))
+        let segment = ProgramSegment::from_loader_actor_state(actor_state(next))
             .expect("every supplied segment account must decode as a valid ProgramSegment");
         elf.extend_from_slice(&segment.bytecode);
         expected_next = segment.next_segment;

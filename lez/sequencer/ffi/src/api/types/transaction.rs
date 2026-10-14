@@ -186,23 +186,37 @@ impl From<ProgramImageClaim> for FfiProgramImageClaim {
     }
 }
 
-impl From<FfiProgramImageClaim> for ProgramImageClaim {
-    fn from(value: FfiProgramImageClaim) -> Self {
+impl TryFrom<FfiProgramImageClaim> for ProgramImageClaim {
+    type Error = OperationStatus;
+
+    /// Frees every non-null pointer (unused ones must be null); a missing required one is an error.
+    fn try_from(value: FfiProgramImageClaim) -> Result<Self, Self::Error> {
+        let account_id = (!value.account_id.is_null())
+            .then(|| unsafe { Box::from_raw(value.account_id.cast_mut()) });
+        let image_id = (!value.image_id.is_null())
+            .then(|| unsafe { Box::from_raw(value.image_id.cast_mut()) });
+        let root = (!value.root.is_null()).then(|| unsafe { Box::from_raw(value.root.cast_mut()) });
+
         match value.image_claim_kind {
             FfiProgramImageClaimKind::Disclosed => {
-                let account_id = unsafe { Box::from_raw(value.account_id.cast_mut()) };
-                let image_id = unsafe { Box::from_raw(value.image_id.cast_mut()) };
-
-                Self::Disclosed {
-                    account_id: (*account_id).into(),
-                    image_id: *image_id,
+                if let (Some(account_id), Some(image_id)) = (account_id, image_id) {
+                    Ok(Self::Disclosed {
+                        account_id: (*account_id).into(),
+                        image_id: *image_id,
+                    })
+                } else {
+                    log::error!(
+                        "Disclosed `FfiProgramImageClaim` is missing its account or image id"
+                    );
+                    Err(OperationStatus::NullPointer)
                 }
             }
-            FfiProgramImageClaimKind::Undisclosed => {
-                let root = unsafe { Box::from_raw(value.root.cast_mut()) };
-
-                Self::Undisclosed { root: *root }
-            }
+            FfiProgramImageClaimKind::Undisclosed => root
+                .map(|root| Self::Undisclosed { root: *root })
+                .ok_or_else(|| {
+                    log::error!("Undisclosed `FfiProgramImageClaim` is missing its root");
+                    OperationStatus::NullPointer
+                }),
         }
     }
 }
@@ -250,7 +264,7 @@ struct OwnedPrivateBody {
     private_actions: Vec<PrivateAction>,
     block_validity_window: [u64; 2],
     timestamp_validity_window: [u64; 2],
-    program_image_claims: Vec<ProgramImageClaim>,
+    program_image_claims: Vec<Result<ProgramImageClaim, OperationStatus>>,
     nonces: Vec<FfiNonceEntry>,
     admission_evidence: Vec<FfiPublicAccountEvidence>,
     witness_set: Vec<FfiSignaturePubKeyEntry>,
@@ -275,7 +289,10 @@ impl From<Box<FfiPrivateTransactionBody>> for OwnedPrivateBody {
             private_actions: owned(message.private_actions),
             block_validity_window: message.block_validity_window,
             timestamp_validity_window: message.timestamp_validity_window,
-            program_image_claims: owned(message.program_image_claims),
+            program_image_claims: Vec::from(message.program_image_claims)
+                .into_iter()
+                .map(ProgramImageClaim::try_from)
+                .collect(),
             nonces: message.nonces.into(),
             admission_evidence: message.admission_evidence.into(),
             witness_set: witness_set.into(),
@@ -287,6 +304,7 @@ impl From<Box<FfiPrivateTransactionBody>> for OwnedPrivateBody {
 impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
     type Error = OperationStatus;
 
+    /// Reclaims every allocation before validating, so a failed conversion leaks nothing.
     fn try_from(value: Box<FfiPrivateTransactionBody>) -> Result<Self, Self::Error> {
         let OwnedPrivateBody {
             public_context,
@@ -316,7 +334,9 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                         blocks: cast_ffi_validity_window(block_validity_window)?,
                         timestamps: cast_ffi_validity_window(timestamp_validity_window)?,
                     },
-                    program_image_claims,
+                    program_image_claims: program_image_claims
+                        .into_iter()
+                        .collect::<Result<_, _>>()?,
                 },
                 nonces: nonces_from_ffi(nonces).map_err(cast_error)?,
                 admission_evidence: public_account_evidence(admission_evidence)?,
@@ -804,7 +824,13 @@ mod tests {
                     }),
                     private_actions: vec![],
                     validity: ValidityWindows::new_unbounded(),
-                    program_image_claims: vec![],
+                    program_image_claims: vec![
+                        ProgramImageClaim::Disclosed {
+                            account_id: account_id(30),
+                            image_id: [31; 8],
+                        },
+                        ProgramImageClaim::Undisclosed { root: [32; 32] },
+                    ],
                 },
                 nonces: BTreeMap::from([(account_id(28), Nonce(29))]),
                 admission_evidence: admission_evidence(),
@@ -846,6 +872,13 @@ mod tests {
         let mut entries = Vec::from(std::mem::replace(list, Vec::new().into()));
         edit(&mut entries);
         *list = entries.into();
+    }
+
+    /// The first claim is the disclosed one.
+    fn drop_a_disclosed_image_id(claims: &mut [FfiProgramImageClaim]) {
+        let claim = &mut claims[0];
+        drop(unsafe { Box::from_raw(claim.image_id.cast_mut()) });
+        claim.image_id = std::ptr::null();
     }
 
     fn duplicate_first_nonce(nonces: &mut Vec<FfiNonceEntry>) {
@@ -944,8 +977,33 @@ mod tests {
             ProgramImageClaim::Undisclosed { root: [3; 32] },
         ] {
             let ffi: FfiProgramImageClaim = claim.into();
-            assert_eq!(ProgramImageClaim::from(ffi), claim);
+            assert_eq!(ProgramImageClaim::try_from(ffi), Ok(claim));
         }
+    }
+
+    #[test]
+    fn a_claim_missing_a_pointer_its_tag_needs_is_a_null_pointer_error() {
+        let disclosed_without_ids = FfiProgramImageClaim {
+            image_claim_kind: FfiProgramImageClaimKind::Disclosed,
+            account_id: std::ptr::null(),
+            image_id: std::ptr::null(),
+            root: Box::into_raw(Box::new([9; 32])),
+        };
+        assert_eq!(
+            ProgramImageClaim::try_from(disclosed_without_ids),
+            Err(OperationStatus::NullPointer)
+        );
+
+        let undisclosed_without_root = FfiProgramImageClaim {
+            image_claim_kind: FfiProgramImageClaimKind::Undisclosed,
+            account_id: std::ptr::null(),
+            image_id: std::ptr::null(),
+            root: std::ptr::null(),
+        };
+        assert_eq!(
+            ProgramImageClaim::try_from(undisclosed_without_root),
+            Err(OperationStatus::NullPointer)
+        );
     }
 
     #[test]
@@ -1007,8 +1065,13 @@ mod tests {
         assert!(
             PrivacyPreservingTransaction::try_from(Box::new(signed_private_body(|_| {}))).is_ok()
         );
-        let corruptions: [fn(&mut FfiPrivateTransactionBody); 4] = [
+        let corruptions: [fn(&mut FfiPrivateTransactionBody); 5] = [
             |body| body.message.block_validity_window = [5, 3],
+            |body| {
+                edit(&mut body.message.program_image_claims, |claims| {
+                    drop_a_disclosed_image_id(claims);
+                });
+            },
             |body| edit(&mut body.message.nonces, duplicate_first_nonce),
             |body| {
                 edit(&mut body.message.admission_evidence, |e| {

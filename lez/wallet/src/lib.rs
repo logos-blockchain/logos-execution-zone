@@ -130,8 +130,8 @@ pub enum ExecutionFailureKind {
     MissingMembershipProof(AccountId),
     #[error("Account {0} is a foreign private account, which this wallet cannot witness")]
     ForeignPrivateAccount(AccountId),
-    #[error("Program bytecode splits into {expected} segment(s) but {actual} were supplied")]
-    SegmentCountMismatch { expected: usize, actual: usize },
+    #[error(transparent)]
+    SegmentChain(#[from] program_loader_core::SegmentChainError),
     #[error("Program bytecode is not a valid RISC0 program binary")]
     InvalidProgramBinary(#[source] anyhow::Error),
     #[error(
@@ -2369,7 +2369,7 @@ mod tests {
             };
             served
                 .accounts
-                .insert(*segment, loader(segment_state.to_bytes()));
+                .insert(*segment, loader(segment_state.to_loader_actor_state()));
         }
         let header_state = ProgramHeader {
             image_id: program.id(),
@@ -2378,7 +2378,7 @@ mod tests {
         };
         served
             .accounts
-            .insert(header, loader(header_state.to_bytes()));
+            .insert(header, loader(header_state.to_loader_actor_state()));
         header
     }
 

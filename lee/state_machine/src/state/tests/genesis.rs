@@ -65,7 +65,7 @@ fn genesis_immutable_program_lands_immutable_mirror_commitment() {
     let state = V03State::new().with_programs([crate::test_methods::scripted()]);
     let header_account_id =
         lee_core::account::AccountId::from_builtin_program(crate::test_methods::scripted().id());
-    let program_header = lee_core::program::ProgramHeader::from_bytes(
+    let program_header = lee_core::program::ProgramHeader::from_loader_actor_state(
         state.public_state[&header_account_id]
             .data
             .actor_state(PROGRAM_LOADER_ACCOUNT_ID),
@@ -84,7 +84,7 @@ fn genesis_mutable_program_lands_no_immutable_mirror_commitment() {
         V03State::new().with_genesis_programs([(crate::test_methods::forges_echo(), false)]);
     let header_account_id =
         lee_core::account::AccountId::from_builtin_program(crate::test_methods::forges_echo().id());
-    let program_header = lee_core::program::ProgramHeader::from_bytes(
+    let program_header = lee_core::program::ProgramHeader::from_loader_actor_state(
         state.public_state[&header_account_id]
             .data
             .actor_state(PROGRAM_LOADER_ACCOUNT_ID),
@@ -140,4 +140,20 @@ fn state_serialization_roundtrip() {
     let bytes = borsh::to_vec(&state).unwrap();
     let state_from_bytes: V03State = borsh::from_slice(&bytes).unwrap();
     assert_eq!(state, state_from_bytes);
+}
+
+#[test]
+#[should_panic(expected = "builtin program must be built with the protocol's default kernel")]
+fn genesis_rejects_a_builtin_with_a_non_default_kernel() {
+    let elf = risc0_binfmt::ProgramBinary::new(b"user elf", b"some other kernel").encode();
+    let program = Program::new_unchecked([1; 8], elf.into());
+    let _state = V03State::new().with_programs([program]);
+}
+
+#[test]
+#[should_panic(expected = "builtin program's image id does not match its bytecode")]
+fn genesis_rejects_a_builtin_whose_id_does_not_match_its_bytecode() {
+    let elf = crate::test_methods::scripted().elf().to_vec();
+    let program = Program::new_unchecked([1; 8], elf.into());
+    let _state = V03State::new().with_programs([program]);
 }

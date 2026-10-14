@@ -29,13 +29,13 @@ impl ActorStates {
                     bytecode,
                     next_segment: next,
                 }
-                .to_bytes(),
+                .to_loader_actor_state(),
             ),
         )
     }
 
     fn header(self, account_id: AccountId, header: &ProgramHeader) -> Self {
-        self.with(account_id, ActorState::from(header.to_bytes()))
+        self.with(account_id, ActorState::from(header.to_loader_actor_state()))
     }
 
     fn read<'actor_states>(
@@ -72,7 +72,7 @@ fn write_segment_writes_the_loader_actor_state() {
     };
 
     let (transition, new_commitment) = handle_message(
-        &input(target_id, false, ActorState::empty(), &message),
+        &input(target_id, true, ActorState::empty(), &message),
         actor_states.read(),
     );
 
@@ -80,7 +80,7 @@ fn write_segment_writes_the_loader_actor_state() {
         .response
         .post_state
         .expect("a segment was written");
-    let segment = ProgramSegment::from_bytes(&post_state).expect("valid segment");
+    let segment = ProgramSegment::from_loader_actor_state(&post_state).expect("valid segment");
     assert_eq!(segment.bytecode, vec![1, 2, 3]);
     assert_eq!(segment.next_segment, None);
     assert!(
@@ -88,6 +88,49 @@ fn write_segment_writes_the_loader_actor_state() {
             && transition.response.async_messages.is_empty()
     );
     assert!(new_commitment.is_none());
+}
+
+#[test]
+#[should_panic(expected = "WriteSegment target must be an authorized account")]
+fn write_segment_rejects_an_unauthorized_target() {
+    let message = Message::WriteSegment {
+        bytecode: vec![1],
+        next_segment: None,
+    };
+
+    let _transition = handle_message(
+        &input(
+            AccountId::new([1; 32]),
+            false,
+            ActorState::empty(),
+            &message,
+        ),
+        ActorStates::default().read(),
+    );
+}
+
+#[test]
+fn write_segment_stores_header_sized_bytecode_as_a_segment() {
+    let next_id = AccountId::new([1; 32]);
+    let actor_states = ActorStates::default().segment(next_id, vec![9], None);
+    for (bytecode_len, next_segment) in [(60, None), (28, Some(next_id))] {
+        let message = Message::WriteSegment {
+            bytecode: vec![0; bytecode_len],
+            next_segment,
+        };
+
+        let (transition, _) = handle_message(
+            &input(AccountId::new([2; 32]), true, ActorState::empty(), &message),
+            actor_states.read(),
+        );
+
+        let stored = transition
+            .response
+            .post_state
+            .expect("a segment was written");
+        assert!(ProgramSegment::from_loader_actor_state(&stored).is_some());
+        assert_eq!(ProgramHeader::from_loader_actor_state(&stored), None);
+    }
 }
 
 #[test]
@@ -102,7 +145,7 @@ fn write_segment_rejects_an_occupied_loader_actor_state() {
     };
 
     let _transition = handle_message(
-        &input(target_id, false, pre_state, &message),
+        &input(target_id, true, pre_state, &message),
         actor_states.read(),
     );
 }
@@ -119,7 +162,7 @@ fn write_segment_rejects_a_next_segment_with_malformed_data() {
     };
 
     let _transition = handle_message(
-        &input(target_id, false, ActorState::empty(), &message),
+        &input(target_id, true, ActorState::empty(), &message),
         actor_states.read(),
     );
 }
@@ -285,5 +328,97 @@ fn a_header_cannot_be_created_at_the_loader_address() {
             &message,
         ),
         ActorStates::default().read(),
+    );
+}
+
+#[test]
+fn build_segments_links_each_chunk_to_the_next_id() {
+    let user_elf: Vec<u8> = (0..=u8::MAX)
+        .cycle()
+        .take(MAX_SEGMENT_DATA_LEN * 2 + 5)
+        .collect();
+    let ids = [
+        AccountId::new([1; 32]),
+        AccountId::new([2; 32]),
+        AccountId::new([3; 32]),
+    ];
+
+    let segments = build_segments(&user_elf, &ids).expect("valid chain");
+
+    let next: Vec<_> = segments
+        .iter()
+        .map(|segment| segment.next_segment)
+        .collect();
+    assert_eq!(next, vec![Some(ids[1]), Some(ids[2]), None]);
+    let rejoined: Vec<u8> = segments
+        .into_iter()
+        .flat_map(|segment| segment.bytecode)
+        .collect();
+    assert_eq!(rejoined, user_elf);
+}
+
+#[test]
+fn build_segments_rejects_a_segment_count_mismatch() {
+    let user_elf = vec![0; MAX_SEGMENT_DATA_LEN + 1];
+    assert_eq!(
+        build_segments(&user_elf, &[AccountId::new([1; 32])]),
+        Err(SegmentChainError::CountMismatch {
+            expected: 2,
+            actual: 1
+        })
+    );
+}
+
+/// Refused before upload, not at `CreateHeader` after every segment is paid for.
+#[test]
+fn build_segments_rejects_a_chain_over_the_segment_cap() {
+    let count = MAX_PROGRAM_SEGMENTS + 1;
+    let user_elf = vec![0; MAX_SEGMENT_DATA_LEN * count];
+    let ids: Vec<_> = (0..count)
+        .map(|i| AccountId::new([u8::try_from(i).unwrap(); 32]))
+        .collect();
+    assert_eq!(
+        build_segments(&user_elf, &ids),
+        Err(SegmentChainError::TooManySegments { count })
+    );
+}
+
+fn linked_header() -> ProgramHeader {
+    ProgramHeader {
+        image_id: [60, 0, 0, 0, 0, 0, 0, 0],
+        program_first_segment: AccountId::new([3; 32]),
+        immutable: false,
+    }
+}
+
+#[test]
+#[should_panic(expected = "every supplied segment account must decode as a valid ProgramSegment")]
+fn create_header_rejects_a_chain_linking_to_a_header() {
+    let linked_header_id = AccountId::new([2; 32]);
+    let actor_states = ActorStates::default().header(linked_header_id, &linked_header());
+    let message = Message::CreateHeader {
+        first_segment: linked_header_id,
+        immutable: true,
+    };
+
+    let _transition = handle_message(
+        &input(AccountId::new([1; 32]), true, ActorState::empty(), &message),
+        actor_states.read(),
+    );
+}
+
+#[test]
+#[should_panic(expected = "`next_segment` must already hold a valid segment")]
+fn write_segment_rejects_linking_to_a_header() {
+    let linked_header_id = AccountId::new([2; 32]);
+    let actor_states = ActorStates::default().header(linked_header_id, &linked_header());
+    let message = Message::WriteSegment {
+        bytecode: vec![1],
+        next_segment: Some(linked_header_id),
+    };
+
+    let _transition = handle_message(
+        &input(AccountId::new([1; 32]), true, ActorState::empty(), &message),
+        actor_states.read(),
     );
 }

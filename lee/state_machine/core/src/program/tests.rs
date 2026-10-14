@@ -175,8 +175,8 @@ fn get_program_via_reads_the_loader_actor_state() {
         bytecode: vec![1, 2, 3],
         next_segment: None,
     };
-    let program_actor_state: ActorState = header.to_bytes().into();
-    let segment_actor_state: ActorState = segment.to_bytes().into();
+    let program_actor_state: ActorState = header.to_loader_actor_state().into();
+    let segment_actor_state: ActorState = segment.to_loader_actor_state().into();
     let lookup = |id| {
         if id == program_account {
             Some(&program_actor_state)
@@ -209,6 +209,63 @@ fn blinded_account_id_matches_pinned_value() {
 fn a_zero_factor_still_blinds_the_account() {
     let account_id = AccountId::new([1; 32]);
     assert_ne!(account_id.blinded(&[0; 32]), account_id);
+}
+
+/// Untagged, the linked header's bytes would parse as a segment.
+#[test]
+fn get_program_via_does_not_follow_a_link_to_a_header() {
+    let program_account = AccountId::new([1; 32]);
+    let linked_header_account = AccountId::new([2; 32]);
+    let program_actor_state: ActorState = ProgramHeader {
+        image_id: [7; 8],
+        program_first_segment: linked_header_account,
+        immutable: true,
+    }
+    .to_loader_actor_state()
+    .into();
+    let linked_actor_state: ActorState = ProgramHeader {
+        image_id: [60, 0, 0, 0, 0, 0, 0, 0],
+        program_first_segment: AccountId::new([3; 32]),
+        immutable: false,
+    }
+    .to_loader_actor_state()
+    .into();
+    let lookup = |id| {
+        if id == program_account {
+            Some(&program_actor_state)
+        } else if id == linked_header_account {
+            Some(&linked_actor_state)
+        } else {
+            None
+        }
+    };
+    assert_eq!(get_program_via(program_account, lookup), None);
+}
+
+#[test]
+fn loader_entry_decoders_reject_the_other_variant() {
+    let header = ProgramHeader {
+        image_id: [7; 8],
+        program_first_segment: AccountId::new([2; 32]),
+        immutable: false,
+    };
+    let segment = ProgramSegment {
+        bytecode: vec![1, 2, 3],
+        next_segment: None,
+    };
+    let header_bytes = header.to_loader_actor_state();
+    let segment_bytes = segment.clone().to_loader_actor_state();
+
+    assert_eq!(
+        ProgramHeader::from_loader_actor_state(&header_bytes),
+        Some(header)
+    );
+    assert_eq!(ProgramSegment::from_loader_actor_state(&header_bytes), None);
+    assert_eq!(
+        ProgramSegment::from_loader_actor_state(&segment_bytes),
+        Some(segment)
+    );
+    assert_eq!(ProgramHeader::from_loader_actor_state(&segment_bytes), None);
 }
 
 // ---- AccountId::for_private_pda tests ----

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::{cell::Cell, collections::BTreeSet};
 
 use lee_core::{
     Commitment,
@@ -11,10 +11,14 @@ use log::debug;
 
 use super::{catch_program_loader_panic, loader_actor_state};
 use crate::{
-    V03State,
+    V03State, ensure,
     error::{InvalidProgramBehaviorError, LeeError},
     program::load_program,
 };
+
+/// Cycles charged per loader actor state byte read, as the native loader records none. ~3.7x
+/// below measured cost, kept so the default wallet gas limit covers any legal chain.
+pub(super) const LOADER_CYCLES_PER_BYTE: Cycles = 1;
 
 pub(super) struct PublicBackend<'state> {
     state: &'state V03State,
@@ -67,13 +71,22 @@ impl ExecutionEnvironment for PublicBackend<'_> {
         let program_account_id = input.receiver.program_account_id;
         debug!("Program {program_account_id:?} input: {input:?}");
         let transition = if program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
-            // `program_loader` runs as Rust, not a guest ELF, so there is no session to charge.
             const ABSENT: &ActorState = &ActorState::empty();
+            let bytes_read = Cell::new(byte_len(&input.pre_state));
             let (transition, new_commitment) = catch_program_loader_panic(|| {
                 program_loader_core::handle_message(input, |account_id| {
-                    loader_actor_state(view, state, account_id).unwrap_or(ABSENT)
+                    let read = loader_actor_state(view, state, account_id).unwrap_or(ABSENT);
+                    bytes_read.set(bytes_read.get().saturating_add(byte_len(read)));
+                    read
                 })
             })?;
+            let call_cycles = bytes_read.get().saturating_mul(LOADER_CYCLES_PER_BYTE);
+            let budget = self.cycle_budget.saturating_sub(*self.cycles_used);
+            ensure!(call_cycles <= budget, LeeError::OutOfGas { budget });
+            *self.cycles_used = self
+                .cycles_used
+                .checked_add(call_cycles)
+                .expect("cycle sums fit u64: the charge is within the budget");
             self.program_commitments.extend(new_commitment);
             transition
         } else if program_account_id == NATIVE_TOKEN_PROGRAM_ID {
@@ -114,4 +127,8 @@ impl ExecutionEnvironment for PublicBackend<'_> {
     ) -> Result<bool, LeeError> {
         Ok(placement == Placement::Public && self.promotions.remove(&index))
     }
+}
+
+fn byte_len(actor_state: &ActorState) -> u64 {
+    u64::try_from(actor_state.len()).expect("an actor state's length fits u64")
 }

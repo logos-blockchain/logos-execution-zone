@@ -441,3 +441,71 @@ fn a_send_to_an_undeclared_actor_from_a_later_transition_is_charged() {
     let diff = result.expect("a charged failure still yields an applicable diff");
     assert!(diff.public_diff().is_empty());
 }
+
+/// A signed `WriteSegment` linking to a `next_len`-byte segment, and that segment's stored size.
+fn loader_write_fixture(next_len: usize) -> (V03State, crate::PublicTransaction, u64) {
+    use lee_core::{
+        account::{Account, ActorState},
+        program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramSegment},
+    };
+
+    let next = AccountId::new([9; 32]);
+    let next_state = ProgramSegment {
+        bytecode: vec![7; next_len],
+        next_segment: None,
+    }
+    .to_loader_actor_state();
+    let next_state_len = u64::try_from(next_state.len()).unwrap();
+    let state = V03State::new().with_public_accounts([(
+        next,
+        Account::default()
+            .with_actor_state(PROGRAM_LOADER_ACCOUNT_ID, ActorState::from(next_state)),
+    )]);
+
+    let key = PrivateKey::try_new([3; 32]).unwrap();
+    let target = Actor::new(
+        AccountId::from(&PublicKey::new_from_private_key(&key)),
+        PROGRAM_LOADER_ACCOUNT_ID,
+    );
+    let tx = public_tx(
+        target,
+        vec![target],
+        vec![Nonce(0)],
+        program_loader_core::Message::WriteSegment {
+            bytecode: vec![1, 2, 3],
+            next_segment: Some(next),
+        },
+        &[&key],
+    );
+    (state, tx, next_state_len)
+}
+
+#[test]
+fn loader_is_charged_for_the_actor_state_bytes_it_reads() {
+    let (state, tx, next_state_len) = loader_write_fixture(10_000);
+
+    let (_diff, charge) = ValidatedStateDiff::from_public_transaction_with_cycle_budget(
+        &tx,
+        &state,
+        1,
+        0,
+        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+    )
+    .expect("a signed segment write validates");
+
+    assert_eq!(
+        charge.cycles,
+        next_state_len * super::public_backend::LOADER_CYCLES_PER_BYTE
+    );
+}
+
+#[test]
+fn loader_reads_beyond_the_budget_are_out_of_gas() {
+    let (state, tx, next_state_len) = loader_write_fixture(10_000);
+    let budget = next_state_len * super::public_backend::LOADER_CYCLES_PER_BYTE - 1;
+
+    let result =
+        ValidatedStateDiff::from_public_transaction_with_cycle_budget(&tx, &state, 1, 0, budget);
+
+    assert!(matches!(result, Err(LeeError::OutOfGas { budget: b }) if b == budget));
+}
