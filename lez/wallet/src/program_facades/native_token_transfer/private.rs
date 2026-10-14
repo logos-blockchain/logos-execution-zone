@@ -37,6 +37,7 @@ impl NativeTokenTransfer<'_> {
                 ],
                 instruction_data,
                 &ProgramWithDependencies::native(),
+                None,
                 tx_pre_check,
             )
             .await
@@ -70,6 +71,7 @@ impl NativeTokenTransfer<'_> {
                 vec![from_account.balance(), to_account.balance()],
                 instruction_data,
                 &ProgramWithDependencies::native(),
+                None,
                 tx_pre_check,
             )
             .await

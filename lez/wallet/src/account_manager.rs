@@ -291,6 +291,8 @@ impl State {
 pub struct AccountManager {
     states: Vec<State>,
     rows: Vec<Row>,
+    /// A private account named to pay the fee; prepared like a mention but outside the root call.
+    fee_payer: Option<AccountId>,
     pin: Option<String>,
     dummy_commitment_root: CommitmentSetDigest,
 }
@@ -304,9 +306,12 @@ impl AccountManager {
     /// application and that all users share the value for a larger anonymity set.
     const MAX_PRIVATE_ACCOUNTS: usize = 7;
 
+    /// `fee_payer` names an owned private account that pays the fee without joining the root
+    /// call, for transactions whose own accounts cannot (a PDA spend, say).
     pub async fn new(
         wallet: &WalletCore,
         mentions: Vec<AccountMention>,
+        fee_payer: Option<AccountId>,
     ) -> Result<Self, ExecutionFailureKind> {
         let mut states: Vec<State> = Vec::new();
         let mut rows = Vec::with_capacity(mentions.len());
@@ -354,11 +359,24 @@ impl AccountManager {
             });
         }
 
+        if let Some(payer) = fee_payer.filter(|payer| !prepared.contains_key(payer)) {
+            states.push(
+                prepare_account(
+                    wallet,
+                    AccountIdentity::PrivateOwned(payer),
+                    ProgramShardSelector::native_balance(payer),
+                    &mut pin,
+                )
+                .await?,
+            );
+        }
+
         let dummy_commitment_root = fetch_private_proofs_and_root(wallet, &mut states).await?;
 
         Ok(Self {
             states,
             rows,
+            fee_payer,
             pin,
             dummy_commitment_root,
         })
@@ -577,6 +595,41 @@ impl AccountManager {
         }
 
         Ok(first_signer)
+    }
+
+    /// The private account that pays `fee`: the named fee payer, else the first authorized one
+    /// holding at least `fee`. A named payer that cannot pay is an error; none at all means the
+    /// caller falls back to [`Self::fee_payer_account_id`].
+    pub fn private_fee_payer_account_id(
+        &self,
+        fee: u128,
+    ) -> Result<Option<AccountId>, ExecutionFailureKind> {
+        let can_pay = |state: &State| match state {
+            State::Private(pre) if state.is_authorized() => pre
+                .pre_state
+                .account
+                .data
+                .native_balance()
+                .is_ok_and(|balance| balance >= fee),
+            State::Private(_) | State::Public { .. } | State::PublicKeycard { .. } => false,
+        };
+        if let Some(payer) = self.fee_payer {
+            let state = self
+                .states
+                .iter()
+                .find(|state| state.account_id() == payer)
+                .expect("the fee payer is prepared with the mentions");
+            return if can_pay(state) {
+                Ok(Some(payer))
+            } else {
+                Err(ExecutionFailureKind::InsufficientFundsError)
+            };
+        }
+        Ok(self
+            .states
+            .iter()
+            .find(|state| can_pay(state))
+            .map(State::account_id))
     }
 
     /// Whether `account_id` is a public account whose signature [`Self::sign_message`] produces.
@@ -1033,6 +1086,56 @@ mod tests {
         public_signing_state_with(seed, Account::funded(balance))
     }
 
+    fn private_signing_state(seed: u8, balance: u128) -> State {
+        let npk = NullifierPublicKey([seed; 32]);
+        let vpk = ViewingPublicKey::from_seed(&[seed; 32], &[seed; 32]);
+        let account_id = lee::AccountId::from((&npk, &vpk, Identifier::ZERO));
+        State::Private(Box::new(AccountPreparedData {
+            kind: WitnessKind::Regular {
+                ask: Some(AuthorizationSecretKey([seed; 32])),
+            },
+            nsk: None,
+            npk,
+            identifier: Identifier::ZERO,
+            vpk,
+            pre_state: PreparedAccount {
+                account_id,
+                account: Account::funded(balance),
+            },
+            proof: None,
+            random_seed: [0; 32],
+        }))
+    }
+
+    #[test]
+    fn private_fee_payer_is_the_first_authorized_account_that_can_pay() {
+        let poor = private_signing_state(1, 99);
+        let rich = private_signing_state(2, 100);
+        let expected = rich.account_id();
+        let manager = manager(vec![private_state(), poor, rich]);
+        assert_eq!(
+            manager.private_fee_payer_account_id(100).unwrap(),
+            Some(expected)
+        );
+        assert_eq!(manager.private_fee_payer_account_id(101).unwrap(), None);
+    }
+
+    #[test]
+    fn a_named_private_fee_payer_must_afford_the_fee() {
+        let payer = private_signing_state(1, 100);
+        let payer_id = payer.account_id();
+        let mut manager = manager(vec![private_signing_state(2, 1_000), payer]);
+        manager.fee_payer = Some(payer_id);
+        assert_eq!(
+            manager.private_fee_payer_account_id(100).unwrap(),
+            Some(payer_id)
+        );
+        assert!(matches!(
+            manager.private_fee_payer_account_id(101),
+            Err(ExecutionFailureKind::InsufficientFundsError)
+        ));
+    }
+
     fn public_signing_state_with(seed: u8, account: Account) -> State {
         let sk = lee::PrivateKey::try_new([seed; 32]).expect("valid key");
         let account_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&sk));
@@ -1079,6 +1182,7 @@ mod tests {
         AccountManager {
             states,
             rows,
+            fee_payer: None,
             pin: None,
             dummy_commitment_root: [0; 32],
         }

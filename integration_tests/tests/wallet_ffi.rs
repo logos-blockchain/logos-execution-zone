@@ -24,7 +24,9 @@ use anyhow::Result;
 use common::HashType;
 use integration_tests::{
     BlockingTestContext, TIME_TO_WAIT_FOR_BLOCK_SECONDS,
-    config::{INITIAL_PRIVATE_BALANCES_FOR_WALLET, INITIAL_PUBLIC_BALANCES_FOR_WALLET},
+    config::{
+        INITIAL_PRIVATE_BALANCES_FOR_WALLET, INITIAL_PUBLIC_BALANCES_FOR_WALLET, min_private_fee,
+    },
 };
 use lee::{Account, AccountId, PrivateKey, PublicKey, program::Program};
 use lee_core::{
@@ -755,9 +757,7 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
         (&out_account).try_into().unwrap()
     };
 
-    // A private account: private balances stay small (fee-exempt under the
-    // interim policy), so this asserts against the private constant, not the
-    // LGO-scaled public one.
+    // A private account, so this asserts against the private constant, not the public one.
     assert_eq!(
         account.data,
         Account::funded(INITIAL_PRIVATE_BALANCES_FOR_WALLET[0]).data
@@ -1095,9 +1095,9 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
         u128::from_le_bytes(out_balance)
     };
 
-    // A shield moves public funds into a private account and is fee-exempt, so
-    // the public sender is debited exactly the amount, with no fee.
-    assert_eq!(from_balance, from_before - 100);
+    // The fresh private recipient holds nothing, so the public sender pays the amount and the
+    // in-proof fee.
+    assert_eq!(from_balance, from_before - 100 - min_private_fee());
     assert_eq!(to_balance, 100);
 
     unsafe {
@@ -1161,10 +1161,12 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
         u128::from_le_bytes(out_balance)
     };
 
-    // A deshield moves private funds into a public account and is fee-exempt, so
-    // the private sender is debited exactly the amount and the public recipient
-    // is credited exactly the amount, with no fee on either side.
-    assert_eq!(from_balance, 9900);
+    // The private sender pays the amount and the in-proof fee; the public recipient gains the
+    // amount.
+    assert_eq!(
+        from_balance,
+        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0] - 100 - min_private_fee()
+    );
     assert_eq!(to_balance, to_before + 100);
 
     unsafe {
@@ -1244,7 +1246,10 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
         u128::from_le_bytes(out_balance)
     };
 
-    assert_eq!(from_balance, 9900);
+    assert_eq!(
+        from_balance,
+        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0] - 100 - min_private_fee()
+    );
     assert_eq!(to_balance, 100);
 
     unsafe {
@@ -1840,11 +1845,12 @@ fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
     let new_from_balance = from_account.data.native_balance().expect("Must fit");
     let new_to_balance = to_account.data.native_balance().expect("Must fit");
 
-    assert!(
-        10000_u128.saturating_sub(new_from_balance) < DEFAULT_MAX_FEE,
-        "Must transfer >= amount",
+    // The private sender pays the amount and the in-proof fee.
+    assert_eq!(
+        new_from_balance,
+        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0] - 100 - min_private_fee()
     );
-    assert_eq!(new_to_balance, 20100,);
+    assert_eq!(new_to_balance, INITIAL_PRIVATE_BALANCES_FOR_WALLET[1] + 100);
 
     unsafe {
         let mentions = account_mentions.cast_mut();

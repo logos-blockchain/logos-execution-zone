@@ -9,7 +9,7 @@
 use thiserror::Error;
 
 use crate::{
-    assess::{FeeTxView, fee_reserve},
+    assess::{FeeTxView, fee_reserve, private_fee_required},
     market,
     state::FeeState,
 };
@@ -24,6 +24,12 @@ pub enum FeeError {
 
     #[error("max_fee {max_fee} below the fee reserve {fee_reserve}")]
     MaxFeeBelowReserve { fee_reserve: u128, max_fee: u128 },
+
+    #[error("fee height {fee_height} outside the window ending at {height}")]
+    FeeHeightOutOfWindow { fee_height: u64, height: u64 },
+
+    #[error("private fee {paid} below the required {required}")]
+    PrivateFeeBelowRequired { required: u128, paid: u128 },
 
     #[error(
         "block execution gas total {total} exceeds max {}",
@@ -64,10 +70,24 @@ pub fn validate_static_tx(view: &FeeTxView, fee_state: &FeeState) -> Result<(), 
             }
             Ok(())
         }
-        // Private wire size and padding are enforced by the wire-format and
-        // proof validity rules, not here; the fee view carries no signed
-        // fields to check.
-        FeeTxView::Private { .. } => Ok(()),
+        // The flat part only: metered effects are priced after execution.
+        FeeTxView::Private { paid, fee_height } => {
+            let (base_fee_exec, base_fee_stor) =
+                fee_state
+                    .base_fees_at(*fee_height)
+                    .ok_or(FeeError::FeeHeightOutOfWindow {
+                        fee_height: *fee_height,
+                        height: fee_state.height,
+                    })?;
+            let required = private_fee_required(0, base_fee_exec, base_fee_stor);
+            if *paid < required {
+                return Err(FeeError::PrivateFeeBelowRequired {
+                    required,
+                    paid: *paid,
+                });
+            }
+            Ok(())
+        }
     }
 }
 
@@ -155,11 +175,31 @@ mod tests {
     }
 
     #[test]
-    fn private_view_is_statically_valid() {
-        let view = FeeTxView::Private {
-            payer: AccountId::new([7_u8; 32]),
-        };
-        assert_eq!(validate_static_tx(&view, &FeeState::genesis()), Ok(()));
+    fn private_view_needs_a_height_in_the_window_and_the_flat_fee() {
+        let mut state = FeeState::genesis();
+        for _ in 0..=market::PRIVATE_FEE_WINDOW {
+            state.apply_block(&crate::BlockFeeSummary::default());
+        }
+        let flat = private_fee_required(0, state.base_fee_exec, state.base_fee_stor);
+        let view = |paid, fee_height| FeeTxView::Private { paid, fee_height };
+
+        assert_eq!(
+            validate_static_tx(&view(flat, state.height), &state),
+            Ok(())
+        );
+        assert_eq!(validate_static_tx(&view(flat, 1), &state), Ok(()));
+        assert!(matches!(
+            validate_static_tx(&view(flat, 0), &state),
+            Err(FeeError::FeeHeightOutOfWindow { .. })
+        ));
+        assert!(matches!(
+            validate_static_tx(&view(flat, state.height + 1), &state),
+            Err(FeeError::FeeHeightOutOfWindow { .. })
+        ));
+        assert!(matches!(
+            validate_static_tx(&view(flat - 1, state.height), &state),
+            Err(FeeError::PrivateFeeBelowRequired { .. })
+        ));
     }
 
     #[test]

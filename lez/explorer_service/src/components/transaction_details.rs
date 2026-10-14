@@ -100,7 +100,9 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
         private_actions,
         block_validity_window,
         timestamp_validity_window,
+        fee_height,
     } = message;
+    let fee_height_str = fee_height.map_or_else(|| "none".to_owned(), |height| height.to_string());
     let private_action_count = private_actions.len();
     let public_account_count = public_actions.len();
     // One row per effect, in the order settlement folds them: the same shard can appear twice.
@@ -152,6 +154,10 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
                 <div class="info-row">
                     <span class="info-label">"Timestamp Validity Window:"</span>
                     <span class="info-value">{timestamp_validity_window.to_string()}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">"Fee Height:"</span>
+                    <span class="info-value">{fee_height_str}</span>
                 </div>
                 <div class="info-row">
                     <span class="info-label">"Signer Nonces:"</span>

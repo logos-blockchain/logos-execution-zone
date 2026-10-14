@@ -279,6 +279,10 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                 timestamp_validity_window: cast_ffi_validity_window(
                     value.message.timestamp_validity_window,
                 ),
+                fee_height: value
+                    .message
+                    .has_fee_height
+                    .then_some(value.message.fee_height),
             },
             witness_set: WitnessSet {
                 signatures_and_public_keys: {
@@ -392,6 +396,9 @@ pub struct FfiPrivacyPreservingMessage {
     pub private_actions: FfiPrivateActionList,
     pub block_validity_window: [u64; 2],
     pub timestamp_validity_window: [u64; 2],
+    /// `fee_height` is meaningful only when `has_fee_height` is true.
+    pub has_fee_height: bool,
+    pub fee_height: u64,
 }
 
 impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
@@ -402,6 +409,7 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
             private_actions,
             block_validity_window,
             timestamp_validity_window,
+            fee_height,
         } = value;
 
         Self {
@@ -422,6 +430,8 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
                 .into(),
             block_validity_window: cast_validity_window(block_validity_window),
             timestamp_validity_window: cast_validity_window(timestamp_validity_window),
+            has_fee_height: fee_height.is_some(),
+            fee_height: fee_height.unwrap_or_default(),
         }
     }
 }
@@ -658,6 +668,7 @@ mod tests {
                 private_actions: vec![],
                 block_validity_window: ValidityWindow((None, None)),
                 timestamp_validity_window: ValidityWindow((None, None)),
+                fee_height: Some(5),
             },
             witness_set: WitnessSet {
                 signatures_and_public_keys: vec![],

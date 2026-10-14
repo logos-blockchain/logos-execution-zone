@@ -594,31 +594,53 @@ fn a_guest_evaluated_public_effect_settles_against_live_state() {
         .get_proof_for_commitment(&Commitment::new(&sender_id, &pre_account))
         .expect("the account's commitment must be in state");
 
-    let (output, proof) = execute_and_prove(
-        ProvingInput {
-            shard_selectors: vec![
-                // A public account whose shard belongs to the guest, so the guest evaluates the
-                // effect on it.
-                ProgramShardSelector::new(written_to, program_id),
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(recipient_id),
-            ],
-            private_witnesses: vec![update_witness(
-                &sender_keys,
-                Identifier::ZERO,
-                pre_account,
-                membership_proof,
-            )],
-            instruction_data: Program::serialize_instruction((vec![5_u8; 4], amount)).unwrap(),
-            ..Default::default()
-        },
-        &synthetic_program(program),
-    )
-    .unwrap();
+    let program = synthetic_program(program);
+    let proving_input = ProvingInput {
+        shard_selectors: vec![
+            // A public account whose shard belongs to the guest, so the guest evaluates the
+            // effect on it.
+            ProgramShardSelector::new(written_to, program_id),
+            ProgramShardSelector::native_balance(sender_id),
+            ProgramShardSelector::native_balance(recipient_id),
+        ],
+        private_witnesses: vec![update_witness(
+            &sender_keys,
+            Identifier::ZERO,
+            pre_account,
+            membership_proof,
+        )],
+        instruction_data: Program::serialize_instruction((vec![5_u8; 4], amount)).unwrap(),
+        ..Default::default()
+    };
+    let (output, proof) = execute_and_prove(proving_input.clone(), &program).unwrap();
 
     let message = Message::from_circuit_output(vec![], output);
     let witness_set = WitnessSet::for_message(&message, proof, &[]);
     let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+    let (_, cycles) = crate::validated_state_diff::ValidatedStateDiff::from_privacy_preserving_transaction_metered(
+        &tx,
+        &state,
+        1,
+        0,
+        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+    )
+    .unwrap();
+    assert!(cycles > 0, "a guest-evaluated effect is metered");
+
+    // A dry run yields the same effects without a proof, and metering them on the state gives
+    // the cycles settlement will charge.
+    let actions = crate::dry_run(&proving_input, &program).unwrap();
+    assert_eq!(actions, tx.message.public_actions);
+    assert_eq!(
+        crate::meter_public_effects(
+            &state,
+            &actions,
+            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET
+        )
+        .unwrap(),
+        cycles
+    );
 
     state
         .transition_from_privacy_preserving_transaction(&tx, 1, 0)
@@ -769,4 +791,94 @@ fn an_apply_forging_the_pre_state_it_was_given_is_refused() {
 #[test]
 fn an_apply_forging_the_effect_it_actually_planned_is_refused() {
     assert_forged_field_is_refused(ForgeField::EffectData);
+}
+
+#[test]
+fn a_fee_transfer_is_paid_inside_the_proof() {
+    use lee_core::FeeTransfer;
+
+    use crate::{execute_and_prove_with_fee, validated_state_diff::ValidatedStateDiff};
+
+    let sender_keys = test_private_account_keys_1();
+    let sender_id = AccountId::for_regular_private_account(
+        &sender_keys.npk(),
+        &sender_keys.vpk(),
+        Identifier::ZERO,
+    );
+    let recipient_id = AccountId::new([88; 32]);
+    let fee_recipient_id = AccountId::new([99; 32]);
+
+    let pre_account = Account::funded(100);
+    let mut state = V03State::new().with_private_account(&sender_keys, &pre_account);
+    let membership_proof = state
+        .get_proof_for_commitment(&Commitment::new(&sender_id, &pre_account))
+        .expect("the account's commitment must be in state");
+
+    let (output, proof) = execute_and_prove_with_fee(
+        ProvingInput {
+            shard_selectors: vec![
+                ProgramShardSelector::native_balance(sender_id),
+                ProgramShardSelector::native_balance(recipient_id),
+            ],
+            private_witnesses: vec![update_witness(
+                &sender_keys,
+                Identifier::ZERO,
+                pre_account,
+                membership_proof,
+            )],
+            instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
+                amount: 30,
+            })
+            .unwrap(),
+            ..Default::default()
+        },
+        &ProgramWithDependencies::native(),
+        Some(FeeTransfer {
+            payer: sender_id,
+            recipient: fee_recipient_id,
+            amount: 5,
+            height: 7,
+        }),
+    )
+    .unwrap();
+
+    let message = Message::from_circuit_output(vec![], output);
+    assert_eq!(message.fee_height, Some(7));
+    let witness_set = WitnessSet::for_message(&message, proof, &[]);
+    let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+    // The height is bound by the proof.
+    for tampered in [Some(8), None] {
+        let mut tampered_tx = tx.clone();
+        tampered_tx.message.fee_height = tampered;
+        assert!(matches!(
+            ValidatedStateDiff::from_privacy_preserving_transaction(&tampered_tx, &state, 1, 0),
+            Err(LeeError::InvalidPrivacyPreservingProof)
+        ));
+    }
+
+    let (_, cycles) = ValidatedStateDiff::from_privacy_preserving_transaction_metered(
+        &tx,
+        &state,
+        1,
+        0,
+        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+    )
+    .unwrap();
+    assert_eq!(cycles, 0, "native effects are not metered");
+
+    state
+        .transition_from_privacy_preserving_transaction(&tx, 1, 0)
+        .unwrap();
+    assert_eq!(
+        state.get_account_by_id(recipient_id).data.native_balance(),
+        Ok(30)
+    );
+    assert_eq!(
+        state
+            .get_account_by_id(fee_recipient_id)
+            .data
+            .native_balance(),
+        Ok(5)
+    );
 }

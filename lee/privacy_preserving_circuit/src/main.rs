@@ -16,6 +16,7 @@ mod private_backend;
 fn main() {
     let PrivacyPreservingCircuitInput {
         root,
+        fee,
         private_witnesses,
         dummy_inputs,
         ciphertext_padding,
@@ -47,8 +48,8 @@ fn main() {
         );
     }
 
-    let state =
-        ExecutionState::initialize(root, &private_witnesses).unwrap_or_else(|e| panic!("{e}"));
+    let state = ExecutionState::initialize(root, fee.as_ref(), &private_witnesses)
+        .unwrap_or_else(|e| panic!("{e}"));
     let mut backend = PrivateBackend::new(image_id_by_account_id, calls);
     let outcome = state.run(&mut backend).unwrap_or_else(|e| panic!("{e}"));
     backend.finish();
@@ -65,6 +66,7 @@ fn main() {
         dummy_inputs,
         ciphertext_padding,
         program_image_claims,
+        fee.map(|fee| fee.height),
     );
 
     env::commit_slice(&lee_core::to_borsh_frame(&output));

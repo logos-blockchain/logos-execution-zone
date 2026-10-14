@@ -10,7 +10,7 @@ use crate::{
     AuthorizationSecretKey, Identifier,
     account::{Account, Balance, Nonce},
     encryption::ViewingPublicKey,
-    native_token::{NATIVE_TOKEN_PROGRAM_ID, encode_balance},
+    native_token::{self, NATIVE_TOKEN_PROGRAM_ID, encode_balance},
 };
 
 const PROGRAM: AccountId = AccountId::new([4; 32]);
@@ -277,7 +277,7 @@ fn plan(call: &PlanInput) -> PlanOutput {
 }
 
 fn start(root: RootCall, witnesses: &[PrivateWitness]) -> ExecutionState<'_> {
-    ExecutionState::initialize(root, witnesses)
+    ExecutionState::initialize(root, None, witnesses)
         .unwrap_or_else(|_| panic!("initialization must succeed"))
 }
 
@@ -738,6 +738,7 @@ fn a_deferred_public_target_is_never_materialized() {
             instruction_data: vec![1, 2, 3],
             authorized_accounts: vec![ALICE],
         },
+        None,
         &witnesses,
     )
     .unwrap();
@@ -1001,12 +1002,92 @@ fn a_chained_call_cannot_name_an_account_the_root_did_not() {
 }
 
 #[test]
+fn a_fee_transfer_runs_ahead_of_the_root_call() {
+    let keys = Keys::new(4);
+    let payer = keys.regular_id();
+    let witnesses = [keys.update(Account {
+        data: funded(100),
+        ..Account::default()
+    })];
+    let fee = FeeTransfer {
+        payer,
+        recipient: CAROL,
+        amount: 30,
+        height: 7,
+    };
+    // The payer is not an input of the root call.
+    let state = ExecutionState::initialize(
+        root(vec![ProgramShardSelector::native_balance(ALICE)]),
+        Some(&fee),
+        &witnesses,
+    )
+    .unwrap();
+    let mut script = Script::deferring([planning(|call| {
+        native_token::plan(None, &call.accounts, &call.instruction_data).unwrap()
+    })])
+    .answering(|input| Ok(native_token::apply_output(input).unwrap()));
+    let ExecutionOutcome {
+        public,
+        private_accounts,
+        ..
+    } = execute(state, &mut script).unwrap();
+
+    let planned = script.planned();
+    assert_eq!(planned[0].self_account_id, NATIVE_TOKEN_PROGRAM_ID);
+    assert_eq!(authorization(planned[0]), vec![true, false]);
+    assert_eq!(planned[1].self_account_id, PROGRAM);
+    assert_eq!(
+        public,
+        vec![
+            PublicAction {
+                account_id: ALICE,
+                is_authorized: false,
+                effects: Vec::new(),
+            },
+            PublicAction {
+                account_id: CAROL,
+                is_authorized: false,
+                effects: vec![DeferredPublicEffect {
+                    program_account_id: NATIVE_TOKEN_PROGRAM_ID,
+                    shard_program_account_id: NATIVE_TOKEN_PROGRAM_ID,
+                    data: borsh::to_vec(&native_token::Effect::Credit(30)).unwrap(),
+                }],
+            },
+        ]
+    );
+    assert_eq!(private_accounts[&payer], funded(70));
+}
+
+#[test]
+fn a_fee_payer_without_its_key_is_not_authorized() {
+    let keys = Keys::new(4);
+    let witnesses = [keys.regular(false)];
+    let fee = FeeTransfer {
+        payer: keys.regular_id(),
+        recipient: CAROL,
+        amount: 30,
+        height: 7,
+    };
+    let state = ExecutionState::initialize(
+        root(vec![ProgramShardSelector::native_balance(ALICE)]),
+        Some(&fee),
+        &witnesses,
+    )
+    .unwrap();
+    let mut script = Script::deferring([]);
+    execute(state, &mut script).unwrap();
+
+    assert_eq!(authorization(script.planned()[0]), vec![false, false]);
+}
+
+#[test]
 fn a_witness_outside_the_root_inputs_is_rejected() {
     let keys = Keys::new(4);
     let witnesses = [keys.regular(true)];
 
     let result = ExecutionState::initialize(
         root(vec![ProgramShardSelector::native_balance(ALICE)]),
+        None,
         &witnesses,
     );
 
@@ -1024,7 +1105,7 @@ fn duplicate_witnesses_and_unlinked_authorization_keys_are_rejected() {
 
     let duplicate = [keys.regular(true), keys.regular(true)];
     assert!(matches!(
-        ExecutionState::initialize(root(selectors.clone()), &duplicate).err(),
+        ExecutionState::initialize(root(selectors.clone()), None, &duplicate).err(),
         Some(ExecutionError::DuplicateWitness { account_id }) if account_id == keys.regular_id()
     ));
 
@@ -1034,7 +1115,7 @@ fn duplicate_witnesses_and_unlinked_authorization_keys_are_rejected() {
     };
     let unlinked = [unlinked];
     assert!(matches!(
-        ExecutionState::initialize(root(selectors), &unlinked).err(),
+        ExecutionState::initialize(root(selectors), None, &unlinked).err(),
         Some(ExecutionError::InvalidAuthorizationKey { account_id }) if account_id == keys.regular_id()
     ));
 }
@@ -1050,6 +1131,7 @@ fn two_private_pdas_under_one_seed_conflict() {
             ProgramShardSelector::native_balance(keys.pda_id(PROGRAM, SEED)),
             ProgramShardSelector::native_balance(other.pda_id(PROGRAM, SEED)),
         ]),
+        None,
         &witnesses,
     );
 

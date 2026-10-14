@@ -254,6 +254,7 @@ pub fn run(
     async move {
         let block_timeout = config.block_create_timeout;
         let max_block_size = config.max_block_size;
+        let dry_run_rpc = config.dry_run_rpc;
 
         let gossip_config = config.gossip.clone();
         let bedrock_config = config.bedrock_config.clone();
@@ -333,6 +334,7 @@ pub fn run(
             max_block_size,
             executor_ref.clone(),
             gossip_publisher,
+            dry_run_rpc,
         )
         .await?;
         // Nothing binds the address in this build, and with no RPC server there
@@ -501,11 +503,17 @@ async fn setup_rpc_server(
     max_block_size: bytesize::ByteSize,
     executor_ref: ActorRef<ExecutorActor>,
     gossip_publisher: Option<Recipient<PublishTransaction>>,
+    dry_run_rpc: bool,
 ) -> Result<RpcServer> {
-    let rpc_server =
-        RpcServerActor::new(listen_addr, max_block_size, executor_ref, gossip_publisher)
-            .await
-            .context("Failed to initialize RPC Server Actor")?;
+    let rpc_server = RpcServerActor::new(
+        listen_addr,
+        max_block_size,
+        executor_ref,
+        gossip_publisher,
+        dry_run_rpc,
+    )
+    .await
+    .context("Failed to initialize RPC Server Actor")?;
     let addr = rpc_server.addr();
     let rpc_server_ref = RpcServerActor::spawn(rpc_server);
     info!("RPC Server Actor spawned");

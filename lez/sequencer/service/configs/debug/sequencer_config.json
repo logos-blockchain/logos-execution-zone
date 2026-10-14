@@ -4,6 +4,7 @@
     "max_block_size": "1 MiB",
     "mempool_max_size": 1000,
     "block_create_timeout": "15s",
+    "dry_run_rpc": true,
     "retry_pending_blocks_timeout": "5s",
     "bedrock_config": {
         "backoff": {

@@ -27,6 +27,25 @@ impl<'de> Deserialize<'de> for LeeTransaction {
     }
 }
 
+/// The public effects a privacy-preserving transaction defers to settlement, as a
+/// [`lee::dry_run`] reports them, for metering over RPC before the fee is priced.
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct DeferredPublicActions(
+    pub Vec<lee::privacy_preserving_transaction::message::PublicActionWithID>,
+);
+
+impl Serialize for DeferredPublicActions {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        crate::borsh_base64::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for DeferredPublicActions {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        crate::borsh_base64::deserialize(deserializer)
+    }
+}
+
 impl LeeTransaction {
     #[must_use]
     pub fn hash(&self) -> HashType {
@@ -95,7 +114,7 @@ impl LeeTransaction {
         timestamp: Timestamp,
     ) -> Result<ValidatedStateDiff, lee::error::LeeError> {
         let diff = self.compute_state_diff(state, block_id, timestamp)?;
-        validate_no_restricted_account_modification(state, &diff)?;
+        validate_no_restricted_account_modification(self, state, &diff)?;
         validate_bridge_account_modification(state, &diff, matches!(self, Self::Public(_)))?;
         Ok(diff)
     }
@@ -407,17 +426,31 @@ pub fn fee_refund_invocation(payer: AccountId, amount: u128) -> lee::public_tran
 /// transaction. Enforcing this on the apply/settlement path as well as the
 /// builder is what stops a block author from draining the fee inbox/escrow with a
 /// user-section fee-program invocation that honest followers would otherwise
-/// apply. The bridge account has its own increase-only rule
-/// ([`validate_bridge_account_modification`]) and is not included here.
+/// apply.
+///
+/// The one exception is a private transaction's in-proof fee, which may only raise the inbox's
+/// native balance.
+///
+/// The bridge account has its own increase-only rule ([`validate_bridge_account_modification`]) and
+/// is not included here.
 fn validate_no_restricted_account_modification(
+    tx: &LeeTransaction,
     state: &V03State,
     diff: &ValidatedStateDiff,
 ) -> Result<(), lee::error::LeeError> {
+    let fee_inbox = system_accounts::fee_inbox_account_id();
     let restricted_modification_accounts = system_accounts::clock_account_ids()
         .into_iter()
         .chain(system_accounts::fee_account_ids());
     for account_id in restricted_modification_accounts {
-        validate_doesnt_modify_account(state, diff, account_id)?;
+        let in_proof_fee = account_id == fee_inbox
+            && matches!(tx, LeeTransaction::PrivacyPreserving(_))
+            && diff.public_diff().get(&account_id).is_some_and(|post| {
+                native_balance_only_increased(&state.get_account_by_id(account_id), post)
+            });
+        if !in_proof_fee {
+            validate_doesnt_modify_account(state, diff, account_id)?;
+        }
     }
     Ok(())
 }
@@ -457,7 +490,7 @@ fn validate_bridge_account_modification(
         )));
     }
 
-    if bridge_balance_only_increased(&pre, post) {
+    if native_balance_only_increased(&pre, post) {
         Ok(())
     } else {
         Err(lee::error::LeeError::InvalidInput(format!(
@@ -474,7 +507,7 @@ pub fn validate_user_state_modification(
     state: &V03State,
     diff: &ValidatedStateDiff,
 ) -> Result<(), lee::error::LeeError> {
-    validate_no_restricted_account_modification(state, diff)?;
+    validate_no_restricted_account_modification(tx, state, diff)?;
     let injected_program = match tx {
         LeeTransaction::Public(public_tx) if is_system_injection(tx) => {
             Some(public_tx.message().program_account_id)
@@ -508,13 +541,14 @@ fn validate_no_inbox_state_modification(
     }
 }
 
-/// Whether the bridge escrow went from `pre` to `post` by a pure balance
-/// increase (only bridge modification a public transaction may make).
+/// Whether `pre` became `post` by a pure native balance increase: nonce and
+/// every other shard unchanged.
 ///
-/// Legit deposits debit the escrow, but they are sequencer-injected, never
-/// user-submitted, so a user transaction that fails this is a forgery attempt.
+/// The only change a user transaction may make to the bridge escrow (legit
+/// deposits debit it, but they are sequencer-injected) or, for a private
+/// transaction, to the fee inbox.
 #[must_use]
-fn bridge_balance_only_increased(pre: &lee::Account, post: &lee::Account) -> bool {
+fn native_balance_only_increased(pre: &lee::Account, post: &lee::Account) -> bool {
     fn non_native(
         account: &lee::Account,
     ) -> impl Iterator<Item = (&lee::AccountId, &lee::ShardData)> {

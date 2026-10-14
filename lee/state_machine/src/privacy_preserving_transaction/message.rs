@@ -29,6 +29,8 @@ pub struct Message {
     /// See [`ProgramImageClaim`]: the sequencer checks each one against real chain state before
     /// accepting the proof.
     pub program_image_claims: Vec<ProgramImageClaim>,
+    /// The height the in-proof fee transfer was priced at, see [`lee_core::FeeTransfer`].
+    pub fee_height: Option<u64>,
 }
 
 impl std::fmt::Debug for Message {
@@ -58,6 +60,7 @@ impl std::fmt::Debug for Message {
             .field("block_validity_window", &self.block_validity_window)
             .field("timestamp_validity_window", &self.timestamp_validity_window)
             .field("program_image_claims", &self.program_image_claims)
+            .field("fee_height", &self.fee_height)
             .finish()
     }
 }
@@ -80,6 +83,7 @@ impl Message {
             block_validity_window: output.block_validity_window,
             timestamp_validity_window: output.timestamp_validity_window,
             program_image_claims: output.program_image_claims,
+            fee_height: output.fee_height,
         }
     }
 
@@ -184,6 +188,7 @@ pub mod tests {
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
             program_image_claims: vec![],
+            fee_height: None,
         }
     }
 
@@ -196,6 +201,7 @@ pub mod tests {
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
             program_image_claims: vec![],
+            fee_height: Some(7),
         };
 
         // empty vec fields: u32 len=0
@@ -205,6 +211,8 @@ pub mod tests {
         // validity windows: unbounded = {from: None (0_u8), to: None (0_u8)}
         let unbounded_window_bytes: &[u8] = &[0, 0];
         let program_image_claims_bytes: &[u8] = &[0, 0, 0, 0];
+        // fee_height: Some tag, then u64 LE
+        let fee_height_bytes: &[u8] = &[1, 7, 0, 0, 0, 0, 0, 0, 0];
 
         let expected_borsh_vec: Vec<u8> = [
             public_actions_bytes,
@@ -213,6 +221,7 @@ pub mod tests {
             unbounded_window_bytes, // block_validity_window
             unbounded_window_bytes, // timestamp_validity_window
             program_image_claims_bytes,
+            fee_height_bytes,
         ]
         .concat();
         let expected_borsh: &[u8] = &expected_borsh_vec;

@@ -15,7 +15,11 @@ use std::{
 pub use account_manager::{AccountIdentity, AccountMention, CIPHERTEXT_PAD_SIZE, SelectedShard};
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
-use common::{HashType, block::Block, transaction::LeeTransaction};
+use common::{
+    HashType,
+    block::Block,
+    transaction::{DeferredPublicActions, LeeTransaction},
+};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
@@ -28,6 +32,7 @@ use lee::{
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey,
     account::{Nonce, ProgramShardSelector},
+    native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::InstructionData,
 };
 use log::warn;
@@ -113,6 +118,8 @@ pub enum ExecutionFailureKind {
     TransactionBuildError(#[from] lee::error::LeeError),
     #[error("Failed to sign transaction: {0}")]
     SignError(anyhow::Error),
+    #[error("Dry run: the transaction was simulated and not sent")]
+    DryRun,
     #[error("Sending transaction failed for each client")]
     MultiSequencerTransactionSendError,
     #[error("Failed to join a task: {0}")]
@@ -128,6 +135,9 @@ pub struct WalletCore {
     storage_path: PathBuf,
 
     sequencer_client: SequencerClient,
+
+    /// Simulate transactions and report their cost instead of sending them.
+    dry_run: bool,
 }
 
 impl WalletCore {
@@ -202,7 +212,14 @@ impl WalletCore {
             storage,
             storage_path,
             sequencer_client,
+            dry_run: false,
         })
+    }
+
+    /// Simulate transactions and report their cost instead of sending them; a send then ends
+    /// with [`ExecutionFailureKind::DryRun`].
+    pub const fn set_dry_run(&mut self, dry_run: bool) {
+        self.dry_run = dry_run;
     }
 
     /// Get configuration with applied overrides.
@@ -714,20 +731,32 @@ impl WalletCore {
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
-        self.send_privacy_preserving_tx_with_pre_check(accounts, instruction_data, program, |_| {
-            Ok(())
-        })
+        self.send_privacy_preserving_tx_with_pre_check(
+            accounts,
+            instruction_data,
+            program,
+            None,
+            |_| Ok(()),
+        )
         .await
     }
 
+    /// Sends a privacy-preserving transaction over `accounts`.
+    ///
+    /// The in-proof fee is paid by `fee_payer` if given: an owned private account that need not
+    /// be one of `accounts`. Otherwise the first authorized private account in `accounts` that
+    /// can afford the fee pays, falling back to the first public signer (see
+    /// [`AccountManager::fee_payer_account_id`]).
     pub async fn send_privacy_preserving_tx_with_pre_check(
         &self,
         accounts: Vec<AccountMention>,
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
+        fee_payer: Option<AccountId>,
         tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
-        let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
+        let mut acc_manager =
+            account_manager::AccountManager::new(self, accounts, fee_payer).await?;
 
         tx_pre_check(&acc_manager.selected_shards())?;
 
@@ -748,9 +777,72 @@ impl WalletCore {
             ciphertext_padding: Some(CIPHERTEXT_PAD_SIZE),
         };
 
+        // Dry run first: the fee must cover the metered cost of the public effects, and the
+        // sequencer meters them on its head state. The dry run carries no fee call, so a payer
+        // outside the root call has nothing to witness in it.
+        let mut dry_run_input = input.clone();
+        let root_accounts: HashSet<AccountId> = dry_run_input
+            .shard_selectors
+            .iter()
+            .map(|selector| selector.account_id)
+            .collect();
+        dry_run_input
+            .private_witnesses
+            .retain(|witness| root_accounts.contains(&witness.account_id()));
+        let dry_run_program = program.clone();
+        let actions =
+            tokio::task::spawn_blocking(move || lee::dry_run(&dry_run_input, &dry_run_program))
+                .await??;
+        let effect_cycles = self
+            .sequencer_client
+            .dry_run_private_effects(DeferredPublicActions(actions.clone()))
+            .await?;
+        let quote = self.sequencer_client.get_fee_state().await?;
+        let amount = fee_core::assess::private_fee_required(
+            effect_cycles,
+            quote.base_fee_exec,
+            quote.base_fee_stor,
+        );
+        let payer = match acc_manager.private_fee_payer_account_id(amount)? {
+            Some(payer) => payer,
+            None => acc_manager
+                .fee_payer_account_id(self)
+                .await?
+                .ok_or_else(|| {
+                    ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
+                        "Privacy-preserving transaction has no account to pay its fee".to_owned(),
+                    ))
+                })?,
+        };
+        let fee = lee_core::FeeTransfer {
+            payer,
+            recipient: system_accounts::fee_inbox_account_id(),
+            amount,
+            height: quote.height,
+        };
+        if self.dry_run {
+            let guest_effects = actions
+                .iter()
+                .flat_map(|action| &action.effects)
+                .filter(|effect| effect.program_account_id != NATIVE_TOKEN_PROGRAM_ID)
+                .count();
+            println!("Dry run: nothing proven or sent");
+            println!("  public accounts touched: {}", actions.len());
+            println!("  guest-evaluated effects: {guest_effects}");
+            println!("  effect cycles:           {effect_cycles}");
+            println!("  fee payer:               {}", fee.payer);
+            println!("  fee height:              {}", fee.height);
+            println!("  required fee:            {}", fee.amount);
+            return Err(ExecutionFailureKind::DryRun);
+        }
+
         let program = program.clone();
         let (output, proof) = tokio::task::spawn_blocking(move || {
-            lee::privacy_preserving_transaction::circuit::execute_and_prove(input, &program)
+            lee::privacy_preserving_transaction::circuit::execute_and_prove_with_fee(
+                input,
+                &program,
+                Some(fee),
+            )
         })
         .await??;
 
@@ -841,7 +933,7 @@ impl WalletCore {
             ));
         }
 
-        let mut acc_manager = account_manager::AccountManager::new(self, accounts).await?;
+        let mut acc_manager = account_manager::AccountManager::new(self, accounts, None).await?;
 
         tx_pre_check(&acc_manager.selected_shards())?;
 
@@ -911,11 +1003,53 @@ impl WalletCore {
             lee::public_transaction::WitnessSet::from_raw_parts(signatures_public_keys);
 
         let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
+        if self.dry_run {
+            self.report_public_dry_run(tx).await?;
+            return Err(ExecutionFailureKind::DryRun);
+        }
 
         Ok(self
             .sequencer_client
             .send_transaction(LeeTransaction::Public(tx))
             .await?)
+    }
+
+    /// Simulates `tx` on the sequencer and prints what it would cost at the head fee state.
+    async fn report_public_dry_run(
+        &self,
+        tx: lee::PublicTransaction,
+    ) -> Result<(), ExecutionFailureKind> {
+        let fee = tx.message().fee.expect("the wallet always declares a fee");
+        // Storage gas is the wire size settlement sees: the whole `LeeTransaction`.
+        let tx = LeeTransaction::Public(tx);
+        let data_bytes = u128::try_from(
+            borsh::to_vec(&tx)
+                .map_err(|err| ExecutionFailureKind::SignError(err.into()))?
+                .len(),
+        )
+        .expect("transaction size fits u128");
+        let run = self.sequencer_client.dry_run_public_transaction(tx).await?;
+        let quote = self.sequencer_client.get_fee_state().await?;
+        let actual_fee = u128::from(run.cycles)
+            .saturating_mul(u128::from(quote.base_fee_exec))
+            .saturating_add(data_bytes.saturating_mul(u128::from(quote.base_fee_stor)))
+            .saturating_add(u128::from(fee.tip));
+
+        println!("Dry run: nothing sent");
+        println!("  fee payer:        {}", fee.payer);
+        println!("  declared gas:     {}", fee.gas_limit);
+        println!("  metered cycles:   {}", run.cycles);
+        println!("  wire bytes:       {data_bytes}");
+        println!(
+            "  base fees:        exec {} / stor {} (height {})",
+            quote.base_fee_exec, quote.base_fee_stor, quote.height
+        );
+        println!("  fee at head:      {actual_fee} (tip {})", fee.tip);
+        match run.revert {
+            Some(reason) => println!("  action REVERTS:   {reason} (fee is still charged)"),
+            None => println!("  action:           applies"),
+        }
+        Ok(())
     }
 
     pub async fn sync_to_latest_block(&mut self) -> Result<u64> {

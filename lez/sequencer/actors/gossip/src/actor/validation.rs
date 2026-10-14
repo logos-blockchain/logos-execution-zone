@@ -14,7 +14,9 @@ use sequencer_slasher_actor::Approval;
 // allocation on the hot validation path.
 pub enum TxEvaluation {
     /// Structurally valid and authenticated; forward and admit.
-    Accept(LeeTransaction),
+    ///
+    /// NOTE: Boxed due to variant-limit lint.
+    Accept(Box<LeeTransaction>),
     /// Malformed / forbidden; do not forward. `GossipSub` peer scoring is not
     /// configured, so this does not currently penalize the propagating peer.
     Reject(String),
@@ -65,7 +67,7 @@ pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
         return TxEvaluation::Reject("sequencer-only program".to_owned());
     }
 
-    TxEvaluation::Accept(authenticated)
+    TxEvaluation::Accept(Box::new(authenticated))
 }
 
 /// Decodes a gossiped slash approval, drops it if the committee does not
