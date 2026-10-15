@@ -11,7 +11,13 @@ pub async fn deploy_program(
     bytecode: Vec<u8>,
     payer: AccountId,
 ) -> anyhow::Result<AccountId> {
-    let segment_count = bytecode.len().div_ceil(MAX_SEGMENT_DATA_LEN);
+    // Only the `user_elf` is segmented on-chain (the kernel is the protocol default), so the
+    // segment count must come from it rather than the whole `ProgramBinary`.
+    let segment_count = risc0_binfmt::ProgramBinary::decode(&bytecode)
+        .map_err(|err| anyhow::anyhow!("invalid program binary: {err}"))?
+        .user_elf
+        .len()
+        .div_ceil(MAX_SEGMENT_DATA_LEN);
     let header = wallet_core.create_new_account_public(None).0;
     let segments: Vec<AccountId> =
         std::iter::repeat_with(|| wallet_core.create_new_account_public(None).0)
