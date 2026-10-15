@@ -1285,7 +1285,10 @@ mod tests {
             })
             .collect();
         let state =
-            initial_state(true).with_private_accounts(senders.iter().map(|(keys, account)| {
+            // Block payouts credit the producer, which settlement admits only once it exists.
+            initial_state(true)
+                .with_public_accounts([common::test_utils::producer_seed()])
+                .with_private_accounts(senders.iter().map(|(keys, account)| {
                 (
                     lee_core::Commitment::new(&keys.account_id(), account),
                     lee_core::Nullifier::for_account_initialization(
