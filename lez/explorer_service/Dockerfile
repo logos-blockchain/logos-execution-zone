@@ -57,7 +57,7 @@ ENV INDEXER_RPC_URL="http://localhost:8779"
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -fsS -o /dev/null http://localhost:8080/ || exit 1
+    CMD curl -fsS -o /dev/null "http://$LEPTOS_SITE_ADDR/" || exit 1
 
 USER explorer_service_user
 
