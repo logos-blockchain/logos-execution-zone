@@ -6,7 +6,7 @@ use lee::{
     AccountId, Actor, PublicTransaction, privacy_preserving_transaction::circuit::ProgramCatalog,
     program::Program, public_transaction,
 };
-use program_deployment::deploy_program;
+use program_deployment::{deploy_program, fee_paid_by};
 use sequencer_service_rpc::RpcClient as _;
 use wallet::{AccountIdentity, WalletCore};
 
@@ -107,11 +107,17 @@ async fn main() {
         } => {
             let message = (WRITE_FUNCTION_ID, greeting.into_bytes());
             let account = Actor::new(account_id.parse().unwrap(), program_account_id);
-            let nonces = BTreeMap::new();
-            let message =
-                public_transaction::Message::try_new(account, vec![account], nonces, message)
-                    .unwrap();
-            let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+            let (fee, payer_nonce, payer_key) = fee_paid_by(&wallet_core, cli.payer).await.unwrap();
+            let nonces = BTreeMap::from([(cli.payer, payer_nonce)]);
+            let message = public_transaction::Message::try_new_with_fees(
+                account,
+                vec![account],
+                nonces,
+                message,
+                fee,
+            )
+            .unwrap();
+            let witness_set = public_transaction::WitnessSet::for_message(&message, &[&payer_key]);
             let tx = PublicTransaction::new(message, witness_set);
 
             // Submit the transaction
@@ -146,15 +152,17 @@ async fn main() {
             let source = Actor::new(from, program_account_id);
             let destination = Actor::new(to, program_account_id);
             let message = (MOVE_DATA_FUNCTION_ID, moved, to);
-            let nonces = BTreeMap::new();
-            let message = public_transaction::Message::try_new(
+            let (fee, payer_nonce, payer_key) = fee_paid_by(&wallet_core, cli.payer).await.unwrap();
+            let nonces = BTreeMap::from([(cli.payer, payer_nonce)]);
+            let message = public_transaction::Message::try_new_with_fees(
                 source,
                 vec![source, destination],
                 nonces,
                 message,
+                fee,
             )
             .unwrap();
-            let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+            let witness_set = public_transaction::WitnessSet::for_message(&message, &[&payer_key]);
             let tx = PublicTransaction::new(message, witness_set);
 
             // Submit the transaction

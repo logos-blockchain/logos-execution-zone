@@ -1,6 +1,7 @@
-use lee::AccountId;
+use lee::{AccountId, FeeDeclaration, PrivateKey};
+use lee_core::account::Nonce;
 use program_loader_core::MAX_SEGMENT_DATA_LEN;
-use wallet::{WalletCore, program_facades::program_loader::ProgramLoader};
+use wallet::{WalletCore, max_fee_for, program_facades::program_loader::ProgramLoader};
 
 /// Deploys `bytecode` through `program_loader`, returning the header's `AccountId`.
 ///
@@ -28,4 +29,23 @@ pub async fn deploy_program(
     ProgramLoader(wallet_core)
         .deploy(header, &segments, bytecode, true, Some(payer))
         .await
+}
+
+/// Declares `payer` as the fee payer of a hand-built public transaction.
+///
+/// Returns the fee declaration together with the payer's current nonce and signing key: the
+/// transaction must list that nonce and be signed with that key, or the sequencer rejects it with
+/// "Incorrect fee".
+pub async fn fee_paid_by(
+    wallet_core: &WalletCore,
+    payer: AccountId,
+) -> anyhow::Result<(FeeDeclaration, Nonce, PrivateKey)> {
+    let signing_key = wallet_core
+        .get_account_public_signing_key(payer)
+        .ok_or_else(|| anyhow::anyhow!("fee payer {payer} is not a self owned public account"))?
+        .clone();
+    let nonce = wallet_core.get_accounts_nonces(&[payer]).await?[0];
+    let gas_limit = wallet_core.config().gas_limit;
+    let fee = FeeDeclaration::new(payer, gas_limit, 0, max_fee_for(gas_limit));
+    Ok((fee, nonce, signing_key))
 }
