@@ -50,6 +50,10 @@ pub struct WalletConfig {
     pub seq_block_poll_max_amount: u64,
     #[serde(default = "default_gas_limit")]
     pub gas_limit: u64,
+    /// How far above the quoted base fees a privacy-preserving transaction reserves its fee, in
+    /// percent; the surplus over the fee settled at inclusion is refunded.
+    #[serde(default = "default_private_fee_headroom_percent")]
+    pub private_fee_headroom_percent: u64,
 }
 
 impl Default for WalletConfig {
@@ -64,6 +68,7 @@ impl Default for WalletConfig {
             seq_poll_max_retries: 5,
             seq_block_poll_max_amount: 100,
             gas_limit: default_gas_limit(),
+            private_fee_headroom_percent: default_private_fee_headroom_percent(),
         }
     }
 }
@@ -114,6 +119,7 @@ impl WalletConfig {
             seq_poll_max_retries,
             seq_block_poll_max_amount,
             gas_limit,
+            private_fee_headroom_percent,
         } = self;
 
         let WalletConfigOverrides {
@@ -123,6 +129,7 @@ impl WalletConfig {
             seq_poll_max_retries: o_seq_poll_max_retries,
             seq_block_poll_max_amount: o_seq_block_poll_max_amount,
             gas_limit: o_gas_limit,
+            private_fee_headroom_percent: o_private_fee_headroom_percent,
         } = overrides;
 
         if let Some(v) = o_sequencer {
@@ -145,6 +152,10 @@ impl WalletConfig {
             warn!("Overriding wallet config 'seq_block_poll_max_amount' to {v}");
             *seq_block_poll_max_amount = v;
         }
+        if let Some(v) = o_private_fee_headroom_percent {
+            warn!("Overriding wallet config 'private_fee_headroom_percent' to {v}");
+            *private_fee_headroom_percent = v;
+        }
         if let Some(v) = o_gas_limit {
             warn!("Overriding wallet config 'gas_limit' to {v}");
             *gas_limit = v;
@@ -154,4 +165,9 @@ impl WalletConfig {
 
 const fn default_gas_limit() -> u64 {
     crate::DEFAULT_GAS_LIMIT
+}
+
+/// Twice the quoted base fees: a few blocks of the steepest base fee climb.
+const fn default_private_fee_headroom_percent() -> u64 {
+    100
 }

@@ -17,8 +17,11 @@ use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
     CommitmentSetDigest, CrossZoneDeadLetter, CrossZoneDeadLetterReport,
     CrossZoneDeadLetterRequeue, EncryptedNote, FeeStateQuote, HashType, MembershipProof, Nonce,
-    PageLimit, ProgramId, Publication,
+    PageLimit, ProgramId, PublicDryRun, Publication,
 };
+
+/// The methods [`crate::RpcServerActor`] serves only when `dry_run_rpc` is on.
+pub const DRY_RUN_METHODS: [&str; 1] = ["dryRunPublicTransaction"];
 
 pub struct Service<E: ExecutorActorTrait> {
     executor_ref: ActorRef<E>,
@@ -135,6 +138,20 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             .await
             .map(map_fee_state_quote)
             .map_err(map_infallible_error)
+    }
+
+    async fn dry_run_public_transaction(
+        &self,
+        tx: LeeTransaction,
+    ) -> Result<PublicDryRun, ErrorObjectOwned> {
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::DryRunPublicTransaction { transaction: tx })
+            .await
+            .map(|run| PublicDryRun {
+                cycles: run.cycles,
+                revert: run.revert,
+            })
+            .map_err(map_executor_error)
     }
 
     async fn check_health(&self) -> Result<(), ErrorObjectOwned> {
@@ -375,10 +392,12 @@ fn map_executor_error<M>(
 
     match err {
         SendError::HandlerError(handle_err) => match handle_err {
-            incorrect_fee @ sequencer_executor_actor::error::Error::IncorrectFee(_) => {
+            invalid @ (sequencer_executor_actor::error::Error::IncorrectFee(_)
+            | sequencer_executor_actor::error::Error::PublicDryRunFailed(_)
+            | sequencer_executor_actor::error::Error::DryRunNotPublic) => {
                 ErrorObjectOwned::owned(
                     ErrorCode::InvalidParams.code(),
-                    format!("{incorrect_fee:#}"),
+                    format!("{invalid:#}"),
                     None::<()>,
                 )
             }

@@ -6,12 +6,15 @@ use std::{
 
 use anyhow::Result;
 use keycard_wallet::KeycardWallet;
-use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey, Recipient, Signature};
+use lee::{
+    AccountId, PrivateKey, PublicAccountEvidence, PublicKey, Recipient, RecipientEncryption,
+    Signature,
+};
 use lee_core::{
     AuthorizationSecretKey, Commitment, CommitmentPosition, CommitmentSetDigest, DummyInput,
-    DummyOutput, MembershipProof, NullifierPublicKey, NullifierSecretKey, NullifierWitness,
-    PrivateAccountKind, PrivateWitness, RegularKey, SenderPresentation, SharedSecretKey,
-    WitnessKind,
+    DummyOutput, EphemeralSecretKey, MembershipProof, NullifierPublicKey, NullifierSecretKey,
+    NullifierWitness, PrivateAccountKind, PrivateWitness, RegularKey, SenderPresentation,
+    SharedSecretKey, WitnessKind,
     account::{Account, Actor, ActorState, Nonce},
     compute_digest_for_path,
     encryption::{Ciphertext, EncryptedNote, MlKem768EncapsulationKey, ViewingPublicKey},
@@ -364,6 +367,8 @@ impl State {
 pub struct AccountManager {
     states: Vec<State>,
     rows: Vec<Row>,
+    /// A private account named to pay the fee; prepared like a mention but outside the root call.
+    fee_payer: Option<AccountId>,
     pin: Option<String>,
     dummy_commitment_root: CommitmentSetDigest,
     message_path: Option<MembershipProof>,
@@ -379,10 +384,13 @@ impl AccountManager {
     /// application and that all users share the value for a larger anonymity set.
     const PADDED_PRIVATE_ACTIONS: usize = 7;
 
+    /// `fee_payer` names an owned private account that pays the fee without joining the root
+    /// call, for transactions whose own accounts cannot (a PDA spend, say).
     pub async fn new(
         wallet: &WalletCore,
         mentions: Vec<AccountMention>,
         message: Option<(CommitmentPosition, Commitment)>,
+        fee_payer: Option<AccountId>,
     ) -> Result<Self, ExecutionFailureKind> {
         let mut states: Vec<State> = Vec::new();
         let mut rows = Vec::with_capacity(mentions.len());
@@ -397,6 +405,8 @@ impl AccountManager {
                 address_openings,
             } = mention.normalized();
             let account_id = identity.account_id();
+            // The fee payer authorizes its debit however it is mentioned.
+            let authorizes = authorizes || fee_payer == Some(account_id);
             let actor_state_selector = Actor::new(account_id, program_account_id);
 
             let known =
@@ -450,12 +460,26 @@ impl AccountManager {
             });
         }
 
+        if let Some(payer) = fee_payer.filter(|payer| !prepared.contains_key(payer)) {
+            states.push(
+                prepare_account(
+                    wallet,
+                    AccountIdentity::PrivateOwned(payer),
+                    Actor::native_balance(payer),
+                    true,
+                    &mut pin,
+                )
+                .await?,
+            );
+        }
+
         let (dummy_commitment_root, message_path) =
             fetch_private_proofs_and_root(wallet, &mut states, message).await?;
 
         Ok(Self {
             states,
             rows,
+            fee_payer,
             pin,
             dummy_commitment_root,
             message_path,
@@ -665,19 +689,94 @@ impl AccountManager {
             .collect()
     }
 
-    // A private account presents a fresh random alias for each message.
-    pub fn presenter(&self) -> impl FnMut(Actor) -> SenderPresentation + Send + 'static {
+    // A private account presents a fresh random alias for each message, except the fee payer's
+    // native actor, which presents under the alias its refund is bound to.
+    pub fn presenter(
+        &self,
+        fee_alias: Option<(AccountId, [u8; 32])>,
+    ) -> impl FnMut(Actor) -> SenderPresentation + Send + 'static {
         let private: HashSet<AccountId> = self
             .private_states()
             .map(|pre| pre.pre_state.account_id)
             .collect();
-        move |sender| {
-            if private.contains(&sender.account_id) {
-                SenderPresentation::Blinded(random_bytes())
-            } else {
-                SenderPresentation::Canonical
+        move |sender| match fee_alias {
+            Some((payer, opening)) if sender == Actor::native_balance(payer) => {
+                SenderPresentation::Blinded(opening)
             }
+            _ if private.contains(&sender.account_id) => {
+                SenderPresentation::Blinded(random_bytes())
+            }
+            _ => SenderPresentation::Canonical,
         }
+    }
+
+    /// The private account that pays `reserve`: the named fee payer as is, else the first
+    /// authorized private account holding it, else the first authorized private account at all,
+    /// whose balance after the root call may cover it. `None` when no private account is
+    /// authorized. The proof's simulation reports a payer that cannot afford it.
+    pub fn private_fee_payer_account_id(&self, reserve: u128) -> Option<AccountId> {
+        if self.fee_payer.is_some() {
+            return self.fee_payer;
+        }
+        let can_pay = |state: &State| {
+            state
+                .account()
+                .account
+                .data
+                .native_balance()
+                .is_ok_and(|balance| balance >= reserve)
+        };
+        let candidates: Vec<&State> = self
+            .states
+            .iter()
+            .filter(|state| matches!(state, State::Private(_)) && state.is_authorized())
+            .collect();
+        candidates
+            .iter()
+            .find(|state| can_pay(state))
+            .or_else(|| candidates.first())
+            .map(|state| state.account_id())
+    }
+
+    /// Recovery material binding `payer`'s alias under `opening`, so a refund published there is
+    /// found by this wallet.
+    pub fn fee_recovery(
+        &self,
+        payer: AccountId,
+        opening: [u8; 32],
+    ) -> Result<RecipientEncryption, ExecutionFailureKind> {
+        let pre = self
+            .private_states()
+            .find(|pre| pre.pre_state.account_id == payer)
+            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+        let (npk, kind) = match &pre.kind {
+            WitnessKind::Regular(RegularKey::Authorized(ask)) => (
+                NullifierPublicKey::from(&NullifierSecretKey::from(ask)),
+                PrivateAccountKind::Regular,
+            ),
+            WitnessKind::Regular(RegularKey::Nullifying(nsk)) => {
+                (NullifierPublicKey::from(nsk), PrivateAccountKind::Regular)
+            }
+            WitnessKind::Pda {
+                nsk,
+                binding: (account_id, seed),
+            } => (
+                NullifierPublicKey::from(nsk),
+                PrivateAccountKind::Pda {
+                    account_id: *account_id,
+                    seed: *seed,
+                },
+            ),
+        };
+        Ok(RecipientEncryption {
+            recipient: Recipient {
+                npk,
+                vpk: pre.vpk.clone(),
+                kind,
+                opening: Some(opening),
+            },
+            esk: EphemeralSecretKey(random_bytes()),
+        })
     }
 
     /// The account that pays this transaction's fee: the first public signing
@@ -1270,10 +1369,63 @@ mod tests {
         AccountManager {
             states,
             rows,
+            fee_payer: None,
             pin: None,
             dummy_commitment_root: [0; 32],
             message_path: None,
         }
+    }
+
+    fn private_signing_state(seed: u8, balance: u128) -> State {
+        let ask = AuthorizationSecretKey([seed; 32]);
+        let npk = NullifierPublicKey::from(&NullifierSecretKey::from(&ask));
+        let vpk = ViewingPublicKey::from_seed(&[seed; 32], &[seed; 32]);
+        State::Private(Box::new(AccountPreparedData {
+            kind: WitnessKind::Regular(RegularKey::Authorized(ask)),
+            vpk: vpk.clone(),
+            pre_state: PreparedAccount {
+                account_id: lee::AccountId::from((&npk, &vpk)),
+                account: Account::funded(balance),
+            },
+            proof: None,
+            random_seed: [0; 32],
+            address_openings: BTreeSet::new(),
+        }))
+    }
+
+    #[test]
+    fn the_private_fee_payer_is_the_first_authorized_account_that_can_pay_else_the_first() {
+        let poor = private_signing_state(1, 99);
+        let rich = private_signing_state(2, 100);
+        let (poor_id, rich_id) = (poor.account_id(), rich.account_id());
+        let with_payers = manager(vec![private_state(), poor, rich]);
+        assert_eq!(with_payers.private_fee_payer_account_id(100), Some(rich_id));
+        // Nobody holds it up front: the first authorized account pays out of what the root
+        // call leaves it.
+        assert_eq!(with_payers.private_fee_payer_account_id(101), Some(poor_id));
+        assert_eq!(
+            manager(vec![private_state()]).private_fee_payer_account_id(1),
+            None
+        );
+    }
+
+    #[test]
+    fn a_named_private_fee_payer_is_taken_as_is() {
+        let payer = private_signing_state(1, 100);
+        let payer_id = payer.account_id();
+        let mut manager = manager(vec![private_signing_state(2, 1_000), payer]);
+        manager.fee_payer = Some(payer_id);
+        assert_eq!(manager.private_fee_payer_account_id(101), Some(payer_id));
+    }
+
+    #[test]
+    fn the_fee_recovery_binds_the_payers_alias() {
+        let payer = private_signing_state(3, 1);
+        let payer_id = payer.account_id();
+        let manager = manager(vec![payer]);
+        let recovery = manager.fee_recovery(payer_id, [7; 32]).unwrap();
+        assert_eq!(recovery.recipient.account_id(), payer_id);
+        assert_eq!(recovery.recipient.address(), payer_id.blinded(&[7; 32]));
     }
 
     #[test]
@@ -1808,7 +1960,7 @@ mod tests {
             random_seed: [0; 32],
             address_openings: BTreeSet::from([[9; 32]]),
         }))])
-        .presenter();
+        .presenter(None);
 
         let factors: HashSet<[u8; 32]> =
             std::iter::repeat_with(|| present(Actor::native_balance(private)))

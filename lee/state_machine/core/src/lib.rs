@@ -4,7 +4,7 @@
 )]
 
 pub use circuit_io::{
-    DummyInput, DummyOutput, InvalidMessageEvidence, MessageWitness, NullifierWitness,
+    DummyInput, DummyOutput, FeeTransfer, InvalidMessageEvidence, MessageWitness, NullifierWitness,
     PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput, PrivateAction, PrivateWitness,
     ProgramImageClaim, ProgramImageWitness, ProvenExecution, ProvingInput, RegularKey, RootCall,
     SenderPresentation, ShadowProgramWitness, WitnessKind,

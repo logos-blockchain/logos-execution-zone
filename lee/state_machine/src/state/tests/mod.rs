@@ -166,6 +166,7 @@ pub fn proving_input(root: TransactionEntry<MessageWitness>) -> ProvingInput {
         ciphertext_padding: None,
         recoveries: Vec::new(),
         private_promotions: BTreeSet::new(),
+        fee: None,
     }
 }
 

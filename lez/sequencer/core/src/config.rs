@@ -108,6 +108,10 @@ pub struct SequencerConfig {
     /// Sequencer p2p gossip configuration. `None` disables gossip.
     #[serde(default)]
     pub gossip: Option<GossipConfig>,
+    /// Serve the `dryRunPublicTransaction` RPC. Each call executes guest code
+    /// for free, so enable it only on a sequencer that serves local wallets.
+    #[serde(default)]
+    pub dry_run_rpc: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

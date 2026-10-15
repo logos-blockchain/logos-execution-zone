@@ -32,6 +32,7 @@ impl RpcServerActor {
         max_block_size_rx: MaxBlockSizeReceiver,
         executor_ref: ActorRef<E>,
         gossip: Option<Recipient<PublishTransaction>>,
+        dry_run_rpc: bool,
     ) -> Result<Self> {
         let server = jsonrpsee::server::ServerBuilder::with_config(
             jsonrpsee::server::ServerConfigBuilder::new()
@@ -52,7 +53,14 @@ impl RpcServerActor {
         info!("Starting RPC Server on {addr}");
 
         let service = service::Service::new(executor_ref, max_block_size_rx, gossip);
-        let server_handle = server.start(service.into_rpc());
+        let mut methods = service.into_rpc();
+        if !dry_run_rpc {
+            // A dry run executes guest code for free; a public sequencer does not serve it.
+            for method in service::DRY_RUN_METHODS {
+                methods.remove_method(method);
+            }
+        }
+        let server_handle = server.start(methods);
 
         Ok(Self {
             server_handle: Some(server_handle),

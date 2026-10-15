@@ -309,6 +309,7 @@ fn setup_sequencer_config() -> SequencerConfig {
         cross_zone: None,
         metrics_address: None,
         gossip: None,
+        dry_run_rpc: false,
     }
 }
 
@@ -5335,6 +5336,7 @@ fn prove_and_settle(
             ciphertext_padding: None,
             recoveries,
             private_promotions: BTreeSet::new(),
+            fee: None,
         },
         &lee::Simulation {
             public_actor_states,

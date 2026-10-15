@@ -305,6 +305,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
             ciphertext_padding: None,
             recoveries: Vec::new(),
             private_promotions: BTreeSet::new(),
+            fee: None,
         },
         &circuit::Simulation::default(),
         &lee::privacy_preserving_transaction::circuit::ProgramCatalog::default(),

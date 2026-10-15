@@ -30,13 +30,12 @@ pub const TEST_POSTING_TIMEOUT: u32 = TEST_POSTING_TIMEFRAME;
 /// Blocks an unstake waits; the production 100 would outlast the exit tests.
 pub const TEST_EXIT_DELAY: u64 = 3;
 
-// Public balances are LGO-scale (`testnet_initial_state` precedent): charged
-// transactions reserve `gas_limit x base_fee` up front (~16M at wallet
-// defaults), so pre-fee-scale balances cannot afford a single transfer.
-// Private transactions are fee-exempt under the interim policy, so the
-// private balances stay small and private-transfer assertions stay exact.
+// Balances are LGO-scale (`testnet_initial_state` precedent): a charged public
+// transaction reserves `gas_limit x base_fee` up front (~16M at wallet defaults)
+// and a privacy-preserving one pays at least [`min_private_fee`] (~5M), so
+// pre-fee-scale balances cannot afford a single transfer.
 pub const INITIAL_PUBLIC_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000_000, 20_000_000_000_000];
-pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
+pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000, 20_000_000_000];
 
 /// The public account for funding the private accounts' balances at genesis.
 pub(crate) const PRIVATE_FUNDER_INDEX: usize = 0;
@@ -172,6 +171,8 @@ pub fn sequencer_config(
         cross_zone,
         metrics_address: Some(SequencerConfig::DEFAULT_METRICS_ADDRESS),
         gossip,
+        // Integration tests price their transactions against the sequencer under test.
+        dry_run_rpc: true,
     })
 }
 
@@ -239,10 +240,34 @@ pub fn private_total(private_accounts: &[InitialPrivateAccountForWallet]) -> u12
     private_accounts.iter().map(|account| account.balance).sum()
 }
 
+/// The fee a privacy-preserving transaction without guest-evaluated effects pays while the base
+/// fees sit at their floor. Test chains run far below the gas targets, so they never leave it.
+#[must_use]
+pub fn min_private_fee() -> u128 {
+    fee_core::assess::private_fee_required(
+        0,
+        fee_core::market::BASE_FEE_EXEC_MIN,
+        fee_core::market::BASE_FEE_STOR_MIN,
+    )
+}
+
+/// What funding the private accounts costs the funder: every balance plus the fee of each
+/// shielding transaction, which the funder pays since the recipients hold nothing yet.
+#[must_use]
+pub fn private_funding_cost(private_accounts: &[InitialPrivateAccountForWallet]) -> u128 {
+    let fees = u128::try_from(private_accounts.len())
+        .expect("account count fits u128")
+        .checked_mul(min_private_fee())
+        .expect("private funding fees overflow");
+    private_total(private_accounts)
+        .checked_add(fees)
+        .expect("private funding cost overflow")
+}
+
 #[must_use]
 pub fn genesis_from_accounts(
     public_accounts: &[(PrivateKey, u128)],
-    private_total: u128,
+    private_funding_cost: u128,
 ) -> Vec<GenesisAction> {
     let mut balances: Vec<(PublicKey, u128)> = public_accounts
         .iter()
@@ -251,7 +276,7 @@ pub fn genesis_from_accounts(
 
     let funder_balance = &mut balances[PRIVATE_FUNDER_INDEX].1;
     *funder_balance = funder_balance
-        .checked_add(private_total)
+        .checked_add(private_funding_cost)
         .expect("private funder genesis balance overflow");
 
     balances
@@ -275,6 +300,9 @@ pub fn wallet_config(sequencer_addr: &SocketAddr) -> Result<WalletConfig> {
         seq_poll_max_retries: 10,
         seq_block_poll_max_amount: 100,
         gas_limit: wallet::DEFAULT_GAS_LIMIT,
+        // Test chains never leave the floor base fees, so an exact reserve needs no refund and
+        // the balance assertions need no refund accounting.
+        private_fee_headroom_percent: 0,
     })
 }
 
@@ -442,13 +470,14 @@ mod tests {
         );
     }
 
-    /// `fund_private_accounts` drains the private balances out of the funder.
+    /// `fund_private_accounts` drains the private balances and their shielding fees out of the
+    /// funder.
     #[test]
     fn genesis_supplies_the_funder_enough_to_seed_every_private_account() {
         let public_accounts = default_public_accounts_for_wallet();
         let private_accounts = default_private_accounts_for_wallet();
-        let private_total = private_total(&private_accounts);
-        let genesis = genesis_from_accounts(&public_accounts, private_total);
+        let funding_cost = private_funding_cost(&private_accounts);
+        let genesis = genesis_from_accounts(&public_accounts, funding_cost);
 
         let funder = AccountId::from(&PublicKey::new_from_private_key(
             &public_accounts[PRIVATE_FUNDER_INDEX].0,
@@ -470,8 +499,8 @@ mod tests {
         let funder_supply = supplied(funder).expect("the funder is supplied at genesis");
         assert_eq!(
             u128::from(funder_supply).checked_sub(public_accounts[PRIVATE_FUNDER_INDEX].1),
-            Some(private_total),
-            "genesis must give the funder its own balance plus every private balance"
+            Some(funding_cost),
+            "genesis must give the funder its own balance plus every private balance and fee"
         );
 
         // A private account has no state until the circuit writes its commitment, so a genesis
