@@ -28,7 +28,7 @@ assert!(binding.amount_out <= quote, "the pool cannot afford this offer at its l
 // reserves += amount_in, -= amount_out; the difference between quote and amount_out stays in the pool
 ```
 
-Because the guard is an inequality against **live** reserves, an offer prepared at 1000/1000 settles at 1100/925 if the curve still covers it, pays exactly what it asked, and is refused (not included, nothing moves) if it does not. A refused offer can be resubmitted unchanged when the price comes back. `integration_tests/tests/amm_prepared_offers.rs` walks through exactly this sequence with three prepared private offers.
+Because the guard is an inequality against **live** reserves, an offer prepared at 1000/1000 settles at 1100/925 if the curve still covers it, pays exactly what it asked, and is refused (not included, nothing moves) if it does not. A refused offer can be resubmitted unchanged when the price comes back. The general property, a prepared private transaction settling against public state that has since moved, is demonstrated by `two_deshielded_transfers_to_one_recipient_compose_at_settlement` and `a_guest_evaluated_public_effect_settles_against_live_state` in `lee/state_machine/src/state/tests/privacy_preserving.rs`.
 
 This is pattern 12 (commutative public effects) and pattern 1 (proposal and guard) together. A `Swap` that quoted at settlement (`amount_out = quote`) would need the trader's receiving effect to know the quote, which `plan` cannot; the fixed offer moves the price risk to the trader and makes the transaction state-free.
 
@@ -38,7 +38,7 @@ Both carry the exact amounts and the exact LP delta as proposals; the pool's app
 
 {{#include ../diagrams/amm-prepared-offer.svg}}
 
-The third column is the prepared-offer behaviour from `amm_prepared_offers.rs`: an offer the live curve cannot afford is simply not included, the trader's note stays unspent, and the same transaction can be resubmitted when the price comes back.
+The third column is the prepared-offer behaviour: an offer the live curve cannot afford is simply not included, the trader's note stays unspent, and the same transaction can be resubmitted when the price comes back.
 
 ## Interoperability matrix
 

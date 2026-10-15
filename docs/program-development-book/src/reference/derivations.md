@@ -1,6 +1,6 @@
 # Account-id derivations
 
-All hashes are SHA-256 over a 32-byte domain prefix followed by the fields, unless noted. `‖` is concatenation. Integers are little-endian. Sources: `lee/state_machine/core/src/{program/mod.rs,nullifier.rs,commitment.rs,encryption/mod.rs}`, `lee/state_machine/src/signature/public_key.rs`, `lee/key_protocol/`.
+All hashes are SHA-256 over a domain prefix followed by the fields, unless noted. Account-id, commitment and nullifier prefixes are padded to 32 bytes; the view tag (18), `esk` (14) and note key (20) prefixes are not, and the two private-nonce rows have no domain prefix at all. `‖` is concatenation. Integers are little-endian, except the key-derivation `index`, which is big-endian to follow BIP-032. Sources: `lee/state_machine/core/src/{program/mod.rs,nullifier.rs,commitment.rs,encryption/mod.rs}`, `lee/state_machine/src/signature/public_key.rs`, `lee/key_protocol/`.
 
 ## Account ids
 

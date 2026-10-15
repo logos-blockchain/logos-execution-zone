@@ -24,8 +24,11 @@ pub struct ProgramHeader {
 A program has at most 20 segments (`MAX_PROGRAM_SEGMENTS`). The wallet does the splitting:
 
 ```text
-wallet program-loader deploy path/to/program.bin
+wallet program-loader deploy --elf path/to/program.bin \
+  --header <account> --segments <account>...
 ```
+
+The accounts must exist first, one per 96 KiB of the user ELF (`MAX_SEGMENT_DATA_LEN`), and a wrong count fails with `SegmentCountMismatch`, which reports the number expected.
 
 Loader messages are allowed only in transactions that carry no proof. A code change must never land in the middle of a transaction whose proof already committed to specific program images.
 

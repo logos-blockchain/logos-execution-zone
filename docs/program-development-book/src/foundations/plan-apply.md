@@ -170,7 +170,7 @@ The same `ExecutionState::run` drives three backends:
 | `Prover` (wallet, private tx) | `…/privacy_preserving_transaction/circuit/mod.rs` | **deferred**: recorded as `DeferredPublicEffect` | applied now, receipts collected |
 | `PrivateBackend` (circuit guest) | `lee/privacy_preserving_circuit/src/private_backend.rs` | deferred (same) | re-verified from receipts |
 
-A **deferred public effect** is `(program_account_id, shard_program_account_id, effect bytes)`. At settlement the sequencer loads the program by its account id from chain state, runs its `apply` against the live shard and takes the result. That is the whole mechanism by which a private swap prepared at reserves 1000/1000 settles correctly, or is refused, against reserves 1200/850: the reserves were never in the proof. See `integration_tests/tests/amm_prepared_offers.rs`.
+A **deferred public effect** is `(program_account_id, shard_program_account_id, effect bytes)`. At settlement the sequencer loads the program by its account id from chain state, runs its `apply` against the live shard and takes the result. That is the whole mechanism by which a private swap prepared at reserves 1000/1000 settles correctly, or is refused, against reserves 1200/850: the reserves were never in the proof. See `a_guest_evaluated_public_effect_settles_against_live_state` in `lee/state_machine/src/state/tests/privacy_preserving.rs`.
 
 Design consequence: in a private transaction, `apply` for a public shard runs **in the clear, later, on the sequencer**, with `effect_data` visible to everyone. The effect's bytes must therefore contain nothing you want hidden, and the program's `apply` for public shards must be deterministic given the effect and the shard alone (which it is by construction).
 

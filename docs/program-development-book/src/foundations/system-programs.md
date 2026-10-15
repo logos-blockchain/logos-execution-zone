@@ -17,7 +17,9 @@ pub struct ClockAccountData { pub block_id: u64, pub timestamp: Timestamp /* ms 
 under the clock program's shard, refreshed every 1, 10 and 50 blocks respectively. A program reads time with a guard:
 
 ```rust
-let [state, clock] = <&[_; 2]>::try_from(input.accounts.as_slice())?;
+let Ok([state, clock]) = <[_; 2]>::try_from(input.accounts.clone()) else {
+    panic!("Expected exactly 2 input accounts: state, clock");
+};
 assert_eq!(clock.account_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
 plan.inspect(&clock, clock.program_account_id, &Effect::TimestampIs(proposed));
 // apply: assert_eq!(ClockAccountData::from_bytes(pre_data).timestamp, proposed); None
@@ -45,7 +47,7 @@ The bridge program mints L1 deposits: a sequencer-injected `Deposit` credits the
 
 ## Cross-zone messaging
 
-Zones talk through two programs and a watcher. A program on the source zone chains into `cross_zone_outbox::Emit`, which writes an `OutboxRecord` into a slot PDA keyed by `(emitter, target zone, ordinal)`; the emitter must refuse to be chained into itself, because the outbox records its **immediate** caller. The destination zone's sequencer watches the peer's finalized blocks and injects `cross_zone_inbox::Dispatch`, which records the delivery in a per-peer-block "seen" shard and chains into the target program with a **source marker** PDA at position 0 followed by the selectors the message named.
+Zones talk through two programs and a watcher. A program on the source zone chains into `cross_zone_outbox::Emit`, which writes an `OutboxRecord` into a slot PDA keyed by `(emitter, target zone, ordinal)`; the emitter must refuse to be chained into by any program (`assert!(input.caller_account_id.is_none())`), because the outbox records its **immediate** caller while cross-zone discovery names the top-level program. The destination zone's sequencer watches the peer's finalized blocks and injects `cross_zone_inbox::Dispatch`, which records the delivery in a per-peer-block "seen" shard and chains into the target program with a **source marker** PDA at position 0 followed by the selectors the message named.
 
 A target that wants to accept cross-zone messages must do two things, both shown by `wrapped_token` and `ping_receiver`:
 

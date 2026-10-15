@@ -22,11 +22,12 @@ Building one by hand (from `examples/program_deployment/src/bin/run_hello_world_
 
 ```rust
 let nonces = wallet.get_accounts_nonces(&[account_id]).await?;
-let message = Message::try_new(
+let message = Message::try_new_with_fees(
     program_account_id,
     vec![ProgramShardSelector::new(account_id, program_account_id)],
     nonces,
     greeting,                       // any BorshSerialize instruction
+    FeeDeclaration::new(payer, gas_limit, tip, max_fee),  // a charged tx must declare one
 )?;
 let witness_set = WitnessSet::for_message(&message, &[&signing_key]);
 let tx = PublicTransaction::new(message, witness_set);

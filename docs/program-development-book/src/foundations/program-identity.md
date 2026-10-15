@@ -34,8 +34,9 @@ Caveats:
 ## Shadow
 
 ```rust
-ProgramWithDependencies::from(program).as_shadow_program()
-.with_shadow_dependency(account_id)
+ProgramWithDependencies::new(program, self_account_id, HashMap::new())
+    .as_shadow_program()
+    .with_shadow_dependency(account_id)
 ```
 
 A shadow program is **never deployed**. It is dispatched at `AccountId::for_shadow_program(&image_id)`, the circuit takes its image id from a `ShadowProgramWitness`, verifies its receipts like any other, and emits **no claim at all**. The sequencer never hears of it.

@@ -51,7 +51,7 @@ which expands to a native `Transfer` naming the vault as sender and `.with_pda_s
 Three things follow.
 
 - **Custody is exactly as safe as the program's plan.** The program is the only party that can produce the seed in a call, and it does so only where its code says. Every check that guards a withdrawal has to sit in that program.
-- **The seed is not a secret.** Vault seeds are derived from public data (pool id, token id). Knowing the seed gives nothing; only the program at the right address can delegate it. `associated_token_account_core::compute_ata_seed` is public for exactly that reason.
+- **The seed is not a secret.** Vault seeds are derived from public data (pool id, token id). Knowing the seed gives nothing; only the program at the right address can delegate it. `ata_core::compute_ata_seed` (`logos-blockchain/lez-programs: programs/ata/core`) is public for exactly that reason.
 - **Seeds are namespaces.** Different seeds give unrelated accounts. A program with per-user vaults derives the seed from the user's id.
 
 ## Restricting the caller

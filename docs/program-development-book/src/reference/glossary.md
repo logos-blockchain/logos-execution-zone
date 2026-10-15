@@ -14,7 +14,7 @@
 - **Family (private PDA).** All accounts `for_private_pda(program, seed, npk, vpk, *)` for one key pair.
 - **Group key (GMS).** A shared secret from which several parties derive the same private account keys.
 - **Guard.** An effect whose apply checks and returns `None`; usually an inspect.
-- **Identifier.** The `u128` that diversifies private account ids under one key.
+- **Identifier.** The 32-byte opaque value that diversifies private account ids under one key.
 - **Image id.** RISC Zero hash of a program's bytecode; what receipts are verified against.
 - **Init / Update.** The two witness kinds: create a private account (anyone, once) or advance it (`nsk` holder).
 - **Inspect.** `Plan::inspect`: an effect on another program's shard, which must not write.
@@ -32,6 +32,6 @@
 - **Shard.** The bytes one program owns on one account. Max 100 KiB.
 - **Undisclosed program.** An immutable program proven by mirror-commitment membership instead of by name.
 - **Validity window.** A block-id or timestamp range outside which a plan's transaction is invalid.
-- **View tag.** One byte per recipient key that lets a wallet skip notes that are not its own.
+- **View tag.** One byte, key-derived on `Init` only, that lets a wallet skip init notes that are not its own. `Update` notes carry a random tag and are found by nullifier instead.
 - **`vpk` / `vsk`.** Viewing public key (ML-KEM-768) and its seed; decrypts notes.
 - **Witness (private).** What a prover supplies per private account: keys, kind, and init or update data.

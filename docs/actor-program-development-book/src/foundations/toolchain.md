@@ -21,7 +21,7 @@ fn handle_message(input: &ReceiveInput, greeting: Vec<u8>) -> Response {
 
 The second parameter can be any type that implements `BorshDeserialize`. In practice it is an enum of the messages the program accepts.
 
-Put the message types in a separate `core` crate, as the shipped programs do (`lez/programs/token/core`, `lez/programs/clock/core`). Wallets, tests and other programs need the types without the guest code.
+Put the message types in a separate `core` crate, as the shipped programs do (`lez/programs/clock/core`, and `logos-blockchain/lez-programs: programs/token/core`). Wallets, tests and other programs need the types without the guest code.
 
 ## Building
 
@@ -34,10 +34,13 @@ The output is one `.bin` file per binary in the guest crate.
 ## Deploying
 
 ```text
-wallet program-loader deploy path/to/hello_world.bin
+wallet account new public --label hello-header
+wallet account new public --label hello-seg-0   # and seg-1, seg-2, ...
+wallet program-loader deploy --elf path/to/hello_world.bin \
+  --header hello-header --segments hello-seg-0 hello-seg-1 hello-seg-2 --immutable
 ```
 
-The subcommand is `program-loader` in the wallet's code at this commit (`lez/wallet/src/cli/mod.rs`). The example's README still writes `wallet deploy-program`; run `wallet program-loader --help` to see the exact arguments.
+`deploy` takes no positional path. The accounts must exist already with an empty `program_loader` state, and the wallet chunks the ELF but never creates accounts. You need one segment account per 96 KiB of the user ELF (`MAX_SEGMENT_DATA_LEN`), so a typical program takes several; a wrong count fails with `SegmentCountMismatch`, which reports the number expected. A deploy that fails partway cannot currently be resumed over the same accounts. The example's README still writes `wallet deploy-program`, which no longer exists; run `wallet program-loader --help` to confirm the arguments.
 
 ## Accounts
 

@@ -46,7 +46,7 @@ The plan/apply model keeps the echo and moves it out of the program's hands.
 ## What this buys, concretely
 
 - **Chained calls are sound without developer discipline.** A callee's receipt is accepted only for the exact call its caller scheduled. Every program in the repository, and every one you write with `run_program`, gets this for free.
-- **Prepared private transactions survive public state changes.** Because public shard contents are not in the proof, the proof does not go stale when they change. Only the deferred applies, re-run at settlement, decide whether the transaction still fits. That is the "incremental updates" the pull request is named for, and `amm_prepared_offers.rs` is its demonstration.
+- **Prepared private transactions survive public state changes.** Because public shard contents are not in the proof, the proof does not go stale when they change. Only the deferred applies, re-run at settlement, decide whether the transaction still fits. That is the "incremental updates" the pull request is named for; `two_deshielded_transfers_to_one_recipient_compose_at_settlement` in `lee/state_machine/src/state/tests/privacy_preserving.rs` is its demonstration.
 - **`plan` is verifiably state-free.** The echo is the proof's only window onto the input, and the input has no state in it. A reader of a `PlanOutput` can trust the plan was a function of exactly those accounts and that instruction.
 
 ## What it costs, and what it does not hide

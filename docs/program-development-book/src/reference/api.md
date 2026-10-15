@@ -78,7 +78,7 @@ AccountId::for_public_pda(&program, &seed)
 AccountId::for_private_pda(&program, &seed, &npk, &vpk, identifier)
 AccountId::for_regular_private_account(&npk, &vpk, identifier)   // identifier: lee_core::Identifier (32 bytes)
 AccountId::for_shadow_program(&image_id)
-AccountId::from_builtin_program_name(b"name")                  // builtins; or token_core::token_account_id() etc.
+AccountId::from_builtin_program_name(b"name")                  // builtins; or clock_core::clock_account_id() etc.
 AccountId::from_builtin_program(image_id)                        // test seeding only
 PdaSeed::new([u8; 32]); Identifier::new([u8; 32]); Identifier::ZERO
 ```

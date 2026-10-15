@@ -84,6 +84,6 @@ The program has no code for any of these four cases. They come from which accoun
 
 ## Going further
 
-- **The shipped token** (`lez/programs/token`) adds token definitions, NFTs, burning and a **notify hook**: a credit can carry `notify { to, payload }`, and the receiving balance then Calls `to` to say "you were paid". That turns "pay, then act" into one message (pattern 19).
+- **The shipped token** (`logos-blockchain/lez-programs: programs/token`) adds token definitions, NFTs, burning and a **notify hook**: a credit can carry `notify { to, payload }`, and the receiving balance then Calls `to` to say "you were paid". That turns "pay, then act" into one message (pattern 19).
 - **Custody by other programs.** `Transfer` checks only `is_authorized`, so a program can move tokens it holds on a PDA by granting the seed (pattern 13).
 - **The same check is the footgun.** `is_authorized` does not say who sent the `Transfer`. Read [what it does not mean](../foundations/authorization.md) before copying this handler.

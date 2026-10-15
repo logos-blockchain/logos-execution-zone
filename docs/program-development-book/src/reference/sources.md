@@ -11,7 +11,8 @@
 - Fee market and block assembly: `lez/programs/fee/`, `lez/chain_state/src/{apply.rs,classify.rs}`.
 - Wallet transaction building: `lez/wallet/src/{lib.rs,account_manager.rs,program_facades/}`.
 - Examples and test programs: `examples/program_deployment/`, `test_programs/`, `lee/state_machine/test_methods/guest/src/bin/`.
-- Integration tests referenced: `integration_tests/tests/{amm_prepared_offers.rs,private_pda.rs,shared_accounts.rs,scoped_reads.rs,native_transfer/private.rs}`.
+- Integration tests referenced: `integration_tests/tests/{private_pda.rs,shared_accounts.rs,scoped_reads.rs,native_transfer/private.rs}`.
+- Prepared private transactions settling against changed public state: `two_deshielded_transfers_to_one_recipient_compose_at_settlement` and `a_guest_evaluated_public_effect_settles_against_live_state`, both in `lee/state_machine/src/state/tests/privacy_preserving.rs`.
 - Tutorials: `docs/LEZ testnet v0.1 tutorials/`.
 - The change this book is written against: pull request 912, "incremental updates with restricted program surface", merged into `dev` on 2026-09-25 together with #908 (builtins addressed by stable name), #919 (256-bit private identifiers) and #925 (system program guards).
 
