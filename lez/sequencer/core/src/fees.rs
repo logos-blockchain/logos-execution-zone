@@ -4,7 +4,7 @@ use chain_state::{
 };
 use common::transaction::LeeTransaction;
 use fee_core::{
-    assess::fee_reserve,
+    assess::{FeeTxView, fee_reserve},
     market,
     validity::{FeeError, validate_static_tx},
 };
@@ -48,20 +48,34 @@ pub struct FeeStateQuote {
     pub max_gas_stor: u64,
 }
 
+/// What a public transaction's action would cost if it settled on the head
+/// state now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicDryRun {
+    /// Cycles the action metered, bounded by its declared gas limit.
+    pub cycles: u64,
+    /// Why the action reverted, if it did: it would be charged and its
+    /// effects dropped.
+    pub revert: Option<String>,
+}
+
 /// Screens a submitted transaction against the head state.
 pub fn screen(tx: &LeeTransaction, state: &lee::V03State) -> Result<()> {
     let class = classify(tx, false)?;
     let FeeClass::Charged(view) = class else {
         return Ok(());
     };
-    let LeeTransaction::Public(public_tx) = tx else {
-        unreachable!("only public transactions classify as charged");
-    };
     let fee_state = opening_fee_state(state);
 
     validate_static_tx(&view, &fee_state)?;
 
-    let payer = view.payer();
+    let (public_tx, payer) = match (tx, &view) {
+        // A private transaction's fee is paid inside its proof,
+        // so nothing is left to check against the payer.
+        (LeeTransaction::PrivacyPreserving(_), FeeTxView::Private { .. }) => return Ok(()),
+        (LeeTransaction::Public(public_tx), FeeTxView::Public { payer, .. }) => (public_tx, *payer),
+        _ => unreachable!("classify pairs each transaction kind with its own fee view"),
+    };
     if !lee::is_fee_authorized(public_tx.message(), public_tx.witness_set()) {
         return Err(Error::UnauthorizedPayer { payer });
     }
@@ -81,6 +95,38 @@ pub fn screen(tx: &LeeTransaction, state: &lee::V03State) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Executes a public transaction's action against the head state without
+/// settling it, so a wallet can size its gas limit and tip.
+///
+/// `Err` is a transaction settlement would reject outright (bad signature,
+/// nonce, window).
+pub fn dry_run_public_transaction(
+    state: &lee::V03State,
+    tx: &lee::PublicTransaction,
+    block_id: u64,
+    timestamp: u64,
+) -> std::result::Result<PublicDryRun, lee::error::LeeError> {
+    let cycle_budget = tx
+        .message()
+        .execution
+        .fee
+        .map_or(market::MAX_GAS_EXEC, |fee| {
+            fee.gas_limit.min(market::MAX_GAS_EXEC)
+        });
+    let (charge, result) = lee::ValidatedStateDiff::from_public_transaction_metered(
+        tx,
+        state,
+        block_id,
+        timestamp,
+        cycle_budget,
+    );
+    result?;
+    Ok(PublicDryRun {
+        cycles: charge.cycles,
+        revert: charge.revert,
+    })
 }
 
 /// Prices the next block off the head state's fee market.
@@ -310,22 +356,98 @@ mod tests {
         assert!(settle_verdict(&tx, &state).is_err());
     }
 
-    /// Private transactions are fee-exempt under the interim policy, so
-    /// admission has nothing to check against one.
+    /// A private transaction is screened on its in-proof reserve alone: the
+    /// flat part of the fee at the head. The proof covers the debit.
     #[test]
-    fn a_private_transaction_is_admitted_unscreened() {
+    fn a_private_transaction_is_screened_on_its_in_proof_reserve() {
+        use std::collections::BTreeSet;
+
         use lee::privacy_preserving_transaction::{
             Message as PrivateMessage, PrivacyPreservingTransaction,
             WitnessSet as PrivateWitnessSet, circuit::Proof,
         };
+        use lee_core::{
+            account::Actor,
+            execution_state::{BoundaryStep, Delivery},
+            native_token,
+            program::MessageEnvelope,
+        };
 
         let state = initial_state(true);
-        let tx = LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
-            PrivateMessage::default(),
-            PrivateWitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![])),
-        ));
+        let flat = fee_core::assess::private_fee_required(0, 8, 8);
+        let private_tx = |reserve: Option<u128>| {
+            let mut message = PrivateMessage::default();
+            message.execution.boundary = reserve
+                .map(|reserve| {
+                    BoundaryStep::PrivateToPublic(Delivery {
+                        envelope: MessageEnvelope {
+                            from: Actor::native_balance(recipient()),
+                            to: Actor::native_balance(system_accounts::fee_inbox_account_id()),
+                            message: borsh::to_vec(&native_token::Message::Credit(reserve))
+                                .expect("serializes"),
+                        },
+                        inherited_authorizations: BTreeSet::new(),
+                        inherits_entry_authorizations: true,
+                        pda_seeds: BTreeSet::new(),
+                    })
+                })
+                .into_iter()
+                .collect();
+            LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+                message,
+                PrivateWitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![])),
+            ))
+        };
 
-        screen(&tx, &state).expect("private transactions are uncharged and unscreened");
+        screen(&private_tx(Some(flat)), &state).expect("a well-priced reserve is admitted");
+        assert!(matches!(
+            screen(&private_tx(None), &state),
+            Err(Error::Classification(ClassifyError::MissingPrivateFee))
+        ));
+        assert!(matches!(
+            screen(&private_tx(Some(flat - 1)), &state),
+            Err(Error::FeeCore(FeeError::PrivateFeeBelowRequired { .. }))
+        ));
+    }
+
+    #[test]
+    fn a_public_dry_run_meters_the_action_without_settling_it() {
+        let state = initial_state(true);
+        let (from, sign_key) = funded();
+        let tx = create_transaction_native_token_transfer(from, 0, recipient(), 10, &sign_key);
+        let LeeTransaction::Public(public_tx) = &tx else {
+            unreachable!("the test transfer is public");
+        };
+
+        let run = dry_run_public_transaction(&state, public_tx, 2, 200).unwrap();
+        // A native transfer is protocol-recomputed and free; only guest programs meter cycles.
+        assert_eq!(run.cycles, 0);
+        assert_eq!(run.revert, None);
+        assert_eq!(
+            state.get_account_by_id(from).nonce,
+            lee_core::account::Nonce::default(),
+            "a dry run leaves the state untouched"
+        );
+
+        // A nonce settlement would reject is an error, not a revert.
+        let stale = create_transaction_native_token_transfer(from, 7, recipient(), 10, &sign_key);
+        let LeeTransaction::Public(stale_tx) = &stale else {
+            unreachable!("the test transfer is public");
+        };
+        assert!(dry_run_public_transaction(&state, stale_tx, 2, 200).is_err());
+
+        // A transfer over the sender's balance reverts: charged, effects dropped.
+        let over =
+            create_transaction_native_token_transfer(from, 0, recipient(), u128::MAX, &sign_key);
+        let LeeTransaction::Public(over_tx) = &over else {
+            unreachable!("the test transfer is public");
+        };
+        assert!(
+            dry_run_public_transaction(&state, over_tx, 2, 200)
+                .unwrap()
+                .revert
+                .is_some()
+        );
     }
 
     /// SPECS §Overview worked example: at the genesis base fees of 8/8 the

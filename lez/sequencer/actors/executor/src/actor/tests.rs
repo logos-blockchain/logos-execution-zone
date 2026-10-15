@@ -58,6 +58,7 @@ fn sequencer_config() -> (SequencerConfig, TempDir) {
         channel_signing_key_file: None,
         funding_public_key: None,
         wait_for_channel: false,
+        dry_run_rpc: false,
     };
 
     (config, home)

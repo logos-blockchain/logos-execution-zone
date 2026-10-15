@@ -26,6 +26,7 @@ fn main() {
     let public_root = input.public_root();
     let ProvingInput {
         root,
+        fee,
         public_context,
         private_witnesses,
         dummy_inputs,
@@ -77,6 +78,8 @@ fn main() {
         public_context.clone(),
         // The top-level message.
         root,
+        // The fee transfer run after it.
+        fee,
         // All the private actor witnesses.
         &private_witnesses,
         // Assumed messages between private and public actors.

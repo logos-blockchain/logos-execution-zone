@@ -1,17 +1,24 @@
 //! Fee classification: which transactions are charged and which are exempt.
 //!
-//! Interim policy: only user-submitted public transactions are charged.
-//! Private transactions stay exempt pending the private-payer (Q3) decision;
-//! system injections and genesis transactions are exempt by design. Programs
+//! User public transactions are charged through their fee declaration. Private
+//! transactions are charged through the reserve they paid inside the proof: one
+//! native credit crossing into the fee inbox, settled at the block's base fees.
+//! System injections and genesis transactions are exempt by design. Programs
 //! are deployed through ordinary public transactions (via `program_loader`),
 //! so deployment is charged like any other user action.
 //!
-//! A user public transaction that is none of those exempt shapes MUST declare a
-//! fee.
-//! Omitting it is rejected outright ([`ClassifyError::MissingFeeDeclaration`]).
+//! A user transaction that is none of those exempt shapes MUST carry its fee.
+//! Omitting it is rejected outright ([`ClassifyError::MissingFeeDeclaration`],
+//! [`ClassifyError::MissingPrivateFee`]).
 
 use common::transaction::{LeeTransaction, is_cross_zone_lock, is_sequencer_stake_operation};
 use fee_core::assess::FeeTxView;
+use lee::privacy_preserving_transaction::Message as PrivateMessage;
+use lee_core::{
+    account::{AccountId, Actor, Balance},
+    execution_state::BoundaryStep,
+    native_token,
+};
 
 /// The fee treatment of one transaction at its turn in the block.
 pub enum FeeClass {
@@ -32,6 +39,38 @@ pub enum ClassifyError {
     /// may omit it; exempting an arbitrary one would execute it for free.
     #[error("user public transaction omits its required fee declaration")]
     MissingFeeDeclaration,
+    /// A private transaction's boundary does not carry exactly one crossing
+    /// into the fee inbox, or that crossing is not a native credit.
+    #[error("private transaction omits its required in-proof fee")]
+    MissingPrivateFee,
+}
+
+/// The reserve a private transaction credits to the fee inbox inside its proof
+/// and the address it came from, if the boundary carries exactly one crossing
+/// into the inbox and it is a native credit.
+fn private_fee_reserve(message: &PrivateMessage) -> Option<(AccountId, Balance)> {
+    let inbox = Actor::native_balance(system_accounts::fee_inbox_account_id());
+    let mut crossings = message
+        .execution
+        .boundary
+        .iter()
+        .filter_map(|step| match step {
+            BoundaryStep::PrivateToPublic(delivery) if delivery.envelope.to == inbox => {
+                Some(&delivery.envelope)
+            }
+            BoundaryStep::PrivateToPublic(_)
+            | BoundaryStep::PublicToPrivate(_)
+            | BoundaryStep::EndPrivateSubtree
+            | BoundaryStep::EndPublicSubtree => None,
+        });
+    let envelope = crossings.next()?;
+    if crossings.next().is_some() {
+        return None;
+    }
+    match borsh::from_slice(&envelope.message).ok()? {
+        native_token::Message::Credit(reserve) => Some((envelope.from.account_id, reserve)),
+        native_token::Message::Transfer { .. } | native_token::Message::ReadState => None,
+    }
 }
 
 /// Classifies `tx` at its turn in the block.
@@ -42,18 +81,21 @@ pub enum ClassifyError {
 ///
 /// # Errors
 ///
-/// [`ClassifyError::MissingFeeDeclaration`] if a user public transaction that is
-/// not an exempt shape omits its fee, and [`ClassifyError::Unserializable`] if a
-/// charged transaction cannot be serialized to price its storage gas.
+/// - [`ClassifyError::MissingFeeDeclaration`] if a user public transaction that is not an exempt
+///   shape omits its fee
+/// - [`ClassifyError::MissingPrivateFee`] if a private transaction omits its in-proof fee, and
+/// - [`ClassifyError::Unserializable`] if a charged transaction cannot be serialized to price its
+///   storage gas.
 pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, ClassifyError> {
     if is_genesis {
         return Ok(FeeClass::Exempt);
     }
     let public_tx = match tx {
-        // Private transactions: exempt under the interim policy, excluded from
-        // metering so free traffic cannot move the public base fee.
-        LeeTransaction::PrivacyPreserving(_) => {
-            return Ok(FeeClass::Exempt);
+        LeeTransaction::PrivacyPreserving(private_tx) => {
+            let Some((payer, reserve)) = private_fee_reserve(private_tx.message()) else {
+                return Err(ClassifyError::MissingPrivateFee);
+            };
+            return Ok(FeeClass::Charged(FeeTxView::Private { payer, reserve }));
         }
         LeeTransaction::Public(public_tx) => public_tx,
     };
@@ -89,4 +131,84 @@ pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, Class
         tip: fee.tip,
         max_fee: fee.max_fee,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use lee::privacy_preserving_transaction::{
+        Message, PrivacyPreservingTransaction, WitnessSet, circuit::Proof,
+    };
+    use lee_core::{execution_state::Delivery, program::MessageEnvelope};
+
+    use super::*;
+
+    fn inbox() -> Actor {
+        Actor::native_balance(system_accounts::fee_inbox_account_id())
+    }
+
+    fn payer() -> Actor {
+        Actor::native_balance(AccountId::new([7; 32]))
+    }
+
+    fn crossing(to: Actor, message: &native_token::Message) -> BoundaryStep {
+        BoundaryStep::PrivateToPublic(Delivery {
+            envelope: MessageEnvelope {
+                from: payer(),
+                to,
+                message: borsh::to_vec(message).expect("serializes"),
+            },
+            inherited_authorizations: BTreeSet::new(),
+            inherits_entry_authorizations: true,
+            pda_seeds: BTreeSet::new(),
+        })
+    }
+
+    fn private_tx(boundary: Vec<BoundaryStep>) -> LeeTransaction {
+        let mut message = Message::default();
+        message.execution.boundary = boundary;
+        LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+            message,
+            WitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![])),
+        ))
+    }
+
+    #[test]
+    fn a_private_transaction_is_charged_its_single_inbox_credit() {
+        let boundary = vec![
+            crossing(inbox(), &native_token::Message::Credit(42)),
+            BoundaryStep::EndPublicSubtree,
+        ];
+        let class = classify(&private_tx(boundary), false).unwrap();
+        assert!(matches!(
+            class,
+            FeeClass::Charged(FeeTxView::Private { payer, reserve: 42 })
+                if payer == self::payer().account_id
+        ));
+    }
+
+    #[test]
+    fn a_private_transaction_without_exactly_one_inbox_credit_is_rejected() {
+        let credit = native_token::Message::Credit(42);
+        let other = Actor::native_balance(AccountId::new([9; 32]));
+        for boundary in [
+            vec![],
+            vec![crossing(other, &credit)],
+            vec![crossing(inbox(), &credit), crossing(inbox(), &credit)],
+            vec![crossing(inbox(), &native_token::Message::ReadState)],
+            vec![crossing(
+                inbox(),
+                &native_token::Message::Transfer {
+                    to: other.account_id,
+                    amount: 1,
+                },
+            )],
+        ] {
+            assert!(matches!(
+                classify(&private_tx(boundary), false),
+                Err(ClassifyError::MissingPrivateFee)
+            ));
+        }
+    }
 }

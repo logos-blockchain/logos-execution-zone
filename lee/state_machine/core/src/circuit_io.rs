@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, InvalidMembershipProof,
     MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
-    account::{Account, AccountId, Actor, Nonce},
+    account::{Account, AccountId, Actor, Balance, Nonce},
     compute_digest_for_path,
     encryption::{EncryptedNote, ViewingPublicKey},
     execution_state::{Boundary, PredictedCrossMessages, PublicExecutionContext, TransactionEntry},
@@ -139,11 +139,25 @@ pub enum InvalidMessageEvidence {
     UnwitnessedDestination,
 }
 
+/// A native transfer run as a second entry once the root's subtree completes.
+///
+/// It debits `payer` in favour of `recipient`. The protocol attaches no meaning to it; a zone
+/// uses it to charge fees, reading the amount off the credit crossing into `recipient`.
+#[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+pub struct FeeTransfer {
+    pub payer: AccountId,
+    pub recipient: AccountId,
+    pub amount: Balance,
+}
+
 /// Inputs for proving a transaction's private part.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct ProvingInput {
     /// Top level initial message starting a transaction.
     pub root: TransactionEntry<MessageWitness>,
+    /// A native transfer run after the root, see [`FeeTransfer`].
+    pub fee: Option<FeeTransfer>,
     /// Assumptions on the public environment context for the proof.
     pub public_context: PublicExecutionContext,
     /// One witness for each private account used by the transaction.
@@ -548,6 +562,7 @@ mod tests {
             ciphertext_padding: None,
             recoveries: Vec::new(),
             private_promotions: BTreeSet::new(),
+            fee: None,
         }
     }
 

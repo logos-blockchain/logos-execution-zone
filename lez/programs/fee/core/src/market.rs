@@ -5,7 +5,7 @@
 
 use core::cmp::Ordering;
 
-use lee_core::account::{Fee, Gas};
+use lee_core::account::{Balance, Fee, Gas};
 
 pub const TARGET_GAS_EXEC: Gas = 5_000_000;
 /// The ±12.5% controller bound and elasticity framing assume `MAX = 2·TARGET`.
@@ -36,11 +36,18 @@ pub const BASE_FEE_STOR_MAX: Fee = u64::MAX / MAX_GAS_STOR;
 
 pub const SMOOTHING_WINDOW: usize = 50;
 
+/// A private reserve surplus at or below this is kept as tip instead of being
+/// refunded: a refund costs a publication, a note and a later nullifier.
+// TODO: agree the value with the tokenomics team.
+pub const MIN_PRIVATE_REFUND: Balance = 1_000_000;
+
 // FIXME: Provisional: re-pin with the LEZ wire-format numbers (spec Parameters TODO).
-/// Execution gas charged to every private transaction (STARK receipt verification,
-/// RISC Zero 3.0.5). THIS WILL BE WORKED ON WHILE HANDLING PPTX FEES!
+/// Execution gas charged to every private transaction: succinct receipt verification.
+///
+/// RISC Zero 3.0.5, `G_verify` ≈ 12.2 ms at 33,546 cycles/ms (`docs/benchmarks/cycle_bench.md`).
+/// Independent of the circuit's contents; re-pin on a RISC Zero bump.
 pub const PRIVATE_VERIFY_GAS: u64 = 409_764;
-/// Proof bytes inside every private transaction.
+/// Proof bytes inside every private transaction: the fixed succinct receipt size.
 pub const PROOF_BYTES: u64 = 223_551;
 /// Payload size every private transaction is padded to.
 pub const PRIVATE_PAD_BYTES: u64 = 512;

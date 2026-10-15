@@ -96,6 +96,7 @@ fn proving_input(
 ) -> ProvingInput {
     ProvingInput {
         root,
+        fee: None,
         public_context: PublicExecutionContext::new(public_actors, signers),
         private_witnesses,
         dummy_inputs: Vec::new(),

@@ -335,6 +335,7 @@ fn setup_sequencer_config() -> SequencerConfig {
         channel_signing_key_file: None,
         funding_public_key: None,
         wait_for_channel: false,
+        dry_run_rpc: false,
     }
 }
 
@@ -5943,6 +5944,7 @@ fn prove_and_settle(
             ciphertext_padding: None,
             recoveries,
             private_promotions: BTreeSet::new(),
+            fee: None,
         },
         &lee::Simulation {
             public_actor_states,

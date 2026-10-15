@@ -287,6 +287,7 @@ impl Case {
         WholeExecution::new(
             public_context,
             TransactionEntry::Sync(RootCall { to: root, message }),
+            None,
             &[],
         )?
         .execute(&mut meter)?;

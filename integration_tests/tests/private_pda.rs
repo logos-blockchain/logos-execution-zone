@@ -3,43 +3,32 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    time::Duration,
-};
+use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, get_account, no_seal, utils::sync_private,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, get_account, utils::sync_private,
     verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, Actor, PrivacyPreservingTransaction, PrivateKey, ProvingInput,
-    PublicExecutionContext, PublicKey, SenderPresentation,
-    privacy_preserving_transaction::{
-        circuit::{ProgramCatalog, Simulation, execute_and_prove},
-        message::Message,
-        witness_set::WitnessSet,
-    },
-    program::Program,
+    AccountId, Actor, PrivateKey, PublicKey,
+    privacy_preserving_transaction::circuit::ProgramCatalog, program::Program,
 };
 use lee_core::{
-    DUMMY_COMMITMENT_HASH, NullifierPublicKey, NullifierSecretKey, NullifierWitness,
-    PrivateAccountKind, PrivateWitness, RootCall, WitnessKind,
+    NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
     encryption::ViewingPublicKey,
-    execution_state::TransactionEntry,
-    native_token::{Message as NativeMessage, NATIVE_TOKEN_PROGRAM_ID},
+    native_token::Message as NativeMessage,
     program::{PdaSeed, SyncMessage},
 };
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_guest_core::Script;
 use testnet_initial_state::initial_pub_accounts_private_keys;
 use tokio::test;
-use wallet::{AccountIdentity, WalletCore};
+use wallet::{AccountIdentity, AsyncDelivery, WalletCore};
 
-/// Funds a private PDA by calling the native token program directly, initializing it under its
-/// owner's `nsk`.
+/// Funds a private PDA with a native transfer from a public sender, initializing it under its
+/// owner's `nsk`; the fee comes from a funded private account of the wallet.
 async fn fund_private_pda(
     wallet: &WalletCore<SequencerClient>,
     sender: AccountId,
@@ -49,82 +38,31 @@ async fn fund_private_pda(
     authority_program_id: AccountId,
     amount: u128,
 ) -> Result<()> {
-    let pda_account_id = AccountId::for_private_pda(
-        &authority_program_id,
-        &seed,
-        &NullifierPublicKey::from(&nsk),
-        &vpk,
-    );
-    let sender_account = wallet
-        .get_account_public(sender)
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to get sender account: {e}"))?
-        .unwrap_or_default();
-    let sender_sk = wallet
-        .get_account_public_signing_key(sender)
-        .context("sender signing key not found")?;
-
-    let sender_actor = Actor::native_balance(sender);
+    let pda = AccountIdentity::PrivatePdaShared {
+        authority: authority_program_id,
+        seed,
+        nsk,
+        vpk,
+    };
     let transfer = Program::serialize_message(NativeMessage::Transfer {
-        to: pda_account_id,
+        to: pda.account_id(),
         amount,
     })
     .context("failed to serialize the native transfer message")?;
-
-    let (output, proof) = execute_and_prove(
-        ProvingInput {
-            root: TransactionEntry::Sync(RootCall {
-                to: sender_actor,
-                message: transfer,
-            }),
-            public_context: PublicExecutionContext::new(vec![sender_actor], [sender]),
-            private_witnesses: vec![PrivateWitness {
-                vpk,
-                random_seed: [0; 32],
-                kind: WitnessKind::Pda {
-                    nsk,
-                    binding: (authority_program_id, seed),
-                },
-                nullifier: NullifierWitness::Init {
-                    commitment_root: DUMMY_COMMITMENT_HASH,
-                },
-                address_openings: BTreeSet::new(),
-            }],
-            dummy_inputs: Vec::new(),
-            ciphertext_padding: None,
-            recoveries: Vec::new(),
-            private_promotions: BTreeSet::new(),
-        },
-        &Simulation {
-            public_actor_states: [(
-                sender_actor,
-                sender_account
-                    .data
-                    .actor_state(NATIVE_TOKEN_PROGRAM_ID)
-                    .clone(),
-            )]
-            .into(),
-            admitted_accounts: None,
-        },
-        &ProgramCatalog::default(),
-        |_| SenderPresentation::Canonical,
-        |_, body| body.to.account_id == pda_account_id,
-        no_seal,
-    )
-    .map_err(|e| anyhow::anyhow!("circuit proving failed: {e}"))?;
-
-    let message =
-        Message::from_circuit_output(BTreeMap::from([(sender, sender_account.nonce)]), output);
-
-    let witness_set = WitnessSet::for_message(&message, proof, &[sender_sk]);
-    let tx = PrivacyPreservingTransaction::new(message, witness_set);
-
     wallet
-        .client_owned()
-        .send_transaction(LeeTransaction::PrivacyPreserving(tx))
+        .send_tx(
+            vec![
+                AccountIdentity::Public(sender).balance(),
+                pda.balance().receiving(),
+            ],
+            0,
+            transfer,
+            &ProgramCatalog::default(),
+            None,
+            AsyncDelivery::default(),
+        )
         .await
-        .map_err(|e| anyhow::anyhow!("send transaction failed: {e}"))?;
-
+        .map_err(|e| anyhow::anyhow!("funding the private PDA failed: {e}"))?;
     Ok(())
 }
 
