@@ -6,7 +6,7 @@
 //! the deadline; otherwise the assertion panics and the whole transaction rolls back. The actor
 //! is the payer's account under this program.
 
-use clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID;
+use clock_core::CLOCK_PROGRAM_ACCOUNT_ID;
 use lee_core::{
     Timestamp,
     account::{AccountId, Actor},
@@ -22,8 +22,9 @@ fn handle_message(
 ) -> Response {
     Response::keep_state()
         .send_sync(
-            Actor::new(CLOCK_01_PROGRAM_ACCOUNT_ID, clock_core::clock_account_id()),
+            Actor::new(CLOCK_PROGRAM_ACCOUNT_ID, clock_core::clock_account_id()),
             &clock_core::Message::AssertTimestamp {
+                granularity: 1,
                 at_least: deadline,
                 at_most: Timestamp::MAX,
             },
