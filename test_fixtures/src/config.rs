@@ -302,7 +302,7 @@ pub fn wallet_config(sequencer_addr: &SocketAddr) -> Result<WalletConfig> {
         gas_limit: wallet::DEFAULT_GAS_LIMIT,
         // Test chains never leave the floor base fees, so an exact reserve needs no refund and
         // the balance assertions need no refund accounting.
-        private_fee_headroom_percent: 0,
+        private_fee_headroom_blocks: 0,
     })
 }
 

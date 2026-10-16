@@ -26,8 +26,8 @@ async fn main() -> Result<()> {
         fee_payer,
         command,
     } = Args::parse();
-    let overrides = fee_headroom.map(|percent| WalletConfigOverrides {
-        private_fee_headroom_percent: Some(percent),
+    let overrides = fee_headroom.map(|blocks| WalletConfigOverrides {
+        private_fee_headroom_blocks: Some(blocks),
         ..WalletConfigOverrides::default()
     });
 

@@ -107,9 +107,9 @@ pub struct Args {
     /// Simulate the transaction a command would send and report its cost instead of sending it.
     #[arg(long, global = true)]
     pub dry_run: bool,
-    /// Reserve a privacy-preserving transaction's fee this many percent above the quoted base
-    /// fees for this command, instead of the configured headroom.
-    #[arg(long, global = true, value_name = "PERCENT")]
+    /// Reserve a privacy-preserving transaction's fee at the base fees this many blocks of the
+    /// steepest climb past the quote for this command, instead of the configured headroom.
+    #[arg(long, global = true, value_name = "BLOCKS")]
     pub fee_headroom: Option<u64>,
     /// Pay a privacy-preserving transaction's fee from this owned private account for this
     /// command, whether or not the transaction mentions it.
