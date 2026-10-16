@@ -6,7 +6,7 @@
 //! State account data layout (16 bytes):
 //!   [`cooldown_ms`: u64 LE | `last_run_timestamp`: u64 LE].
 
-use clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID;
+use clock_core::CLOCK_PROGRAM_ACCOUNT_ID;
 use lee_core::{
     Timestamp,
     account::Actor,
@@ -56,8 +56,9 @@ fn handle_message(input: &ReceiveInput, proposed: Timestamp) -> Response {
         .to_bytes(),
     )
     .send_sync(
-        Actor::new(CLOCK_01_PROGRAM_ACCOUNT_ID, clock_core::clock_account_id()),
+        Actor::new(CLOCK_PROGRAM_ACCOUNT_ID, clock_core::clock_account_id()),
         &clock_core::Message::AssertTimestamp {
+            granularity: 1,
             at_least: proposed,
             at_most: proposed,
         },

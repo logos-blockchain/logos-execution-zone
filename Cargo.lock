@@ -1584,6 +1584,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "borsh",
+ "clock_core",
  "common",
  "fee_core",
  "futures",
