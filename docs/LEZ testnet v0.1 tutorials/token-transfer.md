@@ -51,6 +51,27 @@ Account
 {"balance":150}
 ```
 
+### Where a funded account comes from on the public testnet
+
+There is no faucet on the public testnet. The accounts that already hold tokens are the ones the genesis state funded, and `lez/testnet_initial_state` publishes both their balances and their signing keys (`initial_public_user_accounts` for the ids and balances, `initial_pub_accounts_private_keys` for the keys).
+
+To fund your own account, sign a native-token transfer from one of those accounts to the account you just created and submit it. Because the genesis keys are public, that balance is shared with everyone else reading the crate, so fund a dedicated account once and spend from it. Transacting from the genesis account directly also means racing every other builder on the same nonce.
+
+```text
+Message::try_new_with_fees(
+    NATIVE_TOKEN_PROGRAM_ID,
+    [native_balance(source), native_balance(target)],
+    [nonce],
+    Instruction::Transfer { amount },
+    FeeDeclaration::new(source, /* exec */ 2_000_000, /* stor */ 0, /* ceiling */ u128::MAX >> 1),
+)
+```
+
+Sign the message with the published key (`WitnessSet::for_message`) and submit the transaction to the sequencer.
+
+> [!Note]
+> Whether publishing the genesis signing keys should remain the intended way to obtain funds, or whether they should be rotated and a faucet provided instead, is an open question (#938).
+
 ## 3. Native token transfers between public accounts
 LEZ includes a program for managing native tokens. Run `wallet auth-transfer` to see the available commands:
 ```bash
