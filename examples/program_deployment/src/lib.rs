@@ -5,8 +5,15 @@ use wallet::{WalletCore, max_fee_for, program_facades::program_loader::ProgramLo
 
 /// Deploys `bytecode` through `program_loader`, returning the header's `AccountId`.
 ///
+/// Also prints it as `PROG_CLI {"program_id":"<id>"}`, a line a driving tool can pick out of the
+/// wallet's other output (a runner that deploys two programs prints two, in deploy order).
+///
 /// `payer` must be an existing, funded account — a freshly-claimed account can't pay for its own
 /// claim.
+#[expect(
+    clippy::print_stdout,
+    reason = "This is an example program, it's fine to print to stdout"
+)]
 pub async fn deploy_program(
     wallet_core: &mut WalletCore,
     bytecode: Vec<u8>,
@@ -26,9 +33,11 @@ pub async fn deploy_program(
             .collect();
     wallet_core.store_persistent_data()?;
 
-    ProgramLoader(wallet_core)
+    let program_id = ProgramLoader(wallet_core)
         .deploy(header, &segments, bytecode, true, Some(payer))
-        .await
+        .await?;
+    println!("PROG_CLI {{\"program_id\":\"{program_id}\"}}");
+    Ok(program_id)
 }
 
 /// Declares `payer` as the fee payer of a hand-built public transaction.
