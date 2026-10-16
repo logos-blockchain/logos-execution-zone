@@ -7,7 +7,7 @@
     nixpkgs.follows = "logos-nix/nixpkgs";
 
     rust-overlay = {
-      url = "github:oxalica/rust-overlay";
+      url = "github:oxalica/rust-overlay/b2ccad3b67335d368eef49ec48b9c8166858e73d";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
@@ -57,7 +57,7 @@
         system:
         let
           pkgs = mkPkgs system;
-          rustToolchain = pkgs.rust-bin.stable.latest.default;
+          rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
           craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
           src = ./.;
           cargoLock = builtins.fromTOML (builtins.readFile ./Cargo.lock);
