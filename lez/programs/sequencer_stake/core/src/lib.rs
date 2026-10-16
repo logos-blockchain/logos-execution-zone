@@ -3,17 +3,18 @@
 use std::collections::BTreeMap;
 
 pub use ed25519_dalek;
-use lee_core::account::AccountId;
 pub use lee_core::program::PdaSeed;
+use lee_core::{BlockId, account::AccountId};
 use serde::{Deserialize, Serialize};
 
 const INVALID_KEY: &str = "invalid Ed25519 public key";
 const SEQUENCER_STAKE_CONFIG_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/MinSequencerStake/0000";
 /// Names the fault, so a second fault gets its own domain and its own signatures.
-const SLASH_APPROVAL_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/SlashApproval/NonBlock";
+pub const SLASH_APPROVAL_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/SlashApproval/NonBlock";
 const SLASH_SINK_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/SlashedStakeSink/00000";
 
-pub const SEQUENCER_STAKE_NAME: [u8; 15] = *b"sequencer_stake";
+pub const SEQUENCER_STAKE_NAME: lee_core::program::SystemProgramName =
+    lee_core::program::SystemProgramName::new(b"sequencer_stake");
 /// Blocks before `requested_at` in which an `UnstakeRequest` may land.
 pub const UNSTAKE_REQUEST_WINDOW: u64 = 16;
 
@@ -128,6 +129,26 @@ pub enum Message {
         destination: AccountId,
         requested_at: u64,
     },
+
+    /// Asserts that `approvals` of `payload` meet the committee's threshold, on the rules `Slash`
+    /// applies, and bounds the transaction to the earliest `valid_until` among them. Each
+    /// signature is over [`committee_approval_message`]. Changes nothing.
+    VerifyApprovals {
+        /// Separates what one caller's approvals approve from another's. Never
+        /// [`SLASH_APPROVAL_DOMAIN`]: a slash approval would read as an approval of a payload.
+        domain: [u8; 32],
+        payload: Vec<u8>,
+        approvals: Vec<CommitteeApproval>,
+    },
+}
+
+/// One accredited sequencer's approval of a payload, usable through block `valid_until`.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct CommitteeApproval {
+    pub signer: SequencerKey,
+    pub valid_until: BlockId,
+    /// Ed25519 signature over [`committee_approval_message`].
+    pub signature: Vec<u8>,
 }
 
 /// One accredited sequencer's signature over [`slash_approval_message`].
@@ -300,7 +321,7 @@ impl SequencerEntry {
 
 #[must_use]
 pub fn sequencer_stake_account_id() -> AccountId {
-    AccountId::from_builtin_program_name(&SEQUENCER_STAKE_NAME)
+    AccountId::from_system_program_name(&SEQUENCER_STAKE_NAME)
 }
 
 /// Approvals a `Slash` must carry: two thirds of the committee, never fewer
@@ -328,6 +349,22 @@ pub fn slash_approval_message(
     message.extend_from_slice(&channel_id);
     message.extend_from_slice(&sequencer_key.to_bytes());
     message.extend_from_slice(&inscription);
+    message
+}
+
+/// Bytes a committee member signs to approve `payload`: the channel id keeps the approval to one
+/// zone, and `domain` to one kind of change.
+#[must_use]
+pub fn committee_approval_message(
+    domain: [u8; 32],
+    channel_id: [u8; 32],
+    payload: &[u8],
+    valid_until: BlockId,
+) -> Vec<u8> {
+    let mut message = domain.to_vec();
+    message.extend_from_slice(&channel_id);
+    message.extend_from_slice(payload);
+    message.extend_from_slice(&valid_until.to_le_bytes());
     message
 }
 
@@ -605,6 +642,42 @@ mod tests {
             config.accredited_committee_members_count(),
             1,
             "an exiting key must not raise the threshold its peers have to clear"
+        );
+    }
+
+    /// `system_upgrader` changes only by protocol upgrade and sends `VerifyApprovals`, so its
+    /// encoding and the bytes approvers sign are fixed for as long as it is deployed.
+    #[test]
+    fn verify_approvals_encodings_are_pinned() {
+        let signer = test_key(1);
+        let message = Message::VerifyApprovals {
+            domain: [2; 32],
+            payload: vec![3, 4],
+            approvals: vec![CommitteeApproval {
+                signer,
+                valid_until: 5,
+                signature: vec![6; 64],
+            }],
+        };
+
+        let mut expected = vec![7];
+        expected.extend_from_slice(&[2; 32]);
+        expected.extend_from_slice(&2_u32.to_le_bytes());
+        expected.extend_from_slice(&[3, 4]);
+        expected.extend_from_slice(&1_u32.to_le_bytes());
+        expected.extend_from_slice(&signer.to_bytes());
+        expected.extend_from_slice(&5_u64.to_le_bytes());
+        expected.extend_from_slice(&64_u32.to_le_bytes());
+        expected.extend_from_slice(&[6; 64]);
+        assert_eq!(borsh::to_vec(&message).unwrap(), expected);
+
+        let mut signed = vec![2; 32];
+        signed.extend_from_slice(&[8; 32]);
+        signed.extend_from_slice(&[3, 4]);
+        signed.extend_from_slice(&5_u64.to_le_bytes());
+        assert_eq!(
+            committee_approval_message([2; 32], [8; 32], &[3, 4], 5),
+            signed
         );
     }
 }

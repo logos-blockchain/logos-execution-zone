@@ -29,7 +29,7 @@ pub use privacy_preserving_transaction::{
 };
 pub use public_transaction::PublicTransaction;
 pub use signature::{PrivateKey, PublicKey, Signature};
-pub use state::V03State;
+pub use state::{GenesisBuilder, V03State};
 pub use transaction_message::{
     InvalidTransaction, PublicAccountEvidence, TransactionMessage, nonce_map,
 };

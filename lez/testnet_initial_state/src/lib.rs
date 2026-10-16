@@ -7,7 +7,7 @@ use lee::{
     Account, AccountId, PrivateKey, PublicKey, Recipient, RecoveryBinding, V03State,
     program::Program,
 };
-use lee_core::PrivateAccountKind;
+use lee_core::{PrivateAccountKind, program::SystemProgramName};
 use serde::{Deserialize, Serialize};
 
 const PRIVATE_KEY_PUB_ACC_A: [u8; 32] = [
@@ -186,53 +186,80 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
         .collect()
 }
 
-fn initial_programs(cross_zone: bool) -> Vec<(AccountId, Program)> {
+/// System programs changed only by a protocol upgrade: `system_upgrader`, the root of system
+/// program upgrades.
+fn protocol_upgradable_programs() -> Vec<(AccountId, Program)> {
+    vec![(
+        programs::system_upgrader_account_id(),
+        programs::system_upgrader(),
+    )]
+}
+
+/// System programs, owned by `system_upgrader` and upgradable through it, by name.
+fn system_upgradable_programs(cross_zone: bool) -> Vec<(SystemProgramName, Program)> {
     let mut programs = vec![
-        (programs::clock_account_id(), programs::clock()),
-        (programs::fee_account_id(), programs::fee()),
-        (programs::bridge_account_id(), programs::bridge()),
-        (
-            programs::sequencer_stake_account_id(),
-            programs::sequencer_stake(),
-        ),
+        (programs::CLOCK_NAME, programs::clock()),
+        (programs::FEE_NAME, programs::fee()),
+        (programs::BRIDGE_NAME, programs::bridge()),
+        (programs::SEQUENCER_STAKE_NAME, programs::sequencer_stake()),
     ];
     if cross_zone {
-        // Builtins baked into every node (genesis-block ELFs would exceed the
-        // inscription size limit); registered only on cross_zone zones, fixed at
-        // genesis.
+        // System programs baked into every node (genesis-block ELFs would exceed the
+        // inscription size limit); registered only on cross_zone zones.
         programs.extend([
             (
-                programs::cross_zone_inbox_account_id(),
+                programs::CROSS_ZONE_INBOX_NAME,
                 programs::cross_zone_inbox(),
             ),
             (
-                programs::cross_zone_outbox_account_id(),
+                programs::CROSS_ZONE_OUTBOX_NAME,
                 programs::cross_zone_outbox(),
             ),
-            (programs::ping_sender_account_id(), programs::ping_sender()),
-            (
-                programs::ping_receiver_account_id(),
-                programs::ping_receiver(),
-            ),
-            (programs::bridge_lock_account_id(), programs::bridge_lock()),
-            (
-                programs::wrapped_token_account_id(),
-                programs::wrapped_token(),
-            ),
+            (programs::PING_SENDER_NAME, programs::ping_sender()),
+            (programs::PING_RECEIVER_NAME, programs::ping_receiver()),
+            (programs::BRIDGE_LOCK_NAME, programs::bridge_lock()),
+            (programs::WRAPPED_TOKEN_NAME, programs::wrapped_token()),
         ]);
     }
     programs
 }
 
-/// The pre-genesis state. `cross_zone` selects whether the six cross-zone builtins are
-/// registered, each at a name-derived, `image_id`-independent address. Not defaulted: every
-/// caller states the choice.
+/// `system_upgrader`'s registry: the upgradable system programs, none with an upgrade pending.
+fn system_registry(cross_zone: bool) -> (AccountId, Account) {
+    let registry = system_upgrader_core::Registry {
+        programs: system_upgradable_programs(cross_zone)
+            .into_iter()
+            .map(|(name, _)| (name, None))
+            .collect(),
+    };
+    (
+        system_upgrader_core::registry_account_id(),
+        Account::default().with_actor_state(
+            system_upgrader_core::SYSTEM_UPGRADER_ACCOUNT_ID,
+            registry.to_bytes().into(),
+        ),
+    )
+}
+
+/// The pre-genesis state.
+///
+/// `cross_zone` selects whether the six cross-zone system programs are registered, each at a
+/// name-derived, `image_id`-independent address. Not defaulted: every caller states the choice.
 #[must_use]
 pub fn initial_state(cross_zone: bool) -> V03State {
-    lee::V03State::new()
+    lee::GenesisBuilder::new()
         .with_public_accounts(initial_public_accounts())
+        .with_public_accounts([system_registry(cross_zone)])
         .with_recovery_bindings(initial_recovery_bindings())
-        .with_named_programs(initial_programs(cross_zone))
+        .with_programs_at(
+            protocol_upgradable_programs()
+                .into_iter()
+                .map(|(account_id, program)| (account_id, program, false))
+                .chain(system_upgradable_programs(cross_zone).into_iter().map(
+                    |(name, program)| (AccountId::from_system_program_name(&name), program, false),
+                )),
+        )
+        .build()
 }
 
 #[cfg(test)]
@@ -240,6 +267,7 @@ mod tests {
     use std::str::FromStr as _;
 
     use key_protocol::key_management::secret_holders::ViewingSecretKey;
+    use program_loader_core::LoaderActorState as _;
 
     use super::*;
 
@@ -449,6 +477,30 @@ mod tests {
                 without.get_builtin_program(id).is_none(),
                 "absent when not declared"
             );
+        }
+    }
+
+    #[test]
+    fn every_registered_system_program_is_seeded_mutable() {
+        for cross_zone in [false, true] {
+            let state = initial_state(cross_zone);
+            let registry = system_upgrader_core::Registry::from_bytes(
+                state
+                    .get_account_by_id(system_upgrader_core::registry_account_id())
+                    .data
+                    .actor_state(system_upgrader_core::SYSTEM_UPGRADER_ACCOUNT_ID),
+            )
+            .unwrap();
+            for name in registry.programs.keys() {
+                let header = lee_core::program::ProgramHeader::from_loader_actor_state(
+                    state
+                        .get_account_by_id(AccountId::from_system_program_name(name))
+                        .data
+                        .actor_state(lee_core::program::PROGRAM_LOADER_ACCOUNT_ID),
+                )
+                .unwrap();
+                assert!(!header.immutable);
+            }
         }
     }
 }

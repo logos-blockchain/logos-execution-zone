@@ -32,6 +32,8 @@ prove = ["lee/prove"]
 test-utils = []
 
 [dev-dependencies]
+system_upgrader_core.workspace = true
+lee = { workspace = true, features = ["test-utils"] }
 testnet_initial_state.workspace = true
 serde_json.workspace = true
 test_methods.workspace = true

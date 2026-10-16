@@ -1684,12 +1684,9 @@ mod tests {
         account::{Account, Actor, ActorState},
         compute_digest_for_path,
         native_token::{self, TransferError},
-        program::{
-            MessageBody, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramHeader, ProgramSegment,
-            Publication,
-        },
+        program::{MessageBody, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramHeader, Publication},
     };
-    use program_loader_core::MAX_SEGMENT_DATA_LEN;
+    use program_loader_core::{LoaderActorState as _, MAX_SEGMENT_DATA_LEN, ProgramSegment};
     use sequencer_stake_core::{SequencerKey, StakeRecord, ed25519_dalek::SigningKey};
     use test_guest_core::Script;
 

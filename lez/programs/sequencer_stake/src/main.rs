@@ -7,8 +7,9 @@ use lee_core::{
     program::{BlockValidityWindow, ReceiveInput, Response, SyncMessage},
 };
 use sequencer_stake_core::{
-    ChannelParams, Message, PendingUnstake, SequencerEntry, SequencerKey, SequencerStakeConfig,
-    SlashApproval, StakeRecord, UNSTAKE_REQUEST_WINDOW,
+    ChannelParams, CommitteeApproval, Message, PendingUnstake, SLASH_APPROVAL_DOMAIN,
+    SequencerEntry, SequencerKey, SequencerStakeConfig, SlashApproval, StakeRecord,
+    UNSTAKE_REQUEST_WINDOW, committee_approval_message,
     ed25519_dalek::{Signature, VerifyingKey},
     sequencer_stake_config_account_id, slash_approval_message, slash_approval_threshold,
     slash_sink_account_id, stake_funds_account_id, stake_funds_seed,
@@ -61,6 +62,11 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
                 requested_at,
             },
         ),
+        Message::VerifyApprovals {
+            domain,
+            payload,
+            approvals,
+        } => verify_committee_approvals(input, domain, &payload, &approvals),
     }
 }
 
@@ -381,32 +387,83 @@ fn verify_approvals(
     approvals: &[SlashApproval],
 ) {
     let message = slash_approval_message(channel_id(config), sequencer_key, inscription);
+    verify_signatures(
+        config,
+        approvals.iter().map(|approval| {
+            (
+                approval.signer,
+                approval.signature.as_slice(),
+                message.clone(),
+            )
+        }),
+        "slash carries fewer approvals than the threshold",
+    );
+}
 
-    let mut approvers: Vec<SequencerKey> = Vec::with_capacity(approvals.len());
-    for approval in approvals {
+/// Handles `VerifyApprovals`: the same rules as `Slash`, each approval signed with its own
+/// `valid_until`, which bounds the transaction.
+fn verify_committee_approvals(
+    input: &ReceiveInput,
+    domain: [u8; 32],
+    payload: &[u8],
+    approvals: &[CommitteeApproval],
+) -> Response {
+    assert_config_account(input);
+    // A slash approval's bytes match a committee approval's under this domain.
+    assert_ne!(
+        domain, SLASH_APPROVAL_DOMAIN,
+        "VerifyApprovals cannot verify slash approvals"
+    );
+    let config = decode_config(&input.pre_state);
+    let channel_id = channel_id(&config);
+    verify_signatures(
+        &config,
+        approvals.iter().map(|approval| {
+            (
+                approval.signer,
+                approval.signature.as_slice(),
+                committee_approval_message(domain, channel_id, payload, approval.valid_until),
+            )
+        }),
+        "the change carries fewer approvals than the threshold",
+    );
+    let valid_until = approvals
+        .iter()
+        .map(|approval| approval.valid_until)
+        .min()
+        .expect("a change requires approvals");
+    Response::keep_state().block_window(..valid_until.saturating_add(1))
+}
+
+/// Each `(signer, signature, message)` is by a distinct key this config accredits and verifies,
+/// and there are at least the threshold of them.
+fn verify_signatures<'approval>(
+    config: &SequencerStakeConfig,
+    approvals: impl IntoIterator<Item = (SequencerKey, &'approval [u8], Vec<u8>)>,
+    too_few: &str,
+) {
+    let mut approvers: Vec<SequencerKey> = Vec::new();
+    for (signer, signature, message) in approvals {
         assert!(
-            config.is_accredited_committee_member(&approval.signer),
+            config.is_accredited_committee_member(&signer),
             "approval from a key this config does not accredit"
         );
-        assert!(
-            !approvers.contains(&approval.signer),
-            "the same key approved twice"
-        );
+        assert!(!approvers.contains(&signer), "the same key approved twice");
 
-        let verifying_key = VerifyingKey::from_bytes(&approval.signer.to_bytes())
+        let verifying_key = VerifyingKey::from_bytes(&signer.to_bytes())
             .expect("a SequencerKey is a valid Ed25519 public key");
-        let signature = Signature::from_slice(&approval.signature)
-            .expect("approval signature should be 64 bytes");
+        let signature =
+            Signature::from_slice(signature).expect("approval signature should be 64 bytes");
         verifying_key
             .verify_strict(&message, &signature)
             .expect("approval signature should verify against its signer");
 
-        approvers.push(approval.signer);
+        approvers.push(signer);
     }
 
     assert!(
         approvers.len() >= slash_approval_threshold(config.accredited_committee_members_count()),
-        "slash carries fewer approvals than the threshold"
+        "{too_few}"
     );
 }
 
@@ -452,6 +509,8 @@ mod tests {
     const MINIMUM: u128 = 1_000;
     const EXIT_DELAY: u64 = 10;
     const REQUESTED_AT: u64 = 7;
+    const DOMAIN: [u8; 32] = [11; 32];
+    const PAYLOAD: &[u8] = b"a change";
 
     fn signing_key(seed: u8) -> SigningKey {
         SigningKey::from_bytes(&[seed; 32])
@@ -984,6 +1043,118 @@ mod tests {
             Some(PROGRAM),
             &config_with(&[]),
             record_stake(OWNER, MINIMUM, false),
+        );
+    }
+
+    fn committee_approval(seed: u8, payload: &[u8], valid_until: BlockId) -> CommitteeApproval {
+        CommitteeApproval {
+            signer: key(seed),
+            valid_until,
+            signature: signing_key(seed)
+                .sign(&committee_approval_message(
+                    DOMAIN,
+                    CHANNEL_ID,
+                    payload,
+                    valid_until,
+                ))
+                .to_bytes()
+                .to_vec(),
+        }
+    }
+
+    fn verify(approvals: Vec<CommitteeApproval>) -> Message {
+        Message::VerifyApprovals {
+            domain: DOMAIN,
+            payload: PAYLOAD.to_vec(),
+            approvals,
+        }
+    }
+
+    #[test]
+    fn approvals_meeting_the_threshold_bound_the_transaction_and_change_nothing() {
+        let transition = at_config(
+            Some(ATTACKER),
+            &committee_of_three(),
+            verify(vec![
+                committee_approval(1, PAYLOAD, 30),
+                committee_approval(2, PAYLOAD, 20),
+            ]),
+        );
+
+        assert_eq!(transition.response.post_state, None);
+        let blocks = &transition.response.validity.blocks;
+        assert!(blocks.is_valid_for(20), "valid through the earliest expiry");
+        assert!(!blocks.is_valid_for(21), "and not past it");
+    }
+
+    #[test]
+    #[should_panic(expected = "the change carries fewer approvals than the threshold")]
+    fn approvals_below_the_threshold_are_refused() {
+        let _transition = at_config(
+            None,
+            &committee_of_three(),
+            verify(vec![committee_approval(1, PAYLOAD, 30)]),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "approval signature should verify against its signer")]
+    fn an_approval_of_another_payload_is_refused() {
+        let _transition = at_config(
+            None,
+            &committee_of_three(),
+            verify(vec![
+                committee_approval(1, PAYLOAD, 30),
+                committee_approval(2, b"another change", 30),
+            ]),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "not the sequencer_stake config account")]
+    fn approvals_are_verified_only_at_the_config() {
+        let _transition = at_owner(
+            false,
+            &committee_of_three(),
+            verify(vec![
+                committee_approval(1, PAYLOAD, 30),
+                committee_approval(2, PAYLOAD, 30),
+            ]),
+        );
+    }
+
+    /// A slash approval, read as a committee approval of key ‖ inscription[..24] valid until
+    /// inscription[24..], has the same bytes; the Slash domain is refused outright.
+    #[test]
+    #[should_panic(expected = "VerifyApprovals cannot verify slash approvals")]
+    fn slash_approvals_cannot_pass_as_committee_approvals() {
+        let mut payload = key(1).to_bytes().to_vec();
+        payload.extend_from_slice(&INSCRIPTION[..24]);
+        let valid_until = u64::from_le_bytes(INSCRIPTION[24..].try_into().unwrap());
+        let approvals = [2, 3]
+            .map(|seed| {
+                let slash = approval(seed, key(1));
+                CommitteeApproval {
+                    signer: slash.signer,
+                    valid_until,
+                    signature: slash.signature,
+                }
+            })
+            .to_vec();
+        assert_eq!(
+            committee_approval_message(SLASH_APPROVAL_DOMAIN, CHANNEL_ID, &payload, valid_until),
+            slash_approval_message(CHANNEL_ID, key(1), INSCRIPTION),
+            "the two formats collide"
+        );
+
+        let _transition = at_config(
+            None,
+            &committee_of_three(),
+            Message::VerifyApprovals {
+                domain: SLASH_APPROVAL_DOMAIN,
+                payload,
+                approvals,
+            },
         );
     }
 }

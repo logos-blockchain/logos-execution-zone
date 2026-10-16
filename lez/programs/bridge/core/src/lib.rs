@@ -11,7 +11,8 @@ pub mod event;
 const BRIDGE_SEED_DOMAIN_SEPARATOR: [u8; 32] = *b"/LEZ/v0.3/BridgeSeed/0000000000/";
 const DEPOSIT_RECEIPT_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/BridgeDepositReceipt/0";
 
-pub const BRIDGE_NAME: [u8; 6] = *b"bridge";
+pub const BRIDGE_NAME: lee_core::program::SystemProgramName =
+    lee_core::program::SystemProgramName::new(b"bridge");
 
 pub type BridgeAmount = u64;
 
@@ -45,7 +46,7 @@ pub enum Message {
 
 #[must_use]
 pub fn bridge_account_id() -> AccountId {
-    AccountId::from_builtin_program_name(&BRIDGE_NAME)
+    AccountId::from_system_program_name(&BRIDGE_NAME)
 }
 
 #[must_use]

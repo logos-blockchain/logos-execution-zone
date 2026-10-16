@@ -7,7 +7,7 @@ use lee::{
     program::{Program, load_program},
 };
 use lee_core::program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader};
-use program_loader_core::{MAX_PROGRAM_SEGMENTS, Message, build_segments};
+use program_loader_core::{LoaderActorState as _, MAX_PROGRAM_SEGMENTS, Message, build_segments};
 
 use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
 

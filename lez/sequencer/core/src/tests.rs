@@ -314,11 +314,14 @@ fn setup_sequencer_config() -> SequencerConfig {
 }
 
 #[test]
-fn only_the_cross_zone_inbox_and_fee_are_sequencer_only() {
+fn only_the_cross_zone_inbox_fee_and_system_upgrader_are_sequencer_only() {
     assert!(is_sequencer_only_program(
         programs::cross_zone_inbox_account_id()
     ));
     assert!(is_sequencer_only_program(programs::fee_account_id()));
+    assert!(is_sequencer_only_program(
+        programs::system_upgrader_account_id()
+    ));
     assert!(!is_sequencer_only_program(
         programs::cross_zone_outbox_account_id()
     ));
@@ -2343,9 +2346,9 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
 /// `CLOCK_01` account observe it.
 fn state_with_clock_and_program(program: Program, clock_timestamp: u64) -> V03State {
     let program_id = AccountId::from_builtin_program(program.id());
-    let mut state = V03State::new().with_named_programs([
-        (programs::clock_account_id(), programs::clock()),
-        (program_id, program),
+    let mut state = V03State::new().with_programs_at([
+        (programs::clock_account_id(), programs::clock(), true),
+        (program_id, program, true),
     ]);
     for clock_id in system_accounts::clock_account_ids() {
         state.force_insert_account(clock_id, system_accounts::clock_account());
@@ -2647,6 +2650,30 @@ fn resubmittable_txs_drops_clock_and_bridge_deposits() {
     // The trailing clock tx and the sequencer-generated deposit are dropped;
     // user txs (withdrawals included) are returned.
     assert_eq!(resubmittable_txs(&block), vec![user_tx, withdraw_tx]);
+}
+
+/// An approved change can't be rebuilt, so a rewind returns it; the producer rebuilds `Apply`.
+#[test]
+fn resubmittable_txs_keeps_an_approved_system_change_and_drops_apply() {
+    let schedule = system_upgrader_tx(&system_upgrader_core::Message::Schedule {
+        name: programs::CLOCK_NAME,
+        first_segment: AccountId::new([1; 32]),
+        image_id: [0; 8],
+        activation_height: 5,
+        approvals: vec![],
+    });
+    let apply = system_upgrader_tx(&system_upgrader_core::Message::Apply {
+        name: programs::CLOCK_NAME,
+        activation_height: 5,
+    });
+
+    let block = common::test_utils::produce_dummy_block(
+        2,
+        Some(HashType([1; 32])),
+        vec![schedule.clone(), apply],
+    );
+
+    assert_eq!(resubmittable_txs(&block), vec![schedule]);
 }
 
 #[test]
@@ -3882,9 +3909,10 @@ fn diag_sequencer_stake_writes_the_ownership_account_record() {
 
     let config_id = system_accounts::sequencer_stake_config_account_id();
     let mut state = V03State::new()
-        .with_named_programs([(
+        .with_programs_at([(
             programs::sequencer_stake_account_id(),
             programs::sequencer_stake(),
+            true,
         )])
         .with_public_accounts([
             (funding_id, Account::funded(amount)),
@@ -4044,9 +4072,10 @@ fn stake_entry(
 /// account holding `funding_balance`.
 fn stake_test_state(funding_id: AccountId, funding_balance: u128) -> V03State {
     V03State::new()
-        .with_named_programs([(
+        .with_programs_at([(
             programs::sequencer_stake_account_id(),
             programs::sequencer_stake(),
+            true,
         )])
         .with_public_accounts([
             (funding_id, Account::funded(funding_balance)),
@@ -4404,9 +4433,10 @@ fn a_fully_exited_ownership_account_can_stake_again() {
     let sequencer_key = test_sequencer_key(0x42);
 
     let mut state = V03State::new()
-        .with_named_programs([(
+        .with_programs_at([(
             programs::sequencer_stake_account_id(),
             programs::sequencer_stake(),
+            true,
         )])
         .with_public_accounts([
             (funding_id, Account::funded(amount)),
@@ -5418,7 +5448,7 @@ fn a_privately_owned_and_funded_stake_is_slashed_without_its_owners_witness() {
 // `state` with `TIPS` waiting in the fee inbox and the fee program to distribute them.
 fn tipped(state: V03State) -> V03State {
     state
-        .with_named_programs([(programs::fee_account_id(), programs::fee())])
+        .with_programs_at([(programs::fee_account_id(), programs::fee(), true)])
         .with_public_accounts([
             (
                 system_accounts::fee_state_account_id(),
@@ -6479,4 +6509,70 @@ async fn a_turn_on_a_view_with_a_hole_is_skipped() {
     assert_eq!(sequencer.chain_height().await, 1);
     assert_eq!(sequencer.chain().lock().await.pin(), pin);
     assert_eq!(sequencer.mempool.len(), 1, "the user transaction is kept");
+}
+
+/// Genesis, with `clock`'s upgrade to the chain at `[0x51; 32]` due in block `activation_height`.
+fn state_with_clock_upgrade_due_at(activation_height: lee_core::BlockId) -> lee::V03State {
+    use lee_core::program::SYSTEM_UPGRADER_ACCOUNT_ID;
+    use system_upgrader_core::{Registry, ScheduledUpgrade, registry_account_id};
+
+    let genesis = testnet_initial_state::initial_state(false);
+    let mut registry = common::system_upgrades::registry(&genesis);
+    registry.programs.insert(
+        programs::CLOCK_NAME,
+        Some(ScheduledUpgrade {
+            first_segment: AccountId::new([0x51; 32]),
+            image_id: [0; 8],
+            activation_height,
+        }),
+    );
+    genesis.with_public_accounts([(
+        registry_account_id(),
+        lee::Account::default().with_actor_state(
+            SYSTEM_UPGRADER_ACCOUNT_ID,
+            Registry::to_bytes(&registry).into(),
+        ),
+    )])
+}
+
+/// An unsigned `system_upgrader` transaction to its registry, as a producer builds it.
+fn system_upgrader_tx(message: &system_upgrader_core::Message) -> LeeTransaction {
+    let registry = system_upgrader_core::registry_actor();
+    LeeTransaction::Public(PublicTransaction::new(
+        lee::public_transaction::Message::try_new(registry, [registry], BTreeMap::new(), message)
+            .unwrap(),
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+    ))
+}
+
+#[test]
+fn a_due_system_upgrade_gets_an_apply() {
+    use system_upgrader_core::{loader_actor, registry_actor};
+
+    let state = state_with_clock_upgrade_due_at(5);
+
+    assert_eq!(
+        super::build_due_apply_tx(&state, 4),
+        None,
+        "nothing is due before the upgrade's height"
+    );
+    let expected = LeeTransaction::Public(lee::PublicTransaction::new(
+        lee::public_transaction::Message::try_new(
+            registry_actor(),
+            [registry_actor(), loader_actor(&programs::CLOCK_NAME)],
+            BTreeMap::new(),
+            system_upgrader_core::Message::Apply {
+                name: programs::CLOCK_NAME,
+                activation_height: 5,
+            },
+        )
+        .unwrap(),
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+    ));
+    assert_eq!(super::build_due_apply_tx(&state, 5), Some(expected));
+    assert_eq!(
+        super::build_due_apply_tx(&state, 6),
+        None,
+        "an upgrade activates only at its height"
+    );
 }

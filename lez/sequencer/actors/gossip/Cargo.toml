@@ -55,5 +55,6 @@ lee = { workspace = true, features = ["test-utils"] }
 logos-blockchain-core.workspace = true
 mempool.workspace = true
 sequencer_stake_core.workspace = true
+system_upgrader_core.workspace = true
 testnet_initial_state.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -244,9 +244,9 @@ pub fn clock_invocation(block_id: BlockId, timestamp: Timestamp) -> lee::PublicT
 /// Whether `tx` is a sequencer-injected or account-less system transaction.
 ///
 /// Identified by shape: an empty witness set invoking the bridge deposit, the
-/// cross-zone inbox dispatch, or the `ping_sender` cross-zone send. Fee- and
-/// cap-exempt. Shared by the sequencer (build) and the transition (replay) so
-/// the two can never disagree.
+/// cross-zone inbox dispatch, the `ping_sender` cross-zone send, or `system_upgrader`.
+/// Fee- and cap-exempt. Shared by the sequencer (build) and the transition (replay)
+/// so the two can never disagree.
 ///
 /// Cross-zone traffic is exempt by design, not as a stopgap: an outbound send
 /// is account-less (there is no payer to charge) and an inbound dispatch is
@@ -283,7 +283,7 @@ pub fn is_system_injection(tx: &LeeTransaction) -> bool {
             Ok(ping_core::SenderMessage::Send { .. })
         );
     }
-    false
+    crate::system_upgrades::is_system_upgrader_tx(tx)
 }
 
 /// Whether `tx` is a cross-zone outbound lock (`bridge_lock::Lock`).
@@ -534,7 +534,37 @@ pub fn validate_user_state_modification(
     if injected_program != Some(programs::cross_zone_inbox_account_id()) {
         validate_no_inbox_state_modification(state, diff)?;
     }
+    if injected_program != Some(system_upgrader_core::SYSTEM_UPGRADER_ACCOUNT_ID) {
+        validate_no_system_registry_modification(state, diff)?;
+    }
     Ok(())
+}
+
+/// Rejects a diff that changes `system_upgrader`'s registry. Every `system_upgrader` message
+/// changes it, so only a `system_upgrader` transaction in the producer's shape may reach
+/// `system_upgrader`: not a private transaction's public root, which no entry point or placement
+/// rule sees.
+fn validate_no_system_registry_modification(
+    state: &V03State,
+    diff: &ValidatedStateDiff,
+) -> Result<(), lee::error::LeeError> {
+    let registry = system_upgrader_core::registry_account_id();
+    let program = system_upgrader_core::SYSTEM_UPGRADER_ACCOUNT_ID;
+    let modified = diff.public_diff().get(&registry).is_some_and(|post| {
+        state
+            .get_account_by_id(registry)
+            .data
+            .actor_states
+            .get(&program)
+            != post.data.actor_states.get(&program)
+    });
+    if modified {
+        Err(lee::error::LeeError::InvalidInput(
+            "Transaction modifies system_upgrader's registry".to_owned(),
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 /// Rejects a diff that changes any account's cross-zone inbox actor state.
@@ -864,6 +894,84 @@ mod tests {
         let (state, diff) = bridge_debit();
         validate_user_state_modification(&injected_deposit(), &state, &diff)
             .expect("an injected deposit debits the bridge");
+        assert!(validate_user_state_modification(&signed_transfer(), &state, &diff).is_err());
+    }
+
+    /// The registry gaining a scheduled upgrade.
+    fn registry_write() -> (V03State, lee::ValidatedStateDiff) {
+        let pre = Account::default();
+        let mut post = pre.clone();
+        post.data.set_actor_state(
+            system_upgrader_core::SYSTEM_UPGRADER_ACCOUNT_ID,
+            lee::ActorState::from(vec![1]),
+        );
+        state_and_diff(system_upgrader_core::registry_account_id(), pre, post)
+    }
+
+    fn registry_message() -> Vec<u8> {
+        borsh::to_vec(&system_upgrader_core::Message::Apply {
+            name: system_upgrader_core::SystemProgramName::new(b"clock"),
+            activation_height: 1,
+        })
+        .unwrap()
+    }
+
+    /// A `system_upgrader` transaction as the producer builds it: public, unsigned.
+    fn produced_system_upgrader_tx() -> super::LeeTransaction {
+        let registry = system_upgrader_core::registry_actor();
+        let message = lee::public_transaction::Message::new_preserialized(
+            registry,
+            registry_message(),
+            [registry],
+            BTreeMap::new(),
+            None,
+        );
+        let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![]);
+        super::LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
+    }
+
+    /// A private transaction whose public root sends to `system_upgrader`'s registry.
+    fn private_tx_rooted_at_the_registry() -> super::LeeTransaction {
+        let registry = system_upgrader_core::registry_actor();
+        super::LeeTransaction::PrivacyPreserving(lee::PrivacyPreservingTransaction {
+            message: lee::privacy_preserving_transaction::Message {
+                public_context: lee_core::execution_state::PublicExecutionContext::new(
+                    vec![registry],
+                    [],
+                ),
+                execution: lee_core::ProvenExecution {
+                    boundary: Vec::new(),
+                    async_messages: Vec::new(),
+                    recovery_bindings: Vec::new(),
+                    public_root: Some(lee::RootCall {
+                        to: registry,
+                        message: registry_message(),
+                    }),
+                    private_actions: Vec::new(),
+                    validity: lee_core::program::ValidityWindows::new_unbounded(),
+                    program_image_claims: Vec::new(),
+                },
+                nonces: BTreeMap::new(),
+                admission_evidence: Vec::new(),
+            },
+            witness_set: lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(
+                Vec::new(),
+                lee::privacy_preserving_transaction::circuit::Proof::from_inner(Vec::new()),
+            ),
+        })
+    }
+
+    /// Only the producer reaches `system_upgrader`: a private transaction's public root is seen by
+    /// no entry point or placement rule, so it is refused at settlement.
+    #[test]
+    fn only_a_produced_system_upgrader_transaction_may_change_the_registry() {
+        let (state, diff) = registry_write();
+        validate_user_state_modification(&produced_system_upgrader_tx(), &state, &diff)
+            .expect("the producer's system_upgrader transaction changes the registry");
+        assert!(
+            validate_user_state_modification(&private_tx_rooted_at_the_registry(), &state, &diff)
+                .is_err()
+        );
         assert!(validate_user_state_modification(&signed_transfer(), &state, &diff).is_err());
     }
 

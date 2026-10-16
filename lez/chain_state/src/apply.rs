@@ -164,6 +164,17 @@ pub fn apply_block_to_state(
     // The fee tx is byte-compared only after the user transactions have been
     // settled: its summary is derived from their execution.
 
+    // At most one `system_upgrader` transaction, directly before the fee: a change takes effect
+    // after every other transaction in its block.
+    let last_index = user_txs.len().checked_sub(1);
+    if let Some(tx_index) = user_txs.iter().enumerate().position(|(index, tx)| {
+        common::system_upgrades::is_system_upgrader_tx(tx) && Some(index) != last_index
+    }) {
+        return Err(BlockIngestError::MisplacedSystemUpgraderTransaction {
+            tx_index: tx_index.try_into().expect("tx index fits in u64"),
+        });
+    }
+
     let opening = opening_fee_state(state);
     let mut summary = BlockFeeSummary::default();
     let mut block_events = Vec::new();
@@ -201,6 +212,15 @@ pub fn apply_block_to_state(
             )?
         };
         collect_tx_events(&mut block_events, tx_index, transaction, events);
+    }
+
+    // The block an upgrade activates in must carry its `Apply`.
+    if let Some(name) = common::system_upgrades::due_at(state, block.header.block_id) {
+        return Err(BlockIngestError::MissedSystemUpgrade {
+            name: String::from_utf8_lossy(name.as_bytes())
+                .trim_end_matches('\0')
+                .to_owned(),
+        });
     }
 
     // The forced fee transaction must carry exactly the summary this block's
@@ -533,7 +553,7 @@ mod tests {
     use lee::{AccountId, Actor, PublicTransaction, program::Program, public_transaction};
     use lee_core::{
         account::Nonce,
-        program::{ProgramEvent, Response},
+        program::{ProgramEvent, Response, SYSTEM_UPGRADER_ACCOUNT_ID},
     };
     use test_guest_core::Script;
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_state};
@@ -720,6 +740,95 @@ mod tests {
         .into_pending_block();
         let err = apply_block(None, &block, &mut state).expect_err("should reject");
         assert!(matches!(err, BlockIngestError::InvalidFeeTransaction));
+    }
+
+    fn system_upgrader_tx() -> LeeTransaction {
+        LeeTransaction::Public(PublicTransaction::new(
+            public_transaction::Message::new_preserialized(
+                Actor::new(AccountId::new([1; 32]), SYSTEM_UPGRADER_ACCOUNT_ID),
+                vec![],
+                [],
+                BTreeMap::new(),
+                None,
+            ),
+            public_transaction::WitnessSet::from_raw_parts(vec![]),
+        ))
+    }
+
+    fn block_with(transactions: Vec<LeeTransaction>) -> Block {
+        let fee = LeeTransaction::Public(fee_invocation(
+            fee_core::BlockFeeSummary::default(),
+            0,
+            FeePayee::Present(producer_account_for_testing()),
+        ));
+        HashableBlockData {
+            block_id: 1,
+            prev_block_hash: HashType([0_u8; 32]),
+            timestamp: 100,
+            transactions: [
+                transactions,
+                vec![fee, LeeTransaction::Public(clock_invocation(1, 100))],
+            ]
+            .concat(),
+        }
+        .into_pending_block()
+    }
+
+    #[test]
+    fn a_system_upgrader_tx_before_other_transactions_is_misplaced() {
+        let mut state = initial_state(true);
+        let block = block_with(vec![
+            system_upgrader_tx(),
+            produce_dummy_empty_transaction(),
+        ]);
+
+        let err = apply_block(None, &block, &mut state).expect_err("should reject");
+        assert!(matches!(
+            err,
+            BlockIngestError::MisplacedSystemUpgraderTransaction { tx_index: 0 }
+        ));
+    }
+
+    #[test]
+    fn a_second_system_upgrader_tx_is_misplaced() {
+        let mut state = initial_state(true);
+        let block = block_with(vec![system_upgrader_tx(), system_upgrader_tx()]);
+
+        let err = apply_block(None, &block, &mut state).expect_err("should reject");
+        assert!(matches!(
+            err,
+            BlockIngestError::MisplacedSystemUpgraderTransaction { tx_index: 0 }
+        ));
+    }
+
+    #[test]
+    fn a_block_missing_its_due_apply_is_invalid() {
+        use system_upgrader_core::{
+            Registry, ScheduledUpgrade, SystemProgramName, registry_account_id,
+        };
+
+        let mut registry = common::system_upgrades::registry(&initial_state(true));
+        registry.programs.insert(
+            SystemProgramName::new(b"clock"),
+            Some(ScheduledUpgrade {
+                first_segment: AccountId::new([9; 32]),
+                image_id: [0; 8],
+                activation_height: 1,
+            }),
+        );
+        let mut state = initial_state(true).with_public_accounts([(
+            registry_account_id(),
+            lee::Account::default().with_actor_state(
+                SYSTEM_UPGRADER_ACCOUNT_ID,
+                Registry::to_bytes(&registry).into(),
+            ),
+        )]);
+
+        let err = apply_block(None, &block_with(vec![]), &mut state).expect_err("should reject");
+        assert!(matches!(
+            err,
+            BlockIngestError::MissedSystemUpgrade { name } if name == "clock"
+        ));
     }
 
     #[test]

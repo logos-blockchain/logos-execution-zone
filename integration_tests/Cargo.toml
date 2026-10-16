@@ -41,6 +41,7 @@ test_guest_core.workspace = true
 jsonrpsee = { workspace = true, features = ["jsonrpsee-types"] }
 testnet_initial_state.workspace = true
 program_loader_core.workspace = true
+system_upgrader_core.workspace = true
 
 logos-blockchain-core.workspace = true
 logos-blockchain-key-management-system-service.workspace = true
@@ -69,6 +70,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+lee = { workspace = true, features = ["test-utils"] }
 fee_core.workspace = true
 sequencer_core = { workspace = true }
 sequencer_bedrock_actor = { workspace = true, features = [

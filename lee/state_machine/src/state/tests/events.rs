@@ -247,8 +247,7 @@ fn event_emitting_program_proves_and_validates_on_the_private_path() {
 
     let tx = private_tx((output, proof), vec![], &[]);
 
-    let mut state = V03State::new();
-    state.insert_program(&emitter, true);
+    let mut state = V03State::new().with_programs([emitter]);
 
     state
         .transition_from_privacy_preserving_transaction(&tx, 1, 0)
