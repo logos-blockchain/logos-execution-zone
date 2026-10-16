@@ -182,10 +182,25 @@ SEQUENCER_GOSSIP_BOOTSTRAP_PEER=<ip>:4040,<ip>:4041,...
 
 ### 4. Observability
 
-- [ ] Ops HTTP port serving `/ping`, `/health` (JSON) and `/metrics`. This replaces the current metrics-only exporter port, gives infra the `/health` path it already expects, and closes TODO #244.
-- [ ] JSON logs.
-- [ ] Audit log levels against the severity rules.
-- [ ] Audit metric labels and names against the cardinality and naming rules.
+- [x] Ops HTTP server (axum) on `--metrics-listen-address`, serving three endpoints. The flag keeps its phase 2 name; infra already scrapes `/metrics` on that port.
+  - `/ping`: static.
+  - `/health`: JSON, `200 {"status":"ok"}` or `503 {"status":"failing"}` from `SequencerHandle::is_healthy` (every task except gossip is alive).
+  - `/metrics`: Prometheus.
+- [x] Docker `HEALTHCHECK` probes `http://$SEQUENCER_METRICS_LISTEN_ADDRESS/health`, so it follows an env override. This closes TODO #244.
+- [x] JSON logs: `--log-format json` (`SEQUENCER_LOG_FORMAT`), one object per line with `timestamp`, `level`, `target`, `message`. The image defaults to `json`; local runs stay `text`.
+- [x] Image defaults moved from `CMD` flags to `ENV` (`SEQUENCER_HOME`, `SEQUENCER_RPC_LISTEN_ADDRESS`, `SEQUENCER_METRICS_LISTEN_ADDRESS`, `SEQUENCER_LOG_FORMAT`). A flag in `CMD` beats env, so infra could not override the RPC address with env before.
+- [x] Log levels: the clear-cut demotions.
+  - Per-transaction `info!("Validated transaction …")` and per-turn `info!` lines in the executor are now `debug`.
+  - User- or peer-triggered failures were `error` and are now `warn`/`debug`: failed user settlement, a transaction too large for any block, gas beyond the caps, RPC pre-check and pre-mempool rejection. The last two are already counted by `before_mempool_failed_transactions_total`.
+- [ ] Log levels, left for a decision:
+  - Repeating `error`/`warn` in retry loops should be throttled (`alerts_at`) or turned into metrics:
+    - gossip "network is down" in `actors/gossip/src/actor.rs` (loops forever; a `sequencer_gossip_up` gauge instead)
+    - cross-zone watcher retries in `core/src/cross_zone_watcher.rs`
+    - the re-fed sequencer-transaction failure in `core/src/lib.rs`
+  - Possibly re-logged slasher offences: `actors/slasher/src/actor.rs` logs before its dedupe check.
+  - `sequencer_ffi` logs every caller error, null free and not-found as `error`.
+- [ ] Metrics: no label cardinality problems except `cross_zone_peer_committee_suspended{peer=<zone id>}`. It is bounded by the configured peer set, so it is acceptable unless infra objects.
+- [ ] Metric names: none follow `service_subsystem_measurement_unit`; none has a `sequencer_` prefix. `with_recommended_naming` causes no double suffixes. Renaming breaks the committed Grafana dashboards and infra's scrapes, so it is a coordinated change. The cheapest version is a central prefix in the `names.rs` constants.
 
 ### 5. Compose and CI
 

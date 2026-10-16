@@ -1,13 +1,16 @@
 use std::{
+    io::Write as _,
     net::{IpAddr, SocketAddr},
     path::PathBuf,
+    sync::Arc,
+    time::Duration,
 };
 
 use anyhow::{Context as _, Result, ensure};
 use clap::{Parser, Subcommand};
 use libp2p::{Multiaddr, multiaddr::Protocol};
 use log::error;
-use metrics_exporter_prometheus::{Matcher, PrometheusBuilder};
+use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use sequencer_core::config::GossipConfig;
 use sequencer_service::SequencerConfig;
 use sequencer_stake_core::SequencerKey;
@@ -16,10 +19,18 @@ use tokio_util::sync::CancellationToken;
 use wallet::cli::CliAccountMention;
 
 mod operator;
+mod ops;
 
 #[derive(Debug, Parser)]
 #[clap(version)]
 struct Args {
+    #[clap(
+        long,
+        global = true,
+        env = "SEQUENCER_LOG_FORMAT",
+        default_value = "text"
+    )]
+    log_format: LogFormat,
     #[clap(subcommand)]
     command: Command,
 }
@@ -75,6 +86,13 @@ enum Command {
         #[clap(long)]
         wallet_home: Option<PathBuf>,
     },
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum LogFormat {
+    Text,
+    /// One JSON object per line, for log shippers.
+    Json,
 }
 
 /// Networks whose config is compiled in.
@@ -145,9 +163,10 @@ impl Network {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init();
+    let args = Args::parse();
+    init_logger(args.log_format);
 
-    match Args::parse().command {
+    match args.command {
         Command::Setup {
             home,
             config,
@@ -190,10 +209,20 @@ async fn start(args: StartArgs) -> Result<()> {
     let config = load_config(&args)?;
     log_config(&config)?;
 
-    if let Some(address) = config.metrics_address {
-        install_prometheus_recorder(address)?;
-    }
-    let sequencer_handle = sequencer_service::run(config, args.rpc_listen_address).await?;
+    let ops_listener = match config.metrics_address {
+        Some(address) => Some((ops::bind(address).await?, install_prometheus_recorder()?)),
+        None => None,
+    };
+    let sequencer_handle = Arc::new(sequencer_service::run(config, args.rpc_listen_address).await?);
+    let ops_shutdown = CancellationToken::new();
+    let ops_server = ops_listener.map(|(listener, metrics)| {
+        tokio::spawn(ops::serve(
+            listener,
+            metrics,
+            Arc::clone(&sequencer_handle),
+            ops_shutdown.clone(),
+        ))
+    });
 
     tokio::select! {
         () = cancellation_token.cancelled() => {
@@ -209,7 +238,18 @@ async fn start(args: StartArgs) -> Result<()> {
     // open for an unbounded stretch after that, so a restart can find its own
     // home directory locked, and a watcher can be killed between recording a
     // delivery and handing it over.
-    sequencer_handle.shutdown().await;
+    ops_shutdown.cancel();
+    if let Some(ops_server) = ops_server {
+        match ops_server.await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => error!("{err:#}"),
+            Err(err) => error!("Ops server panicked: {err}"),
+        }
+    }
+    Arc::into_inner(sequencer_handle)
+        .expect("the ops server, the only other holder, has stopped")
+        .shutdown()
+        .await;
 
     log::info!("Sequencer shutdown complete");
 
@@ -337,8 +377,24 @@ fn parse_gossip_peer(peer: &str) -> Result<Multiaddr> {
         .with(Protocol::QuicV1))
 }
 
-/// Installs the recorder on `metrics_address`.
-fn install_prometheus_recorder(metrics_address: SocketAddr) -> Result<()> {
+fn init_logger(format: LogFormat) {
+    let mut builder = env_logger::Builder::from_default_env();
+    if matches!(format, LogFormat::Json) {
+        builder.format(|buf, record| {
+            let line = serde_json::json!({
+                "timestamp": buf.timestamp_millis().to_string(),
+                "level": record.level().as_str(),
+                "target": record.target(),
+                "message": record.args().to_string(),
+            });
+            writeln!(buf, "{line}")
+        });
+    }
+    builder.init();
+}
+
+/// Installs the recorder, whose metrics the ops server renders.
+fn install_prometheus_recorder() -> Result<PrometheusHandle> {
     /// Ladder for `*_seconds` histograms, densest across the 1–100 ms band where
     /// block production and transaction application actually land.
     const LATENCY_BUCKETS: &[f64] = &[
@@ -348,15 +404,24 @@ fn install_prometheus_recorder(metrics_address: SocketAddr) -> Result<()> {
     /// Fallback ladder for histograms that count things rather than measure time.
     const COUNT_BUCKETS: &[f64] = &[1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0];
 
-    PrometheusBuilder::new()
-        .with_http_listener(metrics_address)
+    let handle = PrometheusBuilder::new()
         .with_recommended_naming(true)
         .set_buckets(COUNT_BUCKETS)
         .context("Failed to set default histogram buckets")?
         .set_buckets_for_metric(Matcher::Suffix("_seconds".to_owned()), LATENCY_BUCKETS)
         .context("Failed to set latency histogram buckets")?
-        .install()
-        .context("Failed to install Prometheus recorder")
+        .install_recorder()
+        .context("Failed to install Prometheus recorder")?;
+    // Without the exporter's own listener, draining histograms is ours to schedule.
+    let upkeep = handle.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(5));
+        loop {
+            interval.tick().await;
+            upkeep.run_upkeep();
+        }
+    });
+    Ok(handle)
 }
 
 /// Cancelled on Ctrl-C or `SIGTERM`.
