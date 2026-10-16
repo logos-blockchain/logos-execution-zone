@@ -5,7 +5,7 @@ use lee::{
     AccountId, Actor, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
-use program_deployment::deploy_program;
+use program_deployment::{deploy_program, fee_paid_by};
 use sequencer_service_rpc::RpcClient as _;
 use wallet::WalletCore;
 
@@ -68,13 +68,16 @@ async fn main() {
         .await
         .unwrap();
 
-    let nonces = BTreeMap::new();
-    let signing_keys = [];
+    // The fee is charged to `payer`, so the payer's nonce is listed and its key signs the message.
+    let (fee, payer_nonce, payer_key) = fee_paid_by(&wallet_core, payer).await.unwrap();
+    let nonces = BTreeMap::from([(payer, payer_nonce)]);
+    let signing_keys = [&payer_key];
     // The caller's actor receives the message and sends the greeting to the callee's actor on the
     // same account, so both are declared.
     let caller = Actor::new(account_id, caller_account_id);
     let callee = Actor::new(account_id, callee_account_id);
-    let message = Message::try_new(caller, vec![caller, callee], nonces, callee).unwrap();
+    let message =
+        Message::try_new_with_fees(caller, vec![caller, callee], nonces, callee, fee).unwrap();
     let witness_set = WitnessSet::for_message(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 
