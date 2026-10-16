@@ -116,8 +116,7 @@ Things to raise with infra:
 
 | What | How |
 |---|---|
-| Tuning (`max_num_tx_in_block`, timeouts, mempool, …) | Default config file baked into the image at `/etc/sequencer_service/sequencer_config.json`. `--config` defaults to it. All values are explicit; no hidden serde defaults. |
-| Genesis (`genesis` actions, `channel_params`, `cross_zone`) | Embedded per network (`--network`), with `--genesis-file` to override. channel_params are network constants: testnet uses 25e9/900/150/240, our local default is 149/300/25/100. |
+| Network config (tuning, `genesis`, `channel_params`, `cross_zone`) | One shared config per network, compiled into the binary from `lez/sequencer/service/networks/<net>.json` and picked with `--network local\|devnet\|testnet`. `--config` overrides it with a file. Every value is explicit in the file. channel_params are network constants: testnet uses 25e9/900/150/240, local uses 149/300/25/100. `--network`'s genesis is used only with `--create-channel`. |
 | Channel ID, funding key, bedrock URL | `--channel-id`, `--funding-public-key`, `--bedrock-url` |
 | Listen addresses | Full `host:port` values, following #981: `--rpc-listen-address`, `--metrics-listen-address` (later the ops port: `/ping` `/health` `/metrics`), `--gossip-listen-address` (a fixed port, not `udp/0`) |
 | Bootstrap peers | Repeatable `--gossip-bootstrap-peer host:port`, expanded to `/dns/<host>/udp/<port>/quic-v1`, or `/ip4/...` for an IP. A full multiaddr is passed through as is. |
@@ -156,9 +155,30 @@ Things to raise with infra:
 
 ### 3. Static config and genesis
 
-- [ ] Embed genesis per network, plus `--genesis-file`. Generalise `tools/devnet_configs` to produce it.
-- [ ] Bake the default config file into the image.
-- [ ] Hand infra the list of fields they can stop carrying in `files/lez/<env>/`.
+- [x] Network configs compiled into the binary (`--network`, `SEQUENCER_NETWORK`) for `start` and `setup`. `--config` stays as the file override. No image change is needed.
+  - `local` is the former `configs/debug/sequencer_config.json`.
+  - `devnet` and `testnet` are ported from infra-logos to the new schema (#979). infra's copies use the old schema and no longer parse.
+  - The dead `configs/docker/sequencer_config.json` is deleted.
+- [x] `start --network` drops the genesis unless `--create-channel`, mirroring `setup`.
+- [x] A unit test checks that every built-in network config parses and passes validation.
+- [ ] Founding set for the devnet/testnet relaunch. Their `genesis.actions` are empty: the new `supply_account` takes a recipient public key, not the old `account_id`, and the old stake signatures predate the actor rework. Needed from infra/devs: the founding channel signing public keys, who holds the ownership keys, and the supply recipients' public keys. Then generalise `tools/devnet_configs` to sign the stakes into `networks/<net>.json`.
+- [ ] Indexer: still carries its own `channel_id`. Covered by the indexer-merge PR.
+- [ ] Hand infra the migration below.
+
+**Infra migration.** `files/lez/<env>/sequencer_config.json` and the Ansible `lez_sequencer_config_overrides` map go away. Instead:
+
+```
+SEQUENCER_NETWORK=testnet
+SEQUENCER_CHANNEL_SIGNING_KEY_FILE=/run/secrets/channel_signing_key   # renamed from bedrock_signing_key by #979
+SEQUENCER_FUNDING_PUBLIC_KEY=<hex, from the blockchain keystore PoWClaim>
+SEQUENCER_BEDROCK_URL=http://blockchain:8080
+SEQUENCER_RPC_LISTEN_ADDRESS=0.0.0.0:3040
+SEQUENCER_METRICS_LISTEN_ADDRESS=0.0.0.0:9000                         # was --metrics-address
+SEQUENCER_GOSSIP_LISTEN_ADDRESS=0.0.0.0:4040
+SEQUENCER_GOSSIP_BOOTSTRAP_PEER=<ip>:4040,<ip>:4041,...
+```
+
+`start` with `--network` needs no `setup`. The home only holds the database.
 
 ### 4. Observability
 
@@ -180,7 +200,7 @@ Things to raise with infra:
 ### 6. Ops logic into the binary
 
 - [ ] The sequencer waits for the channel itself, replacing the compose `x-await-channel` entrypoint.
-- [ ] Ship `submit_stake` and `bedrock_pubkey` in the sequencer image.
+- [x] Staking tools in the image: #979 folded `submit_stake` and `bedrock_pubkey` into the `setup`, `stake` and `unstake` subcommands of `sequencer_service`.
 
 ## Open questions
 

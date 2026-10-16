@@ -30,8 +30,11 @@ enum Command {
     Setup {
         home: PathBuf,
         /// Config to copy into the home.
+        #[clap(long, required_unless_present = "network", conflicts_with = "network")]
+        config: Option<PathBuf>,
+        /// Built-in network config to copy into the home, instead of `--config`.
         #[clap(long)]
-        config: PathBuf,
+        network: Option<Network>,
         /// Public key, in hex, of a funded key in the Bedrock node's wallet; it pays the
         /// node's inscriptions.
         #[clap(long)]
@@ -74,6 +77,14 @@ enum Command {
     },
 }
 
+/// Networks whose config is compiled in.
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum Network {
+    Local,
+    Devnet,
+    Testnet,
+}
+
 /// Each option also reads `SEQUENCER_<OPTION>`. A flag wins over its env var, and both win over
 /// the config.
 #[derive(Debug, clap::Args)]
@@ -82,8 +93,15 @@ struct StartArgs {
     #[clap(env = "SEQUENCER_HOME")]
     home: PathBuf,
     /// Defaults to `<home>/sequencer_config.json`.
-    #[clap(long, env = "SEQUENCER_CONFIG")]
+    #[clap(long, env = "SEQUENCER_CONFIG", conflicts_with = "network")]
     config: Option<PathBuf>,
+    /// Runs on a built-in network config instead of `--config`.
+    #[clap(long, env = "SEQUENCER_NETWORK")]
+    network: Option<Network>,
+    /// Keeps `--network`'s genesis, so the channel is created if it does not exist. Without it,
+    /// a node pointed at the wrong channel fails instead of creating that one.
+    #[clap(long, env = "SEQUENCER_CREATE_CHANNEL", requires = "network")]
+    create_channel: bool,
     /// Defaults to `<home>/channel_signing_key`.
     #[clap(long, env = "SEQUENCER_CHANNEL_SIGNING_KEY_FILE")]
     channel_signing_key_file: Option<PathBuf>,
@@ -115,6 +133,16 @@ struct StartArgs {
     gossip_bootstrap_peer: Vec<String>,
 }
 
+impl Network {
+    const fn config(self) -> &'static str {
+        match self {
+            Self::Local => include_str!("../networks/local.json"),
+            Self::Devnet => include_str!("../networks/devnet.json"),
+            Self::Testnet => include_str!("../networks/testnet.json"),
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
@@ -123,9 +151,19 @@ async fn main() -> Result<()> {
         Command::Setup {
             home,
             config,
+            network,
             funding_public_key,
             create_channel,
-        } => operator::setup(&home, &config, &funding_public_key, create_channel),
+        } => {
+            let template = if let Some(network) = network {
+                network.config().to_owned()
+            } else {
+                let path = config.expect("clap requires `--config` without `--network`");
+                std::fs::read_to_string(&path)
+                    .with_context(|| format!("Failed to read {}", path.display()))?
+            };
+            operator::setup(&home, &template, &funding_public_key, create_channel)
+        }
         Command::Start(args) => start(args).await,
         Command::Stake {
             sequencer_key,
@@ -180,17 +218,26 @@ async fn start(args: StartArgs) -> Result<()> {
 
 /// The config file with `args` applied over it.
 fn load_config(args: &StartArgs) -> Result<SequencerConfig> {
-    let config_path = args
-        .config
-        .clone()
-        .unwrap_or_else(|| args.home.join(operator::CONFIG_FILE));
-    ensure!(
-        config_path.exists(),
-        "{} does not exist; run `setup` first",
-        config_path.display()
-    );
-    let mut config = SequencerConfig::from_path(&config_path)
-        .with_context(|| format!("Failed to read {}", config_path.display()))?;
+    let mut config = if let Some(network) = args.network {
+        let mut config = SequencerConfig::from_json(network.config())
+            .with_context(|| format!("Failed to read the built-in {network:?} config"))?;
+        if !args.create_channel {
+            config.genesis = None;
+        }
+        config
+    } else {
+        let config_path = args
+            .config
+            .clone()
+            .unwrap_or_else(|| args.home.join(operator::CONFIG_FILE));
+        ensure!(
+            config_path.exists(),
+            "{} does not exist; run `setup` first",
+            config_path.display()
+        );
+        SequencerConfig::from_path(&config_path)
+            .with_context(|| format!("Failed to read {}", config_path.display()))?
+    };
 
     config.home.clone_from(&args.home);
     config
@@ -385,5 +432,12 @@ mod tests {
             "/ip4/10.0.0.1/udp/4040/quic-v1"
         );
         assert!(parse_gossip_peer("sequencer_service_0").is_err());
+    }
+
+    #[test]
+    fn built_in_networks_parse() {
+        for network in <Network as clap::ValueEnum>::value_variants() {
+            SequencerConfig::from_json(network.config()).unwrap();
+        }
     }
 }

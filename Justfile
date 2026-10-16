@@ -119,7 +119,7 @@ run-monitoring:
 # Run a Sequencer out of the given home (default lez/sequencer/service/sequencer_home, the one `just clean` wipes), setting it up from the debug config first if needed. Extra args go to `sequencer_service start`. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
 [group('decentralized sequencing')]
 run-sequencer home="lez/sequencer/service/sequencer_home" *args:
-    @test -f {{home}}/sequencer_config.json || cargo run --release -q -p sequencer_service -- setup {{home}} --config lez/sequencer/service/configs/debug/sequencer_config.json --funding-public-key {{BEDROCK_FUNDING_PUBLIC_KEY}} --create-channel
+    @test -f {{home}}/sequencer_config.json || cargo run --release -q -p sequencer_service -- setup {{home}} --network local --funding-public-key {{BEDROCK_FUNDING_PUBLIC_KEY}} --create-channel
     RUST_LOG="${RUST_LOG:-info,kameo=warn}" cargo run --release -p sequencer_service -- start {{home}} {{args}}
 
 # Inscribe a non-block payload signed by the key in the given home, to provoke a slash. That node must be stopped first, and the stake behind its key is burned once the offence finalizes, leaving the key unusable.
@@ -142,7 +142,7 @@ channel-health *args:
 # Run Sequencer with mocked Bedrock clients. Takes the same args as `run-sequencer`.
 run-sequencer-standalone home="lez/sequencer/service/sequencer_home" *args:
     @echo "🧪 Running sequencer in standalone mode"
-    @test -f {{home}}/sequencer_config.json || cargo run --release -q -p sequencer_service -- setup {{home}} --config lez/sequencer/service/configs/debug/sequencer_config.json --funding-public-key {{BEDROCK_FUNDING_PUBLIC_KEY}} --create-channel
+    @test -f {{home}}/sequencer_config.json || cargo run --release -q -p sequencer_service -- setup {{home}} --network local --funding-public-key {{BEDROCK_FUNDING_PUBLIC_KEY}} --create-channel
     RUST_LOG=info,kameo=warn cargo run --features standalone --release -p sequencer_service -- start {{home}} {{args}}
 
 # Run Indexer. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.

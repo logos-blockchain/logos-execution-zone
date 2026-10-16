@@ -1,6 +1,4 @@
 use std::{
-    fs::File,
-    io::BufReader,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     time::Duration,
@@ -146,10 +144,12 @@ impl SequencerConfig {
     pub const DEFAULT_METRICS_ADDRESS: SocketAddr =
         SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 9000);
 
-    pub fn from_path(config_home: &Path) -> Result<Self> {
-        let file = File::open(config_home)?;
-        let reader = BufReader::new(file);
-        let config: Self = serde_json::from_reader(reader)?;
+    pub fn from_path(path: &Path) -> Result<Self> {
+        Self::from_json(&std::fs::read_to_string(path)?)
+    }
+
+    pub fn from_json(json: &str) -> Result<Self> {
+        let config: Self = serde_json::from_str(json)?;
         if let Some(genesis) = &config.genesis {
             check_channel_params(&genesis.channel_params, config.block_create_timeout)?;
         }
