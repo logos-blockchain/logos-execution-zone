@@ -1202,18 +1202,31 @@ impl WalletCore {
             TransactionEntry::Sync(_) => None,
         };
         let quote = self.sequencer_client.get_fee_state().await?;
-        let headroom = |base_fee: u64| {
-            base_fee
-                .saturating_mul(100_u64.saturating_add(self.config.private_fee_headroom_percent))
-                .saturating_div(100)
+        // The base fees after the configured blocks of full blocks: the steepest climb allowed.
+        let blocks = self.config.private_fee_headroom_blocks;
+        let climb = |base, max_gas, target, damping, lo, hi| {
+            (0..blocks).fold(base, |fee, _| {
+                fee_core::market::next_base_fee(fee, max_gas, target, damping, lo, hi)
+            })
         };
-        let reserve_for = |cycles| {
-            fee_core::assess::private_fee_required(
-                cycles,
-                headroom(quote.base_fee_exec),
-                headroom(quote.base_fee_stor),
-            )
-        };
+        let exec_ceiling = climb(
+            quote.base_fee_exec,
+            fee_core::market::MAX_GAS_EXEC,
+            fee_core::market::TARGET_GAS_EXEC,
+            fee_core::market::D_EXEC,
+            fee_core::market::BASE_FEE_EXEC_MIN,
+            fee_core::market::BASE_FEE_EXEC_MAX,
+        );
+        let stor_ceiling = climb(
+            quote.base_fee_stor,
+            fee_core::market::MAX_GAS_STOR,
+            fee_core::market::TARGET_GAS_STOR,
+            fee_core::market::D_STOR,
+            fee_core::market::BASE_FEE_STOR_MIN,
+            fee_core::market::BASE_FEE_STOR_MAX,
+        );
+        let reserve_for =
+            |cycles| fee_core::assess::private_fee_required(cycles, exec_ceiling, stor_ceiling);
         let fee_payer = fee_payer
             .or(self.fee_payer)
             .or_else(|| self.auto_fee_payer(&accounts, reserve_for(0)));
@@ -1320,15 +1333,24 @@ impl WalletCore {
             // Given cross messages stand in for the simulation; the public part is priced free.
             Some(_) => (input, simulation, programs, 0),
         };
-        let reserve = reserve_for(cycles);
+        let headroom_reserve = reserve_for(cycles);
         let payer = acc_manager
-            .private_fee_payer_account_id(reserve)
+            .private_fee_payer_account_id(headroom_reserve)
             .ok_or_else(|| {
                 ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
                     "Privacy-preserving transaction has no private account to pay its fee"
                         .to_owned(),
                 ))
             })?;
+        let fee_at_head = fee_core::assess::private_fee_required(
+            cycles,
+            quote.base_fee_exec,
+            quote.base_fee_stor,
+        );
+        // Never reserve more than the payer holds, nor less than the fee at head.
+        let reserve = headroom_reserve
+            .min(acc_manager.native_balance(payer))
+            .max(fee_at_head);
         let opening = account_manager::random_bytes();
         input
             .recoveries
@@ -1339,11 +1361,6 @@ impl WalletCore {
             amount: reserve,
         });
         if self.dry_run {
-            let fee_at_head = fee_core::assess::private_fee_required(
-                cycles,
-                quote.base_fee_exec,
-                quote.base_fee_stor,
-            );
             println!("Dry run: nothing proven or sent");
             println!("  public cycles:  {cycles}");
             println!(
@@ -1352,9 +1369,10 @@ impl WalletCore {
             );
             println!("  fee at head:    {fee_at_head}");
             println!(
-                "  reserve:        {reserve} ({}% headroom, surplus refunded)",
-                self.config.private_fee_headroom_percent
+                "  headroom:       {blocks} blocks, up to exec {exec_ceiling} / stor \
+                 {stor_ceiling} ({headroom_reserve})"
             );
+            println!("  reserve:        {reserve} (surplus refunded)");
             println!("  fee payer:      {payer}");
             return Err(ExecutionFailureKind::DryRun);
         }
