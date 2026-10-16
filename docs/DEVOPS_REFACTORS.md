@@ -118,17 +118,17 @@ Things to raise with infra:
 |---|---|
 | Tuning (`max_num_tx_in_block`, timeouts, mempool, …) | Default config file baked into the image at `/etc/sequencer_service/sequencer_config.json`. `--config` defaults to it. All values are explicit; no hidden serde defaults. |
 | Genesis (`genesis` actions, `channel_params`, `cross_zone`) | Embedded per network (`--network`), with `--genesis-file` to override. channel_params are network constants: testnet uses 25e9/900/150/240, our local default is 149/300/25/100. |
-| Channel ID, funding key, bedrock URL | `--channel-id`, `--funding-key`, `--bedrock-url` |
-| Listen address and ports | `--listen-address`, `--rpc-port`, `--ops-port` (`/ping` `/health` `/metrics`), `--gossip-port` (fixed, not `udp/0`) |
-| Bootstrap peers | Repeatable `--bootstrap-peer host:port` (expanded to `/dns4/<host>/udp/<port>/quic-v1`, or `/ip4/...` for an IP) |
-| Data and keys | `--data-dir` with a fixed layout. `--bedrock-signing-key-file` defaults to `<data-dir>/bedrock_signing_key`, so infra can mount secrets outside the data volume. A missing key is a hard error unless `--generate-key`. |
-| Secrets | Files only (key files, `--bedrock-password-file`). Never in JSON. |
+| Channel ID, funding key, bedrock URL | `--channel-id`, `--funding-public-key`, `--bedrock-url` |
+| Listen addresses | Full `host:port` values, following #981: `--rpc-listen-address`, `--metrics-listen-address` (later the ops port: `/ping` `/health` `/metrics`), `--gossip-listen-address` (a fixed port, not `udp/0`) |
+| Bootstrap peers | Repeatable `--gossip-bootstrap-peer host:port`, expanded to `/dns/<host>/udp/<port>/quic-v1`, or `/ip4/...` for an IP. A full multiaddr is passed through as is. |
+| Data and keys | `start <home>` with the fixed layout from #979: `sequencer_config.json`, `channel_signing_key`, `bedrock_funding_public_key`. `--config` and `--channel-signing-key-file` point outside it, so infra can mount secrets outside the data volume. Only `setup` creates keys; `start` refuses to run without one. |
+| Secrets | Files only. Never in the JSON. `bedrock_config.auth.password` is still plaintext JSON; nobody uses auth today, so a `--bedrock-password-file` waits until someone does. |
 | Logs | `--log-format json\|text`. The image sets `json`. Can be done with an `env_logger` custom format, no new dependency. |
 
 **Conventions.**
 
-- Every flag `--kebab-name` has `env = "SEQUENCER_KEBAB_NAME"` (`EXPLORER_` for the explorer). A unit test walks `Args::command()` and asserts the mapping.
-- No bare `--port`.
+- Every `start` flag `--kebab-name` has `env = "SEQUENCER_KEBAB_NAME"` (`EXPLORER_` for the explorer). A unit test walks `Args::command()` and asserts the mapping.
+- No bare `--port`. Addresses are `*-listen-address` with a full `host:port`.
 - Strict parsing: `deny_unknown_fields`.
 - First log line is the redacted effective config.
 
@@ -141,18 +141,17 @@ Things to raise with infra:
   - The indexer probe called the non-existent `get_schema`.
   - Neither probe checked the JSON-RPC `result`, and an RPC error is still HTTP 200.
 - [x] The compose devnet image builds `prove,mdns`. Plain `mdns` dropped `prove`.
-- [x] Removed the dead `bedrock_config.backoff` key from the sequencer configs.
-- [x] Generated keys are written with mode `0600`, and generation logs a warning.
+- [x] Removed the dead `bedrock_config.backoff` key, and generated keys are written with mode `0600`. Dev landed both independently (#979), so the rebase took dev's versions.
 - [x] Explorer image: runs as non-root, and has a healthcheck that follows `LEPTOS_SITE_ADDR`.
 - [x] Indexer image: sets `RISC0_SERVER_PATH`.
 
 ### 2. Config layering and CLI
 
-- [ ] Flags and env vars for every overrideable setting, as in the table above. Naming test included.
-- [ ] `--config` with a baked default path; `deny_unknown_fields`. Note: `lez-indexer-module/config/indexer_config.json` still carries `backoff`, so drop it there first.
-- [ ] `--data-dir` (replaces `--home`), `--bedrock-signing-key-file`, `--generate-key`, and `*-file` flags for secrets.
-- [ ] Repeatable `--bootstrap-peer`.
-- [ ] Redacted config dump as the first log line.
+- [x] Dev (#979, #981) already landed: `deny_unknown_fields` on the sequencer config, the fixed home layout, key creation only in `setup`, and `--rpc-listen-address`.
+- [x] `start` flags and env vars: `--config`, `--channel-signing-key-file`, `--funding-public-key`, `--bedrock-url`, `--channel-id`, `--metrics-listen-address` (was `--metrics-address`, a breaking change for infra), `--gossip-listen-address`, and a repeatable `--gossip-bootstrap-peer`. Plus the naming test.
+- [x] Gossip dials `/dns` addresses (libp2p `dns` feature), so compose service names work as bootstrap peers.
+- [x] Redacted config dump as the first log line.
+- [ ] `deny_unknown_fields` for the indexer. `lez-indexer-module/config/indexer_config.json` still carries `backoff`, so drop it there first.
 - [ ] Coordinate with the indexer-merge PR, so the merged binary lands on this surface.
 
 ### 3. Static config and genesis

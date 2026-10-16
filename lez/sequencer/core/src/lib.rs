@@ -356,9 +356,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             check_startup_channel_params(&genesis.channel_params, &config)?;
         }
 
-        let channel_signing_key =
-            load_or_create_signing_key(&config.home.join(CHANNEL_SIGNING_KEY_FILE))
-                .expect("Failed to load or create channel signing key");
+        let channel_signing_key = load_or_create_signing_key(&config.channel_signing_key_path())
+            .expect("Failed to load or create channel signing key");
         log::info!(
             "Channel signing public key: {}",
             hex::encode(channel_signing_key.public_key().to_bytes())

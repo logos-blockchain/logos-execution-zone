@@ -187,6 +187,7 @@ humantime-serde = "1.1"
 arc-swap = "1.7"
 humantime = "2.1"
 libp2p = { version = "0.56", features = [
+  "dns",
   "ed25519",
   "gossipsub",
   "identify",

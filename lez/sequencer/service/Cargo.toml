@@ -31,6 +31,7 @@ env_logger.workspace = true
 kameo.workspace = true
 kameo_actors.workspace = true
 hex.workspace = true
+libp2p.workspace = true
 log.workspace = true
 metrics-exporter-prometheus.workspace = true
 tokio.workspace = true

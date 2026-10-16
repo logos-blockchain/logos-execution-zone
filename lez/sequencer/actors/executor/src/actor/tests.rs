@@ -54,6 +54,8 @@ fn sequencer_config() -> (SequencerConfig, TempDir) {
         cross_zone: None,
         metrics_address: None,
         gossip: None,
+        channel_signing_key_file: None,
+        funding_public_key: None,
     };
 
     (config, home)
