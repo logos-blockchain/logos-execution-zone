@@ -167,7 +167,8 @@ const fn default_gas_limit() -> u64 {
     crate::DEFAULT_GAS_LIMIT
 }
 
-/// About 42% above the quote at the 12.5% per-block cap.
+/// A proof plus a block or two in the mempool; about 80% above the quote at the 12.5%
+/// per-block cap.
 const fn default_private_fee_headroom_blocks() -> u64 {
-    3
+    5
 }
