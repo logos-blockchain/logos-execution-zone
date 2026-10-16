@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use clock_core::ClockAccountData;
-use lee_core::account::{Account, AccountId};
+use lee_core::account::{Account, AccountId, Actor};
 
 // TODO: Replace with a real minimum value for testnet
 /// Minimum summed stake for a Bedrock sequencer key to be a committee candidate.
@@ -80,8 +80,13 @@ pub fn fee_state_account() -> Account {
 }
 
 #[must_use]
-pub const fn clock_account_ids() -> [AccountId; 3] {
-    clock_core::CLOCK_PROGRAM_ACCOUNT_IDS
+pub const fn clock_account_id() -> AccountId {
+    clock_core::CLOCK_PROGRAM_ACCOUNT_ID
+}
+
+#[must_use]
+pub fn clock_actor() -> Actor {
+    Actor::new(clock_account_id(), programs::clock_account_id())
 }
 
 #[must_use]
