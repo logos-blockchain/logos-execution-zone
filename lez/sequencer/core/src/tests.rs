@@ -2216,18 +2216,15 @@ async fn transactions_touching_clock_account_are_dropped_from_block() {
     let (mut sequencer, mempool_handle) = common_setup().await;
 
     // Canonical clock invocation and a crafted variant with a different timestamp — both must
-    // be dropped because their diffs touch the clock accounts.
+    // be dropped because their diffs touch the clock account.
     let crafted_clock_tx = {
-        let clock_program_id = programs::clock_account_id();
-        let clock_actors =
-            system_accounts::clock_account_ids().map(|id| Actor::new(id, clock_program_id));
-        let message = lee::public_transaction::Message::try_new(
-            clock_actors[0],
-            clock_actors.to_vec(),
-            BTreeMap::new(),
-            42_u64,
-        )
-        .unwrap();
+        let clock = Actor::new(
+            system_accounts::clock_account_id(),
+            programs::clock_account_id(),
+        );
+        let message =
+            lee::public_transaction::Message::try_new(clock, vec![clock], BTreeMap::new(), 42_u64)
+                .unwrap();
         LeeTransaction::Public(lee::PublicTransaction::new(
             message,
             lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
@@ -2334,23 +2331,22 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     sequencer.run_production_turn().await.unwrap();
 
     // Build a user transaction that invokes `scripted`, which in turn sends the clock program
-    // a tick. The sequencer should detect that the resulting state diff modifies clock accounts
+    // a tick. The sequencer should detect that the resulting state diff modifies the clock account
     // and drop the transaction.
-    let clock_program_id = programs::clock_account_id();
-    let clock_actors =
-        system_accounts::clock_account_ids().map(|id| Actor::new(id, clock_program_id));
+    let clock = Actor::new(
+        system_accounts::clock_account_id(),
+        programs::clock_account_id(),
+    );
     let timestamp: u64 = 0;
     let block_id = sequencer.chain_height().await + 1;
 
     let caller = Actor::new(AccountId::new([212; 32]), scripted_id);
-    let mut public_actors = vec![caller];
-    public_actors.extend(clock_actors);
     let message = lee::public_transaction::Message::try_new(
         caller,
-        public_actors,
+        vec![caller, clock],
         BTreeMap::new(), // no signers
         Script::default().send_sync(
-            clock_actors[0],
+            clock,
             &clock_core::Message::Tick {
                 timestamp,
                 block_id,
@@ -2386,9 +2382,9 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
 async fn block_production_aborts_when_clock_account_data_is_corrupted() {
     let (mut sequencer, mempool_handle) = common_setup().await;
 
-    // Corrupt the clock 01 account's clock actor state so deserialization fails.
+    // Corrupt the clock account's clock actor state so deserialization fails.
     let clock_program_id = programs::clock_account_id();
-    let clock_account_id = system_accounts::clock_account_ids()[0];
+    let clock_account_id = system_accounts::clock_account_id();
     let mut corrupted = sequencer
         .with_state(|s| s.get_account_by_id(clock_account_id))
         .await;
@@ -2417,18 +2413,19 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
     );
 }
 
-/// Builds a [`V03State`] with the clock program and `program` registered, the three clock
-/// accounts initialized, and the clock advanced to `clock_timestamp` so that reads of the
-/// `CLOCK_01` account observe it.
+/// Builds a [`V03State`] with the clock program and `program` registered, the clock account
+/// initialized, and the clock advanced to `clock_timestamp` so that reads of the clock
+/// observe it.
 fn state_with_clock_and_program(program: Program, clock_timestamp: u64) -> V03State {
     let program_id = AccountId::from_builtin_program(program.id());
     let mut state = V03State::new().with_named_programs([
         (programs::clock_account_id(), programs::clock()),
         (program_id, program),
     ]);
-    for clock_id in system_accounts::clock_account_ids() {
-        state.force_insert_account(clock_id, system_accounts::clock_account());
-    }
+    state.force_insert_account(
+        system_accounts::clock_account_id(),
+        system_accounts::clock_account(),
+    );
     state
         .transition_from_public_transaction(
             &clock_invocation(1, clock_timestamp),
@@ -2488,7 +2485,7 @@ fn time_locked_transfer_succeeds_when_deadline_has_passed() {
         &key1,
         0,
         recipient_id,
-        system_accounts::clock_account_ids()[0],
+        system_accounts::clock_account_id(),
         amount,
         deadline,
     );
@@ -2536,7 +2533,7 @@ fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
         &key1,
         0,
         recipient_id,
-        system_accounts::clock_account_ids()[0],
+        system_accounts::clock_account_id(),
         amount,
         deadline,
     );
@@ -2615,7 +2612,7 @@ fn cooldown_opens_after_the_cooldown_elapses() {
 
     let tx = cooldown_transaction(
         state_id,
-        system_accounts::clock_account_ids()[0],
+        system_accounts::clock_account_id(),
         block_timestamp,
     );
 
@@ -2657,7 +2654,7 @@ fn cooldown_rejects_before_the_cooldown_elapses() {
 
     let tx = cooldown_transaction(
         state_id,
-        system_accounts::clock_account_ids()[0],
+        system_accounts::clock_account_id(),
         block_timestamp,
     );
 

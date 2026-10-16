@@ -80,8 +80,8 @@ pub fn fee_state_account() -> Account {
 }
 
 #[must_use]
-pub const fn clock_account_ids() -> [AccountId; 3] {
-    clock_core::CLOCK_PROGRAM_ACCOUNT_IDS
+pub const fn clock_account_id() -> AccountId {
+    clock_core::CLOCK_PROGRAM_ACCOUNT_ID
 }
 
 #[must_use]

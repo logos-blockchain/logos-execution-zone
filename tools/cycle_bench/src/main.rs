@@ -32,10 +32,7 @@ use std::{
 
 use anyhow::{Result, anyhow};
 use clap::Parser;
-use clock_core::{
-    CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
-    ClockAccountData,
-};
+use clock_core::{CLOCK_PROGRAM_ACCOUNT_ID, ClockAccountData};
 use cycle_bench::{ppe, stats::Stats};
 use fee_core::{BlockFeeSummary, state::FeeState};
 use lee::program::Program;
@@ -500,9 +497,9 @@ fn state_write_case(label: &'static str, bytes: usize) -> Result<Case> {
     )
 }
 
-fn clock_account(account_id: AccountId, block_id: BlockId) -> Fixture {
+fn clock_account(block_id: BlockId) -> Fixture {
     Fixture::new(
-        account_id,
+        CLOCK_PROGRAM_ACCOUNT_ID,
         false,
         programs::clock_account_id(),
         ClockAccountData {
@@ -514,20 +511,12 @@ fn clock_account(account_id: AccountId, block_id: BlockId) -> Fixture {
     )
 }
 
-fn clock_accounts_tick_at(block_id: BlockId) -> Vec<Fixture> {
-    vec![
-        clock_account(CLOCK_01_PROGRAM_ACCOUNT_ID, block_id),
-        clock_account(CLOCK_10_PROGRAM_ACCOUNT_ID, block_id),
-        clock_account(CLOCK_50_PROGRAM_ACCOUNT_ID, block_id),
-    ]
-}
-
-// A tick requires each clock account's pre-state one block below the message's.
+// A tick requires the clock's pre-state one block below the message's.
 fn tick_case(label: &'static str, block_id: BlockId) -> Result<Case> {
     Case::new(
         label,
-        Actor::new(CLOCK_01_PROGRAM_ACCOUNT_ID, programs::clock_account_id()),
-        clock_accounts_tick_at(block_id - 1),
+        Actor::new(CLOCK_PROGRAM_ACCOUNT_ID, programs::clock_account_id()),
+        vec![clock_account(block_id - 1)],
         &clock_core::Message::Tick {
             timestamp: Timestamp::from(1_700_000_000_u64),
             block_id,
@@ -535,11 +524,9 @@ fn tick_case(label: &'static str, block_id: BlockId) -> Result<Case> {
     )
 }
 
-fn cases() -> Result<[Case; 7]> {
+fn cases() -> Result<[Case; 5]> {
     Ok([
-        tick_case("Tick (block_id+1, no multiples)", 1)?,
-        tick_case("Tick (10-block rollup)", 10)?,
-        tick_case("Tick (10 and 50-block rollups)", 50)?,
+        tick_case("Tick", 1)?,
         Case::new(
             "Distribute",
             fee_state_actor(),
