@@ -69,16 +69,14 @@ VOLUME /var/lib/sequencer_service
 EXPOSE 3040
 EXPOSE 9000
 
-# Health check (TODO #244: Replace when a real health endpoint is available)
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl http://localhost:3040 \
-    -H "Content-Type: application/json" \
-    -d "{ \
-        \"jsonrpc\": \"2.0\", \
-        \"method\": \"checkHealth\", \
-        \"params\": {}, \
-        \"id\": 1 \
-    }" || exit 1
+# Defaults for `start`, as env so a deployment can override each one the same way.
+ENV SEQUENCER_HOME=/var/lib/sequencer_service
+ENV SEQUENCER_RPC_LISTEN_ADDRESS=0.0.0.0:3040
+ENV SEQUENCER_METRICS_LISTEN_ADDRESS=0.0.0.0:9000
+
+# Follows the ops server when SEQUENCER_METRICS_LISTEN_ADDRESS is overridden.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
+    CMD curl -fsS -o /dev/null "http://$SEQUENCER_METRICS_LISTEN_ADDRESS/health" || exit 1
 
 # Run the application
 ENV RUST_LOG=info
@@ -89,4 +87,4 @@ ENV RISC0_SERVER_PATH=/usr/local/bin/r0vm
 USER sequencer_service_user
 
 WORKDIR /sequencer_service
-CMD ["sequencer_service", "start", "/var/lib/sequencer_service", "--rpc-listen-address", "0.0.0.0:3040"]
+CMD ["sequencer_service", "start"]

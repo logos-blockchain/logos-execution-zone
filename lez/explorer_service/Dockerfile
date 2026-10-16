@@ -33,10 +33,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry/index \
 FROM debian:trixie-slim AS runtime
 WORKDIR /explorer_service
 RUN apt-get update -y \
-  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && apt-get install -y --no-install-recommends openssl ca-certificates curl \
   && apt-get autoremove -y \
   && apt-get clean -y \
   && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 1000 -s /bin/bash explorer_service_user
 
 # Copy the server binary to the /explorer_service directory
 COPY --from=builder /usr/local/bin/explorer_service /explorer_service/
@@ -53,6 +55,11 @@ ENV LEPTOS_SITE_ADDR="0.0.0.0:8080"
 ENV LEPTOS_SITE_ROOT="site"
 ENV INDEXER_RPC_URL="http://localhost:8779"
 EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -fsS -o /dev/null "http://$LEPTOS_SITE_ADDR/" || exit 1
+
+USER explorer_service_user
 
 # Run the server
 CMD ["/explorer_service/explorer_service"]

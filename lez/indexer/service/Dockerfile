@@ -61,19 +61,22 @@ VOLUME /var/lib/indexer_service
 # Expose default port
 EXPOSE 8779
 
-# Health check
+# Health check. JSON-RPC errors come back as HTTP 200, so require a `result`.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl http://localhost:8779 \
+    CMD curl -fsS http://localhost:8779 \
     -H "Content-Type: application/json" \
     -d "{ \
         \"jsonrpc\": \"2.0\", \
-        \"method\": \"get_schema\", \
+        \"method\": \"checkHealth\", \
         \"params\": {}, \
         \"id\": 1 \
-    }" || exit 1
+    }" | grep -q '"result"' || exit 1
 
 # Run the application
 ENV RUST_LOG=info
+
+# Set explicit location for r0vm binary
+ENV RISC0_SERVER_PATH=/usr/local/bin/r0vm
 
 USER indexer_service_user
 

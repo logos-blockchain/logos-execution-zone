@@ -1,7 +1,6 @@
 # devnet_configs
 
-Builds what the four-node docker devnet runs on — `lez/sequencer/service/docker-compose.devnet.yml`,
-included by the repo-root compose file.
+Builds what the four-node docker devnet in the root `docker-compose.yml` runs on.
 
 ```sh
 just regenerate-devnet-configs   # cargo run -p devnet_configs
