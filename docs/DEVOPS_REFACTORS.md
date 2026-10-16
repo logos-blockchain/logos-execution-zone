@@ -116,13 +116,13 @@ Things to raise with infra:
 
 | What | How |
 |---|---|
-| Network config (tuning, `genesis`, `channel_params`, `cross_zone`) | One shared config per network, compiled into the binary from `lez/sequencer/service/networks/<net>.json` and picked with `--network local\|devnet\|testnet`. `--config` overrides it with a file. Every value is explicit in the file. channel_params are network constants: testnet uses 25e9/900/150/240, local uses 149/300/25/100. `--network`'s genesis is used only with `--create-channel`. |
+| Network config (tuning, `genesis`, `channel_params`, `cross_zone`) | One shared config per network, compiled into the binary from `lez/sequencer/service/networks/<net>.json` and picked with `--network local\|devnet\|testnet`. `--config` overrides it with a file. Every value is explicit in the file. channel_params are network constants: testnet uses 25e9/900/150/240, local uses 149/300/25/100. The genesis of `--network` or `--config` is used only with `--create-channel`. |
 | Channel ID, funding key, bedrock URL | `--channel-id`, `--funding-public-key`, `--bedrock-url` |
 | Listen addresses | Full `host:port` values, following #981: `--rpc-listen-address`, `--metrics-listen-address` (later the ops port: `/ping` `/health` `/metrics`), `--gossip-listen-address` (a fixed port, not `udp/0`) |
 | Bootstrap peers | Repeatable `--gossip-bootstrap-peer host:port`, expanded to `/dns/<host>/udp/<port>/quic-v1`, or `/ip4/...` for an IP. A full multiaddr is passed through as is. |
 | Data and keys | `start <home>` with the fixed layout from #979: `sequencer_config.json`, `channel_signing_key`, `bedrock_funding_public_key`. `--config` and `--channel-signing-key-file` point outside it, so infra can mount secrets outside the data volume. Only `setup` creates keys; `start` refuses to run without one. |
 | Secrets | Files only. Never in the JSON. `bedrock_config.auth.password` is still plaintext JSON; nobody uses auth today, so a `--bedrock-password-file` waits until someone does. |
-| Logs | `--log-format json\|text`. The image sets `json`. Can be done with an `env_logger` custom format, no new dependency. |
+| Logs | Plain `env_logger` text for now. JSON only pays off with queryable fields (`tx_hash`, `block_id`, …), which needs structured logging (`log` key-values or `tracing`) at the call sites. |
 
 **Conventions.**
 
@@ -159,7 +159,7 @@ Things to raise with infra:
   - `local` is the former `configs/debug/sequencer_config.json`.
   - `devnet` and `testnet` are ported from infra-logos to the new schema (#979). infra's copies use the old schema and no longer parse.
   - The dead `configs/docker/sequencer_config.json` is deleted.
-- [x] `start --network` drops the genesis unless `--create-channel`, mirroring `setup`.
+- [x] `start --network` drops the genesis unless `--create-channel`, mirroring `setup`. Phase 6 extends this to `--config`.
 - [x] A unit test checks that every built-in network config parses and passes validation.
 - [ ] Founding set for the devnet/testnet relaunch. Their `genesis.actions` are empty: the new `supply_account` takes a recipient public key, not the old `account_id`, and the old stake signatures predate the actor rework. Needed from infra/devs: the founding channel signing public keys, who holds the ownership keys, and the supply recipients' public keys. Then generalise `tools/devnet_configs` to sign the stakes into `networks/<net>.json`.
 - [ ] Indexer: still carries its own `channel_id`. Covered by the indexer-merge PR.
@@ -187,8 +187,8 @@ SEQUENCER_GOSSIP_BOOTSTRAP_PEER=<ip>:4040,<ip>:4041,...
   - `/health`: JSON, `200 {"status":"ok"}` or `503 {"status":"failing"}` from `SequencerHandle::is_healthy` (every task except gossip is alive).
   - `/metrics`: Prometheus.
 - [x] Docker `HEALTHCHECK` probes `http://$SEQUENCER_METRICS_LISTEN_ADDRESS/health`, so it follows an env override. This closes TODO #244.
-- [x] JSON logs: `--log-format json` (`SEQUENCER_LOG_FORMAT`), one object per line with `timestamp`, `level`, `target`, `message`. The image defaults to `json`; local runs stay `text`.
-- [x] Image defaults moved from `CMD` flags to `ENV` (`SEQUENCER_HOME`, `SEQUENCER_RPC_LISTEN_ADDRESS`, `SEQUENCER_METRICS_LISTEN_ADDRESS`, `SEQUENCER_LOG_FORMAT`). A flag in `CMD` beats env, so infra could not override the RPC address with env before.
+- [ ] JSON logs: tried and removed. A JSON wrapper over `env_logger` carried only `timestamp`, `level`, `target` and `message`, which a Logstash grok pattern gets from the text format anyway. The values worth querying are interpolated into messages. Revisit together with structured logging; the one thing a wrapper alone buys is that multi-line `{:#?}` output stays on one line.
+- [x] Image defaults moved from `CMD` flags to `ENV` (`SEQUENCER_HOME`, `SEQUENCER_RPC_LISTEN_ADDRESS`, `SEQUENCER_METRICS_LISTEN_ADDRESS`). A flag in `CMD` beats env, so infra could not override the RPC address with env before.
 - [x] Log levels: the clear-cut demotions.
   - Per-transaction `info!("Validated transaction …")` and per-turn `info!` lines in the executor are now `debug`.
   - User- or peer-triggered failures were `error` and are now `warn`/`debug`: failed user settlement, a transaction too large for any block, gas beyond the caps, RPC pre-check and pre-mempool rejection. The last two are already counted by `before_mempool_failed_transactions_total`.
@@ -210,15 +210,23 @@ SEQUENCER_GOSSIP_BOOTSTRAP_PEER=<ip>:4040,<ip>:4041,...
   - `bedrock/docker-compose.yml` stays a file of its own, included by the root, because the Docker-backed tests start it alone. Its `PORT` is now `BEDROCK_PORT`.
 - [x] Deleted the per-service compose files, `docker-compose.override.yml`, and the configs only they used (`indexer/service/configs/docker/`, `docker-all-in-one/bedrock_funding_public_key`).
 - Decided: no `.env.devnet` or `.env.testnet`. Infra keeps templating its per-host compose with Ansible, because it needs N sequencers and Consul checks. The infra migration block in phase 3 is their spec.
-- [ ] CI:
-  - [ ] Compose smoke test with `up --wait`.
-  - [ ] Build once and promote by digest.
-  - [ ] Publish a bedrock image at the pinned rev.
-  - [ ] Pin the unpinned build inputs (`cargo-chef:latest-…`, the risc0 install script, `cargo-binstall latest`).
+- Dropped: a compose smoke test in CI costs too much CI time for what it buys.
+- Deferred to a later PR. These are dev- and CI-facing; infra pins image versions in Ansible either way.
+  - [ ] Pin the unpinned build inputs. Do this one soon: `rzup install` pulls the newest r0vm on every image build, which must match `risc0-zkvm` 3.0.5 and can break proving with no code change.
+    - `cargo-chef:latest-…`
+    - `rzup install` → `rzup install r0vm 3.0.5`
+    - the arm64 `release-3.0` branch → a tag
+    - the explorer's `cargo-binstall` `releases/latest` (x86_64-only tarball) and unversioned `cargo-leptos`
+  - [ ] Build once per commit (`sha-<commit>`), and make releases a retag (`docker buildx imagetools create`), not a rebuild. Ask infra whether they want moving `devnet`/`testnet` tags or only immutable versions.
+  - [ ] A Bedrock image at the pinned L1 rev, so `docker compose up` pulls it instead of running `just resolve-bedrock-node`. Ask the L1 team first: pinning LEZ only to released L1 versions would make the resolver always download, which mostly removes the need.
 
 ### 6. Ops logic into the binary
 
-- [ ] The sequencer waits for the channel itself, replacing the compose `x-await-channel` entrypoint.
+- [x] The sequencer waits for the channel itself, replacing the compose `x-await-channel` entrypoint (the `grep | cut` shell over the JSON).
+  - `--wait-for-channel` (`SEQUENCER_WAIT_FOR_CHANNEL`): a node with no genesis waits for the channel's creator instead of failing. Without the flag, a node pointed at a wrong channel still fails at once.
+  - `--create-channel` now applies to `--config` as well as `--network`: an explicit config keeps its genesis only with it. A home's config keeps what `setup` decided, and `--create-channel` there is an error.
+  - Compose: seq-0 sets `SEQUENCER_CREATE_CHANNEL`, the followers `SEQUENCER_WAIT_FOR_CHANNEL`. Followers don't need the genesis: they replay the channel's genesis block on the bare initial state.
+- [x] SIGTERM during startup (e.g. while waiting for the channel) stops the node cleanly. It used to be ignored until startup finished, then SIGKILLed with RocksDB open.
 - [x] Staking tools in the image: #979 folded `submit_stake` and `bedrock_pubkey` into the `setup`, `stake` and `unstake` subcommands of `sequencer_service`.
 
 ## Open questions

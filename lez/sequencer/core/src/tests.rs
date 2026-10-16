@@ -311,6 +311,7 @@ fn setup_sequencer_config() -> SequencerConfig {
         gossip: None,
         channel_signing_key_file: None,
         funding_public_key: None,
+        wait_for_channel: false,
     }
 }
 

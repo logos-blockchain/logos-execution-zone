@@ -370,17 +370,34 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // Only seed our own key into genesis as the bootstrap sequencer if the
         // channel doesn't exist yet. Otherwise it's someone else's channel and
         // we join later, the normal self-join way.
-        let channel_probe_retry_strategy =
-            FixedInterval::new(Self::CHANNEL_PROBE_RETRY_DELAY).take(Self::CHANNEL_PROBE_RETRIES);
-        let channel_already_exists = Retry::start(channel_probe_retry_strategy, || async {
-            bedrock_ref
-                .ask(sequencer_bedrock_actor::protocol::CheckChannelExists)
-                .await
-                .map_err(|err| anyhow!(err))
-                .inspect_err(|err| warn!("Failed to probe Bedrock channel: {err:#}"))
-        })
-        .await
-        .expect("Failed to probe Bedrock channel");
+        let probe_channel = || {
+            Retry::start(
+                FixedInterval::new(Self::CHANNEL_PROBE_RETRY_DELAY)
+                    .take(Self::CHANNEL_PROBE_RETRIES),
+                || async {
+                    bedrock_ref
+                        .ask(sequencer_bedrock_actor::protocol::CheckChannelExists)
+                        .await
+                        .map_err(|err| anyhow!(err))
+                        .inspect_err(|err| warn!("Failed to probe Bedrock channel: {err:#}"))
+                },
+            )
+        };
+        let mut channel_already_exists = probe_channel()
+            .await
+            .expect("Failed to probe Bedrock channel");
+        if !channel_already_exists && config.genesis.is_none() && config.wait_for_channel {
+            info!(
+                "Channel {} does not exist yet; waiting for its creator",
+                config.bedrock_config.channel_id
+            );
+            while !channel_already_exists {
+                tokio::time::sleep(Self::CHANNEL_PROBE_RETRY_DELAY).await;
+                channel_already_exists = probe_channel()
+                    .await
+                    .expect("Failed to probe Bedrock channel");
+            }
+        }
         if channel_already_exists {
             info!("Channel already exists; joining as a non channel creator");
         } else {

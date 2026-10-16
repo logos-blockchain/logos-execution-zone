@@ -107,13 +107,20 @@ pub struct SequencerConfig {
     /// Sequencer p2p gossip configuration. `None` disables gossip.
     #[serde(default)]
     pub gossip: Option<GossipConfig>,
-    /// Overrides `<home>/channel_signing_key`. Per node, so never read from the shared config.
+    /// Overrides `<home>/channel_signing_key`.
+    /// This is a "per-node" setting, and should not be read from a shared config.
     #[serde(skip)]
     pub channel_signing_key_file: Option<PathBuf>,
-    /// Overrides `<home>/bedrock_funding_public_key`. Per node, so never read from the shared
+    /// Overrides `<home>/bedrock_funding_public_key`.
+    /// This is a "per-node" setting, and should not be read from a shared config.
     /// config.
     #[serde(skip)]
     pub funding_public_key: Option<ZkPublicKey>,
+    /// Without a `genesis`, waits for the channel's creator instead of failing when the channel
+    /// does not exist yet.
+    /// This is a "per-node" setting, and should not be read from a shared config.
+    #[serde(skip)]
+    pub wait_for_channel: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

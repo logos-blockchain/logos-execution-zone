@@ -1,5 +1,4 @@
 use std::{
-    io::Write as _,
     net::{IpAddr, SocketAddr},
     path::PathBuf,
     sync::Arc,
@@ -24,13 +23,6 @@ mod ops;
 #[derive(Debug, Parser)]
 #[clap(version)]
 struct Args {
-    #[clap(
-        long,
-        global = true,
-        env = "SEQUENCER_LOG_FORMAT",
-        default_value = "text"
-    )]
-    log_format: LogFormat,
     #[clap(subcommand)]
     command: Command,
 }
@@ -88,13 +80,6 @@ enum Command {
     },
 }
 
-#[derive(Clone, Copy, Debug, clap::ValueEnum)]
-enum LogFormat {
-    Text,
-    /// One JSON object per line, for log shippers.
-    Json,
-}
-
 /// Networks whose config is compiled in.
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 enum Network {
@@ -116,10 +101,15 @@ struct StartArgs {
     /// Runs on a built-in network config instead of `--config`.
     #[clap(long, env = "SEQUENCER_NETWORK")]
     network: Option<Network>,
-    /// Keeps `--network`'s genesis, so the channel is created if it does not exist. Without it,
-    /// a node pointed at the wrong channel fails instead of creating that one.
-    #[clap(long, env = "SEQUENCER_CREATE_CHANNEL", requires = "network")]
+    /// Keeps the genesis of `--config` or `--network`, so the channel is created if it does not
+    /// exist. Without it, a node pointed at the wrong channel fails instead of creating that one.
+    /// A home's own config keeps whatever `setup` decided.
+    #[clap(long, env = "SEQUENCER_CREATE_CHANNEL")]
     create_channel: bool,
+    /// Waits for the channel to be created, instead of failing, when it does not exist yet and
+    /// this node has no genesis to create it with.
+    #[clap(long, env = "SEQUENCER_WAIT_FOR_CHANNEL")]
+    wait_for_channel: bool,
     /// Defaults to `<home>/channel_signing_key`.
     #[clap(long, env = "SEQUENCER_CHANNEL_SIGNING_KEY_FILE")]
     channel_signing_key_file: Option<PathBuf>,
@@ -163,8 +153,8 @@ impl Network {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    env_logger::init();
     let args = Args::parse();
-    init_logger(args.log_format);
 
     match args.command {
         Command::Setup {
@@ -213,7 +203,14 @@ async fn start(args: StartArgs) -> Result<()> {
         Some(address) => Some((ops::bind(address).await?, install_prometheus_recorder()?)),
         None => None,
     };
-    let sequencer_handle = Arc::new(sequencer_service::run(config, args.rpc_listen_address).await?);
+    // Startup can wait on Bedrock for long, e.g. `--wait-for-channel`, so a stop must cut it short.
+    let sequencer_handle = tokio::select! {
+        handle = sequencer_service::run(config, args.rpc_listen_address) => Arc::new(handle?),
+        () = cancellation_token.cancelled() => {
+            log::info!("Stopped before the sequencer finished starting");
+            return Ok(());
+        }
+    };
     let ops_shutdown = CancellationToken::new();
     let ops_server = ops_listener.map(|(listener, metrics)| {
         tokio::spawn(ops::serve(
@@ -258,13 +255,14 @@ async fn start(args: StartArgs) -> Result<()> {
 
 /// The config file with `args` applied over it.
 fn load_config(args: &StartArgs) -> Result<SequencerConfig> {
+    let explicit_config = args.network.is_some() || args.config.is_some();
+    ensure!(
+        explicit_config || !args.create_channel,
+        "--create-channel needs --config or --network; a home's own config keeps what `setup` decided"
+    );
     let mut config = if let Some(network) = args.network {
-        let mut config = SequencerConfig::from_json(network.config())
-            .with_context(|| format!("Failed to read the built-in {network:?} config"))?;
-        if !args.create_channel {
-            config.genesis = None;
-        }
-        config
+        SequencerConfig::from_json(network.config())
+            .with_context(|| format!("Failed to read the built-in {network:?} config"))?
     } else {
         let config_path = args
             .config
@@ -278,8 +276,12 @@ fn load_config(args: &StartArgs) -> Result<SequencerConfig> {
         SequencerConfig::from_path(&config_path)
             .with_context(|| format!("Failed to read {}", config_path.display()))?
     };
+    if explicit_config && !args.create_channel {
+        config.genesis = None;
+    }
 
     config.home.clone_from(&args.home);
+    config.wait_for_channel = args.wait_for_channel;
     config
         .channel_signing_key_file
         .clone_from(&args.channel_signing_key_file);
@@ -375,22 +377,6 @@ fn parse_gossip_peer(peer: &str) -> Result<Multiaddr> {
         .with(Protocol::Dns(host.into()))
         .with(Protocol::Udp(port.parse().context("not a port")?))
         .with(Protocol::QuicV1))
-}
-
-fn init_logger(format: LogFormat) {
-    let mut builder = env_logger::Builder::from_default_env();
-    if matches!(format, LogFormat::Json) {
-        builder.format(|buf, record| {
-            let line = serde_json::json!({
-                "timestamp": buf.timestamp_millis().to_string(),
-                "level": record.level().as_str(),
-                "target": record.target(),
-                "message": record.args().to_string(),
-            });
-            writeln!(buf, "{line}")
-        });
-    }
-    builder.init();
 }
 
 /// Installs the recorder, whose metrics the ops server renders.

@@ -56,6 +56,7 @@ fn sequencer_config() -> (SequencerConfig, TempDir) {
         gossip: None,
         channel_signing_key_file: None,
         funding_public_key: None,
+        wait_for_channel: false,
     };
 
     (config, home)

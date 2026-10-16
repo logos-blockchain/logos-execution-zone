@@ -73,7 +73,6 @@ EXPOSE 9000
 ENV SEQUENCER_HOME=/var/lib/sequencer_service
 ENV SEQUENCER_RPC_LISTEN_ADDRESS=0.0.0.0:3040
 ENV SEQUENCER_METRICS_LISTEN_ADDRESS=0.0.0.0:9000
-ENV SEQUENCER_LOG_FORMAT=json
 
 # Follows the ops server when SEQUENCER_METRICS_LISTEN_ADDRESS is overridden.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \

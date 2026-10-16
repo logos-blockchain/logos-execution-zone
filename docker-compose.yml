@@ -27,29 +27,21 @@ x-sequencer: &sequencer
   depends_on:
     - logos-blockchain-node-0
     - indexer_service
-  environment:
-    SEQUENCER_CONFIG: /etc/sequencer_service/sequencer_config.json
-    SEQUENCER_CHANNEL_SIGNING_KEY_FILE: /run/secrets/channel_signing_key
-    SEQUENCER_FUNDING_PUBLIC_KEY: ${LEZ_FUNDING_PUBLIC_KEY:-2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26}
-    SEQUENCER_BEDROCK_URL: ${LEZ_BEDROCK_URL:-http://logos-blockchain-node-0:18080}
   # Lets a node reach a Bedrock published on the host, on Linux too.
   extra_hosts:
     - "host.docker.internal:host-gateway"
 
-# A follower that starts before the channel exists races seq-0 into creating a second one, so it
-# waits for the channel first.
-x-await-channel: &await_channel
-  entrypoint:
-    - /bin/sh
-    - -c
-    - |
-      channel=$$(grep -o '"channel_id"[^,]*' "$$SEQUENCER_CONFIG" | cut -d'"' -f4)
-      until curl -s "$${SEQUENCER_BEDROCK_URL%/}/channel/$$channel" | grep -q accredited_keys; do
-        echo "waiting for the channel to land on Bedrock"
-        sleep 2
-      done
-      exec sequencer_service start
-  command: []
+x-sequencer-environment: &sequencer_environment
+  SEQUENCER_CONFIG: /etc/sequencer_service/sequencer_config.json
+  SEQUENCER_CHANNEL_SIGNING_KEY_FILE: /run/secrets/channel_signing_key
+  SEQUENCER_FUNDING_PUBLIC_KEY: ${LEZ_FUNDING_PUBLIC_KEY:-2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26}
+  SEQUENCER_BEDROCK_URL: ${LEZ_BEDROCK_URL:-http://logos-blockchain-node-0:18080}
+
+# Only seq-0 keeps the config's genesis and creates the channel. The others drop it, so one
+# starting before the channel exists waits for it instead of creating a second one.
+x-follower-environment: &follower_environment
+  <<: *sequencer_environment
+  SEQUENCER_WAIT_FOR_CHANNEL: "true"
 
 services:
   # Build-only: the shared base image (toolchain + r0vm) the sequencer and indexer builds take as
@@ -64,6 +56,9 @@ services:
   sequencer_service_0:
     <<: *sequencer
     container_name: sequencer_service_0
+    environment:
+      <<: *sequencer_environment
+      SEQUENCER_CREATE_CHANNEL: "true"
     ports:
       - "${LEZ_SEQ_0_RPC_PORT:-3040}:3040"
       - "${LEZ_SEQ_0_METRICS_PORT:-9000}:9000"
@@ -73,8 +68,9 @@ services:
       - sequencer_data_0:/var/lib/sequencer_service
 
   sequencer_service_1:
-    <<: [*sequencer, *await_channel]
+    <<: *sequencer
     container_name: sequencer_service_1
+    environment: *follower_environment
     depends_on:
       - sequencer_service_0
     ports:
@@ -86,8 +82,9 @@ services:
       - sequencer_data_1:/var/lib/sequencer_service
 
   sequencer_service_2:
-    <<: [*sequencer, *await_channel]
+    <<: *sequencer
     container_name: sequencer_service_2
+    environment: *follower_environment
     depends_on:
       - sequencer_service_0
     ports:
@@ -99,8 +96,9 @@ services:
       - sequencer_data_2:/var/lib/sequencer_service
 
   sequencer_service_3:
-    <<: [*sequencer, *await_channel]
+    <<: *sequencer
     container_name: sequencer_service_3
+    environment: *follower_environment
     depends_on:
       - sequencer_service_0
     ports:
