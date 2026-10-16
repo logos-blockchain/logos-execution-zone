@@ -57,15 +57,21 @@ impl ValidatedStateDiff {
 }
 
 /// The metered result of a public execution: the cycle count accumulated
-/// across every transition of the transaction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// across every transition of the transaction, and why the action reverted if it did.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionCharge {
     pub cycles: Cycles,
+    /// The action failed in a chargeable way: the fee is kept and the effects
+    /// are dropped. Carries the failure's message.
+    pub revert: Option<String>,
 }
 
 impl ExecutionCharge {
     /// The charge of transaction kinds that meter nothing.
-    pub const FREE: Self = Self { cycles: 0 };
+    pub const FREE: Self = Self {
+        cycles: 0,
+        revert: None,
+    };
 }
 
 impl ValidatedStateDiff {
@@ -110,6 +116,7 @@ impl ValidatedStateDiff {
             diff,
             ExecutionCharge {
                 cycles: cycles_used,
+                revert: None,
             },
         ))
     }
@@ -158,20 +165,31 @@ impl ValidatedStateDiff {
             }
             Err(_) => cycle_budget,
         };
-        let diff = match result {
-            Ok(diff) => diff,
+        let (diff, revert) = match result {
+            Ok(diff) => (diff, None),
             // A chargeable action failure keeps no effects but still advances the
             // signers' nonces, so what `apply_state_diff` receives is the nonce
             // bumps alone: the fee stays committed and the tx cannot be replayed.
-            Err(err) if err.is_chargeable() => Self(StateDiff {
-                signer_account_ids: signers,
-                ..StateDiff::default()
-            }),
+            Err(err) if err.is_chargeable() => (
+                Self(StateDiff {
+                    signer_account_ids: signers,
+                    ..StateDiff::default()
+                }),
+                Some(err.to_string()),
+            ),
             // A non-chargeable failure is a structural defect a correct proposer
             // would never include; reject the whole block.
-            Err(err) => return (ExecutionCharge { cycles }, Err(err)),
+            Err(err) => {
+                return (
+                    ExecutionCharge {
+                        cycles,
+                        revert: None,
+                    },
+                    Err(err),
+                );
+            }
         };
-        (ExecutionCharge { cycles }, Ok(diff))
+        (ExecutionCharge { cycles, revert }, Ok(diff))
     }
 
     /// Executes a fee-settlement invocation (reserve or refund), authorized by
@@ -260,7 +278,7 @@ impl ValidatedStateDiff {
             public_context.promotions.clone(),
             evidence,
         );
-        let request = WholeExecution::new(public_context, TransactionEntry::Sync(root), &[])
+        let request = WholeExecution::new(public_context, TransactionEntry::Sync(root), None, &[])
             .map_err(|error| LeeError::InvalidInput(error.to_string()))?;
         settle(
             backend,
@@ -281,6 +299,24 @@ impl ValidatedStateDiff {
         block_id: BlockId,
         timestamp: Timestamp,
     ) -> Result<Self, LeeError> {
+        Self::from_privacy_preserving_transaction_metered(
+            tx,
+            state,
+            block_id,
+            timestamp,
+            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+        )
+        .map(|(diff, _cycles)| diff)
+    }
+
+    /// Also returns the cycles the public part used, bounded by `cycle_budget`.
+    pub fn from_privacy_preserving_transaction_metered(
+        tx: &PrivacyPreservingTransaction,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+        cycle_budget: Cycles,
+    ) -> Result<(Self, Cycles), LeeError> {
         let message = &tx.message;
         let execution = &message.execution;
         let commitments = execution.commitments();
@@ -342,7 +378,7 @@ impl ValidatedStateDiff {
         let mut cycles_used = 0;
         let backend = PublicBackend::new(
             state,
-            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+            cycle_budget,
             &mut cycles_used,
             message.public_context.promotions.clone(),
             evidence(&signer_account_ids, &message.admission_evidence),
@@ -368,7 +404,7 @@ impl ValidatedStateDiff {
                 .cloned()
                 .map(Publication::Sealed),
         );
-        Ok(Self(diff))
+        Ok((Self(diff), cycles_used))
     }
 
     /// Returns the public account changes produced by this transaction.

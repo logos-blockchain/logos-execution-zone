@@ -30,8 +30,9 @@ use lee::{
     },
 };
 use lee_core::{
-    BlockId, Commitment, CommitmentPosition, CommitmentSetDigest, EphemeralSecretKey,
-    MembershipProof, MessageWitness, Nullifier, NullifierSecretKey, RootCall, SharedSecretKey,
+    BlockId, Commitment, CommitmentPosition, CommitmentSetDigest, EphemeralSecretKey, FeeTransfer,
+    MembershipProof, MessageWitness, Nullifier, NullifierSecretKey, PrivateAccountKind, RootCall,
+    SharedSecretKey,
     account::{Actor, Nonce},
     execution_state::TransactionEntry,
     native_token::NATIVE_TOKEN_PROGRAM_ID,
@@ -143,6 +144,8 @@ pub enum ExecutionFailureKind {
     TransactionBuildError(#[from] lee::error::LeeError),
     #[error("Failed to sign transaction: {0}")]
     SignError(anyhow::Error),
+    #[error("Dry run: the transaction was simulated and not sent")]
+    DryRun,
     #[error("Sending transaction failed for each client")]
     MultiSequencerTransactionSendError,
     #[error("Failed to store wallet data")]
@@ -170,6 +173,11 @@ pub struct WalletCore {
     spent_nullifiers: SpentNullifiers,
 
     sequencer_client: SequencerClient,
+
+    /// Simulate transactions and report their cost instead of sending them.
+    dry_run: bool,
+    /// The owned private account paying every in-proof fee, unless a send names one.
+    fee_payer: Option<AccountId>,
 }
 
 impl WalletCore {
@@ -247,7 +255,85 @@ impl WalletCore {
             storage_path,
             spent_nullifiers,
             sequencer_client,
+            dry_run: false,
+            fee_payer: None,
         })
+    }
+
+    /// Pays every in-proof fee from `fee_payer`, an owned private account, unless a send names
+    /// its own; `None` lets each send pick its payer.
+    pub const fn set_private_fee_payer(&mut self, fee_payer: Option<AccountId>) {
+        self.fee_payer = fee_payer;
+    }
+
+    /// The private account to pay `reserve` when no mentioned private account is authorized and
+    /// holds it: an owned regular private account holding it, outside the root call, else the
+    /// first mentioned owned regular private account, which pays out of what the root credits it
+    /// (a shielding into a fresh account).
+    fn auto_fee_payer(&self, mentions: &[AccountMention], reserve: u128) -> Option<AccountId> {
+        let holds = |account: &Account| {
+            account
+                .data
+                .native_balance()
+                .is_ok_and(|balance| balance >= reserve)
+        };
+        let owned_regular = |account_id: AccountId| {
+            self.storage
+                .key_chain()
+                .managed_private_account(account_id)
+                .filter(|managed| *managed.kind == PrivateAccountKind::Regular)
+        };
+        let mentioned_candidate = mentions.iter().any(|mention| {
+            mention.authorizes
+                && match &mention.identity {
+                    AccountIdentity::PrivateOwned(account_id) => {
+                        owned_regular(*account_id).is_some_and(|managed| holds(managed.account))
+                    }
+                    AccountIdentity::PrivateShared { .. } => true,
+                    AccountIdentity::Public(_)
+                    | AccountIdentity::PublicNoSign(_)
+                    | AccountIdentity::PublicForeign(_)
+                    | AccountIdentity::PublicPda { .. }
+                    | AccountIdentity::PublicKeycard { .. }
+                    | AccountIdentity::PrivateForeign { .. }
+                    | AccountIdentity::PrivatePdaShared { .. } => false,
+                }
+        });
+        if mentioned_candidate {
+            return None;
+        }
+        self.storage
+            .key_chain()
+            .private_accounts()
+            .filter(|found| *found.kind == PrivateAccountKind::Regular && holds(found.account))
+            .map(|found| {
+                AccountId::from((
+                    &found.key_chain.nullifier_public_key,
+                    &found.key_chain.viewing_public_key,
+                ))
+            })
+            .next()
+            .or_else(|| {
+                mentions.iter().find_map(|mention| match mention.identity {
+                    AccountIdentity::PrivateOwned(account_id) => {
+                        owned_regular(account_id).map(|_| account_id)
+                    }
+                    AccountIdentity::Public(_)
+                    | AccountIdentity::PublicNoSign(_)
+                    | AccountIdentity::PublicForeign(_)
+                    | AccountIdentity::PublicPda { .. }
+                    | AccountIdentity::PublicKeycard { .. }
+                    | AccountIdentity::PrivateForeign { .. }
+                    | AccountIdentity::PrivateShared { .. }
+                    | AccountIdentity::PrivatePdaShared { .. } => None,
+                })
+            })
+    }
+
+    /// Simulate transactions and report their cost instead of sending them; a send then ends
+    /// with [`ExecutionFailureKind::DryRun`].
+    pub const fn set_dry_run(&mut self, dry_run: bool) {
+        self.dry_run = dry_run;
     }
 
     /// Get configuration with applied overrides.
@@ -814,6 +900,7 @@ impl WalletCore {
             root,
             message,
             programs,
+            None,
             |_| Ok(()),
         )
         .await
@@ -835,6 +922,7 @@ impl WalletCore {
             programs,
             cross_messages,
             async_delivery,
+            None,
             |_| Ok(()),
         )
         .await
@@ -843,6 +931,8 @@ impl WalletCore {
     // Public when every account is, no recovery binding is new and no candidate is selected,
     // privacy-preserving otherwise. A proof derives its boundary from current public state unless
     // `cross_messages` gives a conditional promise that settlement checks against live execution.
+    // A proof pays its fee from `fee_payer` if given, see
+    // [`Self::send_privacy_preserving_tx_with_pre_check`].
     #[expect(
         clippy::too_many_arguments,
         reason = "send_tx's arguments and the check of the accounts it reads"
@@ -855,6 +945,7 @@ impl WalletCore {
         programs: &ProgramCatalog,
         cross_messages: Option<PredictedCrossMessages>,
         async_delivery: AsyncDelivery,
+        fee_payer: Option<AccountId>,
         tx_pre_check: impl FnOnce(&[SelectedActorState]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let to = root_actor(&accounts, root)?;
@@ -878,6 +969,7 @@ impl WalletCore {
                 async_delivery,
                 programs,
                 cross_messages,
+                fee_payer,
                 tx_pre_check,
             )
             .await
@@ -1008,12 +1100,19 @@ impl WalletCore {
         Ok((declared, joined))
     }
 
+    /// Sends a privacy-preserving transaction over `accounts`.
+    ///
+    /// The in-proof fee is reserved from `fee_payer` if given: an owned private account that need
+    /// not be one of `accounts`. Otherwise the first authorized private account in `accounts`
+    /// that can afford the reserve pays, else the first authorized one (see
+    /// [`AccountManager::private_fee_payer_account_id`]).
     pub async fn send_privacy_preserving_tx_with_pre_check(
         &self,
         accounts: Vec<AccountMention>,
         root: usize,
         message: MessageData,
         programs: &ProgramCatalog,
+        fee_payer: Option<AccountId>,
         tx_pre_check: impl FnOnce(&[SelectedActorState]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let root = TransactionEntry::Sync(RootCall {
@@ -1026,11 +1125,16 @@ impl WalletCore {
             AsyncDelivery::default(),
             programs,
             None,
+            fee_payer,
             tx_pre_check,
         )
         .await
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the proven send threads every input of the transaction it builds"
+    )]
     async fn send_proven(
         &self,
         accounts: Vec<AccountMention>,
@@ -1038,6 +1142,7 @@ impl WalletCore {
         async_delivery: AsyncDelivery,
         programs: &ProgramCatalog,
         cross_messages: Option<PredictedCrossMessages>,
+        fee_payer: Option<AccountId>,
         tx_pre_check: impl FnOnce(&[SelectedActorState]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let AsyncDelivery {
@@ -1054,7 +1159,37 @@ impl WalletCore {
             TransactionEntry::Async(receipt) => Some((receipt.position, receipt.commitment)),
             TransactionEntry::Sync(_) => None,
         };
-        let acc_manager = account_manager::AccountManager::new(self, accounts, message).await?;
+        let quote = self.sequencer_client.get_fee_state().await?;
+        // The base fees after the configured blocks of full blocks: the steepest climb allowed.
+        let blocks = self.config.private_fee_headroom_blocks;
+        let climb = |base, max_gas, target, damping, lo, hi| {
+            (0..blocks).fold(base, |fee, _| {
+                fee_core::market::next_base_fee(fee, max_gas, target, damping, lo, hi)
+            })
+        };
+        let exec_ceiling = climb(
+            quote.base_fee_exec,
+            fee_core::market::MAX_GAS_EXEC,
+            fee_core::market::TARGET_GAS_EXEC,
+            fee_core::market::D_EXEC,
+            fee_core::market::BASE_FEE_EXEC_MIN,
+            fee_core::market::BASE_FEE_EXEC_MAX,
+        );
+        let stor_ceiling = climb(
+            quote.base_fee_stor,
+            fee_core::market::MAX_GAS_STOR,
+            fee_core::market::TARGET_GAS_STOR,
+            fee_core::market::D_STOR,
+            fee_core::market::BASE_FEE_STOR_MIN,
+            fee_core::market::BASE_FEE_STOR_MAX,
+        );
+        let reserve_for =
+            |cycles| fee_core::assess::private_fee_required(cycles, exec_ceiling, stor_ceiling);
+        let fee_payer = fee_payer
+            .or(self.fee_payer)
+            .or_else(|| self.auto_fee_payer(&accounts, reserve_for(0)));
+        let acc_manager =
+            account_manager::AccountManager::new(self, accounts, message, fee_payer).await?;
 
         tx_pre_check(&acc_manager.selected_actor_states())?;
 
@@ -1066,7 +1201,7 @@ impl WalletCore {
         }
 
         let shared_secrets = acc_manager.shared_secrets();
-        let input = ProvingInput {
+        let mut input = ProvingInput {
             root: root.map(|Receipt { body, rho, .. }| MessageWitness {
                 body,
                 rho,
@@ -1085,6 +1220,7 @@ impl WalletCore {
             ciphertext_padding: Some(CIPHERTEXT_PAD_SIZE),
             recoveries,
             private_promotions: private,
+            fee: None,
         };
         let witnessed: HashSet<AccountId> = input
             .private_witnesses
@@ -1118,24 +1254,92 @@ impl WalletCore {
         };
 
         let programs = programs.clone();
-        let present = acc_manager.presenter();
-        let (output, proof) = match cross_messages {
+
+        // The in-proof fee: the inbox is a declared public actor so the reserve crosses to it,
+        // priced off a simulation of the public part and paid under a fresh alias bound for
+        // the refund.
+        let fee_inbox = system_accounts::fee_inbox_account_id();
+        let inbox_actor = Actor::native_balance(fee_inbox);
+        input.public_context.actors.insert(inbox_actor);
+        let mut simulation = Simulation {
+            public_actor_states: acc_manager.public_actor_states(),
+            admitted_accounts: Some(acc_manager.admitted_accounts()),
+        };
+        simulation.public_actor_states.insert(
+            inbox_actor,
+            self.get_account_view(inbox_actor)
+                .await
+                .map_err(ExecutionFailureKind::SequencerError)?
+                .unwrap_or_default()
+                .data
+                .actor_state(NATIVE_TOKEN_PROGRAM_ID)
+                .clone(),
+        );
+        if let Some(admitted) = &mut simulation.admitted_accounts {
+            admitted.insert(fee_inbox);
+        }
+        let (mut input, simulation, programs, cycles) = match cross_messages {
             None => {
-                let simulation = Simulation {
-                    public_actor_states: acc_manager.public_actor_states(),
-                    admitted_accounts: Some(acc_manager.admitted_accounts()),
-                };
+                let (mut present, mut select) = (acc_manager.presenter(None), select.clone());
                 tokio::task::spawn_blocking(move || {
-                    lee::execute_and_prove(
-                        input,
-                        &simulation,
-                        &programs,
-                        present,
-                        select,
-                        choose_seal,
-                    )
+                    let cycles =
+                        lee::simulate(&input, &simulation, &programs, &mut present, &mut select)?;
+                    Ok::<_, lee::error::LeeError>((input, simulation, programs, cycles))
                 })
+                .await??
             }
+            // Given cross messages stand in for the simulation; the public part is priced free.
+            Some(_) => (input, simulation, programs, 0),
+        };
+        let headroom_reserve = reserve_for(cycles);
+        let payer = acc_manager
+            .private_fee_payer_account_id(headroom_reserve)
+            .ok_or_else(|| {
+                ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
+                    "Privacy-preserving transaction has no private account to pay its fee"
+                        .to_owned(),
+                ))
+            })?;
+        let fee_at_head = fee_core::assess::private_fee_required(
+            cycles,
+            quote.base_fee_exec,
+            quote.base_fee_stor,
+        );
+        // Never reserve more than the payer holds, nor less than the fee at head.
+        let reserve = headroom_reserve
+            .min(acc_manager.native_balance(payer))
+            .max(fee_at_head);
+        let opening = account_manager::random_bytes();
+        input
+            .recoveries
+            .push(acc_manager.fee_recovery(payer, opening)?);
+        input.fee = Some(FeeTransfer {
+            payer,
+            recipient: fee_inbox,
+            amount: reserve,
+        });
+        if self.dry_run {
+            println!("Dry run: nothing proven or sent");
+            println!("  public cycles:  {cycles}");
+            println!(
+                "  base fees:      exec {} / stor {} (height {})",
+                quote.base_fee_exec, quote.base_fee_stor, quote.height
+            );
+            println!("  fee at head:    {fee_at_head}");
+            println!(
+                "  headroom:       {blocks} blocks, up to exec {exec_ceiling} / stor \
+                 {stor_ceiling} ({headroom_reserve})"
+            );
+            println!("  reserve:        {reserve} (surplus refunded)");
+            println!("  fee payer:      {payer}");
+            return Err(ExecutionFailureKind::DryRun);
+        }
+
+        let present = acc_manager.presenter(Some((payer, opening)));
+        let (output, proof) = match cross_messages {
+            None => tokio::task::spawn_blocking(move || {
+                lee::execute_and_prove(input, &simulation, &programs, present, select, choose_seal)
+            }),
             Some(cross_messages) => tokio::task::spawn_blocking(move || {
                 lee::execute_and_prove_with_cross_messages(
                     input,
@@ -1238,7 +1442,8 @@ impl WalletCore {
             ));
         }
 
-        let mut acc_manager = account_manager::AccountManager::new(self, accounts, None).await?;
+        let mut acc_manager =
+            account_manager::AccountManager::new(self, accounts, None, None).await?;
 
         tx_pre_check(&acc_manager.selected_actor_states())?;
 
@@ -1310,11 +1515,57 @@ impl WalletCore {
             lee::public_transaction::WitnessSet::from_raw_parts(signatures_public_keys);
 
         let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
+        if self.dry_run {
+            self.report_public_dry_run(tx).await?;
+            return Err(ExecutionFailureKind::DryRun);
+        }
 
         Ok(self
             .sequencer_client
             .send_transaction(LeeTransaction::Public(tx))
             .await?)
+    }
+
+    /// Simulates `tx` on the sequencer and prints what it would cost at the head fee state.
+    async fn report_public_dry_run(
+        &self,
+        tx: lee::PublicTransaction,
+    ) -> Result<(), ExecutionFailureKind> {
+        let fee = tx
+            .message()
+            .execution
+            .fee
+            .expect("the wallet always declares a fee");
+        // Storage gas is the wire size settlement sees: the whole `LeeTransaction`.
+        let tx = LeeTransaction::Public(tx);
+        let data_bytes = u128::try_from(
+            borsh::to_vec(&tx)
+                .map_err(|err| ExecutionFailureKind::SignError(err.into()))?
+                .len(),
+        )
+        .expect("transaction size fits u128");
+        let run = self.sequencer_client.dry_run_public_transaction(tx).await?;
+        let quote = self.sequencer_client.get_fee_state().await?;
+        let actual_fee = u128::from(run.cycles)
+            .saturating_mul(u128::from(quote.base_fee_exec))
+            .saturating_add(data_bytes.saturating_mul(u128::from(quote.base_fee_stor)))
+            .saturating_add(u128::from(fee.tip));
+
+        println!("Dry run: nothing sent");
+        println!("  fee payer:        {}", fee.payer);
+        println!("  declared gas:     {}", fee.gas_limit);
+        println!("  metered cycles:   {}", run.cycles);
+        println!("  wire bytes:       {data_bytes}");
+        println!(
+            "  base fees:        exec {} / stor {} (height {})",
+            quote.base_fee_exec, quote.base_fee_stor, quote.height
+        );
+        println!("  fee at head:      {actual_fee} (tip {})", fee.tip);
+        match run.revert {
+            Some(reason) => println!("  action REVERTS:   {reason} (fee is still charged)"),
+            None => println!("  action:           applies"),
+        }
+        Ok(())
     }
 
     pub async fn receive_pending_message(
@@ -1430,6 +1681,7 @@ impl WalletCore {
             async_delivery,
             &programs,
             cross_messages,
+            None,
             |_| Ok(()),
         )
         .await

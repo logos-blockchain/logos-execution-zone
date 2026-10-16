@@ -1173,7 +1173,7 @@ async fn build_sequencer_components(
         // When a test supplies custom genesis, merge rather than replace.
         let wallet_genesis = config::genesis_from_accounts(
             initial_public_accounts,
-            config::private_total(initial_private_accounts),
+            config::private_funding_cost(initial_private_accounts),
         );
         match genesis_transactions {
             Some(mut custom) => {

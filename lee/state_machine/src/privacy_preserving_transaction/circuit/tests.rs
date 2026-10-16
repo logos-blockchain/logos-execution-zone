@@ -661,6 +661,7 @@ fn direct_input(
             ciphertext_padding: None,
             recoveries: Vec::new(),
             private_promotions: BTreeSet::new(),
+            fee: None,
         },
         program_image_witnesses: claims_for(claims),
         shadow_program_witnesses: Vec::new(),
@@ -888,6 +889,7 @@ fn preparation_meters_a_public_self_call_chain_as_settlement_does() {
         WholeExecution::new(
             tx.message.public_context.clone(),
             TransactionEntry::Sync(tx.message.execution.root.clone()),
+            None,
             &[],
         )?
         .execute(&mut simulator)?;

@@ -4,8 +4,9 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    PrivateWitness, RootCall, SenderPresentation,
+    FeeTransfer, PrivateWitness, RootCall, SenderPresentation,
     account::{AccountData, AccountId, Actor, ActorState},
+    native_token,
     program::{
         AsyncMessage, InvalidWindow, MessageBody, MessageData, MessageEnvelope,
         PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ReceiveInput, SyncMessage, Transition,
@@ -268,6 +269,8 @@ pub enum ExecutionError {
         "Predicted cross messages were supplied for public segments the execution never entered"
     )]
     UnusedPredictedCrossMessages,
+    #[error("fee payer {account_id} is not a witnessed private account")]
+    UnwitnessedFeePayer { account_id: AccountId },
 
     #[error("Predicted cross message sender {actor:?} is not a declared public actor")]
     UndeclaredCrossMessageSender { actor: Actor },
@@ -457,6 +460,14 @@ trait Mode: Sized {
         executor: &mut Executor<'_, Self>,
     ) -> Result<(), ExecutionError>;
 
+    /// Queues what runs once the transaction root's subtree completes.
+    fn start_with_transaction_root(
+        &mut self,
+        _executor: &mut Executor<'_, Self>,
+    ) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+
     fn deliver_to_public<E: ExecutionEnvironment>(
         &mut self,
         executor: &mut Executor<'_, Self>,
@@ -531,10 +542,11 @@ impl<'witnesses> WholeExecution<'witnesses> {
     pub fn new(
         public_context: PublicExecutionContext,
         root: TransactionEntry<MessageBody>,
+        fee: Option<FeeTransfer>,
         witnesses: &'witnesses [PrivateWitness],
     ) -> Result<Self, ExecutionError> {
         let mut mode = WholeMode::default();
-        let executor = Executor::start(public_context, witnesses, Some(root), &mut mode)?;
+        let executor = Executor::start(public_context, witnesses, Some(root), fee, &mut mode)?;
         Ok(Self { executor, mode })
     }
 
@@ -550,6 +562,7 @@ impl<'witnesses> PrivatePart<'witnesses> {
     pub fn new(
         public_context: PublicExecutionContext,
         root: TransactionEntry<MessageBody>,
+        fee: Option<FeeTransfer>,
         witnesses: &'witnesses [PrivateWitness],
         predicted_cross_messages: PredictedCrossMessages,
     ) -> Result<Self, ExecutionError> {
@@ -558,7 +571,7 @@ impl<'witnesses> PrivatePart<'witnesses> {
             next_public_segment: 0,
             boundary: Boundary::new(),
         };
-        let executor = Executor::start(public_context, witnesses, Some(root), &mut mode)?;
+        let executor = Executor::start(public_context, witnesses, Some(root), fee, &mut mode)?;
         Ok(Self { executor, mode })
     }
 
@@ -584,6 +597,7 @@ impl PublicPart {
             public_context,
             &[],
             root.map(TransactionEntry::Sync),
+            None,
             &mut mode,
         )?;
         Ok(Self { executor, mode })
@@ -865,6 +879,14 @@ impl Mode for PublicMode {
         Ok(())
     }
 
+    // The proven calls of a fee transfer follow a public root's subtree.
+    fn start_with_transaction_root(
+        &mut self,
+        executor: &mut Executor<'_, Self>,
+    ) -> Result<(), ExecutionError> {
+        self.start_without_transaction_root(executor)
+    }
+
     fn deliver_to_public<E: ExecutionEnvironment>(
         &mut self,
         executor: &mut Executor<'_, Self>,
@@ -940,6 +962,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         public_context: PublicExecutionContext,
         witnesses: &'witnesses [PrivateWitness],
         root: Option<TransactionEntry<MessageBody>>,
+        fee: Option<FeeTransfer>,
         mode: &mut M,
     ) -> Result<Self, ExecutionError> {
         let mut witness_index = HashMap::with_capacity(witnesses.len());
@@ -1019,27 +1042,63 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         for (alias, account_id) in openings {
             executor.register_alias(alias, account_id)?;
         }
-        match root {
-            Some(root) => {
-                let (from, to, message) = match root {
-                    TransactionEntry::Sync(RootCall { to, message }) => (None, to, message),
-                    TransactionEntry::Async(MessageBody { from, to, message }) => {
-                        (Some(from), to, message)
-                    }
-                };
-                executor
-                    .work_stack
-                    .push(WorkItem::Deliver(Box::new(Delivery::entry(
-                        MessageEnvelope {
-                            from: Sender::Root { from },
-                            to,
-                            message,
-                        },
-                    ))));
-            }
-            None => mode.start_without_transaction_root(&mut executor)?,
+        // The fee transfer is a second entry run by the modes executing private roots, once the
+        // root's subtree and, for a public root, its cross messages complete.
+        let fee = fee.filter(|_| M::executes_transaction_root(false));
+        if let Some(fee) = fee
+            && !executor.is_private(&fee.payer)
+        {
+            return Err(ExecutionError::UnwitnessedFeePayer {
+                account_id: fee.payer,
+            });
+        }
+        if let Some(root) = root {
+            mode.start_with_transaction_root(&mut executor)?;
+            executor.queue_fee(fee);
+            let (from, to, message) = match root {
+                TransactionEntry::Sync(RootCall { to, message }) => (None, to, message),
+                TransactionEntry::Async(MessageBody { from, to, message }) => {
+                    (Some(from), to, message)
+                }
+            };
+            executor
+                .work_stack
+                .push(WorkItem::Deliver(Box::new(Delivery::entry(
+                    MessageEnvelope {
+                        from: Sender::Root { from },
+                        to,
+                        message,
+                    },
+                ))));
+        } else {
+            executor.queue_fee(fee);
+            mode.start_without_transaction_root(&mut executor)?;
         }
         Ok(executor)
+    }
+
+    fn queue_fee(&mut self, fee: Option<FeeTransfer>) {
+        let Some(FeeTransfer {
+            payer,
+            recipient,
+            amount,
+        }) = fee
+        else {
+            return;
+        };
+        let message = borsh::to_vec(&native_token::Message::Transfer {
+            to: recipient,
+            amount,
+        })
+        .expect("a native message serializes");
+        self.work_stack
+            .push(WorkItem::Deliver(Box::new(Delivery::entry(
+                MessageEnvelope {
+                    from: Sender::Root { from: None },
+                    to: Actor::native_balance(payer),
+                    message,
+                },
+            ))));
     }
 
     fn run<E: ExecutionEnvironment>(

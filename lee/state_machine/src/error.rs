@@ -140,6 +140,7 @@ impl From<ExecutionError> for LeeError {
             | ExecutionError::PublicAndPrivate { .. }
             | ExecutionError::MissingPredictedCrossMessages { .. }
             | ExecutionError::UnusedPredictedCrossMessages
+            | ExecutionError::UnwitnessedFeePayer { .. }
             | ExecutionError::UndeclaredCrossMessageSender { .. }
             | ExecutionError::BoundaryMismatch { .. }
             | ExecutionError::CrossMessageMismatch { .. }

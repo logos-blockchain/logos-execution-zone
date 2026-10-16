@@ -6,8 +6,9 @@
 use anyhow::{Context as _, Result};
 use clap::{CommandFactory as _, Parser as _};
 use wallet::{
-    WalletCore,
+    ExecutionFailureKind, WalletCore,
     cli::{Args, execute_continuous_run, execute_subcommand, read_password_from_stdin},
+    config::WalletConfigOverrides,
     helperfunctions::{fetch_config_path, fetch_persistent_storage_path},
 };
 
@@ -20,8 +21,15 @@ use wallet::{
 async fn main() -> Result<()> {
     let Args {
         continuous_run,
+        dry_run,
+        fee_headroom,
+        fee_payer,
         command,
     } = Args::parse();
+    let overrides = fee_headroom.map(|blocks| WalletConfigOverrides {
+        private_fee_headroom_blocks: Some(blocks),
+        ..WalletConfigOverrides::default()
+    });
 
     env_logger::init();
 
@@ -31,7 +39,7 @@ async fn main() -> Result<()> {
 
     if let Some(command) = command {
         let mut wallet = if storage_path.exists() {
-            WalletCore::new_update_chain(config_path, storage_path, None)?
+            WalletCore::new_update_chain(config_path, storage_path, overrides)?
         } else {
             // TODO: Maybe move to `WalletCore::from_env()` or similar?
 
@@ -39,7 +47,7 @@ async fn main() -> Result<()> {
 
             let password = read_password_from_stdin()?;
             let (wallet, mnemonic) =
-                WalletCore::new_init_storage(config_path, storage_path, None, &password)?;
+                WalletCore::new_init_storage(config_path, storage_path, overrides, &password)?;
 
             println!();
             println!("IMPORTANT: Write down your recovery phrase and store it securely.");
@@ -52,8 +60,25 @@ async fn main() -> Result<()> {
             wallet.store_persistent_data()?;
             wallet
         };
-        let _output = execute_subcommand(&mut wallet, command).await?;
-        Ok(())
+        wallet.set_dry_run(dry_run);
+        wallet.set_private_fee_payer(fee_payer);
+        match execute_subcommand(&mut wallet, command).await {
+            // A dry run stops the command once it has reported; that is its success.
+            //
+            // TODO: a dry run travels on the error channel to stop the command deep inside
+            // `WalletCore` without touching every send caller. Rework it into a typed send
+            // outcome (sent hash or dry-run report) so that we dont need this ugly error to success
+            // case.
+            Err(err)
+                if matches!(
+                    err.root_cause().downcast_ref(),
+                    Some(ExecutionFailureKind::DryRun)
+                ) =>
+            {
+                Ok(())
+            }
+            result => result.map(drop),
+        }
     } else if continuous_run {
         let mut wallet = WalletCore::new_update_chain(config_path, storage_path, None)?;
         execute_continuous_run(&mut wallet).await
