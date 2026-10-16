@@ -5,7 +5,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "${PORT:-18080}:18080/tcp"
+      - "${BEDROCK_PORT:-18080}:18080/tcp"
     volumes:
       - ./scripts:/etc/logos-blockchain/scripts
       - ./kzgrs_test_params:/kzgrs_test_params:z

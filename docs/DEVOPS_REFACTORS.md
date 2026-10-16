@@ -204,8 +204,12 @@ SEQUENCER_GOSSIP_BOOTSTRAP_PEER=<ip>:4040,<ip>:4041,...
 
 ### 5. Compose and CI
 
-- [ ] One compose file plus profiles. All ports and secret paths use `${VAR:-default}`. Add `.env.local`, `.env.devnet` and `.env.testnet`.
-- [ ] Delete the per-service compose files and `docker-compose.override.yml`.
+- [x] One root `docker-compose.yml`, a local stack only: dev Bedrock, the four-sequencer devnet, indexer and explorer, plus Prometheus and Grafana behind `--profile monitoring`.
+  - Every host port, image, config and key path is `${VAR:-default}`, all listed in a committed `.env.local`. A personal `.env` is gitignored.
+  - Sequencers are configured through their `SEQUENCER_*` env: the key is mounted at `/run/secrets/channel_signing_key`, and the funding key is an env var, not a mounted file.
+  - `bedrock/docker-compose.yml` stays a file of its own, included by the root, because the Docker-backed tests start it alone. Its `PORT` is now `BEDROCK_PORT`.
+- [x] Deleted the per-service compose files, `docker-compose.override.yml`, and the configs only they used (`indexer/service/configs/docker/`, `docker-all-in-one/bedrock_funding_public_key`).
+- Decided: no `.env.devnet` or `.env.testnet`. Infra keeps templating its per-host compose with Ansible, because it needs N sequencers and Consul checks. The infra migration block in phase 3 is their spec.
 - [ ] CI:
   - [ ] Compose smoke test with `up --wait`.
   - [ ] Build once and promote by digest.

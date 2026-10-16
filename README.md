@@ -214,13 +214,18 @@ just run-sequencer-standalone
 
 ## Running with Docker
 
-You can run the whole setup with Docker. `just run-bedrock` resolves the
-Cargo-authoritative Bedrock node first, and the compose runtime image uses that
-same binary:
+The root `docker-compose.yml` runs the whole local stack: a dev Bedrock node, a four-sequencer
+devnet, the indexer and the explorer. The Bedrock image is built from the Cargo-authoritative node,
+so resolve it first:
 
 ```bash
-just run-bedrock
+just resolve-bedrock-node
+docker compose up                          # add --profile monitoring for Prometheus + Grafana
+docker compose up indexer_service          # or just a service and what it depends on
 ```
+
+Every host port, image and key path can be overridden; `.env.local` lists them with their
+defaults. To run only Bedrock, use `just run-bedrock`.
 
 With that you can send transactions from local wallet to the Sequencer running inside Docker using `lez/wallet/configs/debug` as well as exploring blocks by opening `http://localhost:8080`.
 

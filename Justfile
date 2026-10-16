@@ -109,10 +109,9 @@ resolve-host-bedrock-node:
 
 # Run Prometheus + Grafana in docker. Grafana: http://localhost:3000 (anonymous
 # admin), Prometheus: http://localhost:9090. Scrapes the sequencer's /metrics.
-[working-directory: 'monitoring']
 run-monitoring:
     @echo "📊 Running Prometheus (http://localhost:9090) + Grafana (http://localhost:3000)"
-    docker compose up
+    docker compose --profile monitoring up prometheus grafana
 
 # ---- Decentralized sequencing tools ----
 
@@ -212,6 +211,5 @@ clean:
     rm -rf lez/indexer/service/rocksdb*
     rm -rf lez/wallet/configs/debug/storage.json
     rm -rf rocksdb*
-    docker compose down -v
+    docker compose --profile monitoring down -v
     cd bedrock && docker compose down -v && cd ..
-    cd monitoring && docker compose down -v && cd ..
