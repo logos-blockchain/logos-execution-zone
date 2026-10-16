@@ -738,6 +738,16 @@ impl AccountManager {
             .map(|state| state.account_id())
     }
 
+    /// `account_id`'s native balance before the root call; zero when it is not prepared or holds
+    /// none.
+    pub fn native_balance(&self, account_id: AccountId) -> u128 {
+        self.states
+            .iter()
+            .find(|state| state.account_id() == account_id)
+            .and_then(|state| state.account().account.data.native_balance().ok())
+            .unwrap_or(0)
+    }
+
     /// Recovery material binding `payer`'s alias under `opening`, so a refund published there is
     /// found by this wallet.
     pub fn fee_recovery(
