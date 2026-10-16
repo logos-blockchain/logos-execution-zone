@@ -6,6 +6,7 @@ use crate::{
     AccountIdentity, WalletCore,
     account::AccountIdWithPrivacy,
     cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand, destination},
+    names,
     program_facades::{CreditDelivery, native_token_transfer::NativeTokenTransfer},
 };
 
@@ -38,6 +39,19 @@ pub enum AuthTransferSubcommand {
         /// Recipient's public key, for a public account that has not been used yet.
         #[arg(long, conflicts_with_all = ["to", "to_npk", "to_vpk", "to_keys"])]
         to_pk: Option<PublicKey>,
+        /// A `.lez` name, such as `jef.lez`, resolved through the LNS registry in
+        /// `--names-registry`. Pays the name's private receiving keys when it has them,
+        /// else the public account its holder published.
+        #[arg(
+            long,
+            conflicts_with_all = ["to", "to_npk", "to_vpk", "to_keys", "to_pk"],
+            requires = "names_registry"
+        )]
+        to_name: Option<String>,
+        /// The LNS registry program `--to-name` resolves through. On the LEZ v0.3
+        /// testnet: 38jEfVV1RCyMzu1FGbYcCn5FqxCxKyY58VgzjruAh2gq (registry v5).
+        #[arg(long, env = "LEZ_NAMES_REGISTRY")]
+        names_registry: Option<lee::AccountId>,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
@@ -57,12 +71,34 @@ impl WalletSubcommand for AuthTransferSubcommand {
                 to_vpk,
                 to_keys,
                 to_pk,
+                to_name,
+                names_registry,
                 amount,
             } => {
+                let by_name = match (to_name, names_registry) {
+                    (Some(name), Some(registry)) => {
+                        let now_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)?
+                            .as_millis()
+                            .try_into()?;
+                        let destination =
+                            names::resolve(wallet_core, registry, &name, now_ms).await?;
+                        let via = match &destination {
+                            names::NameDestination::Private { .. } => "its private receiving keys",
+                            names::NameDestination::Public(_) => "its public account",
+                        };
+                        println!("Paying {}.lez through {via}", names::normalize(&name));
+                        Some(destination.into_identity()?)
+                    }
+                    _ => None,
+                };
                 let storage = wallet_core.storage();
                 let named = to.is_some();
                 let sender = from.signer(storage)?;
-                let recipient = destination(storage, to, to_npk, to_vpk, to_keys, to_pk)?;
+                let recipient = match by_name {
+                    Some(recipient) => recipient,
+                    None => destination(storage, to, to_npk, to_vpk, to_keys, to_pk)?,
+                };
                 let privacy_id = |identity: &AccountIdentity| {
                     if identity.is_private() {
                         AccountIdWithPrivacy::Private(identity.account_id())

@@ -39,6 +39,9 @@ humantime.workspace = true
 tokio = { workspace = true, features = ["macros"] }
 clap.workspace = true
 hex.workspace = true
+sha2.workspace = true
+aes-gcm.workspace = true
+argon2 = "0.5"
 rand.workspace = true
 itertools.workspace = true
 futures.workspace = true

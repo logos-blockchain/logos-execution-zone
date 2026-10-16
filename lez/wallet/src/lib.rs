@@ -56,6 +56,7 @@ mod account_manager;
 pub mod cli;
 pub mod config;
 pub mod helperfunctions;
+pub mod names;
 pub mod poller;
 pub mod program_facades;
 pub mod storage;
