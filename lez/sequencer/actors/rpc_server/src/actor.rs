@@ -10,7 +10,7 @@ use kameo::{
 };
 use log::info;
 use sequencer_executor_actor::ExecutorActorTrait;
-use sequencer_gossip_actor::protocol::PublishTransaction;
+use sequencer_gossip_actor::protocol::Publish;
 use sequencer_service_rpc::RpcServer as _;
 use tokio::select;
 
@@ -30,7 +30,7 @@ impl RpcServerActor {
         listen_addr: SocketAddr,
         max_block_size: ByteSize,
         executor_ref: ActorRef<E>,
-        gossip: Option<Recipient<PublishTransaction>>,
+        gossip: Option<Recipient<Publish>>,
     ) -> Result<Self> {
         let server = jsonrpsee::server::ServerBuilder::with_config(
             jsonrpsee::server::ServerConfigBuilder::new()

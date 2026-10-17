@@ -29,6 +29,7 @@ sequencer_actors_common.workspace = true
 sequencer_slasher_actor.workspace = true
 sequencer_storage_actor.workspace = true
 sequencer_bedrock_actor.workspace = true
+system_upgrader_core.workspace = true
 sequencer_executor_actor_metrics = { workspace = true, features = [
   "record",
 ], optional = true }

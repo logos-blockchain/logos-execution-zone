@@ -52,9 +52,10 @@ use sequencer_storage_actor::{
         DispatchOrigin, DropSettledCrossZoneDispatches, GetAllBlocks, GetBlock,
         GetChannelViewBytes, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
         GetFirstBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
-        GetPendingDepositEvents, GetZoneAnchor, GetZoneCheckpoint, PendingCrossZoneDispatchRecord,
-        PendingDepositEventRecord, RecordDispatchFailure, RequeueDeadLetterDispatch,
-        WithdrawalReconciliationKey, ZoneAnchorRecord, ZoneCheckpointRecord,
+        GetPendingDepositEvents, GetSystemApprovalsBytes, GetZoneAnchor, GetZoneCheckpoint,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RecordDispatchFailure,
+        RequeueDeadLetterDispatch, WithdrawalReconciliationKey, ZoneAnchorRecord,
+        ZoneCheckpointRecord,
     },
 };
 use tokio::sync::Mutex;
@@ -75,6 +76,7 @@ mod faults;
 pub mod fees;
 pub mod gossip;
 pub mod logging;
+pub mod system_approvals;
 pub mod task_group;
 
 /// Failed production attempts before a cross-zone dispatch is given up on.
@@ -227,6 +229,8 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     finalized_config: MsgId,
     /// Channel sequence of the last thing `BedrockActor` handed us.
     applied_seq: Option<sequencer_bedrock_actor::protocol::ChannelSeq>,
+    /// Committee approvals of `system_upgrader` changes, until a threshold builds one.
+    system_approvals: system_approvals::SystemApprovals,
 }
 
 /// A funded channel config, from the moment zone-sdk funds it to the moment it
@@ -560,6 +564,19 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .expect("Failed to get zone checkpoint")
             .map_or_else(MsgId::root, |checkpoint| checkpoint.finalized_config);
 
+        let system_approvals = storage_ref
+            .ask(GetSystemApprovalsBytes)
+            .await
+            .expect("Failed to read the system_upgrader approvals")
+            .and_then(|bytes| {
+                let approvals = system_approvals::SystemApprovals::from_bytes(&bytes);
+                if approvals.is_none() {
+                    warn!("Dropping persisted system_upgrader approvals that don't decode");
+                }
+                approvals
+            })
+            .unwrap_or_default();
+
         let sequencer_core = Self {
             chain,
             storage_ref,
@@ -576,6 +593,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             config_draft: None,
             finalized_config,
             applied_seq: None,
+            system_approvals,
         };
 
         sequencer_core_metrics::record_chain_height(sequencer_core.chain_height().await);
@@ -1735,7 +1753,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // record behind it and so needs no requeue, where the origin only says
         // it was not submitted by a user.
         let mut mempool_transactions = Vec::new();
-        // `system_upgrader` transactions handed to the node wait for the one slot before the fee.
+        // `system_upgrader` changes in the mempool, returned by a reorg, wait for the one slot
+        // before the fee.
         let mut upgrade_candidates = Vec::new();
         let mut pending_from_store = pending_deposits;
         pending_from_store.extend(pending_dispatches);
@@ -1899,14 +1918,23 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
 
         // At most one `system_upgrader` transaction, directly before the fee: the due `Apply`
-        // first, then approved changes handed to the node, the first that fits and applies.
-        // Untried changes go back to the mempool.
+        // first, then changes a threshold of collected approvals carries, then approved changes a
+        // reorg returned, the first that fits and applies. Untried returned changes go back to
+        // the mempool.
+        let approved = committee_discovery::read_config(&working_state)
+            .map(|committee| self.system_approvals.ready(&committee, new_block_height))
+            .unwrap_or_default();
         let mut candidates = due_apply
             .into_iter()
-            .map(|tx| (TransactionOrigin::Sequencer, tx))
-            .chain(upgrade_candidates)
+            .map(|tx| (TransactionOrigin::Sequencer, tx, None))
+            .chain(build_approved_txs(approved))
+            .chain(
+                upgrade_candidates
+                    .into_iter()
+                    .map(|(origin, tx)| (origin, tx, None)),
+            )
             .collect::<VecDeque<_>>();
-        while let Some((origin, tx)) = candidates.pop_front() {
+        while let Some((origin, tx, proposal)) = candidates.pop_front() {
             let block_size = borsh::to_vec(&HashableBlockData {
                 block_id: new_block_height,
                 transactions: [
@@ -1951,11 +1979,20 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 break;
             }
             warn!("system_upgrader transaction {} failed to apply", tx.hash());
+            // An approved change that no longer applies (already carried out, or invalid) is
+            // dropped; one that applied stays until a later attempt finds it done, so an orphaned
+            // block doesn't lose it.
+            if let Some(proposal) = proposal {
+                self.system_approvals.remove(&proposal);
+            }
         }
-        for (origin, tx) in candidates {
+        for (origin, tx, _) in candidates {
             if !matches!(origin, TransactionOrigin::Sequencer) {
                 self.mempool.push_front((origin, tx));
             }
+        }
+        if let Err(err) = self.persist_system_approvals().await {
+            warn!("{err:#}");
         }
         // Peers reject a block that leaves its due upgrade pending, so never publish one.
         if let Some(name) = common::system_upgrades::due_at(&working_state, new_block_height) {
@@ -2016,6 +2053,62 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     #[must_use]
     pub const fn storage_ref(&self) -> &ActorRef<S> {
         &self.storage_ref
+    }
+
+    /// Verifies a committee member's approval of a `system_upgrader` change against the head's
+    /// committee, and keeps it until a threshold of approvals lets the producer build the change.
+    pub async fn submit_system_approval(
+        &mut self,
+        signed: system_upgrader_core::SignedApproval,
+    ) -> Result<()> {
+        let (committee, next_block) = {
+            let chain = self.chain.lock().await;
+            let committee = committee_discovery::read_config(chain.head_state())
+                .context("the head state has no committee config")?;
+            let next_block = chain
+                .head_tip()
+                .map_or(GENESIS_BLOCK_ID, |tip| tip.block_id.saturating_add(1));
+            (committee, next_block)
+        };
+        self.system_approvals.add(signed, &committee, next_block)?;
+        self.persist_system_approvals().await
+    }
+
+    /// The approvals the head's committee must reach for a change, and every proposal held with
+    /// its approvals.
+    pub async fn system_proposals(
+        &self,
+    ) -> Result<(
+        usize,
+        Vec<(
+            system_upgrader_core::Proposal,
+            Vec<system_upgrader_core::Approval>,
+        )>,
+    )> {
+        let committee = committee_discovery::read_config(self.chain.lock().await.head_state())
+            .context("the head state has no committee config")?;
+        let threshold = sequencer_stake_core::slash_approval_threshold(
+            committee.accredited_committee_members_count(),
+        );
+        let proposals = self
+            .system_approvals
+            .proposals()
+            .map(|(proposal, approvals)| (*proposal, approvals.cloned().collect()))
+            .collect();
+        Ok((threshold, proposals))
+    }
+
+    /// Writes the approval pool to storage if it changed, so a restart keeps it.
+    async fn persist_system_approvals(&mut self) -> Result<()> {
+        if self.system_approvals.take_changed() {
+            self.storage_ref
+                .ask(sequencer_storage_actor::protocol::PutSystemApprovalsBytes {
+                    bytes: self.system_approvals.to_bytes(),
+                })
+                .await
+                .context("Failed to persist the system_upgrader approvals")?;
+        }
+        Ok(())
     }
 
     pub async fn chain_height(&self) -> u64 {
@@ -3001,13 +3094,10 @@ fn build_due_apply_tx(
     block_id: lee_core::BlockId,
 ) -> Option<LeeTransaction> {
     let name = common::system_upgrades::due_at(state, block_id)?;
-    system_upgrader_tx(
-        [system_upgrader_core::loader_actor(&name)],
-        system_upgrader_core::Message::Apply {
-            name,
-            activation_height: block_id,
-        },
-    )
+    system_upgrader_tx(system_upgrader_core::Message::Apply {
+        name,
+        activation_height: block_id,
+    })
     .map_err(|err| {
         error!(
             "Failed to build the due Apply of system program {}: {err:#}",
@@ -3017,16 +3107,34 @@ fn build_due_apply_tx(
     .ok()
 }
 
-/// An unsigned, fee-exempt `system_upgrader` transaction to its registry, also declaring
-/// `actors`.
-fn system_upgrader_tx(
-    actors: impl IntoIterator<Item = Actor>,
-    message: system_upgrader_core::Message,
-) -> Result<LeeTransaction> {
-    let registry = system_upgrader_core::registry_actor();
+/// The `Schedule`, `Cancel` or `Install` carrying out each approved proposal, with the proposal.
+fn build_approved_txs(
+    approved: Vec<(
+        system_upgrader_core::Proposal,
+        Vec<system_upgrader_core::Approval>,
+    )>,
+) -> Vec<(
+    TransactionOrigin,
+    LeeTransaction,
+    Option<system_upgrader_core::Proposal>,
+)> {
+    approved
+        .into_iter()
+        .filter_map(|(proposal, approvals)| {
+            system_upgrader_tx(system_upgrader_core::Message::approved(proposal, approvals))
+                .map_err(|err| warn!("Skipping an approved system_upgrader change: {err:#}"))
+                .ok()
+                .map(|tx| (TransactionOrigin::Sequencer, tx, Some(proposal)))
+        })
+        .collect()
+}
+
+/// An unsigned, fee-exempt `system_upgrader` transaction to its registry, declaring the actors
+/// its message reaches.
+fn system_upgrader_tx(message: system_upgrader_core::Message) -> Result<LeeTransaction> {
     let message = Message::try_new(
-        registry,
-        std::iter::once(registry).chain(actors),
+        system_upgrader_core::registry_actor(),
+        message.actors(),
         BTreeMap::new(),
         message,
     )
@@ -3308,6 +3416,15 @@ fn load_or_create_key_bytes(path: &Path) -> Result<[u8; ED25519_SECRET_KEY_SIZE]
         std::fs::write(path, key_bytes)?;
         Ok(key_bytes)
     }
+}
+
+/// Load an existing signing key; fails rather than creating one.
+pub fn load_signing_key(path: &Path) -> Result<Ed25519Key> {
+    let bytes: [u8; ED25519_SECRET_KEY_SIZE] = std::fs::read(path)
+        .with_context(|| format!("Failed to read the signing key at {}", path.display()))?
+        .try_into()
+        .map_err(|_bytes| anyhow!("Found key with incorrect length"))?;
+    Ok(Ed25519Key::from_bytes(&bytes))
 }
 
 /// Load signing key from file or generate a new one if it doesn't exist.

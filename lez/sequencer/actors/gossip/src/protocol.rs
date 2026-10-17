@@ -5,8 +5,13 @@ use common::transaction::LeeTransaction;
 /// Ed25519 public keys of currently connected, identified peers.
 pub struct GetConnectedPeers;
 
-/// Publish a locally-submitted transaction to the gossip mesh.
-pub struct PublishTransaction(pub LeeTransaction);
+/// Publish what this node accepted to the gossip mesh.
+pub enum Publish {
+    /// A locally-submitted transaction.
+    Transaction(Box<LeeTransaction>),
+    /// A committee member's approval of a `system_upgrader` change.
+    SystemApproval(system_upgrader_core::SignedApproval),
+}
 
 /// Publish one of this node's own channel-config messages to the mesh.
 #[cfg(feature = "actor")]

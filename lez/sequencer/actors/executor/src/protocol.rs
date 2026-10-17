@@ -160,6 +160,24 @@ pub struct RequeueCrossZoneDeadLetter {
     pub message_key: CrossZoneMessageKey,
 }
 
+/// The `system_upgrader` changes the approval pool holds approvals of.
+pub struct GetSystemProposals;
+
+#[derive(Reply)]
+pub struct GetSystemProposalsReply {
+    /// Approvals the head's committee must reach for a change.
+    pub threshold: usize,
+    pub proposals: Vec<(
+        system_upgrader_core::Proposal,
+        Vec<system_upgrader_core::Approval>,
+    )>,
+}
+
+/// A committee member's approval of a `system_upgrader` change, for the producer's pool.
+pub struct SubmitSystemApproval {
+    pub approval: system_upgrader_core::SignedApproval,
+}
+
 #[derive(Reply)]
 pub struct RequeueCrossZoneDeadLetterReply {
     pub outcome: sequencer_storage_actor::protocol::DeadLetterRequeue,

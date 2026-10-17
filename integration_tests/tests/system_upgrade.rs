@@ -3,7 +3,7 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::{collections::BTreeMap, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
@@ -79,8 +79,9 @@ async fn image_id(ctx: &TestContext, program: AccountId) -> Result<ProgramId> {
     Ok(header.image_id)
 }
 
-/// The new code is uploaded, the committee approves `bridge`'s upgrade and the producer schedules
-/// it, and from the block it activates in `bridge` runs it while blocks keep coming.
+/// The new code is uploaded, the committee's approvals of `bridge`'s upgrade are submitted to one
+/// sequencer and gossiped to the other, the producer schedules it, and from the block it activates
+/// in `bridge` runs it while blocks keep coming.
 #[test]
 async fn an_approved_system_upgrade_goes_live_at_its_height() -> Result<()> {
     let new_code = test_programs::scripted();
@@ -94,7 +95,8 @@ async fn an_approved_system_upgrade_goes_live_at_its_height() -> Result<()> {
                 num_nodes: 2,
                 ..MultiNodeTestContextConfig::default()
             })
-            .with_sequencer_partial_config(fast_blocks()),
+            .with_sequencer_partial_config(fast_blocks())
+            .with_gossip(),
         )
         .build()
         .await?;
@@ -123,8 +125,8 @@ async fn an_approved_system_upgrade_goes_live_at_its_height() -> Result<()> {
         ctx.wallet().poll_transaction(tx_hash).await?;
     }
 
-    // The committee approves the upgrade, and the producer includes the approved `Schedule`.
-    // Until approval tooling lands, the test hands it to the node directly.
+    // The committee approves the upgrade. The approvals go to one sequencer, gossip carries them
+    // to the other, and whichever produces next builds the `Schedule` from them.
     let now = ctx.sequencer_client().get_last_block_id().await?;
     let activation_height = now.saturating_add(UPGRADE_DELAY);
     let proposal = system_upgrader_core::Proposal::Schedule {
@@ -133,46 +135,27 @@ async fn an_approved_system_upgrade_goes_live_at_its_height() -> Result<()> {
         image_id: new_code.id(),
         activation_height,
     };
-    let approvals =
-        committee_approvals(&ctx, &proposal, now.saturating_add(APPROVAL_LIFETIME)).await?;
-    let registry = system_upgrader_core::registry_actor();
-    let schedule = LeeTransaction::Public(lee::PublicTransaction::new(
-        lee::public_transaction::Message::try_new(
-            registry,
-            [
-                registry,
-                system_upgrader_core::committee_actor(),
-                system_upgrader_core::staging_actor(
-                    &programs::BRIDGE_NAME,
-                    &system_upgrader_core::ScheduledUpgrade {
-                        first_segment: segment_ids[0],
-                        image_id: new_code.id(),
-                        activation_height,
-                    },
-                ),
-            ],
-            BTreeMap::new(),
-            system_upgrader_core::Message::Schedule {
-                name: programs::BRIDGE_NAME,
-                first_segment: segment_ids[0],
-                image_id: new_code.id(),
-                activation_height,
-                approvals,
-            },
-        )?,
-        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
-    ));
-    let schedule_hash = schedule.hash();
-    ctx.default_sequencer_component()
-        .sequencer_handle
-        .submit_system_upgrader_tx(schedule)
-        .await?;
-    wait_until("the Schedule to be included", || async {
-        Ok(ctx
-            .sequencer_client()
-            .get_transaction(schedule_hash)
-            .await?
-            .is_some())
+    for approval in
+        committee_approvals(&ctx, &proposal, now.saturating_add(APPROVAL_LIFETIME)).await?
+    {
+        let signed = system_upgrader_core::SignedApproval { proposal, approval };
+        ctx.sequencer_client()
+            .submit_system_approval(hex::encode(borsh::to_vec(&signed)?))
+            .await?;
+    }
+    // Gossip carries both to the other sequencer, which lists the proposal with its hash.
+    let (channel_id, _) = ctx.zones_iter().next().context("the test has a zone")?;
+    let other = ctx
+        .sequencer_components_iter(*channel_id)
+        .context("the zone has sequencers")?
+        .nth(1)
+        .context("the zone has a second sequencer")?;
+    wait_until("the other sequencer to hold both approvals", || async {
+        let report = other.sequencer_client.get_system_proposals().await?;
+        Ok(report
+            .proposals
+            .iter()
+            .any(|held| held.proposal_hash.0 == proposal.hash() && held.approvals.len() == 2))
     })
     .await?;
     // Read before the height, so a chain still short of it after the read was short during it.

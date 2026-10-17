@@ -94,3 +94,28 @@ impl FromStr for ChannelId {
         Ok(Self(bytes))
     }
 }
+
+/// The `system_upgrader` changes a sequencer holds committee approvals of.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemProposalReport {
+    /// Approvals the committee must reach for a change.
+    pub threshold: u32,
+    pub proposals: Vec<SystemProposal>,
+}
+
+/// A proposed `system_upgrader` change and the approvals held of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemProposal {
+    /// SHA-256 of the proposal's bytes, as `approve_system_change` prints it.
+    pub proposal_hash: HashType,
+    /// The proposal, hex-encoded borsh.
+    pub proposal: String,
+    pub approvals: Vec<SystemProposalApproval>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemProposalApproval {
+    /// The approving sequencer key, hex.
+    pub signer: String,
+    pub valid_until: u64,
+}

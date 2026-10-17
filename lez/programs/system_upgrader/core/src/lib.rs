@@ -56,6 +56,74 @@ pub enum Message {
 }
 
 impl Message {
+    /// The message carrying out `proposal`, with `approvals` of it.
+    #[must_use]
+    pub const fn approved(proposal: Proposal, approvals: Vec<Approval>) -> Self {
+        match proposal {
+            Proposal::Schedule {
+                name,
+                first_segment,
+                image_id,
+                activation_height,
+            } => Self::Schedule {
+                name,
+                first_segment,
+                image_id,
+                activation_height,
+                approvals,
+            },
+            Proposal::Cancel {
+                name,
+                first_segment,
+                activation_height,
+            } => Self::Cancel {
+                name,
+                first_segment,
+                activation_height,
+                approvals,
+            },
+            Proposal::Install {
+                name,
+                first_segment,
+                image_id,
+            } => Self::Install {
+                name,
+                first_segment,
+                image_id,
+                approvals,
+            },
+        }
+    }
+
+    /// The actors a transaction carrying this message declares: the registry's, then those the
+    /// message reaches.
+    #[must_use]
+    pub fn actors(&self) -> Vec<Actor> {
+        let reached = match self {
+            Self::Schedule {
+                name,
+                first_segment,
+                image_id,
+                activation_height,
+                ..
+            } => vec![
+                committee_actor(),
+                staging_actor(
+                    name,
+                    &ScheduledUpgrade {
+                        first_segment: *first_segment,
+                        image_id: *image_id,
+                        activation_height: *activation_height,
+                    },
+                ),
+            ],
+            Self::Apply { name, .. } => vec![loader_actor(name)],
+            Self::Cancel { .. } => vec![committee_actor()],
+            Self::Install { name, .. } => vec![committee_actor(), loader_actor(name)],
+        };
+        std::iter::once(registry_actor()).chain(reached).collect()
+    }
+
     /// The change the committee approves, with its approvals; `None` for `Apply`.
     #[must_use]
     pub fn proposal(&self) -> Option<(Proposal, &[Approval])> {
@@ -134,6 +202,15 @@ impl Proposal {
     pub fn to_bytes(&self) -> Vec<u8> {
         borsh::to_vec(self).expect("a proposal serializes")
     }
+
+    /// SHA-256 of [`Proposal::to_bytes`]: committee members who compare it have signed the same
+    /// proposal, byte for byte.
+    #[must_use]
+    pub fn hash(&self) -> [u8; 32] {
+        use sha2::{Digest as _, Sha256};
+
+        Sha256::digest(self.to_bytes()).into()
+    }
 }
 
 /// A pending upgrade, stored in the [`Registry`] under the system program's name.
@@ -174,6 +251,14 @@ impl Registry {
     }
 }
 
+/// One committee member's approval together with the proposal it approves: what an operator
+/// signs offline and hands to the nodes.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SignedApproval {
+    pub proposal: Proposal,
+    pub approval: Approval,
+}
+
 /// Bytes a committee member signs. The channel id keeps an approval to one zone.
 #[must_use]
 pub fn approval_message(
@@ -187,6 +272,25 @@ pub fn approval_message(
         &proposal.to_bytes(),
         valid_until,
     )
+}
+
+/// Whether `approval`'s signature is its signer's over exactly what `sequencer_stake` verifies for
+/// `proposal` on the zone `channel_id`. Says nothing about committee membership.
+#[must_use]
+pub fn verify_approval(approval: &Approval, channel_id: [u8; 32], proposal: &Proposal) -> bool {
+    use sequencer_stake_core::ed25519_dalek::{Signature, VerifyingKey};
+
+    let Ok(key) = VerifyingKey::from_bytes(&approval.signer.to_bytes()) else {
+        return false;
+    };
+    let Ok(signature) = Signature::from_slice(&approval.signature) else {
+        return false;
+    };
+    key.verify_strict(
+        &approval_message(channel_id, proposal, approval.valid_until),
+        &signature,
+    )
+    .is_ok()
 }
 
 /// The sequencer committee's config, under `sequencer_stake`: it verifies approvals.
@@ -245,4 +349,115 @@ pub fn loader_actor(name: &SystemProgramName) -> Actor {
 #[must_use]
 pub const fn system_upgrader_account_id() -> AccountId {
     SYSTEM_UPGRADER_ACCOUNT_ID
+}
+
+#[cfg(test)]
+mod tests {
+    use sequencer_stake_core::ed25519_dalek::{Signer as _, SigningKey};
+
+    use super::*;
+
+    const CHANNEL_ID: [u8; 32] = [5; 32];
+
+    fn proposal() -> Proposal {
+        Proposal::Schedule {
+            name: SystemProgramName::new(b"clock"),
+            first_segment: AccountId::new([1; 32]),
+            image_id: [2; 8],
+            activation_height: 10,
+        }
+    }
+
+    fn approval_of(proposal: &Proposal, channel_id: [u8; 32]) -> Approval {
+        let key = SigningKey::from_bytes(&[7; 32]);
+        Approval {
+            signer: SequencerKey::new(key.verifying_key().to_bytes()).unwrap(),
+            valid_until: 9,
+            signature: key
+                .sign(&approval_message(channel_id, proposal, 9))
+                .to_bytes()
+                .to_vec(),
+        }
+    }
+
+    #[test]
+    fn an_approval_verifies_only_for_its_proposal_and_zone() {
+        let approval = approval_of(&proposal(), CHANNEL_ID);
+        assert!(verify_approval(&approval, CHANNEL_ID, &proposal()));
+
+        let cancel = Proposal::Cancel {
+            name: SystemProgramName::new(b"clock"),
+            first_segment: AccountId::new([1; 32]),
+            activation_height: 10,
+        };
+        assert!(
+            !verify_approval(&approval, CHANNEL_ID, &cancel),
+            "another action"
+        );
+        assert!(
+            !verify_approval(&approval, [6; 32], &proposal()),
+            "another zone"
+        );
+
+        let mut extended = approval;
+        extended.valid_until = 10;
+        assert!(
+            !verify_approval(&extended, CHANNEL_ID, &proposal()),
+            "a changed expiry"
+        );
+    }
+
+    #[test]
+    fn an_approved_message_carries_its_proposal() {
+        let approvals = vec![approval_of(&proposal(), CHANNEL_ID)];
+        let message = Message::approved(proposal(), approvals.clone());
+        assert_eq!(message.proposal(), Some((proposal(), approvals.as_slice())));
+    }
+
+    #[test]
+    fn a_proposal_hash_tells_proposals_apart() {
+        let Proposal::Schedule {
+            name,
+            first_segment,
+            image_id,
+            activation_height,
+        } = proposal()
+        else {
+            unreachable!();
+        };
+        let later = Proposal::Schedule {
+            name,
+            first_segment,
+            image_id,
+            activation_height: activation_height + 1,
+        };
+        assert_eq!(proposal().hash(), proposal().hash());
+        assert_ne!(proposal().hash(), later.hash());
+    }
+
+    #[test]
+    fn a_schedule_declares_its_staging_header() {
+        let message = Message::approved(proposal(), Vec::new());
+        let Proposal::Schedule {
+            name,
+            first_segment,
+            image_id,
+            activation_height,
+        } = proposal()
+        else {
+            unreachable!();
+        };
+        let staging = staging_actor(
+            &name,
+            &ScheduledUpgrade {
+                first_segment,
+                image_id,
+                activation_height,
+            },
+        );
+        assert_eq!(
+            message.actors(),
+            vec![registry_actor(), committee_actor(), staging]
+        );
+    }
 }

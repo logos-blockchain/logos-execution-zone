@@ -6576,3 +6576,43 @@ fn a_due_system_upgrade_gets_an_apply() {
         "an upgrade activates only at its height"
     );
 }
+
+#[test]
+fn an_approved_change_is_built_with_its_approvals_and_actors() {
+    let proposal = system_upgrader_core::Proposal::Cancel {
+        name: programs::CLOCK_NAME,
+        first_segment: AccountId::new([1; 32]),
+        activation_height: 5,
+    };
+    let approvals = vec![system_upgrader_core::Approval {
+        signer: sequencer_stake_core::SequencerKey::new(
+            sequencer_stake_core::ed25519_dalek::SigningKey::from_bytes(&[7; 32])
+                .verifying_key()
+                .to_bytes(),
+        )
+        .unwrap(),
+        valid_until: 4,
+        signature: vec![0; 64],
+    }];
+
+    let built = super::build_approved_txs(vec![(proposal, approvals.clone())]);
+    let [(TransactionOrigin::Sequencer, tx, Some(built_proposal))] = built.as_slice() else {
+        panic!("expected one sequencer-built change, got {}", built.len());
+    };
+    assert_eq!(*built_proposal, proposal);
+    let message = system_upgrader_core::Message::approved(proposal, approvals);
+    let expected = LeeTransaction::Public(PublicTransaction::new(
+        lee::public_transaction::Message::try_new(
+            system_upgrader_core::registry_actor(),
+            [
+                system_upgrader_core::registry_actor(),
+                system_upgrader_core::committee_actor(),
+            ],
+            BTreeMap::new(),
+            message,
+        )
+        .unwrap(),
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+    ));
+    assert_eq!(*tx, expected);
+}
