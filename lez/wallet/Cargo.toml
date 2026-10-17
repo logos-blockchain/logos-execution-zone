@@ -23,9 +23,12 @@ program_loader_core.workspace = true
 risc0-binfmt.workspace = true
 risc0-zkos-v1compat.workspace = true
 
+aes-gcm.workspace = true
+argon2.workspace = true
 bip39.workspace = true
 borsh.workspace = true
 rpassword = "7"
+tempfile.workspace = true
 zeroize.workspace = true
 
 anyhow.workspace = true
@@ -38,7 +41,7 @@ humantime-serde.workspace = true
 humantime.workspace = true
 tokio = { workspace = true, features = ["macros"] }
 clap.workspace = true
-hex.workspace = true
+hex = { workspace = true, features = ["serde"] }
 rand.workspace = true
 itertools.workspace = true
 futures.workspace = true
@@ -56,7 +59,6 @@ keycard-debug = []
 [dev-dependencies]
 jsonrpsee = { workspace = true, features = ["server"] }
 lee = { workspace = true, features = ["test-utils"] }
-tempfile.workspace = true
 key_protocol = { workspace = true, features = ["test_utils"] }
 test_programs.workspace = true
 test_guest_core.workspace = true

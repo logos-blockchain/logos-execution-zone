@@ -15,9 +15,12 @@ To check that everythin is working, run `wallet help`.
 | `wallet account`       | Account management (get, list, new, sync-private)           |
 | `wallet check-health`  | Health checks that the wallet is connected to the node      |
 | `wallet config`        | Config Setup (get, set)                                     |
-| `wallet restore-keys ` | Keys restore from a given password at given `depth`         |
+| `wallet set-password`  | Set, change or remove the storage password                  |
+| `wallet restore-keys ` | Keys restore from a mnemonic phrase at given `depth`        |
 | `wallet deploy-program`| Program deployment                                          |
 | `wallet help`          | Help                                           |
+
+A wallet with a password asks for it on every command; set `LEE_WALLET_PASSWORD` to skip the prompt.
 
 Some completion scripts exists, see the [completions](./completions/README.md) folder.
 

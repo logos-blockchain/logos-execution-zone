@@ -7,8 +7,8 @@ use anyhow::{Context as _, Result};
 use clap::{CommandFactory as _, Parser as _};
 use wallet::{
     WalletCore,
-    cli::{Args, execute_continuous_run, execute_subcommand, read_password_from_stdin},
-    helperfunctions::{fetch_config_path, fetch_persistent_storage_path},
+    cli::{Args, execute_continuous_run, execute_subcommand},
+    utils::{fetch_config_path, fetch_persistent_storage_path, read_new_password, read_password},
 };
 
 // TODO #169: We have sample configs for sequencer, but not for wallet
@@ -31,13 +31,14 @@ async fn main() -> Result<()> {
 
     if let Some(command) = command {
         let mut wallet = if storage_path.exists() {
-            WalletCore::new_update_chain(config_path, storage_path, None)?
+            let password = read_password(&storage_path)?;
+            WalletCore::new_update_chain(config_path, storage_path, None, &password)?
         } else {
             // TODO: Maybe move to `WalletCore::from_env()` or similar?
 
             println!("Persistent storage not found, need to execute setup");
 
-            let password = read_password_from_stdin()?;
+            let password = read_new_password()?;
             let (wallet, mnemonic) =
                 WalletCore::new_init_storage(config_path, storage_path, None, &password)?;
 
@@ -55,7 +56,8 @@ async fn main() -> Result<()> {
         let _output = execute_subcommand(&mut wallet, command).await?;
         Ok(())
     } else if continuous_run {
-        let mut wallet = WalletCore::new_update_chain(config_path, storage_path, None)?;
+        let password = read_password(&storage_path)?;
+        let mut wallet = WalletCore::new_update_chain(config_path, storage_path, None, &password)?;
         execute_continuous_run(&mut wallet).await
     } else {
         let help = Args::command().render_long_help();

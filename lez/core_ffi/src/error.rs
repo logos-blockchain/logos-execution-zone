@@ -62,6 +62,8 @@ pub enum FfiOperationError {
     ResponseTooBig = 23,
     /// Message not found.
     MessageNotFound = 24,
+    /// The password does not open the wallet storage, or the storage is corrupted.
+    WrongPassword = 25,
     /// Internal error (catch-all).
     InternalError = 99,
 }

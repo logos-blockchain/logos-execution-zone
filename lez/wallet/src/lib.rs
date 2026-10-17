@@ -39,7 +39,7 @@ use lee_core::{
 };
 use log::warn;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
-use storage::{Storage, spent_nullifiers::SpentNullifiers};
+use storage::{Storage, StorageKey, spent_nullifiers::SpentNullifiers};
 use tokio::io::AsyncWriteExt as _;
 use url::Url;
 
@@ -55,14 +55,17 @@ pub mod account;
 mod account_manager;
 pub mod cli;
 pub mod config;
-pub mod helperfunctions;
 pub mod poller;
 pub mod program_facades;
 pub mod storage;
+pub mod utils;
 
 pub const SUPPRESS_VERBOSE_PRINTS: &str = "SUPPRESS_VERBOSE_PRINTS";
 
 pub const HOME_DIR_ENV_VAR: &str = "LEE_WALLET_HOME_DIR";
+
+/// Env var holding the storage password, read instead of prompting for it.
+pub const PASSWORD_ENV_VAR: &str = "LEE_WALLET_PASSWORD";
 
 /// Default execution gas limit for wallet-built public transactions: roughly
 /// three times the widest measured program call, one fifth of the per-block cap.
@@ -167,39 +170,60 @@ pub struct WalletCore {
 
     storage: Storage,
     storage_path: PathBuf,
+    storage_key: Option<StorageKey>,
     spent_nullifiers: SpentNullifiers,
 
     sequencer_client: SequencerClient,
 }
 
 impl WalletCore {
-    /// Construct wallet using [`HOME_DIR_ENV_VAR`] env var for paths or user home dir if not set.
+    /// Construct wallet using [`HOME_DIR_ENV_VAR`] env var for paths or user home dir if not set,
+    /// reading the password with [`utils::read_password`].
     pub fn from_env() -> Result<Self> {
-        let config_path = helperfunctions::fetch_config_path()?;
-        let storage_path = helperfunctions::fetch_persistent_storage_path()?;
+        let config_path = utils::fetch_config_path()?;
+        let storage_path = utils::fetch_persistent_storage_path()?;
+        let password = utils::read_password(&storage_path)?;
 
-        Self::new_update_chain(config_path, storage_path, None)
+        Self::new_update_chain(config_path, storage_path, None, &password)
     }
 
+    /// Opens the wallet whose storage is encrypted under `password`, or unencrypted for an empty
+    /// one.
     pub fn new_update_chain(
         config_path: PathBuf,
         storage_path: PathBuf,
         config_overrides: Option<WalletConfigOverrides>,
+        password: &str,
     ) -> Result<Self> {
-        let storage = Storage::from_path(&storage_path)
+        let (storage, storage_key) = Storage::from_path(&storage_path, password)
             .with_context(|| format!("Failed to load storage from {}", storage_path.display()))?;
 
-        Self::new(config_path, storage_path, config_overrides, storage)
+        Self::new(
+            config_path,
+            storage_path,
+            config_overrides,
+            storage,
+            storage_key,
+        )
     }
 
+    /// Creates a wallet from a fresh mnemonic, its storage encrypted under `password`, or
+    /// unencrypted for an empty one.
     pub fn new_init_storage(
         config_path: PathBuf,
         storage_path: PathBuf,
         config_overrides: Option<WalletConfigOverrides>,
         password: &str,
     ) -> Result<(Self, Mnemonic)> {
-        let (storage, mnemonic) = Storage::new(password).context("Failed to create storage")?;
-        let wallet = Self::new(config_path, storage_path, config_overrides, storage)?;
+        let (storage, mnemonic) = Storage::new();
+        let storage_key = storage::storage_key_for(password)?;
+        let wallet = Self::new(
+            config_path,
+            storage_path,
+            config_overrides,
+            storage,
+            storage_key,
+        )?;
 
         Ok((wallet, mnemonic))
     }
@@ -209,6 +233,7 @@ impl WalletCore {
         storage_path: PathBuf,
         config_overrides: Option<WalletConfigOverrides>,
         storage: Storage,
+        storage_key: Option<StorageKey>,
     ) -> Result<Self> {
         let mut config =
             WalletConfig::from_path_or_initialize_default(&config_path).with_context(|| {
@@ -245,6 +270,7 @@ impl WalletCore {
             config,
             storage,
             storage_path,
+            storage_key,
             spent_nullifiers,
             sequencer_client,
         })
@@ -293,14 +319,30 @@ impl WalletCore {
     }
 
     /// Restore storage from an existing mnemonic phrase.
-    pub fn restore_storage(&mut self, mnemonic: &Mnemonic, password: &str) -> Result<()> {
-        self.storage.restore(mnemonic, password)
+    pub fn restore_storage(&mut self, mnemonic: &Mnemonic) {
+        self.storage.restore(mnemonic);
+    }
+
+    /// Saves the storage encrypted under `password`, or unencrypted for an empty one, and keeps
+    /// saving it so.
+    pub fn set_password(&mut self, password: &str) -> Result<()> {
+        let storage_key = storage::storage_key_for(password)?;
+        self.storage
+            .save_to_path(&self.storage_path, storage_key.as_ref())
+            .with_context(|| {
+                format!(
+                    "Failed to store persistent accounts at {}",
+                    self.storage_path.display()
+                )
+            })?;
+        self.storage_key = storage_key;
+        Ok(())
     }
 
     /// Store persistent data at home.
     pub fn store_persistent_data(&self) -> Result<()> {
         self.storage
-            .save_to_path(&self.storage_path)
+            .save_to_path(&self.storage_path, self.storage_key.as_ref())
             .with_context(|| {
                 format!(
                     "Failed to store persistent accounts at {}",
@@ -366,7 +408,7 @@ impl WalletCore {
     }
 
     /// Set the wallet's dedicated sealing secret key.
-    pub const fn set_sealing_secret_key(
+    pub fn set_sealing_secret_key(
         &mut self,
         key: key_protocol::key_management::secret_holders::ViewingSecretKey,
     ) {
@@ -1703,7 +1745,7 @@ mod tests {
         config::{SequencerConnectionData, WalletConfig},
         program_facades::{CreditDelivery, credit_destination, sequencer_stake::SequencerStake},
         storage::{
-            Storage,
+            Storage, WrongPassword,
             key_chain::tests::{block_of, transition_message},
         },
     };
@@ -1761,6 +1803,41 @@ mod tests {
         )
         .unwrap();
         (wallet, home, handle)
+    }
+
+    #[tokio::test]
+    async fn a_set_password_reopens_the_storage_and_an_empty_one_leaves_it_unencrypted() {
+        let (mut wallet, _home, _sequencer) = served_wallet(RpcModule::new(())).await;
+        let (config_path, storage_path) = (wallet.config_path.clone(), wallet.storage_path.clone());
+        let reopen = |password: &str| {
+            WalletCore::new_update_chain(config_path.clone(), storage_path.clone(), None, password)
+        };
+
+        wallet.set_password("new password").unwrap();
+        assert!(reopen("password").is_err());
+        assert!(reopen("new password").is_ok());
+
+        wallet.set_password("").unwrap();
+        assert!(!Storage::is_encrypted(&storage_path).unwrap());
+        assert!(reopen("").is_ok());
+    }
+
+    #[tokio::test]
+    async fn opening_with_a_password_that_does_not_open_the_storage_is_a_wrong_password() {
+        let (mut wallet, _home, _sequencer) = served_wallet(RpcModule::new(())).await;
+        let (config_path, storage_path) = (wallet.config_path.clone(), wallet.storage_path.clone());
+        let reopen = |password: &str| {
+            WalletCore::new_update_chain(config_path.clone(), storage_path.clone(), None, password)
+                .err()
+                .unwrap()
+        };
+        wallet.store_persistent_data().unwrap();
+
+        assert!(reopen("wrong password").is::<WrongPassword>());
+        assert!(reopen("").is::<WrongPassword>());
+
+        wallet.set_password("").unwrap();
+        assert!(reopen("password").is::<WrongPassword>());
     }
 
     #[tokio::test]
@@ -1847,7 +1924,10 @@ mod tests {
 
         for key_chain in [
             wallet.storage.key_chain(),
-            Storage::from_path(&storage_path).unwrap().key_chain(),
+            Storage::from_path(&storage_path, "password")
+                .unwrap()
+                .0
+                .key_chain(),
         ] {
             assert_eq!(
                 key_chain.private_account(pda_id).unwrap().account,
@@ -1909,7 +1989,9 @@ mod tests {
         assert_eq!(wallet.storage.last_synced_block(), 1);
         for storage in [
             &wallet.storage,
-            &Storage::from_path(&wallet.storage_path).unwrap(),
+            &Storage::from_path(&wallet.storage_path, "password")
+                .unwrap()
+                .0,
         ] {
             assert_eq!(
                 storage
@@ -2432,6 +2514,7 @@ mod tests {
             wallet.config_path.clone(),
             wallet.storage_path.clone(),
             None,
+            "password",
         )
         .unwrap();
         assert_eq!(
@@ -2598,7 +2681,9 @@ mod tests {
             wallet_past_an_undiscovered_pda().await;
         let cache_path = home.path().join("storage.nullifiers");
         let cache = std::fs::read(&cache_path).unwrap();
-        let mut expected = Storage::from_path(&wallet.storage_path).unwrap();
+        let mut expected = Storage::from_path(&wallet.storage_path, "password")
+            .unwrap()
+            .0;
         expected
             .key_chain_mut()
             .insert_private_account(pda, pda_kind, Account::funded(90))
@@ -2607,14 +2692,21 @@ mod tests {
         wallet.rescan_private_accounts().await.unwrap();
 
         assert_eq!(wallet.storage, expected);
-        assert_eq!(Storage::from_path(&wallet.storage_path).unwrap(), expected);
+        assert_eq!(
+            Storage::from_path(&wallet.storage_path, "password")
+                .unwrap()
+                .0,
+            expected
+        );
         assert_eq!(std::fs::read(&cache_path).unwrap(), cache);
     }
 
     #[tokio::test]
     async fn an_incomplete_rescan_leaves_the_account_records_unchanged() {
         let (mut wallet, _home, _sequencer, served, ..) = wallet_past_an_undiscovered_pda().await;
-        let recorded = Storage::from_path(&wallet.storage_path).unwrap();
+        let recorded = Storage::from_path(&wallet.storage_path, "password")
+            .unwrap()
+            .0;
         let history = served.lock().unwrap().blocks.clone();
 
         for remaining in [[0, 2], [0, 1]] {
@@ -2622,7 +2714,12 @@ mod tests {
 
             assert!(wallet.rescan_private_accounts().await.is_err());
             assert_eq!(wallet.storage, recorded);
-            assert_eq!(Storage::from_path(&wallet.storage_path).unwrap(), recorded);
+            assert_eq!(
+                Storage::from_path(&wallet.storage_path, "password")
+                    .unwrap()
+                    .0,
+                recorded
+            );
         }
     }
 }

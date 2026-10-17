@@ -4,12 +4,12 @@ use k256::elliptic_curve::{PrimeField as _, sec1::ToEncodedPoint as _};
 use rand::{Rng as _, rngs::OsRng};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 use sha2::{Digest as _, Sha256};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::error::LeeError;
 
 // TODO: Remove Debug, Clone, Serialize, Deserialize, PartialEq and Eq for security reasons
-// TODO: Implement Zeroize
-#[derive(Clone, SerializeDisplay, DeserializeFromStr, PartialEq, Eq)]
+#[derive(Clone, SerializeDisplay, DeserializeFromStr, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct PrivateKey([u8; 32]);
 
 impl std::fmt::Debug for PrivateKey {

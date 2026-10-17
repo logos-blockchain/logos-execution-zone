@@ -21,7 +21,9 @@ ignore = [
   { id = "RUSTSEC-2026-0173", reason = "`proc-macro-error2` is unmaintained; pulled in transitively via `leptos_macro` and `overwatch-derive`, waiting on upstream fix" },
   { id = "RUSTSEC-2024-0449", reason = "`unsafe-libyaml` unmaintained, pulled in by the logos crates" },
   { id = "RUSTSEC-2026-0344", reason = "`ruzstd` reached only through `object` under `risc0-zkvm`" },
-  { crate = "zip@2.4.2", reason = "yanked, reached only through `risc0-circuit-recursion`" },
+  { id = "RUSTSEC-2026-0367", reason = "`zip` 2.4.2 reached only through `risc0-circuit-recursion`, which reads its embedded archive in memory and never calls the vulnerable `extract`" },
+  { id = "RUSTSEC-2026-0368", reason = "`zip` 2.4.2 reached only through `risc0-circuit-recursion`, which reads its embedded archive in memory and never calls the vulnerable `extract`" },
+  { id = "RUSTSEC-2026-0369", reason = "`zip` 2.4.2 reached only through `risc0-circuit-recursion`, which reads its embedded archive in memory and never calls the vulnerable `extract`" },
 ]
 yanked = "deny"
 unused-ignored-advisory = "deny"

@@ -115,7 +115,6 @@ fn new_wallet_ffi_with_test_context_config(
 ) -> Result<FfiCreateWalletOutput> {
     let config_path = home.join("wallet_config.json");
     let storage_path = home.join("storage.json");
-    let metrics_path = home.join("metrics.json");
     let mut config = ctx.ctx().wallet().config().to_owned();
     if let Some(config_overrides) = ctx.ctx().wallet().config_overrides().clone() {
         config.apply_overrides(config_overrides);
@@ -132,14 +131,12 @@ fn new_wallet_ffi_with_test_context_config(
 
     let config_path = CString::new(config_path.to_str().unwrap())?;
     let storage_path = CString::new(storage_path.to_str().unwrap())?;
-    let metrics_path = CString::new(metrics_path.to_str().unwrap())?;
     let password = CString::new(ctx.ctx().wallet_password())?;
 
     let create_wallet_result = unsafe {
         wallet_ffi_create_new(
             config_path.as_ptr(),
             storage_path.as_ptr(),
-            metrics_path.as_ptr(),
             password.as_ptr(),
         )
     };
@@ -189,21 +186,28 @@ fn new_wallet_ffi_with_test_context_config(
     Ok(create_wallet_result)
 }
 
-fn load_existing_ffi_wallet(home: &Path) -> Result<*mut WalletHandle> {
+fn load_existing_ffi_wallet(
+    home: &Path,
+    password: &str,
+) -> Result<Result<*mut WalletHandle, error::FfiOperationError>> {
     let config_path = home.join("wallet_config.json");
     let storage_path = home.join("storage.json");
-    let metrics_path = home.join("metrics.json");
     let config_path = CString::new(config_path.to_str().unwrap())?;
     let storage_path = CString::new(storage_path.to_str().unwrap())?;
-    let metrics_path = CString::new(metrics_path.to_str().unwrap())?;
+    let password = CString::new(password)?;
+    let mut handle = std::ptr::null_mut();
 
-    Ok(unsafe {
+    let result = unsafe {
         wallet_ffi_open(
             config_path.as_ptr(),
             storage_path.as_ptr(),
-            metrics_path.as_ptr(),
+            password.as_ptr(),
+            &raw mut handle,
         )
-    })
+    };
+    Ok((result == error::FfiOperationError::Success)
+        .then_some(handle)
+        .ok_or(result))
 }
 
 #[test]
@@ -301,9 +305,15 @@ fn wallet_ffi_save_and_load_persistent_storage() -> Result<()> {
         npk
     };
 
+    assert_eq!(
+        load_existing_ffi_wallet(home.path(), "wrong password")?,
+        Err(error::FfiOperationError::WrongPassword)
+    );
+
     // After loading, creating a new key should yield a different NPK (state was persisted)
     let second_npk = unsafe {
-        let wallet_ffi_handle = load_existing_ffi_wallet(home.path())?;
+        let wallet_ffi_handle =
+            load_existing_ffi_wallet(home.path(), ctx.ctx().wallet_password())?.unwrap();
         let mut out_keys = FfiPrivateAccountKeys::default();
         wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys).unwrap();
         let npk = out_keys.nullifier_public_key.data;
@@ -1239,8 +1249,6 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
 
     log::info!("Preparation complete, performing keys restoration");
 
-    let password = CString::new(ctx.ctx().wallet_password())?;
-
     // Sent by keys, both private credits are pending until the owner receives them.
     receive_pending(wallet_ffi_handle);
 
@@ -1296,8 +1304,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
     assert_eq!(public_account_id_2_balance, 103);
 
     unsafe {
-        wallet_ffi_restore_data(wallet_ffi_handle, mnemonic.as_ptr(), password.as_ptr(), 5)
-            .unwrap();
+        wallet_ffi_restore_data(wallet_ffi_handle, mnemonic.as_ptr(), 5).unwrap();
     }
 
     // Sync private account local storage with onchain encrypted state
@@ -1372,7 +1379,6 @@ fn a_pending_private_credit_survives_seed_restoration_ffi() -> Result<()> {
         mnemonic,
     } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
     let mnemonic = unsafe { CString::from_raw(mnemonic) };
-    let password = CString::new(ctx.ctx().wallet_password())?;
 
     let (private_account_id, private_account_keys) = unsafe {
         let mut out_keys = FfiPrivateAccountKeys::default();
@@ -1398,8 +1404,7 @@ fn a_pending_private_credit_survives_seed_restoration_ffi() -> Result<()> {
     wait_for_inclusion(wallet_ffi_handle, &transfer_result);
     unsafe {
         wallet_ffi_free_transfer_result(&raw mut transfer_result);
-        wallet_ffi_restore_data(wallet_ffi_handle, mnemonic.as_ptr(), password.as_ptr(), 5)
-            .unwrap();
+        wallet_ffi_restore_data(wallet_ffi_handle, mnemonic.as_ptr(), 5).unwrap();
     }
 
     receive_pending(wallet_ffi_handle);

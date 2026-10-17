@@ -28,6 +28,7 @@ bip39.workspace = true
 hmac-sha512.workspace = true
 thiserror.workspace = true
 itertools.workspace = true
+zeroize = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 lee_core = { workspace = true, features = ["test_utils"] }

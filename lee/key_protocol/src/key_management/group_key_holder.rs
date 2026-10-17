@@ -432,12 +432,12 @@ mod tests {
         let recipient_ssk = SecretSpendingKey([7_u8; 32]);
         let recipient_keys = recipient_ssk.produce_private_key_holder(None);
         let recipient_vpk = recipient_keys.generate_viewing_public_key();
-        let recipient_vsk = recipient_keys.viewing_secret_key;
+        let recipient_vsk = &recipient_keys.viewing_secret_key;
 
         let sealed = holder.seal_for(&SealingPublicKey::from_bytes(
             recipient_vpk.to_bytes().to_vec(),
         ));
-        let restored = GroupKeyHolder::unseal(&sealed, &recipient_vsk).expect("unseal");
+        let restored = GroupKeyHolder::unseal(&sealed, recipient_vsk).expect("unseal");
 
         assert_eq!(restored.dangerous_raw_gms(), holder.dangerous_raw_gms());
 
@@ -462,14 +462,13 @@ mod tests {
             .produce_private_key_holder(None)
             .generate_viewing_public_key();
 
-        let wrong_vsk = SecretSpendingKey([99_u8; 32])
-            .produce_private_key_holder(None)
-            .viewing_secret_key;
+        let wrong_keys = SecretSpendingKey([99_u8; 32]).produce_private_key_holder(None);
+        let wrong_vsk = &wrong_keys.viewing_secret_key;
 
         let sealed = holder.seal_for(&SealingPublicKey::from_bytes(
             recipient_vpk.to_bytes().to_vec(),
         ));
-        let result = GroupKeyHolder::unseal(&sealed, &wrong_vsk);
+        let result = GroupKeyHolder::unseal(&sealed, wrong_vsk);
         assert!(matches!(result, Err(super::SealError::DecryptionFailed)));
     }
 
@@ -481,7 +480,7 @@ mod tests {
         let recipient_ssk = SecretSpendingKey([7_u8; 32]);
         let recipient_keys = recipient_ssk.produce_private_key_holder(None);
         let recipient_vpk = recipient_keys.generate_viewing_public_key();
-        let recipient_vsk = recipient_keys.viewing_secret_key;
+        let recipient_vsk = &recipient_keys.viewing_secret_key;
 
         let mut sealed = holder.seal_for(&SealingPublicKey::from_bytes(
             recipient_vpk.to_bytes().to_vec(),
@@ -490,7 +489,7 @@ mod tests {
         let last = sealed.len() - 1;
         sealed[last] ^= 0xFF;
 
-        let result = GroupKeyHolder::unseal(&sealed, &recipient_vsk);
+        let result = GroupKeyHolder::unseal(&sealed, recipient_vsk);
         assert!(matches!(result, Err(super::SealError::DecryptionFailed)));
     }
 
@@ -565,12 +564,12 @@ mod tests {
         let bob_ssk = SecretSpendingKey([77_u8; 32]);
         let bob_keys = bob_ssk.produce_private_key_holder(None);
         let bob_vpk = bob_keys.generate_viewing_public_key();
-        let bob_vsk = bob_keys.viewing_secret_key;
+        let bob_vsk = &bob_keys.viewing_secret_key;
 
         let sealed =
             alice_holder.seal_for(&SealingPublicKey::from_bytes(bob_vpk.to_bytes().to_vec()));
         let bob_holder =
-            GroupKeyHolder::unseal(&sealed, &bob_vsk).expect("Bob should unseal the GMS");
+            GroupKeyHolder::unseal(&sealed, bob_vsk).expect("Bob should unseal the GMS");
 
         let bob_group_keys = bob_holder.derive_keys_for_pda(&TEST_PROGRAM_ID, &pda_seed);
         let bob_npk = bob_group_keys.generate_nullifier_public_key();

@@ -138,6 +138,10 @@ typedef enum FfiOperationError {
    */
   FfiOperationError_MessageNotFound = 24,
   /**
+   * The password does not open the wallet storage, or the storage is corrupted.
+   */
+  FfiOperationError_WrongPassword = 25,
+  /**
    * Internal error (catch-all).
    */
   FfiOperationError_InternalError = 99,
@@ -2126,17 +2130,17 @@ enum FfiOperationError wallet_ffi_free_label_list(struct LabelList *label_list);
 /**
  * Create a new wallet with fresh storage.
  *
- * This initializes a new wallet with a new seed derived from the password.
+ * This initializes a new wallet with a fresh mnemonic.
  * Use this for first-time wallet creation.
  *
  * # Parameters
  * - `config_path`: Path to the wallet configuration file (JSON)
  * - `storage_path`: Path where wallet data will be stored
- * - `password`: Password for encrypting the wallet seed
+ * - `password`: Password the wallet storage is encrypted under, or empty to leave it unencrypted
  *
  * # Returns
  * - Result, which contains opaque wallet handle and mnemonic words on success
- * - Result with null pointers on error (call `wallet_ffi_get_last_error()` for details)
+ * - Result with null pointers on error, whose details are printed to stderr
  *
  * # Safety
  * All string parameters must be valid null-terminated UTF-8 strings.
@@ -2153,15 +2157,63 @@ struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
  * # Parameters
  * - `config_path`: Path to the wallet configuration file (JSON)
  * - `storage_path`: Path to the wallet storage (JSON)
+ * - `password`: Password the wallet storage is encrypted under, or empty for an unencrypted
+ *   storage (see `wallet_ffi_storage_is_encrypted`)
+ * - `out_handle`: Output pointer for the opaque wallet handle
  *
  * # Returns
- * - Opaque wallet handle on success
- * - Null pointer on error (call `wallet_ffi_get_last_error()` for details)
+ * - `Success` with the handle written to `out_handle`
+ * - `WrongPassword` if the password does not open the storage, including a non-empty one for an
+ *   unencrypted storage
+ * - Another error code on any other failure, whose details are printed to stderr
  *
  * # Safety
- * All string parameters must be valid null-terminated UTF-8 strings.
+ * - All string parameters must be valid null-terminated UTF-8 strings.
+ * - `out_handle` must be a valid pointer to a `WalletHandle *`.
  */
-struct WalletHandle *wallet_ffi_open(const char *config_path, const char *storage_path);
+enum FfiOperationError wallet_ffi_open(const char *config_path,
+                                       const char *storage_path,
+                                       const char *password,
+                                       struct WalletHandle **out_handle);
+
+/**
+ * Report whether the wallet storage at `storage_path` is encrypted, and so needs a password to
+ * open.
+ *
+ * # Parameters
+ * - `storage_path`: Path to the wallet storage (JSON)
+ * - `out_encrypted`: Output pointer for whether the storage is encrypted
+ *
+ * # Returns
+ * - `Success` with the answer written to `out_encrypted`
+ * - Error code on failure, including a missing storage file, whose details are printed to stderr
+ *
+ * # Safety
+ * - `storage_path` must be a valid null-terminated UTF-8 string.
+ * - `out_encrypted` must be a valid pointer to a `bool`.
+ */
+enum FfiOperationError wallet_ffi_storage_is_encrypted(const char *storage_path,
+                                                       bool *out_encrypted);
+
+/**
+ * Save the wallet storage encrypted under `password`, or unencrypted for an empty one, and keep
+ * saving it so.
+ *
+ * Ask for the new password twice: nothing recovers the storage from a mistyped one.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `password`: Password to encrypt the storage under, or empty for none
+ *
+ * # Returns
+ * - `Success` once the storage is saved
+ * - Error code on failure, whose details are printed to stderr
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `password` must be a valid null-terminated UTF-8 string.
+ */
+enum FfiOperationError wallet_ffi_set_password(struct WalletHandle *handle, const char *password);
 
 /**
  * Destroy a wallet handle and free its resources.
@@ -2194,12 +2246,11 @@ void wallet_ffi_destroy(struct WalletHandle *handle);
 enum FfiOperationError wallet_ffi_save(struct WalletHandle *handle);
 
 /**
- * Restore wallet data from mnemonic and password.
+ * Restore wallet data from a mnemonic.
  *
  * # Parameters
  * - `handle`: Valid wallet handle
  * - `mnemonic`: Valid pointer to instance of `* char`, provided by `wallet_ffi_create_new`
- * - `password`: Valid pointer to C string.
  * - `depth`: Depth of a reconstructed tree
  *
  * # Returns
@@ -2210,12 +2261,10 @@ enum FfiOperationError wallet_ffi_save(struct WalletHandle *handle);
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
  * - `mnemonic` must be a valid pointer to instance of `* char`, provided by
  *   `wallet_ffi_create_new`
- * - `password` must be a valid pointer to C string.
  * - `depth` parameter induces exponential growth in execution time, be aware of it.
  */
 enum FfiOperationError wallet_ffi_restore_data(struct WalletHandle *handle,
                                                const char *mnemonic,
-                                               const char *password,
                                                uint32_t depth);
 
 /**

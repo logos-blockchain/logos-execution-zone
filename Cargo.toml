@@ -194,7 +194,11 @@ libp2p = { version = "0.56", features = [
   "quic",
   "tokio",
 ] }
-aes-gcm = "0.10.3"
+aes-gcm = { version = "0.10.3", features = ["zeroize"] }
+argon2 = { version = "0.5.3", default-features = false, features = [
+  "alloc",
+  "zeroize",
+] }
 toml = "0.9.8"
 bincode = "1.3.3"
 tempfile = "3.14.0"
@@ -278,6 +282,13 @@ keccak = { git = "https://github.com/logos-blockchain/sponges", rev = "3a56e9977
 # linking large integration-test binaries on resource-constrained CI runners.
 [profile.dev]
 debug = "line-tables-only"
+
+# Unoptimized, the wallet's storage key derivation takes seconds instead of a tenth of one.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
 
 [profile.test]
 debug = "line-tables-only"

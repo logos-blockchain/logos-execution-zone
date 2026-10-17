@@ -1,10 +1,72 @@
-use std::{path::PathBuf, str::FromStr as _};
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr as _,
+};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, ensure};
 use lee_core::account::Nonce;
 use rand::{RngCore as _, rngs::OsRng};
+use zeroize::Zeroizing;
 
-use crate::HOME_DIR_ENV_VAR;
+use crate::{HOME_DIR_ENV_VAR, PASSWORD_ENV_VAR, storage::Storage};
+
+/// Read the password of the existing storage at `storage_path`: empty for an unencrypted one,
+/// else a non-empty [`PASSWORD_ENV_VAR`], else a TTY prompt.
+pub fn read_password(storage_path: &Path) -> Result<Zeroizing<String>> {
+    if !Storage::is_encrypted(storage_path)? {
+        return Ok(Zeroizing::default());
+    }
+    match std::env::var(PASSWORD_ENV_VAR) {
+        Ok(password) if !password.is_empty() => Ok(Zeroizing::new(password)),
+        _ => prompt_password("Wallet password: "),
+    }
+}
+
+/// Read the password for a new storage: [`PASSWORD_ENV_VAR`] if set, even empty, else
+/// [`prompt_new_password`].
+pub fn read_new_password() -> Result<Zeroizing<String>> {
+    let Ok(password) = std::env::var(PASSWORD_ENV_VAR) else {
+        return prompt_new_password();
+    };
+    warn_if_unencrypted(&password);
+    Ok(Zeroizing::new(password))
+}
+
+/// Prompt on the TTY for a storage password, typed twice; an empty one leaves the storage
+/// unencrypted.
+pub fn prompt_new_password() -> Result<Zeroizing<String>> {
+    warn(
+        "A forgotten password cannot be recovered; the recovery phrase restores only the \
+         accounts generated from it, not imported keys, groups or labels.",
+    );
+    let password = prompt_password("New wallet password (empty for none): ")?;
+    ensure!(
+        *prompt_password("Repeat the wallet password: ")? == *password,
+        "The passwords do not match"
+    );
+    warn_if_unencrypted(&password);
+    Ok(password)
+}
+
+fn warn_if_unencrypted(password: &str) {
+    if password.is_empty() {
+        warn("The wallet storage will not be encrypted.");
+    }
+}
+
+#[expect(
+    clippy::print_stderr,
+    reason = "A warning must not mix into the output of the command"
+)]
+fn warn(message: &str) {
+    eprintln!("{message}");
+}
+
+fn prompt_password(prompt: &str) -> Result<Zeroizing<String>> {
+    rpassword::prompt_password(prompt)
+        .map(Zeroizing::new)
+        .map_err(Into::into)
+}
 
 /// Read the Keycard PIN without echoing it.
 ///

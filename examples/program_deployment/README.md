@@ -22,7 +22,7 @@ For sanity let's check that the wallet can connect to it.
 wallet check-health
 ```
 
-If this is your first time, the wallet will ask for a password. This is used as seed to deterministically generate all account keys (public and private).
+If this is your first time, the wallet will ask for a password, twice; leave it empty to keep the wallet storage unencrypted. A non-empty password encrypts it, and every later wallet command then asks for it (or reads it from `LEE_WALLET_PASSWORD`).
 For this tutorial, use: `program-tutorial`
 
 You should see `✅All looks good!` if everything went well.

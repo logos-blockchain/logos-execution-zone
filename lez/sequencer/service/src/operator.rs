@@ -208,14 +208,19 @@ pub async fn unstake(
 fn open_wallet(home: Option<PathBuf>) -> Result<WalletCore> {
     let home = match home {
         Some(home) => home,
-        None => wallet::helperfunctions::get_home()?,
+        None => wallet::utils::get_home()?,
     };
-    WalletCore::new_update_chain(
-        home.join("wallet_config.json"),
-        home.join("storage.json"),
-        None,
-    )
-    .with_context(|| format!("Failed to open the wallet in {}", home.display()))
+    let storage_path = home.join("storage.json");
+    wallet::utils::read_password(&storage_path)
+        .and_then(|password| {
+            WalletCore::new_update_chain(
+                home.join("wallet_config.json"),
+                storage_path,
+                None,
+                &password,
+            )
+        })
+        .with_context(|| format!("Failed to open the wallet in {}", home.display()))
 }
 
 fn public_account(wallet: &WalletCore, mention: &CliAccountMention) -> Result<AccountId> {

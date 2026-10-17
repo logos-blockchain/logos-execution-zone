@@ -18,15 +18,15 @@ unsafe extern "C" {
     pub fn wallet_ffi_create_new(
         config_path: *const c_char,
         storage_path: *const c_char,
-        metrics_path: *const c_char,
         password: *const c_char,
     ) -> FfiCreateWalletOutput;
 
     pub fn wallet_ffi_open(
         config_path: *const c_char,
         storage_path: *const c_char,
-        metrics_path: *const c_char,
-    ) -> *mut WalletHandle;
+        password: *const c_char,
+        out_handle: *mut *mut WalletHandle,
+    ) -> error::FfiOperationError;
 
     pub fn wallet_ffi_destroy(handle: *mut WalletHandle);
 
@@ -181,7 +181,6 @@ unsafe extern "C" {
     pub fn wallet_ffi_restore_data(
         handle: *mut WalletHandle,
         mnemonic: *const c_char,
-        password: *const c_char,
         depth: u32,
     ) -> error::FfiOperationError;
 

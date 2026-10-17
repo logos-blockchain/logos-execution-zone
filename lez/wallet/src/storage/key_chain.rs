@@ -398,7 +398,11 @@ impl UserKeyChain {
             .chain(self.shared_private_accounts.values().filter_map(|entry| {
                 let keys = self.derive_shared_account_keys(entry)?;
                 let nsk = keys.nullifier_secret_key();
-                Some((NullifierPublicKey::from(&nsk), keys.viewing_secret_key, nsk))
+                Some((
+                    NullifierPublicKey::from(&nsk),
+                    keys.viewing_secret_key.clone(),
+                    nsk,
+                ))
             }))
     }
 
@@ -896,7 +900,7 @@ impl UserKeyChain {
     }
 
     /// Sets the sealing secret key for GMS distribution.
-    pub const fn set_sealing_secret_key(&mut self, key: ViewingSecretKey) {
+    pub fn set_sealing_secret_key(&mut self, key: ViewingSecretKey) {
         self.sealing_secret_key = Some(key);
     }
 
