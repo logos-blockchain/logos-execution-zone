@@ -4841,6 +4841,7 @@ dependencies = [
  "lee_core",
  "log",
  "logos-blockchain-core",
+ "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-zone-sdk",
  "num-bigint 0.4.6",
@@ -11139,17 +11140,16 @@ dependencies = [
  "mockall",
  "rand 0.8.6",
  "sequencer_actors_common",
- "sequencer_channel_config_actor",
+ "sequencer_channel_signing_actor",
  "sequencer_stake_core",
  "sequencer_storage_actor",
- "system_accounts",
  "thiserror 2.0.18",
  "tokio",
  "url",
 ]
 
 [[package]]
-name = "sequencer_channel_config_actor"
+name = "sequencer_channel_signing_actor"
 version = "0.1.0"
 dependencies = [
  "kameo",
@@ -11196,7 +11196,7 @@ dependencies = [
  "programs",
  "rand 0.8.6",
  "sequencer_bedrock_actor",
- "sequencer_channel_config_actor",
+ "sequencer_channel_signing_actor",
  "sequencer_core_metrics",
  "sequencer_slasher_actor",
  "sequencer_stake_core",
@@ -11287,7 +11287,7 @@ dependencies = [
  "logos-blockchain-core",
  "logos-blockchain-key-management-system-service",
  "mempool",
- "sequencer_channel_config_actor",
+ "sequencer_channel_signing_actor",
  "sequencer_core",
  "sequencer_slasher_actor",
  "sequencer_stake_core",
@@ -11342,7 +11342,7 @@ dependencies = [
  "metrics-exporter-prometheus",
  "programs",
  "sequencer_bedrock_actor",
- "sequencer_channel_config_actor",
+ "sequencer_channel_signing_actor",
  "sequencer_core",
  "sequencer_executor_actor",
  "sequencer_gossip_actor",
