@@ -894,7 +894,7 @@ async fn prepare_account(
             let (account, _) = prepare_public_account(wallet, actor_state_selector).await?;
             if pin.is_none() {
                 *pin = Some(
-                    crate::helperfunctions::read_pin()
+                    crate::utils::read_pin()
                         .map_err(ExecutionFailureKind::SignError)?
                         .as_str()
                         .to_owned(),

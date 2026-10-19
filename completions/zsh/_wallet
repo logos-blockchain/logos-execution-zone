@@ -24,7 +24,8 @@ _wallet() {
                 'bridge:Bridge program interaction subcommand'
                 'check-health:Check the wallet can connect to the node and builtin local programs match the remote versions'
                 'config:Command to setup config, get and set config fields'
-                'restore-keys:Restoring keys from given password at given depth'
+                'set-password:Set, change or remove the wallet storage password'
+                'restore-keys:Restoring keys from a mnemonic phrase at given depth'
                 'deploy-program:Deploy a program'
                 'help:Print help message or the help of the given subcommand(s)'
             )
@@ -296,7 +297,8 @@ _wallet_help() {
         'bridge:Bridge program interaction subcommand'
         'check-health:Check the wallet can connect to the node'
         'config:Command to setup config, get and set config fields'
-        'restore-keys:Restoring keys from given password at given depth'
+        'set-password:Set, change or remove the wallet storage password'
+        'restore-keys:Restoring keys from a mnemonic phrase at given depth'
         'deploy-program:Deploy a program'
     )
     _describe -t commands 'wallet commands' commands

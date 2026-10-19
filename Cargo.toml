@@ -32,7 +32,6 @@ members = [
   "lez/sequencer/actors/slasher",
   "lez/sequencer/actors/storage",
   "lez/sequencer/actors/bedrock",
-  "lez/sequencer/ffi",
   "lez/ffi_types",
   "lez/indexer/core",
   "lez/indexer/service",
@@ -44,7 +43,6 @@ members = [
   "lez/keycard_wallet",
   "lez/mempool",
   "lez/wallet",
-  "lez/wallet-ffi",
   "lez/common",
   "lez/programs",
   "lez/programs/bridge",
@@ -61,6 +59,7 @@ members = [
   "lez/programs/sequencer_stake",
   "lez/programs/program_loader/core",
   "lez/cross_zone",
+  "lez/core_ffi",
 
   "test_guest_core",
   "test_programs",
@@ -105,15 +104,14 @@ sequencer_slasher_actor = { path = "lez/sequencer/actors/slasher" }
 sequencer_storage_actor = { path = "lez/sequencer/actors/storage" }
 sequencer_bedrock_actor = { path = "lez/sequencer/actors/bedrock" }
 sequencer_service = { path = "lez/sequencer/service" }
-sequencer_ffi = { path = "lez/sequencer/ffi" }
 ffi_types = { path = "lez/ffi_types" }
 indexer_core = { path = "lez/indexer/core" }
 indexer_service = { path = "lez/indexer/service" }
 indexer_service_protocol = { path = "lez/indexer/service/protocol" }
 indexer_service_rpc = { path = "lez/indexer/service/rpc" }
 wallet = { path = "lez/wallet" }
-wallet-ffi = { path = "lez/wallet-ffi", default-features = false }
 indexer_ffi = { path = "lez/indexer/ffi" }
+core_ffi = { path = "lez/core_ffi", default-features = false }
 lez = { path = "lez" }
 programs = { path = "lez/programs", default-features = false, features = [
   "artifacts",
@@ -196,7 +194,11 @@ libp2p = { version = "0.56", features = [
   "quic",
   "tokio",
 ] }
-aes-gcm = "0.10.3"
+aes-gcm = { version = "0.10.3", features = ["zeroize"] }
+argon2 = { version = "0.5.3", default-features = false, features = [
+  "alloc",
+  "zeroize",
+] }
 toml = "0.9.8"
 bincode = "1.3.3"
 tempfile = "3.14.0"
@@ -280,6 +282,13 @@ keccak = { git = "https://github.com/logos-blockchain/sponges", rev = "3a56e9977
 # linking large integration-test binaries on resource-constrained CI runners.
 [profile.dev]
 debug = "line-tables-only"
+
+# Unoptimized, the wallet's storage key derivation takes seconds instead of a tenth of one.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
 
 [profile.test]
 debug = "line-tables-only"

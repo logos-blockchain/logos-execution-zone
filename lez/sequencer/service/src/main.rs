@@ -1,5 +1,5 @@
 use std::{
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     path::{Path, PathBuf},
 };
 
@@ -40,12 +40,10 @@ enum Command {
     /// Runs the sequencer out of a home, following the channel.
     Start {
         home: PathBuf,
-        #[clap(short, long, default_value = "3040")]
-        port: u16,
-        /// Interface the RPC server binds to. The RPC has no caller auth, so only widen it
+        /// Address the JSON-RPC server binds to. The RPC has no caller auth, so only widen it
         /// behind a firewall.
-        #[clap(long, default_value = "127.0.0.1")]
-        listen_address: IpAddr,
+        #[clap(long, default_value = "127.0.0.1:3040")]
+        rpc_listen_address: SocketAddr,
         /// Overrides the config's `metrics_address`.
         #[clap(long)]
         metrics_address: Option<SocketAddr>,
@@ -95,17 +93,9 @@ async fn main() -> Result<()> {
         } => operator::setup(&home, &config, &funding_public_key, create_channel),
         Command::Start {
             home,
-            port,
-            listen_address,
+            rpc_listen_address,
             metrics_address,
-        } => {
-            start(
-                &home,
-                SocketAddr::new(listen_address, port),
-                metrics_address,
-            )
-            .await
-        }
+        } => start(&home, rpc_listen_address, metrics_address).await,
         Command::Stake {
             sequencer_key,
             from,
@@ -127,7 +117,7 @@ async fn main() -> Result<()> {
 )]
 async fn start(
     home: &Path,
-    rpc_address: SocketAddr,
+    rpc_listen_address: SocketAddr,
     metrics_address: Option<SocketAddr>,
 ) -> Result<()> {
     let cancellation_token = listen_for_shutdown_signal();
@@ -155,7 +145,7 @@ async fn start(
     if let Some(address) = config.metrics_address {
         install_prometheus_recorder(address)?;
     }
-    let sequencer_handle = sequencer_service::run(config, rpc_address).await?;
+    let sequencer_handle = sequencer_service::run(config, rpc_listen_address).await?;
 
     tokio::select! {
         () = cancellation_token.cancelled() => {

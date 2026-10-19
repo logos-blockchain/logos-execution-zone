@@ -89,4 +89,4 @@ ENV RISC0_SERVER_PATH=/usr/local/bin/r0vm
 USER sequencer_service_user
 
 WORKDIR /sequencer_service
-CMD ["sequencer_service", "start", "/var/lib/sequencer_service", "--listen-address", "0.0.0.0"]
+CMD ["sequencer_service", "start", "/var/lib/sequencer_service", "--rpc-listen-address", "0.0.0.0:3040"]

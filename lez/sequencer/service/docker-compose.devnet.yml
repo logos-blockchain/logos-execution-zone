@@ -45,7 +45,7 @@ x-await-channel: &await_channel
         echo "waiting for the channel to land on Bedrock"
         sleep 2
       done
-      exec sequencer_service start /var/lib/sequencer_service --listen-address 0.0.0.0
+      exec sequencer_service start /var/lib/sequencer_service --rpc-listen-address 0.0.0.0:3040
 
 services:
   # Build-only: shared base image (toolchain + r0vm) referenced as the
@@ -65,8 +65,8 @@ services:
       - sequencer_service
       - start
       - /var/lib/sequencer_service
-      - --listen-address
-      - 0.0.0.0
+      - --rpc-listen-address
+      - 0.0.0.0:3040
     ports:
       - "3040:3040"
       - "9000:9000"
