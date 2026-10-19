@@ -35,6 +35,8 @@ use wallet::WalletCore;
 //   cargo run --release --bin prog_cli -- --payer <payer> deploy <path/to/guest.bin>
 //   cargo run --release --bin prog_cli -- --payer <payer> hello --program <id> --account <id> \
 //     --text 'Hola mundo!'
+//   cargo run --release --bin prog_cli -- --payer <payer> send --program <id> --account <id> \
+//     --message-hex 0002000000486f   # any guest: Borsh-encoded message bytes
 
 // The `hello_world_with_move_function` guest's `Message::Write(data)` and
 // `Message::MoveData { data, to }`, borsh-encoded as a variant index followed by the fields.
@@ -105,6 +107,19 @@ enum Command {
         #[arg(long)]
         callee: AccountId,
     },
+    /// Any guest: send already-encoded message bytes to the program's actor on `account`.
+    Send {
+        #[arg(long)]
+        program: AccountId,
+        #[arg(long)]
+        account: AccountId,
+        /// The Borsh-encoded message, as hex.
+        #[arg(long)]
+        message_hex: String,
+        /// Sign with `account`'s key, for handlers that check `is_authorized`.
+        #[arg(long)]
+        sign: bool,
+    },
 }
 
 /// A public call: the root actor, every actor it touches, and the actor state to check afterwards.
@@ -136,6 +151,18 @@ fn hex(bytes: &[u8]) -> String {
         write!(out, "{byte:02x}").unwrap();
         out
     })
+}
+
+fn unhex(text: &str) -> anyhow::Result<Vec<u8>> {
+    let text = text.trim().trim_start_matches("0x");
+    anyhow::ensure!(text.len() % 2 == 0, "hex has an odd number of digits");
+    (0..text.len())
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(&text[i..i + 2], 16)
+                .map_err(|err| anyhow::anyhow!("invalid hex {:?}: {err}", &text[i..i + 2]))
+        })
+        .collect()
 }
 
 /// Sends `call` paid by `payer`, waits for inclusion, and reports whether the target changed.
@@ -301,6 +328,22 @@ async fn main() -> anyhow::Result<()> {
                     seed: PDA_SEED,
                 }],
                 target: callee_actor,
+            }
+        }
+        Command::Send {
+            program,
+            account,
+            message_hex,
+            sign,
+        } => {
+            let actor = Actor::new(account, program);
+            Call {
+                to: actor,
+                actors: vec![actor],
+                message: unhex(&message_hex)?,
+                signers: if sign { vec![account] } else { Vec::new() },
+                evidence: Vec::new(),
+                target: actor,
             }
         }
     };
