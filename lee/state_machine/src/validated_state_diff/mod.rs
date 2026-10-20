@@ -278,8 +278,14 @@ impl ValidatedStateDiff {
             public_context.promotions.clone(),
             evidence,
         );
-        let request = WholeExecution::new(public_context, TransactionEntry::Sync(root), None, &[])
-            .map_err(|error| LeeError::InvalidInput(error.to_string()))?;
+        let request = WholeExecution::new(
+            public_context,
+            TransactionEntry::Sync(root),
+            Vec::new(),
+            None,
+            &[],
+        )
+        .map_err(|error| LeeError::InvalidInput(error.to_string()))?;
         settle(
             backend,
             |backend| Ok(request.execute(backend)?.public),

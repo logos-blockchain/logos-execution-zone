@@ -1244,6 +1244,7 @@ impl WalletCore {
 
         let shared_secrets = acc_manager.shared_secrets();
         let mut input = ProvingInput {
+            claims: Vec::new(),
             root: root.map(|Receipt { body, rho, .. }| MessageWitness {
                 body,
                 rho,

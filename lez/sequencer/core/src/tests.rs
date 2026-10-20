@@ -5329,6 +5329,7 @@ fn prove_and_settle(
         .collect();
     let (output, proof) = lee::execute_and_prove(
         lee::ProvingInput {
+            claims: Vec::new(),
             root,
             public_context: lee::PublicExecutionContext::new(public_actors, []),
             private_witnesses,

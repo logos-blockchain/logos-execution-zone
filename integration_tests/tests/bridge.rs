@@ -171,6 +171,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     // Proven without running the deposit, which settlement refuses.
     let (output, proof) = execute_and_prove_with_cross_messages(
         lee::ProvingInput {
+            claims: Vec::new(),
             root: TransactionEntry::Sync(RootCall {
                 to: receipt,
                 message: deposit,

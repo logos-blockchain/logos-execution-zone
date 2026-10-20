@@ -385,6 +385,14 @@ pub fn execute_and_prove(
     )
 }
 
+fn claim_bodies(input: &ProvingInput) -> Vec<MessageBody> {
+    input
+        .claims
+        .iter()
+        .map(|witness| witness.body.clone())
+        .collect()
+}
+
 /// Simulates the whole transaction as [`execute_and_prove`] does and returns the cycles its
 /// public transitions metered, for pricing the fee before proving.
 pub fn simulate(
@@ -434,6 +442,7 @@ fn simulate_whole(
     let predicted_cross_messages = WholeExecution::new(
         input.public_context.clone(),
         input.root.clone().map(|witness| witness.body),
+        claim_bodies(input),
         input.fee,
         &input.private_witnesses,
     )?
@@ -507,6 +516,7 @@ fn prove(
     let outcome = PrivatePart::new(
         input.public_context.clone(),
         input.root.clone().map(|witness| witness.body),
+        claim_bodies(&input),
         input.fee,
         &input.private_witnesses,
         predicted_cross_messages.clone(),

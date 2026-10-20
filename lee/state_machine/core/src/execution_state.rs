@@ -542,11 +542,19 @@ impl<'witnesses> WholeExecution<'witnesses> {
     pub fn new(
         public_context: PublicExecutionContext,
         root: TransactionEntry<MessageBody>,
+        claims: Vec<MessageBody>,
         fee: Option<FeeTransfer>,
         witnesses: &'witnesses [PrivateWitness],
     ) -> Result<Self, ExecutionError> {
         let mut mode = WholeMode::default();
-        let executor = Executor::start(public_context, witnesses, Some(root), fee, &mut mode)?;
+        let executor = Executor::start(
+            public_context,
+            witnesses,
+            Some(root),
+            claims,
+            fee,
+            &mut mode,
+        )?;
         Ok(Self { executor, mode })
     }
 
@@ -562,6 +570,7 @@ impl<'witnesses> PrivatePart<'witnesses> {
     pub fn new(
         public_context: PublicExecutionContext,
         root: TransactionEntry<MessageBody>,
+        claims: Vec<MessageBody>,
         fee: Option<FeeTransfer>,
         witnesses: &'witnesses [PrivateWitness],
         predicted_cross_messages: PredictedCrossMessages,
@@ -571,7 +580,14 @@ impl<'witnesses> PrivatePart<'witnesses> {
             next_public_segment: 0,
             boundary: Boundary::new(),
         };
-        let executor = Executor::start(public_context, witnesses, Some(root), fee, &mut mode)?;
+        let executor = Executor::start(
+            public_context,
+            witnesses,
+            Some(root),
+            claims,
+            fee,
+            &mut mode,
+        )?;
         Ok(Self { executor, mode })
     }
 
@@ -597,6 +613,7 @@ impl PublicPart {
             public_context,
             &[],
             root.map(TransactionEntry::Sync),
+            Vec::new(),
             None,
             &mut mode,
         )?;
@@ -962,6 +979,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         public_context: PublicExecutionContext,
         witnesses: &'witnesses [PrivateWitness],
         root: Option<TransactionEntry<MessageBody>>,
+        claims: Vec<MessageBody>,
         fee: Option<FeeTransfer>,
         mode: &mut M,
     ) -> Result<Self, ExecutionError> {
@@ -1042,8 +1060,8 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         for (alias, account_id) in openings {
             executor.register_alias(alias, account_id)?;
         }
-        // The fee transfer is a second entry run by the modes executing private roots, once the
-        // root's subtree and, for a public root, its cross messages complete.
+        // Entry order in the modes executing private roots: claims -> root -> fee transfer.
+        // The fee transfer waits for the root's subtree and, for a public root, its cross messages.
         let fee = fee.filter(|_| M::executes_transaction_root(false));
         if let Some(fee) = fee
             && !executor.is_private(&fee.payer)
@@ -1052,8 +1070,12 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
                 account_id: fee.payer,
             });
         }
+        let claims = claims
+            .into_iter()
+            .filter(|_| M::executes_transaction_root(false));
         if let Some(root) = root {
             mode.start_with_transaction_root(&mut executor)?;
+            // push fee work (before root)
             executor.queue_fee(fee);
             let (from, to, message) = match root {
                 TransactionEntry::Sync(RootCall { to, message }) => (None, to, message),
@@ -1061,20 +1083,30 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
                     (Some(from), to, message)
                 }
             };
-            executor
-                .work_stack
-                .push(WorkItem::Deliver(Box::new(Delivery::entry(
-                    MessageEnvelope {
-                        from: Sender::Root { from },
-                        to,
-                        message,
-                    },
-                ))));
+            executor.queue_entry(from, to, message);
         } else {
+            // push fee transfer & start without root
             executor.queue_fee(fee);
             mode.start_without_transaction_root(&mut executor)?;
         }
+
+        // push all claims (in reverse), they will be popped first
+        // so that the balance becomes `current + claimed`
+        for MessageBody { from, to, message } in claims.rev() {
+            executor.queue_entry(Some(from), to, message);
+        }
         Ok(executor)
+    }
+
+    fn queue_entry(&mut self, from: Option<Actor>, to: Actor, message: MessageData) {
+        self.work_stack
+            .push(WorkItem::Deliver(Box::new(Delivery::entry(
+                MessageEnvelope {
+                    from: Sender::Root { from },
+                    to,
+                    message,
+                },
+            ))));
     }
 
     fn queue_fee(&mut self, fee: Option<FeeTransfer>) {

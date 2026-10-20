@@ -1344,6 +1344,7 @@ mod tests {
             .expect("the sender's commitment is in state");
         let (output, proof) = lee::execute_and_prove(
             lee::ProvingInput {
+                claims: Vec::new(),
                 root: TransactionEntry::Sync(RootCall {
                     to: Actor::native_balance(keys.account_id()),
                     message: borsh::to_vec(&native_token::Message::Transfer {

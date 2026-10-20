@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use lee_core::{
-    PrivacyPreservingCircuitInput, ProgramImageWitness, ProvingInput,
+    MessageWitness, PrivacyPreservingCircuitInput, ProgramImageWitness, ProvingInput,
     account::AccountId,
     execution_state::{PrivatePart, TransactionEntry},
     native_token::NATIVE_TOKEN_PROGRAM_ID,
@@ -26,6 +26,7 @@ fn main() {
     let public_root = input.public_root();
     let ProvingInput {
         root,
+        claims,
         fee,
         public_context,
         private_witnesses,
@@ -58,19 +59,20 @@ fn main() {
         );
     }
 
-    // Extract the top-level message and whether it is a consumed async message.
-    let (root, message_spend) = match root {
-        TransactionEntry::Sync(call) => (TransactionEntry::Sync(call), None),
-        TransactionEntry::Async(witness) => {
-            let spend = witness
-                .spend(&private_witnesses)
-                .unwrap_or_else(|e| panic!("{e}"));
-            (
-                TransactionEntry::Async(witness.body),
-                Some((spend, witness.filler)),
-            )
-        }
+    // Extract the top-level message and whether it is a consumed async message, then the claims.
+    let mut message_spends = Vec::with_capacity(claims.len().saturating_add(1));
+    let mut spend = |witness: MessageWitness| {
+        let spend = witness
+            .spend(&private_witnesses)
+            .unwrap_or_else(|e| panic!("{e}"));
+        message_spends.push((spend, witness.filler));
+        witness.body
     };
+    let root = match root {
+        TransactionEntry::Sync(call) => TransactionEntry::Sync(call),
+        TransactionEntry::Async(witness) => TransactionEntry::Async(spend(witness)),
+    };
+    let claims: Vec<_> = claims.into_iter().map(&mut spend).collect();
 
     // Generate the private part of the transaction.
     let private_part = PrivatePart::new(
@@ -78,6 +80,8 @@ fn main() {
         public_context.clone(),
         // The top-level message.
         root,
+        // The received messages delivered before it.
+        claims,
         // The fee transfer run after it.
         fee,
         // All the private actor witnesses.
@@ -115,7 +119,7 @@ fn main() {
         public_context,
         public_root,
         &private_witnesses,
-        message_spend,
+        message_spends,
         dummy_inputs,
         ciphertext_padding,
         program_image_claims,

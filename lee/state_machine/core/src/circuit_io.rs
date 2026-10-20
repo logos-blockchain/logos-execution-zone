@@ -156,6 +156,8 @@ pub struct FeeTransfer {
 pub struct ProvingInput {
     /// Top level initial message starting a transaction.
     pub root: TransactionEntry<MessageWitness>,
+    /// Received messages spent and delivered as entries before the root, in order.
+    pub claims: Vec<MessageWitness>,
     /// A native transfer run after the root, see [`FeeTransfer`].
     pub fee: Option<FeeTransfer>,
     /// Assumptions on the public environment context for the proof.
@@ -556,6 +558,7 @@ mod tests {
     ) -> ProvingInput {
         ProvingInput {
             root,
+            claims: Vec::new(),
             public_context,
             private_witnesses: vec![receiver()],
             dummy_inputs: Vec::new(),
