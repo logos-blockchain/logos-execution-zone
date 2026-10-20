@@ -36,7 +36,8 @@ use wallet::WalletCore;
 //   cargo run --release --bin prog_cli -- --payer <payer> hello --program <id> --account <id> \
 //     --text 'Hola mundo!'
 //   cargo run --release --bin prog_cli -- --payer <payer> send --program <id> --account <id> \
-//     --message-hex 0002000000486f   # any guest: Borsh-encoded message bytes
+//     --message-hex 0002000000486f [--sign] [--also <id>]... [--pda-seed <base58|0xhex>]
+//     # any guest: Borsh-encoded message bytes; --also/--pda-seed declare more of its actors
 
 // The `hello_world_with_move_function` guest's `Message::Write(data)` and
 // `Message::MoveData { data, to }`, borsh-encoded as a variant index followed by the fields.
@@ -119,6 +120,14 @@ enum Command {
         /// Sign with `account`'s key, for handlers that check `is_authorized`.
         #[arg(long)]
         sign: bool,
+        /// Also declare the program's actor on this account, for a message the handler sends on.
+        /// Repeatable.
+        #[arg(long)]
+        also: Vec<AccountId>,
+        /// Also declare the program's actor on its PDA for this seed (base58, or 0x-prefixed hex),
+        /// with the PDA's admission evidence. The PDA's state is then the one checked afterwards.
+        #[arg(long)]
+        pda_seed: Option<String>,
     },
 }
 
@@ -163,6 +172,19 @@ fn unhex(text: &str) -> anyhow::Result<Vec<u8>> {
                 .map_err(|err| anyhow::anyhow!("invalid hex {:?}: {err}", &text[i..i + 2]))
         })
         .collect()
+}
+
+/// A PDA seed: 32 bytes as base58 (an account id, say) or 0x-prefixed hex.
+fn parse_seed(text: &str) -> anyhow::Result<PdaSeed> {
+    let text = text.trim();
+    let bytes: [u8; 32] = if text.starts_with("0x") {
+        unhex(text)?
+            .try_into()
+            .map_err(|bytes: Vec<u8>| anyhow::anyhow!("a PDA seed is 32 bytes, not {}", bytes.len()))?
+    } else {
+        *text.parse::<AccountId>()?.value()
+    };
+    Ok(PdaSeed::new(bytes))
 }
 
 /// Sends `call` paid by `payer`, waits for inclusion, and reports whether the target changed.
@@ -335,15 +357,29 @@ async fn main() -> anyhow::Result<()> {
             account,
             message_hex,
             sign,
+            also,
+            pda_seed,
         } => {
             let actor = Actor::new(account, program);
+            let mut actors = vec![actor];
+            actors.extend(also.into_iter().map(|other| Actor::new(other, program)));
+            let mut evidence = Vec::new();
+            let mut target = actor;
+            if let Some(seed) = pda_seed {
+                let seed = parse_seed(&seed)?;
+                let pda = Actor::new(AccountId::for_public_pda(&program, &seed), program);
+                println!("The program derived account id is: {}", pda.account_id);
+                actors.push(pda);
+                evidence.push(PublicAccountEvidence::Pda { program, seed });
+                target = pda;
+            }
             Call {
                 to: actor,
-                actors: vec![actor],
+                actors,
                 message: unhex(&message_hex)?,
                 signers: if sign { vec![account] } else { Vec::new() },
-                evidence: Vec::new(),
-                target: actor,
+                evidence,
+                target,
             }
         }
     };
