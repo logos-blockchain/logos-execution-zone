@@ -7,6 +7,9 @@ use lee_core::{
     execution_state::{PrivatePartOutcome, PublicExecutionContext},
 };
 
+/// A spent received message: its nullifier and root, and the dummy output standing in for it.
+type MessageSpend = ((Nullifier, CommitmentSetDigest), DummyOutput);
+
 #[expect(
     clippy::too_many_arguments,
     reason = "Each input is a distinct part of the journal; bundling would be artificial"
@@ -16,7 +19,7 @@ pub fn compute_circuit_output(
     public_context: PublicExecutionContext,
     public_root: Option<RootCall>,
     private_witnesses: &[PrivateWitness],
-    message_spend: Option<((Nullifier, CommitmentSetDigest), DummyOutput)>,
+    message_spends: Vec<MessageSpend>,
     dummy_inputs: Vec<DummyInput>,
     ciphertext_padding: Option<u32>,
     program_image_claims: Vec<ProgramImageClaim>,
@@ -66,8 +69,8 @@ pub fn compute_circuit_output(
         )
     });
 
-    // If a message is consumed, pad its nullifier with a dummy commitment.
-    for (spend, filler) in message_spend.into_iter().chain(padding) {
+    // Each consumed message's nullifier is padded with a dummy commitment.
+    for (spend, filler) in message_spends.into_iter().chain(padding) {
         emit_dummy_output(&mut output, spend, filler, ciphertext_padding);
     }
 
@@ -253,7 +256,7 @@ mod tests {
     fn emit(
         private: Vec<(AccountId, AccountData)>,
         witnesses: &[PrivateWitness],
-        message_spend: Option<((Nullifier, CommitmentSetDigest), DummyOutput)>,
+        message_spend: Option<MessageSpend>,
         dummy_inputs: Vec<DummyInput>,
     ) -> PrivacyPreservingCircuitOutput {
         compute_circuit_output(
@@ -266,7 +269,7 @@ mod tests {
             PublicExecutionContext::default(),
             None,
             witnesses,
-            message_spend,
+            message_spend.into_iter().collect(),
             dummy_inputs,
             None,
             Vec::new(),

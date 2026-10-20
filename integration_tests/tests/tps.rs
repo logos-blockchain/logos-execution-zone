@@ -271,6 +271,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     );
     let (output, proof) = circuit::execute_and_prove(
         ProvingInput {
+            claims: Vec::new(),
             root: TransactionEntry::Sync(RootCall {
                 to: Actor::native_balance(sender_id),
                 message: Program::serialize_message(lee_core::native_token::Message::Transfer {

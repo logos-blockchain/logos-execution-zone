@@ -527,6 +527,7 @@ fn prove_init_with_commitment_root(
     let sender = Actor::native_balance(sender_id);
     let (output, _) = execute_and_prove(
         ProvingInput {
+            claims: Vec::new(),
             root: TransactionEntry::Sync(RootCall {
                 to: sender,
                 message: Program::serialize_message(native_token::Message::Transfer {

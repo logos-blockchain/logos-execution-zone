@@ -120,6 +120,7 @@ fn prove_trade(
         .send_sync(payer, &request);
     let (output, proof) = execute_and_prove_with_cross_messages(
         ProvingInput {
+            claims: Vec::new(),
             root: TransactionEntry::Sync(RootCall {
                 to: Actor::new(input, programs.scripted),
                 message: Program::serialize_message(script)?,
