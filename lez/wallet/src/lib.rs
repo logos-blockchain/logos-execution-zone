@@ -937,9 +937,20 @@ impl WalletCore {
     ) -> Result<cli::SubcommandReturnValue> {
         let (tx, block_id) = self.await_inclusion(tx_hash).await?;
         if let LeeTransaction::PrivacyPreserving(tx) = tx {
+            let reverted = self.get_block(block_id).await?.is_some_and(|block| {
+                block
+                    .body
+                    .transactions
+                    .iter()
+                    .position(|included| included.hash() == tx_hash)
+                    .is_some_and(|position| block.body.is_reverted(position))
+            });
+            if reverted {
+                println!("Transaction reverted: its fee was charged and nothing else applied");
+            }
             let key_chain = self.storage.key_chain_mut();
             let mut index = key_chain.build_latest_nullifier_index();
-            key_chain.sync_updates_via_nullifiers(&tx.message, &mut index);
+            key_chain.follow_transaction(&tx.message, reverted, false, &mut index);
         }
         self.store_persistent_data().with_context(|| {
             format!("Transaction {tx_hash} is included in block {block_id}, but storing the wallet failed")
@@ -1888,24 +1899,17 @@ impl WalletCore {
                 "History reaches block {} out of sequence",
                 block.header.block_id
             );
-            let mut spent = Vec::new();
-            for tx in block.body.transactions {
-                let LeeTransaction::PrivacyPreserving(pp_tx) = &tx else {
+            let spent = spent_in(&block);
+            for (position, tx) in block.body.transactions.iter().enumerate() {
+                let LeeTransaction::PrivacyPreserving(pp_tx) = tx else {
                     continue;
                 };
-                spent.extend(
-                    pp_tx
-                        .message
-                        .execution
-                        .private_actions
-                        .iter()
-                        .map(|action| action.nullifier),
+                self.storage.key_chain_mut().follow_transaction(
+                    &pp_tx.message,
+                    block.body.is_reverted(position),
+                    discover,
+                    &mut index,
                 );
-                let key_chain = self.storage.key_chain_mut();
-                let followed = key_chain.sync_updates_via_nullifiers(&pp_tx.message, &mut index);
-                if discover {
-                    key_chain.discover_unfollowed(&pp_tx.message, &followed, &mut index);
-                }
             }
 
             self.spent_nullifiers.append(spent)?;
@@ -1955,17 +1959,41 @@ pub const fn max_fee_for(gas_limit: u64) -> u128 {
     (gas_limit as u128 + ASSUMED_DATA_BYTES) * ASSUMED_BASE_FEE
 }
 
-fn decrypt_note_at(
-    message: &Message,
-    i: usize,
+/// The nullifiers `block` spends: a reverted transaction's fee fallback alone, every private
+/// action of the others.
+fn spent_in(block: &Block) -> Vec<Nullifier> {
+    block
+        .body
+        .transactions
+        .iter()
+        .enumerate()
+        .filter_map(|(position, tx)| match tx {
+            LeeTransaction::PrivacyPreserving(pp_tx) => Some((position, &pp_tx.message.execution)),
+            LeeTransaction::Public(_) => None,
+        })
+        .flat_map(|(position, execution)| {
+            let fallback = execution.fee.as_ref().and_then(|fee| fee.fallback.as_ref());
+            match (block.body.is_reverted(position), fallback) {
+                (true, Some(fallback)) => vec![fallback.action.nullifier],
+                (true, None) => Vec::new(),
+                (false, _) => execution
+                    .private_actions
+                    .iter()
+                    .map(|action| action.nullifier)
+                    .collect(),
+            }
+        })
+        .collect()
+}
+
+fn decrypt_note(
+    action: &lee_core::PrivateAction,
     secret: &SharedSecretKey,
 ) -> Option<(lee_core::PrivateAccountKind, Account)> {
     lee_core::EncryptionScheme::decrypt(
-        &message.execution.private_actions[i]
-            .encrypted_post_state
-            .ciphertext,
+        &action.encrypted_post_state.ciphertext,
         secret,
-        &message.execution.private_actions[i].nullifier,
+        &action.nullifier,
     )
 }
 
