@@ -83,7 +83,8 @@ fn c_str_to_path(ptr: *const c_char, name: &str) -> Result<PathBuf, FfiOperation
 
 /// Create a new wallet with fresh storage.
 ///
-/// This initializes a new wallet with a fresh mnemonic.
+/// This initializes a new wallet with a fresh mnemonic, its sync cursor at the chain tip.
+/// An unreachable node leaves the cursor at genesis.
 /// Use this for first-time wallet creation.
 ///
 /// # Parameters
@@ -116,7 +117,13 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
     };
 
     match WalletCore::new_init_storage(config_path, storage_path, None, &password) {
-        Ok((core, mnemonic)) => {
+        Ok((mut core, mnemonic)) => {
+            if let Err(e) = block_on(core.start_at_chain_tip()) {
+                print_error(format!(
+                    "Could not read the chain tip, the new wallet syncs from block 0: {e}"
+                ));
+            }
+
             let wrapper = Box::new(WalletWrapper {
                 core: Mutex::new(core),
             });

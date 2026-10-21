@@ -34,6 +34,7 @@ pub struct Storage {
     key_chain: UserKeyChain,
     labels: BTreeMap<Label, AccountIdWithPrivacy>,
     last_synced_block: BlockId,
+    synced_from_block: BlockId,
 }
 
 impl Storage {
@@ -48,6 +49,7 @@ impl Storage {
                 key_chain: UserKeyChain::new_with_accounts(public_tree, private_tree),
                 labels: BTreeMap::new(),
                 last_synced_block: 0,
+                synced_from_block: 0,
             },
             mnemonic,
         )
@@ -107,6 +109,7 @@ impl Storage {
         self.key_chain = UserKeyChain::new_with_accounts(public_tree, private_tree);
         self.labels = BTreeMap::new();
         self.last_synced_block = 0;
+        self.synced_from_block = 0;
     }
 
     #[must_use]
@@ -164,10 +167,29 @@ impl Storage {
         self.last_synced_block
     }
 
+    pub(crate) const fn set_synced_from_block(&mut self, block_id: BlockId) {
+        self.synced_from_block = block_id;
+    }
+
+    pub const fn rewind_skipped_history(&mut self) {
+        if self.synced_from_block > 0 {
+            self.last_synced_block = 0;
+            self.synced_from_block = 0;
+        }
+    }
+
+    /// The block this wallet's history starts after: it holds no key used at or below it, and
+    /// its spent-nullifier cache covers each block from there to the sync cursor.
+    #[must_use]
+    pub const fn synced_from_block(&self) -> BlockId {
+        self.synced_from_block
+    }
+
     fn to_persistent(&self) -> PersistentStorage {
         let Self {
             key_chain,
             last_synced_block,
+            synced_from_block,
             labels,
         } = self;
         let key_chain_data = key_chain.to_persistent();
@@ -175,6 +197,7 @@ impl Storage {
         PersistentStorage {
             key_chain: key_chain_data,
             last_synced_block: *last_synced_block,
+            synced_from_block: *synced_from_block,
             labels: labels.clone(),
         }
     }
@@ -183,12 +206,14 @@ impl Storage {
         let PersistentStorage {
             key_chain,
             last_synced_block,
+            synced_from_block,
             labels,
         } = persistent;
 
         Ok(Self {
             key_chain: UserKeyChain::from_persistent(key_chain)?,
             last_synced_block,
+            synced_from_block,
             labels,
         })
     }
@@ -300,6 +325,7 @@ mod tests {
             .add_imported_private_account(key_chain, None, account);
 
         storage.set_last_synced_block(42);
+        storage.set_synced_from_block(7);
 
         let temp_dir = tempfile::tempdir().unwrap();
         let storage_path = temp_dir.path().join("storage.json");
@@ -312,6 +338,55 @@ mod tests {
 
             assert_eq!(loaded_store, storage);
         }
+    }
+
+    #[test]
+    fn a_storage_file_written_before_the_field_existed_loads_at_genesis() {
+        let (mut storage, _) = Storage::new();
+        storage.set_last_synced_block(42);
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage_path = temp_dir.path().join("storage.json");
+        storage.save_to_path(&storage_path, None).unwrap();
+
+        let mut file: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&storage_path).unwrap()).unwrap();
+        assert!(
+            file.as_object_mut()
+                .unwrap()
+                .remove("synced_from_block")
+                .is_some()
+        );
+        std::fs::write(&storage_path, serde_json::to_vec(&file).unwrap()).unwrap();
+
+        let (loaded, _) = Storage::from_path(&storage_path, "").unwrap();
+        assert_eq!(loaded.last_synced_block(), 42);
+        assert_eq!(loaded.synced_from_block(), 0);
+    }
+
+    #[test]
+    fn rewinding_hands_back_a_skipped_history_and_leaves_a_whole_one() {
+        let (mut storage, _) = Storage::new();
+        storage.set_last_synced_block(42);
+
+        storage.rewind_skipped_history();
+        assert_eq!(storage.last_synced_block(), 42);
+
+        storage.set_synced_from_block(7);
+        storage.rewind_skipped_history();
+        assert_eq!(storage.last_synced_block(), 0);
+        assert_eq!(storage.synced_from_block(), 0);
+    }
+
+    #[test]
+    fn restoring_rewinds_the_history_to_genesis() {
+        let (mut storage, mnemonic) = Storage::new();
+        storage.set_last_synced_block(42);
+        storage.set_synced_from_block(7);
+
+        storage.restore(&mnemonic);
+
+        assert_eq!(storage.last_synced_block(), 0);
+        assert_eq!(storage.synced_from_block(), 0);
     }
 
     #[test]

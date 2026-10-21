@@ -2130,7 +2130,8 @@ enum FfiOperationError wallet_ffi_free_label_list(struct LabelList *label_list);
 /**
  * Create a new wallet with fresh storage.
  *
- * This initializes a new wallet with a fresh mnemonic.
+ * This initializes a new wallet with a fresh mnemonic, its sync cursor at the chain tip.
+ * An unreachable node leaves the cursor at genesis.
  * Use this for first-time wallet creation.
  *
  * # Parameters

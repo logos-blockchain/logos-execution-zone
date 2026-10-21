@@ -20,6 +20,8 @@ pub struct PersistentStorage {
     pub key_chain: KeyChainPersistentData,
     pub last_synced_block: u64,
     #[serde(default)]
+    pub synced_from_block: u64,
+    #[serde(default)]
     pub labels: BTreeMap<Label, AccountIdWithPrivacy>,
 }
 
