@@ -582,6 +582,8 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
                     // on `lee_core::ProvenExecution`. FFI/wallet plumbing for address-flexible
                     // program dispatch is tracked separately.
                     program_image_claims: _,
+                    // Not yet part of this wire protocol either: the refund target.
+                    fee: _,
                 },
             nonces,
             admission_evidence,
@@ -651,6 +653,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
                 // A privacy-preserving tx submitted through this protocol will fail proof
                 // verification for any program not at its bijection address until this is wired.
                 program_image_claims: Vec::new(),
+                fee: None,
             },
             nonces: nonce_map(nonces)?,
             admission_evidence: admission_evidence
@@ -1443,6 +1446,7 @@ mod tests {
                 private_actions: vec![],
                 validity: lee_core::program::ValidityWindows::new_unbounded(),
                 program_image_claims: vec![],
+                fee: None,
             },
             nonces: BTreeMap::new(),
             admission_evidence: admission_evidence(),

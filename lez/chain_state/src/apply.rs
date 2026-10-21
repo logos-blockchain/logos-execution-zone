@@ -337,10 +337,12 @@ pub fn settle_transaction(
         ClassifyError::MissingFeeDeclaration => {
             BlockIngestError::MissingFeeDeclaration { tx_index }
         }
-        ClassifyError::MissingPrivateFee => BlockIngestError::InvalidFeeClass {
-            tx_index,
-            reason: err.to_string(),
-        },
+        ClassifyError::MissingPrivateFee | ClassifyError::InvalidRefundTarget { .. } => {
+            BlockIngestError::InvalidFeeClass {
+                tx_index,
+                reason: err.to_string(),
+            }
+        }
     })?;
     let events = match class {
         FeeClass::Exempt => {
@@ -395,7 +397,8 @@ pub fn settle_transaction(
 ///
 /// The actual fee is priced at the opening base fees and taken from the
 /// reserve; a surplus above [`market::MIN_PRIVATE_REFUND`] is refunded to the
-/// payer as a published message, a smaller one is kept as tip. Every failure
+/// proof's public refund target if it names one, else published to the payer's
+/// bound alias, and a smaller or unrefundable one is kept as tip. Every failure
 /// invalidates the transaction: fee and action share one proof, so there is no
 /// revert that keeps the fee.
 #[expect(
@@ -469,16 +472,26 @@ fn settle_private_transaction(
         .apply_state_diff(diff)
         .map_err(|err| fee_validity(format!("private action failed: {err}")))?;
 
-    // A surplus worth a note goes back to the payer, if a recovery binding lets it be
-    // published there; dust and an unbound payer's surplus stay as tip.
-    let (refund, tip) =
-        if surplus > market::MIN_PRIVATE_REFUND && state.recovery_binding(*payer).is_some() {
-            (surplus, 0)
-        } else {
-            (0, surplus)
-        };
+    // A surplus worth a note goes to the public refund target, else back to the payer if a
+    // recovery binding lets it be published there; dust and an unbound payer's surplus stay
+    // as tip.
+    let refund_to = private_tx
+        .message()
+        .execution
+        .fee
+        .as_ref()
+        .and_then(|fee| fee.refund_to);
+    let refundable = refund_to.is_some() || state.recovery_binding(*payer).is_some();
+    let (refund, tip) = if surplus > market::MIN_PRIVATE_REFUND && refundable {
+        (surplus, 0)
+    } else {
+        (0, surplus)
+    };
     if refund > 0 {
-        let refund_msg = private_fee_refund_invocation(*payer, refund);
+        let refund_msg = refund_to.map_or_else(
+            || private_fee_refund_invocation(*payer, refund),
+            |target| fee_refund_invocation(target, refund),
+        );
         let refund_diff = lee::ValidatedStateDiff::from_fee_settlement_invocation(
             refund_msg.execution.root.to,
             &refund_msg.execution.root.message,
@@ -1403,6 +1416,7 @@ mod tests {
             payer,
             recipient: system_accounts::fee_inbox_account_id(),
             amount,
+            refund_to: None,
         }
     }
 
@@ -1538,6 +1552,52 @@ mod tests {
         assert_eq!(
             native_balance(&settled, system_accounts::fee_inbox_account_id()),
             reserve
+        );
+        assert_eq!(published_credit(&settled, alias), None);
+    }
+
+    #[test]
+    fn a_surplus_is_refunded_to_the_proofs_public_target() {
+        let (state, senders) = private_sender_state(&[0x57]);
+        let sender = &senders[0];
+        let alias = sender.0.account_id().blinded(&ALIAS_OPENING);
+        let recipient = initial_pub_accounts_private_keys()[0].account_id;
+        let required = fee_core::assess::private_fee_required(0, 8, 8);
+        let surplus = fee_core::market::MIN_PRIVATE_REFUND + 1;
+        let tx = private_tx(
+            &state,
+            sender,
+            recipient,
+            10,
+            Some(lee_core::FeeTransfer {
+                refund_to: Some(recipient),
+                ..inbox_fee(required + surplus, sender.0.account_id())
+            }),
+        );
+        let recipient_pre = native_balance(&state, recipient);
+
+        let mut settled = state;
+        let mut summary = BlockFeeSummary::default();
+        settle_transaction(
+            &tx,
+            &mut settled,
+            &FeeState::genesis(),
+            1,
+            100,
+            0,
+            &mut summary,
+        )
+        .expect("settles");
+        assert_eq!(summary.revenue_base, required);
+        assert_eq!(summary.revenue_tip, 0);
+        assert_eq!(
+            native_balance(&settled, system_accounts::fee_inbox_account_id()),
+            required
+        );
+        // The target gets the transfer and the surplus; nothing is published to the alias.
+        assert_eq!(
+            native_balance(&settled, recipient),
+            recipient_pre + 10 + surplus
         );
         assert_eq!(published_credit(&settled, alias), None);
     }

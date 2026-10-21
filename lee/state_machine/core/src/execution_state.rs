@@ -1114,6 +1114,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             payer,
             recipient,
             amount,
+            refund_to: _,
         }) = fee
         else {
             return;

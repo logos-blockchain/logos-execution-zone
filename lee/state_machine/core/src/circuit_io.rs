@@ -149,6 +149,19 @@ pub struct FeeTransfer {
     pub payer: AccountId,
     pub recipient: AccountId,
     pub amount: Balance,
+    /// A public account the zone returns any unspent part of the transfer to; `None` returns it
+    /// to `payer` as presented.
+    pub refund_to: Option<AccountId>,
+}
+
+/// What a proof commits about its fee transfer, see [`FeeTransfer`].
+///
+/// TODO: a struct rather than a bare `refund_to` because the payer's fee fallback joins it next,
+/// so the journal gains one `fee` field rather than two.
+#[derive(BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
+pub struct ProvenFee {
+    pub refund_to: Option<AccountId>,
 }
 
 /// Inputs for proving a transaction's private part.
@@ -471,6 +484,8 @@ pub struct ProvenExecution {
     /// Claims derived from [`PrivacyPreservingCircuitInput::program_image_witnesses`] — what the
     /// receipt actually commits to, so the sequencer can check it against real chain state.
     pub program_image_claims: Vec<ProgramImageClaim>,
+    /// The fee transfer's refund target, when the proof runs one.
+    pub fee: Option<ProvenFee>,
 }
 
 #[cfg(any(feature = "host", test))]
@@ -642,6 +657,7 @@ mod tests {
                     },
                     ProgramImageClaim::Undisclosed { root: [26; 32] },
                 ],
+                fee: None,
             },
         };
 
@@ -716,6 +732,7 @@ mod tests {
             &[25, 0, 0, 0].repeat(8), // image_id: eight little-endian words
             &[1],                     // ProgramImageClaim::Undisclosed
             &[26; 32],                // root
+            &[0],                     // fee: None
         ]
         .concat();
 

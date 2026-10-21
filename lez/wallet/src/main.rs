@@ -24,6 +24,7 @@ async fn main() -> Result<()> {
         dry_run,
         fee_headroom,
         fee_payer,
+        refund_to,
         command,
     } = Args::parse();
     let overrides = fee_headroom.map(|blocks| WalletConfigOverrides {
@@ -63,6 +64,7 @@ async fn main() -> Result<()> {
         };
         wallet.set_dry_run(dry_run);
         wallet.set_private_fee_payer(fee_payer);
+        wallet.set_private_refund_target(refund_to);
         match execute_subcommand(&mut wallet, command).await {
             // A dry run stops the command once it has reported; that is its success.
             //

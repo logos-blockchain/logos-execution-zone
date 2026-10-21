@@ -182,6 +182,9 @@ pub struct WalletCore {
     dry_run: bool,
     /// The owned private account paying every in-proof fee, unless a send names one.
     fee_payer: Option<AccountId>,
+    /// The public account every in-proof fee's surplus is refunded to, instead of the payer's
+    /// alias.
+    refund_to: Option<AccountId>,
 }
 
 impl WalletCore {
@@ -283,6 +286,7 @@ impl WalletCore {
             sequencer_client,
             dry_run: false,
             fee_payer: None,
+            refund_to: None,
         })
     }
 
@@ -290,6 +294,19 @@ impl WalletCore {
     /// its own; `None` lets each send pick its payer.
     pub const fn set_private_fee_payer(&mut self, fee_payer: Option<AccountId>) {
         self.fee_payer = fee_payer;
+    }
+
+    /// Refunds every in-proof fee's surplus to `target`, a public account, instead of the payer's
+    /// alias: for a transaction that already credits `target` publicly (a deshield), which then
+    /// leaves nothing behind. Any other target links the transaction to it.
+    pub const fn set_private_refund_target(&mut self, target: Option<AccountId>) {
+        self.refund_to = target;
+    }
+
+    /// Reserves every in-proof fee at the base fees after `blocks` of the steepest climb past
+    /// the quote, instead of the configured headroom.
+    pub const fn set_private_fee_headroom_blocks(&mut self, blocks: u64) {
+        self.config.private_fee_headroom_blocks = blocks;
     }
 
     /// The private account to pay `reserve` when no mentioned private account is authorized and
@@ -1352,6 +1369,17 @@ impl WalletCore {
         let reserve = headroom_reserve
             .min(acc_manager.native_balance(payer))
             .max(fee_at_head);
+        let refund_to = self.refund_to;
+        if let Some(target) = refund_to
+            && !acc_manager
+                .public_actors()
+                .contains(&Actor::native_balance(target))
+        {
+            warn!(
+                "Refund target {target} is not credited publicly by this transaction; the refund \
+                 links the transaction to it"
+            );
+        }
         let opening = account_manager::random_bytes();
         input
             .recoveries
@@ -1360,6 +1388,7 @@ impl WalletCore {
             payer,
             recipient: fee_inbox,
             amount: reserve,
+            refund_to,
         });
         if self.dry_run {
             println!("Dry run: nothing proven or sent");
@@ -1375,6 +1404,10 @@ impl WalletCore {
             );
             println!("  reserve:        {reserve} (surplus refunded)");
             println!("  fee payer:      {payer}");
+            println!(
+                "  refund to:      {}",
+                refund_to.map_or_else(|| "the payer's alias".to_owned(), |t| t.to_string())
+            );
             return Err(ExecutionFailureKind::DryRun);
         }
 

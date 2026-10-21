@@ -1,8 +1,8 @@
 use lee_core::{
     Commitment, CommitmentSetDigest, DummyInput, DummyOutput, EncryptedNote, EncryptionScheme,
-    EphemeralSecretKey, ML_KEM_768_CIPHERTEXT_LEN, Nullifier, PrivacyPreservingCircuitOutput,
-    PrivateAction, PrivateWitness, ProgramImageClaim, ProvenExecution, RecipientEncryption,
-    RootCall, SharedSecretKey,
+    EphemeralSecretKey, FeeTransfer, ML_KEM_768_CIPHERTEXT_LEN, Nullifier,
+    PrivacyPreservingCircuitOutput, PrivateAction, PrivateWitness, ProgramImageClaim,
+    ProvenExecution, ProvenFee, RecipientEncryption, RootCall, SharedSecretKey,
     account::{Account, AccountData},
     execution_state::{PrivatePartOutcome, PublicExecutionContext},
 };
@@ -25,6 +25,7 @@ pub fn compute_circuit_output(
     program_image_claims: Vec<ProgramImageClaim>,
     recoveries: &[RecipientEncryption],
     message_seals: Vec<RecipientEncryption>,
+    fee: Option<FeeTransfer>,
 ) -> PrivacyPreservingCircuitOutput {
     let PrivatePartOutcome {
         validity,
@@ -35,6 +36,9 @@ pub fn compute_circuit_output(
     let async_messages =
         lee_core::seal_messages(&async_messages, message_seals, ciphertext_padding)
             .unwrap_or_else(|e| panic!("{e}"));
+    let fee = fee.map(|fee| ProvenFee {
+        refund_to: fee.refund_to,
+    });
     let mut output = ProvenExecution {
         boundary,
         async_messages,
@@ -46,6 +50,7 @@ pub fn compute_circuit_output(
         private_actions: Vec::new(),
         validity,
         program_image_claims,
+        fee,
     };
 
     // Emit one action per private account, covering all its actor states.
@@ -275,6 +280,7 @@ mod tests {
             Vec::new(),
             &[],
             Vec::new(),
+            None,
         )
     }
 
