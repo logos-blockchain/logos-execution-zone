@@ -314,6 +314,9 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                         timestamps: cast_ffi_validity_window(timestamp_validity_window)?,
                     },
                     program_image_claims,
+                    // Not carried over this FFI: a proof committing a fee cannot be rebuilt from
+                    // it, see the corresponding destructure below.
+                    fee: None,
                 },
                 nonces: nonces_from_ffi(nonces).map_err(cast_error)?,
                 admission_evidence: public_account_evidence(admission_evidence)?,
@@ -355,6 +358,7 @@ impl From<lee::privacy_preserving_transaction::Message> for FfiPrivacyPreserving
                     private_actions,
                     validity,
                     program_image_claims,
+                    fee: _,
                 },
             nonces,
             admission_evidence,
@@ -806,6 +810,7 @@ mod tests {
                     private_actions: vec![],
                     validity: ValidityWindows::new_unbounded(),
                     program_image_claims: vec![],
+                    fee: None,
                 },
                 nonces: BTreeMap::from([(account_id(28), Nonce(29))]),
                 admission_evidence: admission_evidence(),

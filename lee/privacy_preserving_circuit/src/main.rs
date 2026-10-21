@@ -125,6 +125,7 @@ fn main() {
         program_image_claims,
         &recoveries,
         message_seals,
+        fee,
     );
 
     env::commit_slice(&lee_core::to_borsh_frame(&output));

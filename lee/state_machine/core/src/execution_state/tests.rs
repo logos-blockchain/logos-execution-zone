@@ -1579,6 +1579,7 @@ fn a_fee_transfer_runs_after_the_root_in_every_mode() {
         payer: keys.regular_id(),
         recipient: inbox.account_id,
         amount: 0,
+        refund_to: None,
     };
     let native = |input: &ReceiveInput| {
         native_token::handle_message(input).unwrap_or_else(|error| panic!("{error}"))

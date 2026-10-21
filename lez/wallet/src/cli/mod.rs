@@ -126,6 +126,12 @@ pub struct Args {
     /// command, whether or not the transaction mentions it.
     #[arg(long, global = true, value_name = "ACCOUNT_ID")]
     pub fee_payer: Option<lee::AccountId>,
+    /// Refund a privacy-preserving transaction's fee surplus to this public account for this
+    /// command, instead of the payer's blinded alias. Meant for a transaction that already
+    /// credits that account publicly, such as a deshield; any other target links the transaction
+    /// to it.
+    #[arg(long, global = true, value_name = "ACCOUNT_ID")]
+    pub refund_to: Option<lee::AccountId>,
     /// Wallet command.
     #[command(subcommand)]
     pub command: Option<Command>,

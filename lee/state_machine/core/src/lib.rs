@@ -6,8 +6,8 @@
 pub use circuit_io::{
     DummyInput, DummyOutput, FeeTransfer, InvalidMessageEvidence, MessageWitness, NullifierWitness,
     PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput, PrivateAction, PrivateWitness,
-    ProgramImageClaim, ProgramImageWitness, ProvenExecution, ProvingInput, RegularKey, RootCall,
-    SenderPresentation, ShadowProgramWitness, WitnessKind,
+    ProgramImageClaim, ProgramImageWitness, ProvenExecution, ProvenFee, ProvingInput, RegularKey,
+    RootCall, SenderPresentation, ShadowProgramWitness, WitnessKind,
 };
 pub use commitment::{
     Commitment, CommitmentPosition, CommitmentSetDigest, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH,

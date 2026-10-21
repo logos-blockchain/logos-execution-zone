@@ -11,7 +11,9 @@
 //! Omitting it is rejected outright ([`ClassifyError::MissingFeeDeclaration`],
 //! [`ClassifyError::MissingPrivateFee`]).
 
-use common::transaction::{LeeTransaction, is_cross_zone_lock, is_sequencer_stake_operation};
+use common::transaction::{
+    LeeTransaction, is_cross_zone_lock, is_sequencer_stake_operation, validate_reward_target,
+};
 use fee_core::assess::FeeTxView;
 use lee::privacy_preserving_transaction::Message as PrivateMessage;
 use lee_core::{
@@ -43,6 +45,10 @@ pub enum ClassifyError {
     /// into the fee inbox, or that crossing is not a native credit.
     #[error("private transaction omits its required in-proof fee")]
     MissingPrivateFee,
+    /// A private transaction names a restricted system account as its refund
+    /// target.
+    #[error("private fee refund target is invalid: {reason}")]
+    InvalidRefundTarget { reason: String },
 }
 
 /// The reserve a private transaction credits to the fee inbox inside its proof
@@ -83,7 +89,8 @@ fn private_fee_reserve(message: &PrivateMessage) -> Option<(AccountId, Balance)>
 ///
 /// - [`ClassifyError::MissingFeeDeclaration`] if a user public transaction that is not an exempt
 ///   shape omits its fee
-/// - [`ClassifyError::MissingPrivateFee`] if a private transaction omits its in-proof fee, and
+/// - [`ClassifyError::MissingPrivateFee`] if a private transaction omits its in-proof fee,
+/// - [`ClassifyError::InvalidRefundTarget`] if it names a restricted account as its refund target,
 /// - [`ClassifyError::Unserializable`] if a charged transaction cannot be serialized to price its
 ///   storage gas.
 pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, ClassifyError> {
@@ -92,9 +99,14 @@ pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, Class
     }
     let public_tx = match tx {
         LeeTransaction::PrivacyPreserving(private_tx) => {
+            let execution = &private_tx.message().execution;
             let Some((payer, reserve)) = private_fee_reserve(private_tx.message()) else {
                 return Err(ClassifyError::MissingPrivateFee);
             };
+            if let Some(target) = execution.fee.as_ref().and_then(|fee| fee.refund_to) {
+                validate_reward_target(target)
+                    .map_err(|reason| ClassifyError::InvalidRefundTarget { reason })?;
+            }
             return Ok(FeeClass::Charged(FeeTxView::Private { payer, reserve }));
         }
         LeeTransaction::Public(public_tx) => public_tx,
@@ -185,6 +197,39 @@ mod tests {
             class,
             FeeClass::Charged(FeeTxView::Private { payer, reserve: 42 })
                 if payer == self::payer().account_id
+        ));
+    }
+
+    #[test]
+    fn a_private_transaction_refunding_a_restricted_account_is_rejected() {
+        let crediting = || {
+            vec![
+                crossing(inbox(), &native_token::Message::Credit(42)),
+                BoundaryStep::EndPublicSubtree,
+            ]
+        };
+        let tx = |message| {
+            LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+                message,
+                WitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![])),
+            ))
+        };
+
+        let targeting = |target| {
+            let mut message = Message::default();
+            message.execution.boundary = crediting();
+            message.execution.fee = Some(lee_core::ProvenFee {
+                refund_to: Some(target),
+            });
+            tx(message)
+        };
+        assert!(matches!(
+            classify(&targeting(system_accounts::fee_inbox_account_id()), false),
+            Err(ClassifyError::InvalidRefundTarget { .. })
+        ));
+        assert!(matches!(
+            classify(&targeting(AccountId::new([3; 32])), false),
+            Ok(FeeClass::Charged(FeeTxView::Private { reserve: 42, .. }))
         ));
     }
 
