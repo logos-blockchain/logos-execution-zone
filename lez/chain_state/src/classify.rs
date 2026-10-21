@@ -220,6 +220,7 @@ mod tests {
             message.execution.boundary = crediting();
             message.execution.fee = Some(lee_core::ProvenFee {
                 refund_to: Some(target),
+                fallback: None,
             });
             tx(message)
         };

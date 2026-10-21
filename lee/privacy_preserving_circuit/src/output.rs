@@ -1,10 +1,11 @@
 use lee_core::{
     Commitment, CommitmentSetDigest, DummyInput, DummyOutput, EncryptedNote, EncryptionScheme,
-    EphemeralSecretKey, FeeTransfer, ML_KEM_768_CIPHERTEXT_LEN, Nullifier,
+    EphemeralSecretKey, FeeFallback, FeeTransfer, ML_KEM_768_CIPHERTEXT_LEN, Nullifier,
     PrivacyPreservingCircuitOutput, PrivateAction, PrivateWitness, ProgramImageClaim,
     ProvenExecution, ProvenFee, RecipientEncryption, RootCall, SharedSecretKey,
-    account::{Account, AccountData},
-    execution_state::{PrivatePartOutcome, PublicExecutionContext},
+    account::{Account, AccountData, Actor, Nonce},
+    execution_state::{Boundary, BoundaryStep, PrivatePartOutcome, PublicExecutionContext},
+    native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
 };
 
 /// A spent received message: its nullifier and root, and the dummy output standing in for it.
@@ -38,6 +39,8 @@ pub fn compute_circuit_output(
             .unwrap_or_else(|e| panic!("{e}"));
     let fee = fee.map(|fee| ProvenFee {
         refund_to: fee.refund_to,
+        fallback: fee_fallback(&fee, &boundary, private_witnesses, ciphertext_padding)
+            .map(Box::new),
     });
     let mut output = ProvenExecution {
         boundary,
@@ -60,7 +63,7 @@ pub fn compute_circuit_output(
         );
         output
             .private_actions
-            .push(private_action(witness, post_data, ciphertext_padding));
+            .push(private_action(witness, post_data, ciphertext_padding, None));
     }
 
     // Pad the output with dummy commitment/nullifier pairs.
@@ -139,11 +142,62 @@ fn emit_dummy_output(
     });
 }
 
-/// Generate a private action given old and new account data.
+/// The payer's transition after the fee transfer alone, for settlement to apply when the public
+/// part fails: `None` when its pre-state does not cover the transfer or nothing crosses with it.
+///
+/// This enables us to include reverted pptx'es, like how we do for public tx'es
+/// so that we can charge the user for sending (potentially spamming) wrong tx'es.
+fn fee_fallback(
+    fee: &FeeTransfer,
+    boundary: &Boundary,
+    private_witnesses: &[PrivateWitness],
+    ciphertext_padding: Option<u32>,
+) -> Option<FeeFallback> {
+    let witness = private_witnesses
+        .iter()
+        .find(|witness| witness.account_id() == fee.payer)?;
+    let pre = witness.predecessor();
+    let balance = native_token::decode_balance(pre.data.actor_state(NATIVE_TOKEN_PROGRAM_ID))
+        .ok()?
+        .checked_sub(fee.amount)?;
+    let post = pre.data.clone().with_actor_state(
+        NATIVE_TOKEN_PROGRAM_ID,
+        native_token::encode_balance(balance),
+    );
+    let credit = borsh::to_vec(&native_token::Message::Credit(fee.amount))
+        .expect("a native message serializes");
+    // The fee entry runs last, so searching from the end finds its own crossing; settlement
+    // rejects a transaction crediting the inbox twice anyway.
+    let crossing = boundary.iter().rev().find_map(|step| match step {
+        BoundaryStep::PrivateToPublic(delivery)
+            if delivery.envelope.to == Actor::native_balance(fee.recipient)
+                && delivery.envelope.message == credit =>
+        {
+            Some(delivery.clone())
+        }
+        BoundaryStep::PrivateToPublic(_)
+        | BoundaryStep::PublicToPrivate(_)
+        | BoundaryStep::EndPrivateSubtree
+        | BoundaryStep::EndPublicSubtree => None,
+    })?;
+    // Its own key: the main note is encrypted under the successor's nonce.
+    let esk_nonce = pre.nonce;
+    Some(FeeFallback {
+        action: private_action(witness, post, ciphertext_padding, Some(esk_nonce)),
+        boundary: vec![
+            BoundaryStep::PrivateToPublic(crossing),
+            BoundaryStep::EndPublicSubtree,
+        ],
+    })
+}
+
+/// Generate a private action given old and new account data, encrypted under the key the
+/// successor's nonce derives unless `esk_nonce` names another.
 fn private_action(
     witness: &PrivateWitness,
     post_data: AccountData,
     ciphertext_padding: Option<u32>,
+    esk_nonce: Option<Nonce>,
 ) -> PrivateAction {
     let PrivateWitness {
         vpk,
@@ -162,7 +216,11 @@ fn private_action(
     };
     let account_kind = kind.account_kind();
 
-    let esk = EphemeralSecretKey::new(&account_id, random_seed, &post_state.nonce);
+    let esk = EphemeralSecretKey::new(
+        &account_id,
+        random_seed,
+        &esk_nonce.unwrap_or(post_state.nonce),
+    );
     let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(vpk, &esk);
 
     let encrypted_account = EncryptionScheme::encrypt(
@@ -387,6 +445,71 @@ mod tests {
                 .commitments()
                 .contains(&Commitment::for_dummy(&spend.0, &filler.commitment_seed))
         );
+    }
+
+    #[test]
+    fn the_fee_fallback_is_the_payers_state_after_the_transfer_alone() {
+        let owner = Owner::new(3);
+        let account = Account::funded(100);
+        let witness = owner.update_witness(account.clone());
+        let inbox = AccountId::new([8; 32]);
+        let fee = FeeTransfer {
+            payer: owner.account_id(),
+            recipient: inbox,
+            amount: 30,
+            refund_to: None,
+        };
+        let crossing = |amount| {
+            BoundaryStep::PrivateToPublic(lee_core::execution_state::Delivery {
+                envelope: lee_core::program::MessageEnvelope {
+                    from: Actor::native_balance(AccountId::new([9; 32])),
+                    to: Actor::native_balance(inbox),
+                    message: borsh::to_vec(&native_token::Message::Credit(amount)).unwrap(),
+                },
+                inherited_authorizations: BTreeSet::new(),
+                inherits_entry_authorizations: true,
+                pda_seeds: BTreeSet::new(),
+            })
+        };
+        let boundary = vec![crossing(30), BoundaryStep::EndPublicSubtree];
+
+        let fallback = fee_fallback(&fee, &boundary, std::slice::from_ref(&witness), None)
+            .expect("the pre-state covers the fee");
+        let expected = Account {
+            nonce: account.nonce.private_account_nonce_increment(&owner.nsk()),
+            data: Account::funded(70).data,
+        };
+        assert_eq!(
+            fallback.action.commitment,
+            Commitment::new(&owner.account_id(), &expected)
+        );
+        assert_eq!(
+            owner.decrypt(&fallback.action),
+            (PrivateAccountKind::Regular, expected)
+        );
+        assert_eq!(
+            fallback.boundary,
+            vec![crossing(30), BoundaryStep::EndPublicSubtree]
+        );
+        // Encrypted under its own key, apart from the main note's.
+        let main = private_action(&witness, Account::funded(70).data, None, None);
+        assert_ne!(
+            main.encrypted_post_state.epk,
+            fallback.action.encrypted_post_state.epk
+        );
+
+        // A fee the pre-state does not cover, or whose credit does not cross, has no fallback.
+        let unaffordable = FeeTransfer { amount: 101, ..fee };
+        assert!(
+            fee_fallback(
+                &unaffordable,
+                &boundary,
+                std::slice::from_ref(&witness),
+                None
+            )
+            .is_none()
+        );
+        assert!(fee_fallback(&fee, &Vec::new(), &[witness], None).is_none());
     }
 
     #[test]

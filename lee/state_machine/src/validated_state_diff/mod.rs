@@ -312,17 +312,23 @@ impl ValidatedStateDiff {
             timestamp,
             crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
         )
-        .map(|(diff, _cycles)| diff)
+        .map(|(diff, _charge)| diff)
     }
 
-    /// Also returns the cycles the public part used, bounded by `cycle_budget`.
+    /// Also returns the charge: the cycles the public part used, bounded by `cycle_budget`, and
+    /// why it reverted if it did.
+    ///
+    /// A public part failing in a chargeable way reverts to the proof's fee fallback when it
+    /// carries one: the diff then spends only the payer's nullifier, commits its post-state
+    /// after the fee transfer and replays that transfer's crossing. Without a fallback the
+    /// failure is an error, as every pre-execution check is.
     pub fn from_privacy_preserving_transaction_metered(
         tx: &PrivacyPreservingTransaction,
         state: &V03State,
         block_id: BlockId,
         timestamp: Timestamp,
         cycle_budget: Cycles,
-    ) -> Result<(Self, Cycles), LeeError> {
+    ) -> Result<(Self, ExecutionCharge), LeeError> {
         let message = &tx.message;
         let execution = &message.execution;
         let commitments = execution.commitments();
@@ -389,28 +395,75 @@ impl ValidatedStateDiff {
             message.public_context.promotions.clone(),
             evidence(&signer_account_ids, &message.admission_evidence),
         );
-        let mut diff = settle(
+        let result = settle(
             backend,
             |backend| request.execute(backend),
             block_id,
             timestamp,
             StateDiff {
-                signer_account_ids,
+                signer_account_ids: signer_account_ids.clone(),
                 new_commitments: commitments,
                 new_nullifiers: nullifiers,
                 recovery_bindings: execution.recovery_bindings.clone(),
                 ..StateDiff::default()
             },
-        )?;
-        // The proven private async messages follow the live public ones.
-        diff.published.extend(
-            execution
-                .async_messages
-                .iter()
-                .cloned()
-                .map(Publication::Sealed),
         );
-        Ok((Self(diff), cycles_used))
+        // As for a public action: a non-zero exit keeps its count, a panic or session-limit
+        // bail pays the full budget.
+        let cycles = match &result {
+            Ok(_) => cycles_used,
+            Err(LeeError::ProgramExitedWithCode { cycles, .. }) => {
+                cycles_used.saturating_add(*cycles)
+            }
+            Err(_) => cycle_budget,
+        };
+        let fallback = execution.fee.as_ref().and_then(|fee| fee.fallback.as_ref());
+        let (diff, revert) = match (result, fallback) {
+            (Ok(mut diff), _) => {
+                // The proven private async messages follow the live public ones.
+                diff.published.extend(
+                    execution
+                        .async_messages
+                        .iter()
+                        .cloned()
+                        .map(Publication::Sealed),
+                );
+                (diff, None)
+            }
+            (Err(err), Some(fallback)) if err.is_chargeable() => {
+                state.check_commitments_are_new(&[fallback.action.commitment])?;
+                let fallback_request = PublicPart::new(
+                    message.public_context.clone(),
+                    None,
+                    fallback.boundary.clone(),
+                )
+                .map_err(|error| LeeError::InvalidInput(error.to_string()))?;
+                let mut fallback_cycles = 0;
+                let fallback_backend = PublicBackend::new(
+                    state,
+                    cycle_budget,
+                    &mut fallback_cycles,
+                    BTreeSet::new(),
+                    evidence(&signer_account_ids, &message.admission_evidence),
+                );
+                let diff = settle(
+                    fallback_backend,
+                    |replay| fallback_request.execute(replay),
+                    block_id,
+                    timestamp,
+                    StateDiff {
+                        signer_account_ids,
+                        new_commitments: vec![fallback.action.commitment],
+                        new_nullifiers: vec![(fallback.action.nullifier, fallback.action.root)],
+                        recovery_bindings: execution.recovery_bindings.clone(),
+                        ..StateDiff::default()
+                    },
+                )?;
+                (diff, Some(err.to_string()))
+            }
+            (Err(err), _) => return Err(err),
+        };
+        Ok((Self(diff), ExecutionCharge { cycles, revert }))
     }
 
     /// Returns the public account changes produced by this transaction.

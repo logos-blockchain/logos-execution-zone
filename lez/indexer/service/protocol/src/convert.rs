@@ -582,7 +582,7 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
                     // on `lee_core::ProvenExecution`. FFI/wallet plumbing for address-flexible
                     // program dispatch is tracked separately.
                     program_image_claims: _,
-                    // Not yet part of this wire protocol either: the refund target.
+                    // Not yet part of this wire protocol either: the refund target and fallback.
                     fee: _,
                 },
             nonces,
@@ -854,7 +854,10 @@ impl From<BlockHeader> for common::block::BlockHeader {
 
 impl From<common::block::BlockBody> for BlockBody {
     fn from(value: common::block::BlockBody) -> Self {
-        let common::block::BlockBody { transactions } = value;
+        let common::block::BlockBody {
+            transactions,
+            reverted,
+        } = value;
 
         let transactions = transactions
             .into_iter()
@@ -866,7 +869,10 @@ impl From<common::block::BlockBody> for BlockBody {
             })
             .collect();
 
-        Self { transactions }
+        Self {
+            transactions,
+            reverted,
+        }
     }
 }
 
@@ -874,7 +880,10 @@ impl TryFrom<BlockBody> for common::block::BlockBody {
     type Error = lee::error::LeeError;
 
     fn try_from(value: BlockBody) -> Result<Self, Self::Error> {
-        let BlockBody { transactions } = value;
+        let BlockBody {
+            transactions,
+            reverted,
+        } = value;
 
         let transactions = transactions
             .into_iter()
@@ -884,7 +893,10 @@ impl TryFrom<BlockBody> for common::block::BlockBody {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(Self { transactions })
+        Ok(Self {
+            transactions,
+            reverted,
+        })
     }
 }
 
@@ -1087,6 +1099,9 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
             }
             indexer_core::BlockIngestError::NonPublicGenesisTransaction => {
                 Self::NonPublicGenesisTransaction
+            }
+            indexer_core::BlockIngestError::RevertMismatch { listed, settled } => {
+                Self::RevertMismatch { listed, settled }
             }
             indexer_core::BlockIngestError::StateTransition { tx_index, reason } => {
                 Self::StateTransition { tx_index, reason }
@@ -1383,6 +1398,7 @@ mod tests {
                 ..lee_core::execution_state::PublicExecutionContext::default()
             },
             execution: lee_core::ProvenExecution {
+                fee: None,
                 boundary: vec![
                     lee_core::execution_state::BoundaryStep::PrivateToPublic(repeated.clone()),
                     lee_core::execution_state::BoundaryStep::PrivateToPublic(
@@ -1446,7 +1462,6 @@ mod tests {
                 private_actions: vec![],
                 validity: lee_core::program::ValidityWindows::new_unbounded(),
                 program_image_claims: vec![],
-                fee: None,
             },
             nonces: BTreeMap::new(),
             admission_evidence: admission_evidence(),

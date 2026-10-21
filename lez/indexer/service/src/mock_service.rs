@@ -617,6 +617,7 @@ fn build_mock_block(
         },
         body: BlockBody {
             transactions: block_transactions,
+            reverted: Vec::new(),
         },
         bedrock_status,
     }

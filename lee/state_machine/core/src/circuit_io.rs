@@ -155,13 +155,25 @@ pub struct FeeTransfer {
 }
 
 /// What a proof commits about its fee transfer, see [`FeeTransfer`].
-///
-/// TODO: a struct rather than a bare `refund_to` because the payer's fee fallback joins it next,
-/// so the journal gains one `fee` field rather than two.
 #[derive(BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
 pub struct ProvenFee {
     pub refund_to: Option<AccountId>,
+    /// What settlement applies instead of the private actions when the public part fails, if the
+    /// payer's pre-state covers the transfer on its own.
+    pub fallback: Option<Box<FeeFallback>>,
+}
+
+/// The payer's transition after the fee transfer alone: its post-state is its pre-state less the
+/// amount, and the boundary carries only the transfer's crossing.
+///
+/// Its action spends the payer's nullifier, so it tells the payer's action from the others of
+/// the same transaction; it links nothing across transactions.
+#[derive(BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
+pub struct FeeFallback {
+    pub action: PrivateAction,
+    pub boundary: Boundary,
 }
 
 /// Inputs for proving a transaction's private part.
@@ -366,7 +378,7 @@ impl PrivateWitness {
     /// The state this witness's transition starts from: the fixed empty account when it
     /// initializes.
     #[must_use]
-    pub(crate) fn predecessor(&self) -> Cow<'_, Account> {
+    pub fn predecessor(&self) -> Cow<'_, Account> {
         match &self.nullifier {
             NullifierWitness::Init { .. } => Cow::Owned(Account::default()),
             NullifierWitness::Update { account, .. } => Cow::Borrowed(account),
@@ -484,7 +496,7 @@ pub struct ProvenExecution {
     /// Claims derived from [`PrivacyPreservingCircuitInput::program_image_witnesses`] — what the
     /// receipt actually commits to, so the sequencer can check it against real chain state.
     pub program_image_claims: Vec<ProgramImageClaim>,
-    /// The fee transfer's refund target, when the proof runs one.
+    /// The fee transfer's refund target and fallback, when the proof runs one.
     pub fee: Option<ProvenFee>,
 }
 

@@ -1719,8 +1719,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     }
 
     /// Validates and applies a single mempool transaction to the current state.
-    /// Returns `Ok(true)` if the transaction was valid and applied, `Ok(false)` if
-    /// it was skipped due to validation failure.
+    /// Returns `Some(reverted)` if the transaction was valid and applied, with
+    /// whether its action reverted, or `None` if it was skipped due to validation
+    /// failure.
     #[expect(
         clippy::too_many_arguments,
         reason = "the settlement threads exactly the block-transition context the spec names"
@@ -1735,8 +1736,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         opening: &fee_core::state::FeeState,
         tx_index: u64,
         summary: &mut fee_core::BlockFeeSummary,
-    ) -> bool {
+    ) -> Option<bool> {
         let tx_hash = tx.hash();
+        let mut reverted = false;
         match origin {
             // Gossiped transactions arrive from untrusted peers, same as
             // user-submitted ones, so they get the same full state validation.
@@ -1748,7 +1750,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     } else {
                         log::warn!("Dropping user-submitted bridge deposit {tx_hash}");
                     }
-                    return false;
+                    return None;
                 }
 
                 // The cheap admission screen first: an unfundable or fee-invalid
@@ -1759,7 +1761,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                         "Dropping candidate {tx_hash:?} at the fee screen: {:#}",
                         anyhow!(rejection)
                     );
-                    return false;
+                    return None;
                 }
 
                 // Settle on a scratch clone: settlement is the single validation
@@ -1777,12 +1779,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     tx_index,
                     &mut scratch_summary,
                 ) {
-                    Ok(_events) => {
+                    Ok((_events, tx_reverted)) => {
                         if let Some(withdraw_data) = extract_bridge_withdraw_data(tx) {
                             withdrawals.push(withdraw_data);
                         }
                         *state = scratch;
                         *summary = scratch_summary;
+                        reverted = tx_reverted;
                     }
                     Err(err) => {
                         if matches!(origin, TransactionOrigin::Gossip) {
@@ -1801,7 +1804,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                                 anyhow!(err)
                             );
                         }
-                        return false;
+                        return None;
                     }
                 }
             }
@@ -1828,13 +1831,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                         "Sequencer-generated transaction {tx_hash} failed execution: {:#}, skipping it",
                         anyhow!(err)
                     );
-                    return false;
+                    return None;
                 }
             }
         }
 
         debug!("Validated transaction with hash {tx_hash}, including it in block");
-        true
+        Some(reverted)
     }
 
     #[expect(
@@ -1969,6 +1972,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
 
         let mut valid_transactions = Vec::new();
+        let mut reverted = Vec::new();
         let mut withdrawals = Vec::new();
 
         // Bridge deposit mints are drained from the store, not the mempool: the
@@ -2090,6 +2094,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 transactions: temp_valid_transactions,
                 prev_block_hash,
                 timestamp: new_block_timestamp,
+                reverted: reverted.clone(),
             };
 
             let block_size = borsh::to_vec(&temp_hashable_data)
@@ -2193,7 +2198,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 valid_transactions.len().try_into().expect("fits u64"),
                 &mut summary,
             );
-            if applied {
+            if let Some(tx_reverted) = applied {
+                if tx_reverted {
+                    reverted.push(u64::try_from(valid_transactions.len()).expect("fits u64"));
+                }
                 // track the charged gas
                 gas_budget.sync(&summary);
                 sequencer_core_metrics::record_mempool_transaction_application_time(
@@ -2252,6 +2260,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             transactions: valid_transactions,
             prev_block_hash,
             timestamp: new_block_timestamp,
+            reverted,
         };
 
         let block = hashable_data.clone().into_pending_block();
@@ -2359,6 +2368,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         timestamp: u64,
     ) -> Result<bool> {
         let alone = HashableBlockData {
+            reverted: Vec::new(),
             block_id,
             transactions: [std::slice::from_ref(tx), system_txs].concat(),
             prev_block_hash,
@@ -2771,6 +2781,7 @@ fn genesis_block_and_state(
     let (genesis_state, genesis_txs, genesis_events) =
         build_genesis_state(config, bootstrap_sequencer_key);
     let genesis_block = HashableBlockData {
+        reverted: Vec::new(),
         block_id: GENESIS_BLOCK_ID,
         transactions: genesis_txs,
         prev_block_hash: HashType([0; 32]),

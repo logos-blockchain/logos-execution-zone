@@ -172,6 +172,7 @@ fn prepare_mock_storage_with_stake(
         },
         body: BlockBody {
             transactions: vec![],
+            reverted: Vec::new(),
         },
         bedrock_status: BedrockStatus::Pending,
     };
