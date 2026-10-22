@@ -178,6 +178,7 @@ pub struct FeeFallback {
 
 /// Inputs for proving a transaction's private part.
 #[derive(BorshSerialize, BorshDeserialize)]
+#[cfg_attr(feature = "host", derive(Clone))]
 pub struct ProvingInput {
     /// Top level initial message starting a transaction.
     pub root: TransactionEntry<MessageWitness>,
@@ -322,6 +323,7 @@ pub enum NullifierWitness {
 /// A struct containing necessary data for dummy nullifier and
 /// commitment generation.
 #[derive(BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Clone))]
 pub struct DummyInput {
     /// The seed used for generating the dummy nullifier.
     pub nullifier_seed: [u8; 32],
