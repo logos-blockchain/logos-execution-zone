@@ -2094,7 +2094,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 transactions: temp_valid_transactions,
                 prev_block_hash,
                 timestamp: new_block_timestamp,
-                reverted: reverted.clone(),
+                // Whether this transaction reverts is known only once it is settled below; if
+                // it does, its index joins the list and the block grows by one `u64`. Size the
+                // worst case now, with a placeholder index, so a revert doesn't push the block
+                // over the limit.
+                reverted: reverted.iter().copied().chain([0]).collect(),
             };
 
             let block_size = borsh::to_vec(&temp_hashable_data)
@@ -2368,7 +2372,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         timestamp: u64,
     ) -> Result<bool> {
         let alone = HashableBlockData {
-            reverted: Vec::new(),
+            // A placeholder index: the size if the transaction reverts.
+            reverted: vec![0],
             block_id,
             transactions: [std::slice::from_ref(tx), system_txs].concat(),
             prev_block_hash,

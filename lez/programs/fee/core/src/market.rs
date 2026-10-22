@@ -54,6 +54,9 @@ pub const PRIVATE_PAD_BYTES: u64 = 512;
 /// Canonical serialized size of every private transaction. Derived from its
 /// parts so the relationship cannot drift silently on a re-pin.
 pub const PRIVATE_GAS_STOR: u64 = PROOF_BYTES + PRIVATE_PAD_BYTES;
+/// The most private actions one private transaction may carry: its storage is priced flat, so
+/// the count is capped instead of metered.
+pub const MAX_PRIVATE_ACTIONS: usize = 8;
 
 /// One base-fee update.
 ///

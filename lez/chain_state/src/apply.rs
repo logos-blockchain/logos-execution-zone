@@ -355,12 +355,13 @@ pub fn settle_transaction(
         ClassifyError::MissingFeeDeclaration => {
             BlockIngestError::MissingFeeDeclaration { tx_index }
         }
-        ClassifyError::MissingPrivateFee | ClassifyError::InvalidRefundTarget { .. } => {
-            BlockIngestError::InvalidFeeClass {
-                tx_index,
-                reason: err.to_string(),
-            }
-        }
+        ClassifyError::MissingPrivateFee
+        | ClassifyError::TooManyPrivateActions { .. }
+        | ClassifyError::InvalidRefundTarget { .. }
+        | ClassifyError::InvalidFeeFallback => BlockIngestError::InvalidFeeClass {
+            tx_index,
+            reason: err.to_string(),
+        },
     })?;
     let settled = match class {
         FeeClass::Exempt => {
