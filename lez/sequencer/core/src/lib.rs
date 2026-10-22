@@ -704,7 +704,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let stored_final = chain.lock().await.final_msg();
         let mut on_lineage = stored_final == MsgId::root();
         let mut read_any = false;
-        while let Some((message, slot)) = messages.next().await {
+        while let Some(message) = messages.next().await {
+            let (message, slot) = message.context(
+                "Channel history read failed part way, so reconstruction would be incomplete",
+            )?;
             if let Some(check) = &mut consistency_check
                 && let Some(ChainConsistency::Inconsistent(mismatch)) =
                     check.observe(&message, slot)

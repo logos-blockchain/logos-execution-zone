@@ -280,7 +280,8 @@ where
             .await?;
         let mut stream = std::pin::pin!(stream);
 
-        while let Some((msg, slot)) = stream.next().await {
+        while let Some(item) = stream.next().await {
+            let (msg, slot) = item?;
             if check.observe(&msg, slot).is_some() {
                 break;
             }
