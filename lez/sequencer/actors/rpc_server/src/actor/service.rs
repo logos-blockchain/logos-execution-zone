@@ -385,21 +385,33 @@ const fn map_fee_state_quote(
 fn map_executor_error<M>(
     err: SendError<M, sequencer_executor_actor::error::Error>,
 ) -> ErrorObjectOwned {
-    const MEMPOOL_IS_FULL_ERROR_CODE: i32 = -31900;
-
     match err {
         SendError::HandlerError(handle_err) => match handle_err {
-            invalid @ (sequencer_executor_actor::error::Error::IncorrectFee(_)
-            | sequencer_executor_actor::error::Error::PublicDryRunFailed(_)
-            | sequencer_executor_actor::error::Error::DryRunNotPublic) => {
+            // A reserve the head fee outgrew gets its own code: priced again, it may pass.
+            sequencer_executor_actor::error::Error::IncorrectFee(source)
+                if matches!(
+                    source.downcast_ref::<fee_core::validity::FeeError>(),
+                    Some(fee_core::validity::FeeError::PrivateFeeBelowRequired { .. })
+                ) =>
+            {
                 ErrorObjectOwned::owned(
-                    ErrorCode::InvalidParams.code(),
-                    format!("{invalid:#}"),
+                    sequencer_service_rpc::PRIVATE_FEE_BELOW_HEAD_ERROR_CODE,
+                    format!("Incorrect fee: {source:#}"),
                     None::<()>,
                 )
             }
+            invalid @ (sequencer_executor_actor::error::Error::IncorrectFee(_)
+            | sequencer_executor_actor::error::Error::PublicDryRunFailed(_)
+            | sequencer_executor_actor::error::Error::DryRunNotPublic) => {
+                // With its cause, which the sender is shown.
+                let message = std::error::Error::source(&invalid).map_or_else(
+                    || invalid.to_string(),
+                    |cause| format!("{invalid}: {cause:#}"),
+                );
+                ErrorObjectOwned::owned(ErrorCode::InvalidParams.code(), message, None::<()>)
+            }
             sequencer_executor_actor::error::Error::MempoolIsFull => ErrorObjectOwned::owned(
-                MEMPOOL_IS_FULL_ERROR_CODE,
+                sequencer_service_rpc::MEMPOOL_IS_FULL_ERROR_CODE,
                 "Mempool is full".to_owned(),
                 None::<()>,
             ),

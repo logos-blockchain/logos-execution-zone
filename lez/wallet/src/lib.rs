@@ -91,6 +91,9 @@ const MAX_SWEPT_CLAIMS: usize = 4;
 /// credits.
 const MAX_SWEEP_SCAN_BLOCKS: u64 = 64;
 
+/// How many times a send prices its reserve again after the screen finds it below the head fee.
+const MAX_REPRICES: u32 = 2;
+
 /// Info returned when creating a shared account.
 pub struct SharedAccountInfo {
     pub account_id: AccountId,
@@ -202,6 +205,14 @@ impl From<sequencer_service_rpc::ClientError> for ExecutionFailureKind {
             other => Self::SequencerError(anyhow::Error::from(other)),
         }
     }
+}
+
+/// The reserve a send prices at a quote, see [`WalletCore::reserve_pricing`].
+struct ReservePricing {
+    fee_at_head: u128,
+    exec_ceiling: u64,
+    stor_ceiling: u64,
+    headroom_reserve: u128,
 }
 
 /// A received message a transaction starts from. Its membership path comes with the proofs of the
@@ -1472,35 +1483,10 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             TransactionEntry::Async(receipt) => Some((receipt.position, receipt.commitment)),
             TransactionEntry::Sync(_) => None,
         };
-        let quote = self.sequencer_client.get_fee_state().await?;
-        // The base fees after the configured blocks of full blocks: the steepest climb allowed.
-        let blocks = self.config.private_fee_headroom_blocks;
-        let climb = |base, max_gas, target, damping, lo, hi| {
-            (0..blocks).fold(base, |fee, _| {
-                fee_core::market::next_base_fee(fee, max_gas, target, damping, lo, hi)
-            })
-        };
-        let exec_ceiling = climb(
-            quote.base_fee_exec,
-            fee_core::market::MAX_GAS_EXEC,
-            fee_core::market::TARGET_GAS_EXEC,
-            fee_core::market::D_EXEC,
-            fee_core::market::BASE_FEE_EXEC_MIN,
-            fee_core::market::BASE_FEE_EXEC_MAX,
-        );
-        let stor_ceiling = climb(
-            quote.base_fee_stor,
-            fee_core::market::MAX_GAS_STOR,
-            fee_core::market::TARGET_GAS_STOR,
-            fee_core::market::D_STOR,
-            fee_core::market::BASE_FEE_STOR_MIN,
-            fee_core::market::BASE_FEE_STOR_MAX,
-        );
-        let reserve_for =
-            |cycles| fee_core::assess::private_fee_required(cycles, exec_ceiling, stor_ceiling);
-        let fee_payer = fee_payer
-            .or(self.fee_payer)
-            .or_else(|| self.auto_fee_payer(&accounts, reserve_for(0)));
+        let mut quote = self.sequencer_client.get_fee_state().await?;
+        let fee_payer = fee_payer.or(self.fee_payer).or_else(|| {
+            self.auto_fee_payer(&accounts, self.reserve_pricing(&quote, 0).headroom_reserve)
+        });
         // Pending native credits to the transaction's private accounts are claimed before the
         // root, so they count as balance; they take the action slots its accounts and root leave.
         let private_states: HashSet<AccountId> = accounts
@@ -1580,20 +1566,22 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .collect();
         let select =
             move |_, body: &MessageBody| !listed_only && witnessed.contains(&body.to.account_id);
-        let choose_seal = move |body: &MessageBody| {
-            let to = body.to.account_id;
-            seals
-                .iter()
-                .find(|recipient| recipient.address() == to)
-                .map(|recipient| RecipientEncryption {
-                    recipient: recipient.clone(),
-                    esk: EphemeralSecretKey(account_manager::random_bytes()),
-                })
-                .ok_or_else(|| {
-                    lee::error::LeeError::InvalidInput(format!(
-                        "No recipient material seals an async message to {to}"
-                    ))
-                })
+        let choose_seal_with = |seals: Vec<Recipient>| {
+            move |body: &MessageBody| {
+                let to = body.to.account_id;
+                seals
+                    .iter()
+                    .find(|recipient| recipient.address() == to)
+                    .map(|recipient| RecipientEncryption {
+                        recipient: recipient.clone(),
+                        esk: EphemeralSecretKey(account_manager::random_bytes()),
+                    })
+                    .ok_or_else(|| {
+                        lee::error::LeeError::InvalidInput(format!(
+                            "No recipient material seals an async message to {to}"
+                        ))
+                    })
+            }
         };
 
         let programs = programs.clone();
@@ -1634,20 +1622,14 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             // Given cross messages stand in for the simulation; the public part is priced free.
             Some(_) => (input, simulation, programs, 0),
         };
-        let headroom_reserve = reserve_for(cycles);
         let payer = acc_manager
-            .private_fee_payer_account_id(headroom_reserve)
+            .private_fee_payer_account_id(self.reserve_pricing(&quote, cycles).headroom_reserve)
             .ok_or_else(|| {
                 ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
                     "Privacy-preserving transaction has no private account to pay its fee"
                         .to_owned(),
                 ))
             })?;
-        let fee_at_head = fee_core::assess::private_fee_required(
-            cycles,
-            quote.base_fee_exec,
-            quote.base_fee_stor,
-        );
         // What the payer holds before the root: its note plus the credits it claims.
         let swept: u128 = claims
             .iter()
@@ -1655,8 +1637,6 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .filter_map(PendingMessage::native_credit)
             .sum();
         let balance = acc_manager.native_balance(payer).saturating_add(swept);
-        // Never reserve more than the payer holds, nor less than the fee at head.
-        let reserve = headroom_reserve.min(balance).max(fee_at_head);
         let refund_to = self.refund_to;
         if let Some(target) = refund_to
             && !acc_manager
@@ -1672,86 +1652,168 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         input
             .recoveries
             .push(acc_manager.fee_recovery(payer, opening)?);
-        input.fee = Some(FeeTransfer {
-            payer,
-            recipient: fee_inbox,
-            amount: reserve,
-            refund_to,
-        });
-        if self.dry_run {
-            println!("Dry run: nothing proven or sent");
-            println!("  public cycles:  {cycles}");
-            println!(
-                "  base fees:      exec {} / stor {} (height {})",
-                quote.base_fee_exec, quote.base_fee_stor, quote.height
-            );
-            println!("  fee at head:    {fee_at_head}");
-            println!(
-                "  headroom:       {blocks} blocks, up to exec {exec_ceiling} / stor \
-                 {stor_ceiling} ({headroom_reserve})"
-            );
-            println!("  reserve:        {reserve} (surplus refunded)");
-            println!("  fee payer:      {payer}");
-            println!(
-                "  claims:         {} pending credit(s), {swept} to the payer",
-                claims.len()
-            );
-            println!(
-                "  refund to:      {}",
-                refund_to.map_or_else(|| "the payer's alias".to_owned(), |t| t.to_string())
-            );
-            return Err(ExecutionFailureKind::DryRun);
-        }
 
-        let present = acc_manager.presenter(Some((payer, opening)));
-        let (output, proof) = match cross_messages {
-            None => tokio::task::spawn_blocking(move || {
-                lee::execute_and_prove(input, &simulation, &programs, present, select, choose_seal)
-            }),
-            Some(cross_messages) => tokio::task::spawn_blocking(move || {
-                lee::execute_and_prove_with_cross_messages(
-                    input,
-                    cross_messages,
-                    &programs,
-                    present,
-                    select,
-                    choose_seal,
-                )
-            }),
-        }
-        .await??;
+        // Base fees move between the quote and inclusion; a reserve the screen finds below the
+        // head fee is priced again off a fresh quote and proven again.
+        let mut reprices = 0;
+        loop {
+            let ReservePricing {
+                fee_at_head,
+                exec_ceiling,
+                stor_ceiling,
+                headroom_reserve,
+            } = self.reserve_pricing(&quote, cycles);
+            // Never reserve more than the payer holds, nor less than the fee at head.
+            let reserve = headroom_reserve.min(balance).max(fee_at_head);
+            if self.dry_run {
+                let blocks = self.config.private_fee_headroom_blocks;
+                println!("Dry run: nothing proven or sent");
+                println!("  public cycles:  {cycles}");
+                println!(
+                    "  base fees:      exec {} / stor {} (height {})",
+                    quote.base_fee_exec, quote.base_fee_stor, quote.height
+                );
+                println!("  fee at head:    {fee_at_head}");
+                println!(
+                    "  headroom:       {blocks} blocks, up to exec {exec_ceiling} / stor \
+                     {stor_ceiling} ({headroom_reserve})"
+                );
+                println!("  reserve:        {reserve} (surplus refunded)");
+                println!("  fee payer:      {payer}");
+                println!(
+                    "  claims:         {} pending credit(s), {swept} to the payer",
+                    claims.len()
+                );
+                println!(
+                    "  refund to:      {}",
+                    refund_to.map_or_else(|| "the payer's alias".to_owned(), |t| t.to_string())
+                );
+                return Err(ExecutionFailureKind::DryRun);
+            }
 
-        let message = Message {
-            admission_evidence: acc_manager.admission_evidence(),
-            ..Message::from_circuit_output(acc_manager.public_account_nonces(), output)
+            let mut priced = input.clone();
+            priced.fee = Some(FeeTransfer {
+                payer,
+                recipient: fee_inbox,
+                amount: reserve,
+                refund_to,
+            });
+            let present = acc_manager.presenter(Some((payer, opening)));
+            let (select, choose_seal) = (select.clone(), choose_seal_with(seals.clone()));
+            let (programs, simulation) = (programs.clone(), simulation.clone());
+            let (output, proof) = match cross_messages.clone() {
+                None => tokio::task::spawn_blocking(move || {
+                    lee::execute_and_prove(
+                        priced,
+                        &simulation,
+                        &programs,
+                        present,
+                        select,
+                        choose_seal,
+                    )
+                }),
+                Some(cross_messages) => tokio::task::spawn_blocking(move || {
+                    lee::execute_and_prove_with_cross_messages(
+                        priced,
+                        cross_messages,
+                        &programs,
+                        present,
+                        select,
+                        choose_seal,
+                    )
+                }),
+            }
+            .await??;
+
+            let message = Message {
+                admission_evidence: acc_manager.admission_evidence(),
+                ..Message::from_circuit_output(acc_manager.public_account_nonces(), output)
+            };
+
+            let message_hash = message.hash();
+            let signatures_public_keys = acc_manager
+                .sign_message(message_hash)
+                .map_err(ExecutionFailureKind::SignError)?;
+
+            let witness_set =
+                lee::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
+                    signatures_public_keys,
+                    proof,
+                );
+
+            let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+            match self
+                .sequencer_client
+                .send_transaction(LeeTransaction::PrivacyPreserving(tx))
+                .await
+            {
+                Ok(tx_hash) => {
+                    if !claims.is_empty() {
+                        self.swept
+                            .lock()
+                            .expect("the swept set is not poisoned")
+                            .insert(tx_hash, claims.iter().map(|claim| claim.receipt).collect());
+                    }
+                    return Ok((tx_hash, shared_secrets));
+                }
+                Err(rejection) if reprices < MAX_REPRICES && reserve_below_head(&rejection) => {
+                    reprices = reprices.saturating_add(1);
+                    warn!(
+                        "The sequencer prices the fee above the {reserve} reserved; pricing it \
+                         again off a fresh quote ({reprices} of {MAX_REPRICES})"
+                    );
+                    quote = self.sequencer_client.get_fee_state().await?;
+                }
+                Err(rejection) => return Err(rejection.into()),
+            }
+        }
+    }
+
+    /// The reserve a privacy-preserving transaction of `cycles` public cycles takes at `quote`:
+    /// the fee at the head and at the base fees after the configured blocks of full blocks,
+    /// the steepest climb allowed.
+    fn reserve_pricing(
+        &self,
+        quote: &sequencer_service_rpc::FeeStateQuote,
+        cycles: u64,
+    ) -> ReservePricing {
+        let blocks = self.config.private_fee_headroom_blocks;
+        let climb = |base, max_gas, target, damping, lo, hi| {
+            (0..blocks).fold(base, |fee, _| {
+                fee_core::market::next_base_fee(fee, max_gas, target, damping, lo, hi)
+            })
         };
-
-        let message_hash = message.hash();
-        let signatures_public_keys = acc_manager
-            .sign_message(message_hash)
-            .map_err(ExecutionFailureKind::SignError)?;
-
-        let witness_set =
-            lee::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
-                signatures_public_keys,
-                proof,
-            );
-
-        let tx = PrivacyPreservingTransaction::new(message, witness_set);
-
-        let tx_hash = self
-            .sequencer_client
-            .send_transaction(LeeTransaction::PrivacyPreserving(tx))
-            .await
-            .map_err(Into::into)?;
-        if !claims.is_empty() {
-            self.swept
-                .lock()
-                .expect("the swept set is not poisoned")
-                .insert(tx_hash, claims.iter().map(|claim| claim.receipt).collect());
+        let exec_ceiling = climb(
+            quote.base_fee_exec,
+            fee_core::market::MAX_GAS_EXEC,
+            fee_core::market::TARGET_GAS_EXEC,
+            fee_core::market::D_EXEC,
+            fee_core::market::BASE_FEE_EXEC_MIN,
+            fee_core::market::BASE_FEE_EXEC_MAX,
+        );
+        let stor_ceiling = climb(
+            quote.base_fee_stor,
+            fee_core::market::MAX_GAS_STOR,
+            fee_core::market::TARGET_GAS_STOR,
+            fee_core::market::D_STOR,
+            fee_core::market::BASE_FEE_STOR_MIN,
+            fee_core::market::BASE_FEE_STOR_MAX,
+        );
+        ReservePricing {
+            fee_at_head: fee_core::assess::private_fee_required(
+                cycles,
+                quote.base_fee_exec,
+                quote.base_fee_stor,
+            ),
+            exec_ceiling,
+            stor_ceiling,
+            headroom_reserve: fee_core::assess::private_fee_required(
+                cycles,
+                exec_ceiling,
+                stor_ceiling,
+            ),
         }
-
-        Ok((tx_hash, shared_secrets))
     }
 
     /// Gives the claims of `tx_hash` back to the pending messages: it reverted or was not
@@ -2458,6 +2520,15 @@ fn spent_in(block: &Block) -> Vec<Nullifier> {
             }
         })
         .collect()
+}
+
+/// Whether the sequencer turned a transaction away for a reserve below the fee at its head.
+fn reserve_below_head(rejection: &sequencer_service_rpc::ClientError) -> bool {
+    matches!(
+        rejection,
+        sequencer_service_rpc::ClientError::Call(object)
+            if object.code() == sequencer_service_rpc::PRIVATE_FEE_BELOW_HEAD_ERROR_CODE
+    )
 }
 
 fn decrypt_note(

@@ -148,7 +148,7 @@ impl ProgramCatalog {
 }
 
 /// Public states assumed for simulation purposes of a private part of a transaction.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Simulation {
     pub public_actor_states: HashMap<Actor, ActorState>,
     /// The public accounts settlement admits, or `None` to admit every one.
