@@ -8,7 +8,7 @@
 )]
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::PathBuf,
 };
 
@@ -82,6 +82,14 @@ const ASSUMED_DATA_BYTES: u128 = 100_000;
 /// Default cap on the fee reservation for wallet-built public transactions.
 pub const DEFAULT_MAX_FEE: u128 = max_fee_for(DEFAULT_GAS_LIMIT);
 
+/// The most pending credits one send claims: with its accounts and a received root, a
+/// transaction stays within the private actions the wallet pads to.
+const MAX_SWEPT_CLAIMS: usize = 4;
+
+/// The most blocks past the sync cursor a send scans for spent receipts before claiming pending
+/// credits.
+const MAX_SWEEP_SCAN_BLOCKS: u64 = 64;
+
 /// Info returned when creating a shared account.
 pub struct SharedAccountInfo {
     pub account_id: AccountId,
@@ -112,6 +120,26 @@ pub struct PendingMessage {
     pub publication: Publication,
     pub body: MessageBody,
     pub recipient: Recipient,
+    /// A sealed message's commitment randomness.
+    pub rho: Option<[u8; 32]>,
+    /// The nullifier receiving it.
+    pub receipt: Nullifier,
+}
+
+impl PendingMessage {
+    /// The amount this message credits its recipient's native balance with,
+    /// if it is a native credit.
+    #[must_use]
+    pub fn native_credit(&self) -> Option<u128> {
+        if self.body.to.program_account_id != NATIVE_TOKEN_PROGRAM_ID {
+            return None;
+        }
+        match borsh::from_slice(&self.body.message).ok()? {
+            lee_core::native_token::Message::Credit(amount) => Some(amount),
+            lee_core::native_token::Message::Transfer { .. }
+            | lee_core::native_token::Message::ReadState => None,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -134,6 +162,8 @@ pub enum ExecutionFailureKind {
     MissingMembershipProof(AccountId),
     #[error("Account {0} is a foreign private account, which this wallet cannot witness")]
     ForeignPrivateAccount(AccountId),
+    #[error("A claimed message reaches {0}, which the transaction does not witness")]
+    UnwitnessedClaim(AccountId),
     #[error("Program bytecode splits into {expected} segment(s) but {actual} were supplied")]
     SegmentCountMismatch { expected: usize, actual: usize },
     #[error("Program bytecode is not a valid RISC0 program binary")]
@@ -185,6 +215,10 @@ pub struct WalletCore {
     /// The public account every in-proof fee's surplus is refunded to, instead of the payer's
     /// alias.
     refund_to: Option<AccountId>,
+    /// Receipts of the pending messages each send of this process claimed, by its transaction,
+    /// which a later send leaves alone until the spent-nullifier cache covers them. A
+    /// transaction seen reverted or not included gives its claims back.
+    swept: std::sync::Mutex<HashMap<HashType, Vec<Nullifier>>>,
 }
 
 impl WalletCore {
@@ -287,6 +321,7 @@ impl WalletCore {
             dry_run: false,
             fee_payer: None,
             refund_to: None,
+            swept: std::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -737,8 +772,14 @@ impl WalletCore {
     // Messages that one of this wallet's key pairs opens: a private address's recovery note, or a
     // sealed message.
     pub async fn owned_pending_messages(&mut self) -> Result<Vec<PendingMessage>> {
-        const PAGE: PageLimit = 256;
         self.sync_to_latest_block().await?;
+        self.pending_messages().await
+    }
+
+    // The messages one of this wallet's key pairs opens that the spent-nullifier cache, as it
+    // stands, does not see received.
+    async fn pending_messages(&self) -> Result<Vec<PendingMessage>> {
+        const PAGE: PageLimit = 256;
         let mut records = Vec::new();
         let mut from_position = 0;
         loop {
@@ -782,7 +823,7 @@ impl WalletCore {
         position: CommitmentPosition,
         publication: Publication,
     ) -> Option<(PendingMessage, Nullifier)> {
-        let (body, recipient, _, nsk) = self.private_receipt(&publication)?;
+        let (body, recipient, rho, nsk) = self.private_receipt(&publication)?;
         let receipt = Nullifier::for_message(&nsk, &publication.commitment(), position);
         Some((
             PendingMessage {
@@ -790,6 +831,8 @@ impl WalletCore {
                 publication,
                 body,
                 recipient,
+                rho,
+                receipt,
             },
             receipt,
         ))
@@ -809,14 +852,25 @@ impl WalletCore {
         Ok(self.unreceived(found).last())
     }
 
-    // Drops the records whose receipt this wallet sees spent.
+    // Drops the records whose receipt this wallet sees spent, or claimed by a send of this
+    // process.
     fn unreceived(
         &self,
         records: impl IntoIterator<Item = (PendingMessage, Nullifier)>,
     ) -> impl Iterator<Item = PendingMessage> {
+        let swept: HashSet<Nullifier> = self
+            .swept
+            .lock()
+            .expect("the swept set is not poisoned")
+            .values()
+            .flatten()
+            .copied()
+            .collect();
         records
             .into_iter()
-            .filter(|(_, receipt)| !self.spent_nullifiers.contains(receipt))
+            .filter(move |(_, receipt)| {
+                !self.spent_nullifiers.contains(receipt) && !swept.contains(receipt)
+            })
             .map(|(pending, _)| pending)
     }
 
@@ -935,18 +989,27 @@ impl WalletCore {
         &mut self,
         tx_hash: HashType,
     ) -> Result<cli::SubcommandReturnValue> {
-        let (tx, block_id) = self.await_inclusion(tx_hash).await?;
+        let (tx, block_id) = match self.await_inclusion(tx_hash).await {
+            Ok(included) => included,
+            Err(error) => {
+                self.forget_swept(tx_hash);
+                return Err(error);
+            }
+        };
         if let LeeTransaction::PrivacyPreserving(tx) = tx {
-            let reverted = self.get_block(block_id).await?.is_some_and(|block| {
-                block
-                    .body
-                    .transactions
-                    .iter()
-                    .position(|included| included.hash() == tx_hash)
-                    .is_some_and(|position| block.body.is_reverted(position))
-            });
+            let block = self
+                .get_block(block_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Block {block_id} including {tx_hash} not found"))?;
+            let reverted = block
+                .body
+                .transactions
+                .iter()
+                .position(|included| included.hash() == tx_hash)
+                .is_some_and(|position| block.body.is_reverted(position));
             if reverted {
                 println!("Transaction reverted: its fee was charged and nothing else applied");
+                self.forget_swept(tx_hash);
             }
             let key_chain = self.storage.key_chain_mut();
             let mut index = key_chain.build_latest_nullifier_index();
@@ -1258,8 +1321,28 @@ impl WalletCore {
         let fee_payer = fee_payer
             .or(self.fee_payer)
             .or_else(|| self.auto_fee_payer(&accounts, reserve_for(0)));
+        // Pending native credits to the transaction's private accounts are claimed before the
+        // root, so they count as balance; they take the action slots its accounts and root leave.
+        let private_states: HashSet<AccountId> = accounts
+            .iter()
+            .filter(|mention| mention.identity.is_private())
+            .map(|mention| mention.identity.account_id())
+            .chain(fee_payer)
+            .collect();
+        let slots = account_manager::AccountManager::PADDED_PRIVATE_ACTIONS
+            .saturating_sub(private_states.len())
+            .saturating_sub(usize::from(message.is_some()));
+        let claims = self
+            .sweepable(
+                &accounts,
+                fee_payer,
+                message.map(|(position, _)| position),
+                slots.min(MAX_SWEPT_CLAIMS),
+            )
+            .await?;
         let acc_manager =
-            account_manager::AccountManager::new(self, accounts, message, fee_payer).await?;
+            account_manager::AccountManager::new(self, accounts, message, fee_payer, &claims)
+                .await?;
 
         tx_pre_check(&acc_manager.selected_actor_states())?;
 
@@ -1272,7 +1355,6 @@ impl WalletCore {
 
         let shared_secrets = acc_manager.shared_secrets();
         let mut input = ProvingInput {
-            claims: Vec::new(),
             root: root.map(|Receipt { body, rho, .. }| MessageWitness {
                 body,
                 rho,
@@ -1282,6 +1364,16 @@ impl WalletCore {
                     .clone(),
                 filler: account_manager::dummy_output(),
             }),
+            claims: claims
+                .iter()
+                .zip(acc_manager.claim_paths())
+                .map(|(claim, path)| MessageWitness {
+                    body: claim.body.clone(),
+                    rho: claim.rho,
+                    membership_proof: path.clone(),
+                    filler: account_manager::dummy_output(),
+                })
+                .collect(),
             public_context: PublicExecutionContext {
                 promotions: public,
                 ..PublicExecutionContext::new(acc_manager.public_actors(), acc_manager.signers())
@@ -1376,10 +1468,15 @@ impl WalletCore {
             quote.base_fee_exec,
             quote.base_fee_stor,
         );
+        // What the payer holds before the root: its note plus the credits it claims.
+        let swept: u128 = claims
+            .iter()
+            .filter(|claim| claim.recipient.account_id() == payer)
+            .filter_map(PendingMessage::native_credit)
+            .sum();
+        let balance = acc_manager.native_balance(payer).saturating_add(swept);
         // Never reserve more than the payer holds, nor less than the fee at head.
-        let reserve = headroom_reserve
-            .min(acc_manager.native_balance(payer))
-            .max(fee_at_head);
+        let reserve = headroom_reserve.min(balance).max(fee_at_head);
         let refund_to = self.refund_to;
         if let Some(target) = refund_to
             && !acc_manager
@@ -1415,6 +1512,10 @@ impl WalletCore {
             );
             println!("  reserve:        {reserve} (surplus refunded)");
             println!("  fee payer:      {payer}");
+            println!(
+                "  claims:         {} pending credit(s), {swept} to the payer",
+                claims.len()
+            );
             println!(
                 "  refund to:      {}",
                 refund_to.map_or_else(|| "the payer's alias".to_owned(), |t| t.to_string())
@@ -1458,12 +1559,97 @@ impl WalletCore {
 
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
-        let call_res = self
+        let tx_hash = self
             .sequencer_client
             .send_transaction(LeeTransaction::PrivacyPreserving(tx))
-            .await;
+            .await?;
+        if !claims.is_empty() {
+            self.swept
+                .lock()
+                .expect("the swept set is not poisoned")
+                .insert(tx_hash, claims.iter().map(|claim| claim.receipt).collect());
+        }
 
-        Ok((call_res?, shared_secrets))
+        Ok((tx_hash, shared_secrets))
+    }
+
+    /// Gives the claims of `tx_hash` back to the pending messages: it reverted or was not
+    /// included.
+    fn forget_swept(&self, tx_hash: HashType) {
+        self.swept
+            .lock()
+            .expect("the swept set is not poisoned")
+            .remove(&tx_hash);
+    }
+
+    /// The pending native credits a transaction over `mentions`, paid by `fee_payer`, claims
+    /// before its root, the message at `root` if it receives one: those reaching its authorized
+    /// private accounts this wallet manages, largest first, up to `limit`. The blocks past the
+    /// sync cursor are scanned for receipts spent since; none is claimed when they exceed
+    /// [`MAX_SWEEP_SCAN_BLOCKS`].
+    async fn sweepable(
+        &self,
+        mentions: &[AccountMention],
+        fee_payer: Option<AccountId>,
+        root: Option<CommitmentPosition>,
+        limit: usize,
+    ) -> Result<Vec<PendingMessage>, ExecutionFailureKind> {
+        use futures::TryStreamExt as _;
+
+        let claimants: HashSet<AccountId> = mentions
+            .iter()
+            .filter(|mention| mention.authorizes && mention.identity.is_private())
+            .map(|mention| mention.identity.account_id())
+            .chain(fee_payer)
+            .filter(|account_id| {
+                self.storage
+                    .key_chain()
+                    .managed_private_account(*account_id)
+                    .is_some()
+            })
+            .collect();
+        if claimants.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let head = self
+            .get_last_block_id()
+            .await
+            .map_err(ExecutionFailureKind::SequencerError)?;
+        let synced = self.storage.last_synced_block();
+        if head.saturating_sub(synced) > MAX_SWEEP_SCAN_BLOCKS {
+            log::info!(
+                "Pending credits are not claimed: the wallet is synced to block {synced} of {head}"
+            );
+            return Ok(Vec::new());
+        }
+        let mut spent_since = HashSet::new();
+        if synced < head {
+            let poller = self.poller();
+            let mut blocks =
+                std::pin::pin!(poller.poll_block_range(synced.saturating_add(1)..=head));
+            while let Some(block) = blocks
+                .try_next()
+                .await
+                .map_err(ExecutionFailureKind::SequencerError)?
+            {
+                spent_since.extend(spent_in(&block));
+            }
+        }
+        let mut credits: Vec<PendingMessage> = self
+            .pending_messages()
+            .await
+            .map_err(ExecutionFailureKind::SequencerError)?
+            .into_iter()
+            .filter(|pending| {
+                Some(pending.position) != root
+                    && claimants.contains(&pending.recipient.account_id())
+                    && pending.native_credit().is_some()
+                    && !spent_since.contains(&pending.receipt)
+            })
+            .collect();
+        credits.sort_by_key(|pending| std::cmp::Reverse(pending.native_credit()));
+        credits.truncate(limit);
+        Ok(credits)
     }
 
     pub async fn send_pub_tx(
@@ -1530,7 +1716,7 @@ impl WalletCore {
         }
 
         let mut acc_manager =
-            account_manager::AccountManager::new(self, accounts, None, None).await?;
+            account_manager::AccountManager::new(self, accounts, None, None, &[]).await?;
 
         tx_pre_check(&acc_manager.selected_actor_states())?;
 

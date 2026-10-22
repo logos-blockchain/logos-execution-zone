@@ -23,7 +23,7 @@ use lee_core::{
 };
 use rand::{RngCore as _, rngs::OsRng};
 
-use crate::{ExecutionFailureKind, WalletCore};
+use crate::{ExecutionFailureKind, PendingMessage, WalletCore};
 
 /// Length every note ciphertext the wallet emits is padded up to.
 ///
@@ -372,6 +372,8 @@ pub struct AccountManager {
     pin: Option<String>,
     dummy_commitment_root: CommitmentSetDigest,
     message_path: Option<MembershipProof>,
+    /// The membership path of each received message the transaction claims before its root.
+    claim_paths: Vec<MembershipProof>,
 }
 
 impl AccountManager {
@@ -382,15 +384,18 @@ impl AccountManager {
     /// The value is selected based on the largest account number per-tx currently supported.
     /// It is recommended to reassess this value per new actively supported
     /// application and that all users share the value for a larger anonymity set.
-    const PADDED_PRIVATE_ACTIONS: usize = 7;
+    pub(crate) const PADDED_PRIVATE_ACTIONS: usize = 7;
 
     /// `fee_payer` names an owned private account that pays the fee without joining the root
-    /// call, for transactions whose own accounts cannot (a PDA spend, say).
+    /// call, for transactions whose own accounts cannot (a PDA spend, say). `claims` are the
+    /// received messages the transaction spends before its root; each reaches one of its private
+    /// accounts, whose witness takes the address opening the message was sent at.
     pub async fn new(
         wallet: &WalletCore,
         mentions: Vec<AccountMention>,
         message: Option<(CommitmentPosition, Commitment)>,
         fee_payer: Option<AccountId>,
+        claims: &[PendingMessage],
     ) -> Result<Self, ExecutionFailureKind> {
         let mut states: Vec<State> = Vec::new();
         let mut rows = Vec::with_capacity(mentions.len());
@@ -473,8 +478,20 @@ impl AccountManager {
             );
         }
 
-        let (dummy_commitment_root, message_path) =
-            fetch_private_proofs_and_root(wallet, &mut states, message).await?;
+        for claim in claims {
+            let recipient = claim.recipient.account_id();
+            let pre = states
+                .iter_mut()
+                .find_map(|state| match state {
+                    State::Private(pre) if pre.pre_state.account_id == recipient => Some(pre),
+                    State::Private(_) | State::Public { .. } | State::PublicKeycard { .. } => None,
+                })
+                .ok_or(ExecutionFailureKind::UnwitnessedClaim(recipient))?;
+            pre.address_openings.extend(claim.recipient.opening);
+        }
+
+        let (dummy_commitment_root, message_path, claim_paths) =
+            fetch_private_proofs_and_root(wallet, &mut states, message, claims).await?;
 
         Ok(Self {
             states,
@@ -483,6 +500,7 @@ impl AccountManager {
             pin,
             dummy_commitment_root,
             message_path,
+            claim_paths,
         })
     }
 
@@ -625,7 +643,8 @@ impl AccountManager {
         let action_count = self
             .private_states()
             .count()
-            .saturating_add(usize::from(self.message_path.is_some()));
+            .saturating_add(usize::from(self.message_path.is_some()))
+            .saturating_add(self.claim_paths.len());
         if action_count > Self::PADDED_PRIVATE_ACTIONS {
             log::warn!(
                 "private action count {action_count} exceeds PADDED_PRIVATE_ACTIONS ({}); \
@@ -640,6 +659,11 @@ impl AccountManager {
     /// proves its accounts.
     pub const fn message_path(&self) -> Option<&MembershipProof> {
         self.message_path.as_ref()
+    }
+
+    /// The membership path of each claim, in the order given.
+    pub fn claim_paths(&self) -> &[MembershipProof] {
+        &self.claim_paths
     }
 
     /// Private accounts whose note already outgrows [`CIPHERTEXT_PAD_SIZE`], and so ship at their
@@ -1119,8 +1143,16 @@ async fn fetch_private_proofs_and_root(
     wallet: &WalletCore,
     states: &mut [State],
     message: Option<(CommitmentPosition, Commitment)>,
-) -> Result<(CommitmentSetDigest, Option<MembershipProof>), ExecutionFailureKind> {
-    let (mut private, commitments): (Vec<&mut AccountPreparedData>, Vec<Commitment>) = states
+    claims: &[PendingMessage],
+) -> Result<
+    (
+        CommitmentSetDigest,
+        Option<MembershipProof>,
+        Vec<MembershipProof>,
+    ),
+    ExecutionFailureKind,
+> {
+    let (mut private, mut commitments): (Vec<&mut AccountPreparedData>, Vec<Commitment>) = states
         .iter_mut()
         .filter_map(|state| match state {
             State::Private(pre) => {
@@ -1130,8 +1162,11 @@ async fn fetch_private_proofs_and_root(
             State::Public { .. } | State::PublicKeycard { .. } => None,
         })
         .unzip();
+    // The claims' commitments are proven at the same root as the accounts'.
+    let accounts = commitments.len();
+    commitments.extend(claims.iter().map(|claim| claim.publication.commitment()));
 
-    let (proofs, message_path, root) = wallet
+    let (mut proofs, message_path, root) = wallet
         .get_proofs_and_root(&commitments, message.map(|(position, _)| position))
         .await
         .map_err(ExecutionFailureKind::SequencerError)?;
@@ -1140,12 +1175,26 @@ async fn fetch_private_proofs_and_root(
     let message_path = message
         .map(|message| message_path_at(message, message_path, root))
         .transpose()?;
+    let claim_paths = proofs
+        .drain(accounts..)
+        .zip(claims)
+        .map(|(proof, claim)| {
+            proof
+                .filter(|(position, _)| *position == claim.position)
+                .ok_or_else(|| {
+                    ExecutionFailureKind::SequencerError(anyhow::anyhow!(
+                        "No membership proof of the claimed message at {}.",
+                        claim.position
+                    ))
+                })
+        })
+        .collect::<Result<_, _>>()?;
 
     for (pre, proof) in private.iter_mut().zip(proofs) {
         pre.proof = proof;
     }
 
-    Ok((root, message_path))
+    Ok((root, message_path, claim_paths))
 }
 
 // The received message's path, if it sits at the requested position and reproduces `root`.
@@ -1383,6 +1432,7 @@ mod tests {
             pin: None,
             dummy_commitment_root: [0; 32],
             message_path: None,
+            claim_paths: Vec::new(),
         }
     }
 
