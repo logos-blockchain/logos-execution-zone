@@ -284,10 +284,10 @@ mod tests {
             message.execution.boundary = vec![credit.clone(), BoundaryStep::EndPublicSubtree];
             message.execution.fee = Some(lee_core::ProvenFee {
                 refund_to: None,
-                fallback: Some(Box::new(lee_core::FeeFallback {
+                fallback: Some(lee_core::FeeFallback {
                     action: lee_core::PrivateAction::default(),
                     boundary,
-                })),
+                }),
             });
             LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
                 message,

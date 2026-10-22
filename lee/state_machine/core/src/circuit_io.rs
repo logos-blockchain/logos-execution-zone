@@ -161,7 +161,7 @@ pub struct ProvenFee {
     pub refund_to: Option<AccountId>,
     /// What settlement applies instead of the private actions when the public part fails, if the
     /// payer's pre-state covers the transfer on its own.
-    pub fallback: Option<Box<FeeFallback>>,
+    pub fallback: Option<FeeFallback>,
 }
 
 /// The payer's transition after the fee transfer alone: its post-state is its pre-state less the

@@ -12,6 +12,11 @@ use serde::{Deserialize, Serialize};
 use crate::HashType;
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "both variants are whole transactions whose bulk is on the heap; the inline \
+              difference is a few hundred bytes, and boxing one would touch every match"
+)]
 pub enum LeeTransaction {
     Public(lee::PublicTransaction),
     PrivacyPreserving(lee::PrivacyPreservingTransaction),
