@@ -6,13 +6,13 @@ use lee_core::{
 };
 
 use crate::{
-    AccountIdentity, ExecutionFailureKind, SelectedActorState, WalletCore,
+    AccountIdentity, ExecutionFailureKind, SelectedActorState, WalletCore, WalletSequencerClient,
     program_facades::{CreditDelivery, credit_destination},
 };
 
-pub struct NativeTokenTransfer<'wallet>(pub &'wallet WalletCore);
+pub struct NativeTokenTransfer<'wallet, C: WalletSequencerClient>(pub &'wallet WalletCore<C>);
 
-impl NativeTokenTransfer<'_> {
+impl<C: WalletSequencerClient> NativeTokenTransfer<'_, C> {
     // The sender's native actor is the root and must hold `amount`; its credit to `recipient` is an
     // async message.
     pub async fn transfer(
