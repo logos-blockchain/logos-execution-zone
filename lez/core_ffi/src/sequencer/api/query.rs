@@ -1,14 +1,13 @@
 use std::ffi::{CString, c_char};
 
 use sequencer_executor_actor::protocol::{
-    BoundedRangeInclusive, GetAccount, GetAccountTransactions, GetBlock, GetBlockByHash,
-    GetBlockRange, GetLastBlockId, GetTransaction, MAX_BLOCK_RANGE_LEN, Transaction,
-    TransactionOrigin,
+    GetAccountTransactions, GetBlockByHash, MAX_BLOCK_RANGE_LEN,
 };
 use sequencer_storage_actor::{
     actor::event_filter::{EventRecord, MAX_EVENT_QUERY_RESPONSE_BYTES, Selector, record_charge},
     protocol::{GetBlockEvents, GetEventFilter, GetTxHashToBlockIdMapItem},
 };
+use wallet::WalletSequencerClient as _;
 
 use crate::{
     error::FfiOperationError,
@@ -23,6 +22,7 @@ use crate::{
         },
     },
     sequencer::SequencerServiceFFI,
+    sequencer_ffi_client::SequencerServiceFFIWrapper,
 };
 
 /// Result of [`query_last_block`], returned **inline** (no heap allocation, so
@@ -89,10 +89,11 @@ pub unsafe extern "C" fn sequencer_ffi_query_last_block(
     }
 
     let sequencer = unsafe { &*sequencer };
+    let sequencer_wrap = SequencerServiceFFIWrapper::wrap(sequencer);
 
     let last_block_id_resp = sequencer
         .runtime()
-        .block_on(sequencer.executor_ref().ask(GetLastBlockId).send());
+        .block_on(sequencer_wrap.get_last_block_id());
 
     last_block_id_resp.map_or_else(
         |e| {
@@ -191,10 +192,11 @@ pub unsafe extern "C" fn sequencer_ffi_query_block(
     }
 
     let sequencer = unsafe { &*sequencer };
+    let sequencer_wrap = SequencerServiceFFIWrapper::wrap(sequencer);
 
     let block_resp = sequencer
         .runtime()
-        .block_on(sequencer.executor_ref().ask(GetBlock { block_id }).send());
+        .block_on(sequencer_wrap.get_block(block_id));
 
     block_resp.map_or_else(
         |e| {
@@ -291,22 +293,21 @@ pub unsafe extern "C" fn sequencer_ffi_query_account(
     }
 
     let sequencer = unsafe { &*sequencer };
+    let sequencer_wrap = SequencerServiceFFIWrapper::wrap(sequencer);
 
-    let acc_resp = sequencer.runtime().block_on(
-        sequencer
-            .executor_ref()
-            .ask(GetAccount {
-                account_id: account_id.into(),
-            })
-            .send(),
-    );
+    let acc_resp = sequencer
+        .runtime()
+        .block_on(sequencer_wrap.get_account(account_id.into()));
 
     acc_resp.map_or_else(
         |e| {
             log::error!("Failed to query account: {e:#}");
             PointerResult::from_error(FfiOperationError::QueryError)
         },
-        |account| PointerResult::from_value(account.account.map(FfiAccount::from).into()),
+        |account| {
+            let opt_ffi_acc: Option<FfiAccount> = account.map(Into::into);
+            PointerResult::from_value(opt_ffi_acc.into())
+        },
     )
 }
 
@@ -333,13 +334,14 @@ pub unsafe extern "C" fn sequencer_ffi_query_account(
 pub unsafe extern "C" fn sequencer_ffi_send_transaction(
     sequencer: *const SequencerServiceFFI,
     transaction: FfiTransaction,
-) -> PointerResult<u8, FfiOperationError> {
+) -> PointerResult<FfiHashType, FfiOperationError> {
     if sequencer.is_null() {
         log::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(FfiOperationError::NullPointer);
     }
 
     let sequencer = unsafe { &*sequencer };
+    let sequencer_wrap = SequencerServiceFFIWrapper::wrap(sequencer);
 
     let lee_tx_res = transaction.try_into().map_err(Into::into);
     if lee_tx_res.is_err() {
@@ -347,29 +349,16 @@ pub unsafe extern "C" fn sequencer_ffi_send_transaction(
     }
     let lee_tx = lee_tx_res.unwrap();
 
-    let tx_resp = sequencer.runtime().block_on(
-        sequencer
-            .executor_ref()
-            .ask(Transaction {
-                transaction: lee_tx,
-                origin: TransactionOrigin::User,
-            })
-            .send(),
-    );
+    let tx_resp = sequencer
+        .runtime()
+        .block_on(sequencer_wrap.send_transaction(lee_tx));
 
     tx_resp.map_or_else(
         |e| {
             log::error!("Failed to query transaction: {e:#}");
             PointerResult::from_error(FfiOperationError::QueryError)
         },
-        // Not really the most intuitive example of an FFI.
-        // Written this way to satisfy `PointerResult` semantics,
-        // it is assumed, that `PointerResult::from_value` must produce a valid pointer to
-        // somewhere. The issue is that there is no natural representation for ZSTs(in this
-        // case `()`) in C. Any FFI type will take as much place as u8, so there is no
-        // point in hiding anything here. ToDo: Update, if `Transaction` message for
-        // `ExecutorActor` will get non-`()` response.
-        |()| PointerResult::from_value(0_u8),
+        |tx_hash| PointerResult::from_value(tx_hash.into()),
     )
 }
 
@@ -399,15 +388,11 @@ pub unsafe extern "C" fn sequencer_ffi_query_transaction(
     }
 
     let sequencer = unsafe { &*sequencer };
+    let sequencer_wrap = SequencerServiceFFIWrapper::wrap(sequencer);
 
-    let tx_resp = sequencer.runtime().block_on(
-        sequencer
-            .executor_ref()
-            .ask(GetTransaction {
-                tx_hash: hash.into(),
-            })
-            .send(),
-    );
+    let tx_resp = sequencer
+        .runtime()
+        .block_on(sequencer_wrap.get_transaction(hash.into()));
 
     tx_resp.map_or_else(
         |e| {
@@ -452,6 +437,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_vec(
     }
 
     let sequencer = unsafe { &*sequencer };
+    let sequencer_wrap = SequencerServiceFFIWrapper::wrap(sequencer);
 
     let before_opt = before.is_some.then(|| unsafe { before.value.read() });
 
@@ -478,15 +464,9 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_vec(
         1
     };
 
-    let block_range_resp = sequencer.runtime().block_on(
-        sequencer
-            .executor_ref()
-            .ask(GetBlockRange {
-                range: BoundedRangeInclusive::try_from(left_bound..=before_limit)
-                    .expect("Previous checks ensure that range fits the limit"),
-            })
-            .send(),
-    );
+    let block_range_resp = sequencer
+        .runtime()
+        .block_on(sequencer_wrap.get_block_range(left_bound, before_limit));
 
     block_range_resp.map_or_else(
         |e| {

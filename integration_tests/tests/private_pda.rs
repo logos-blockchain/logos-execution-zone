@@ -32,7 +32,7 @@ use lee_core::{
     native_token::{Message as NativeMessage, NATIVE_TOKEN_PROGRAM_ID},
     program::{PdaSeed, SyncMessage},
 };
-use sequencer_service_rpc::RpcClient as _;
+use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_guest_core::Script;
 use testnet_initial_state::initial_pub_accounts_private_keys;
 use tokio::test;
@@ -41,7 +41,7 @@ use wallet::{AccountIdentity, WalletCore};
 /// Funds a private PDA by calling the native token program directly, initializing it under its
 /// owner's `nsk`.
 async fn fund_private_pda(
-    wallet: &WalletCore,
+    wallet: &WalletCore<SequencerClient>,
     sender: AccountId,
     nsk: NullifierSecretKey,
     vpk: ViewingPublicKey,
@@ -134,7 +134,7 @@ async fn fund_private_pda(
 /// PDA's own actor under the proxy program is the root; it transfers out of the PDA's native
 /// balance under the seed that binds the PDA to the proxy.
 async fn spend_private_pda(
-    wallet: &WalletCore,
+    wallet: &WalletCore<SequencerClient>,
     pda_account_id: AccountId,
     recipient_npk: NullifierPublicKey,
     recipient_vpk: ViewingPublicKey,

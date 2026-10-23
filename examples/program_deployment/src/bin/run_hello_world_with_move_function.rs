@@ -7,7 +7,7 @@ use lee::{
     program::Program, public_transaction,
 };
 use program_deployment::deploy_program;
-use sequencer_service_rpc::RpcClient as _;
+use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use wallet::{AccountIdentity, WalletCore};
 
 // Before running this example, compile the `hello_world_with_move_function.rs` guest program with:
@@ -69,7 +69,7 @@ enum Command {
 }
 
 async fn actor_state_bytes(
-    wallet_core: &WalletCore,
+    wallet_core: &WalletCore<SequencerClient>,
     account_id: AccountId,
     program_account_id: AccountId,
 ) -> Vec<u8> {

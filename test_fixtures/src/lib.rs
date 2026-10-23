@@ -79,7 +79,7 @@ pub struct SequencerComponents {
 }
 
 pub struct WalletComponents {
-    wallet: WalletCore,
+    wallet: WalletCore<SequencerClient>,
     wallet_password: String,
     temp_wallet_dir: TempDir,
 }
@@ -190,7 +190,7 @@ impl TestContext {
     ///
     /// Panics in case if there is more than one zone.
     #[must_use]
-    pub fn wallet(&self) -> &WalletCore {
+    pub fn wallet(&self) -> &WalletCore<SequencerClient> {
         &self.default_zone().wallet.as_ref().unwrap().wallet
     }
 
@@ -205,13 +205,13 @@ impl TestContext {
     /// Get mutable reference to default the wallet.
     ///
     /// Panics in case if there is more than one zone.
-    pub fn wallet_mut(&mut self) -> &mut WalletCore {
+    pub fn wallet_mut(&mut self) -> &mut WalletCore<SequencerClient> {
         &mut self.default_zone_mut().wallet.as_mut().unwrap().wallet
     }
 
     /// Get reference to the zone wallet.
     #[must_use]
-    pub fn wallet_zone(&self, channel_id: ChannelId) -> Option<&WalletCore> {
+    pub fn wallet_zone(&self, channel_id: ChannelId) -> Option<&WalletCore<SequencerClient>> {
         self.zones
             .get(&channel_id)
             .map(|val| &val.wallet.as_ref().unwrap().wallet)
@@ -226,7 +226,10 @@ impl TestContext {
     }
 
     /// Get mutable reference to the zone wallet.
-    pub fn wallet_mut_zone(&mut self, channel_id: ChannelId) -> Option<&mut WalletCore> {
+    pub fn wallet_mut_zone(
+        &mut self,
+        channel_id: ChannelId,
+    ) -> Option<&mut WalletCore<SequencerClient>> {
         self.zones
             .get_mut(&channel_id)
             .map(|val| &mut val.wallet.as_mut().unwrap().wallet)
