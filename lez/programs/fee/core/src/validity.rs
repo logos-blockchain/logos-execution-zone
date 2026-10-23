@@ -9,7 +9,7 @@
 use thiserror::Error;
 
 use crate::{
-    assess::{FeeTxView, fee_reserve},
+    assess::{FeeTxView, fee_reserve, private_fee_required},
     market,
     state::FeeState,
 };
@@ -24,6 +24,9 @@ pub enum FeeError {
 
     #[error("max_fee {max_fee} below the fee reserve {fee_reserve}")]
     MaxFeeBelowReserve { fee_reserve: u128, max_fee: u128 },
+
+    #[error("private fee reserve {reserve} below the required {required}")]
+    PrivateFeeBelowRequired { required: u128, reserve: u128 },
 
     #[error(
         "block execution gas total {total} exceeds max {}",
@@ -64,10 +67,18 @@ pub fn validate_static_tx(view: &FeeTxView, fee_state: &FeeState) -> Result<(), 
             }
             Ok(())
         }
-        // Private wire size and padding are enforced by the wire-format and
-        // proof validity rules, not here; the fee view carries no signed
-        // fields to check.
-        FeeTxView::Private { .. } => Ok(()),
+        // The flat part only: metered effects are priced after execution.
+        FeeTxView::Private { reserve, .. } => {
+            let required =
+                private_fee_required(0, fee_state.base_fee_exec, fee_state.base_fee_stor);
+            if *reserve < required {
+                return Err(FeeError::PrivateFeeBelowRequired {
+                    required,
+                    reserve: *reserve,
+                });
+            }
+            Ok(())
+        }
     }
 }
 
@@ -155,11 +166,20 @@ mod tests {
     }
 
     #[test]
-    fn private_view_is_statically_valid() {
-        let view = FeeTxView::Private {
+    fn private_view_needs_the_flat_fee_in_reserve() {
+        let state = FeeState::genesis();
+        let flat = private_fee_required(0, state.base_fee_exec, state.base_fee_stor);
+        let view = |reserve| FeeTxView::Private {
             payer: AccountId::new([7_u8; 32]),
+            reserve,
         };
-        assert_eq!(validate_static_tx(&view, &FeeState::genesis()), Ok(()));
+
+        assert_eq!(validate_static_tx(&view(flat), &state), Ok(()));
+        assert_eq!(validate_static_tx(&view(flat + 1), &state), Ok(()));
+        assert!(matches!(
+            validate_static_tx(&view(flat - 1), &state),
+            Err(FeeError::PrivateFeeBelowRequired { .. })
+        ));
     }
 
     #[test]

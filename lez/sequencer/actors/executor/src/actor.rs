@@ -33,12 +33,12 @@ use crate::{
     ExecutorActorTrait, Result,
     error::Error,
     protocol::{
-        ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
-        GetAccountTransactions, GetAccountView, GetBlock, GetBlockByHash, GetBlockRange,
-        GetChannelId, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply, GetFeeQuote,
-        GetLastBlockId, GetMessagePath, GetProofsAndRoot, GetPublications, GetRecoveryBinding,
-        GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
-        Transaction,
+        ChannelId, DryRunPublicTransaction, FeeStateQuote, GetAccount, GetAccountBalance,
+        GetAccountNonces, GetAccountReply, GetAccountTransactions, GetAccountView, GetBlock,
+        GetBlockByHash, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
+        GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetMessagePath,
+        GetProofsAndRoot, GetPublications, GetRecoveryBinding, GetTransaction, ProduceBlock,
+        PublicDryRun, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, Transaction,
     },
 };
 
@@ -338,6 +338,36 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountBalance>
     }
 }
 
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<DryRunPublicTransaction>
+    for ExecutorActor<S, B>
+{
+    type Reply = Result<PublicDryRun>;
+
+    async fn handle(
+        &mut self,
+        DryRunPublicTransaction { transaction }: DryRunPublicTransaction,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let LeeTransaction::Public(tx) = transaction else {
+            return Err(Error::DryRunNotPublic);
+        };
+        // The block the transaction would land in: the next height, built now.
+        let block_id = self.sequencer.chain_height().await.saturating_add(1);
+        let timestamp =
+            u64::try_from(chrono::Utc::now().timestamp_millis()).expect("timestamp is positive");
+        self.sequencer
+            .with_state(|state| {
+                sequencer_core::fees::dry_run_public_transaction(state, &tx, block_id, timestamp)
+            })
+            .await
+            .map(|run| PublicDryRun {
+                cycles: run.cycles,
+                revert: run.revert,
+            })
+            .map_err(|err| Error::PublicDryRunFailed(err.into()))
+    }
+}
+
 impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetFeeQuote> for ExecutorActor<S, B> {
     type Reply = FeeStateQuote;
 
@@ -398,7 +428,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetProofsAndRoot> for E
         &mut self,
         GetProofsAndRoot {
             commitments,
-            message_position,
+            message_positions,
         }: GetProofsAndRoot,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
@@ -408,9 +438,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetProofsAndRoot> for E
                     .iter()
                     .map(|commitment| state.get_proof_for_commitment(commitment))
                     .collect();
-                let message_path =
-                    message_position.and_then(|position| state.get_proof_for_position(position));
-                (proofs, message_path, state.commitment_root())
+                let message_paths = message_positions
+                    .iter()
+                    .map(|position| state.get_proof_for_position(*position))
+                    .collect();
+                (proofs, message_paths, state.commitment_root())
             })
             .await
     }

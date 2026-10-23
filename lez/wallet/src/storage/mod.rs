@@ -228,19 +228,26 @@ fn replace_synced(path: &Path, content: &[u8]) -> std::io::Result<()> {
 }
 
 fn read_storage_file(path: &Path) -> Result<StorageFile> {
-    let file = read_storage_json(path)?;
-    if is_encrypted(&file) {
-        Ok(StorageFile::Encrypted(
-            serde_json::from_value(file).context("Failed to parse storage file")?,
-        ))
+    let content = read_storage_bytes(path)?;
+    // Decoded from the bytes rather than from the sniffed `Value`: a `Value` holds an integer
+    // above `u64::MAX`, such as a private account nonce, as a float.
+    let file = if is_encrypted(&parse_storage_json(&content)?) {
+        serde_json::from_slice(&content).map(StorageFile::Encrypted)
     } else {
-        Ok(StorageFile::Plaintext(
-            serde_json::from_value(file).context("Failed to parse storage file")?,
-        ))
-    }
+        serde_json::from_slice(&content).map(StorageFile::Plaintext)
+    };
+    file.context("Failed to parse storage file")
 }
 
 fn read_storage_json(path: &Path) -> Result<serde_json::Value> {
+    parse_storage_json(&read_storage_bytes(path)?)
+}
+
+fn parse_storage_json(content: &[u8]) -> Result<serde_json::Value> {
+    serde_json::from_slice(content).context("Failed to parse storage file")
+}
+
+fn read_storage_bytes(path: &Path) -> Result<Vec<u8>> {
     #[expect(
         clippy::wildcard_enum_match_arm,
         reason = "We want to provide a specific error message for not found case"
@@ -259,7 +266,7 @@ fn read_storage_json(path: &Path) -> Result<serde_json::Value> {
             }
         },
     };
-    serde_json::from_slice(&content).context("Failed to parse storage file")
+    Ok(content)
 }
 
 fn is_encrypted(file: &serde_json::Value) -> bool {
@@ -294,7 +301,11 @@ mod tests {
             .add_imported_public_account(private_key);
 
         let key_chain = key_protocol::key_management::KeyChain::new_os_random();
-        let account = lee::Account::default();
+        // A nonce above `u64::MAX`, as every private account that has acted carries.
+        let account = lee::Account {
+            nonce: lee_core::account::Nonce(u128::MAX),
+            ..lee::Account::default()
+        };
         storage
             .key_chain_mut()
             .add_imported_private_account(key_chain, None, account);

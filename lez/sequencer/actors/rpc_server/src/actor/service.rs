@@ -17,8 +17,11 @@ use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
     CommitmentSetDigest, CrossZoneDeadLetter, CrossZoneDeadLetterReport,
     CrossZoneDeadLetterRequeue, EncryptedNote, FeeStateQuote, HashType, MembershipProof, Nonce,
-    PageLimit, ProgramId, Publication,
+    PageLimit, ProgramId, PublicDryRun, Publication,
 };
+
+/// The methods [`crate::RpcServerActor`] serves only when `dry_run_rpc` is on.
+pub const DRY_RUN_METHODS: [&str; 1] = ["dryRunPublicTransaction"];
 
 pub struct Service<E: ExecutorActorTrait> {
     executor_ref: ActorRef<E>,
@@ -137,6 +140,20 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             .map_err(map_infallible_error)
     }
 
+    async fn dry_run_public_transaction(
+        &self,
+        tx: LeeTransaction,
+    ) -> Result<PublicDryRun, ErrorObjectOwned> {
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::DryRunPublicTransaction { transaction: tx })
+            .await
+            .map(|run| PublicDryRun {
+                cycles: run.cycles,
+                revert: run.revert,
+            })
+            .map_err(map_executor_error)
+    }
+
     async fn check_health(&self) -> Result<(), ErrorObjectOwned> {
         Ok(())
     }
@@ -251,11 +268,11 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
     async fn get_proofs_and_root(
         &self,
         commitments: Vec<Commitment>,
-        message_position: Option<CommitmentPosition>,
+        message_positions: Vec<CommitmentPosition>,
     ) -> Result<
         (
             Vec<Option<MembershipProof>>,
-            Option<MembershipProof>,
+            Vec<Option<MembershipProof>>,
             CommitmentSetDigest,
         ),
         ErrorObjectOwned,
@@ -263,7 +280,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetProofsAndRoot {
                 commitments,
-                message_position,
+                message_positions,
             })
             .await
             .map_err(map_infallible_error)
@@ -371,19 +388,33 @@ const fn map_fee_state_quote(
 fn map_executor_error<M>(
     err: SendError<M, sequencer_executor_actor::error::Error>,
 ) -> ErrorObjectOwned {
-    const MEMPOOL_IS_FULL_ERROR_CODE: i32 = -31900;
-
     match err {
         SendError::HandlerError(handle_err) => match handle_err {
-            incorrect_fee @ sequencer_executor_actor::error::Error::IncorrectFee(_) => {
+            // A reserve the head fee outgrew gets its own code: priced again, it may pass.
+            sequencer_executor_actor::error::Error::IncorrectFee(source)
+                if matches!(
+                    source.downcast_ref::<fee_core::validity::FeeError>(),
+                    Some(fee_core::validity::FeeError::PrivateFeeBelowRequired { .. })
+                ) =>
+            {
                 ErrorObjectOwned::owned(
-                    ErrorCode::InvalidParams.code(),
-                    format!("{incorrect_fee:#}"),
+                    sequencer_service_rpc::PRIVATE_FEE_BELOW_HEAD_ERROR_CODE,
+                    format!("Incorrect fee: {source:#}"),
                     None::<()>,
                 )
             }
+            invalid @ (sequencer_executor_actor::error::Error::IncorrectFee(_)
+            | sequencer_executor_actor::error::Error::PublicDryRunFailed(_)
+            | sequencer_executor_actor::error::Error::DryRunNotPublic) => {
+                // With its cause, which the sender is shown.
+                let message = std::error::Error::source(&invalid).map_or_else(
+                    || invalid.to_string(),
+                    |cause| format!("{invalid}: {cause:#}"),
+                );
+                ErrorObjectOwned::owned(ErrorCode::InvalidParams.code(), message, None::<()>)
+            }
             sequencer_executor_actor::error::Error::MempoolIsFull => ErrorObjectOwned::owned(
-                MEMPOOL_IS_FULL_ERROR_CODE,
+                sequencer_service_rpc::MEMPOOL_IS_FULL_ERROR_CODE,
                 "Mempool is full".to_owned(),
                 None::<()>,
             ),

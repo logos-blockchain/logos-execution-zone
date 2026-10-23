@@ -589,7 +589,10 @@ pub async fn fund_private_accounts(
     ));
 
     for private_account in initial_private_accounts {
-        wallet::cli::execute_subcommand(
+        // The recipient pays the shielding's in-proof fee out of what it receives, so it is
+        // shielded the fee on top of its balance.
+        wallet.set_private_fee_payer(Some(private_account.account_id()));
+        let funded = wallet::cli::execute_subcommand(
             wallet,
             Command::AuthTransfer(AuthTransferSubcommand::Send {
                 from: public_mention(funder_id),
@@ -598,11 +601,15 @@ pub async fn fund_private_accounts(
                 to_vpk: None,
                 to_keys: None,
                 to_pk: None,
-                amount: private_account.balance,
+                amount: private_account
+                    .balance
+                    .checked_add(config::min_private_fee())
+                    .expect("private funding overflow"),
             }),
         )
-        .await
-        .with_context(|| {
+        .await;
+        wallet.set_private_fee_payer(None);
+        funded.with_context(|| {
             format!(
                 "Failed to fund private account {}",
                 private_account.account_id()

@@ -54,6 +54,7 @@ fn sequencer_config() -> (SequencerConfig, TempDir) {
         cross_zone: None,
         metrics_address: None,
         gossip: None,
+        dry_run_rpc: false,
     };
 
     (config, home)
@@ -167,6 +168,7 @@ fn prepare_mock_storage_with_stake(
         },
         body: BlockBody {
             transactions: vec![],
+            reverted: Vec::new(),
         },
         bedrock_status: BedrockStatus::Pending,
     };

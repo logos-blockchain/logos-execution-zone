@@ -32,6 +32,17 @@ pub struct Transaction {
 
 pub struct GetFeeQuote;
 
+/// Executes a public transaction's action on the head state without settling it.
+pub struct DryRunPublicTransaction {
+    pub transaction: LeeTransaction,
+}
+
+#[derive(Reply)]
+pub struct PublicDryRun {
+    pub cycles: u64,
+    pub revert: Option<String>,
+}
+
 /// The fee market priced off the head state, for wallets sizing `max_fee`.
 #[derive(Reply)]
 pub struct FeeStateQuote {
@@ -110,13 +121,13 @@ pub struct GetAccountNonces {
 
 pub struct GetProofsAndRoot {
     pub commitments: Vec<Commitment>,
-    pub message_position: Option<CommitmentPosition>,
+    pub message_positions: Vec<CommitmentPosition>,
 }
 
-/// The membership paths of the requested commitments and message, and the root they reach.
+/// The membership paths of the requested commitments and messages, and the root they reach.
 pub type ProofsAndRoot = (
     Vec<Option<MembershipProof>>,
-    Option<MembershipProof>,
+    Vec<Option<MembershipProof>>,
     CommitmentSetDigest,
 );
 

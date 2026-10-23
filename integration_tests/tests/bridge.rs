@@ -171,6 +171,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     // Proven without running the deposit, which settlement refuses.
     let (output, proof) = execute_and_prove_with_cross_messages(
         lee::ProvingInput {
+            claims: Vec::new(),
             root: TransactionEntry::Sync(RootCall {
                 to: receipt,
                 message: deposit,
@@ -181,6 +182,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
             ciphertext_padding: None,
             recoveries: Vec::new(),
             private_promotions: BTreeSet::new(),
+            fee: None,
         },
         // The receipt's own delivery is the one public output; it sends nothing private.
         vec![Vec::new()],
@@ -204,20 +206,21 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let bridge_balance_before = account_balance(&ctx, bridge_account_id).await?;
     let recipient_balance_before = account_balance(&ctx, recipient_id).await?;
 
-    let tx_hash = ctx.sequencer_client().send_transaction(attack_tx).await?;
+    // The attack carries no in-proof fee, so admission already refuses it; were it admitted, the
+    // bridge program would drop the private invocation at settlement.
+    let refused = ctx.sequencer_client().send_transaction(attack_tx).await;
+    assert!(
+        refused.is_err(),
+        "Privacy-preserving bridge::Deposit invocation should be rejected, got {refused:?}"
+    );
 
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let bridge_balance_after = account_balance(&ctx, bridge_account_id).await?;
     let recipient_balance_after = account_balance(&ctx, recipient_id).await?;
-    let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
 
     assert_eq!(bridge_balance_after, bridge_balance_before);
     assert_eq!(recipient_balance_after, recipient_balance_before);
-    assert!(
-        tx_on_chain.is_none(),
-        "Privacy-preserving bridge::Deposit invocation should be rejected"
-    );
 
     Ok(())
 }

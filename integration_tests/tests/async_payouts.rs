@@ -43,6 +43,13 @@ struct Programs {
     live_payout: AccountId,
 }
 
+/// The in-proof fee reserve of a trade, generous for the payout's guest cycles at the floor base
+/// fees. The input note is presented canonically and unbound, so settlement keeps the surplus as
+/// tip rather than refunding it, and a settled trade spends the note whole.
+fn fee_reserve() -> u128 {
+    fee_core::assess::private_fee_required(2_000_000, 8, 8)
+}
+
 // Deploys `program` immutably through the loader, paid by the context's first public account.
 async fn deploy(ctx: &mut TestContext, program: &Program) -> Result<AccountId> {
     let payer = ctx.existing_public_accounts()[0];
@@ -68,7 +75,7 @@ async fn spend_input(ctx: &TestContext, input: AccountId, seed: u8) -> Result<Pr
         .context("the trader's input note is unknown to the wallet")?;
     let (proofs, _, _) = ctx
         .wallet()
-        .get_proofs_and_root(&[commitment], None)
+        .get_proofs_and_root(&[commitment], Vec::new())
         .await?;
     let membership_proof = proofs
         .into_iter()
@@ -113,12 +120,18 @@ fn prove_trade(
         .send_sync(payer, &request);
     let (output, proof) = execute_and_prove_with_cross_messages(
         ProvingInput {
+            claims: Vec::new(),
             root: TransactionEntry::Sync(RootCall {
                 to: Actor::new(input, programs.scripted),
                 message: Program::serialize_message(script)?,
             }),
+            // The fee inbox is declared so the reserve crosses to it rather than being published.
             public_context: PublicExecutionContext::new(
-                [payer, Actor::native_balance(custody)],
+                [
+                    payer,
+                    Actor::native_balance(custody),
+                    Actor::native_balance(system_accounts::fee_inbox_account_id()),
+                ],
                 [],
             ),
             private_witnesses: vec![witness],
@@ -126,6 +139,12 @@ fn prove_trade(
             ciphertext_padding: None,
             recoveries,
             private_promotions: BTreeSet::new(),
+            fee: Some(lee_core::FeeTransfer {
+                payer: input,
+                recipient: system_accounts::fee_inbox_account_id(),
+                amount: fee_reserve(),
+                refund_to: None,
+            }),
         },
         // One public segment each for the deposit and the request; neither sends anything back.
         vec![Vec::new(), Vec::new()],
@@ -219,7 +238,7 @@ async fn trades_proven_at_one_custody_balance_pay_out_at_the_live_balance() -> R
     let mut traders = Vec::new();
     let mut prepared = Vec::new();
     for (min_payout, seed) in [200, 190, 200].into_iter().zip(1..) {
-        let input = funded_private_account(&mut ctx, AMOUNT_IN).await?;
+        let input = funded_private_account(&mut ctx, AMOUNT_IN + fee_reserve()).await?;
         let output = new_account(&mut ctx, true, None).await?;
         let (_, async_delivery) = ctx
             .wallet()
@@ -275,6 +294,8 @@ async fn trades_proven_at_one_custody_balance_pay_out_at_the_live_balance() -> R
     for record in pending {
         let (received, _) = ctx.wallet_mut().receive_pending_message(record).await?;
         wait_for_inclusion(&ctx, received).await?;
+        // The receipts share a fee payer: the next one spends the note this one left.
+        sync_private(&mut ctx).await?;
     }
     assert!(
         ctx.wallet_mut().owned_pending_messages().await?.is_empty(),
@@ -283,7 +304,9 @@ async fn trades_proven_at_one_custody_balance_pay_out_at_the_live_balance() -> R
 
     sync_private(&mut ctx).await?;
     for ((input, output), (input_left, received)) in
-        traders.iter().zip([(0, 200), (0, 190), (AMOUNT_IN, 0)])
+        traders
+            .iter()
+            .zip([(0, 200), (0, 190), (AMOUNT_IN + fee_reserve(), 0)])
     {
         assert_eq!(private_balance(&ctx, *input)?, input_left, "input note");
         assert_eq!(private_balance(&ctx, *output)?, received, "payout");

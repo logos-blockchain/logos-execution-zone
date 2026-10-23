@@ -593,7 +593,9 @@ impl V03State {
     ) -> Result<(), LeeError> {
         for commitment in new_commitments {
             if self.private_state.0.contains(commitment) {
-                return Err(LeeError::InvalidInput("Commitment already seen".to_owned()));
+                return Err(LeeError::InvalidInput(format!(
+                    "Commitment {commitment:?} already seen"
+                )));
             }
         }
         Ok(())

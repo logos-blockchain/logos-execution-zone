@@ -18,7 +18,8 @@ use lee::{
 };
 use lee_core::{
     BlockId, Commitment, Nullifier, NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
-    SealedMessage, SharedSecretKey, encryption::ViewingPublicKey, program::MessageBody,
+    PrivateAction, SealedMessage, SharedSecretKey, encryption::ViewingPublicKey,
+    program::MessageBody,
 };
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
@@ -477,6 +478,46 @@ impl UserKeyChain {
         index
     }
 
+    /// Follows what settlement applied of `message`: its fee fallback's action when it
+    /// `reverted`, else every private action and, when `discover`, the unfollowed notes.
+    pub fn follow_transaction(
+        &mut self,
+        message: &Message,
+        reverted: bool,
+        discover: bool,
+        index: &mut NullifierIndex,
+    ) {
+        if reverted {
+            self.sync_reverted_via_nullifier(message, index);
+            return;
+        }
+        let followed = self.sync_updates_via_nullifiers(message, index);
+        if discover {
+            self.discover_unfollowed(message, &followed, index);
+        }
+    }
+
+    /// Applies the fee fallback's action of a reverted `message`, if the index watches its
+    /// nullifier: the payer's state after the fee alone.
+    pub fn sync_reverted_via_nullifier(&mut self, message: &Message, index: &mut NullifierIndex) {
+        let Some(action) = message
+            .execution
+            .fee
+            .as_ref()
+            .and_then(|fee| fee.fallback.as_ref())
+            .map(|fallback| &fallback.action)
+        else {
+            return;
+        };
+        let Some(account_id) = index.account_for(&action.nullifier) else {
+            return;
+        };
+        let committed = HashSet::from([action.commitment]);
+        if let Some(next) = self.apply_nullifier_update(account_id, action, &committed) {
+            index.update(&action.nullifier, next, account_id);
+        }
+    }
+
     /// Applies every watched nullifier the `message` publishes: decrypts the note in that
     /// nullifier's action, stores the new state, and rolls the index to the account's next
     /// nullifier. Returns the action slots it followed.
@@ -486,6 +527,7 @@ impl UserKeyChain {
         index: &mut NullifierIndex,
     ) -> HashSet<usize> {
         let mut followed = HashSet::new();
+        let committed: HashSet<Commitment> = message.execution.commitments().into_iter().collect();
         for (i, action) in message.execution.private_actions.iter().enumerate() {
             // Get the nullifier information if awaiting the nullifier.
             let Some(account_id) = index.account_for(&action.nullifier) else {
@@ -493,7 +535,8 @@ impl UserKeyChain {
             };
             // Try decrypting the commitment connected to the nullifier and get the next
             // nullifier to await.
-            if let Some(new_nullifier) = self.apply_nullifier_update(account_id, message, i) {
+            if let Some(new_nullifier) = self.apply_nullifier_update(account_id, action, &committed)
+            {
                 // Update the index to await for the new state of the account, i.e.
                 // the new nullifier.
                 index.update(&action.nullifier, new_nullifier, account_id);
@@ -517,12 +560,11 @@ impl UserKeyChain {
         let found: Vec<_> = (0..message.execution.private_actions.len())
             .filter(|slot| !followed.contains(slot))
             .flat_map(|slot| {
-                let epk = &message.execution.private_actions[slot]
-                    .encrypted_post_state
-                    .epk;
+                let action = &message.execution.private_actions[slot];
                 self.owned_key_chains().filter_map(move |key_chain| {
-                    let secret = key_chain.calculate_shared_secret_receiver(epk)?;
-                    let (kind, account) = crate::decrypt_note_at(message, slot, &secret)?;
+                    let secret = key_chain
+                        .calculate_shared_secret_receiver(&action.encrypted_post_state.epk)?;
+                    let (kind, account) = crate::decrypt_note(action, &secret)?;
                     let account_id = AccountId::for_private_account(
                         &key_chain.nullifier_public_key,
                         &key_chain.viewing_public_key,
@@ -625,12 +667,10 @@ impl UserKeyChain {
                 "History reaches block {} out of sequence",
                 block.header.block_id
             );
-            for tx in &block.body.transactions {
+            for (position, tx) in block.body.transactions.iter().enumerate() {
                 if let LeeTransaction::PrivacyPreserving(pp_tx) = tx {
-                    let followed = self.sync_updates_via_nullifiers(&pp_tx.message, &mut index);
-                    if discover {
-                        self.discover_unfollowed(&pp_tx.message, &followed, &mut index);
-                    }
+                    let reverted = block.body.is_reverted(position);
+                    self.follow_transaction(&pp_tx.message, reverted, discover, &mut index);
                 }
             }
         }
@@ -638,32 +678,26 @@ impl UserKeyChain {
         Ok(())
     }
 
-    /// Decrypts the note at slot `i` for `account_id`, stores the new state, and returns the
-    /// account's next update nullifier. `None` if keys or decryption fail.
+    /// Decrypts `action`'s note for `account_id`, stores the new state if `committed` holds its
+    /// commitment, and returns the account's next update nullifier. `None` if keys or decryption
+    /// fail.
     fn apply_nullifier_update(
         &mut self,
         account_id: AccountId,
-        message: &Message,
-        i: usize,
+        action: &PrivateAction,
+        committed: &HashSet<Commitment>,
     ) -> Option<Nullifier> {
-        let epk = &message.execution.private_actions[i]
-            .encrypted_post_state
-            .epk;
         let keys = self.managed_private_account(account_id)?.keys;
         let secret = SharedSecretKey::decapsulate(
-            epk,
+            &action.encrypted_post_state.epk,
             &keys.viewing_secret_key.d,
             &keys.viewing_secret_key.z,
         )?;
         let nsk = keys.nullifier_secret_key();
 
-        let (kind, new_account) = crate::decrypt_note_at(message, i, &secret)?;
+        let (kind, new_account) = crate::decrypt_note(action, &secret)?;
         // The note is the sender's claim: follow it only to a state the message commits.
-        if !message
-            .execution
-            .commitments()
-            .contains(&Commitment::new(&account_id, &new_account))
-        {
+        if !committed.contains(&Commitment::new(&account_id, &new_account)) {
             return None;
         }
         let new_nullifier = NullifierIndex::next_update_nullifier(account_id, &new_account, &nsk);

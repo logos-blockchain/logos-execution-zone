@@ -328,6 +328,7 @@ fn genesis() -> Block {
 /// A valid empty block, like [`produce_dummy_block`] but at `timestamp`.
 fn block_at(id: u64, prev: HashType, timestamp: u64) -> Block {
     HashableBlockData {
+        reverted: Vec::new(),
         block_id: id,
         prev_block_hash: prev,
         timestamp,

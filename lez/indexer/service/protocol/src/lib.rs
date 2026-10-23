@@ -207,6 +207,9 @@ impl FromStr for Signature {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct BlockBody {
     pub transactions: Vec<Transaction>,
+    /// Indices into `transactions` of the charged transactions whose action reverted.
+    #[serde(default)]
+    pub reverted: Vec<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -576,6 +579,10 @@ pub enum BlockIngestError {
         reason: String,
     },
     NonPublicGenesisTransaction,
+    RevertMismatch {
+        listed: Vec<u64>,
+        settled: Vec<u64>,
+    },
     StateTransition {
         /// Index of the failing transaction within the block body.
         tx_index: u64,
