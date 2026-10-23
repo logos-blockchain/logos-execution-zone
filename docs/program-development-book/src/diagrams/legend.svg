@@ -1,0 +1,20 @@
+<div style="overflow-x:auto;margin:1.2em 0">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 790 70" width="790" height="70" style="display:block;max-width:none" role="img" aria-label="Diagram legend">
+<title>Diagram legend</title>
+<rect x="4" y="6" width="120" height="24" rx="12" style="fill:rgba(79,134,198,0.18);stroke:#4f86c6"/>
+<text x="64" y="22" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">hidden</text>
+<rect x="136" y="6" width="120" height="24" rx="12" style="fill:rgba(217,145,43,0.20);stroke:#d9912b"/>
+<text x="196" y="22" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">on chain</text>
+<rect x="268" y="6" width="170" height="24" rx="12" style="fill:none;stroke:rgba(128,128,128,0.95);stroke-dasharray:3,3"/>
+<text x="353" y="22" font-size="12" font-weight="normal" text-anchor="middle" style="fill:rgba(128,128,128,0.95);font-style:italic;font-family:inherit">only unlinkable notes</text>
+<rect x="450" y="6" width="120" height="24" rx="12" style="fill:rgba(201,80,74,0.12);stroke:#c9504a"/>
+<text x="510" y="22" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">refused</text>
+<rect x="582" y="6" width="120" height="24" rx="12" style="fill:rgba(128,128,128,0.10);stroke:rgba(128,128,128,0.95)"/>
+<text x="642" y="22" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">off chain</text>
+<line x1="8" y1="54" x2="44" y2="54" style="stroke:#4f86c6;stroke-width:1.8;stroke-dasharray:5,4"/>
+<text x="52" y="58" font-size="12" font-weight="normal" text-anchor="start" style="fill:var(--fg, #333);font-family:inherit">private transaction (proof)</text>
+<line x1="250" y1="54" x2="286" y2="54" style="stroke:#d9912b;stroke-width:1.8"/>
+<text x="294" y="58" font-size="12" font-weight="normal" text-anchor="start" style="fill:var(--fg, #333);font-family:inherit">public transaction (signed)</text>
+<text x="500" y="58" font-size="12" font-weight="normal" text-anchor="start" style="fill:rgba(128,128,128,0.95);font-style:italic;font-family:inherit">no arrow: nothing is sent to the chain</text>
+</svg>
+</div>

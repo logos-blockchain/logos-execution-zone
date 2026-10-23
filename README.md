@@ -3,6 +3,20 @@
 Logos Execution Zone (LEZ) is a programmable blockchain that cleanly separates public and private state while keeping them fully interoperable. Developers can build apps that operate across transparent and privacy-preserving accounts without changing their logic. Privacy is enforced by the protocol itself through zero-knowledge proofs (ZKPs), so it is always available and automatic.
 
 
+## Documentation
+
+Two books live under `docs/`, both built with [mdbook](https://rust-lang.github.io/mdBook/):
+
+- [The LEZ guide](docs/lez-guide/src/introduction.md) is the place to start. It runs from what LEZ is, through using it with a wallet, writing programs for it, and integrating a client with it, to a reference and the engine internals. It documents the actor interface, which ships in `v0.4.0`; testnet and every current release run plan/apply, so read [Which interface you are writing for](docs/lez-guide/src/understand/which-interface.md) before writing a program against it.
+- [The program development book](docs/program-development-book/src/introduction.md) documents the plan/apply interface as released today, with a catalog of worked designs.
+
+```bash
+mdbook build docs/lez-guide
+mdbook build docs/program-development-book
+```
+
+[The testnet tutorials](docs/LEZ%20testnet%20v0.1%20tutorials/) cover wallet setup, a token transfer and Keycard against the public testnet.
+
 ## Background
 
 These features are provided by the Logos Execution Environment (LEE). Traditional public blockchains expose a fully transparent state: the mapping from account IDs to account values is entirely visible. LEE introduces a parallel *private state* that coexists with the public one. Together, public and private accounts form a partition of the account ID space: public IDs are visible on-chain, while private accounts are accessible only to holders of the corresponding viewing keys. Consistency across both states is enforced by ZKPs.

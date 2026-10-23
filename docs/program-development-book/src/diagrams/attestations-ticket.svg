@@ -1,0 +1,34 @@
+<div style="overflow-x:auto;margin:1.2em 0">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 528 266" width="528" height="266" style="display:block;max-width:none" role="img" aria-label="Ticket at the door">
+<title>Ticket at the door</title>
+<text x="12" y="22" font-size="15" font-weight="bold" text-anchor="start" style="fill:var(--fg, #333);font-family:inherit">Ticket at the door</text>
+<text x="12" y="42" font-size="12" font-weight="normal" text-anchor="start" style="fill:rgba(128,128,128,0.95);font-family:inherit">The ticket stays private; the door only counts admissions.</text>
+<rect x="12" y="104" width="504" height="60" rx="8" style="fill:rgba(79,134,198,0.07)"/>
+<text x="20" y="117" font-size="10" font-weight="bold" text-anchor="start" style="fill:#4f86c6;font-family:inherit">HIDDEN</text>
+<rect x="12" y="194" width="504" height="60" rx="8" style="fill:rgba(217,145,43,0.07)"/>
+<text x="20" y="207" font-size="10" font-weight="bold" text-anchor="start" style="fill:#d9912b;font-family:inherit">ON CHAIN</text>
+<text x="92" y="74" font-size="13" font-weight="bold" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">Buy</text>
+<text x="92" y="92" font-size="12" font-weight="normal" text-anchor="middle" style="fill:#4f86c6;font-family:inherit">holder</text>
+<rect x="12" y="130" width="160" height="24" rx="12" style="fill:rgba(79,134,198,0.18);stroke:#4f86c6;stroke-width:1.1"/>
+<text x="92" y="146" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">which ticket</text>
+<line x1="92.0" y1="167" x2="92.0" y2="184" style="stroke:#4f86c6;stroke-width:1.8;stroke-dasharray:5,4"/>
+<polygon points="87.0,183 97.0,183 92.0,191" style="fill:#4f86c6"/>
+<rect x="12" y="220" width="160" height="24" rx="12" style="fill:rgba(217,145,43,0.20);stroke:#d9912b;stroke-width:1.1"/>
+<text x="92" y="236" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">token program named</text>
+<text x="264" y="74" font-size="13" font-weight="bold" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">Admit</text>
+<text x="264" y="92" font-size="12" font-weight="normal" text-anchor="middle" style="fill:#4f86c6;font-family:inherit">holder</text>
+<rect x="184" y="130" width="160" height="24" rx="12" style="fill:rgba(79,134,198,0.18);stroke:#4f86c6;stroke-width:1.1"/>
+<text x="264" y="146" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">which ticket</text>
+<line x1="264.0" y1="167" x2="264.0" y2="184" style="stroke:#4f86c6;stroke-width:1.8;stroke-dasharray:5,4"/>
+<polygon points="259.0,183 269.0,183 264.0,191" style="fill:#4f86c6"/>
+<rect x="184" y="220" width="160" height="24" rx="12" style="fill:rgba(217,145,43,0.20);stroke:#d9912b;stroke-width:1.1"/>
+<text x="264" y="236" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">admissions +1</text>
+<text x="436" y="74" font-size="13" font-weight="bold" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">Admit again</text>
+<text x="436" y="92" font-size="12" font-weight="normal" text-anchor="middle" style="fill:#c9504a;font-family:inherit">same ticket</text>
+<text x="436" y="146" font-size="12" font-weight="normal" text-anchor="middle" style="fill:rgba(128,128,128,0.95);font-style:italic;font-family:inherit">nothing</text>
+<line x1="436.0" y1="167" x2="436.0" y2="184" style="stroke:#4f86c6;stroke-width:1.8;stroke-dasharray:5,4"/>
+<polygon points="431.0,183 441.0,183 436.0,191" style="fill:#4f86c6"/>
+<rect x="356" y="220" width="160" height="24" rx="12" style="fill:rgba(201,80,74,0.12);stroke:#c9504a;stroke-width:1.1"/>
+<text x="436" y="236" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">refused</text>
+</svg>
+</div>

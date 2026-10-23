@@ -1,7 +1,7 @@
 This repository includes a CLI for interacting with the Logos Blockchain. To install it, run the following command from the root of the repository:
 
 ```bash
-cargo install --path wallet --force
+cargo install --path lez/wallet --force
 ```
 
 To check that everythin is working, run `wallet help`.
@@ -22,5 +22,5 @@ To check that everythin is working, run `wallet help`.
 
 A wallet with a password asks for it on every command; set `LEE_WALLET_PASSWORD` to skip the prompt.
 
-Some completion scripts exists, see the [completions](./completions/README.md) folder.
+Some completion scripts exists, see the [completions](../../completions/README.md) folder.
 

@@ -45,7 +45,9 @@ jobs:
             --jq '.[].filename')"
 
           # An empty list means the API told us nothing, so assume code.
-          if [[ -n "$files" && -z "$(sed '/\.md$/d' <<< "$files")" ]]; then
+          # Anything under docs/ is documentation whatever its extension: the
+          # books carry .toml, .py, .svg and .gitignore alongside their markdown.
+          if [[ -n "$files" && -z "$(sed -e '/\.md$/d' -e '\|^docs/|d' <<< "$files")" ]]; then
             echo "Documentation-only pull request; skipping the code jobs."
             echo "code=false" >> "$GITHUB_OUTPUT"
           else
@@ -514,6 +516,57 @@ jobs:
           fi
           echo "✅ Dashboards are up to date"
 
+  # Not gated on `changes`: the citation check resolves paths against the code,
+  # so a commit that moves a cited file has to run it even when it edits no
+  # documentation. This lives here rather than in its own workflow because a
+  # workflow with a path filter never reports on a pull request that misses the
+  # filter, so it could never be a required check. The workflow's own
+  # `paths-ignore` still applies, so a markdown-only push skips the run; every
+  # pull request is covered.
+  books:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MDBOOK_VERSION: "0.5.4"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
+
+      - name: Install mdbook
+        run: |
+          source .github/scripts/with_retry.sh
+          mkdir -p "$HOME/.local/bin"
+          with_retry 'curl -fsSL "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C "$HOME/.local/bin"'
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # Both books set create-missing = false, so a SUMMARY entry whose file is
+      # missing fails here rather than silently rendering an empty page.
+      - name: Build both books
+        run: |
+          for book in docs/lez-guide docs/program-development-book; do
+            echo "::group::$book"
+            mdbook build "$book"
+            echo "::endgroup::"
+          done
+
+      - name: Check cited repository paths
+        run: python3 docs/ci/check_book_paths.py
+
+      # Diagrams are generated from diagrams/specs.py. Committed SVGs that no
+      # longer match their spec mean a chapter is showing a stale picture.
+      - name: Check diagrams reproduce from their generator
+        run: |
+          for book in docs/lez-guide docs/program-development-book; do
+            echo "::group::$book"
+            work=$(mktemp -d)
+            mkdir -p "$work/src/diagrams"
+            cp -r "$book/diagrams" "$work/diagrams"
+            (cd "$work/diagrams" && python3 gen.py)
+            diff -r "$work/src/diagrams" "$book/src/diagrams"
+            echo "::endgroup::"
+          done
+
   # The one required status check: `always()` so it reports even when `changes`
   # skipped everything. A skipped job reports nothing and would block forever.
   ci-ok:
@@ -535,6 +588,7 @@ jobs:
       - integration-tests
       - artifacts
       - dashboards
+      - books
     runs-on: ubuntu-latest
     steps:
       # Skipped is a pass; everything else, cancelled included, fails.
