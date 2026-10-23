@@ -1675,6 +1675,14 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 stor_ceiling,
                 headroom_reserve,
             } = self.reserve_pricing(&quote, cycles);
+            if balance < fee_at_head {
+                return Err(ExecutionFailureKind::TransactionBuildError(
+                    lee::error::LeeError::InvalidInput(format!(
+                        "Fee payer {payer} holds {balance} ({swept} of it claimed), below the fee \
+                         at head {fee_at_head}"
+                    )),
+                ));
+            }
             // Never reserve more than the payer holds, nor less than the fee at head.
             let reserve = headroom_reserve.min(balance).max(fee_at_head);
             if self.dry_run {
