@@ -1495,14 +1495,6 @@ impl WalletCore {
                 stor_ceiling,
                 headroom_reserve,
             } = self.reserve_pricing(&quote, cycles);
-            if balance < fee_at_head {
-                return Err(ExecutionFailureKind::TransactionBuildError(
-                    lee::error::LeeError::InvalidInput(format!(
-                        "Fee payer {payer} holds {balance} ({swept} of it claimed), below the fee \
-                         at head {fee_at_head}"
-                    )),
-                ));
-            }
             // Never reserve more than the payer holds, nor less than the fee at head.
             let reserve = headroom_reserve.min(balance).max(fee_at_head);
             if self.dry_run {
@@ -1551,19 +1543,33 @@ impl WalletCore {
                         select,
                         choose_seal,
                     )
-                }),
-                Some(cross_messages) => tokio::task::spawn_blocking(move || {
-                    lee::execute_and_prove_with_cross_messages(
-                        priced,
-                        cross_messages,
-                        &programs,
-                        present,
-                        select,
-                        choose_seal,
-                    )
-                }),
-            }
-            .await??;
+                })
+                .await?
+                .map_err(|error| {
+                    // The transaction simulated without its fee, so the reserve is what broke it.
+                    if let lee::error::LeeError::InvalidProgramBehavior(cause) = error {
+                        lee::error::LeeError::InvalidInput(format!(
+                            "Fee reserve of {reserve} from payer {payer} fails, though the \
+                             transaction runs without it: {cause}"
+                        ))
+                    } else {
+                        error
+                    }
+                })?,
+                Some(cross_messages) => {
+                    tokio::task::spawn_blocking(move || {
+                        lee::execute_and_prove_with_cross_messages(
+                            priced,
+                            cross_messages,
+                            &programs,
+                            present,
+                            select,
+                            choose_seal,
+                        )
+                    })
+                    .await??
+                }
+            };
 
             let message = Message {
                 admission_evidence: acc_manager.admission_evidence(),
