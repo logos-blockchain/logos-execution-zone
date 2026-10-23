@@ -9,7 +9,7 @@ use kameo::{
     actor::{ActorRef, Recipient},
     error::{Infallible, SendError},
 };
-use log::{error, warn};
+use log::debug;
 use sequencer_core::gossip::MaxBlockSizeReceiver;
 use sequencer_executor_actor::ExecutorActorTrait;
 use sequencer_gossip_actor::protocol::PublishTransaction;
@@ -70,7 +70,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
 
             let authenticated_tx = tx
                 .transaction_stateless_check()
-                .inspect_err(|err| warn!("Error at pre_check {err:#?}"))
+                .inspect_err(|err| debug!("Error at pre_check {err:#?}"))
                 .map_err(|err| {
                     ErrorObjectOwned::owned(
                         ErrorCode::InvalidParams.code(),
@@ -100,7 +100,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         let authenticated_tx = res.await.inspect_err(|err| {
             sequencer_rpc_server_actor_metrics::increment_before_mempool_failed_transactions_total(
             );
-            error!("Transaction failed before reaching mempool: {err:#?}");
+            debug!("Transaction failed before reaching mempool: {err:#?}");
         })?;
 
         self

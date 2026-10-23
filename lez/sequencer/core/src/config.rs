@@ -1,6 +1,4 @@
 use std::{
-    fs::File,
-    io::BufReader,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     time::Duration,
@@ -14,6 +12,7 @@ pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use humantime_serde;
 use lee::{AccountId, PublicKey, Signature};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
+use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
 pub use sequencer_stake_core::ChannelParams;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -103,11 +102,25 @@ pub struct SequencerConfig {
     #[serde(default)]
     pub cross_zone: Option<CrossZoneConfig>,
     /// Address the Prometheus metrics exporter binds to.
-    #[serde(default = "default_metrics_address")]
-    pub metrics_address: Option<SocketAddr>,
+    #[serde(default = "default_metrics_listen_address")]
+    pub metrics_listen_address: Option<SocketAddr>,
     /// Sequencer p2p gossip configuration. `None` disables gossip.
     #[serde(default)]
     pub gossip: Option<GossipConfig>,
+    /// Overrides `<home>/channel_signing_key`.
+    /// This is a "per-node" setting, and should not be read from a shared config.
+    #[serde(skip)]
+    pub channel_signing_key_file: Option<PathBuf>,
+    /// Overrides `<home>/bedrock_funding_public_key`.
+    /// This is a "per-node" setting, and should not be read from a shared config.
+    /// config.
+    #[serde(skip)]
+    pub funding_public_key: Option<ZkPublicKey>,
+    /// Without a `genesis`, waits for the channel's creator instead of failing when the channel
+    /// does not exist yet.
+    /// This is a "per-node" setting, and should not be read from a shared config.
+    #[serde(skip)]
+    pub wait_for_channel: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,14 +147,16 @@ pub struct GenesisConfig {
 }
 
 impl SequencerConfig {
-    /// Address [`Self::metrics_address`] falls back to when the config omits it.
-    pub const DEFAULT_METRICS_ADDRESS: SocketAddr =
+    /// Address [`Self::metrics_listen_address`] falls back to when the config omits it.
+    pub const DEFAULT_METRICS_LISTEN_ADDRESS: SocketAddr =
         SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 9000);
 
-    pub fn from_path(config_home: &Path) -> Result<Self> {
-        let file = File::open(config_home)?;
-        let reader = BufReader::new(file);
-        let config: Self = serde_json::from_reader(reader)?;
+    pub fn from_path(path: &Path) -> Result<Self> {
+        Self::from_json(&std::fs::read_to_string(path)?)
+    }
+
+    pub fn from_json(json: &str) -> Result<Self> {
+        let config: Self = serde_json::from_str(json)?;
         if let Some(genesis) = &config.genesis {
             check_channel_params(&genesis.channel_params, config.block_create_timeout)?;
         }
@@ -156,6 +171,27 @@ impl SequencerConfig {
     pub fn db_path(&self) -> PathBuf {
         self.home
             .join(format!("rocksdb-{}", self.bedrock_config.channel_id))
+    }
+
+    #[must_use]
+    pub fn channel_signing_key_path(&self) -> PathBuf {
+        self.channel_signing_key_file
+            .clone()
+            .unwrap_or_else(|| self.home.join(crate::CHANNEL_SIGNING_KEY_FILE))
+    }
+
+    pub fn load_funding_public_key(&self) -> Result<ZkPublicKey> {
+        self.funding_public_key
+            .map_or_else(|| crate::load_funding_public_key(&self.home), Ok)
+    }
+}
+
+impl Default for GossipConfig {
+    fn default() -> Self {
+        Self {
+            listen_addr: default_gossip_listen_addr(),
+            bootstrap_peers: Vec::new(),
+        }
     }
 }
 
@@ -196,8 +232,8 @@ fn default_gossip_listen_addr() -> libp2p::Multiaddr {
 }
 
 #[expect(clippy::unnecessary_wraps, reason = "Required by serde")]
-const fn default_metrics_address() -> Option<SocketAddr> {
-    Some(SequencerConfig::DEFAULT_METRICS_ADDRESS)
+const fn default_metrics_listen_address() -> Option<SocketAddr> {
+    Some(SequencerConfig::DEFAULT_METRICS_LISTEN_ADDRESS)
 }
 
 /// Percentage of the mandatory fee reserved on every funded Bedrock
