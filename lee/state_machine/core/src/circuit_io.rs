@@ -676,7 +676,7 @@ mod tests {
         };
 
         let expected: Vec<u8> = [
-            &[108, 3, 0, 0][..], // frame length: the 876 bytes below
+            &[109, 3, 0, 0][..], // frame length: the 877 bytes below
             &[1, 0, 0, 0],       // public_context.actors: one actor
             &[0; 32],
             &[1; 32],

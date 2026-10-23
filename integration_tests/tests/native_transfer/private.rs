@@ -570,7 +570,7 @@ async fn init_with_dummy_commitment_root_produces_valid_root() -> Result<()> {
 
     let (_, _, expected_digest) = ctx
         .sequencer_client()
-        .get_proofs_and_root(vec![], None)
+        .get_proofs_and_root(vec![], Vec::new())
         .await?;
 
     let ask = lee_core::AuthorizationSecretKey([7; 32]);
@@ -600,7 +600,7 @@ async fn init_nullifier_digest_is_bound_to_commitment_root() -> Result<()> {
 
     let (_, _, expected_digest) = ctx
         .sequencer_client()
-        .get_proofs_and_root(vec![], None)
+        .get_proofs_and_root(vec![], Vec::new())
         .await?;
 
     let output_with_root = prove_init_with_commitment_root(&ctx, expected_digest)?;

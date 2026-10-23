@@ -1152,7 +1152,7 @@ async fn fetch_private_proofs_and_root<C: WalletSequencerClient>(
     ),
     ExecutionFailureKind,
 > {
-    let (mut private, mut commitments): (Vec<&mut AccountPreparedData>, Vec<Commitment>) = states
+    let (mut private, commitments): (Vec<&mut AccountPreparedData>, Vec<Commitment>) = states
         .iter_mut()
         .filter_map(|state| match state {
             State::Private(pre) => {
@@ -1162,33 +1162,44 @@ async fn fetch_private_proofs_and_root<C: WalletSequencerClient>(
             State::Public { .. } | State::PublicKeycard { .. } => None,
         })
         .unzip();
-    // The claims' commitments are proven at the same root as the accounts'.
-    let accounts = commitments.len();
-    commitments.extend(claims.iter().map(|claim| claim.publication.commitment()));
-
-    let (mut proofs, message_path, root) = wallet
-        .get_proofs_and_root(&commitments, message.map(|(position, _)| position))
+    // Message leaves are found by position alone; the received root's comes first, then the
+    // claims', all under the one root the accounts are proven at.
+    let messages: Vec<(CommitmentPosition, Commitment)> = message
+        .into_iter()
+        .chain(
+            claims
+                .iter()
+                .map(|claim| (claim.position, claim.publication.commitment())),
+        )
+        .collect();
+    let (proofs, message_paths, root) = wallet
+        .get_proofs_and_root(
+            &commitments,
+            messages.iter().map(|(position, _)| *position).collect(),
+        )
         .await
         .map_err(ExecutionFailureKind::SequencerError)?;
 
     validate_proofs_against_root(&commitments, &proofs, root)?;
+    if message_paths.len() != messages.len() {
+        return Err(ExecutionFailureKind::SequencerError(anyhow::anyhow!(
+            "{} message paths served for {} messages.",
+            message_paths.len(),
+            messages.len()
+        )));
+    }
+    let mut message_paths = messages
+        .into_iter()
+        .zip(message_paths)
+        .map(|(message, path)| message_path_at(message, path, root));
     let message_path = message
-        .map(|message| message_path_at(message, message_path, root))
-        .transpose()?;
-    let claim_paths = proofs
-        .drain(accounts..)
-        .zip(claims)
-        .map(|(proof, claim)| {
-            proof
-                .filter(|(position, _)| *position == claim.position)
-                .ok_or_else(|| {
-                    ExecutionFailureKind::SequencerError(anyhow::anyhow!(
-                        "No membership proof of the claimed message at {}.",
-                        claim.position
-                    ))
-                })
+        .map(|_| {
+            message_paths
+                .next()
+                .expect("the root message's path comes first")
         })
-        .collect::<Result<_, _>>()?;
+        .transpose()?;
+    let claim_paths = message_paths.collect::<Result<_, _>>()?;
 
     for (pre, proof) in private.iter_mut().zip(proofs) {
         pre.proof = proof;

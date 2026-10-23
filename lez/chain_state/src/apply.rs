@@ -1773,14 +1773,18 @@ mod tests {
             required
         );
         assert_eq!(published_credit(&settled, alias), Some(surplus));
-        // The payer's note is spent for the fallback's state, not the proven one.
+        // The payer's note is spent for the fallback's state; none of the other proven
+        // commitments land. (The root kept the payer's state, so its proven post-state is the
+        // fallback's own.)
         assert!(
             settled
                 .get_proof_for_commitment(&fallback.action.commitment)
                 .is_some()
         );
         for commitment in private_tx.message.execution.commitments() {
-            assert!(settled.get_proof_for_commitment(&commitment).is_none());
+            if commitment != fallback.action.commitment {
+                assert!(settled.get_proof_for_commitment(&commitment).is_none());
+            }
         }
     }
 
