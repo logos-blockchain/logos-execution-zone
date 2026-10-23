@@ -1,0 +1,117 @@
+# Throwaway: measures how much the integration test archive shrinks under
+# different debug and compression settings. Dispatch only, never merged.
+# `workflow_dispatch` alone only fires from the default branch, so this
+# triggers on its own branch instead. `ci.yml` pushes only on main and dev, so
+# nothing else runs.
+on:
+  push:
+    branches:
+      - moudy/ci-archive-size-measure
+  workflow_dispatch:
+
+name: Archive size measurement
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  ci-image:
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/ci-image.yml
+
+  measure:
+    needs: ci-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pin host toolchain
+        uses: ./.github/actions/pin-host-toolchain
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-host-prebuild
+          save-if: false
+
+      - name: Measure at the shipped debug level
+        uses: ./.github/actions/run-in-ci-image
+        with:
+          image: ${{ needs.ci-image.outputs.image }}
+          env: |
+            RISC0_DEV_MODE=1
+          run: |
+            measure() {
+              local label="$1"
+              shift
+              local started
+              started="$(date +%s)"
+              cargo nextest archive -p integration_tests --archive-file m.tar.zst --no-pager "$@"
+              echo "MEASURED $label $(stat -c %s m.tar.zst) bytes in $(( $(date +%s) - started ))s"
+              rm -f m.tar.zst
+              df -h / | tail -1
+            }
+
+            measure shipped-default
+            measure shipped-zstd19 --zstd-level 19
+
+      # Both profiles: `cargo test` builds the test targets under `test` and
+      # their dependencies under `dev`, and the dependencies are the bulk.
+      - name: Measure without debug info
+        uses: ./.github/actions/run-in-ci-image
+        with:
+          image: ${{ needs.ci-image.outputs.image }}
+          env: |
+            RISC0_DEV_MODE=1
+            CARGO_PROFILE_DEV_DEBUG=0
+            CARGO_PROFILE_TEST_DEBUG=0
+          run: |
+            measure() {
+              local label="$1"
+              shift
+              local started
+              started="$(date +%s)"
+              cargo nextest archive -p integration_tests --archive-file m.tar.zst --no-pager "$@"
+              echo "MEASURED $label $(stat -c %s m.tar.zst) bytes in $(( $(date +%s) - started ))s"
+              rm -f m.tar.zst
+              df -h / | tail -1
+            }
+
+            measure nodebug-default
+            measure nodebug-zstd19 --zstd-level 19
+
+      - name: Measure without debug info or symbols
+        uses: ./.github/actions/run-in-ci-image
+        with:
+          image: ${{ needs.ci-image.outputs.image }}
+          env: |
+            RISC0_DEV_MODE=1
+            CARGO_PROFILE_DEV_DEBUG=0
+            CARGO_PROFILE_TEST_DEBUG=0
+            CARGO_PROFILE_DEV_STRIP=symbols
+            CARGO_PROFILE_TEST_STRIP=symbols
+          run: |
+            measure() {
+              local label="$1"
+              shift
+              local started
+              started="$(date +%s)"
+              cargo nextest archive -p integration_tests --archive-file m.tar.zst --no-pager "$@"
+              echo "MEASURED $label $(stat -c %s m.tar.zst) bytes in $(( $(date +%s) - started ))s"
+              rm -f m.tar.zst
+              df -h / | tail -1
+            }
+
+            measure stripped-default
+            measure stripped-zstd19 --zstd-level 19
