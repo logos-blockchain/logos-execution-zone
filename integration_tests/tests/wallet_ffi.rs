@@ -1393,7 +1393,8 @@ fn a_pending_private_credit_survives_seed_restoration_ffi() -> Result<()> {
         (FfiBytes32::from(account_id), out_keys)
     };
     let from: FfiBytes32 = ctx.ctx().existing_private_accounts()[0].into();
-    let amount: [u8; 16] = 100_u128.to_le_bytes();
+    // The restored account pays the receipt's fee out of the credit it receives.
+    let amount: [u8; 16] = (100 + min_private_fee()).to_le_bytes();
 
     let mut transfer_result = FfiTransferResult::default();
     unsafe {

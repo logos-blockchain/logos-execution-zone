@@ -125,15 +125,17 @@ pub trait Rpc {
         address: AccountId,
     ) -> Result<Option<EncryptedNote>, ErrorObjectOwned>;
 
+    /// The membership paths of `commitments` and of the message leaves at `message_positions`,
+    /// all under the root returned with them.
     #[method(name = "getProofsAndRoot")]
     async fn get_proofs_and_root(
         &self,
         commitments: Vec<Commitment>,
-        message_position: Option<CommitmentPosition>,
+        message_positions: Vec<CommitmentPosition>,
     ) -> Result<
         (
             Vec<Option<MembershipProof>>,
-            Option<MembershipProof>,
+            Vec<Option<MembershipProof>>,
             CommitmentSetDigest,
         ),
         ErrorObjectOwned,

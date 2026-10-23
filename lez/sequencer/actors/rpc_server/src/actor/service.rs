@@ -268,11 +268,11 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
     async fn get_proofs_and_root(
         &self,
         commitments: Vec<Commitment>,
-        message_position: Option<CommitmentPosition>,
+        message_positions: Vec<CommitmentPosition>,
     ) -> Result<
         (
             Vec<Option<MembershipProof>>,
-            Option<MembershipProof>,
+            Vec<Option<MembershipProof>>,
             CommitmentSetDigest,
         ),
         ErrorObjectOwned,
@@ -280,7 +280,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetProofsAndRoot {
                 commitments,
-                message_position,
+                message_positions,
             })
             .await
             .map_err(map_infallible_error)

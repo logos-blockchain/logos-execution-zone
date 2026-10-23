@@ -75,7 +75,7 @@ async fn spend_input(ctx: &TestContext, input: AccountId, seed: u8) -> Result<Pr
         .context("the trader's input note is unknown to the wallet")?;
     let (proofs, _, _) = ctx
         .wallet()
-        .get_proofs_and_root(&[commitment], None)
+        .get_proofs_and_root(&[commitment], Vec::new())
         .await?;
     let membership_proof = proofs
         .into_iter()
@@ -125,8 +125,13 @@ fn prove_trade(
                 to: Actor::new(input, programs.scripted),
                 message: Program::serialize_message(script)?,
             }),
+            // The fee inbox is declared so the reserve crosses to it rather than being published.
             public_context: PublicExecutionContext::new(
-                [payer, Actor::native_balance(custody)],
+                [
+                    payer,
+                    Actor::native_balance(custody),
+                    Actor::native_balance(system_accounts::fee_inbox_account_id()),
+                ],
                 [],
             ),
             private_witnesses: vec![witness],
@@ -289,6 +294,8 @@ async fn trades_proven_at_one_custody_balance_pay_out_at_the_live_balance() -> R
     for record in pending {
         let (received, _) = ctx.wallet_mut().receive_pending_message(record).await?;
         wait_for_inclusion(&ctx, received).await?;
+        // The receipts share a fee payer: the next one spends the note this one left.
+        sync_private(&mut ctx).await?;
     }
     assert!(
         ctx.wallet_mut().owned_pending_messages().await?.is_empty(),

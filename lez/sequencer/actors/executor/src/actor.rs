@@ -428,7 +428,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetProofsAndRoot> for E
         &mut self,
         GetProofsAndRoot {
             commitments,
-            message_position,
+            message_positions,
         }: GetProofsAndRoot,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
@@ -438,9 +438,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetProofsAndRoot> for E
                     .iter()
                     .map(|commitment| state.get_proof_for_commitment(commitment))
                     .collect();
-                let message_path =
-                    message_position.and_then(|position| state.get_proof_for_position(position));
-                (proofs, message_path, state.commitment_root())
+                let message_paths = message_positions
+                    .iter()
+                    .map(|position| state.get_proof_for_position(*position))
+                    .collect();
+                (proofs, message_paths, state.commitment_root())
             })
             .await
     }

@@ -966,18 +966,20 @@ impl WalletCore {
         self.poller().poll_tx(tx_hash).await
     }
 
+    /// The membership paths of `commitments` and of the message leaves at `message_positions`,
+    /// all under the root returned with them.
     pub async fn get_proofs_and_root(
         &self,
         commitments: &[Commitment],
-        message_position: Option<CommitmentPosition>,
+        message_positions: Vec<CommitmentPosition>,
     ) -> Result<(
         Vec<Option<MembershipProof>>,
-        Option<MembershipProof>,
+        Vec<Option<MembershipProof>>,
         CommitmentSetDigest,
     )> {
         Ok(self
             .sequencer_client
-            .get_proofs_and_root(commitments.to_vec(), message_position)
+            .get_proofs_and_root(commitments.to_vec(), message_positions)
             .await?)
     }
 
@@ -1326,6 +1328,16 @@ impl WalletCore {
                 slots.min(MAX_SWEPT_CLAIMS),
             )
             .await?;
+        if !claims.is_empty() {
+            log::info!(
+                "Claiming {} pending credit(s) before the root: {:?}",
+                claims.len(),
+                claims
+                    .iter()
+                    .map(|claim| (claim.position, claim.native_credit()))
+                    .collect::<Vec<_>>()
+            );
+        }
         let acc_manager =
             account_manager::AccountManager::new(self, accounts, message, fee_payer, &claims)
                 .await?;
@@ -2286,9 +2298,7 @@ mod tests {
         types::ErrorObjectOwned,
     };
     use lee::{
-        AccountId, BoundaryStep,
-        error::{InvalidProgramBehaviorError, LeeError},
-        privacy_preserving_transaction::circuit::ProgramCatalog,
+        AccountId, BoundaryStep, privacy_preserving_transaction::circuit::ProgramCatalog,
         program::Program,
     };
     use lee_core::{
@@ -2296,8 +2306,7 @@ mod tests {
         Nullifier, PrivateAccountKind, ProgramImageClaim, Recipient, RecipientEncryption,
         RecoveryBinding,
         account::{Account, Actor, ActorState},
-        compute_digest_for_path,
-        native_token::{self, TransferError},
+        compute_digest_for_path, native_token,
         program::{
             MessageBody, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramHeader, ProgramSegment,
             Publication,
@@ -2510,14 +2519,25 @@ mod tests {
 
     #[tokio::test]
     async fn completion_applies_the_included_transaction_without_moving_the_cursor() {
-        let included: Arc<Mutex<Option<LeeTransaction>>> = Arc::default();
+        let included: Arc<Mutex<Option<Block>>> = Arc::default();
         let mut sequencer = RpcModule::new(Arc::clone(&included));
         sequencer
             .register_method("getLastBlockId", |_, _, _| Ok::<_, ErrorObjectOwned>(2_u64))
             .unwrap();
         sequencer
             .register_method("getTransaction", |_, included, _| {
-                Ok::<_, ErrorObjectOwned>(included.lock().unwrap().clone().map(|tx| (tx, 2_u64)))
+                Ok::<_, ErrorObjectOwned>(
+                    included
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .map(|block| (block.body.transactions[0].clone(), 2_u64)),
+                )
+            })
+            .unwrap();
+        sequencer
+            .register_method("getBlock", |_, included, _| {
+                Ok::<_, ErrorObjectOwned>(included.lock().unwrap().clone())
             })
             .unwrap();
         let (mut wallet, _home, _sequencer) = served_wallet(sequencer).await;
@@ -2533,7 +2553,7 @@ mod tests {
             .unwrap()
             .clone();
         let initialized = Account::funded(1);
-        let tx = block_of(
+        let block = block_of(
             2,
             transition_message(
                 account_id,
@@ -2545,14 +2565,9 @@ mod tests {
                 ),
                 &initialized,
             ),
-        )
-        .body
-        .transactions
-        .into_iter()
-        .next()
-        .unwrap();
-        let tx_hash = tx.hash();
-        *included.lock().unwrap() = Some(tx);
+        );
+        let tx_hash = block.body.transactions[0].hash();
+        *included.lock().unwrap() = Some(block);
 
         assert!(matches!(
             wallet.finish_transaction(tx_hash).await.unwrap(),
@@ -2727,7 +2742,7 @@ mod tests {
             .register_method("getProofsAndRoot", |_, _, _| {
                 Ok::<_, ErrorObjectOwned>((
                     Vec::<Option<lee_core::MembershipProof>>::new(),
-                    None::<lee_core::MembershipProof>,
+                    Vec::<Option<lee_core::MembershipProof>>::new(),
                     [0_u8; 32],
                 ))
             })
@@ -2828,22 +2843,42 @@ mod tests {
             })
             .unwrap();
         sequencer
+            .register_method("getFeeState", |_, _, _| {
+                Ok::<_, ErrorObjectOwned>(sequencer_service_rpc::FeeStateQuote {
+                    height: 3,
+                    base_fee_exec: 0,
+                    base_fee_stor: 0,
+                    next_base_fee_exec_floor: 0,
+                    next_base_fee_exec_ceiling: 0,
+                    next_base_fee_stor_floor: 0,
+                    next_base_fee_stor_ceiling: 0,
+                    max_gas_exec: u64::MAX,
+                    max_gas_stor: u64::MAX,
+                })
+            })
+            .unwrap();
+        sequencer
             .register_method("getProofsAndRoot", |params, served, _| {
-                let (commitments, position) =
-                    params.parse::<(Vec<Commitment>, Option<CommitmentPosition>)>()?;
-                let path = position.map(|position| (position, vec![[0; 32]]));
-                let root = path.as_ref().map_or([0; 32], |(position, path)| {
+                let (commitments, positions) =
+                    params.parse::<(Vec<Commitment>, Vec<CommitmentPosition>)>()?;
+                // One message path is served, under a root computed from it.
+                let paths: Vec<Option<MembershipProof>> = positions
+                    .iter()
+                    .map(|position| Some((*position, vec![[0; 32]])))
+                    .collect();
+                let root = positions.first().map_or([0; 32], |position| {
                     let served = served.lock().unwrap();
                     let (_, publication) = served
                         .publications
                         .iter()
                         .find(|(published, _)| published == position)
                         .unwrap();
-                    compute_digest_for_path(&publication.commitment(), *position, path).unwrap()
+                    compute_digest_for_path(&publication.commitment(), *position, &[[0; 32]])
+                        .unwrap()
                 });
                 Ok::<_, ErrorObjectOwned>((
                     vec![None::<MembershipProof>; commitments.len()],
-                    path,
+                    paths,
                     root,
                 ))
             })
@@ -3200,8 +3235,10 @@ mod tests {
         );
     }
 
+    // The recipient pays the receipt's fee, and a fee payer authorizes its account: the transfer
+    // the message asks of it runs whether or not the caller mentions it as authorizing.
     #[tokio::test]
-    async fn a_receipt_runs_unauthorized_unless_its_caller_authorizes_the_recipient() {
+    async fn a_receipt_runs_authorized_by_its_recipient_paying_the_fee() {
         let (mut wallet, _home, _sequencer, served) = wallet_with_a_received_message().await;
         let recipient = wallet
             .find_pending_message(1)
@@ -3221,14 +3258,7 @@ mod tests {
         );
 
         let pending = wallet.find_pending_message(1).await.unwrap().unwrap();
-        assert!(matches!(
-            wallet.receive_pending_message(pending).await,
-            Err(ExecutionFailureKind::TransactionBuildError(
-                LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::NativeTransferFailed(
-                    TransferError::UnauthorizedSender { account_id }
-                ))
-            )) if account_id == recipient
-        ));
+        wallet.receive_pending_message(pending).await.unwrap();
 
         let pending = wallet.find_pending_message(1).await.unwrap().unwrap();
         wallet
@@ -3243,7 +3273,10 @@ mod tests {
             .unwrap();
         assert!(matches!(
             served.lock().unwrap().submitted.as_slice(),
-            [LeeTransaction::PrivacyPreserving(_)]
+            [
+                LeeTransaction::PrivacyPreserving(_),
+                LeeTransaction::PrivacyPreserving(_)
+            ]
         ));
     }
 

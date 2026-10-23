@@ -855,15 +855,12 @@ impl PublicMode {
                     .push(WorkItem::Deliver(Box::new(delivery)));
                 Ok(())
             }
-            (None, true) | (Some(BoundaryStep::EndPrivateSubtree), false) => Ok(()),
+            // At the top level the replay ends at anything but a proven call; `finish` rejects
+            // whatever the public part then leaves unconsumed.
+            (_, true) | (Some(BoundaryStep::EndPrivateSubtree), false) => Ok(()),
             (
-                None
-                | Some(
-                    BoundaryStep::PublicToPrivate(_)
-                    | BoundaryStep::EndPrivateSubtree
-                    | BoundaryStep::EndPublicSubtree,
-                ),
-                _,
+                None | Some(BoundaryStep::PublicToPrivate(_) | BoundaryStep::EndPublicSubtree),
+                false,
             ) => Err(ExecutionError::BoundaryMismatch { index: self.cursor }),
         }
     }
