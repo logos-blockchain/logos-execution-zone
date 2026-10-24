@@ -9547,6 +9547,7 @@ dependencies = [
  "lee",
  "lee_core",
  "program_loader_core",
+ "risc0-binfmt",
  "sequencer_service_rpc",
  "tokio",
  "wallet",
