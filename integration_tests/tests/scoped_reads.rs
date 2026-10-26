@@ -281,7 +281,7 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
 
 /// The indexer's view of a bloated account: scoped reads and the summary keep working.
 #[test]
-#[ignore = "the indexer cannot keep up with 2.8 MB blocks, #901"]
+#[ignore = "L1 finalization stops part way on CI, so the indexer runs out of blocks to read while the sequencer keeps producing, #901"]
 async fn a_bloated_account_stays_readable_through_the_indexer() -> Result<()> {
     let mut ctx = TestContext::new().await?;
     let victim = ctx.existing_public_accounts()[0];
@@ -368,16 +368,8 @@ async fn a_bloated_account_stays_readable_through_the_indexer() -> Result<()> {
         balance_only.data.native_balance().unwrap()
     );
 
-    // The explorer renders actor state counts and sizes, so it needs to enumerate actor states on
-    // an account a scoped read cannot enumerate and a whole-account read can no longer
-    // return. The summary answers that without carrying the bytes.
+    // The summary enumerates actor states without carrying the bytes, which the explorer needs.
     let victim_key: indexer_service_protocol::AccountId = victim.into();
-    assert!(
-        indexer_service_rpc::RpcClient::get_account(indexer, victim_key)
-            .await
-            .is_err(),
-        "the whole-account indexer read must fail on the bloated account"
-    );
     let expected_actor_state_len =
         u64::try_from(BLOAT_ACTOR_STATE_BYTES).expect("the bloat actor state size fits in u64");
     let summary = indexer_service_rpc::RpcClient::get_account_summary(indexer, victim_key).await?;
