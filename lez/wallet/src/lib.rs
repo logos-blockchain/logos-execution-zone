@@ -405,15 +405,17 @@ impl WalletCore {
             .generate_new_privacy_preserving_transaction_key_chain(chain_index)
     }
 
-    /// Insert a group key holder into storage.
+    /// Insert a group key holder into storage. `created` only for a group this wallet made
+    /// itself, whose accounts cannot predate this wallet's history.
     pub fn insert_group_key_holder(
         &mut self,
         name: Label,
         holder: key_protocol::key_management::group_key_holder::GroupKeyHolder,
+        created: bool,
     ) {
         self.storage
             .key_chain_mut()
-            .insert_group_key_holder(name, holder);
+            .insert_group_key_holder(name, holder, created);
     }
 
     /// Set the wallet's dedicated sealing secret key.
@@ -529,6 +531,10 @@ impl WalletCore {
             &vpk,
         );
 
+        let joined = !self
+            .storage
+            .key_chain()
+            .is_locally_created_group(&group_name);
         let entry = SharedAccountEntry {
             group_label: group_name,
             derivation: SharedAccountDerivation::Pda {
@@ -541,7 +547,9 @@ impl WalletCore {
             },
             account: Account::default(),
         };
-        self.storage.rewind_skipped_history();
+        if joined {
+            self.storage.rewind_skipped_history();
+        }
         self.record_caught_up(
             |key_chain| {
                 key_chain.insert_shared_private_account(account_id, entry);
@@ -577,13 +585,19 @@ impl WalletCore {
         let vpk = keys.generate_viewing_public_key();
         let account_id = AccountId::from((&npk, &vpk));
 
+        let joined = !self
+            .storage
+            .key_chain()
+            .is_locally_created_group(&group_name);
         let entry = SharedAccountEntry {
             group_label: group_name,
             derivation: SharedAccountDerivation::Regular { derivation_id },
             kind: lee_core::PrivateAccountKind::Regular,
             account: Account::default(),
         };
-        self.storage.rewind_skipped_history();
+        if joined {
+            self.storage.rewind_skipped_history();
+        }
         self.record_caught_up(
             |key_chain| {
                 key_chain.insert_shared_private_account(account_id, entry);
@@ -2578,6 +2592,29 @@ mod tests {
             positions(wallet.owned_pending_messages().await.unwrap()),
             [1]
         );
+    }
+
+    #[tokio::test]
+    async fn only_a_joined_group_hands_the_skipped_blocks_back() {
+        use key_protocol::key_management::group_key_holder::GroupKeyHolder;
+
+        let (mut wallet, _home, _sequencer, _served) = wallet_with_a_received_message().await;
+        let (mine, theirs) = (Label::new("mine"), Label::new("theirs"));
+        wallet.insert_group_key_holder(mine.clone(), GroupKeyHolder::new(), true);
+        wallet.insert_group_key_holder(theirs.clone(), GroupKeyHolder::new(), false);
+        wallet.start_at_chain_tip().await.unwrap();
+
+        wallet
+            .create_shared_regular_account(mine, [1; 32])
+            .await
+            .unwrap();
+        assert_eq!(wallet.storage.synced_from_block(), 3);
+
+        wallet
+            .create_shared_regular_account(theirs, [2; 32])
+            .await
+            .unwrap();
+        assert_eq!(wallet.storage.synced_from_block(), 0);
     }
 
     #[tokio::test]

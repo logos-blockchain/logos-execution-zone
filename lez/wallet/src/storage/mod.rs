@@ -171,6 +171,7 @@ impl Storage {
         self.synced_from_block = block_id;
     }
 
+    /// Hands back the blocks a tip start skipped, which only a scan from genesis can read.
     pub const fn rewind_skipped_history(&mut self) {
         if self.synced_from_block > 0 {
             self.last_synced_block = 0;
