@@ -1126,6 +1126,7 @@ pub async fn spawn_channel_observer(
         funding_pk: config::bedrock_funding_key(),
         priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
         resubmit_interval: Duration::from_secs(2),
+        stale_refund_slots: 0,
     })
     .await
 }

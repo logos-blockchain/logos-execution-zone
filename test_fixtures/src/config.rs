@@ -168,6 +168,7 @@ pub fn sequencer_config(
                 .context("Failed to convert bedrock addr to URL")?,
             auth: None,
             priority_fee_percent,
+            stale_refund_slots: 0,
         },
         cross_zone,
         metrics_address: Some(SequencerConfig::DEFAULT_METRICS_ADDRESS),

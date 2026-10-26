@@ -100,6 +100,7 @@ impl BedrockActor {
             funding_pk,
             priority_fee_percent,
             resubmit_interval,
+            stale_refund_slots,
         } = &config;
 
         let node = NodeHttpClient::new(CommonHttpClient::new(basic_auth.clone()), node_url.clone());
@@ -117,9 +118,7 @@ impl BedrockActor {
 
         let zone_sdk_config = SequencerConfig {
             resubmit_interval: *resubmit_interval,
-            // Zero disables the pending-tx expiry, recovering the pre-expiry sdk behavior.
-            // TODO: set a sensible value.
-            stale_refund_slots: 0,
+            stale_refund_slots: *stale_refund_slots,
             ..SequencerConfig::new(FundingConfig {
                 funding_pk: *funding_pk,
                 // Withdraw change goes back to the funding key.

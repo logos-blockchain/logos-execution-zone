@@ -22,7 +22,7 @@ use lee::{
 };
 use logos_blockchain_binary_codec::bincode::SerializeOp as _;
 use logos_blockchain_core::mantle::ops::channel::inscribe::Inscription;
-use logos_blockchain_zone_sdk::ZoneBlock;
+use logos_blockchain_zone_sdk::{UnverifiedEd25519PublicKey, ZoneBlock};
 use ping_core::{ReceiverMessage, ping_record_pda, receiver_config_account_id};
 use sequencer_bedrock_actor::{
     mock::MockBedrockActor,
@@ -354,6 +354,7 @@ fn channel_message(block: &Block, slot: u64) -> (ZoneMessage, Slot) {
     let message = ZoneMessage::Block(ZoneBlock {
         id: MsgId::from(block.header.hash.0),
         data: Inscription::try_from(bytes.as_slice()).expect("block fits an inscription"),
+        signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
     });
     (message, Slot::from(slot))
 }
@@ -452,6 +453,7 @@ async fn reconstruction_skips_an_undecodable_inscription() -> Result<()> {
     let junk = ZoneMessage::Block(ZoneBlock {
         id: MsgId::from([0xAA_u8; 32]),
         data: Inscription::try_from(b"not a block".as_slice()).expect("fits an inscription"),
+        signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
     });
 
     let mut store = StoredChain::finalized_genesis().into_mock();
@@ -486,6 +488,7 @@ async fn reconstruction_pins_on_trailing_garbage() -> Result<()> {
                 id: MsgId::from([n; 32]),
                 data: Inscription::try_from(b"not a block".as_slice())
                     .expect("fits an inscription"),
+                signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
             }),
             Slot::from(slot),
         )
@@ -600,6 +603,7 @@ fn garbage(id: MsgId, slot: u64) -> (ZoneMessage, Slot) {
     let message = ZoneMessage::Block(ZoneBlock {
         id,
         data: Inscription::try_from(b"not a block".as_slice()).expect("fits an inscription"),
+        signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
     });
     (message, Slot::from(slot))
 }
