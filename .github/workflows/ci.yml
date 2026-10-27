@@ -118,8 +118,8 @@ jobs:
           RUN_LIVE_RELEASE_TESTS: "1"
         run: python3 bedrock/tools/test_resolve_bedrock_node.py -v
 
-      - name: Test integration test target discovery
-        run: python3 .github/scripts/test_discover_integration_test_targets.py -v
+      - name: Test integration shard planning
+        run: python3 .github/scripts/test_plan_integration_shards.py -v
 
   fmt-rs:
     needs: ci-image
@@ -373,18 +373,19 @@ jobs:
       # $GITHUB_OUTPUT is outside the mounted workspace, so the container cannot
       # write to it. Discover targets on the runner from the full nextest test
       # inventory so binaries containing only ignored tests are not scheduled.
-      - name: Discover integration test targets from archive
+      - name: Plan integration test shards
         id: discover-targets
         run: |
-          targets_json="$(python3 .github/scripts/discover_integration_test_targets.py integration-tests-binaries.json)"
+          targets_json="$(python3 .github/scripts/plan_integration_shards.py \
+            integration-tests-binaries.json .github/integration-shard-weights.json)"
 
           if [[ "$targets_json" == "[]" ]]; then
-            echo "No integration test targets were discovered." >&2
+            echo "No integration test shards were planned." >&2
             exit 1
           fi
 
           echo "targets=$targets_json" >> "$GITHUB_OUTPUT"
-          echo "Discovered integration targets: $targets_json"
+          python3 -m json.tool <<< "$targets_json"
 
   integration-tests:
     needs: [ci-image, bedrock-node, integration-tests-prebuild]
@@ -394,7 +395,7 @@ jobs:
       fail-fast: false
       matrix:
         target: ${{ fromJson(needs.integration-tests-prebuild.outputs.targets) }}
-    name: integration-tests (${{ matrix.target }})
+    name: integration-tests (${{ matrix.target.name }})
     steps:
       - uses: actions/checkout@v5
         with:
@@ -438,20 +439,22 @@ jobs:
             RISC0_DEV_MODE=1
             RUST_LOG=info,kameo=warn
             LOGOS_BLOCKCHAIN_NODE_BIN=${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
+            SHARD_FILTER=${{ matrix.target.filter }}
           run: |
             # `--retries` names the flaky test, `with_retry` covers a bad runner.
+            # The filter travels in the environment: `with_retry` evals its
+            # argument, so an expression inlined here would expand twice.
             source .github/scripts/with_retry.sh
-            if [[ "${{ matrix.target }}" == "tf_bedrock_builder" || \
-                  "${{ matrix.target }}" == "tf_app_deployments" ]]; then
+            if [[ "${{ matrix.target.needs_cargo_fetch }}" == "true" ]]; then
               # The nextest archive contains the absolute Cargo git checkout
               # path compiled into the Logos testing framework. This is a fresh
               # runner, so materialize the pinned Logos checkout again before
               # allowing TF to use its local build provider.
               cargo fetch --locked
 
-              with_retry 'env -u GITHUB_ACTIONS -u CI cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
+              with_retry 'env -u GITHUB_ACTIONS -u CI cargo nextest run --retries 1 --test-threads 2 --archive-file integration-tests.tar.zst -E "$SHARD_FILTER"' 2
             else
-              with_retry 'cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
+              with_retry 'cargo nextest run --retries 1 --test-threads 2 --archive-file integration-tests.tar.zst -E "$SHARD_FILTER"' 2
             fi
 
       - name: Report disk headroom after the tests

@@ -69,6 +69,10 @@ regenerate-dashboards:
     @cargo build -q -p dashboard_gen
     @cargo run -q -p dashboard_gen -- sequencer > monitoring/grafana/dashboards/sequencer.json
 
+# Rewrite .github/integration-shard-weights.json from a completed dev run.
+refresh-shard-weights run_id:
+    @python3 .github/scripts/refresh_shard_weights.py {{run_id}}
+
 # Run criterion benches: fast crypto primitives, then the slow PPE verify (real proving setup).
 bench:
     @echo "📊 Running criterion benches"
