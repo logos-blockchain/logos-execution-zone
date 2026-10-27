@@ -1,0 +1,48 @@
+# Throwaway: does `unit-tests` compile less with its own cache key? It shares
+# `ci-container` with `lint`, which builds a different graph, so the restore is
+# a full match that nothing can reuse. Never merged.
+#
+# Run once to write the key cold, then dispatch again to measure the hit.
+on:
+  push:
+    branches:
+      - moudy/unit-cache-measure
+  workflow_dispatch:
+
+name: unit cache measurement
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  ci-image:
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/ci-image.yml
+
+  unit-tests-own-key:
+    needs: ci-image
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.ci-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-container-unit
+          # Relaxed for the measurement only; the real change keeps main/dev.
+          save-if: true
+
+      - name: Run tests
+        env:
+          RISC0_DEV_MODE: "1"
+          RUST_LOG: "info,kameo=warn"
+        run: cargo nextest run --profile ci --workspace --exclude integration_tests --exclude test_fixtures --all-features
