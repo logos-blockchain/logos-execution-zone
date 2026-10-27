@@ -452,9 +452,9 @@ jobs:
               # allowing TF to use its local build provider.
               cargo fetch --locked
 
-              with_retry 'env -u GITHUB_ACTIONS -u CI cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E "$SHARD_FILTER"' 2
+              with_retry 'env -u GITHUB_ACTIONS -u CI cargo nextest run --retries 1 --test-threads 2 --archive-file integration-tests.tar.zst -E "$SHARD_FILTER"' 2
             else
-              with_retry 'cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E "$SHARD_FILTER"' 2
+              with_retry 'cargo nextest run --retries 1 --test-threads 2 --archive-file integration-tests.tar.zst -E "$SHARD_FILTER"' 2
             fi
 
       - name: Report disk headroom after the tests
