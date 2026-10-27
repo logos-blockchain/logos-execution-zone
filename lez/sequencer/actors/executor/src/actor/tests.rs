@@ -50,6 +50,7 @@ fn sequencer_config() -> (SequencerConfig, TempDir) {
             auth: None,
             funding_key: BigUint::default().into(),
             priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
+            stale_refund_slots: 0,
             channel_params: sequencer_core::config::default_channel_params(),
         },
         genesis: Vec::new(),

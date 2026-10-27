@@ -320,7 +320,7 @@ fn frontier_verdict(anchor_slot: Slot, channel_tip_slot: Option<Slot>) -> Option
 mod tests {
     use common::block::HashableBlockData;
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
-    use logos_blockchain_zone_sdk::ZoneBlock;
+    use logos_blockchain_zone_sdk::{UnverifiedEd25519PublicKey, ZoneBlock};
 
     use super::*;
 
@@ -338,6 +338,7 @@ mod tests {
         let bytes = borsh::to_vec(block).expect("serialize");
         ZoneMessage::Block(ZoneBlock {
             id: MsgId::from([0_u8; 32]),
+            signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("a valid key"),
             data: Inscription::try_from(bytes.as_slice()).expect("inscription"),
         })
     }
@@ -412,6 +413,7 @@ mod tests {
         let anchor = anchor_for(&tip, Slot::from(1_000));
         let garbage = ZoneMessage::Block(ZoneBlock {
             id: MsgId::from([0_u8; 32]),
+            signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("a valid key"),
             data: Inscription::try_from(&[1_u8, 2, 3][..]).expect("inscription"),
         });
         assert!(matches!(
@@ -427,6 +429,7 @@ mod tests {
         let anchor = Anchor::new(Slot::from(1_000), None);
         let garbage = ZoneMessage::Block(ZoneBlock {
             id: MsgId::from([0_u8; 32]),
+            signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("a valid key"),
             data: Inscription::try_from(&[1_u8, 2, 3][..]).expect("inscription"),
         });
         assert!(matches!(

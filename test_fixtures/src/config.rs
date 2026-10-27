@@ -178,6 +178,7 @@ pub fn sequencer_config(
             funding_key,
             auth: None,
             priority_fee_percent,
+            stale_refund_slots: 0,
             channel_params,
         },
         cross_zone,

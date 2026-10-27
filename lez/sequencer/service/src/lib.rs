@@ -537,6 +537,7 @@ async fn setup_bedrock_actor(
         funding_pk: config.bedrock_config.funding_key,
         priority_fee_percent: config.bedrock_config.priority_fee_percent,
         resubmit_interval: config.retry_pending_blocks_timeout,
+        stale_refund_slots: config.bedrock_config.stale_refund_slots,
     };
 
     BedrockActor::new(bedrock_actor_config, storage_ref, bedrock_broker_ref).await
