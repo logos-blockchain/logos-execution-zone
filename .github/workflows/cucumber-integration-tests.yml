@@ -13,10 +13,12 @@ permissions:
   packages: read
 
 jobs:
-  cucumber:
-    name: Run cucumber integration tests
+  # Not a `container:` job: the binary bakes CARGO_MANIFEST_DIR in, so it has
+  # to run from the path it was built on.
+  build:
+    name: Build cucumber tests
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
@@ -31,19 +33,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download resolved Bedrock node
-        uses: actions/download-artifact@v4
-        with:
-          name: bedrock-node
-          path: bedrock/.resolved
-
-      - name: Make resolved Bedrock node executable
-        run: chmod +x bedrock/.resolved/logos-blockchain-node
-
-      # Build the Cucumber test target first so compile time is separate from
-      # the individual scenario suite timings below.
       - name: Build cucumber tests
-        id: build_cucumber
         uses: ./.github/actions/run-in-ci-image
         with:
           image: ${{ inputs.image }}
@@ -54,106 +44,113 @@ jobs:
           env: |
             RUSTFLAGS=-A single-use-lifetimes
             RISC0_DEV_MODE=1
+          # `json-render-diagnostics` keeps stdout to what the next step parses.
           run: >-
             cargo test -p integration_tests --features cucumber
             --test cucumber --no-run
+            --message-format json-render-diagnostics > cucumber-build.json
 
-      # Feature: Smoke (@smoke_ci)
-      - name: Run cucumber suite - smoke
-        if: ${{ !cancelled() && steps.build_cucumber.outcome == 'success' }}
-        timeout-minutes: 60
+      # The container cannot write $GITHUB_OUTPUT, so find the hashed name here.
+      - name: Collect the cucumber test binary
+        run: |
+          mapfile -t executables < <(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "cucumber" and .target.kind == ["test"])
+            | .executable // empty' cucumber-build.json)
+
+          if [[ "${#executables[@]}" -ne 1 ]]; then
+            echo "::error::Expected one cucumber test executable, found ${#executables[@]}: ${executables[*]}"
+            exit 1
+          fi
+
+          mkdir -p cucumber-bin
+          cp "${executables[0]}" cucumber-bin/cucumber
+          ls -l --block-size=M cucumber-bin/cucumber
+
+      - name: Upload cucumber test binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: cucumber-test-binary
+          path: cucumber-bin/cucumber
+          if-no-files-found: error
+
+  suites:
+    needs: build
+    name: ${{ matrix.suite.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - tag: "@smoke_ci"
+            name: smoke
+            artifact_subdir: "LEZ integration environment"
+          - tag: "@auth_transfer_ci"
+            name: auth-transfer
+            artifact_subdir: "Authenticated transfers"
+          - tag: "@indexer_state_ci"
+            name: indexer-state
+            artifact_subdir: "LEZ indexer state consistency"
+          - tag: "@multi_sequencer_ci"
+            name: multi-sequencer
+            artifact_subdir: "LEZ multi-sequencer committee convergence"
+          - tag: "@stake_registration_ci"
+            name: stake-registration
+            artifact_subdir: "Sequencer registration"
+          - tag: "@stake_accounts_ci"
+            name: stake-accounts
+            artifact_subdir: "Stake account validation"
+          - tag: "@stake_instruction_ci"
+            name: stake-instruction
+            artifact_subdir: "Stake instruction validation"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download cucumber test binary
+        timeout-minutes: 20
+        uses: actions/download-artifact@v4
+        with:
+          name: cucumber-test-binary
+          path: cucumber-bin
+
+      - name: Download resolved Bedrock node
+        timeout-minutes: 20
+        uses: actions/download-artifact@v4
+        with:
+          name: bedrock-node
+          path: bedrock/.resolved
+
+      - name: Make the downloaded binaries executable
+        run: chmod +x cucumber-bin/cucumber bedrock/.resolved/logos-blockchain-node
+
+      - name: Run cucumber suite
         uses: ./.github/actions/run-cucumber-suite
         with:
-          suite_tag: "@smoke_ci"
-          suite_name: smoke
-          artifact_subdir: "LEZ integration environment"
+          suite_tag: ${{ matrix.suite.tag }}
+          suite_name: ${{ matrix.suite.name }}
+          artifact_subdir: ${{ matrix.suite.artifact_subdir }}
           max_concurrent_scenarios: "1"
           image: ${{ inputs.image }}
           node_binary: ${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
-
-      # Feature: Authenticated transfers (@auth_transfer_ci)
-      - name: Run cucumber suite - authenticated transfers
-        if: ${{ !cancelled() && steps.build_cucumber.outcome == 'success' }}
-        timeout-minutes: 60
-        uses: ./.github/actions/run-cucumber-suite
-        with:
-          suite_tag: "@auth_transfer_ci"
-          suite_name: auth-transfer
-          artifact_subdir: "Authenticated transfers"
-          max_concurrent_scenarios: "1"
-          image: ${{ inputs.image }}
-          node_binary: ${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
-
-      # Feature: Indexer state (@indexer_state_ci)
-      - name: Run cucumber suite - indexer state
-        if: ${{ !cancelled() && steps.build_cucumber.outcome == 'success' }}
-        timeout-minutes: 60
-        uses: ./.github/actions/run-cucumber-suite
-        with:
-          suite_tag: "@indexer_state_ci"
-          suite_name: indexer-state
-          artifact_subdir: "LEZ indexer state consistency"
-          max_concurrent_scenarios: "1"
-          image: ${{ inputs.image }}
-          node_binary: ${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
-
-      # Feature: Multi sequencer (@multi_sequencer_ci)
-      - name: Run cucumber suite - multi sequencer
-        if: ${{ !cancelled() && steps.build_cucumber.outcome == 'success' }}
-        timeout-minutes: 60
-        uses: ./.github/actions/run-cucumber-suite
-        with:
-          suite_tag: "@multi_sequencer_ci"
-          suite_name: multi-sequencer
-          artifact_subdir: "LEZ multi-sequencer committee convergence"
-          max_concurrent_scenarios: "1"
-          image: ${{ inputs.image }}
-          node_binary: ${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
-
-      # Feature: Sequencer registration (@stake_registration_ci)
-      - name: Run cucumber suite - stake registration
-        if: ${{ !cancelled() && steps.build_cucumber.outcome == 'success' }}
-        timeout-minutes: 60
-        uses: ./.github/actions/run-cucumber-suite
-        with:
-          suite_tag: "@stake_registration_ci"
-          suite_name: stake-registration
-          artifact_subdir: "Sequencer registration"
-          max_concurrent_scenarios: "1"
-          image: ${{ inputs.image }}
-          node_binary: ${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
-
-      # Feature: Stake account validation (@stake_accounts_ci)
-      - name: Run cucumber suite - stake accounts
-        if: ${{ !cancelled() && steps.build_cucumber.outcome == 'success' }}
-        timeout-minutes: 60
-        uses: ./.github/actions/run-cucumber-suite
-        with:
-          suite_tag: "@stake_accounts_ci"
-          suite_name: stake-accounts
-          artifact_subdir: "Stake account validation"
-          max_concurrent_scenarios: "1"
-          image: ${{ inputs.image }}
-          node_binary: ${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
-
-      # Feature: Stake instruction validation (@stake_instruction_ci)
-      - name: Run cucumber suite - stake instruction
-        if: ${{ !cancelled() && steps.build_cucumber.outcome == 'success' }}
-        timeout-minutes: 60
-        uses: ./.github/actions/run-cucumber-suite
-        with:
-          suite_tag: "@stake_instruction_ci"
-          suite_name: stake-instruction
-          artifact_subdir: "Stake instruction validation"
-          max_concurrent_scenarios: "1"
-          image: ${{ inputs.image }}
-          node_binary: ${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
+          test_binary: ${{ github.workspace }}/cucumber-bin/cucumber
 
       - name: Upload cucumber JUnit results
-        if: ${{ !cancelled() && steps.build_cucumber.outcome == 'success' }}
+        if: ${{ !cancelled() }}
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: cucumber-junit-${{ runner.os }}
+          name: cucumber-junit-${{ runner.os }}-${{ matrix.suite.name }}
           path: ${{ github.workspace }}/integration_tests/cucumber_tests/temp/cucumber-output-junit.xml
           if-no-files-found: warn
