@@ -32,9 +32,9 @@ use wallet::{
     program_facades::program_loader::ProgramLoader,
 };
 
-const BLOAT_ACTOR_STATE_BYTES: usize = 96 * 1024;
+const BLOAT_ACTOR_STATE_BYTES: usize = 512 * 1024;
 
-const BLOAT_WRITERS: usize = 30;
+const BLOAT_WRITERS: usize = 6;
 
 // This test only exercises chain *resolution* under a bloated account, never `CreateHeader`,
 // so `bytecode` is never decoded or validated as a real program - arbitrary filler well under

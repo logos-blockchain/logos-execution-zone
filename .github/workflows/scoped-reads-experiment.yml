@@ -1,0 +1,65 @@
+# Throwaway: times `scoped_reads` with fewer, larger actor-state writes.
+# Triggers on its own branch, so nothing else runs. Never merged.
+on:
+  push:
+    branches:
+      - moudy/scoped-reads-bloat
+  workflow_dispatch:
+
+name: scoped_reads experiment
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  ci-image:
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/ci-image.yml
+
+  scoped-reads:
+    needs: ci-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pin host toolchain
+        uses: ./.github/actions/pin-host-toolchain
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-host-prebuild-nodebug
+          save-if: false
+
+      - name: Resolve Cargo-authoritative Bedrock node
+        uses: ./.github/actions/resolve-bedrock-node
+        with:
+          image: ${{ needs.ci-image.outputs.image }}
+          target_platform: linux-x86_64
+
+      - name: Make resolved Bedrock node executable
+        run: chmod +x bedrock/.resolved/logos-blockchain-node
+
+      # Default thread count: this is the configuration the shard runs.
+      - name: Run scoped_reads as the shard runs it
+        uses: ./.github/actions/run-in-ci-image
+        with:
+          image: ${{ needs.ci-image.outputs.image }}
+          env: |
+            RISC0_DEV_MODE=1
+            RUST_LOG=info,kameo=warn
+            LOGOS_BLOCKCHAIN_NODE_BIN=${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
+          run: >-
+            cargo nextest run -p integration_tests
+            -E 'binary(scoped_reads)' --no-fail-fast
