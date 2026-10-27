@@ -21,6 +21,9 @@ inputs:
   node_binary:
     description: Absolute path to the Cargo-authoritative Bedrock node binary
     required: true
+  test_binary:
+    description: Absolute path to the prebuilt cucumber test binary
+    required: true
 
 runs:
   using: composite
@@ -32,15 +35,15 @@ runs:
       with:
         image: ${{ inputs.image }}
         env: |
-          RUSTFLAGS=-A single-use-lifetimes
           RISC0_DEV_MODE=1
           RUST_LOG=info,logos_blockchain_chain_leader_service=trace,risc0_zkvm::host::server::exec::executor=off
           CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL=true
           MAX_CUCUMBER_CONCURRENT_SCENARIOS=${{ inputs.max_concurrent_scenarios }}
           LOGOS_BLOCKCHAIN_NODE_BIN=${{ inputs.node_binary }}
+        # The `cd` reproduces the crate root cargo runs a test binary from.
         run: >-
-          cargo test -p integration_tests --features cucumber
-          --test cucumber -- --tags "${{ inputs.suite_tag }}"
+          cd integration_tests &&
+          "${{ inputs.test_binary }}" --tags "${{ inputs.suite_tag }}"
 
     - name: Upload cucumber logs on failure
       if: ${{ steps.run_suite.outcome == 'failure' }}
