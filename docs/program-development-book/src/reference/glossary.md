@@ -1,0 +1,37 @@
+# Glossary
+
+- **Account.** A nonce plus a map from program account ids to shards. Public accounts live in the chain's map; private accounts exist as commitments and notes.
+- **Apply.** A program's second entrypoint: given one effect and one shard's bytes, keep, write or panic.
+- **`ask`.** Authorization secret key of a private account; proving knowledge of it authorizes the account.
+- **Chained call.** A call a plan schedules into another program (or itself), run depth first after the plan's effects.
+- **Claim (program image).** A private transaction's statement of which image id stands behind a program account: disclosed, undisclosed or absent (shadow).
+- **Commitment.** `H(account_id, H(account))`, the on-chain trace of a private account's current value.
+- **Custody transfer.** A native transfer chained with a PDA seed so the program pays from its vault.
+- **Deferred public effect.** An effect on a public shard recorded by a private transaction and applied by the sequencer at settlement.
+- **Dummy input.** A fake private action padding a transaction to seven.
+- **Echo.** The verbatim copy of `PlanInput`/`ApplyInput` inside every guest output, binding a receipt to its input.
+- **Effect.** A borsh-encoded proposal aimed at one shard, produced by `plan`, consumed by `apply`.
+- **Family (private PDA).** All accounts `for_private_pda(program, seed, npk, vpk, *)` for one key pair.
+- **Group key (GMS).** A shared secret from which several parties derive the same private account keys.
+- **Guard.** An effect whose apply checks and returns `None`; usually an inspect.
+- **Identifier.** The 32-byte opaque value that diversifies private account ids under one key.
+- **Image id.** RISC Zero hash of a program's bytecode; what receipts are verified against.
+- **Init / Update.** The two witness kinds: create a private account (anyone, once) or advance it (`nsk` holder).
+- **Inspect.** `Plan::inspect`: an effect on another program's shard, which must not write.
+- **Membership proof.** Merkle path of a commitment in the commitment set.
+- **Note.** The encrypted post-state of a private account, with `epk` and view tag.
+- **`npk` / `nsk`.** Nullifier public and secret keys.
+- **Nullifier.** The value that marks a commitment spent; deterministic for init, keyed for update.
+- **PDA.** Program-derived account: an address only a program can authorize, by delegating its seed.
+- **Plan.** A program's first entrypoint: metadata and instruction in, effects and chained calls out; never reads state.
+- **Program account id.** The address a program is deployed at and the key of its shards.
+- **Root call.** The transaction's top-level call.
+- **Selector.** `(account_id, program_account_id)`: one shard.
+- **Settlement.** The sequencer applying a private transaction's deferred public effects.
+- **Shadow program.** A program never deployed, dispatched at `for_shadow_program(image_id)`, private-state only, unclaimed.
+- **Shard.** The bytes one program owns on one account. Max 100 KiB.
+- **Undisclosed program.** An immutable program proven by mirror-commitment membership instead of by name.
+- **Validity window.** A block-id or timestamp range outside which a plan's transaction is invalid.
+- **View tag.** One byte, key-derived on `Init` only, that lets a wallet skip init notes that are not its own. `Update` notes carry a random tag and are found by nullifier instead.
+- **`vpk` / `vsk`.** Viewing public key (ML-KEM-768) and its seed; decrypts notes.
+- **Witness (private).** What a prover supplies per private account: keys, kind, and init or update data.

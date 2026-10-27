@@ -1,0 +1,53 @@
+<div style="overflow-x:auto;margin:1.2em 0">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 356" width="700" height="356" style="display:block;max-width:none" role="img" aria-label="Deep Space Radio">
+<title>Deep Space Radio</title>
+<text x="12" y="22" font-size="15" font-weight="bold" text-anchor="start" style="fill:var(--fg, #333);font-family:inherit">Deep Space Radio</text>
+<text x="12" y="42" font-size="12" font-weight="normal" text-anchor="start" style="fill:rgba(128,128,128,0.95);font-family:inherit">Ships are private. A radio message is a fresh private slot. Docking is the only reveal.</text>
+<rect x="12" y="104" width="676" height="120" rx="8" style="fill:rgba(79,134,198,0.07)"/>
+<text x="20" y="117" font-size="10" font-weight="bold" text-anchor="start" style="fill:#4f86c6;font-family:inherit">HIDDEN</text>
+<rect x="12" y="254" width="676" height="90" rx="8" style="fill:rgba(217,145,43,0.07)"/>
+<text x="20" y="267" font-size="10" font-weight="bold" text-anchor="start" style="fill:#d9912b;font-family:inherit">ON CHAIN</text>
+<text x="92" y="74" font-size="13" font-weight="bold" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">Move</text>
+<text x="92" y="92" font-size="12" font-weight="normal" text-anchor="middle" style="fill:#4f86c6;font-family:inherit">a ship</text>
+<rect x="12" y="130" width="160" height="24" rx="12" style="fill:rgba(79,134,198,0.18);stroke:#4f86c6;stroke-width:1.1"/>
+<text x="92" y="146" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">from where</text>
+<rect x="12" y="160" width="160" height="24" rx="12" style="fill:rgba(79,134,198,0.18);stroke:#4f86c6;stroke-width:1.1"/>
+<text x="92" y="176" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">to where</text>
+<line x1="92.0" y1="227" x2="92.0" y2="244" style="stroke:#4f86c6;stroke-width:1.8;stroke-dasharray:5,4"/>
+<polygon points="87.0,243 97.0,243 92.0,251" style="fill:#4f86c6"/>
+<rect x="12" y="280" width="160" height="24" rx="12" style="fill:none;stroke:rgba(128,128,128,0.95);stroke-dasharray:3,3"/>
+<text x="92" y="296" font-size="12" font-weight="normal" text-anchor="middle" style="fill:rgba(128,128,128,0.95);font-style:italic;font-family:inherit">only unlinkable notes</text>
+<text x="264" y="74" font-size="13" font-weight="bold" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">Radio</text>
+<text x="264" y="92" font-size="12" font-weight="normal" text-anchor="middle" style="fill:#4f86c6;font-family:inherit">ship to ship</text>
+<rect x="184" y="130" width="160" height="24" rx="12" style="fill:rgba(79,134,198,0.18);stroke:#4f86c6;stroke-width:1.1"/>
+<text x="264" y="146" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">sender</text>
+<rect x="184" y="160" width="160" height="24" rx="12" style="fill:rgba(79,134,198,0.18);stroke:#4f86c6;stroke-width:1.1"/>
+<text x="264" y="176" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">receiver</text>
+<rect x="184" y="190" width="160" height="24" rx="12" style="fill:rgba(79,134,198,0.18);stroke:#4f86c6;stroke-width:1.1"/>
+<text x="264" y="206" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">text and cargo</text>
+<line x1="264.0" y1="227" x2="264.0" y2="244" style="stroke:#4f86c6;stroke-width:1.8;stroke-dasharray:5,4"/>
+<polygon points="259.0,243 269.0,243 264.0,251" style="fill:#4f86c6"/>
+<rect x="184" y="280" width="160" height="24" rx="12" style="fill:none;stroke:rgba(128,128,128,0.95);stroke-dasharray:3,3"/>
+<text x="264" y="296" font-size="12" font-weight="normal" text-anchor="middle" style="fill:rgba(128,128,128,0.95);font-style:italic;font-family:inherit">only unlinkable notes</text>
+<text x="436" y="74" font-size="13" font-weight="bold" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">Take</text>
+<text x="436" y="92" font-size="12" font-weight="normal" text-anchor="middle" style="fill:#4f86c6;font-family:inherit">the other ship</text>
+<rect x="356" y="130" width="160" height="24" rx="12" style="fill:rgba(79,134,198,0.18);stroke:#4f86c6;stroke-width:1.1"/>
+<text x="436" y="146" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">cargo taken aboard</text>
+<line x1="436.0" y1="227" x2="436.0" y2="244" style="stroke:#4f86c6;stroke-width:1.8;stroke-dasharray:5,4"/>
+<polygon points="431.0,243 441.0,243 436.0,251" style="fill:#4f86c6"/>
+<rect x="356" y="280" width="160" height="24" rx="12" style="fill:none;stroke:rgba(128,128,128,0.95);stroke-dasharray:3,3"/>
+<text x="436" y="296" font-size="12" font-weight="normal" text-anchor="middle" style="fill:rgba(128,128,128,0.95);font-style:italic;font-family:inherit">only unlinkable notes</text>
+<text x="608" y="74" font-size="13" font-weight="bold" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">Dock</text>
+<text x="608" y="92" font-size="12" font-weight="normal" text-anchor="middle" style="fill:#4f86c6;font-family:inherit">a ship</text>
+<rect x="528" y="130" width="160" height="24" rx="12" style="fill:rgba(79,134,198,0.18);stroke:#4f86c6;stroke-width:1.1"/>
+<text x="608" y="146" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">which ship</text>
+<rect x="528" y="160" width="160" height="24" rx="12" style="fill:rgba(79,134,198,0.18);stroke:#4f86c6;stroke-width:1.1"/>
+<text x="608" y="176" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">its cargo</text>
+<line x1="608.0" y1="227" x2="608.0" y2="244" style="stroke:#4f86c6;stroke-width:1.8;stroke-dasharray:5,4"/>
+<polygon points="603.0,243 613.0,243 608.0,251" style="fill:#4f86c6"/>
+<rect x="528" y="280" width="160" height="24" rx="12" style="fill:rgba(217,145,43,0.20);stroke:#d9912b;stroke-width:1.1"/>
+<text x="608" y="296" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">a ship docked</text>
+<rect x="528" y="310" width="160" height="24" rx="12" style="fill:rgba(217,145,43,0.20);stroke:#d9912b;stroke-width:1.1"/>
+<text x="608" y="326" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">at station 4</text>
+</svg>
+</div>

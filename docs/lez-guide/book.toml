@@ -1,0 +1,18 @@
+[book]
+title = "The LEZ Guide"
+description = "Understand, use, build on and integrate with the Logos Execution Zone: the execution model, the privacy model and its limits, a catalog of program designs, and the client and reference surfaces."
+authors = ["Logos Execution Zone contributors"]
+language = "en"
+src = "src"
+
+[build]
+create-missing = false
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/logos-blockchain/logos-execution-zone"
+fold = { enable = true, level = 1 }
+
+[output.html.search]
+limit-results = 30

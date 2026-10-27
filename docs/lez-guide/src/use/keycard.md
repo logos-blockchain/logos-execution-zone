@@ -1,0 +1,256 @@
+# Using a Keycard
+
+This tutorial walks you through using Keycard with Wallet CLI. Keycard is optional hardware that can offer enhance security to a LEZ wallet. A LEZ wallet that utilizes Keycard does not store any secret keys for public accounts (eventually, this will extend to private accounts). Instead, Wallet CLI retrieves the appropriate public keys and signatures from Keycard.
+
+
+## Keycard Setup
+
+### Required hardware
+- Keycard (Blank) - a Keycard, directly, from Keycard.tech cannot (currently) be updated to support LEE.
+- Smartcard reader
+
+### Firmware installation
+
+LEE key protocol support (on top of standard Status Keycard commands) is built from source, from [`keycard-tech/status-keycard`](https://github.com/keycard-tech/status-keycard)'s default branch:
+
+```bash
+git clone --recurse-submodules https://github.com/keycard-tech/status-keycard.git
+cd status-keycard
+```
+
+The build requires **OpenJDK 11 specifically** (newer JDKs aren't compatible with its Gradle/plugin versions):
+
+```bash
+sudo apt-get install -y openjdk-11-jdk
+export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+```
+
+Gradle's default heap is too small for this build and will OOM during `buildSrc` compilation; bump it once:
+
+```bash
+echo "org.gradle.jvmargs=-Xmx2g" >> gradle.properties
+```
+
+Build and install onto a connected, blank card (disconnect all other card readers first):
+
+```bash
+./gradlew install
+```
+
+This uses the GlobalPlatform default keys (`404142434445464748494a4b4c4d4e4f`) or the Keycard development-card key (`c212e073ff8b4bbfaff4de8ab655221f`) to load it onto the card.
+
+**Warning: `./gradlew install` uninstalls and reinstalls the applet, which erases any existing personalization.** If you run this against a card that's already personalized (identity certificate, PIN, PUK, and any loaded keys), all of that is wiped, regardless of whether the firmware source changed at all — reinstalling the exact same build twice has the same effect.
+
+### Personalizing your card
+
+**Personalization is mandatory, not optional — every card requires it before any command will work, immediately after installing the firmware.** A freshly installed (or freshly reinstalled) card has no identity certificate, and refuses every command.
+
+**Important:** keycard can only connect with one application at a time; if another tool is using the keycard then Wallet CLI cannot access the same keycard, and vice-versa.
+
+## PIN entry
+
+Each Keycard command prompts for a PIN interactively. To avoid re-entering it across multiple commands, export it as an environment variable:
+
+```bash
+export KEYCARD_PIN=123456
+```
+
+Unset it when done:
+
+```bash
+unset KEYCARD_PIN
+```
+
+## Default CA public key
+
+`keycard-rs` verifies every card's identity certificate against a trusted CA public key before anything else happens — no match, no commands, regardless of whether the firmware or PIN is correct. The baked-in default is:
+
+```
+029ab99ee1e7a71bdf45b3f9c58c99866ff1294d2c1e304e228a86e10c3343501c
+```
+
+Cards personalized for development/testing (see "Personalizing the card" above) are signed by a different, throwaway CA instead, so the wallet needs to be told to trust it explicitly:
+
+```bash
+export KEYCARD_CA_PUBLIC_KEY=025877220aaae6e54a6f974602d5995c0fe24a3ea7ddabd8644bec795b9da00743
+# unset KEYCARD_CA_PUBLIC_KEY when done testing against a dev card
+```
+
+If the card's certificate doesn't match whichever CA is in effect, every command reports the card as simply "not available."
+
+## Keycard Commands
+
+Keycard uses Secure Channel V2 (applet version >= 4.0) — the wallet authenticates the card via its identity certificate and opens a fresh ECDHE-derived channel every session. There's no pairing step and nothing cached between commands; you'll enter your PIN each time you connect.
+
+### Keycard
+
+| Command                          | Description                                                           |
+|----------------------------------|-----------------------------------------------------------------------|
+| `wallet keycard available`       | Checks whether a Keycard reader and card are accessible               |
+| `wallet keycard init`            | Initializes a blank Keycard with a PIN and a generated PUK            |
+| `wallet keycard connect`         | Opens a secure channel with the Keycard and verifies the PIN          |
+| `wallet keycard load`            | Loads a mnemonic phrase onto the Keycard                              |
+| `wallet keycard factory-reset`   | Wipes PIN/PUK/keys back to uninitialized, for re-`init` |
+| `wallet keycard get-private-keys`| Prints NSK and VSK for a BIP-32 path — **debug builds only** (see below) |
+
+1. Check keycard availability
+```bash
+wallet keycard available
+
+# Output:
+✅ Keycard is available.
+```
+
+2. Initialize a blank Keycard
+```bash
+wallet keycard init
+
+# Output:
+Keycard PIN:
+Keycard PUK: 847302916485
+Record this PUK and store it somewhere safe. It cannot be recovered.
+✅ Keycard initialized successfully.
+```
+
+3. Connect (open a secure channel and verify the PIN)
+```bash
+wallet keycard connect
+
+# Output:
+Keycard PIN:
+✅ Keycard connected and PIN verified.
+```
+
+4. Load a mnemonic phrase
+```bash
+# Supply mnemonic via environment variable to avoid interactive prompt
+export KEYCARD_MNEMONIC="fashion degree mountain wool question damp current pond grow dolphin chronic then"
+wallet keycard load
+unset KEYCARD_MNEMONIC
+
+# Output:
+Keycard PIN:
+✅ Keycard is now connected to wallet.
+✅ Mnemonic phrase loaded successfully.
+```
+
+5. `factory-reset`
+
+Wipes the card's PIN, PUK, and loaded keys back to an uninitialized state, so it can be re-`init`ialized — the counterpart to `init`. It does **not** remove the identity certificate, so the card doesn't need re-personalizing afterward. Irreversibly destroys any keys currently on the card, so it requires `--confirm`:
+```bash
+wallet keycard factory-reset --confirm
+
+# Output:
+✅ Keycard factory-reset. Run `wallet keycard init` to reinitialize it.
+```
+
+6. `get-private-keys` (**debug builds only**)
+
+Requires building the wallet with the `keycard-debug` feature:
+```bash
+cargo install --path lez/wallet --force --features keycard-debug
+```
+
+Exports the raw NSK and VSK for a derivation path. NSK gates nullifier creation and VSK gates note decryption — either key is sufficient to fully compromise that account's privacy. Requires `--reveal` to confirm intent:
+```bash
+wallet keycard get-private-keys --key-path "m/44'/60'/0'/0/0" --reveal
+
+# Output:
+WARNING: NSK and VSK are being printed to stdout. Any terminal log, scrollback, or screen recording captures these keys.
+Keycard PIN:
+NSK: 55e505bf925e536c843a12ebc08c41ca5f4761eeeb7fa33725f0b44e6f1ac2e4
+VSK: 30f798893977a7b7263d1f77abf58e11e014428c92030d6a02fe363cceb41ffa
+```
+
+To restore the standard build without `keycard-debug` afterwards:
+```bash
+cargo install --path lez/wallet --force
+```
+
+### Funding a Keycard account
+
+Fund a Keycard-backed account from an account of yours that already holds tokens:
+
+| Command                     | Description                                          |
+|-----------------------------|------------------------------------------------------|
+| `wallet auth-transfer send` | Sends native tokens to a public or private recipient |
+
+`--to` accepts any of:
+- A BIP32 key path — uses Keycard (e.g. `m/44'/60'/0'/0/0`)
+- An account ID with privacy prefix (e.g. `Public/9bKm...`)
+- An account label (e.g. `my-account`)
+
+```bash
+wallet auth-transfer send --amount 200 --from my-account --to "m/44'/60'/0'/0/0"
+
+# Output:
+Keycard PIN:
+Transaction hash is fd320c01f5469e62d2486afa1d9d5be39afcca0cd01d1575905b7acd95cf6397
+```
+
+### Authenticated-transfer program
+
+| Command                     | Description                                                                   |
+|-----------------------------|-------------------------------------------------------------------------------|
+| `wallet auth-transfer send` | Sends native tokens between accounts                                          |
+
+`--from`/`--to` (for `send`) each accept any of:
+- A BIP32 key path — uses Keycard (e.g. `m/44'/60'/0'/0/0`)
+- An account ID with privacy prefix (e.g. `Public/9bKm...`)
+- An account label (e.g. `my-account`)
+
+For `send`, foreign recipient accounts (not in the local wallet and not a Keycard path) do not need to sign — pass their account ID directly via `--to`. Shielded sends to foreign private accounts use `--to-npk`/`--to-vpk`.
+
+1. Send native tokens between two Keycard accounts
+```bash
+wallet auth-transfer send \
+  --from   "m/44'/60'/0'/0/0" \
+  --to     "m/44'/60'/0'/0/1" \
+  --amount 40
+
+# Output:
+Keycard PIN:
+Transaction hash is 1a9764ab20763dcc1ffb51c6e9badd5a6316a773759032ca48e0eee59caaf488
+```
+
+2. Send native tokens from a Keycard account to a foreign account
+```bash
+wallet auth-transfer send \
+  --from   "m/44'/60'/0'/0/0" \
+  --to     "Public/9bKmZ4n7PqVRxEtY3dWsQjA2cHrFT5LpDoGXM8wJuNv6" \
+  --amount 20
+
+# Output:
+Keycard PIN:
+Transaction hash is 3e7b2a91cf804d56fe19084b3c8b25d07e8f243829bc50addf6e2c78b4b09d34
+```
+
+3. Send native tokens from a Keycard account to a local wallet account by label
+```bash
+wallet auth-transfer send \
+  --from   "m/44'/60'/0'/0/0" \
+  --to     my-account \
+  --amount 20
+
+# Output:
+Keycard PIN:
+Transaction hash is 7d4c1b8e2f903a56fd19084b3c8b25d07e8f243829bc50addf6e2c78b4b09e45
+```
+
+## Testing
+
+Tests for Keycard commands are in `lez/keycard_wallet/tests/`.
+
+| Test file | Description |
+|---|---|
+| `keycard_tests.sh` | Core Keycard wallet commands and `auth-transfer` commands |
+| `keycard_test_3.sh` |  Demonstrates retrieving private account keys from keycard |
+| `keycard_power_recovery_tests.sh` | Modified test file of `keycard_tests.sh` to test power recovery paths |
+
+Run from the repo root with a Keycard connected:
+
+```bash
+bash lez/keycard_wallet/tests/keycard_tests.sh
+bash lez/keycard_wallet/tests/keycard_test_3.sh
+bash lez/keycard_wallet/tests/keycard_power_recovery_tests.sh
+```

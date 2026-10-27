@@ -1,0 +1,50 @@
+<div style="overflow-x:auto;margin:1.2em 0">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 326" width="700" height="326" style="display:block;max-width:none" role="img" aria-label="Token transfer: four placements">
+<title>Token transfer: four placements</title>
+<text x="12" y="22" font-size="15" font-weight="bold" text-anchor="start" style="fill:var(--fg, #333);font-family:inherit">Token transfer: four placements</text>
+<text x="12" y="42" font-size="12" font-weight="normal" text-anchor="start" style="fill:rgba(128,128,128,0.95);font-family:inherit">Four alternatives of one Transfer.</text>
+<rect x="12" y="104" width="676" height="90" rx="8" style="fill:rgba(79,134,198,0.07)"/>
+<text x="20" y="117" font-size="10" font-weight="bold" text-anchor="start" style="fill:#4f86c6;font-family:inherit">HIDDEN</text>
+<rect x="12" y="224" width="676" height="90" rx="8" style="fill:rgba(217,145,43,0.07)"/>
+<text x="20" y="237" font-size="10" font-weight="bold" text-anchor="start" style="fill:#d9912b;font-family:inherit">ON CHAIN</text>
+<text x="92" y="74" font-size="13" font-weight="bold" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">Public to public</text>
+<text x="92" y="92" font-size="12" font-weight="normal" text-anchor="middle" style="fill:#d9912b;font-family:inherit"></text>
+<text x="92" y="146" font-size="12" font-weight="normal" text-anchor="middle" style="fill:rgba(128,128,128,0.95);font-style:italic;font-family:inherit">nothing</text>
+<line x1="92.0" y1="197" x2="92.0" y2="214" style="stroke:#d9912b;stroke-width:1.8;stroke-dasharray:none"/>
+<polygon points="87.0,213 97.0,213 92.0,221" style="fill:#d9912b"/>
+<rect x="12" y="250" width="160" height="24" rx="12" style="fill:rgba(217,145,43,0.20);stroke:#d9912b;stroke-width:1.1"/>
+<text x="92" y="266" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">sender signs</text>
+<rect x="12" y="280" width="160" height="24" rx="12" style="fill:rgba(217,145,43,0.20);stroke:#d9912b;stroke-width:1.1"/>
+<text x="92" y="296" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">amount</text>
+<text x="264" y="74" font-size="13" font-weight="bold" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">Private to private</text>
+<text x="264" y="92" font-size="12" font-weight="normal" text-anchor="middle" style="fill:#4f86c6;font-family:inherit"></text>
+<rect x="184" y="130" width="160" height="24" rx="12" style="fill:rgba(79,134,198,0.18);stroke:#4f86c6;stroke-width:1.1"/>
+<text x="264" y="146" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">both sides</text>
+<rect x="184" y="160" width="160" height="24" rx="12" style="fill:rgba(79,134,198,0.18);stroke:#4f86c6;stroke-width:1.1"/>
+<text x="264" y="176" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">amount</text>
+<line x1="264.0" y1="197" x2="264.0" y2="214" style="stroke:#4f86c6;stroke-width:1.8;stroke-dasharray:5,4"/>
+<polygon points="259.0,213 269.0,213 264.0,221" style="fill:#4f86c6"/>
+<rect x="184" y="250" width="160" height="24" rx="12" style="fill:rgba(217,145,43,0.20);stroke:#d9912b;stroke-width:1.1"/>
+<text x="264" y="266" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">token program named</text>
+<text x="436" y="74" font-size="13" font-weight="bold" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">Private to public</text>
+<text x="436" y="92" font-size="12" font-weight="normal" text-anchor="middle" style="fill:#4f86c6;font-family:inherit"></text>
+<rect x="356" y="130" width="160" height="24" rx="12" style="fill:rgba(79,134,198,0.18);stroke:#4f86c6;stroke-width:1.1"/>
+<text x="436" y="146" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">sender</text>
+<line x1="436.0" y1="197" x2="436.0" y2="214" style="stroke:#4f86c6;stroke-width:1.8;stroke-dasharray:5,4"/>
+<polygon points="431.0,213 441.0,213 436.0,221" style="fill:#4f86c6"/>
+<rect x="356" y="250" width="160" height="24" rx="12" style="fill:rgba(217,145,43,0.20);stroke:#d9912b;stroke-width:1.1"/>
+<text x="436" y="266" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">recipient +amount</text>
+<rect x="356" y="280" width="160" height="24" rx="12" style="fill:rgba(217,145,43,0.20);stroke:#d9912b;stroke-width:1.1"/>
+<text x="436" y="296" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">token program named</text>
+<text x="608" y="74" font-size="13" font-weight="bold" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">Public to private</text>
+<text x="608" y="92" font-size="12" font-weight="normal" text-anchor="middle" style="fill:#4f86c6;font-family:inherit"></text>
+<rect x="528" y="130" width="160" height="24" rx="12" style="fill:rgba(79,134,198,0.18);stroke:#4f86c6;stroke-width:1.1"/>
+<text x="608" y="146" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">recipient</text>
+<line x1="608.0" y1="197" x2="608.0" y2="214" style="stroke:#4f86c6;stroke-width:1.8;stroke-dasharray:5,4"/>
+<polygon points="603.0,213 613.0,213 608.0,221" style="fill:#4f86c6"/>
+<rect x="528" y="250" width="160" height="24" rx="12" style="fill:rgba(217,145,43,0.20);stroke:#d9912b;stroke-width:1.1"/>
+<text x="608" y="266" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">sender signs</text>
+<rect x="528" y="280" width="160" height="24" rx="12" style="fill:rgba(217,145,43,0.20);stroke:#d9912b;stroke-width:1.1"/>
+<text x="608" y="296" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">sender -amount</text>
+</svg>
+</div>

@@ -1,0 +1,27 @@
+<div style="overflow-x:auto;margin:1.2em 0">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 356 266" width="356" height="266" style="display:block;max-width:none" role="img" aria-label="Two-party private swap">
+<title>Two-party private swap</title>
+<text x="12" y="22" font-size="15" font-weight="bold" text-anchor="start" style="fill:var(--fg, #333);font-family:inherit">Two-party private swap</text>
+<text x="12" y="42" font-size="12" font-weight="normal" text-anchor="start" style="fill:rgba(128,128,128,0.95);font-family:inherit">Both legs held on one private PDA under a shared pairwise key.</text>
+<rect x="12" y="104" width="332" height="60" rx="8" style="fill:rgba(79,134,198,0.07)"/>
+<text x="20" y="117" font-size="10" font-weight="bold" text-anchor="start" style="fill:#4f86c6;font-family:inherit">HIDDEN</text>
+<rect x="12" y="194" width="332" height="60" rx="8" style="fill:rgba(217,145,43,0.07)"/>
+<text x="20" y="207" font-size="10" font-weight="bold" text-anchor="start" style="fill:#d9912b;font-family:inherit">ON CHAIN</text>
+<text x="92" y="74" font-size="13" font-weight="bold" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">Offer</text>
+<text x="92" y="92" font-size="12" font-weight="normal" text-anchor="middle" style="fill:#4f86c6;font-family:inherit">Alice</text>
+<rect x="12" y="130" width="160" height="24" rx="12" style="fill:rgba(79,134,198,0.18);stroke:#4f86c6;stroke-width:1.1"/>
+<text x="92" y="146" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">Alice&#x27;s leg</text>
+<line x1="92.0" y1="167" x2="92.0" y2="184" style="stroke:#4f86c6;stroke-width:1.8;stroke-dasharray:5,4"/>
+<polygon points="87.0,183 97.0,183 92.0,191" style="fill:#4f86c6"/>
+<rect x="12" y="220" width="160" height="24" rx="12" style="fill:rgba(217,145,43,0.20);stroke:#d9912b;stroke-width:1.1"/>
+<text x="92" y="236" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">swap program named</text>
+<text x="264" y="74" font-size="13" font-weight="bold" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">Accept</text>
+<text x="264" y="92" font-size="12" font-weight="normal" text-anchor="middle" style="fill:#4f86c6;font-family:inherit">Bob</text>
+<rect x="184" y="130" width="160" height="24" rx="12" style="fill:rgba(79,134,198,0.18);stroke:#4f86c6;stroke-width:1.1"/>
+<text x="264" y="146" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">Bob&#x27;s leg</text>
+<line x1="264.0" y1="167" x2="264.0" y2="184" style="stroke:#4f86c6;stroke-width:1.8;stroke-dasharray:5,4"/>
+<polygon points="259.0,183 269.0,183 264.0,191" style="fill:#4f86c6"/>
+<rect x="184" y="220" width="160" height="24" rx="12" style="fill:rgba(217,145,43,0.20);stroke:#d9912b;stroke-width:1.1"/>
+<text x="264" y="236" font-size="12" font-weight="normal" text-anchor="middle" style="fill:var(--fg, #333);font-family:inherit">swap program named</text>
+</svg>
+</div>
