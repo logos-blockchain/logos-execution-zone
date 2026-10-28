@@ -300,6 +300,7 @@ fn setup_sequencer_config() -> SequencerConfig {
             node_url: "http://not-used-in-unit-tests".parse().unwrap(),
             auth: None,
             priority_fee_percent: config::default_priority_fee_percent(),
+            stale_refund_slots: 0,
         },
         retry_pending_blocks_timeout: Duration::from_mins(4),
         genesis: Some(config::GenesisConfig {
