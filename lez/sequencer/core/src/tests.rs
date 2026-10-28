@@ -297,6 +297,7 @@ fn setup_sequencer_config() -> SequencerConfig {
             auth: None,
             funding_key: ZkPublicKey::zero(),
             priority_fee_percent: config::default_priority_fee_percent(),
+            stale_refund_slots: 0,
             channel_params: crate::config::default_channel_params(),
         },
         retry_pending_blocks_timeout: Duration::from_mins(4),

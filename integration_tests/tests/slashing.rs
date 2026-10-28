@@ -218,6 +218,7 @@ async fn assert_offender_is_slashed(payload: impl Fn(&Block) -> Vec<u8>) -> Resu
         funding_pk: config::bedrock_funding_key(),
         priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
         resubmit_interval: Duration::from_secs(5),
+        stale_refund_slots: 0,
     })
     .await
     .context("Failed to open a publisher for the offender")?;
