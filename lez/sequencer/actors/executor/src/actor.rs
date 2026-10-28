@@ -21,7 +21,7 @@ use mempool::MemPoolHandle;
 use sequencer_actors_common::EraseMessage as _;
 use sequencer_bedrock_actor::BedrockActorTrait;
 use sequencer_core::{
-    ChannelConfigActor, SequencerCore, SubmitConfig, TransactionOrigin,
+    ChannelSigningActor, SequencerCore, SubmitConfig, TransactionOrigin,
     config::SequencerConfig,
     gossip::{AccreditedKeysReceiver, MaxBlockSizeReceiver},
     task_group::TaskGroup,
@@ -114,10 +114,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
         self.sequencer.slasher_ref().clone()
     }
 
-    /// Handle to the channel-config actor, for the service to feed gossip into.
+    /// Handle to the channel-signing actor, for the service to feed gossip into.
     #[must_use]
-    pub fn config_manager_ref(&self) -> ActorRef<ChannelConfigActor> {
-        self.sequencer.config_manager_ref().clone()
+    pub fn channel_signer_ref(&self) -> ActorRef<ChannelSigningActor> {
+        self.sequencer.channel_signer_ref().clone()
     }
 
     /// The committee the gossip mesh screens slash approvals against.
@@ -623,6 +623,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait>
                 self.sequencer
                     .on_channel_config_update(live_channel_config)
                     .await;
+            }
+            sequencer_bedrock_actor::protocol::ChannelEvent::Deposits(deposits) => {
+                self.sequencer.on_observed_deposits(deposits).await;
             }
         }
     }

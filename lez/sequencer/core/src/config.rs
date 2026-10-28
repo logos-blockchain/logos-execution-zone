@@ -31,6 +31,15 @@ pub const BLOCK_OVERHEAD: u64 = 2_048;
 pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 =
     logos_blockchain_core::mantle::ops::channel::inscribe::MAX_BYTES as u64;
 
+/// The largest Bedrock transaction: the L1 caps a block's transactions at this
+/// many bytes.
+#[expect(
+    clippy::as_conversions,
+    reason = "usize::try_from is not const & usize fits u64 on every supported target"
+)]
+pub const MAX_BEDROCK_TX_SIZE: u64 =
+    logos_blockchain_core::block::MAX_BLOCK_TRANSACTIONS_SIZE as u64;
+
 /// Smallest nonzero `stale_refund_slots`, since a shorter window orphans blocks before L1 can
 /// mine them.
 const MIN_STALE_REFUND_SLOTS: u64 = 50;
