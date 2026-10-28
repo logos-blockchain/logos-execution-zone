@@ -2103,7 +2103,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             quote.base_fee_exec, quote.base_fee_stor, quote.height
         );
         println!("  fee at head:      {actual_fee} (tip {})", fee.tip);
-        match run.revert {
+        match run.revert_reason {
             Some(reason) => println!("  action REVERTS:   {reason} (fee is still charged)"),
             None => println!("  action:           applies"),
         }

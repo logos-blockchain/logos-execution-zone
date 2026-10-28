@@ -141,12 +141,21 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         &self,
         tx: LeeTransaction,
     ) -> Result<PublicDryRun, ErrorObjectOwned> {
+        // A privacy-preserving transaction is priced by the wallet's local simulation, before
+        // its proof exists.
+        let LeeTransaction::Public(tx) = tx else {
+            return Err(ErrorObjectOwned::owned(
+                ErrorCode::InvalidParams.code(),
+                "Only a public transaction can be dry-run; a privacy-preserving one was given",
+                None::<()>,
+            ));
+        };
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::DryRunPublicTransaction { transaction: tx })
             .await
             .map(|run| PublicDryRun {
                 cycles: run.cycles,
-                revert: run.revert,
+                revert_reason: run.revert_reason,
             })
             .map_err(map_executor_error)
     }
@@ -388,21 +397,15 @@ fn map_executor_error<M>(
     match err {
         SendError::HandlerError(handle_err) => match handle_err {
             // A reserve the head fee outgrew gets its own code: priced again, it may pass.
-            sequencer_executor_actor::error::Error::IncorrectFee(source)
-                if matches!(
-                    source.downcast_ref::<fee_core::validity::FeeError>(),
-                    Some(fee_core::validity::FeeError::PrivateFeeBelowRequired { .. })
-                ) =>
-            {
+            below @ sequencer_executor_actor::error::Error::PrivateFeeBelowHead { .. } => {
                 ErrorObjectOwned::owned(
                     sequencer_service_rpc::PRIVATE_FEE_BELOW_HEAD_ERROR_CODE,
-                    format!("Incorrect fee: {source:#}"),
+                    below.to_string(),
                     None::<()>,
                 )
             }
             invalid @ (sequencer_executor_actor::error::Error::IncorrectFee(_)
-            | sequencer_executor_actor::error::Error::PublicDryRunFailed(_)
-            | sequencer_executor_actor::error::Error::DryRunNotPublic) => {
+            | sequencer_executor_actor::error::Error::PublicDryRunFailed(_)) => {
                 // With its cause, which the sender is shown.
                 let message = std::error::Error::source(&invalid).map_or_else(
                     || invalid.to_string(),
@@ -438,4 +441,24 @@ fn map_infallible_error<M>(err: SendError<M, Infallible>) -> ErrorObjectOwned {
 
 fn internal_error(err: impl std::fmt::Display) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_reserve_below_the_head_fee_gets_the_reprice_code() {
+        let below = map_executor_error(SendError::<(), _>::HandlerError(
+            sequencer_executor_actor::error::Error::PrivateFeeBelowHead {
+                required: 2,
+                reserve: 1,
+            },
+        ));
+        assert_eq!(
+            below.code(),
+            sequencer_service_rpc::PRIVATE_FEE_BELOW_HEAD_ERROR_CODE
+        );
+        assert!(below.message().contains("below the 2 required"));
+    }
 }

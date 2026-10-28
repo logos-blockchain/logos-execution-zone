@@ -11423,7 +11423,6 @@ dependencies = [
  "borsh",
  "bytesize",
  "common",
- "fee_core",
  "jsonrpsee",
  "kameo",
  "lee",

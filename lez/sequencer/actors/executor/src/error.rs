@@ -30,13 +30,15 @@ pub enum Error {
     #[error("Incorrect fee")]
     IncorrectFee(#[source] anyhow::Error),
 
+    /// A privacy-preserving transaction's reserve the head fee outgrew: priced again off a fresh
+    /// quote, it may pass.
+    #[error(
+        "Privacy-preserving fee reserve {reserve} is below the {required} required at the head"
+    )]
+    PrivateFeeBelowHead { required: u128, reserve: u128 },
+
     #[error("The public transaction would be rejected at settlement")]
     PublicDryRunFailed(#[source] anyhow::Error),
-
-    /// `dryRunPublicTransaction` was given a privacy-preserving transaction.
-    /// Those are priced by the wallet's local simulation, before the proof exists.
-    #[error("Only a public transaction can be dry-run; a privacy-preserving one was given")]
-    DryRunNotPublic,
 }
 
 impl<M> From<kameo::error::SendError<M, sequencer_storage_actor::error::Error>> for Error {

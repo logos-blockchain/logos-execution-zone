@@ -56,7 +56,7 @@ pub struct PublicDryRun {
     pub cycles: u64,
     /// Why the action reverted, if it did: it would be charged and its
     /// effects dropped.
-    pub revert: Option<String>,
+    pub revert_reason: Option<String>,
 }
 
 /// Screens a submitted transaction against the head state.
@@ -125,7 +125,7 @@ pub fn dry_run_public_transaction(
     result?;
     Ok(PublicDryRun {
         cycles: charge.cycles,
-        revert: charge.revert,
+        revert_reason: charge.revert,
     })
 }
 
@@ -422,7 +422,7 @@ mod tests {
         let run = dry_run_public_transaction(&state, public_tx, 2, 200).unwrap();
         // A native transfer is protocol-recomputed and free; only guest programs meter cycles.
         assert_eq!(run.cycles, 0);
-        assert_eq!(run.revert, None);
+        assert_eq!(run.revert_reason, None);
         assert_eq!(
             state.get_account_by_id(from).nonce,
             lee_core::account::Nonce::default(),
@@ -445,7 +445,7 @@ mod tests {
         assert!(
             dry_run_public_transaction(&state, over_tx, 2, 200)
                 .unwrap()
-                .revert
+                .revert_reason
                 .is_some()
         );
     }

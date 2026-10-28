@@ -1,6 +1,7 @@
 use std::future::Future;
 
 use common::{PageLimit, block::Block, transaction::LeeTransaction};
+use fee_core::validity::FeeError;
 use futures::{
     FutureExt as _, StreamExt as _, TryFutureExt as _, TryStreamExt as _, future::ready, stream,
 };
@@ -253,7 +254,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
         self.sequencer
             .with_state(|state| sequencer_core::fees::screen(&transaction, state))
             .await
-            .map_err(|err| Error::IncorrectFee(err.into()))?;
+            .map_err(|err| {
+                if let sequencer_core::fees::Error::FeeCore(FeeError::PrivateFeeBelowRequired {
+                    required,
+                    reserve,
+                }) = err
+                {
+                    Error::PrivateFeeBelowHead { required, reserve }
+                } else {
+                    Error::IncorrectFee(err.into())
+                }
+            })?;
 
         self.mempool_handle
             .try_push((origin.into(), transaction))
@@ -345,12 +356,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<DryRunPublicTransaction
 
     async fn handle(
         &mut self,
-        DryRunPublicTransaction { transaction }: DryRunPublicTransaction,
+        DryRunPublicTransaction { transaction: tx }: DryRunPublicTransaction,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let LeeTransaction::Public(tx) = transaction else {
-            return Err(Error::DryRunNotPublic);
-        };
         // The block the transaction would land in: the next height, built now.
         let block_id = self.sequencer.chain_height().await.saturating_add(1);
         let timestamp =
@@ -362,7 +370,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<DryRunPublicTransaction
             .await
             .map(|run| PublicDryRun {
                 cycles: run.cycles,
-                revert: run.revert,
+                revert_reason: run.revert_reason,
             })
             .map_err(|err| Error::PublicDryRunFailed(err.into()))
     }

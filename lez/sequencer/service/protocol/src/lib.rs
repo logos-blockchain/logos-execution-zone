@@ -48,7 +48,7 @@ pub struct PublicDryRun {
     /// Cycles the action metered, bounded by its declared gas limit.
     pub cycles: u64,
     /// Why the action reverted, if it did: it would be charged and its effects dropped.
-    pub revert: Option<String>,
+    pub revert_reason: Option<String>,
 }
 
 /// A cross-zone delivery a sequencer gave up on after repeated failures.

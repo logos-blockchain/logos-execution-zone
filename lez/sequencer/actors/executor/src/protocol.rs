@@ -32,15 +32,17 @@ pub struct Transaction {
 
 pub struct GetFeeQuote;
 
-/// Executes a public transaction's action on the head state without settling it.
+/// Runs a public transaction against the head state and applies nothing, reporting the cycles it
+/// used and why it reverted, if it did: a wallet sizes its gas limit and tip from it.
 pub struct DryRunPublicTransaction {
-    pub transaction: LeeTransaction,
+    pub transaction: lee::PublicTransaction,
 }
 
 #[derive(Reply)]
 pub struct PublicDryRun {
     pub cycles: u64,
-    pub revert: Option<String>,
+    /// The failure's message, when the action failed in a way settlement charges for.
+    pub revert_reason: Option<String>,
 }
 
 /// The fee market priced off the head state, for wallets sizing `max_fee`.
