@@ -217,8 +217,9 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-container
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
+          shared-key: ci-container-tests
+          # Read-only; `unit-tests` is the only writer.
+          save-if: false
 
       - name: Lint workspace
         env:
@@ -247,7 +248,8 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-container
+          shared-key: ci-container-tests
+          # Only writer of this cache.
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
       - name: Run tests
