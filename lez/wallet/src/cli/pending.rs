@@ -11,6 +11,7 @@ use lee_core::CommitmentPosition;
 
 use crate::{
     AccountIdentity, AccountMention, AsyncDelivery, PendingMessage, Promotions, WalletCore,
+    WalletSequencerClient,
     account::AccountIdWithPrivacy,
     cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
     storage::Storage,
@@ -73,9 +74,9 @@ pub struct ReceiptInputs {
 }
 
 impl WalletSubcommand for PendingSubcommand {
-    async fn handle_subcommand(
+    async fn handle_subcommand<C: WalletSequencerClient>(
         self,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::List => {

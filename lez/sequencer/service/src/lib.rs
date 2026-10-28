@@ -225,6 +225,12 @@ impl SequencerHandle {
         self.executor.actor_ref()
     }
 
+    /// The gossip actor, for cases where there is need for gossip-only fucntionality.
+    #[must_use]
+    pub fn gossip_ref(&self) -> Option<&ActorRef<GossipActor>> {
+        self.gossip.as_ref().map(|gossip| gossip.actor.actor_ref())
+    }
+
     /// The storage, for embedders that talk to the sequencer in-process
     /// instead of over the RPC.
     #[must_use]
