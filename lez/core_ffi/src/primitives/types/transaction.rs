@@ -5,7 +5,9 @@ use lee::{
     privacy_preserving_transaction::circuit::Proof,
 };
 use lee_core::{
-    PrivateAction, ProgramImageClaim, ProvenExecution, RecoveryBinding, SealedMessage,
+    FeeFallback, PrivateAction, ProgramImageClaim, ProvenExecution, ProvenFee, RecoveryBinding,
+    SealedMessage,
+    account::AccountId,
     program::{ValidityWindow, ValidityWindows},
 };
 use sequencer_executor_actor::protocol::Transaction;
@@ -15,8 +17,8 @@ use crate::primitives::{
     types::{
         FfiAccountId, FfiBytes32, FfiFeeDeclaration, FfiHashType, FfiOption, FfiVec,
         actor::{
-            FfiNonceEntry, FfiPublicAccountEvidence, FfiPublicExecutionContext, FfiRootCall,
-            FfiSignaturePubKeyEntry, empty_root_call, nonces_from_ffi,
+            FfiNonceEntry, FfiPrivateAction, FfiPublicAccountEvidence, FfiPublicExecutionContext,
+            FfiRootCall, FfiSignaturePubKeyEntry, empty_root_call, nonces_from_ffi,
         },
         vectors::{
             FfiBoundaryStepList, FfiNonceList, FfiPrivateActionList, FfiProof,
@@ -248,6 +250,7 @@ struct OwnedPrivateBody {
     block_validity_window: [u64; 2],
     timestamp_validity_window: [u64; 2],
     program_image_claims: Vec<ProgramImageClaim>,
+    fee: Option<ProvenFee>,
     nonces: Vec<FfiNonceEntry>,
     admission_evidence: Vec<FfiPublicAccountEvidence>,
     witness_set: Vec<FfiSignaturePubKeyEntry>,
@@ -273,6 +276,7 @@ impl From<Box<FfiPrivateTransactionBody>> for OwnedPrivateBody {
             block_validity_window: message.block_validity_window,
             timestamp_validity_window: message.timestamp_validity_window,
             program_image_claims: owned(message.program_image_claims),
+            fee: proven_fee_from_ffi(message.has_fee, message.fee),
             nonces: message.nonces.into(),
             admission_evidence: message.admission_evidence.into(),
             witness_set: witness_set.into(),
@@ -295,6 +299,7 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
             block_validity_window,
             timestamp_validity_window,
             program_image_claims,
+            fee,
             nonces,
             admission_evidence,
             witness_set,
@@ -314,9 +319,7 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                         timestamps: cast_ffi_validity_window(timestamp_validity_window)?,
                     },
                     program_image_claims,
-                    // Not carried over this FFI: a proof committing a fee cannot be rebuilt from
-                    // it, see the corresponding destructure below.
-                    fee: None,
+                    fee,
                 },
                 nonces: nonces_from_ffi(nonces).map_err(cast_error)?,
                 admission_evidence: public_account_evidence(admission_evidence)?,
@@ -343,6 +346,41 @@ pub struct FfiPrivacyPreservingMessage {
     pub timestamp_validity_window: [u64; 2],
     pub program_image_claims: FfiProgramImageClaims,
     pub admission_evidence: FfiPublicAccountEvidenceList,
+    pub has_fee: bool,
+    pub fee: FfiProvenFee,
+}
+
+/// What a proof commits about its in-proof fee. The `has_*` flags mark which parts are present;
+/// an absent part holds an empty value.
+#[repr(C)]
+pub struct FfiProvenFee {
+    pub has_refund_to: bool,
+    pub refund_to: FfiAccountId,
+    pub has_fallback: bool,
+    pub fallback_action: FfiPrivateAction,
+    pub fallback_boundary: FfiBoundaryStepList,
+}
+
+impl From<Option<ProvenFee>> for FfiProvenFee {
+    fn from(value: Option<ProvenFee>) -> Self {
+        let (refund_to, fallback) = value.map_or((None, None), |fee| (fee.refund_to, fee.fallback));
+        let has_fallback = fallback.is_some();
+        let FeeFallback { action, boundary } = fallback.unwrap_or_else(|| FeeFallback {
+            action: PrivateAction::default(),
+            boundary: Vec::new(),
+        });
+        Self {
+            has_refund_to: refund_to.is_some(),
+            refund_to: refund_to.unwrap_or_default().into(),
+            has_fallback,
+            fallback_action: action.into(),
+            fallback_boundary: boundary
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
+        }
+    }
 }
 
 impl From<lee::privacy_preserving_transaction::Message> for FfiPrivacyPreservingMessage {
@@ -358,13 +396,15 @@ impl From<lee::privacy_preserving_transaction::Message> for FfiPrivacyPreserving
                     private_actions,
                     validity,
                     program_image_claims,
-                    fee: _,
+                    fee,
                 },
             nonces,
             admission_evidence,
         } = value;
 
         Self {
+            has_fee: fee.is_some(),
+            fee: fee.into(),
             public_context: public_context.into(),
             boundary: boundary
                 .into_iter()
@@ -620,6 +660,25 @@ fn cast_ffi_validity_window(
     ValidityWindow::try_from((left, right)).map_err(|e| {
         log::error!("Failed to cast ffi validity window: {e}");
         PrimitiveOperationStatus::CastError
+    })
+}
+
+// Every part is taken back, present or not, so that dropping the result frees it.
+fn proven_fee_from_ffi(has_fee: bool, fee: FfiProvenFee) -> Option<ProvenFee> {
+    let FfiProvenFee {
+        has_refund_to,
+        refund_to,
+        has_fallback,
+        fallback_action,
+        fallback_boundary,
+    } = fee;
+    let fallback = FeeFallback {
+        action: fallback_action.into(),
+        boundary: owned(fallback_boundary),
+    };
+    has_fee.then(|| ProvenFee {
+        refund_to: has_refund_to.then(|| AccountId::from(refund_to)),
+        fallback: has_fallback.then_some(fallback),
     })
 }
 
@@ -1010,6 +1069,34 @@ mod tests {
         let back: PrivacyPreservingTransaction = Box::new(ffi).try_into().unwrap();
 
         assert_eq!(back.message, original.message);
+    }
+
+    #[test]
+    fn a_private_transactions_fee_roundtrips_over_the_ffi() {
+        // The proof commits to its fee, so a transaction rebuilt without it fails verification.
+        let fallback = FeeFallback {
+            action: PrivateAction::default(),
+            boundary: vec![BoundaryStep::EndPublicSubtree],
+        };
+        for fee in [
+            None,
+            Some(ProvenFee {
+                refund_to: None,
+                fallback: None,
+            }),
+            Some(ProvenFee {
+                refund_to: Some(account_id(70)),
+                fallback: Some(fallback),
+            }),
+        ] {
+            let mut original = private_transaction();
+            original.message.execution.fee = fee;
+
+            let ffi: FfiPrivateTransactionBody = original.clone().into();
+            let back: PrivacyPreservingTransaction = Box::new(ffi).try_into().unwrap();
+
+            assert_eq!(back.message, original.message);
+        }
     }
 
     #[test]

@@ -105,6 +105,8 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
         block_validity_window,
         timestamp_validity_window,
         admission_evidence: _,
+        // TODO: show the fee's refund target, and whether a fallback was committed.
+        fee: _,
     } = message;
     let PublicExecutionContext {
         actors: public_actors,
