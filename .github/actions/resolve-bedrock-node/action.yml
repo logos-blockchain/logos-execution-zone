@@ -85,6 +85,7 @@ runs:
           GITHUB_TOKEN=${{ github.token }}
           RUSTFLAGS=-A single-use-lifetimes
           RISC0_DEV_MODE=1
+          CARGO_INCREMENTAL=0
         run: >-
           python3 bedrock/tools/resolve_bedrock_node.py
           --target-platform "${{ inputs.target_platform }}"
