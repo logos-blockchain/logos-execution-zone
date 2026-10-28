@@ -285,7 +285,7 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-host-prebuild
+          shared-key: ci-host-prebuild-nodebug
           # Read-only; prebuild is the only writer.
           save-if: false
 
@@ -296,6 +296,8 @@ jobs:
           env: |
             RISC0_DEV_MODE=1
             RUST_LOG=info,kameo=warn
+            CARGO_PROFILE_DEV_DEBUG=0
+            CARGO_PROFILE_TEST_DEBUG=0
           run: cargo nextest run -p test_fixtures
 
   abort-on-stale-fixtures:
@@ -337,7 +339,9 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-host-prebuild
+          # The suffix tracks the debug level: this action cannot see the
+          # container's environment, so a change without a rename never saves.
+          shared-key: ci-host-prebuild-nodebug
           # Only writer of this cache.
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
@@ -345,7 +349,12 @@ jobs:
         uses: ./.github/actions/run-in-ci-image
         with:
           image: ${{ needs.ci-image.outputs.image }}
-          env: RISC0_DEV_MODE=1
+          # One pair per line; a single line makes the whole string the
+          # first variable's value.
+          env: |
+            RISC0_DEV_MODE=1
+            CARGO_PROFILE_DEV_DEBUG=0
+            CARGO_PROFILE_TEST_DEBUG=0
           # Listed from the build just archived: unpacking the archive again
           # overflows the runner's disk.
           run: |
@@ -474,7 +483,7 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-host-prebuild
+          shared-key: ci-host-prebuild-nodebug
           # Read-only; prebuild is the only writer.
           save-if: false
 
