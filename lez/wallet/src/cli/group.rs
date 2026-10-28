@@ -6,7 +6,7 @@ use key_protocol::key_management::{
 };
 
 use crate::{
-    WalletCore,
+    WalletCore, WalletSequencerClient,
     account::Label,
     cli::{SubcommandReturnValue, WalletSubcommand},
 };
@@ -50,7 +50,10 @@ pub enum GroupSubcommand {
 }
 
 impl GroupSubcommand {
-    fn handle_new(name: &Label, wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
+    fn handle_new<C: WalletSequencerClient>(
+        name: &Label,
+        wallet_core: &mut WalletCore<C>,
+    ) -> Result<SubcommandReturnValue> {
         if wallet_core
             .storage()
             .key_chain()
@@ -68,7 +71,7 @@ impl GroupSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    fn handle_list(wallet_core: &WalletCore) -> SubcommandReturnValue {
+    fn handle_list<C: WalletSequencerClient>(wallet_core: &WalletCore<C>) -> SubcommandReturnValue {
         let mut empty = true;
         let holders_iter = wallet_core.storage().key_chain().group_key_holders_iter();
         for (name, _) in holders_iter {
@@ -81,7 +84,10 @@ impl GroupSubcommand {
         SubcommandReturnValue::Empty
     }
 
-    fn handle_remove(name: &Label, wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
+    fn handle_remove<C: WalletSequencerClient>(
+        name: &Label,
+        wallet_core: &mut WalletCore<C>,
+    ) -> Result<SubcommandReturnValue> {
         if wallet_core.remove_group_key_holder(name).is_none() {
             anyhow::bail!("Group '{name}' not found");
         }
@@ -91,10 +97,10 @@ impl GroupSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    fn handle_invite(
+    fn handle_invite<C: WalletSequencerClient>(
         name: &Label,
         key: &str,
-        wallet_core: &WalletCore,
+        wallet_core: &WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let holder = wallet_core
             .storage()
@@ -111,10 +117,10 @@ impl GroupSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    fn handle_join(
+    fn handle_join<C: WalletSequencerClient>(
         name: &Label,
         sealed: &str,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         if wallet_core
             .storage()
@@ -143,7 +149,9 @@ impl GroupSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    fn handle_new_sealing_key(wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
+    fn handle_new_sealing_key<C: WalletSequencerClient>(
+        wallet_core: &mut WalletCore<C>,
+    ) -> Result<SubcommandReturnValue> {
         if wallet_core
             .storage()
             .key_chain()
@@ -174,9 +182,9 @@ impl GroupSubcommand {
 }
 
 impl WalletSubcommand for GroupSubcommand {
-    async fn handle_subcommand(
+    async fn handle_subcommand<C: WalletSequencerClient>(
         self,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::New { name } => Self::handle_new(&name, wallet_core),

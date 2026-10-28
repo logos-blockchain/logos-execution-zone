@@ -1,13 +1,13 @@
 use lee::AccountId;
 use program_loader_core::MAX_SEGMENT_DATA_LEN;
-use wallet::{WalletCore, program_facades::program_loader::ProgramLoader};
+use wallet::{WalletCore, WalletSequencerClient, program_facades::program_loader::ProgramLoader};
 
 /// Deploys `bytecode` through `program_loader`, returning the header's `AccountId`.
 ///
 /// `payer` must be an existing, funded account — a freshly-claimed account can't pay for its own
 /// claim.
-pub async fn deploy_program(
-    wallet_core: &mut WalletCore,
+pub async fn deploy_program<C: WalletSequencerClient>(
+    wallet_core: &mut WalletCore<C>,
     bytecode: Vec<u8>,
     payer: AccountId,
 ) -> anyhow::Result<AccountId> {
