@@ -12,7 +12,72 @@ inputs:
 runs:
   using: composite
   steps:
+    # The resolver reads this revision itself through `cargo metadata`, but the
+    # cache key has to exist before the resolver runs and this job has no cargo
+    # on the host. Read the fragment rather than the `rev=` parameter, as
+    # `resolve_bedrock_node.py` and `test_fixtures/src/setup.rs` both do: a pin
+    # written as a short revision, a tag or a branch still resolves to a full
+    # revision in the fragment.
+    - name: Read the Cargo-authoritative Logos revision
+      id: pin
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        mapfile -t revisions < <(
+          grep -oE 'github\.com/logos-blockchain/logos-blockchain\.git[^"#]*#[0-9a-f]{40}' Cargo.lock \
+            | cut -d'#' -f2 \
+            | sort -u
+        )
+
+        if [[ "${#revisions[@]}" -ne 1 ]]; then
+          echo "::error::Cargo.lock pins ${#revisions[@]} logos-blockchain revisions: ${revisions[*]}"
+          exit 1
+        fi
+
+        echo "revision=${revisions[0]}" >> "$GITHUB_OUTPUT"
+        echo "Cargo-authoritative Logos revision: ${revisions[0]}"
+
+    # Resolution is a function of the revision, the target platform, the
+    # resolver and the image it builds in, and the source build behind it is
+    # 17 minutes of every run. Cache keys are immutable, so anything left out
+    # of the key would not take effect in CI until the revision moved.
+    - name: Restore the resolved node
+      id: cache
+      uses: actions/cache/restore@v4
+      with:
+        path: bedrock/.resolved
+        key: >-
+          bedrock-node-${{ inputs.target_platform }}-${{ steps.pin.outputs.revision }}-${{
+            hashFiles('bedrock/tools/resolve_bedrock_node.py',
+                      '.github/actions/resolve-bedrock-node/action.yml',
+                      '.github/docker/ci.Dockerfile',
+                      'rust-toolchain.toml') }}
+
+    # Resolve again rather than trust a hit that does not hold a runnable
+    # binary for the pinned revision.
+    - name: Check the restored node
+      id: restored
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        usable=false
+        if [[ -s bedrock/.resolved/logos-blockchain-node ]] &&
+          [[ "$(jq -r '.resolved_sha' bedrock/.resolved/metadata.json 2>/dev/null)" \
+            == "${{ steps.pin.outputs.revision }}" ]]; then
+          usable=true
+        elif [[ "${{ steps.cache.outputs.cache-hit }}" == 'true' ]]; then
+          # Keys are immutable, so resolving again works but pays the build on
+          # every run until the entry is deleted or the key moves.
+          echo "::warning::the cached node for ${{ steps.pin.outputs.revision }} is unusable; delete that cache entry"
+        fi
+
+        echo "usable=$usable" >> "$GITHUB_OUTPUT"
+        echo "Restored node usable: $usable"
+
     - name: Resolve Cargo-authoritative Bedrock node
+      if: steps.restored.outputs.usable != 'true'
       uses: ./.github/actions/run-in-ci-image
       with:
         image: ${{ inputs.image }}
@@ -23,3 +88,19 @@ runs:
         run: >-
           python3 bedrock/tools/resolve_bedrock_node.py
           --target-platform "${{ inputs.target_platform }}"
+
+    # Only main and dev write, as with the Rust caches: one copy per branch
+    # would spend the repository's 10 GiB cache budget on the same binary.
+    - name: Save the resolved node
+      if: >-
+        steps.restored.outputs.usable != 'true'
+        && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
+      uses: actions/cache/save@v4
+      with:
+        path: bedrock/.resolved
+        key: >-
+          bedrock-node-${{ inputs.target_platform }}-${{ steps.pin.outputs.revision }}-${{
+            hashFiles('bedrock/tools/resolve_bedrock_node.py',
+                      '.github/actions/resolve-bedrock-node/action.yml',
+                      '.github/docker/ci.Dockerfile',
+                      'rust-toolchain.toml') }}

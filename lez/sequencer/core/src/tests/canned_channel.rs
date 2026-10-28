@@ -14,7 +14,7 @@ use sequencer_bedrock_actor::{
     error::Error,
     mock::MockBedrockActor,
     protocol::{
-        AccreditedKeys, BoxStream, CreateChannel, PublishBlock, PublishOutcome, ReadChannel,
+        AccreditedKeys, ChannelReadStream, CreateChannel, PublishBlock, PublishOutcome, ReadChannel,
     },
 };
 
@@ -117,14 +117,12 @@ impl CannedChannel {
 }
 
 /// The entries of `messages` past `after` (exclusive), as `ReadChannel` serves them.
-fn history_after(
-    messages: &[(ZoneMessage, Slot)],
-    after: Option<Slot>,
-) -> BoxStream<(ZoneMessage, Slot)> {
+fn history_after(messages: &[(ZoneMessage, Slot)], after: Option<Slot>) -> ChannelReadStream {
     let messages: Vec<_> = messages
         .iter()
         .filter(|(_, slot)| after.is_none_or(|after| *slot > after))
         .cloned()
+        .map(Ok)
         .collect();
     Box::pin(futures::stream::iter(messages))
 }

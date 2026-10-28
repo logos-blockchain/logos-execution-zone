@@ -7,12 +7,42 @@ on:
       - "v*"
 
 jobs:
-  # Shared base (toolchain + r0vm), single source of truth in
-  # lez/docker/risc0-base.Dockerfile. Built and pushed once so the service
-  # builds below can pull it as the `risc0_base` named context. The
-  # docker-container builder resolves named contexts from the registry (not the
-  # host image store), so the base must be pushed, not just loaded.
+  ci-image:
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/ci-image.yml
+
+  advisories:
+    needs: ci-image
+    # Tags only: a dispatch is the way out before triage can land.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ needs.ci-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check licenses, bans, sources and advisories
+        run: cargo deny --locked check
+
+  # Pushed, not just loaded: the docker-container builder resolves named
+  # contexts from the registry rather than the host image store.
   risc0_base:
+    needs: advisories
+    # Allow by what passed: a timeout reports `cancelled`, not `failure`.
+    if: >-
+      ${{ !cancelled()
+      && (needs.advisories.result == 'success'
+      || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

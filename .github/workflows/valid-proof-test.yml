@@ -54,7 +54,7 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-host-prebuild
+          shared-key: ci-host-prebuild-nodebug
           # Read-only; prebuild is the only writer.
           save-if: false
 
@@ -62,7 +62,10 @@ jobs:
         uses: ./.github/actions/run-in-ci-image
         with:
           image: ${{ needs.ci-image.outputs.image }}
-          env: RUST_LOG=info,kameo=warn
+          env: |
+            RUST_LOG=info,kameo=warn
+            CARGO_PROFILE_DEV_DEBUG=0
+            CARGO_PROFILE_TEST_DEBUG=0
           run: |
               source .github/scripts/with_retry.sh
               with_retry 'cargo test -p integration_tests -- --exact ${{ matrix.test }}' 1
