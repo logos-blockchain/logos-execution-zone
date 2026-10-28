@@ -122,9 +122,8 @@ impl SequencerSetup {
         let temp_sequencer_dir =
             tempfile::tempdir().context("Failed to create temp dir for sequencer home")?;
 
-        let sequencer_handle = self
-            .setup_owned(temp_sequencer_dir.path().to_owned())
-            .await?;
+        let sequencer_handle =
+            Box::pin(self.setup_owned(temp_sequencer_dir.path().to_owned())).await?;
 
         Ok((sequencer_handle, temp_sequencer_dir))
     }
@@ -134,7 +133,7 @@ impl SequencerSetup {
     /// The caller is responsible for creating and retaining the directory.
     /// Useful for tests that restart the sequencer against the same on-disk store.
     pub async fn setup_at(self, home: &Path) -> Result<SequencerHandle> {
-        self.setup_owned(home.to_owned()).await
+        Box::pin(self.setup_owned(home.to_owned())).await
     }
 
     async fn setup_owned(self, home: PathBuf) -> Result<SequencerHandle> {
