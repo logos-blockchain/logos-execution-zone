@@ -265,7 +265,7 @@ pub fn run(
 
         let gossip_config = config.gossip.clone();
         let bedrock_config = config.bedrock_config.clone();
-        let sequencer_home = config.home.clone();
+        let channel_signing_key_path = config.channel_signing_key_path();
 
         let storage =
             StorageActor::new(&config.db_path()).context("Failed to set up Storage Actor")?;
@@ -322,7 +322,7 @@ pub fn run(
                 setup_gossip(
                     gossip_config,
                     *bedrock_config.channel_id.as_ref(),
-                    &sequencer_home,
+                    &channel_signing_key_path,
                     max_block_size_rx.clone(),
                     accredited_keys_rx,
                     staked_keys_rx,
@@ -388,7 +388,7 @@ pub fn run(
 pub async fn setup_gossip(
     gossip_config: GossipConfig,
     channel_id: [u8; 32],
-    sequencer_home: &Path,
+    channel_signing_key_path: &Path,
     max_block_size_rx: MaxBlockSizeReceiver,
     accredited_keys_rx: AccreditedKeysReceiver,
     staked_keys_rx: AccreditedKeysReceiver,
@@ -399,8 +399,7 @@ pub async fn setup_gossip(
 ) -> Result<(Gossip, Recipient<PublishTransaction>)> {
     // The node's L1 channel signing key is deliberately reused as the
     // libp2p identity; `GossipActor::new` derives the keypair.
-    let signing_key =
-        load_or_create_signing_key(&sequencer_home.join(sequencer_core::CHANNEL_SIGNING_KEY_FILE))?;
+    let signing_key = load_or_create_signing_key(channel_signing_key_path)?;
     // Gossiped transactions enter through the executor's admission door
     // (fee screen + mempool push), same as RPC submissions — gossip never
     // touches the mempool directly.
@@ -536,8 +535,7 @@ async fn setup_bedrock_actor(
     storage_ref: ActorRef<StorageActor>,
     bedrock_broker_ref: ActorRef<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
 ) -> Result<BedrockActor> {
-    let channel_signing_key =
-        load_or_create_signing_key(&config.home.join(sequencer_core::CHANNEL_SIGNING_KEY_FILE))?;
+    let channel_signing_key = load_or_create_signing_key(&config.channel_signing_key_path())?;
     log::info!(
         "Channel signing public key: {}",
         hex::encode(channel_signing_key.public_key().to_bytes())
@@ -548,7 +546,7 @@ async fn setup_bedrock_actor(
         basic_auth: config.bedrock_config.auth.clone().map(Into::into),
         channel_id: config.bedrock_config.channel_id,
         channel_signing_key,
-        funding_pk: sequencer_core::load_funding_public_key(&config.home)?,
+        funding_pk: config.load_funding_public_key()?,
         priority_fee_percent: config.bedrock_config.priority_fee_percent,
         resubmit_interval: config.retry_pending_blocks_timeout,
     };

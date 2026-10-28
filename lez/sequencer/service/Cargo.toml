@@ -28,10 +28,12 @@ sequencer_service_rpc.workspace = true
 
 clap = { workspace = true, features = ["derive", "env"] }
 anyhow.workspace = true
+axum.workspace = true
 env_logger.workspace = true
 kameo.workspace = true
 kameo_actors.workspace = true
 hex.workspace = true
+libp2p.workspace = true
 log.workspace = true
 metrics-exporter-prometheus.workspace = true
 tokio.workspace = true

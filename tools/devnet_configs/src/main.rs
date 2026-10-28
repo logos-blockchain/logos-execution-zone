@@ -1,5 +1,5 @@
 //! Regenerate what the four-node docker devnet runs on
-//! (`lez/sequencer/service/docker-compose.devnet.yml`): one sequencer config
+//! (the root `docker-compose.yml`): one sequencer config
 //! all four nodes share, and a key directory per node.
 //!
 //! The shared config carries the genesis that stakes all four channel signing
