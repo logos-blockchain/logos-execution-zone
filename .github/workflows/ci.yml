@@ -443,17 +443,27 @@ jobs:
           run: |
             # `--retries` names the flaky test, `with_retry` covers a bad runner.
             source .github/scripts/with_retry.sh
-            if [[ "${{ matrix.target }}" == "tf_bedrock_builder" || \
-                  "${{ matrix.target }}" == "tf_app_deployments" ]]; then
+
+            # A `binary::test` target is one test alone on this runner.
+            target='${{ matrix.target }}'
+            binary="${target%%::*}"
+            if [[ "$target" == *::* ]]; then
+              filter="binary($binary) and test(=${target#*::})"
+            else
+              filter="binary($binary)"
+            fi
+
+            if [[ "$binary" == "tf_bedrock_builder" || \
+                  "$binary" == "tf_app_deployments" ]]; then
               # The nextest archive contains the absolute Cargo git checkout
               # path compiled into the Logos testing framework. This is a fresh
               # runner, so materialize the pinned Logos checkout again before
               # allowing TF to use its local build provider.
               cargo fetch --locked
 
-              with_retry 'env -u GITHUB_ACTIONS -u CI cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
+              with_retry "env -u GITHUB_ACTIONS -u CI cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E '$filter'" 2
             else
-              with_retry 'cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
+              with_retry "cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E '$filter'" 2
             fi
 
       - name: Report disk headroom after the tests

@@ -54,6 +54,44 @@ class DiscoverIntegrationTestTargetsTests(unittest.TestCase):
 
         self.assertEqual(discover_targets(summary), ["auth_transfer"])
 
+    def test_splits_configured_binaries_into_one_entry_per_test(self) -> None:
+        summary = {
+            "rust-suites": {
+                "integration_tests::scoped_reads": suite(
+                    "scoped_reads",
+                    ("first_offence", False, "matches"),
+                    ("second_offence", False, "matches"),
+                    ("blocked_on_finality", True, "mismatch"),
+                ),
+                "integration_tests::gossip": suite(
+                    "gossip",
+                    ("peers_converge", False, "matches"),
+                    ("peers_recover", False, "matches"),
+                ),
+            }
+        }
+
+        self.assertEqual(
+            discover_targets(summary),
+            [
+                "gossip",
+                "scoped_reads::first_offence",
+                "scoped_reads::second_offence",
+            ],
+        )
+
+    def test_drops_a_split_binary_with_no_runnable_tests(self) -> None:
+        summary = {
+            "rust-suites": {
+                "integration_tests::slashing": suite(
+                    "slashing",
+                    ("blocked_on_finality", True, "mismatch"),
+                ),
+            }
+        }
+
+        self.assertEqual(discover_targets(summary), [])
+
     def test_rejects_binary_only_listing(self) -> None:
         with self.assertRaises(DiscoveryError):
             discover_targets(
