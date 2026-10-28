@@ -170,8 +170,11 @@ pub fn sequencer_config(
             priority_fee_percent,
         },
         cross_zone,
-        metrics_address: Some(SequencerConfig::DEFAULT_METRICS_ADDRESS),
+        metrics_listen_address: Some(SequencerConfig::DEFAULT_METRICS_LISTEN_ADDRESS),
         gossip,
+        channel_signing_key_file: None,
+        funding_public_key: None,
+        wait_for_channel: false,
     })
 }
 

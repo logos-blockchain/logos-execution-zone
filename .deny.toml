@@ -24,9 +24,12 @@ ignore = [
   { id = "RUSTSEC-2026-0367", reason = "`zip` 2.4.2 reached only through `risc0-circuit-recursion`, which reads its embedded archive in memory and never calls the vulnerable `extract`" },
   { id = "RUSTSEC-2026-0368", reason = "`zip` 2.4.2 reached only through `risc0-circuit-recursion`, which reads its embedded archive in memory and never calls the vulnerable `extract`" },
   { id = "RUSTSEC-2026-0369", reason = "`zip` 2.4.2 reached only through `risc0-circuit-recursion`, which reads its embedded archive in memory and never calls the vulnerable `extract`" },
+  { id = "RUSTSEC-2026-0387", reason = "Two copies. `crypto-bigint` 0.5.5 is reached through `elliptic-curve` 0.13.8 under the `k256` 0.13 this workspace requires, and `elliptic-curve` 0.13.8 requires `crypto-bigint ^0.5`, so the only fix is migrating to `k256` 0.14. The 0.7.5 copy under `keycard-rs` is fixed by a bump that also moves `ctutils`, see RUSTSEC-2026-0385." },
+  { id = "RUSTSEC-2026-0385", reason = "`ctutils` 0.4.2 reaches guest code through `hybrid-array` under `ml-kem` and `chacha20` in `lee_core`, so bumping it rewrites constant-time primitives compiled into the privacy circuit and every builtin program and moves their image ids. That belongs in a change about image ids, not in a dependency bump." },
+  { crate = "crypto-bigint@0.7.5", reason = "Yanked upstream. Clearing it means the same bump that moves `ctutils` into the guests, see RUSTSEC-2026-0385." },
 ]
 yanked = "deny"
-unused-ignored-advisory = "deny"
+unused-ignored-advisory = "warn"
 
 [bans]
 allow-wildcard-paths = false

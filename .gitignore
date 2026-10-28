@@ -30,3 +30,6 @@ MyLogFile.log
 # default sequencer home for `just run-sequencer`
 lez/sequencer/service/sequencer_home/
 __pycache__/
+
+# Local overrides of .env.local
+.env

@@ -5,10 +5,22 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "${PORT:-18080}:18080/tcp"
+      - "${LEZ_COMPOSE_BEDROCK_PORT:-18080}:18080/tcp"
     volumes:
       - ./scripts:/etc/logos-blockchain/scripts
       - ./kzgrs_test_params:/kzgrs_test_params:z
       - ./node-config.yaml:/etc/logos-blockchain/node-config.yaml:z
       - ./deployment-settings.yaml:/etc/logos-blockchain/deployment-settings.yaml:z
+      # The node's default `./state`, from `/`. Keeps the chain across restarts; `down -v` resets it.
+      - bedrock_state:/state
     entrypoint: /etc/logos-blockchain/scripts/run_logos_blockchain_node.sh
+    # The node has no health route; its API answering is the signal.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:18080/cryptarchia/info"]
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+      start_interval: 2s
+
+volumes:
+  bedrock_state:

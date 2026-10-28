@@ -346,7 +346,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         reason = "Slop has won the battle, but our war is not over"
     )]
     pub async fn start_from_config(
-        config: SequencerConfig,
+        mut config: SequencerConfig,
         storage_ref: ActorRef<S>,
         bedrock_ref: ActorRef<B>,
     ) -> Result<(Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>)> {
@@ -356,9 +356,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             check_startup_channel_params(&genesis.channel_params, &config)?;
         }
 
-        let channel_signing_key =
-            load_or_create_signing_key(&config.home.join(CHANNEL_SIGNING_KEY_FILE))
-                .expect("Failed to load or create channel signing key");
+        let channel_signing_key = load_or_create_signing_key(&config.channel_signing_key_path())
+            .expect("Failed to load or create channel signing key");
         log::info!(
             "Channel signing public key: {}",
             hex::encode(channel_signing_key.public_key().to_bytes())
@@ -371,19 +370,39 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // Only seed our own key into genesis as the bootstrap sequencer if the
         // channel doesn't exist yet. Otherwise it's someone else's channel and
         // we join later, the normal self-join way.
-        let channel_probe_retry_strategy =
-            FixedInterval::new(Self::CHANNEL_PROBE_RETRY_DELAY).take(Self::CHANNEL_PROBE_RETRIES);
-        let channel_already_exists = Retry::start(channel_probe_retry_strategy, || async {
-            bedrock_ref
-                .ask(sequencer_bedrock_actor::protocol::CheckChannelExists)
-                .await
-                .map_err(|err| anyhow!(err))
-                .inspect_err(|err| warn!("Failed to probe Bedrock channel: {err:#}"))
-        })
-        .await
-        .expect("Failed to probe Bedrock channel");
+        let probe_channel = || {
+            Retry::start(
+                FixedInterval::new(Self::CHANNEL_PROBE_RETRY_DELAY)
+                    .take(Self::CHANNEL_PROBE_RETRIES),
+                || async {
+                    bedrock_ref
+                        .ask(sequencer_bedrock_actor::protocol::CheckChannelExists)
+                        .await
+                        .map_err(|err| anyhow!(err))
+                        .inspect_err(|err| warn!("Failed to probe Bedrock channel: {err:#}"))
+                },
+            )
+        };
+        let mut channel_already_exists = probe_channel()
+            .await
+            .expect("Failed to probe Bedrock channel");
+        if !channel_already_exists && config.genesis.is_none() && config.wait_for_channel {
+            info!(
+                "Channel {} does not exist yet; waiting for its creator",
+                config.bedrock_config.channel_id
+            );
+            while !channel_already_exists {
+                tokio::time::sleep(Self::CHANNEL_PROBE_RETRY_DELAY).await;
+                channel_already_exists = probe_channel()
+                    .await
+                    .expect("Failed to probe Bedrock channel");
+            }
+        }
         if channel_already_exists {
             info!("Channel already exists; joining as a non channel creator");
+            // The channel's own genesis is replayed instead, so a creator restarting (or a second
+            // one) cannot diverge from it.
+            config.genesis = None;
         } else {
             ensure!(
                 config.genesis.is_some(),
@@ -704,7 +723,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let stored_final = chain.lock().await.final_msg();
         let mut on_lineage = stored_final == MsgId::root();
         let mut read_any = false;
-        while let Some((message, slot)) = messages.next().await {
+        while let Some(message) = messages.next().await {
+            let (message, slot) = message.context(
+                "Channel history read failed part way, so reconstruction would be incomplete",
+            )?;
             if let Some(check) = &mut consistency_check
                 && let Some(ChainConsistency::Inconsistent(mismatch)) =
                     check.observe(&message, slot)
@@ -1509,17 +1531,18 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                         *summary = scratch_summary;
                     }
                     Err(err) => {
-                        // A gossiped tx the leader already included is expected to
-                        // fail here (e.g. on nonce) for every other node on its
-                        // turn; that is steady-state noise, not an error.
-                        // User-submitted failures still warrant `error!`.
                         if matches!(origin, TransactionOrigin::Gossip) {
+                            // A gossiped tx the leader already included is expected to
+                            // fail here (e.g. on nonce) for every other node on its
+                            // turn; that is steady-state noise, not an error.
                             debug!(
                                 "Transaction with hash {tx_hash} failed settlement: {:#}, skipping it",
                                 anyhow!(err)
                             );
                         } else {
-                            error!(
+                            // A user-submitted failure is the user's, not the node's,
+                            // so it is only a warning.
+                            warn!(
                                 "Transaction with hash {tx_hash} failed settlement: {:#}, skipping it",
                                 anyhow!(err)
                             );
@@ -1556,7 +1579,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             }
         }
 
-        log::info!("Validated transaction with hash {tx_hash}, including it in block");
+        debug!("Validated transaction with hash {tx_hash}, including it in block");
         true
     }
 
@@ -1805,7 +1828,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     prev_block_hash,
                     new_block_timestamp,
                 )? {
-                    error!(
+                    warn!(
                         "Transaction {tx_hash} cannot fit in any block under the \
                          {max_block_size} byte limit; giving up on it rather than stalling production",
                     );
@@ -1848,7 +1871,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // builder behind it for ever. The RPC door screens these out,
                 // but gossip ingest does not, so drop it here instead.
                 if !DeclaredGasBudget::fits_empty(view) {
-                    error!(
+                    warn!(
                         "Transaction with hash {tx_hash} declares gas beyond the block caps \
                          (limit {}, bytes {}); dropping it rather than stalling production",
                         view.gas_limit(),

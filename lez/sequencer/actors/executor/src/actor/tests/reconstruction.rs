@@ -25,6 +25,7 @@ use logos_blockchain_core::mantle::ops::channel::inscribe::Inscription;
 use logos_blockchain_zone_sdk::ZoneBlock;
 use ping_core::{ReceiverMessage, ping_record_pda, receiver_config_account_id};
 use sequencer_bedrock_actor::{
+    error::Error,
     mock::MockBedrockActor,
     protocol::{Checkpoint, HeaderId, MsgId, ReadChannel, Slot, ZoneMessage},
 };
@@ -281,6 +282,22 @@ fn expect_reconstructed(store: &mut MockStorageActor, block: &Block, slot: u64) 
 /// A Bedrock whose channel ends at `tip_slot` (`None`: no channel) and holds
 /// `messages` as finalized history.
 fn channel_serving(tip_slot: Option<Slot>, messages: Vec<(ZoneMessage, Slot)>) -> MockBedrockActor {
+    channel_serving_inner(tip_slot, messages, false)
+}
+
+/// Like [`channel_serving`], but its read ends on a failure, not at the channel's end.
+fn channel_serving_then_failing(
+    tip_slot: Option<Slot>,
+    messages: Vec<(ZoneMessage, Slot)>,
+) -> MockBedrockActor {
+    channel_serving_inner(tip_slot, messages, true)
+}
+
+fn channel_serving_inner(
+    tip_slot: Option<Slot>,
+    messages: Vec<(ZoneMessage, Slot)>,
+    read_fails: bool,
+) -> MockBedrockActor {
     let mut mock = MockBedrockActor::default();
     mock.expect_handle_check_channel_exists()
         .returning(move |_msg, _ctx| Ok(tip_slot.is_some()));
@@ -288,12 +305,20 @@ fn channel_serving(tip_slot: Option<Slot>, messages: Vec<(ZoneMessage, Slot)>) -
         .returning(move |_msg, _ctx| Ok(tip_slot));
     mock.expect_handle_read_channel()
         .returning(move |ReadChannel { after }, _ctx| {
-            let messages: Vec<_> = messages
+            let mut items: Vec<_> = messages
                 .iter()
                 .filter(|(_, slot)| after.is_none_or(|after| *slot > after))
                 .cloned()
+                .map(Ok)
                 .collect();
-            Ok(Box::pin(futures::stream::iter(messages)))
+            if read_fails {
+                items.push(Err(Error::ChannelReadFailed {
+                    from: Slot::from(0),
+                    to: Slot::from(99),
+                    cause: anyhow::anyhow!("node down"),
+                }));
+            }
+            Ok(Box::pin(futures::stream::iter(items)))
         });
     mock.expect_handle_check_is_our_turn()
         .returning(|_msg, _ctx| true);
@@ -792,6 +817,26 @@ async fn fails_when_channel_serves_a_divergent_block() {
     assert_refused(
         start(&storage_ref, &bedrock_ref).await,
         "diverges from the Bedrock channel",
+    );
+}
+
+#[test]
+async fn fails_when_the_channel_read_ends_early() {
+    let genesis = genesis();
+    let store = StoredChain::finalized_genesis().with_anchor(ZoneAnchorRecord {
+        slot: 100,
+        block_id: 1,
+        hash: genesis.header.hash,
+    });
+
+    // At the recorded frontier, so only the failed read can refuse the start.
+    let bedrock = channel_serving_then_failing(Some(Slot::from(100)), vec![]);
+
+    let storage_ref = MockStorageActor::spawn(store.into_mock());
+    let bedrock_ref = MockBedrockActor::spawn(bedrock);
+    assert_refused(
+        start(&storage_ref, &bedrock_ref).await,
+        "Channel history read failed part way",
     );
 }
 

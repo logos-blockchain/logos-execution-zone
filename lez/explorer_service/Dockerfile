@@ -22,21 +22,23 @@ WORKDIR /explorer_service
 COPY . .
 
 # Build the app
-RUN --mount=type=cache,target=/usr/local/cargo/registry/index \
-    --mount=type=cache,target=/usr/local/cargo/registry/cache \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/explorer_service/target \
-    cargo leptos build --release -vv \
-    && cp /explorer_service/target/release/explorer_service /usr/local/bin/explorer_service \
-    && cp -r /explorer_service/target/site /explorer_service/site_output
+RUN --mount=type=cache,id=explorer-cargo-registry-index,target=/usr/local/cargo/registry/index \
+  --mount=type=cache,id=explorer-cargo-registry-cache,target=/usr/local/cargo/registry/cache \
+  --mount=type=cache,id=explorer-cargo-git,target=/usr/local/cargo/git \
+  --mount=type=cache,target=/explorer_service/target \
+  cargo leptos build --release -vv \
+  && cp /explorer_service/target/release/explorer_service /usr/local/bin/explorer_service \
+  && cp -r /explorer_service/target/site /explorer_service/site_output
 
 FROM debian:trixie-slim AS runtime
 WORKDIR /explorer_service
 RUN apt-get update -y \
-  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && apt-get install -y --no-install-recommends openssl ca-certificates curl \
   && apt-get autoremove -y \
   && apt-get clean -y \
   && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 1000 -s /bin/bash explorer_service_user
 
 # Copy the server binary to the /explorer_service directory
 COPY --from=builder /usr/local/bin/explorer_service /explorer_service/
@@ -53,6 +55,11 @@ ENV LEPTOS_SITE_ADDR="0.0.0.0:8080"
 ENV LEPTOS_SITE_ROOT="site"
 ENV INDEXER_RPC_URL="http://localhost:8779"
 EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD curl -fsS -o /dev/null "http://$LEPTOS_SITE_ADDR/" || exit 1
+
+USER explorer_service_user
 
 # Run the server
 CMD ["/explorer_service/explorer_service"]

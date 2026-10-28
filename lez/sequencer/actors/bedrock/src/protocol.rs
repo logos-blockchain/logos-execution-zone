@@ -19,6 +19,9 @@ pub use sequencer_stake_core::ChannelParams;
 /// A boxed, pinned, Send stream.
 pub type BoxStream<T> = std::pin::Pin<Box<dyn futures::Stream<Item = T> + Send>>;
 
+/// What [`ReadChannel`] serves: a failed read is an `Err` item, not the stream's end.
+pub type ChannelReadStream = BoxStream<crate::Result<(ZoneMessage, Slot)>>;
+
 /// Version of the channel view the actor holds, bumped by every broadcast update
 /// and every publish.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Reply)]

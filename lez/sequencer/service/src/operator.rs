@@ -22,7 +22,7 @@ pub const CONFIG_FILE: &str = "sequencer_config.json";
 /// Creates `home` with its config, channel signing key and Bedrock funding public key.
 pub fn setup(
     home: &Path,
-    template: &Path,
+    template: &str,
     funding_public_key: &str,
     create_channel: bool,
 ) -> Result<()> {
@@ -40,11 +40,8 @@ pub fn setup(
         .with_context(|| format!("Failed to resolve {}", home.display()))?;
 
     // Not `SequencerConfig::from_path`: its genesis checks don't apply to a joiner, who drops it.
-    let template_file = std::fs::File::open(template)
-        .with_context(|| format!("Failed to open the config at {}", template.display()))?;
     let mut config: SequencerConfig =
-        serde_json::from_reader(std::io::BufReader::new(template_file))
-            .with_context(|| format!("Failed to read the config at {}", template.display()))?;
+        serde_json::from_str(template).context("Failed to read the config")?;
     config.home.clone_from(&home);
     if create_channel {
         let genesis = config

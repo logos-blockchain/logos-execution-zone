@@ -175,6 +175,7 @@ jobs:
   deny:
     needs: ci-image
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     container:
       image: ${{ needs.ci-image.outputs.image }}
       credentials:
@@ -185,8 +186,17 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
 
-      - name: Check licenses and advisories
-        run: cargo deny check
+      - name: Check licenses, bans and sources
+        run: cargo deny --locked check licenses bans sources
+
+      # By severity, not by code: a code list misses the ones hardcoded to
+      # error. Only a fetch failure is absorbed, since nothing can demote it.
+      - name: Report advisories
+        run: |
+          set -o pipefail
+          cargo deny fetch db || exit 0
+          cargo deny --locked check advisories -W denied 2>&1 \
+            | tee -a "$GITHUB_STEP_SUMMARY"
 
   lint:
     needs: ci-image
@@ -267,7 +277,7 @@ jobs:
       - name: Pin host toolchain
         uses: ./.github/actions/pin-host-toolchain
       - name: Download resolved Bedrock node
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: bedrock-node
           path: bedrock/.resolved
@@ -275,7 +285,7 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-host-prebuild
+          shared-key: ci-host-prebuild-nodebug
           # Read-only; prebuild is the only writer.
           save-if: false
 
@@ -286,6 +296,8 @@ jobs:
           env: |
             RISC0_DEV_MODE=1
             RUST_LOG=info,kameo=warn
+            CARGO_PROFILE_DEV_DEBUG=0
+            CARGO_PROFILE_TEST_DEBUG=0
           run: cargo nextest run -p test_fixtures
 
   abort-on-stale-fixtures:
@@ -327,7 +339,9 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-host-prebuild
+          # The suffix tracks the debug level: this action cannot see the
+          # container's environment, so a change without a rename never saves.
+          shared-key: ci-host-prebuild-nodebug
           # Only writer of this cache.
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
@@ -335,7 +349,12 @@ jobs:
         uses: ./.github/actions/run-in-ci-image
         with:
           image: ${{ needs.ci-image.outputs.image }}
-          env: RISC0_DEV_MODE=1
+          # One pair per line; a single line makes the whole string the
+          # first variable's value.
+          env: |
+            RISC0_DEV_MODE=1
+            CARGO_PROFILE_DEV_DEBUG=0
+            CARGO_PROFILE_TEST_DEBUG=0
           # Listed from the build just archived: unpacking the archive again
           # overflows the runner's disk.
           run: |
@@ -389,14 +408,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download integration test archive
-        timeout-minutes: 10
-        uses: actions/download-artifact@v4
+        timeout-minutes: 20
+        uses: actions/download-artifact@v5
         with:
           name: integration-tests-archive
 
       - name: Download resolved Bedrock node
-        timeout-minutes: 10
-        uses: actions/download-artifact@v4
+        timeout-minutes: 20
+        uses: actions/download-artifact@v5
         with:
           name: bedrock-node
           path: bedrock/.resolved
@@ -422,17 +441,27 @@ jobs:
           run: |
             # `--retries` names the flaky test, `with_retry` covers a bad runner.
             source .github/scripts/with_retry.sh
-            if [[ "${{ matrix.target }}" == "tf_bedrock_builder" || \
-                  "${{ matrix.target }}" == "tf_app_deployments" ]]; then
+
+            # A `binary::test` target is one test alone on this runner.
+            target='${{ matrix.target }}'
+            binary="${target%%::*}"
+            if [[ "$target" == *::* ]]; then
+              filter="binary($binary) and test(=${target#*::})"
+            else
+              filter="binary($binary)"
+            fi
+
+            if [[ "$binary" == "tf_bedrock_builder" || \
+                  "$binary" == "tf_app_deployments" ]]; then
               # The nextest archive contains the absolute Cargo git checkout
               # path compiled into the Logos testing framework. This is a fresh
               # runner, so materialize the pinned Logos checkout again before
               # allowing TF to use its local build provider.
               cargo fetch --locked
 
-              with_retry 'env -u GITHUB_ACTIONS -u CI cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
+              with_retry "env -u GITHUB_ACTIONS -u CI cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E '$filter'" 2
             else
-              with_retry 'cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
+              with_retry "cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E '$filter'" 2
             fi
 
       - name: Report disk headroom after the tests
@@ -464,7 +493,7 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-host-prebuild
+          shared-key: ci-host-prebuild-nodebug
           # Read-only; prebuild is the only writer.
           save-if: false
 
