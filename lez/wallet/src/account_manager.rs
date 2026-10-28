@@ -401,6 +401,9 @@ impl AccountManager {
         let mut rows = Vec::with_capacity(mentions.len());
         let mut prepared: HashMap<AccountId, (usize, AccountIdentity, bool)> = HashMap::new();
         let mut pin = None;
+        // Whether the transaction itself authorizes the fee payer; if not, the payer's key
+        // authorizes only the fee entry.
+        let mut payer_authorized = false;
 
         for mention in mentions {
             let AccountMention {
@@ -410,8 +413,11 @@ impl AccountManager {
                 address_openings,
             } = mention.normalized();
             let account_id = identity.account_id();
-            // The fee payer authorizes its debit however it is mentioned.
-            let authorizes = authorizes || fee_payer == Some(account_id);
+            let is_payer = fee_payer == Some(account_id);
+            payer_authorized |= is_payer && authorizes;
+            // The payer's witness takes its authorization key however it is mentioned, scoped to
+            // the fee entry below unless the transaction authorizes it.
+            let authorizes = authorizes || is_payer;
             let actor_state_selector = Actor::new(account_id, program_account_id);
 
             let known =
@@ -476,6 +482,14 @@ impl AccountManager {
                 )
                 .await?,
             );
+        }
+
+        if let Some(payer) = fee_payer.filter(|_| !payer_authorized)
+            && let Some(State::Private(pre)) =
+                states.iter_mut().find(|state| state.account_id() == payer)
+            && let WitnessKind::Regular(RegularKey::Authorized(ask)) = pre.kind
+        {
+            pre.kind = WitnessKind::Regular(RegularKey::FeeOnly(ask));
         }
 
         for claim in claims {
@@ -784,7 +798,7 @@ impl AccountManager {
             .find(|pre| pre.pre_state.account_id == payer)
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
         let (npk, kind) = match &pre.kind {
-            WitnessKind::Regular(RegularKey::Authorized(ask)) => (
+            WitnessKind::Regular(RegularKey::Authorized(ask) | RegularKey::FeeOnly(ask)) => (
                 NullifierPublicKey::from(&NullifierSecretKey::from(ask)),
                 PrivateAccountKind::Regular,
             ),

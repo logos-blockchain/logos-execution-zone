@@ -2599,7 +2599,9 @@ mod tests {
         types::ErrorObjectOwned,
     };
     use lee::{
-        AccountId, BoundaryStep, privacy_preserving_transaction::circuit::ProgramCatalog,
+        AccountId, BoundaryStep,
+        error::{InvalidProgramBehaviorError, LeeError},
+        privacy_preserving_transaction::circuit::ProgramCatalog,
         program::Program,
     };
     use lee_core::{
@@ -2607,7 +2609,8 @@ mod tests {
         Nullifier, PrivateAccountKind, ProgramImageClaim, Recipient, RecipientEncryption,
         RecoveryBinding,
         account::{Account, Actor, ActorState},
-        compute_digest_for_path, native_token,
+        compute_digest_for_path,
+        native_token::{self, TransferError},
         program::{
             MessageBody, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramHeader, ProgramSegment,
             Publication,
@@ -3593,10 +3596,10 @@ mod tests {
         );
     }
 
-    // The recipient pays the receipt's fee, and a fee payer authorizes its account: the transfer
-    // the message asks of it runs whether or not the caller mentions it as authorizing.
+    // The recipient pays the receipt's fee, but its key authorizes only the fee entry: the transfer
+    // the message asks of it runs only when the caller mentions it as authorizing.
     #[tokio::test]
-    async fn a_receipt_runs_authorized_by_its_recipient_paying_the_fee() {
+    async fn a_receipt_runs_unauthorized_unless_its_caller_authorizes_the_recipient() {
         let (mut wallet, _home, _sequencer, served) = wallet_with_a_received_message().await;
         let recipient = wallet
             .find_pending_message(1)
@@ -3616,7 +3619,14 @@ mod tests {
         );
 
         let pending = wallet.find_pending_message(1).await.unwrap().unwrap();
-        wallet.receive_pending_message(pending).await.unwrap();
+        assert!(matches!(
+            wallet.receive_pending_message(pending).await,
+            Err(ExecutionFailureKind::TransactionBuildError(
+                LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::NativeTransferFailed(
+                    TransferError::UnauthorizedSender { account_id }
+                ))
+            )) if account_id == recipient
+        ));
 
         let pending = wallet.find_pending_message(1).await.unwrap().unwrap();
         wallet
@@ -3631,10 +3641,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             served.lock().unwrap().submitted.as_slice(),
-            [
-                LeeTransaction::PrivacyPreserving(_),
-                LeeTransaction::PrivacyPreserving(_)
-            ]
+            [LeeTransaction::PrivacyPreserving(_)]
         ));
     }
 

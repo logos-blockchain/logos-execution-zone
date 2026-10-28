@@ -304,6 +304,9 @@ pub enum WitnessKind {
 pub enum RegularKey {
     Authorized(AuthorizationSecretKey),
     Nullifying(NullifierSecretKey),
+    /// Holds the authorization key, but authorizes only the transaction's fee entry: a fee payer
+    /// the transaction does not otherwise authorize.
+    FeeOnly(AuthorizationSecretKey),
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
@@ -427,6 +430,15 @@ impl WitnessKind {
         matches!(self, Self::Regular(RegularKey::Authorized(_)))
     }
 
+    /// Whether the witness holds its account's authorization key, as a fee payer must.
+    #[must_use]
+    pub const fn holds_authorization_key(&self) -> bool {
+        matches!(
+            self,
+            Self::Regular(RegularKey::Authorized(_) | RegularKey::FeeOnly(_))
+        )
+    }
+
     #[must_use]
     pub const fn account_kind(&self) -> PrivateAccountKind {
         match *self {
@@ -444,7 +456,7 @@ impl RegularKey {
     #[must_use]
     pub fn nsk(&self) -> NullifierSecretKey {
         match self {
-            Self::Authorized(ask) => NullifierSecretKey::from(ask),
+            Self::Authorized(ask) | Self::FeeOnly(ask) => NullifierSecretKey::from(ask),
             Self::Nullifying(nsk) => *nsk,
         }
     }

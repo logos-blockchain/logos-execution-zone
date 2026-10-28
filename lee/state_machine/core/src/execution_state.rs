@@ -272,6 +272,9 @@ pub enum ExecutionError {
     #[error("fee payer {account_id} is not a witnessed private account")]
     UnwitnessedFeePayer { account_id: AccountId },
 
+    #[error("fee payer {account_id}'s witness does not hold its authorization key")]
+    FeePayerWithoutAuthorization { account_id: AccountId },
+
     #[error("Predicted cross message sender {actor:?} is not a declared public actor")]
     UndeclaredCrossMessageSender { actor: Actor },
 
@@ -1063,12 +1066,17 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         // Entry order in the modes executing private roots: claims -> root -> fee transfer.
         // The fee transfer waits for the root's subtree and, for a public root, its cross messages.
         let fee = fee.filter(|_| M::executes_transaction_root(false));
-        if let Some(fee) = fee
-            && !executor.is_private(&fee.payer)
-        {
-            return Err(ExecutionError::UnwitnessedFeePayer {
-                account_id: fee.payer,
-            });
+        if let Some(fee) = fee {
+            if !executor.is_private(&fee.payer) {
+                return Err(ExecutionError::UnwitnessedFeePayer {
+                    account_id: fee.payer,
+                });
+            }
+            if !executor.holds_authorization_key(&fee.payer) {
+                return Err(ExecutionError::FeePayerWithoutAuthorization {
+                    account_id: fee.payer,
+                });
+            }
         }
         let claims = claims
             .into_iter()
@@ -1124,14 +1132,15 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             amount,
         })
         .expect("a native message serializes");
-        self.work_stack
-            .push(WorkItem::Deliver(Box::new(Delivery::entry(
-                MessageEnvelope {
-                    from: Sender::Root { from: None },
-                    to: Actor::native_balance(payer),
-                    message,
-                },
-            ))));
+        // The fee entry carries the payer's authorization itself, so a payer the transaction does
+        // not otherwise authorize is debited by it alone.
+        let mut delivery = Delivery::entry(MessageEnvelope {
+            from: Sender::Root { from: None },
+            to: Actor::native_balance(payer),
+            message,
+        });
+        delivery.inherited_authorizations.insert(payer);
+        self.work_stack.push(WorkItem::Deliver(Box::new(delivery)));
     }
 
     fn run<E: ExecutionEnvironment>(
@@ -1212,6 +1221,15 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         self.accounts
             .get(account_id)
             .is_some_and(AccountEntry::is_private)
+    }
+
+    fn holds_authorization_key(&self, account_id: &AccountId) -> bool {
+        match self.accounts.get(account_id) {
+            Some(AccountEntry::Private { witness_index, .. }) => self.witnesses[*witness_index]
+                .kind
+                .holds_authorization_key(),
+            Some(AccountEntry::Public { .. }) | None => false,
+        }
     }
 
     fn resolve(&self, actor: Actor) -> Actor {

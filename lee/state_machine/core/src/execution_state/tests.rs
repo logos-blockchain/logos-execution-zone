@@ -1671,6 +1671,46 @@ fn a_fee_transfer_runs_after_the_root_in_every_mode() {
 }
 
 #[test]
+fn a_fee_only_payer_authorizes_the_fee_entry_alone() {
+    let keys = Keys::new(1);
+    let payer = Actor::native_balance(keys.regular_id());
+    let inbox = Actor::native_balance(id(5));
+    let fee = FeeTransfer {
+        payer: keys.regular_id(),
+        recipient: inbox.account_id,
+        amount: 0,
+        refund_to: None,
+    };
+    let run = |kind: RegularKey| {
+        let mut script = Script::default().on(payer, |input| echo(input, Response::keep_state()));
+        WholeExecution::new(
+            public_context(vec![inbox]),
+            root(payer),
+            Vec::new(),
+            Some(fee),
+            &[keys.witness(WitnessKind::Regular(kind))],
+        )?
+        .execute(&mut script)?;
+        Ok::<_, ExecutionError>(authorized(&script))
+    };
+
+    // The root reaches the payer unauthorized; only the fee entry is authorized over it.
+    assert_eq!(
+        run(RegularKey::FeeOnly(keys.ask)).unwrap(),
+        vec![(payer, false), (payer, true)]
+    );
+    assert_eq!(
+        run(RegularKey::Authorized(keys.ask)).unwrap(),
+        vec![(payer, true), (payer, true)]
+    );
+    assert!(matches!(
+        run(RegularKey::Nullifying(keys.nsk())),
+        Err(ExecutionError::FeePayerWithoutAuthorization { account_id })
+            if account_id == keys.regular_id()
+    ));
+}
+
+#[test]
 fn an_undeclared_actor_of_a_declared_public_account_is_refused() {
     let keys = Keys::new(1);
     let owner = holder(&keys);
