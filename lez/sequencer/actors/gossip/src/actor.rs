@@ -206,6 +206,8 @@ impl GossipActor {
         let mut swarm = SwarmBuilder::with_existing_identity(keypair)
             .with_tokio()
             .with_quic()
+            .with_dns()
+            .context("Failed to set up DNS resolution for gossip")?
             .with_behaviour(|_key| GossipBehaviour {
                 gossipsub: gossipsub_behaviour,
                 identify: identify_behaviour,
