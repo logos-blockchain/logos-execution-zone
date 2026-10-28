@@ -727,6 +727,9 @@ impl PrivateMode {
             if !executor.public_context.runs_publicly(sender) {
                 return Err(ExecutionError::UndeclaredCrossMessageSender { actor: sender });
             }
+            // A prediction is a public call into the private part. Aimed at a public actor it
+            // would be recorded as a proven call and replayed publicly unchecked.
+            executor.require_private(cross_message.envelope.to)?;
             let mut delivery = executor.disclose(cross_message, Sender::Call(sender));
             if delivery.inherits_entry_authorizations {
                 delivery.inherited_authorizations.extend(withheld);

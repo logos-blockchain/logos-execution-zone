@@ -912,10 +912,11 @@ fn predicted_cross_messages_must_match_the_recorded_public_deliveries() {
     let keys = Keys::new(1);
     let vault = actor(2, 9);
     let stranger = actor(5, 9);
+    let bystander = actor(6, 9);
     let run_private = |predicted_cross_messages: PredictedCrossMessages| {
         let mut script = Script::default().on(holder(&keys), sending(vec![send_to(vault)]));
         private_part(
-            public_context(vec![vault]),
+            public_context(vec![vault, bystander]),
             &[keys.regular(false)],
             root(holder(&keys)),
             predicted_cross_messages,
@@ -935,6 +936,11 @@ fn predicted_cross_messages_must_match_the_recorded_public_deliveries() {
     assert!(matches!(
         run_private(vec![vec![reply]]),
         Err(ExecutionError::UndeclaredCrossMessageSender { actor: sender }) if sender == stranger
+    ));
+    // A prediction between two public actors would replay as a proven call.
+    assert!(matches!(
+        run_private(vec![vec![delivery(vault, bystander, &[])]]),
+        Err(ExecutionError::UndeclaredActor { actor }) if actor == bystander
     ));
 }
 
