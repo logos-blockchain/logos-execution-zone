@@ -401,7 +401,7 @@ pub async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {
         .with_build(true)
         // Setting port to 0 to avoid conflicts between parallel tests, actual port will be
         // retrieved after container is up
-        .with_env("PORT", "0");
+        .with_env("LEZ_COMPOSE_BEDROCK_PORT", "0");
 
     #[expect(
         clippy::items_after_statements,

@@ -6,7 +6,10 @@ scrape_configs:
   - job_name: sequencer
     metrics_path: /metrics
     static_configs:
-      # The four-node devnet, each node's exporter published on its own port.
+      # The four-node devnet, each node's exporter published on its own port. Scraped through
+      # the host so a natively run sequencer (`just run-sequencer`, :9000) is seen the same way.
+      #
+      # These ports follow the default `LEZ_COMPOSE_SEQ_*_METRICS_PORT`s; update them if you change those.
       - targets:
           - host.docker.internal:9000
           - host.docker.internal:9001
