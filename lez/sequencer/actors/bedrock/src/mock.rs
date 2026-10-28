@@ -14,10 +14,10 @@ use crate::{
     BedrockActorTrait, Result,
     error::Error,
     protocol::{
-        AccreditedKeys, BoxStream, ChangeChannelConfig, CheckChannelExists, CheckIsOurTurn,
+        AccreditedKeys, ChangeChannelConfig, ChannelReadStream, CheckChannelExists, CheckIsOurTurn,
         CreateChannel, GetAccreditedKeys, GetChannelId, GetChannelIdReply, GetChannelTipMessageId,
         GetChannelTipSlot, MsgId, PrepareConfig, PreparedChannelConfig, PublishBlock,
-        PublishOutcome, ReadChannel, Slot, ZoneMessage,
+        PublishOutcome, ReadChannel, Slot,
     },
 };
 
@@ -86,8 +86,8 @@ mockall::mock! {
         pub fn handle_read_channel(
             &mut self,
             msg: ReadChannel,
-            ctx: &mut Context<Self, Result<BoxStream<(ZoneMessage, Slot)>>>
-        ) -> Result<BoxStream<(ZoneMessage, Slot)>>;
+            ctx: &mut Context<Self, Result<ChannelReadStream>>
+        ) -> Result<ChannelReadStream>;
     }
 }
 
@@ -248,7 +248,7 @@ impl Message<GetChannelTipMessageId> for MockBedrockActor {
 }
 
 impl Message<ReadChannel> for MockBedrockActor {
-    type Reply = Result<BoxStream<(ZoneMessage, Slot)>>;
+    type Reply = Result<ChannelReadStream>;
 
     async fn handle(
         &mut self,

@@ -9,6 +9,7 @@ use sequencer_executor_actor::protocol::{
     GetLastBlockId, GetProofsAndRoot, GetPublications, GetRecoveryBinding, GetTransaction,
     Transaction, TransactionOrigin,
 };
+use sequencer_gossip_actor::protocol::PublishTransaction;
 use wallet::{ExecutionFailureKind, WalletSequencerClient};
 
 use crate::sequencer::SequencerServiceFFI;
@@ -156,14 +157,35 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
     ) -> Result<common::HashType, Self::Error> {
         let tx_hash = tx.hash();
 
+        // TODO: Fix that code duplication, when `RpcServerActor` becomes real actor.
+
+        let authenticated_tx = tx
+            .transaction_stateless_check()
+            .map_err(anyhow::Error::from)
+            .map_err(FfiSequencerClientError::ArgumentError)?;
+
+        if let Some((to, _)) = authenticated_tx.public_call()
+            && sequencer_core::is_sequencer_only_program(to.program_account_id)
+        {
+            return Err(FfiSequencerClientError::ArgumentError(anyhow::anyhow!(
+                "Program is sequencer-only and cannot be invoked by a user transaction"
+            )));
+        }
+
         self.0
             .executor_ref()
             .ask(Transaction {
-                transaction: tx,
+                transaction: authenticated_tx.clone(),
                 origin: TransactionOrigin::User,
             })
             .send()
             .await?;
+
+        if let Some(gossip_ref) = self.0.gossip_ref() {
+            gossip_ref
+                .tell(PublishTransaction(authenticated_tx))
+                .await?;
+        }
 
         Ok(tx_hash)
     }

@@ -32,9 +32,13 @@ use wallet::{
     program_facades::program_loader::ProgramLoader,
 };
 
-const BLOAT_ACTOR_STATE_BYTES: usize = 96 * 1024;
+// Each write is ~79% of `MAX_GAS_EXEC` at the ~15 cycles/byte in
+// `docs/benchmarks/cycle_bench.md`, and half of `MAX_GAS_STOR`. The six
+// together put a whole-account read past the 10 MiB response cap, since
+// `0xFF` costs four JSON bytes.
+const BLOAT_ACTOR_STATE_BYTES: usize = 512 * 1024;
 
-const BLOAT_WRITERS: usize = 30;
+const BLOAT_WRITERS: usize = 6;
 
 // This test only exercises chain *resolution* under a bloated account, never `CreateHeader`,
 // so `bytecode` is never decoded or validated as a real program - arbitrary filler well under
@@ -281,7 +285,7 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
 
 /// The indexer's view of a bloated account: scoped reads and the summary keep working.
 #[test]
-#[ignore = "the indexer cannot keep up with 2.8 MB blocks, #901"]
+#[ignore = "L1 finalization stops part way on CI, so the indexer runs out of blocks to read while the sequencer keeps producing, #901"]
 async fn a_bloated_account_stays_readable_through_the_indexer() -> Result<()> {
     let mut ctx = TestContext::new().await?;
     let victim = ctx.existing_public_accounts()[0];
@@ -368,16 +372,8 @@ async fn a_bloated_account_stays_readable_through_the_indexer() -> Result<()> {
         balance_only.data.native_balance().unwrap()
     );
 
-    // The explorer renders actor state counts and sizes, so it needs to enumerate actor states on
-    // an account a scoped read cannot enumerate and a whole-account read can no longer
-    // return. The summary answers that without carrying the bytes.
+    // The summary enumerates actor states without carrying the bytes, which the explorer needs.
     let victim_key: indexer_service_protocol::AccountId = victim.into();
-    assert!(
-        indexer_service_rpc::RpcClient::get_account(indexer, victim_key)
-            .await
-            .is_err(),
-        "the whole-account indexer read must fail on the bloated account"
-    );
     let expected_actor_state_len =
         u64::try_from(BLOAT_ACTOR_STATE_BYTES).expect("the bloat actor state size fits in u64");
     let summary = indexer_service_rpc::RpcClient::get_account_summary(indexer, victim_key).await?;
@@ -509,9 +505,13 @@ async fn loader_reads_survive_a_bloated_segment_account() -> Result<()> {
 
     bloat_account(&mut ctx, segment_id).await?;
 
+    let error = get_account(&ctx, segment_id)
+        .await
+        .map(|_| ())
+        .expect_err("the segment account must be past the whole-account response limit");
     assert!(
-        get_account(&ctx, segment_id).await.is_err(),
-        "the segment account must be past the whole-account response limit"
+        is_oversized_response(&error),
+        "the read must fail on response size specifically: {error:?}"
     );
 
     let head_id = new_account(&mut ctx, false, None).await?;

@@ -7,9 +7,11 @@ edition = "2024"
 [dependencies]
 lee.workspace = true
 lee_core.workspace = true
+sequencer_core.workspace = true
 sequencer_service.workspace = true
 sequencer_executor_actor = { workspace = true, features = ["actor"] }
 sequencer_storage_actor.workspace = true
+sequencer_gossip_actor.workspace = true
 common.workspace = true
 programs.workspace = true
 wallet.workspace = true

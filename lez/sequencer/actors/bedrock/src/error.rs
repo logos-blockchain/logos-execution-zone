@@ -1,7 +1,7 @@
 use kameo::error::Infallible;
 use sequencer_actors_common::{EraseMessage as _, ErasedMessage};
 
-use crate::protocol::ChannelSeq;
+use crate::protocol::{ChannelSeq, Slot};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -28,6 +28,14 @@ pub enum Error {
 
     #[error("Node request failed")]
     NodeRequestFailed(#[source] anyhow::Error),
+
+    #[error("Failed to fetch zone messages from blocks {from:?}..={to:?}")]
+    ChannelReadFailed {
+        from: Slot,
+        to: Slot,
+        #[source]
+        cause: anyhow::Error,
+    },
 
     #[error("Transaction assemble failed")]
     TransactionAssembleFailed(

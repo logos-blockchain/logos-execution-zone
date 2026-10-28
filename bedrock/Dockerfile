@@ -9,6 +9,7 @@ FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
     libssl3t64 \
     libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
