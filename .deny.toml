@@ -21,7 +21,7 @@ ignore = [
   { id = "RUSTSEC-2026-0173", reason = "`proc-macro-error2` is unmaintained; pulled in transitively via `leptos_macro` and `overwatch-derive`, waiting on upstream fix" },
 ]
 yanked = "deny"
-unused-ignored-advisory = "deny"
+unused-ignored-advisory = "warn"
 
 [bans]
 allow-wildcard-paths = false

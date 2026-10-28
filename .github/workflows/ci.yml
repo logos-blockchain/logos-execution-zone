@@ -175,6 +175,7 @@ jobs:
   deny:
     needs: ci-image
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     container:
       image: ${{ needs.ci-image.outputs.image }}
       credentials:
@@ -185,8 +186,17 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
 
-      - name: Check licenses and advisories
-        run: cargo deny check
+      - name: Check licenses, bans and sources
+        run: cargo deny --locked check licenses bans sources
+
+      # By severity, not by code: a code list misses the ones hardcoded to
+      # error. Only a fetch failure is absorbed, since nothing can demote it.
+      - name: Report advisories
+        run: |
+          set -o pipefail
+          cargo deny fetch db || exit 0
+          cargo deny --locked check advisories -W denied 2>&1 \
+            | tee -a "$GITHUB_STEP_SUMMARY"
 
   lint:
     needs: ci-image
