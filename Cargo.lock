@@ -1582,6 +1582,7 @@ name = "chain_state"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "borsh",
  "common",
  "fee_core",
@@ -11443,6 +11444,7 @@ name = "sequencer_service"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum 0.8.9",
  "borsh",
  "clap",
  "common",
@@ -11453,6 +11455,7 @@ dependencies = [
  "kameo",
  "kameo_actors",
  "lee",
+ "libp2p",
  "log",
  "metrics-exporter-prometheus",
  "programs",

@@ -4,10 +4,10 @@ use crate::{
     Result,
     error::Error,
     protocol::{
-        AccreditedKeys, BoxStream, ChangeChannelConfig, CheckChannelExists, CheckIsOurTurn,
+        AccreditedKeys, ChangeChannelConfig, ChannelReadStream, CheckChannelExists, CheckIsOurTurn,
         CreateChannel, GetAccreditedKeys, GetChannelId, GetChannelIdReply, GetChannelTipMessageId,
         GetChannelTipSlot, MsgId, PrepareConfig, PreparedChannelConfig, PublishBlock,
-        PublishOutcome, ReadChannel, Slot, ZoneMessage,
+        PublishOutcome, ReadChannel, Slot,
     },
 };
 
@@ -23,6 +23,6 @@ pub trait BedrockActorTrait:
     + Message<GetAccreditedKeys, Reply = Result<Option<AccreditedKeys>>>
     + Message<GetChannelTipSlot, Reply = Result<Option<Slot>>>
     + Message<GetChannelTipMessageId, Reply = Result<Option<MsgId>>>
-    + Message<ReadChannel, Reply = Result<BoxStream<(ZoneMessage, Slot)>>>
+    + Message<ReadChannel, Reply = Result<ChannelReadStream>>
 {
 }
