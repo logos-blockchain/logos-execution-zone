@@ -14,7 +14,9 @@ use common::{
 };
 use fee_core::{
     BlockFeeSummary,
-    assess::{FeeTxView, fee_actual_base, fee_reserve, private_fee_required},
+    assess::{
+        FeeTxView, fee_actual_base, fee_reserve, private_cycles_affordable, private_fee_required,
+    },
     market,
     state::FeeState,
     validity::{FeeError, accumulate_exec_gas, accumulate_stor_gas, validate_static_tx},
@@ -452,15 +454,22 @@ fn settle_private_transaction(
 
     validate_static_tx(view, opening).map_err(|err| fee_validity(err.to_string()))?;
 
-    // The verification cost is charged up front; the effects may use what is
-    // left of the block's execution gas.
+    // The verification cost is charged up front.
     let gas_used_exec =
         accumulate_exec_gas(summary.gas_used_exec, market::PRIVATE_VERIFY_GAS).map_err(gas_cap)?;
     let gas_used_stor =
         accumulate_stor_gas(summary.gas_used_stor, market::PRIVATE_GAS_STOR).map_err(gas_cap)?;
+    // The effects may use what is left of the block's execution gas, up to what the reserve
+    // pays for, so a public part running out of it is a charged revert and never costs more
+    // than was reserved.
     let cycle_budget = market::MAX_GAS_EXEC
         .checked_sub(gas_used_exec)
-        .expect("the accumulator is cap-checked");
+        .expect("the accumulator is cap-checked")
+        .min(private_cycles_affordable(
+            *reserve,
+            opening.base_fee_exec,
+            opening.base_fee_stor,
+        ));
     let (diff, charge) = lee::ValidatedStateDiff::from_privacy_preserving_transaction_metered(
         private_tx,
         state,
@@ -472,9 +481,11 @@ fn settle_private_transaction(
         tx_index,
         reason: format!("{:#}", anyhow::Error::from(err)),
     })?;
-    let gas_used_exec = accumulate_exec_gas(gas_used_exec, charge.cycles).map_err(gas_cap)?;
+    // The cycle count can overshoot the budget it ran out of.
+    let charged_cycles = charge.cycles.min(cycle_budget);
+    let gas_used_exec = accumulate_exec_gas(gas_used_exec, charged_cycles).map_err(gas_cap)?;
 
-    let actual = private_fee_required(charge.cycles, opening.base_fee_exec, opening.base_fee_stor);
+    let actual = private_fee_required(charged_cycles, opening.base_fee_exec, opening.base_fee_stor);
     let surplus = reserve.checked_sub(actual).ok_or_else(|| {
         fee_validity(
             FeeError::PrivateFeeBelowRequired {
@@ -1786,6 +1797,50 @@ mod tests {
                 assert!(settled.get_proof_for_commitment(&commitment).is_none());
             }
         }
+    }
+
+    #[test]
+    fn a_failing_public_part_is_bounded_by_what_its_reserve_pays_for() {
+        let (state, senders) = private_sender_state(&[0x58]);
+        let state = state.with_programs(vec![event_emitter()]);
+        let sender = &senders[0];
+        let scripted = Actor::new(
+            initial_pub_accounts_private_keys()[0].account_id,
+            AccountId::from_builtin_program(event_emitter().id()),
+        );
+        // The block is empty, but the reserve pays for only `budget` cycles, which the scripted
+        // public root runs out of: a charged revert, not a fee above the reserve.
+        let budget = 5_000;
+        let reserve = fee_core::assess::private_fee_required(budget, 8, 8);
+        let tx = public_root_private_tx(
+            &state,
+            sender,
+            scripted,
+            inbox_fee(reserve, sender.0.account_id()),
+        );
+
+        let mut settled = state;
+        let mut summary = BlockFeeSummary::default();
+        let (_, reverted) = settle_transaction(
+            &tx,
+            &mut settled,
+            &FeeState::genesis(),
+            1,
+            100,
+            0,
+            &mut summary,
+        )
+        .expect("a public part out of its reserve's cycles reverts to the fallback");
+        assert!(reverted);
+        assert_eq!(
+            summary.gas_used_exec,
+            fee_core::market::PRIVATE_VERIFY_GAS + budget
+        );
+        assert_eq!(summary.revenue_base, reserve);
+        assert_eq!(
+            native_balance(&settled, system_accounts::fee_inbox_account_id()),
+            reserve
+        );
     }
 
     #[test]

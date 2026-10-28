@@ -102,6 +102,22 @@ pub fn private_fee_required(
         + u128::from(market::PRIVATE_GAS_STOR) * u128::from(base_fee_stor)
 }
 
+/// The public cycles a privacy-preserving transaction's `reserve` pays for at these base fees,
+/// after its flat verification and storage cost: zero when the reserve does not cover that.
+#[must_use]
+pub fn private_cycles_affordable(
+    reserve: Balance,
+    base_fee_exec: Fee,
+    base_fee_stor: Fee,
+) -> Cycles {
+    let flat = private_fee_required(0, base_fee_exec, base_fee_stor);
+    let cycles = reserve
+        .saturating_sub(flat)
+        .checked_div(u128::from(base_fee_exec))
+        .unwrap_or(u128::MAX);
+    Cycles::try_from(cycles).unwrap_or(Cycles::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,5 +190,17 @@ mod tests {
         let reserve = fee_reserve(&view, &state);
         assert!(reserve > 0);
         assert!(fee_actual_base(market::MAX_GAS_EXEC, &view, &state) < reserve);
+    }
+
+    #[test]
+    fn a_private_reserve_pays_for_the_cycles_above_its_flat_cost() {
+        let flat = private_fee_required(0, 8, 8);
+        assert_eq!(private_cycles_affordable(flat - 1, 8, 8), 0);
+        assert_eq!(private_cycles_affordable(flat, 8, 8), 0);
+        assert_eq!(private_cycles_affordable(flat + 8 * 1_000 + 7, 8, 8), 1_000);
+        assert_eq!(
+            private_fee_required(private_cycles_affordable(flat + 8_003, 8, 8), 8, 8),
+            flat + 8_000
+        );
     }
 }
