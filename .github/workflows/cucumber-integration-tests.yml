@@ -33,17 +33,27 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Required for the cache key below to match the one prebuild writes.
+      - name: Pin host toolchain
+        uses: ./.github/actions/pin-host-toolchain
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-host-prebuild-nodebug
+          # Read-only; prebuild is the only writer.
+          save-if: false
+
       - name: Build cucumber tests
         uses: ./.github/actions/run-in-ci-image
         with:
           image: ${{ inputs.image }}
-          # Temporary CI-only suppression for the single-use-lifetimes
-          # warning triggered while the pinned logos-blockchain dependency is
-          # built in the LEZ environment. Normal linting remains strict with
-          # -D warnings.
+          # The debug level has to match the key's `nodebug` suffix, or nothing
+          # restored here fingerprints the same.
           env: |
-            RUSTFLAGS=-A single-use-lifetimes
             RISC0_DEV_MODE=1
+            CARGO_PROFILE_DEV_DEBUG=0
+            CARGO_PROFILE_TEST_DEBUG=0
           # `json-render-diagnostics` keeps stdout to what the next step parses.
           run: >-
             cargo test -p integration_tests --features cucumber
