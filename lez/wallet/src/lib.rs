@@ -40,6 +40,8 @@ use lee_core::{
     program::{MessageBody, MessageData, Publication},
 };
 use log::warn;
+/// The fee types a [`WalletSequencerClient`] returns.
+pub use sequencer_service_rpc::{FeeStateQuote, PublicDryRun};
 use sequencer_service_rpc::{RpcClient, SequencerClient, SequencerClientBuilder};
 use storage::{Storage, StorageKey, spent_nullifiers::SpentNullifiers};
 use tokio::io::AsyncWriteExt as _;
@@ -156,6 +158,10 @@ pub enum ExecutionFailureKind {
     KeyNotFoundError,
     #[error("Sequencer client error: {0}")]
     SequencerClientError(String),
+    /// A privacy-preserving transaction's fee reserve the head fee outgrew: priced again off a
+    /// fresh quote, it may pass.
+    #[error("Sequencer client error: {0}")]
+    PrivateFeeBelowHead(String),
     #[error("Can not pay for operation")]
     InsufficientFundsError,
     #[error("Account {0} data is invalid")]
@@ -199,6 +205,11 @@ impl From<sequencer_service_rpc::ClientError> for ExecutionFailureKind {
     fn from(value: sequencer_service_rpc::ClientError) -> Self {
         match value {
             sequencer_service_rpc::ClientError::Custom(val) => Self::SequencerClientError(val),
+            sequencer_service_rpc::ClientError::Call(err_obj)
+                if err_obj.code() == sequencer_service_rpc::PRIVATE_FEE_BELOW_HEAD_ERROR_CODE =>
+            {
+                Self::PrivateFeeBelowHead(err_obj.message().to_owned())
+            }
             sequencer_service_rpc::ClientError::Call(err_obj) => {
                 Self::SequencerClientError(err_obj.message().to_owned())
             }
@@ -257,18 +268,29 @@ pub trait WalletSequencerClient: Clone {
         actor_state_selector: Actor,
     ) -> Result<Option<Account>, Self::Error>;
 
+    /// The membership paths of `commitments` and of the message leaves at `message_positions`,
+    /// all under the root returned with them.
     async fn get_proofs_and_root(
         &self,
         commitments: Vec<Commitment>,
-        message_position: Option<CommitmentPosition>,
+        message_positions: Vec<CommitmentPosition>,
     ) -> Result<
         (
             Vec<Option<MembershipProof>>,
-            Option<MembershipProof>,
+            Vec<Option<MembershipProof>>,
             CommitmentSetDigest,
         ),
         Self::Error,
     >;
+
+    /// The head fee market, for pricing a transaction's fee.
+    async fn get_fee_state(&self) -> Result<sequencer_service_rpc::FeeStateQuote, Self::Error>;
+
+    /// The cycles a public transaction costs on the head state, and why it reverts if it does.
+    async fn dry_run_public_transaction(
+        &self,
+        tx: LeeTransaction,
+    ) -> Result<sequencer_service_rpc::PublicDryRun, Self::Error>;
 
     async fn get_account(&self, account_id: AccountId) -> Result<Option<Account>, Self::Error>;
 
@@ -337,16 +359,27 @@ impl WalletSequencerClient for SequencerClient {
     async fn get_proofs_and_root(
         &self,
         commitments: Vec<Commitment>,
-        message_position: Option<CommitmentPosition>,
+        message_positions: Vec<CommitmentPosition>,
     ) -> Result<
         (
             Vec<Option<MembershipProof>>,
-            Option<MembershipProof>,
+            Vec<Option<MembershipProof>>,
             CommitmentSetDigest,
         ),
         Self::Error,
     > {
-        RpcClient::get_proofs_and_root(self, commitments, message_position).await
+        RpcClient::get_proofs_and_root(self, commitments, message_positions).await
+    }
+
+    async fn get_fee_state(&self) -> Result<sequencer_service_rpc::FeeStateQuote, Self::Error> {
+        RpcClient::get_fee_state(self).await
+    }
+
+    async fn dry_run_public_transaction(
+        &self,
+        tx: LeeTransaction,
+    ) -> Result<sequencer_service_rpc::PublicDryRun, Self::Error> {
+        RpcClient::dry_run_public_transaction(self, tx).await
     }
 
     async fn get_account(&self, account_id: AccountId) -> Result<Option<Account>, Self::Error> {
@@ -1157,10 +1190,10 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         Vec<Option<MembershipProof>>,
         CommitmentSetDigest,
     )> {
-        Ok(self
-            .sequencer_client
+        self.sequencer_client
             .get_proofs_and_root(commitments.to_vec(), message_positions)
-            .await?)
+            .await
+            .map_err(anyhow::Error::from)
     }
 
     pub(crate) async fn await_inclusion(
@@ -1485,7 +1518,11 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             TransactionEntry::Async(receipt) => Some((receipt.position, receipt.commitment)),
             TransactionEntry::Sync(_) => None,
         };
-        let mut quote = self.sequencer_client.get_fee_state().await?;
+        let mut quote = self
+            .sequencer_client
+            .get_fee_state()
+            .await
+            .map_err(Into::into)?;
         let fee_payer = fee_payer.or(self.fee_payer).or_else(|| {
             self.auto_fee_payer(&accounts, self.reserve_pricing(&quote, 0).headroom_reserve)
         });
@@ -1773,6 +1810,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 .sequencer_client
                 .send_transaction(LeeTransaction::PrivacyPreserving(tx))
                 .await
+                .map_err(Into::into)
             {
                 Ok(tx_hash) => {
                     if !claims.is_empty() {
@@ -1783,15 +1821,19 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                     }
                     return Ok((tx_hash, shared_secrets));
                 }
-                Err(rejection) if reprices < MAX_REPRICES && reserve_below_head(&rejection) => {
+                Err(ExecutionFailureKind::PrivateFeeBelowHead(_)) if reprices < MAX_REPRICES => {
                     reprices = reprices.saturating_add(1);
                     warn!(
                         "The sequencer prices the fee above the {reserve} reserved; pricing it \
                          again off a fresh quote ({reprices} of {MAX_REPRICES})"
                     );
-                    quote = self.sequencer_client.get_fee_state().await?;
+                    quote = self
+                        .sequencer_client
+                        .get_fee_state()
+                        .await
+                        .map_err(Into::into)?;
                 }
-                Err(rejection) => return Err(rejection.into()),
+                Err(rejection) => return Err(rejection),
             }
         }
     }
@@ -2086,8 +2128,16 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 .len(),
         )
         .expect("transaction size fits u128");
-        let run = self.sequencer_client.dry_run_public_transaction(tx).await?;
-        let quote = self.sequencer_client.get_fee_state().await?;
+        let run = self
+            .sequencer_client
+            .dry_run_public_transaction(tx)
+            .await
+            .map_err(Into::into)?;
+        let quote = self
+            .sequencer_client
+            .get_fee_state()
+            .await
+            .map_err(Into::into)?;
         let actual_fee = u128::from(run.cycles)
             .saturating_mul(u128::from(quote.base_fee_exec))
             .saturating_add(data_bytes.saturating_mul(u128::from(quote.base_fee_stor)))
@@ -2450,6 +2500,10 @@ impl WalletCore<SequencerClient> {
             storage_key,
             spent_nullifiers,
             sequencer_client,
+            dry_run: false,
+            fee_payer: None,
+            refund_to: None,
+            swept: std::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -2549,14 +2603,6 @@ fn spent_in(block: &Block) -> Vec<Nullifier> {
 }
 
 /// Whether the sequencer turned a transaction away for a reserve below the fee at its head.
-fn reserve_below_head(rejection: &sequencer_service_rpc::ClientError) -> bool {
-    matches!(
-        rejection,
-        sequencer_service_rpc::ClientError::Call(object)
-            if object.code() == sequencer_service_rpc::PRIVATE_FEE_BELOW_HEAD_ERROR_CODE
-    )
-}
-
 fn decrypt_note(
     action: &lee_core::PrivateAction,
     secret: &SharedSecretKey,
