@@ -52,15 +52,8 @@ impl RpcServerActor {
 
         info!("Starting RPC Server on {addr}");
 
-        let service = service::Service::new(executor_ref, max_block_size_rx, gossip);
-        let mut methods = service.into_rpc();
-        if !dry_run_rpc {
-            // A dry run executes guest code for free; a public sequencer does not serve it.
-            for method in service::DRY_RUN_METHODS {
-                methods.remove_method(method);
-            }
-        }
-        let server_handle = server.start(methods);
+        let service = service::Service::new(executor_ref, max_block_size_rx, gossip, dry_run_rpc);
+        let server_handle = server.start(service.into_rpc());
 
         Ok(Self {
             server_handle: Some(server_handle),

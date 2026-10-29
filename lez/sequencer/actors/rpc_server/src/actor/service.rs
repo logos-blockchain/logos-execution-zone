@@ -20,13 +20,15 @@ use sequencer_service_protocol::{
     PageLimit, ProgramId, PublicDryRun, Publication,
 };
 
-/// The methods [`crate::RpcServerActor`] serves only when `dry_run_rpc` is on.
-pub const DRY_RUN_METHODS: [&str; 1] = ["dryRunPublicTransaction"];
-
 pub struct Service<E: ExecutorActorTrait> {
     executor_ref: ActorRef<E>,
     max_block_size_rx: MaxBlockSizeReceiver,
     gossip: Option<Recipient<PublishTransaction>>,
+    /// Whether `dryRunPublicTransaction` is served.
+    ///
+    /// Each call executes guest code for free, so we prefer to disable it
+    /// for public services, and use it locally only.
+    dry_run_rpc: bool,
 }
 
 impl<E: ExecutorActorTrait> Service<E> {
@@ -34,6 +36,7 @@ impl<E: ExecutorActorTrait> Service<E> {
         executor_ref: ActorRef<E>,
         max_block_size_rx: MaxBlockSizeReceiver,
         gossip: Option<Recipient<PublishTransaction>>,
+        dry_run_rpc: bool,
     ) -> Self {
         sequencer_rpc_server_actor_metrics::init();
 
@@ -41,6 +44,7 @@ impl<E: ExecutorActorTrait> Service<E> {
             executor_ref,
             max_block_size_rx,
             gossip,
+            dry_run_rpc,
         }
     }
 }
@@ -141,6 +145,13 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         &self,
         tx: LeeTransaction,
     ) -> Result<PublicDryRun, ErrorObjectOwned> {
+        if !self.dry_run_rpc {
+            return Err(ErrorObjectOwned::owned(
+                sequencer_service_rpc::DRY_RUN_DISABLED_ERROR_CODE,
+                "This sequencer does not serve dry runs",
+                None::<()>,
+            ));
+        }
         // A privacy-preserving transaction is priced by the wallet's local simulation, before
         // its proof exists.
         let LeeTransaction::Public(tx) = tx else {

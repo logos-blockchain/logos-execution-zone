@@ -21,6 +21,9 @@ pub const MEMPOOL_IS_FULL_ERROR_CODE: i32 = -31900;
 /// the fee at the head: priced again off a fresh quote, it may pass.
 pub const PRIVATE_FEE_BELOW_HEAD_ERROR_CODE: i32 = -31901;
 
+/// Error code of a dry run asked of a sequencer that does not serve dry runs (`dry_run_rpc` off).
+pub const DRY_RUN_DISABLED_ERROR_CODE: i32 = -31902;
+
 /// Type alias for RPC client. Only available when `client` feature is enabled.
 ///
 /// It's cheap to clone this client, so it can be cloned and shared across the application.
