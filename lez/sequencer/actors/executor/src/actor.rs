@@ -34,12 +34,12 @@ use crate::{
     ExecutorActorTrait, Result,
     error::Error,
     protocol::{
-        ChannelId, DryRunPublicTransaction, FeeStateQuote, GetAccount, GetAccountBalance,
-        GetAccountNonces, GetAccountReply, GetAccountTransactions, GetAccountView, GetBlock,
-        GetBlockByHash, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
-        GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetMessagePath,
-        GetProofsAndRoot, GetPublications, GetRecoveryBinding, GetTransaction, ProduceBlock,
-        PublicDryRun, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, Transaction,
+        ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
+        GetAccountTransactions, GetAccountView, GetBlock, GetBlockByHash, GetBlockRange,
+        GetChannelId, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply, GetFeeQuote,
+        GetLastBlockId, GetMessagePath, GetProofsAndRoot, GetPublications, GetRecoveryBinding,
+        GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
+        Transaction,
     },
 };
 
@@ -346,33 +346,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountBalance>
                     })
             })
             .await
-    }
-}
-
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<DryRunPublicTransaction>
-    for ExecutorActor<S, B>
-{
-    type Reply = Result<PublicDryRun>;
-
-    async fn handle(
-        &mut self,
-        DryRunPublicTransaction { transaction: tx }: DryRunPublicTransaction,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        // The block the transaction would land in: the next height, built now.
-        let block_id = self.sequencer.chain_height().await.saturating_add(1);
-        let timestamp =
-            u64::try_from(chrono::Utc::now().timestamp_millis()).expect("timestamp is positive");
-        self.sequencer
-            .with_state(|state| {
-                sequencer_core::fees::dry_run_public_transaction(state, &tx, block_id, timestamp)
-            })
-            .await
-            .map(|run| PublicDryRun {
-                cycles: run.cycles,
-                revert_reason: run.revert_reason,
-            })
-            .map_err(|err| Error::PublicDryRunFailed(err.into()))
     }
 }
 

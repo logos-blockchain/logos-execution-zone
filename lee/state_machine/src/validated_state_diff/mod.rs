@@ -155,16 +155,7 @@ impl ValidatedStateDiff {
             cycle_budget,
             &mut cycles_used,
         );
-        // A non-zero exit keeps its count: the failing call's cycles ride on the error since
-        // `execute_authorized` bailed before adding them. A panic or session-limit bail loses
-        // the count and pays the full budget.
-        let cycles = match &result {
-            Ok(_) => cycles_used,
-            Err(LeeError::ProgramExitedWithCode { cycles, .. }) => {
-                cycles_used.saturating_add(*cycles)
-            }
-            Err(_) => cycle_budget,
-        };
+        let cycles = charged_cycles(&result, cycles_used, cycle_budget);
         let (diff, revert) = match result {
             Ok(diff) => (diff, None),
             // A chargeable action failure keeps no effects but still advances the
@@ -408,15 +399,8 @@ impl ValidatedStateDiff {
                 ..StateDiff::default()
             },
         );
-        // As for a public action: a non-zero exit keeps its count, a panic or session-limit
-        // bail pays the full budget.
-        let cycles = match &result {
-            Ok(_) => cycles_used,
-            Err(LeeError::ProgramExitedWithCode { cycles, .. }) => {
-                cycles_used.saturating_add(*cycles)
-            }
-            Err(_) => cycle_budget,
-        };
+        // As for a public action.
+        let cycles = charged_cycles(&result, cycles_used, cycle_budget);
         let fallback = execution.fee.as_ref().and_then(|fee| fee.fallback.as_ref());
         let (diff, revert) = match (result, fallback) {
             (Ok(mut diff), _) => {
@@ -491,11 +475,26 @@ fn loader_actor_state<'state>(
         .or_else(|| state.loader_actor_state(account_id))
 }
 
+/// The cycles a public action is charged: what it metered, plus a failing call's own count on a
+/// non-zero exit, since execution bailed before adding them; a panic or session-limit bail loses
+/// the count and pays the full budget.
+pub const fn charged_cycles<T>(
+    result: &Result<T, LeeError>,
+    cycles_used: Cycles,
+    cycle_budget: Cycles,
+) -> Cycles {
+    match result {
+        Ok(_) => cycles_used,
+        Err(LeeError::ProgramExitedWithCode { cycles, .. }) => cycles_used.saturating_add(*cycles),
+        Err(_) => cycle_budget,
+    }
+}
+
 /// `program_loader_core`'s functions panic on malformed input, mirroring the assert-based style
 /// every other `*_core` crate uses under its guest's sandbox. There is no zkVM sandbox here, so
 /// `catch_unwind` stands in for it: a panic becomes a chargeable
 /// [`LeeError::ProgramExecutionFailed`] instead of taking down the caller.
-fn catch_program_loader_panic<T>(run: impl FnOnce() -> T) -> Result<T, LeeError> {
+pub fn catch_program_loader_panic<T>(run: impl FnOnce() -> T) -> Result<T, LeeError> {
     catch_unwind(AssertUnwindSafe(run)).map_err(|panic| {
         let message = panic
             .downcast_ref::<&str>()

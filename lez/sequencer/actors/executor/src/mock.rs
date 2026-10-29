@@ -21,12 +21,11 @@ use crate::{
     ExecutorActorTrait, Result,
     error::Error,
     protocol::{
-        ChannelId, DryRunPublicTransaction, FeeStateQuote, GetAccount, GetAccountBalance,
-        GetAccountNonces, GetAccountReply, GetAccountView, GetBlock, GetBlockRange, GetChannelId,
-        GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId,
-        GetMessagePath, GetProofsAndRoot, GetPublications, GetRecoveryBinding, GetTransaction,
-        ProduceBlock, ProofsAndRoot, PublicDryRun, RequeueCrossZoneDeadLetter,
-        RequeueCrossZoneDeadLetterReply, Transaction,
+        ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
+        GetAccountView, GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
+        GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetMessagePath,
+        GetProofsAndRoot, GetPublications, GetRecoveryBinding, GetTransaction, ProduceBlock,
+        ProofsAndRoot, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, Transaction,
     },
 };
 
@@ -140,11 +139,6 @@ mockall::mock! {
             ctx: &mut Context<Self, FeeStateQuote>
         ) -> FeeStateQuote;
 
-        pub fn handle_dry_run_public_transaction(
-            &mut self,
-            msg: DryRunPublicTransaction,
-            ctx: &mut Context<Self, Result<PublicDryRun>>
-        ) -> Result<PublicDryRun>;
     }
 }
 
@@ -381,18 +375,6 @@ impl Message<RequeueCrossZoneDeadLetter> for MockExecutorActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_requeue_cross_zone_dead_letter(msg, ctx)
-    }
-}
-
-impl Message<DryRunPublicTransaction> for MockExecutorActor {
-    type Reply = Result<PublicDryRun>;
-
-    async fn handle(
-        &mut self,
-        msg: DryRunPublicTransaction,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_dry_run_public_transaction(msg, ctx)
     }
 }
 

@@ -5,9 +5,9 @@ use kameo::error::SendError;
 use lee::Actor;
 use lee_core::CommitmentPosition;
 use sequencer_executor_actor::protocol::{
-    DryRunPublicTransaction, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountView,
-    GetBlock, GetBlockRange, GetFeeQuote, GetLastBlockId, GetProofsAndRoot, GetPublications,
-    GetRecoveryBinding, GetTransaction, Transaction, TransactionOrigin,
+    GetAccount, GetAccountBalance, GetAccountNonces, GetAccountView, GetBlock, GetBlockRange,
+    GetFeeQuote, GetLastBlockId, GetProofsAndRoot, GetPublications, GetRecoveryBinding,
+    GetTransaction, Transaction, TransactionOrigin,
 };
 use sequencer_gossip_actor::protocol::PublishTransaction;
 use wallet::{ExecutionFailureKind, WalletSequencerClient};
@@ -255,29 +255,6 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
             next_base_fee_stor_ceiling: quote.next_base_fee_stor_ceiling,
             max_gas_exec: quote.max_gas_exec,
             max_gas_stor: quote.max_gas_stor,
-        })
-    }
-
-    // Served in-process to the caller's own wallet, so not gated by `dry_run_rpc`, which keeps a
-    // public RPC from running guest code for free.
-    async fn dry_run_public_transaction(
-        &self,
-        tx: common::transaction::LeeTransaction,
-    ) -> Result<wallet::PublicDryRun, Self::Error> {
-        let common::transaction::LeeTransaction::Public(transaction) = tx else {
-            return Err(FfiSequencerClientError::ArgumentError(anyhow::anyhow!(
-                "Only a public transaction can be dry-run; a privacy-preserving one was given"
-            )));
-        };
-        let run = self
-            .0
-            .executor_ref()
-            .ask(DryRunPublicTransaction { transaction })
-            .send()
-            .await?;
-        Ok(wallet::PublicDryRun {
-            cycles: run.cycles,
-            revert_reason: run.revert_reason,
         })
     }
 

@@ -8,11 +8,13 @@ use lee_core::{
     account::{AccountId, Actor, ActorState, Cycles},
     execution_state::{
         ExecutionEnvironment, ExecutionError, Placement, PredictedCrossMessages, PrivatePart,
-        PublicExecutionContext, TransitionView, WholeExecution,
+        PublicExecutionContext, TransactionEntry, TransitionView, WholeExecution,
     },
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
-    program::{MessageBody, ProgramHeader, ReceiveInput, Response, Transition},
+    program::{
+        MessageBody, PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ReceiveInput, Response, Transition,
+    },
     to_frame,
 };
 use risc0_zkvm::{
@@ -20,9 +22,10 @@ use risc0_zkvm::{
 };
 
 use crate::{
-    PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
+    PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID, PublicTransaction,
     error::{InvalidProgramBehaviorError, LeeError},
     program::{DEFAULT_PUBLIC_CYCLE_BUDGET, Program, check_exit_code, transition_journal},
+    validated_state_diff::{catch_program_loader_panic, charged_cycles},
 };
 
 /// Proof of the privacy preserving execution circuit.
@@ -218,6 +221,21 @@ impl ExecutionEnvironment for Simulator<'_> {
         input: &ReceiveInput,
         view: &TransitionView<'_>,
     ) -> Result<Transition, LeeError> {
+        // The loader runs as Rust, as in settlement, and only in a transaction without private
+        // accounts; it reads the declared accounts' loader states.
+        if input.receiver.program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
+            const ABSENT: &ActorState = &ActorState::empty();
+            let states = self.public_actor_states;
+            let (transition, _) = catch_program_loader_panic(|| {
+                program_loader_core::handle_message(input, |account_id| {
+                    let actor = Actor::new(account_id, PROGRAM_LOADER_ACCOUNT_ID);
+                    view.staged_state(actor)
+                        .or_else(|| states.get(&actor))
+                        .unwrap_or(ABSENT)
+                })
+            })?;
+            return Ok(transition);
+        }
         // A private transition is bounded only by what its prover can prove, as when it is proven.
         let runs_privately = view.runs_privately(input.receiver.account_id);
         handle_message_with(self.programs, input, |program| {
@@ -395,7 +413,7 @@ fn claim_bodies(input: &ProvingInput) -> Vec<MessageBody> {
 
 /// Simulates the whole transaction as [`execute_and_prove`] does and returns the cycles its
 /// public transitions metered, for pricing the fee before proving.
-pub fn simulate(
+pub fn simulate_privacy_preserving_transaction(
     input: &ProvingInput,
     simulation: &Simulation,
     programs: &ProgramCatalog,
@@ -410,6 +428,53 @@ pub fn simulate(
         &mut select_promotion,
     )
     .map(|simulated| simulated.cycles_used)
+}
+
+/// Runs a public transaction's action against `simulation`, as settlement charges it.
+///
+/// Returns the cycles it would be charged within `cycle_budget` and, if it fails, why. Its
+/// signatures, nonces and validity windows are not checked.
+pub fn simulate_public_transaction(
+    tx: &PublicTransaction,
+    simulation: &Simulation,
+    programs: &ProgramCatalog,
+    cycle_budget: Cycles,
+) -> (Cycles, Result<(), LeeError>) {
+    let message = tx.message();
+    let mut choose = |_| None;
+    let mut select = |_, _: &MessageBody| false;
+    let mut simulator = Simulator {
+        programs: &programs.programs,
+        public_actor_states: &simulation.public_actor_states,
+        admitted_accounts: simulation.admitted_accounts.as_ref(),
+        recorder: SenderPresentationRecorder {
+            choose: &mut choose,
+            recorded: Vec::new(),
+        },
+        selector: PromotionSelector {
+            select: &mut select,
+            from_public: PromotionSelection::new(message.public_context.promotions.clone()),
+            from_private: PromotionSelection::new(BTreeSet::new()),
+        },
+        cycle_budget,
+        cycles_used: 0,
+    };
+    let root = message.execution.root.clone();
+    let result = if message.public_context.runs_publicly(root.to) {
+        WholeExecution::new(
+            message.public_context.clone(),
+            TransactionEntry::Sync(root),
+            Vec::new(),
+            None,
+            &[],
+        )
+        .map_err(|error| LeeError::InvalidInput(error.to_string()))
+        .and_then(|request| request.execute(&mut simulator).map(drop))
+    } else {
+        Err(LeeError::InvalidInput("Root actor is not declared".into()))
+    };
+    let cycles = charged_cycles(&result, simulator.cycles_used, cycle_budget);
+    (cycles, result)
 }
 
 fn simulate_whole(

@@ -37,11 +37,11 @@ use lee_core::{
     account::{Actor, Nonce},
     execution_state::TransactionEntry,
     native_token::NATIVE_TOKEN_PROGRAM_ID,
-    program::{MessageBody, MessageData, Publication},
+    program::{MessageBody, MessageData, PROGRAM_LOADER_ACCOUNT_ID, Publication},
 };
 use log::warn;
-/// The fee types a [`WalletSequencerClient`] returns.
-pub use sequencer_service_rpc::{FeeStateQuote, PublicDryRun};
+/// The fee quote a [`WalletSequencerClient`] returns.
+pub use sequencer_service_rpc::FeeStateQuote;
 use sequencer_service_rpc::{RpcClient, SequencerClient, SequencerClientBuilder};
 use storage::{Storage, StorageKey, spent_nullifiers::SpentNullifiers};
 use tokio::io::AsyncWriteExt as _;
@@ -286,12 +286,6 @@ pub trait WalletSequencerClient: Clone {
     /// The head fee market, for pricing a transaction's fee.
     async fn get_fee_state(&self) -> Result<sequencer_service_rpc::FeeStateQuote, Self::Error>;
 
-    /// The cycles a public transaction costs on the head state, and why it reverts if it does.
-    async fn dry_run_public_transaction(
-        &self,
-        tx: LeeTransaction,
-    ) -> Result<sequencer_service_rpc::PublicDryRun, Self::Error>;
-
     async fn get_account(&self, account_id: AccountId) -> Result<Option<Account>, Self::Error>;
 
     async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>, Self::Error>;
@@ -373,13 +367,6 @@ impl WalletSequencerClient for SequencerClient {
 
     async fn get_fee_state(&self) -> Result<sequencer_service_rpc::FeeStateQuote, Self::Error> {
         RpcClient::get_fee_state(self).await
-    }
-
-    async fn dry_run_public_transaction(
-        &self,
-        tx: LeeTransaction,
-    ) -> Result<sequencer_service_rpc::PublicDryRun, Self::Error> {
-        RpcClient::dry_run_public_transaction(self, tx).await
     }
 
     async fn get_account(&self, account_id: AccountId) -> Result<Option<Account>, Self::Error> {
@@ -1662,8 +1649,13 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             None => {
                 let (mut present, mut select) = (acc_manager.presenter(None), select.clone());
                 tokio::task::spawn_blocking(move || {
-                    let cycles =
-                        lee::simulate(&input, &simulation, &programs, &mut present, &mut select)?;
+                    let cycles = lee::simulate_privacy_preserving_transaction(
+                        &input,
+                        &simulation,
+                        &programs,
+                        &mut present,
+                        &mut select,
+                    )?;
                     Ok::<_, lee::error::LeeError>((input, simulation, programs, cycles))
                 })
                 .await??
@@ -2100,7 +2092,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
 
         let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
         if self.dry_run {
-            self.report_public_dry_run(tx).await?;
+            self.report_public_dry_run(tx, &acc_manager).await?;
             return Err(ExecutionFailureKind::DryRun);
         }
 
@@ -2110,35 +2102,73 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .map_err(Into::into)
     }
 
-    /// Simulates `tx` on the sequencer and prints what it would cost at the head fee state.
+    /// Simulates `tx` against the fetched states of its accounts and prints what it would cost at
+    /// the head fee state.
     async fn report_public_dry_run(
         &self,
         tx: lee::PublicTransaction,
+        acc_manager: &account_manager::AccountManager,
     ) -> Result<(), ExecutionFailureKind> {
         let fee = tx
             .message()
             .execution
             .fee
             .expect("the wallet always declares a fee");
+        // Every program the transaction may call is a declared actor's; the native token and the
+        // loader run as protocol code.
+        let mut programs = ProgramCatalog::default();
+        let declared: BTreeSet<AccountId> = tx
+            .message()
+            .public_context
+            .actors
+            .iter()
+            .map(|actor| actor.program_account_id)
+            .collect();
+        for program in declared {
+            if program != NATIVE_TOKEN_PROGRAM_ID
+                && program != PROGRAM_LOADER_ACCOUNT_ID
+                && let Some(deployed) = ProgramLoader(self)
+                    .program(program)
+                    .await
+                    .map_err(ExecutionFailureKind::SequencerError)?
+            {
+                programs.programs.insert(
+                    program,
+                    Dependency {
+                        program: deployed,
+                        kind: ProgramKind::Disclosed,
+                    },
+                );
+            }
+        }
+        let simulation = Simulation {
+            public_actor_states: acc_manager.public_actor_states(),
+            admitted_accounts: Some(acc_manager.admitted_accounts()),
+        };
+        let budget = fee.gas_limit.min(fee_core::market::MAX_GAS_EXEC);
         // Storage gas is the wire size settlement sees: the whole `LeeTransaction`.
-        let tx = LeeTransaction::Public(tx);
         let data_bytes = u128::try_from(
-            borsh::to_vec(&tx)
+            borsh::to_vec(&LeeTransaction::Public(tx.clone()))
                 .map_err(|err| ExecutionFailureKind::SignError(err.into()))?
                 .len(),
         )
         .expect("transaction size fits u128");
-        let run = self
-            .sequencer_client
-            .dry_run_public_transaction(tx)
-            .await
-            .map_err(Into::into)?;
+        let (cycles, result) = tokio::task::spawn_blocking(move || {
+            lee::simulate_public_transaction(&tx, &simulation, &programs, budget)
+        })
+        .await?;
+        let revert_reason = match result {
+            Ok(()) => None,
+            Err(err) if err.is_chargeable() => Some(err.to_string()),
+            // Settlement would reject it outright rather than charge it.
+            Err(err) => return Err(ExecutionFailureKind::TransactionBuildError(err)),
+        };
         let quote = self
             .sequencer_client
             .get_fee_state()
             .await
             .map_err(Into::into)?;
-        let actual_fee = u128::from(run.cycles)
+        let actual_fee = u128::from(cycles)
             .saturating_mul(u128::from(quote.base_fee_exec))
             .saturating_add(data_bytes.saturating_mul(u128::from(quote.base_fee_stor)))
             .saturating_add(u128::from(fee.tip));
@@ -2146,14 +2176,14 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         println!("Dry run: nothing sent");
         println!("  fee payer:        {}", fee.payer);
         println!("  declared gas:     {}", fee.gas_limit);
-        println!("  metered cycles:   {}", run.cycles);
+        println!("  metered cycles:   {cycles}");
         println!("  wire bytes:       {data_bytes}");
         println!(
             "  base fees:        exec {} / stor {} (height {})",
             quote.base_fee_exec, quote.base_fee_stor, quote.height
         );
         println!("  fee at head:      {actual_fee} (tip {})", fee.tip);
-        match run.revert_reason {
+        match revert_reason {
             Some(reason) => println!("  action REVERTS:   {reason} (fee is still charged)"),
             None => println!("  action:           applies"),
         }

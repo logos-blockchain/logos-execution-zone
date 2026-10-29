@@ -17,18 +17,13 @@ use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
     CommitmentSetDigest, CrossZoneDeadLetter, CrossZoneDeadLetterReport,
     CrossZoneDeadLetterRequeue, EncryptedNote, FeeStateQuote, HashType, MembershipProof, Nonce,
-    PageLimit, ProgramId, PublicDryRun, Publication,
+    PageLimit, ProgramId, Publication,
 };
 
 pub struct Service<E: ExecutorActorTrait> {
     executor_ref: ActorRef<E>,
     max_block_size_rx: MaxBlockSizeReceiver,
     gossip: Option<Recipient<PublishTransaction>>,
-    /// Whether `dryRunPublicTransaction` is served.
-    ///
-    /// Each call executes guest code for free, so we prefer to disable it
-    /// for public services, and use it locally only.
-    dry_run_rpc: bool,
 }
 
 impl<E: ExecutorActorTrait> Service<E> {
@@ -36,7 +31,6 @@ impl<E: ExecutorActorTrait> Service<E> {
         executor_ref: ActorRef<E>,
         max_block_size_rx: MaxBlockSizeReceiver,
         gossip: Option<Recipient<PublishTransaction>>,
-        dry_run_rpc: bool,
     ) -> Self {
         sequencer_rpc_server_actor_metrics::init();
 
@@ -44,7 +38,6 @@ impl<E: ExecutorActorTrait> Service<E> {
             executor_ref,
             max_block_size_rx,
             gossip,
-            dry_run_rpc,
         }
     }
 }
@@ -139,36 +132,6 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             .await
             .map(map_fee_state_quote)
             .map_err(map_infallible_error)
-    }
-
-    async fn dry_run_public_transaction(
-        &self,
-        tx: LeeTransaction,
-    ) -> Result<PublicDryRun, ErrorObjectOwned> {
-        if !self.dry_run_rpc {
-            return Err(ErrorObjectOwned::owned(
-                sequencer_service_rpc::DRY_RUN_DISABLED_ERROR_CODE,
-                "This sequencer does not serve dry runs",
-                None::<()>,
-            ));
-        }
-        // A privacy-preserving transaction is priced by the wallet's local simulation, before
-        // its proof exists.
-        let LeeTransaction::Public(tx) = tx else {
-            return Err(ErrorObjectOwned::owned(
-                ErrorCode::InvalidParams.code(),
-                "Only a public transaction can be dry-run; a privacy-preserving one was given",
-                None::<()>,
-            ));
-        };
-        self.executor_ref
-            .ask(sequencer_executor_actor::protocol::DryRunPublicTransaction { transaction: tx })
-            .await
-            .map(|run| PublicDryRun {
-                cycles: run.cycles,
-                revert_reason: run.revert_reason,
-            })
-            .map_err(map_executor_error)
     }
 
     async fn check_health(&self) -> Result<(), ErrorObjectOwned> {
@@ -415,8 +378,7 @@ fn map_executor_error<M>(
                     None::<()>,
                 )
             }
-            invalid @ (sequencer_executor_actor::error::Error::IncorrectFee(_)
-            | sequencer_executor_actor::error::Error::PublicDryRunFailed(_)) => {
+            invalid @ sequencer_executor_actor::error::Error::IncorrectFee(_) => {
                 // With its cause, which the sender is shown.
                 let message = std::error::Error::source(&invalid).map_or_else(
                     || invalid.to_string(),

@@ -4,12 +4,12 @@ use jsonrpsee::proc_macros::rpc;
 pub use jsonrpsee::types::ErrorObjectOwned;
 #[cfg(feature = "client")]
 pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
+pub use sequencer_service_protocol::FeeStateQuote;
 use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
     CommitmentSetDigest, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, EncryptedNote,
     HashType, LeeTransaction, MembershipProof, Nonce, PageLimit, ProgramId, Publication,
 };
-pub use sequencer_service_protocol::{FeeStateQuote, PublicDryRun};
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
 compile_error!("At least one of `server` or `client` features must be enabled.");
@@ -20,9 +20,6 @@ pub const MEMPOOL_IS_FULL_ERROR_CODE: i32 = -31900;
 /// Error code of a privacy-preserving transaction turned away because its fee reserve is below
 /// the fee at the head: priced again off a fresh quote, it may pass.
 pub const PRIVATE_FEE_BELOW_HEAD_ERROR_CODE: i32 = -31901;
-
-/// Error code of a dry run asked of a sequencer that does not serve dry runs (`dry_run_rpc` off).
-pub const DRY_RUN_DISABLED_ERROR_CODE: i32 = -31902;
 
 /// Type alias for RPC client. Only available when `client` feature is enabled.
 ///
@@ -54,14 +51,6 @@ pub trait Rpc {
     /// can move within, for sizing `max_fee` at submission time.
     #[method(name = "getFeeState")]
     async fn get_fee_state(&self) -> Result<FeeStateQuote, ErrorObjectOwned>;
-
-    /// The cycles a privacy-preserving transaction's deferred public effects
-    /// (from `lee::dry_run`) cost on the head state, for pricing its fee.
-    #[method(name = "dryRunPublicTransaction")]
-    async fn dry_run_public_transaction(
-        &self,
-        tx: LeeTransaction,
-    ) -> Result<PublicDryRun, ErrorObjectOwned>;
 
     // TODO: expand healthcheck response into some kind of report
     #[method(name = "checkHealth")]

@@ -32,19 +32,6 @@ pub struct Transaction {
 
 pub struct GetFeeQuote;
 
-/// Runs a public transaction against the head state and applies nothing, reporting the cycles it
-/// used and why it reverted, if it did: a wallet sizes its gas limit and tip from it.
-pub struct DryRunPublicTransaction {
-    pub transaction: lee::PublicTransaction,
-}
-
-#[derive(Reply)]
-pub struct PublicDryRun {
-    pub cycles: u64,
-    /// The failure's message, when the action failed in a way settlement charges for.
-    pub revert_reason: Option<String>,
-}
-
 /// The fee market priced off the head state, for wallets sizing `max_fee`.
 #[derive(Reply)]
 pub struct FeeStateQuote {

@@ -175,8 +175,6 @@ pub fn sequencer_config(
         channel_signing_key_file: None,
         funding_public_key: None,
         wait_for_channel: false,
-        // Integration tests price their transactions against the sequencer under test.
-        dry_run_rpc: true,
     })
 }
 

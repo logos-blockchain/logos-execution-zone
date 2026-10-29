@@ -36,9 +36,6 @@ pub enum Error {
         "Privacy-preserving fee reserve {reserve} is below the {required} required at the head"
     )]
     PrivateFeeBelowHead { required: u128, reserve: u128 },
-
-    #[error("The public transaction would be rejected at settlement")]
-    PublicDryRunFailed(#[source] anyhow::Error),
 }
 
 impl<M> From<kameo::error::SendError<M, sequencer_storage_actor::error::Error>> for Error {

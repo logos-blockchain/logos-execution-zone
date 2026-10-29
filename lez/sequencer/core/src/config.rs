@@ -133,10 +133,6 @@ pub struct SequencerConfig {
     /// This is a "per-node" setting, and should not be read from a shared config.
     #[serde(skip)]
     pub wait_for_channel: bool,
-    /// Serve the `dryRunPublicTransaction` RPC. Each call executes guest code
-    /// for free, so enable it only on a sequencer that serves local wallets.
-    #[serde(default)]
-    pub dry_run_rpc: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
