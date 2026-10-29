@@ -3,42 +3,57 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{Timestamp, account::AccountId};
 
-pub const CLOCK_01_PROGRAM_ACCOUNT_ID: AccountId =
-    AccountId::new(*b"/LEZ/ClockProgramAccount/0000001");
-
-pub const CLOCK_10_PROGRAM_ACCOUNT_ID: AccountId =
-    AccountId::new(*b"/LEZ/ClockProgramAccount/0000010");
-
-pub const CLOCK_50_PROGRAM_ACCOUNT_ID: AccountId =
-    AccountId::new(*b"/LEZ/ClockProgramAccount/0000050");
-
-/// All clock program account IDs, from the every-block one to the coarsest.
-pub const CLOCK_PROGRAM_ACCOUNT_IDS: [AccountId; 3] = [
-    CLOCK_01_PROGRAM_ACCOUNT_ID,
-    CLOCK_10_PROGRAM_ACCOUNT_ID,
-    CLOCK_50_PROGRAM_ACCOUNT_ID,
-];
+pub const CLOCK_PROGRAM_ACCOUNT_ID: AccountId =
+    AccountId::new(*b"/LEZ/ClockProgramAccount/0000000");
 
 pub const CLOCK_NAME: [u8; 5] = *b"clock";
 
-/// The message type for the Clock Program. The sequencer ticks the every-block account with the
-/// current block timestamp and block ID; that account records it into the coarser ones.
+/// The message type for the Clock Program. The sequencer ticks the clock as the last transaction
+/// of every block, so every other transaction sees the previous block's ID and timestamp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Message {
     Tick {
         timestamp: Timestamp,
         block_id: u64,
     },
-    Record(ClockAccountData),
-    /// Read-only: any clock account may answer it, asserting its own timestamp falls in
-    /// `[at_least, at_most]` (`at_least == at_most` pins an exact timestamp).
+    /// Read-only: rounds the clock's timestamp down to a multiple of `granularity`, and fails the
+    /// transaction unless the **rounded** timestamp is between `at_least` and `at_most`, both
+    /// included.
+    ///
+    /// Example: with a granularity of 60,000 ms (one minute) and the clock at 125,000 ms, the
+    /// rounded timestamp is 120,000. `at_least: 60_000, at_most: 180_000` passes, but
+    /// `at_least: 125_000, at_most: 180_000` fails: the clock is in range, its rounded timestamp
+    /// is not.
     AssertTimestamp {
+        /// The rounding step in milliseconds, at least 1; a passing check keeps passing at least
+        /// until the step ends.
+        granularity: Timestamp,
+        /// The lowest accepted **rounded** timestamp, in milliseconds.
         at_least: Timestamp,
+        /// The highest accepted **rounded** timestamp, in milliseconds, so the clock may be up to
+        /// `granularity - 1` ms past it.
         at_most: Timestamp,
+    },
+    /// Read-only: rounds the clock's block ID down to a multiple of `granularity`, and fails the
+    /// transaction unless the **rounded** block ID is between `at_least` and `at_most`, both
+    /// included.
+    ///
+    /// Example: with a granularity of 50 and the clock at block 57, the rounded block ID is 50.
+    /// `at_least: 50, at_most: 100` passes, but `at_least: 55, at_most: 100` fails: block 57 is in
+    /// range, its rounded block ID is not.
+    AssertBlockId {
+        /// The rounding step in blocks, at least 1; a passing check keeps passing at least until
+        /// the step ends.
+        granularity: u64,
+        /// The lowest accepted **rounded** block ID.
+        at_least: u64,
+        /// The highest accepted **rounded** block ID, so the clock may be up to `granularity - 1`
+        /// blocks past it.
+        at_most: u64,
     },
 }
 
-/// The data stored in a clock account.
+/// The data stored in the clock account.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ClockAccountData {
     pub block_id: u64,

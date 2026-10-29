@@ -112,9 +112,9 @@ pub fn finalize_unstake_candidates(
         .collect()
 }
 
-/// The block id the per-block clock account holds, or `None` if it does not decode.
+/// The block id the clock account holds, or `None` if it does not decode.
 pub(crate) fn clock_block_id(state: &lee::V03State) -> Option<u64> {
-    let clock = state.get_account_by_id(system_accounts::clock_account_ids()[0]);
+    let clock = state.get_account_by_id(system_accounts::clock_account_id());
     borsh::from_slice::<clock_core::ClockAccountData>(
         clock.data.actor_state(programs::clock_account_id()),
     )
@@ -206,7 +206,7 @@ mod tests {
             .to_bytes()
             .into(),
         );
-        state_with(stakes).with_public_accounts([(system_accounts::clock_account_ids()[0], clock)])
+        state_with(stakes).with_public_accounts([(system_accounts::clock_account_id(), clock)])
     }
 
     /// LEZ state holding the config account.

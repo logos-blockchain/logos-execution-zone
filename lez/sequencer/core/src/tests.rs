@@ -2216,54 +2216,6 @@ async fn produce_block_with_correct_prev_meta_after_restart() {
 }
 
 #[tokio::test]
-async fn transactions_touching_clock_account_are_dropped_from_block() {
-    let (mut sequencer, mempool_handle) = common_setup().await;
-
-    // Canonical clock invocation and a crafted variant with a different timestamp — both must
-    // be dropped because their diffs touch the clock accounts.
-    let crafted_clock_tx = {
-        let clock_program_id = programs::clock_account_id();
-        let clock_actors =
-            system_accounts::clock_account_ids().map(|id| Actor::new(id, clock_program_id));
-        let message = lee::public_transaction::Message::try_new(
-            clock_actors[0],
-            clock_actors.to_vec(),
-            BTreeMap::new(),
-            42_u64,
-        )
-        .unwrap();
-        LeeTransaction::Public(lee::PublicTransaction::new(
-            message,
-            lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
-        ))
-    };
-    mempool_handle
-        .push((
-            TransactionOrigin::User,
-            LeeTransaction::Public(clock_invocation(1, 0)),
-        ))
-        .await
-        .unwrap();
-    mempool_handle
-        .push((TransactionOrigin::User, crafted_clock_tx))
-        .await
-        .unwrap();
-    sequencer.run_production_turn().await.unwrap();
-
-    let block = sequencer
-        .storage_ref
-        .ask(GetBlock {
-            block_id: sequencer.chain_height().await,
-        })
-        .await
-        .unwrap()
-        .unwrap();
-
-    // Both transactions were dropped. Only the system-appended fee and clock txs remain.
-    assert_block_tail(&block, &[]);
-}
-
-#[tokio::test]
 async fn user_tx_that_chain_calls_clock_is_dropped() {
     let (mut sequencer, mempool_handle) = common_setup().await;
 
@@ -2337,62 +2289,64 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
 
-    // Build a user transaction that invokes `scripted`, which in turn sends the clock program
-    // a tick. The sequencer should detect that the resulting state diff modifies clock accounts
-    // and drop the transaction.
-    let clock_program_id = programs::clock_account_id();
-    let clock_actors =
-        system_accounts::clock_account_ids().map(|id| Actor::new(id, clock_program_id));
-    let timestamp: u64 = 0;
-    let block_id = sequencer.chain_height().await + 1;
+    // A funded payer calls `scripted`, which sends `clock_message` to the clock.
+    let clock = system_accounts::clock_actor();
+    let caller = Actor::new(payer.account_id, scripted_id);
+    let user_tx = |clock_message: &clock_core::Message| {
+        let message = lee::public_transaction::Message::try_new_with_fees(
+            caller,
+            vec![caller, clock],
+            signer_nonces(&[&payer.pub_sign_key], vec![lee_core::account::Nonce(2)]),
+            Script::default().send_sync(clock, clock_message),
+            common::test_utils::test_fee_declaration(payer.account_id),
+        )
+        .expect("Script message should always be serializable");
+        let witness_set =
+            lee::public_transaction::WitnessSet::for_message(&message, &[&payer.pub_sign_key]);
+        LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
+    };
 
-    let caller = Actor::new(AccountId::new([212; 32]), scripted_id);
-    let mut public_actors = vec![caller];
-    public_actors.extend(clock_actors);
-    let message = lee::public_transaction::Message::try_new(
-        caller,
-        public_actors,
-        BTreeMap::new(), // no signers
-        Script::default().send_sync(
-            clock_actors[0],
-            &clock_core::Message::Tick {
-                timestamp,
-                block_id,
-            },
-        ),
-    )
-    .unwrap();
-    let user_tx = LeeTransaction::Public(lee::PublicTransaction::new(
-        message,
-        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
-    ));
-
+    // A tick for the block being produced passes the clock's own check, so only the
+    // restricted-account guard can drop it.
+    let tick_block_id = sequencer.chain_height().await + 1;
+    let tick = user_tx(&clock_core::Message::Tick {
+        timestamp: 0,
+        block_id: tick_block_id,
+    });
     mempool_handle
-        .push((TransactionOrigin::User, user_tx))
+        .push((TransactionOrigin::User, tick))
         .await
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
-
-    let block = sequencer
-        .storage_ref
-        .ask(GetBlock {
-            block_id: sequencer.chain_height().await,
-        })
+    let block = block_at(&sequencer, tick_block_id)
         .await
-        .unwrap()
-        .unwrap();
-
-    // The user tx must have been dropped; only the mandatory fee and clock invocations remain.
+        .expect("The turn should produce the tick's block");
     assert_block_tail(&block, &[]);
+
+    // The same transaction with a read-only message is included, so the setup is sound.
+    let assert = user_tx(&clock_core::Message::AssertBlockId {
+        granularity: 1,
+        at_least: 0,
+        at_most: u64::MAX,
+    });
+    mempool_handle
+        .push((TransactionOrigin::User, assert.clone()))
+        .await
+        .unwrap();
+    sequencer.run_production_turn().await.unwrap();
+    let block = block_at(&sequencer, tick_block_id + 1)
+        .await
+        .expect("The turn should produce a block");
+    assert_block_tail(&block, &[assert]);
 }
 
 #[tokio::test]
 async fn block_production_aborts_when_clock_account_data_is_corrupted() {
     let (mut sequencer, mempool_handle) = common_setup().await;
 
-    // Corrupt the clock 01 account's clock actor state so deserialization fails.
+    // Corrupt the clock account's clock actor state so deserialization fails.
     let clock_program_id = programs::clock_account_id();
-    let clock_account_id = system_accounts::clock_account_ids()[0];
+    let clock_account_id = system_accounts::clock_account_id();
     let mut corrupted = sequencer
         .with_state(|s| s.get_account_by_id(clock_account_id))
         .await;
@@ -2421,18 +2375,19 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
     );
 }
 
-/// Builds a [`V03State`] with the clock program and `program` registered, the three clock
-/// accounts initialized, and the clock advanced to `clock_timestamp` so that reads of the
-/// `CLOCK_01` account observe it.
+/// Builds a [`V03State`] with the clock program and `program` registered, the clock account
+/// initialized, and the clock advanced to `clock_timestamp` so that reads of the clock
+/// observe it.
 fn state_with_clock_and_program(program: Program, clock_timestamp: u64) -> V03State {
     let program_id = AccountId::from_builtin_program(program.id());
     let mut state = V03State::new().with_named_programs([
         (programs::clock_account_id(), programs::clock()),
         (program_id, program),
     ]);
-    for clock_id in system_accounts::clock_account_ids() {
-        state.force_insert_account(clock_id, system_accounts::clock_account());
-    }
+    state.force_insert_account(
+        system_accounts::clock_account_id(),
+        system_accounts::clock_account(),
+    );
     state
         .transition_from_public_transaction(
             &clock_invocation(1, clock_timestamp),
@@ -2448,18 +2403,16 @@ fn time_locked_transfer_transaction(
     from_key: &PrivateKey,
     from_nonce: u128,
     to: AccountId,
-    clock_account_id: AccountId,
     amount: u128,
     deadline: u64,
 ) -> PublicTransaction {
     let program_id = AccountId::from_builtin_program(test_programs::time_locked_transfer().id());
-    let clock_program_id = programs::clock_account_id();
     let payer = Actor::new(from, program_id);
     let message = lee::public_transaction::Message::try_new(
         payer,
         vec![
             payer,
-            Actor::new(clock_account_id, clock_program_id),
+            system_accounts::clock_actor(),
             Actor::native_balance(from),
             Actor::native_balance(to),
         ],
@@ -2487,15 +2440,7 @@ fn time_locked_transfer_succeeds_when_deadline_has_passed() {
     // Deadline is in the past relative to the clock, so the transfer is unlocked.
     let deadline = 0;
 
-    let tx = time_locked_transfer_transaction(
-        sender_id,
-        &key1,
-        0,
-        recipient_id,
-        system_accounts::clock_account_ids()[0],
-        amount,
-        deadline,
-    );
+    let tx = time_locked_transfer_transaction(sender_id, &key1, 0, recipient_id, amount, deadline);
 
     state
         .transition_from_public_transaction(&tx, 2, clock_timestamp)
@@ -2535,15 +2480,7 @@ fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
     // Far-future deadline: the program panics because the clock has not reached it.
     let deadline = u64::MAX;
 
-    let tx = time_locked_transfer_transaction(
-        sender_id,
-        &key1,
-        0,
-        recipient_id,
-        system_accounts::clock_account_ids()[0],
-        amount,
-        deadline,
-    );
+    let tx = time_locked_transfer_transaction(sender_id, &key1, 0, recipient_id, amount, deadline);
 
     let result = state.transition_from_public_transaction(&tx, 2, clock_timestamp);
 
@@ -2570,6 +2507,85 @@ fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
     );
 }
 
+/// Whether `message` passes when the `scripted` guest sends it to a clock holding `clock`.
+fn clock_assert_from_guest_passes(
+    clock: clock_core::ClockAccountData,
+    message: &clock_core::Message,
+) -> bool {
+    let scripted = test_programs::scripted();
+    let scripted_id = AccountId::from_builtin_program(scripted.id());
+    let mut state = V03State::new().with_named_programs([
+        (programs::clock_account_id(), programs::clock()),
+        (scripted_id, scripted),
+    ]);
+    state.force_insert_account(
+        system_accounts::clock_account_id(),
+        Account::default().with_actor_state(programs::clock_account_id(), clock.to_bytes().into()),
+    );
+    let caller = Actor::new(AccountId::new([7; 32]), scripted_id);
+    state.force_insert_account(caller.account_id, Account::default());
+    let clock_actor = system_accounts::clock_actor();
+    let tx_message = lee::public_transaction::Message::try_new(
+        caller,
+        vec![caller, clock_actor],
+        BTreeMap::new(),
+        Script::default().send_sync(clock_actor, message),
+    )
+    .unwrap();
+    let tx = PublicTransaction::new(
+        tx_message,
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+    );
+    state
+        .transition_from_public_transaction(&tx, 100, clock.timestamp)
+        .is_ok()
+}
+
+#[test]
+fn a_coarse_timestamp_assert_from_a_guest_checks_the_rounded_timestamp() {
+    let clock = clock_core::ClockAccountData {
+        block_id: 7,
+        timestamp: 125_400,
+    };
+    let assert = |at_least, at_most| clock_core::Message::AssertTimestamp {
+        granularity: 1_000,
+        at_least,
+        at_most,
+    };
+
+    assert!(clock_assert_from_guest_passes(
+        clock,
+        &assert(125_000, 125_000)
+    ));
+    // The clock is 400 ms past `at_most`, its rounded timestamp is not.
+    assert!(clock_assert_from_guest_passes(clock, &assert(0, 125_000)));
+    assert!(!clock_assert_from_guest_passes(
+        clock,
+        &assert(125_400, u64::MAX)
+    ));
+}
+
+#[test]
+fn a_coarse_block_id_assert_from_a_guest_checks_the_rounded_block_id() {
+    let clock = clock_core::ClockAccountData {
+        block_id: 57,
+        timestamp: 0,
+    };
+    let assert = |at_least, at_most| clock_core::Message::AssertBlockId {
+        granularity: 50,
+        at_least,
+        at_most,
+    };
+
+    assert!(clock_assert_from_guest_passes(clock, &assert(50, 50)));
+    // The clock is 7 blocks past `at_most`, its rounded block id is not.
+    assert!(clock_assert_from_guest_passes(clock, &assert(0, 50)));
+    assert!(!clock_assert_from_guest_passes(
+        clock,
+        &assert(55, u64::MAX)
+    ));
+}
+
 fn cooldown_data(cooldown_ms: u64, last_run_timestamp: u64) -> Vec<u8> {
     let mut buf = Vec::with_capacity(16);
     buf.extend_from_slice(&cooldown_ms.to_le_bytes());
@@ -2577,17 +2593,12 @@ fn cooldown_data(cooldown_ms: u64, last_run_timestamp: u64) -> Vec<u8> {
     buf
 }
 
-fn cooldown_transaction(
-    state_id: AccountId,
-    clock_account_id: AccountId,
-    timestamp: u64,
-) -> PublicTransaction {
+fn cooldown_transaction(state_id: AccountId, timestamp: u64) -> PublicTransaction {
     let program_id = AccountId::from_builtin_program(test_programs::cooldown().id());
-    let clock_program_id = programs::clock_account_id();
     let state = Actor::new(state_id, program_id);
     let message = lee::public_transaction::Message::try_new(
         state,
-        vec![state, Actor::new(clock_account_id, clock_program_id)],
+        vec![state, system_accounts::clock_actor()],
         BTreeMap::new(),
         timestamp,
     )
@@ -2617,11 +2628,7 @@ fn cooldown_opens_after_the_cooldown_elapses() {
         ),
     );
 
-    let tx = cooldown_transaction(
-        state_id,
-        system_accounts::clock_account_ids()[0],
-        block_timestamp,
-    );
+    let tx = cooldown_transaction(state_id, block_timestamp);
 
     state
         .transition_from_public_transaction(&tx, 2, block_timestamp)
@@ -2659,11 +2666,7 @@ fn cooldown_rejects_before_the_cooldown_elapses() {
         ),
     );
 
-    let tx = cooldown_transaction(
-        state_id,
-        system_accounts::clock_account_ids()[0],
-        block_timestamp,
-    );
+    let tx = cooldown_transaction(state_id, block_timestamp);
 
     let result = state.transition_from_public_transaction(&tx, 2, block_timestamp);
 

@@ -166,11 +166,10 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
             system_accounts::bridge_account_id(),
             system_accounts::bridge_account(),
         )])
-        .chain(
-            system_accounts::clock_account_ids()
-                .into_iter()
-                .map(|clock_id| (clock_id, system_accounts::clock_account())),
-        )
+        .chain([(
+            system_accounts::clock_account_id(),
+            system_accounts::clock_account(),
+        )])
         .chain([(
             system_accounts::sequencer_stake_config_account_id(),
             system_accounts::sequencer_stake_config_account(None, None),
