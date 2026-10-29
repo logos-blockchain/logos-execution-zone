@@ -8,11 +8,13 @@ use lee_core::{
     account::{AccountId, Actor, ActorState, Cycles},
     execution_state::{
         ExecutionEnvironment, ExecutionError, Placement, PredictedCrossMessages, PrivatePart,
-        PublicExecutionContext, TransitionView, WholeExecution,
+        PublicExecutionContext, TransactionEntry, TransitionView, WholeExecution,
     },
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
-    program::{MessageBody, ProgramHeader, ReceiveInput, Response, Transition},
+    program::{
+        MessageBody, PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ReceiveInput, Response, Transition,
+    },
     to_frame,
 };
 use risc0_zkvm::{
@@ -20,9 +22,10 @@ use risc0_zkvm::{
 };
 
 use crate::{
-    PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
+    PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID, PublicTransaction,
     error::{InvalidProgramBehaviorError, LeeError},
     program::{DEFAULT_PUBLIC_CYCLE_BUDGET, Program, check_exit_code, transition_journal},
+    validated_state_diff::{catch_program_loader_panic, charged_cycles},
 };
 
 /// Proof of the privacy preserving execution circuit.
@@ -148,7 +151,7 @@ impl ProgramCatalog {
 }
 
 /// Public states assumed for simulation purposes of a private part of a transaction.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Simulation {
     pub public_actor_states: HashMap<Actor, ActorState>,
     /// The public accounts settlement admits, or `None` to admit every one.
@@ -218,6 +221,21 @@ impl ExecutionEnvironment for Simulator<'_> {
         input: &ReceiveInput,
         view: &TransitionView<'_>,
     ) -> Result<Transition, LeeError> {
+        // The loader runs as Rust, as in settlement, and only in a transaction without private
+        // accounts; it reads the declared accounts' loader states.
+        if input.receiver.program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
+            const ABSENT: &ActorState = &ActorState::empty();
+            let states = self.public_actor_states;
+            let (transition, _) = catch_program_loader_panic(|| {
+                program_loader_core::handle_message(input, |account_id| {
+                    let actor = Actor::new(account_id, PROGRAM_LOADER_ACCOUNT_ID);
+                    view.staged_state(actor)
+                        .or_else(|| states.get(&actor))
+                        .unwrap_or(ABSENT)
+                })
+            })?;
+            return Ok(transition);
+        }
         // A private transition is bounded only by what its prover can prove, as when it is proven.
         let runs_privately = view.runs_privately(input.receiver.account_id);
         handle_message_with(self.programs, input, |program| {
@@ -267,6 +285,15 @@ impl ExecutionEnvironment for Simulator<'_> {
         }
         Ok(selected)
     }
+}
+
+/// What a whole simulation derives for the prover.
+struct Simulated {
+    predicted_cross_messages: PredictedCrossMessages,
+    public_promotions: BTreeSet<u64>,
+    private_promotions: BTreeSet<u64>,
+    presented: Vec<SenderPresentation>,
+    cycles_used: Cycles,
 }
 
 /// The prover handling the generation of the proof of a private part of a transaction.
@@ -348,17 +375,126 @@ pub fn execute_and_prove(
     mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
     mut choose_seal: impl FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
+    let Simulated {
+        predicted_cross_messages,
+        public_promotions,
+        private_promotions,
+        presented,
+        cycles_used: _,
+    } = simulate_whole(
+        &input,
+        simulation,
+        programs,
+        &mut |sender| Some(present_sender(sender)),
+        &mut select_promotion,
+    )?;
+    input.public_context.promotions = public_promotions;
+    input.private_promotions = private_promotions;
+    let recorded = input.private_promotions.clone();
+    let mut presented = presented.into_iter();
+    // Given the simulated outputs, use them to prove the private part of the transaction.
+    prove(
+        input,
+        predicted_cross_messages,
+        programs,
+        &mut |_| presented.next(),
+        &mut |index, _| recorded.contains(&index),
+        &mut choose_seal,
+    )
+}
+
+fn claim_bodies(input: &ProvingInput) -> Vec<MessageBody> {
+    input
+        .claims
+        .iter()
+        .map(|witness| witness.body.clone())
+        .collect()
+}
+
+/// Simulates the whole transaction as [`execute_and_prove`] does and returns the cycles its
+/// public transitions metered, for pricing the fee before proving.
+pub fn simulate_privacy_preserving_transaction(
+    input: &ProvingInput,
+    simulation: &Simulation,
+    programs: &ProgramCatalog,
+    mut present_sender: impl FnMut(Actor) -> SenderPresentation,
+    mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
+) -> Result<Cycles, LeeError> {
+    simulate_whole(
+        input,
+        simulation,
+        programs,
+        &mut |sender| Some(present_sender(sender)),
+        &mut select_promotion,
+    )
+    .map(|simulated| simulated.cycles_used)
+}
+
+/// Runs a public transaction's action against `simulation`, as settlement charges it.
+///
+/// Returns the cycles it would be charged within `cycle_budget` and, if it fails, why. Its
+/// signatures, nonces and validity windows are not checked.
+pub fn simulate_public_transaction(
+    tx: &PublicTransaction,
+    simulation: &Simulation,
+    programs: &ProgramCatalog,
+    cycle_budget: Cycles,
+) -> (Cycles, Result<(), LeeError>) {
+    let message = tx.message();
+    let mut choose = |_| None;
+    let mut select = |_, _: &MessageBody| false;
+    let mut simulator = Simulator {
+        programs: &programs.programs,
+        public_actor_states: &simulation.public_actor_states,
+        admitted_accounts: simulation.admitted_accounts.as_ref(),
+        recorder: SenderPresentationRecorder {
+            choose: &mut choose,
+            recorded: Vec::new(),
+        },
+        selector: PromotionSelector {
+            select: &mut select,
+            from_public: PromotionSelection::new(message.public_context.promotions.clone()),
+            from_private: PromotionSelection::new(BTreeSet::new()),
+        },
+        cycle_budget,
+        cycles_used: 0,
+    };
+    let root = message.execution.root.clone();
+    let result = if message.public_context.runs_publicly(root.to) {
+        WholeExecution::new(
+            message.public_context.clone(),
+            TransactionEntry::Sync(root),
+            Vec::new(),
+            None,
+            &[],
+        )
+        .map_err(|error| LeeError::InvalidInput(error.to_string()))
+        .and_then(|request| request.execute(&mut simulator).map(drop))
+    } else {
+        Err(LeeError::InvalidInput("Root actor is not declared".into()))
+    };
+    let cycles = charged_cycles(&result, simulator.cycles_used, cycle_budget);
+    (cycles, result)
+}
+
+fn simulate_whole(
+    input: &ProvingInput,
+    simulation: &Simulation,
+    programs: &ProgramCatalog,
+    choose: &mut dyn FnMut(Actor) -> Option<SenderPresentation>,
+    select: &mut dyn FnMut(Placement, &MessageBody) -> bool,
+) -> Result<Simulated, LeeError> {
     // Build a simulator to generate the parameters to generate the proof with.
     let mut simulator = Simulator {
         programs: &programs.programs,
         public_actor_states: &simulation.public_actor_states,
         admitted_accounts: simulation.admitted_accounts.as_ref(),
         recorder: SenderPresentationRecorder {
-            choose: &mut |sender| Some(present_sender(sender)),
+            choose,
             recorded: Vec::new(),
         },
         selector: PromotionSelector {
-            select: &mut select_promotion,
+            select,
             from_public: PromotionSelection::new(input.public_context.promotions.clone()),
             from_private: PromotionSelection::new(input.private_promotions.clone()),
         },
@@ -371,26 +507,25 @@ pub fn execute_and_prove(
     let predicted_cross_messages = WholeExecution::new(
         input.public_context.clone(),
         input.root.clone().map(|witness| witness.body),
+        claim_bodies(input),
+        input.fee,
         &input.private_witnesses,
     )?
     .execute(&mut simulator)?
     .predicted_cross_messages;
     let Simulator {
-        recorder, selector, ..
+        recorder,
+        selector,
+        cycles_used,
+        ..
     } = simulator;
-    input.public_context.promotions = selector.from_public.finish()?;
-    input.private_promotions = selector.from_private.finish()?;
-    let recorded = input.private_promotions.clone();
-    let mut presented = recorder.recorded.into_iter();
-    // Given the simulated outputs, use them to prove the private part of the transaction.
-    prove(
-        input,
+    Ok(Simulated {
         predicted_cross_messages,
-        programs,
-        &mut |_| presented.next(),
-        &mut |index, _| recorded.contains(&index),
-        &mut choose_seal,
-    )
+        public_promotions: selector.from_public.finish()?,
+        private_promotions: selector.from_private.finish()?,
+        presented: recorder.recorded,
+        cycles_used,
+    })
 }
 
 /// Like [`execute_and_prove`], but under the given predicted cross messages and the promotions
@@ -400,12 +535,16 @@ pub fn execute_and_prove(
 /// produce a proof settlement refuses.
 pub fn execute_and_prove_with_cross_messages(
     input: ProvingInput,
-    predicted_cross_messages: PredictedCrossMessages,
+    mut predicted_cross_messages: PredictedCrossMessages,
     programs: &ProgramCatalog,
     mut present_sender: impl FnMut(Actor) -> SenderPresentation,
     mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
     mut choose_seal: impl FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
+    // The fee's credit reaches a native actor, which calls nothing back.
+    if input.fee.is_some() {
+        predicted_cross_messages.push(Vec::new());
+    }
     let requested = input.private_promotions.clone();
     prove(
         input,
@@ -442,6 +581,8 @@ fn prove(
     let outcome = PrivatePart::new(
         input.public_context.clone(),
         input.root.clone().map(|witness| witness.body),
+        claim_bodies(&input),
+        input.fee,
         &input.private_witnesses,
         predicted_cross_messages.clone(),
     )?

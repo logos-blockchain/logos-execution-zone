@@ -1,11 +1,20 @@
 use lee_core::{
     Commitment, CommitmentSetDigest, DummyInput, DummyOutput, EncryptedNote, EncryptionScheme,
-    EphemeralSecretKey, ML_KEM_768_CIPHERTEXT_LEN, Nullifier, PrivacyPreservingCircuitOutput,
-    PrivateAction, PrivateWitness, ProgramImageClaim, ProvenExecution, RecipientEncryption,
-    RootCall, SharedSecretKey,
-    account::{Account, AccountData},
-    execution_state::{PrivatePartOutcome, PublicExecutionContext},
+    EphemeralSecretKey, FeeFallback, FeeTransfer, ML_KEM_768_CIPHERTEXT_LEN, Nullifier,
+    PrivacyPreservingCircuitOutput, PrivateAction, PrivateWitness, ProgramImageClaim,
+    ProvenExecution, ProvenFee, RecipientEncryption, RootCall, SharedSecretKey,
+    account::{Account, AccountData, Actor, Nonce},
+    execution_state::{Boundary, BoundaryStep, PrivatePartOutcome, PublicExecutionContext},
+    native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
 };
+
+/// A nullifier spent with no private action of its own, a received message's or a dummy
+/// input's, and the dummy output standing in for its commitment.
+pub struct MessageSpend {
+    pub nullifier: Nullifier,
+    pub root: CommitmentSetDigest,
+    pub filler: DummyOutput,
+}
 
 #[expect(
     clippy::too_many_arguments,
@@ -16,12 +25,13 @@ pub fn compute_circuit_output(
     public_context: PublicExecutionContext,
     public_root: Option<RootCall>,
     private_witnesses: &[PrivateWitness],
-    message_spend: Option<((Nullifier, CommitmentSetDigest), DummyOutput)>,
+    message_spends: Vec<MessageSpend>,
     dummy_inputs: Vec<DummyInput>,
     ciphertext_padding: Option<u32>,
     program_image_claims: Vec<ProgramImageClaim>,
     recoveries: &[RecipientEncryption],
     message_seals: Vec<RecipientEncryption>,
+    fee: Option<FeeTransfer>,
 ) -> PrivacyPreservingCircuitOutput {
     let PrivatePartOutcome {
         validity,
@@ -32,6 +42,10 @@ pub fn compute_circuit_output(
     let async_messages =
         lee_core::seal_messages(&async_messages, message_seals, ciphertext_padding)
             .unwrap_or_else(|e| panic!("{e}"));
+    let fee = fee.map(|fee| ProvenFee {
+        refund_to: fee.refund_to,
+        fallback: fee_fallback(&fee, &boundary, private_witnesses, ciphertext_padding),
+    });
     let mut output = ProvenExecution {
         boundary,
         async_messages,
@@ -43,6 +57,7 @@ pub fn compute_circuit_output(
         private_actions: Vec::new(),
         validity,
         program_image_claims,
+        fee,
     };
 
     // Emit one action per private account, covering all its actor states.
@@ -52,23 +67,19 @@ pub fn compute_circuit_output(
         );
         output
             .private_actions
-            .push(private_action(witness, post_data, ciphertext_padding));
+            .push(private_action(witness, post_data, ciphertext_padding, None));
     }
 
     // Pad the output with dummy commitment/nullifier pairs.
-    let padding = dummy_inputs.into_iter().map(|dummy| {
-        (
-            (
-                Nullifier::for_dummy(&dummy.nullifier_seed),
-                dummy.commitment_root,
-            ),
-            dummy.output,
-        )
+    let padding = dummy_inputs.into_iter().map(|dummy| MessageSpend {
+        nullifier: Nullifier::for_dummy(&dummy.nullifier_seed),
+        root: dummy.commitment_root,
+        filler: dummy.output,
     });
 
-    // If a message is consumed, pad its nullifier with a dummy commitment.
-    for (spend, filler) in message_spend.into_iter().chain(padding) {
-        emit_dummy_output(&mut output, spend, filler, ciphertext_padding);
+    // Each consumed message's nullifier is padded with a dummy commitment.
+    for spend in message_spends.into_iter().chain(padding) {
+        emit_dummy_output(&mut output, spend, ciphertext_padding);
     }
 
     obfuscate_output_ordering(&mut output);
@@ -98,8 +109,11 @@ fn obfuscate_output_ordering(output: &mut ProvenExecution) {
 
 fn emit_dummy_output(
     output: &mut ProvenExecution,
-    (nullifier, root): (Nullifier, CommitmentSetDigest),
-    filler: DummyOutput,
+    MessageSpend {
+        nullifier,
+        root,
+        filler,
+    }: MessageSpend,
     ciphertext_padding: Option<u32>,
 ) {
     if let Some(padding) = ciphertext_padding {
@@ -131,11 +145,62 @@ fn emit_dummy_output(
     });
 }
 
-/// Generate a private action given old and new account data.
+/// The payer's transition after the fee transfer alone, for settlement to apply when the public
+/// part fails: `None` when its pre-state does not cover the transfer or nothing crosses with it.
+///
+/// This enables us to include reverted pptx'es, like how we do for public tx'es
+/// so that we can charge the user for sending (potentially spamming) wrong tx'es.
+fn fee_fallback(
+    fee: &FeeTransfer,
+    boundary: &Boundary,
+    private_witnesses: &[PrivateWitness],
+    ciphertext_padding: Option<u32>,
+) -> Option<FeeFallback> {
+    let witness = private_witnesses
+        .iter()
+        .find(|witness| witness.account_id() == fee.payer)?;
+    let pre = witness.predecessor();
+    let balance = native_token::decode_balance(pre.data.actor_state(NATIVE_TOKEN_PROGRAM_ID))
+        .ok()?
+        .checked_sub(fee.amount)?;
+    let post = pre.data.clone().with_actor_state(
+        NATIVE_TOKEN_PROGRAM_ID,
+        native_token::encode_balance(balance),
+    );
+    let credit = borsh::to_vec(&native_token::Message::Credit(fee.amount))
+        .expect("a native message serializes");
+    // The fee entry runs last, so searching from the end finds its own crossing; settlement
+    // rejects a transaction crediting the inbox twice anyway.
+    let crossing = boundary.iter().rev().find_map(|step| match step {
+        BoundaryStep::PrivateToPublic(delivery)
+            if delivery.envelope.to == Actor::native_balance(fee.recipient)
+                && delivery.envelope.message == credit =>
+        {
+            Some(delivery.clone())
+        }
+        BoundaryStep::PrivateToPublic(_)
+        | BoundaryStep::PublicToPrivate(_)
+        | BoundaryStep::EndPrivateSubtree
+        | BoundaryStep::EndPublicSubtree => None,
+    })?;
+    // Its own key: the main note is encrypted under the successor's nonce.
+    let esk_nonce = pre.nonce;
+    Some(FeeFallback {
+        action: private_action(witness, post, ciphertext_padding, Some(esk_nonce)),
+        boundary: vec![
+            BoundaryStep::PrivateToPublic(crossing),
+            BoundaryStep::EndPublicSubtree,
+        ],
+    })
+}
+
+/// Generate a private action given old and new account data, encrypted under the key the
+/// successor's nonce derives unless `esk_nonce` names another.
 fn private_action(
     witness: &PrivateWitness,
     post_data: AccountData,
     ciphertext_padding: Option<u32>,
+    esk_nonce: Option<Nonce>,
 ) -> PrivateAction {
     let PrivateWitness {
         vpk,
@@ -154,7 +219,11 @@ fn private_action(
     };
     let account_kind = kind.account_kind();
 
-    let esk = EphemeralSecretKey::new(&account_id, random_seed, &post_state.nonce);
+    let esk = EphemeralSecretKey::new(
+        &account_id,
+        random_seed,
+        &esk_nonce.unwrap_or(post_state.nonce),
+    );
     let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(vpk, &esk);
 
     let encrypted_account = EncryptionScheme::encrypt(
@@ -253,7 +322,7 @@ mod tests {
     fn emit(
         private: Vec<(AccountId, AccountData)>,
         witnesses: &[PrivateWitness],
-        message_spend: Option<((Nullifier, CommitmentSetDigest), DummyOutput)>,
+        message_spend: Option<MessageSpend>,
         dummy_inputs: Vec<DummyInput>,
     ) -> PrivacyPreservingCircuitOutput {
         compute_circuit_output(
@@ -266,12 +335,13 @@ mod tests {
             PublicExecutionContext::default(),
             None,
             witnesses,
-            message_spend,
+            message_spend.into_iter().collect(),
             dummy_inputs,
             None,
             Vec::new(),
             &[],
             Vec::new(),
+            None,
         )
     }
 
@@ -338,7 +408,7 @@ mod tests {
                 })
                 .collect()
         };
-        let spend = (Nullifier::from_byte_array([5; 32]), [6; 32]);
+        let (nullifier, root) = (Nullifier::from_byte_array([5; 32]), [6; 32]);
         let filler = DummyOutput {
             commitment_seed: [7; 32],
             note: note(7).encrypted_post_state,
@@ -347,7 +417,11 @@ mod tests {
         let receipt = emit(
             private(),
             &witnesses,
-            Some((spend, filler.clone())),
+            Some(MessageSpend {
+                nullifier,
+                root,
+                filler: filler.clone(),
+            }),
             padding(5),
         );
         let call = emit(private(), &witnesses, None, padding(6));
@@ -366,18 +440,83 @@ mod tests {
             .execution
             .private_actions
             .iter()
-            .find(|action| action.nullifier == spend.0)
+            .find(|action| action.nullifier == nullifier)
             .expect("the message's nullifier is spent in one action");
         assert_eq!(
             (action.root, action.encrypted_post_state.clone()),
-            (spend.1, filler.note)
+            (root, filler.note)
         );
         assert!(
             receipt
                 .execution
                 .commitments()
-                .contains(&Commitment::for_dummy(&spend.0, &filler.commitment_seed))
+                .contains(&Commitment::for_dummy(&nullifier, &filler.commitment_seed))
         );
+    }
+
+    #[test]
+    fn the_fee_fallback_is_the_payers_state_after_the_transfer_alone() {
+        let owner = Owner::new(3);
+        let account = Account::funded(100);
+        let witness = owner.update_witness(account.clone());
+        let inbox = AccountId::new([8; 32]);
+        let fee = FeeTransfer {
+            payer: owner.account_id(),
+            recipient: inbox,
+            amount: 30,
+            refund_to: None,
+        };
+        let crossing = |amount| {
+            BoundaryStep::PrivateToPublic(lee_core::execution_state::Delivery {
+                envelope: lee_core::program::MessageEnvelope {
+                    from: Actor::native_balance(AccountId::new([9; 32])),
+                    to: Actor::native_balance(inbox),
+                    message: borsh::to_vec(&native_token::Message::Credit(amount)).unwrap(),
+                },
+                inherited_authorizations: BTreeSet::new(),
+                inherits_entry_authorizations: true,
+                pda_seeds: BTreeSet::new(),
+            })
+        };
+        let boundary = vec![crossing(30), BoundaryStep::EndPublicSubtree];
+
+        let fallback = fee_fallback(&fee, &boundary, std::slice::from_ref(&witness), None)
+            .expect("the pre-state covers the fee");
+        let expected = Account {
+            nonce: account.nonce.private_account_nonce_increment(&owner.nsk()),
+            data: Account::funded(70).data,
+        };
+        assert_eq!(
+            fallback.action.commitment,
+            Commitment::new(&owner.account_id(), &expected)
+        );
+        assert_eq!(
+            owner.decrypt(&fallback.action),
+            (PrivateAccountKind::Regular, expected)
+        );
+        assert_eq!(
+            fallback.boundary,
+            vec![crossing(30), BoundaryStep::EndPublicSubtree]
+        );
+        // Encrypted under its own key, apart from the main note's.
+        let main = private_action(&witness, Account::funded(70).data, None, None);
+        assert_ne!(
+            main.encrypted_post_state.epk,
+            fallback.action.encrypted_post_state.epk
+        );
+
+        // A fee the pre-state does not cover, or whose credit does not cross, has no fallback.
+        let unaffordable = FeeTransfer { amount: 101, ..fee };
+        assert!(
+            fee_fallback(
+                &unaffordable,
+                &boundary,
+                std::slice::from_ref(&witness),
+                None
+            )
+            .is_none()
+        );
+        assert!(fee_fallback(&fee, &Vec::new(), &[witness], None).is_none());
     }
 
     #[test]
@@ -392,7 +531,11 @@ mod tests {
         emit(
             Vec::new(),
             &[],
-            Some(((Nullifier::from_byte_array([5; 32]), [6; 32]), filler)),
+            Some(MessageSpend {
+                nullifier: Nullifier::from_byte_array([5; 32]),
+                root: [6; 32],
+                filler,
+            }),
             Vec::new(),
         );
     }

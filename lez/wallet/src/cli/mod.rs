@@ -1,4 +1,7 @@
-use std::{io::Write as _, str::FromStr};
+use std::{
+    io::{IsTerminal as _, Write as _},
+    str::FromStr,
+};
 
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
@@ -91,6 +94,9 @@ pub enum Command {
         #[arg(short, long)]
         /// Indicates, how deep in tree accounts may be. Affects command complexity.
         depth: u32,
+        /// Skip the confirmation prompt.
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Keycard hardware wallet management.
     #[command(subcommand)]
@@ -109,6 +115,23 @@ pub struct Args {
     /// Continious run flag.
     #[arg(short, long)]
     pub continuous_run: bool,
+    /// Simulate the transaction a command would send and report its cost instead of sending it.
+    #[arg(long, global = true)]
+    pub dry_run: bool,
+    /// Reserve a privacy-preserving transaction's fee at the base fees this many blocks of the
+    /// steepest climb past the quote for this command, instead of the configured headroom.
+    #[arg(long, global = true, value_name = "BLOCKS")]
+    pub fee_headroom: Option<u64>,
+    /// Pay a privacy-preserving transaction's fee from this owned private account for this
+    /// command, whether or not the transaction mentions it.
+    #[arg(long, global = true, value_name = "ACCOUNT_ID")]
+    pub fee_payer: Option<lee::AccountId>,
+    /// Refund a privacy-preserving transaction's fee surplus to this public account for this
+    /// command, instead of the payer's blinded alias. Meant for a transaction that already
+    /// credits that account publicly, such as a deshield; any other target links the transaction
+    /// to it.
+    #[arg(long, global = true, value_name = "ACCOUNT_ID")]
+    pub refund_to: Option<lee::AccountId>,
     /// Wallet command.
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -308,10 +331,8 @@ pub async fn execute_subcommand<C: WalletSequencerClient>(
 
             SubcommandReturnValue::Empty
         }
-        Command::RestoreKeys { depth } => {
-            let mnemonic = read_mnemonic_from_stdin()?;
-            wallet_core.restore_storage(&mnemonic);
-            wallet_core.restore_keys(depth).await?;
+        Command::RestoreKeys { depth, yes } => {
+            execute_restore_keys(wallet_core, depth, yes).await?;
 
             SubcommandReturnValue::Empty
         }
@@ -327,6 +348,42 @@ pub async fn execute_continuous_run<C: WalletSequencerClient>(
         wallet_core.sync_to_latest_block().await?;
         tokio::time::sleep(wallet_core.config().seq_poll_timeout).await;
     }
+}
+
+async fn execute_restore_keys<C: WalletSequencerClient>(
+    wallet_core: &mut WalletCore<C>,
+    depth: u32,
+    yes: bool,
+) -> Result<()> {
+    if !yes {
+        let blocks = wallet_core.get_last_block_id().await?;
+        let question = format!(
+            "Restoring overwrites this wallet and scans {blocks} blocks, which may take a while. \
+             Continue?"
+        );
+        if !confirm(&question)? {
+            anyhow::bail!("Restore cancelled");
+        }
+    }
+
+    let mnemonic = read_mnemonic_from_stdin()?;
+    wallet_core.restore_storage(&mnemonic);
+    wallet_core.restore_keys(depth).await
+}
+
+/// Asks on stderr; true without a terminal, so scripts never block.
+pub(crate) fn confirm(question: &str) -> Result<bool> {
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        return Ok(true);
+    }
+
+    eprint!("{question} [y/N]: ");
+    std::io::stderr().flush()?;
+
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+
+    Ok(matches!(answer.trim().to_lowercase().as_str(), "y" | "yes"))
 }
 
 /// Parse a keys file exported by `wallet account show-keys`.

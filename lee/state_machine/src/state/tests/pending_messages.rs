@@ -1083,7 +1083,7 @@ fn identical_async_messages_to_a_private_receiver_are_spent_independently() {
     let before = state.clone();
     assert!(matches!(
         state.transition_from_privacy_preserving_transaction(&reinitialized, 3, 0),
-        Err(LeeError::InvalidInput(message)) if message == "Commitment already seen"
+        Err(LeeError::InvalidInput(message)) if message.ends_with("already seen")
     ));
     assert_eq!(state, before);
 

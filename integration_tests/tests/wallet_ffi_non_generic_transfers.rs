@@ -19,6 +19,7 @@ use core_ffi::{
 };
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS,
+    config::{INITIAL_PRIVATE_BALANCES_FOR_WALLET, min_private_fee},
     ffi_helpers::{sequencer as sequencer_ffi_helpers, wallet::*},
 };
 use lee::Account;
@@ -252,8 +253,8 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
         u128::from_le_bytes(out_balance)
     };
 
-    // A shield moves public funds into a private account and is fee-exempt, so
-    // the public sender is debited exactly the amount, with no fee.
+    // The fresh private recipient holds nothing, so a funded private account of the wallet pays
+    // the in-proof fee and the public sender pays exactly the amount.
     assert_eq!(from_balance, from_before - 100);
     assert_eq!(to_balance, 100);
 
@@ -332,10 +333,12 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
         u128::from_le_bytes(out_balance)
     };
 
-    // A deshield moves private funds into a public account and is fee-exempt, so
-    // the private sender is debited exactly the amount and the public recipient
-    // is credited exactly the amount, with no fee on either side.
-    assert_eq!(from_balance, 9900);
+    // The private sender pays the amount and the in-proof fee; the public recipient gains the
+    // amount.
+    assert_eq!(
+        from_balance,
+        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0] - 100 - min_private_fee()
+    );
     assert_eq!(to_balance, to_before + 100);
 
     unsafe {
@@ -426,7 +429,11 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
         u128::from_le_bytes(out_balance)
     };
 
-    assert_eq!(from_balance, 9900);
+    // The recipient holds 100, below the fee, so the wallet pays its receipt from `from` too.
+    assert_eq!(
+        from_balance,
+        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0] - 100 - 2 * min_private_fee()
+    );
     assert_eq!(to_balance, 100);
 
     unsafe {

@@ -386,8 +386,9 @@ fn settled_peer_block(
     producer: lee::AccountId,
 ) -> common::block::Block {
     let timestamp = id.saturating_mul(100);
-    let (summary, payout) = chain_state::apply::derive_block_summary(state, &txs, id, timestamp)
-        .expect("test transactions settle");
+    let (summary, payout, reverted) =
+        chain_state::apply::derive_block_summary(state, &txs, id, timestamp)
+            .expect("test transactions settle");
     let mut transactions = txs;
     transactions.push(LeeTransaction::Public(fee_invocation(
         summary,
@@ -400,6 +401,7 @@ fn settled_peer_block(
         prev_block_hash: prev_hash,
         timestamp,
         transactions,
+        reverted,
     }
     .into_pending_block()
 }
@@ -784,6 +786,7 @@ async fn start_from_config_opens_existing_db_if_it_exists() {
     let (genesis_state, genesis_txs, _) =
         build_genesis_state(&config, Some(bootstrap_sequencer_key));
     let genesis_hashable_data = HashableBlockData {
+        reverted: Vec::new(),
         block_id: 1,
         transactions: genesis_txs,
         prev_block_hash: HashType([0; 32]),
@@ -2542,6 +2545,7 @@ fn resubmittable_txs_drops_clock_and_bridge_deposits() {
 fn resubmittable_txs_of_blocks_without_user_txs_is_empty() {
     // No transactions at all (not even the mandatory clock tx).
     let empty = HashableBlockData {
+        reverted: Vec::new(),
         block_id: 1,
         prev_block_hash: HashType([0; 32]),
         timestamp: 0,
@@ -5936,6 +5940,7 @@ fn prove_and_settle(
         .collect();
     let (output, proof) = lee::execute_and_prove(
         lee::ProvingInput {
+            claims: Vec::new(),
             root,
             public_context: lee::PublicExecutionContext::new(public_actors, []),
             private_witnesses,
@@ -5943,6 +5948,7 @@ fn prove_and_settle(
             ciphertext_padding: None,
             recoveries,
             private_promotions: BTreeSet::new(),
+            fee: None,
         },
         &lee::Simulation {
             public_actor_states,
