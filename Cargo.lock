@@ -2078,6 +2078,7 @@ dependencies = [
  "sequencer_executor_actor",
  "sequencer_gossip_actor",
  "sequencer_service",
+ "sequencer_service_rpc",
  "sequencer_storage_actor",
  "serde_json",
  "thiserror 2.0.18",
