@@ -9,8 +9,8 @@ use lee::{
     PublicAccountEvidence, PublicExecutionContext, PublicKey, RootCall, Signature, error::LeeError,
 };
 use lee_core::{
-    Commitment, EncryptedNote, Nullifier, PrivateAction, RecoveryBinding, SealedMessage,
-    account::Nonce, encryption::Ciphertext, program::PdaSeed,
+    Commitment, EncryptedNote, FeeFallback, Nullifier, PrivateAction, ProvenFee, RecoveryBinding,
+    SealedMessage, account::Nonce, encryption::Ciphertext, program::PdaSeed,
 };
 
 /// 32-byte array type for `AccountId`, keys, hashes, etc.
@@ -619,6 +619,39 @@ impl From<FfiPrivateAction> for PrivateAction {
     }
 }
 
+/// What a proof commits about its in-proof fee. The `has_*` flags mark which parts are present;
+/// an absent part holds an empty value.
+#[repr(C)]
+pub struct FfiProvenFee {
+    pub has_refund_to: bool,
+    pub refund_to: FfiAccountId,
+    pub has_fallback: bool,
+    pub fallback_action: FfiPrivateAction,
+    pub fallback_boundary: FfiBoundaryStepList,
+}
+
+impl From<Option<ProvenFee>> for FfiProvenFee {
+    fn from(value: Option<ProvenFee>) -> Self {
+        let (refund_to, fallback) = value.map_or((None, None), |fee| (fee.refund_to, fee.fallback));
+        let has_fallback = fallback.is_some();
+        let FeeFallback { action, boundary } = fallback.unwrap_or_else(|| FeeFallback {
+            action: PrivateAction::default(),
+            boundary: Vec::new(),
+        });
+        Self {
+            has_refund_to: refund_to.is_some(),
+            refund_to: refund_to.unwrap_or_default().into(),
+            has_fallback,
+            fallback_action: action.into(),
+            fallback_boundary: boundary
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
+        }
+    }
+}
+
 #[repr(C)]
 pub struct FfiRecoveryBinding {
     pub address: FfiAccountId,
@@ -683,6 +716,30 @@ impl From<(Signature, PublicKey)> for FfiSignaturePubKeyEntry {
             public_key: value.1.into(),
         }
     }
+}
+
+/// The fee `has_fee` and `fee` describe. Every part is taken back, present or not, so that
+/// dropping the result frees it.
+#[must_use]
+pub fn proven_fee_from_ffi(has_fee: bool, fee: FfiProvenFee) -> Option<ProvenFee> {
+    let FfiProvenFee {
+        has_refund_to,
+        refund_to,
+        has_fallback,
+        fallback_action,
+        fallback_boundary,
+    } = fee;
+    let fallback = FeeFallback {
+        action: fallback_action.into(),
+        boundary: Vec::from(fallback_boundary)
+            .into_iter()
+            .map(BoundaryStep::from)
+            .collect(),
+    };
+    has_fee.then(|| ProvenFee {
+        refund_to: has_refund_to.then(|| AccountId::from(refund_to)),
+        fallback: has_fallback.then_some(fallback),
+    })
 }
 
 #[must_use]

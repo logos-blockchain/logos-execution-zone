@@ -501,6 +501,18 @@ typedef struct FfiVec_FfiProgramImageClaim {
 
 typedef struct FfiVec_FfiProgramImageClaim FfiProgramImageClaims;
 
+/**
+ * What a proof commits about its in-proof fee. The `has_*` flags mark which parts are present;
+ * an absent part holds an empty value.
+ */
+typedef struct FfiProvenFee {
+  bool has_refund_to;
+  FfiAccountId refund_to;
+  bool has_fallback;
+  struct FfiPrivateAction fallback_action;
+  FfiBoundaryStepList fallback_boundary;
+} FfiProvenFee;
+
 typedef struct FfiPrivacyPreservingMessage {
   struct FfiPublicExecutionContext public_context;
   FfiBoundaryStepList boundary;
@@ -514,6 +526,8 @@ typedef struct FfiPrivacyPreservingMessage {
   uint64_t timestamp_validity_window[2];
   FfiProgramImageClaims program_image_claims;
   FfiPublicAccountEvidenceList admission_evidence;
+  bool has_fee;
+  struct FfiProvenFee fee;
 } FfiPrivacyPreservingMessage;
 
 typedef FfiVecU8 FfiProof;

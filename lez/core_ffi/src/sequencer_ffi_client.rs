@@ -6,8 +6,8 @@ use lee::Actor;
 use lee_core::CommitmentPosition;
 use sequencer_executor_actor::protocol::{
     GetAccount, GetAccountBalance, GetAccountNonces, GetAccountView, GetBlock, GetBlockRange,
-    GetLastBlockId, GetProofsAndRoot, GetPublications, GetRecoveryBinding, GetTransaction,
-    Transaction, TransactionOrigin,
+    GetFeeQuote, GetLastBlockId, GetProofsAndRoot, GetPublications, GetRecoveryBinding,
+    GetTransaction, Transaction, TransactionOrigin,
 };
 use sequencer_gossip_actor::protocol::PublishTransaction;
 use wallet::{ExecutionFailureKind, WalletSequencerClient};
@@ -58,6 +58,9 @@ impl<T: Send + Sync + 'static> From<SendError<T, sequencer_executor_actor::error
 impl From<FfiSequencerClientError> for ExecutionFailureKind {
     fn from(value: FfiSequencerClientError) -> Self {
         match value {
+            FfiSequencerClientError::SequencerExecutorError(
+                val @ sequencer_executor_actor::error::Error::PrivateFeeBelowHead { .. },
+            ) => Self::PrivateFeeBelowHead(val.to_string()),
             FfiSequencerClientError::SequencerExecutorError(val) => {
                 Self::SequencerClientError(val.to_string())
             }
@@ -220,11 +223,11 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
     async fn get_proofs_and_root(
         &self,
         commitments: Vec<lee_core::Commitment>,
-        message_position: Option<CommitmentPosition>,
+        message_positions: Vec<CommitmentPosition>,
     ) -> Result<
         (
             Vec<Option<lee_core::MembershipProof>>,
-            Option<lee_core::MembershipProof>,
+            Vec<Option<lee_core::MembershipProof>>,
             lee_core::CommitmentSetDigest,
         ),
         Self::Error,
@@ -234,10 +237,25 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
             .executor_ref()
             .ask(GetProofsAndRoot {
                 commitments,
-                message_position,
+                message_positions,
             })
             .send()
             .await?)
+    }
+
+    async fn get_fee_state(&self) -> Result<wallet::FeeStateQuote, Self::Error> {
+        let quote = self.0.executor_ref().ask(GetFeeQuote).send().await?;
+        Ok(wallet::FeeStateQuote {
+            height: quote.height,
+            base_fee_exec: quote.base_fee_exec,
+            base_fee_stor: quote.base_fee_stor,
+            next_base_fee_exec_floor: quote.next_base_fee_exec_floor,
+            next_base_fee_exec_ceiling: quote.next_base_fee_exec_ceiling,
+            next_base_fee_stor_floor: quote.next_base_fee_stor_floor,
+            next_base_fee_stor_ceiling: quote.next_base_fee_stor_ceiling,
+            max_gas_exec: quote.max_gas_exec,
+            max_gas_stor: quote.max_gas_stor,
+        })
     }
 
     async fn get_publications(

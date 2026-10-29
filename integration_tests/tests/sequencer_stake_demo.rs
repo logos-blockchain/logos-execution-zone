@@ -274,6 +274,10 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     );
     info!("Demo sequencer key removed from the Bedrock committee");
 
+    // The ownership account is the demo sequencer's reward target, so it holds the producer
+    // payouts of the blocks it built while in the committee.
+    let ownership_before_release = account_balance(&ctx, ownership_id).await?;
+
     // Once removed, the sequencer injects FinalizeUnstake itself; this test
     // never submits one.
     poll_until(
@@ -288,7 +292,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .context("Failed to read the ownership account after the release")?;
     assert_eq!(
         drained_ownership_account.data.native_balance().unwrap(),
-        0,
+        ownership_before_release,
         "the ownership account never custodies the stake"
     );
     assert_eq!(

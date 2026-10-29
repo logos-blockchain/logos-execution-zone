@@ -25,6 +25,7 @@ use core_ffi::{
 };
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS,
+    config::{INITIAL_PRIVATE_BALANCES_FOR_WALLET, min_private_fee},
     ffi_helpers::{sequencer as sequencer_ffi_helpers, wallet::*},
 };
 use lee::{Account, program::Program};
@@ -277,11 +278,12 @@ fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
     let new_from_balance = from_account.data.native_balance().expect("Must fit");
     let new_to_balance = to_account.data.native_balance().expect("Must fit");
 
-    assert!(
-        10000_u128.saturating_sub(new_from_balance) < DEFAULT_MAX_FEE,
-        "Must transfer >= amount",
+    // The private sender pays the amount and the in-proof fee.
+    assert_eq!(
+        new_from_balance,
+        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0] - 100 - min_private_fee()
     );
-    assert_eq!(new_to_balance, 20100,);
+    assert_eq!(new_to_balance, INITIAL_PRIVATE_BALANCES_FOR_WALLET[1] + 100);
 
     unsafe {
         let mentions = account_mentions.cast_mut();

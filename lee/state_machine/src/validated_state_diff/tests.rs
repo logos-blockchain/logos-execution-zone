@@ -97,6 +97,7 @@ fn privacy_garbage_proof_is_rejected() {
             }],
             validity: ValidityWindows::new_unbounded(),
             program_image_claims: vec![],
+            fee: None,
         },
         nonces: BTreeMap::new(),
         admission_evidence: vec![],
@@ -440,4 +441,163 @@ fn a_send_to_an_undeclared_actor_from_a_later_transition_is_charged() {
     );
     let diff = result.expect("a charged failure still yields an applicable diff");
     assert!(diff.public_diff().is_empty());
+}
+
+/// Charges `tx` both as settlement does and as a wallet simulates it, over the same state, and
+/// returns the charge both agree on: its cycles, and whether it reverts.
+fn charged_alike(
+    tx: &crate::PublicTransaction,
+    state: &V03State,
+    programs: &[(AccountId, crate::program::Program)],
+    budget: u64,
+) -> (u64, bool) {
+    use crate::privacy_preserving_transaction::circuit::{
+        Dependency, ProgramCatalog, ProgramKind, Simulation, simulate_public_transaction,
+    };
+
+    let (settled, settled_result) =
+        ValidatedStateDiff::from_public_transaction_metered(tx, state, 1, 0, budget);
+    let simulation = Simulation {
+        public_actor_states: tx
+            .message()
+            .public_context
+            .actors
+            .iter()
+            .map(|actor| {
+                let account = state.get_account_by_id(actor.account_id);
+                (
+                    *actor,
+                    account.data.actor_state(actor.program_account_id).clone(),
+                )
+            })
+            .collect(),
+        admitted_accounts: None,
+    };
+    let catalog = ProgramCatalog {
+        programs: programs
+            .iter()
+            .map(|(account_id, program)| {
+                (
+                    *account_id,
+                    Dependency {
+                        program: program.clone(),
+                        kind: ProgramKind::Disclosed,
+                    },
+                )
+            })
+            .collect(),
+    };
+    let (simulated, simulated_result) =
+        simulate_public_transaction(tx, &simulation, &catalog, budget);
+    // Settlement turns a chargeable failure into a revert it still applies.
+    let settled_charge = (
+        settled.cycles,
+        settled_result.is_err() || settled.revert.is_some(),
+    );
+    assert_eq!(settled_charge, (simulated, simulated_result.is_err()));
+    settled_charge
+}
+
+fn scripted_catalog() -> [(AccountId, crate::program::Program); 1] {
+    [(scripted_id(), crate::test_methods::scripted())]
+}
+
+#[test]
+fn a_simulated_write_is_charged_as_settled_and_runs_out_of_a_small_budget_alike() {
+    let (state, tx) = metering_write_fixture();
+    let budget = crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET;
+    assert!(!charged_alike(&tx, &state, &scripted_catalog(), budget).1);
+    assert_eq!(
+        charged_alike(&tx, &state, &scripted_catalog(), 1_024),
+        (1_024, true)
+    );
+}
+
+#[test]
+fn simulated_sends_share_the_budget_as_settled() {
+    let (from_key, from) = signer();
+    let state = V03State::new()
+        .with_public_account_balances([(from, 1_000)])
+        .with_programs([crate::test_methods::scripted()]);
+    let sender = Actor::new(from, scripted_id());
+    let callee = SyncMessage::new(sender, &Script::default());
+    let script = (0..SENDS).fold(Script::default(), |script, _| script.send(callee.clone()));
+    let chain = public_tx(sender, vec![sender], vec![Nonce(0)], script, &[&from_key]);
+    let (cycles, reverts) = charged_alike(
+        &chain,
+        &state,
+        &scripted_catalog(),
+        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+    );
+    assert!(!reverts && cycles > 0);
+}
+
+#[test]
+fn a_simulated_guest_panic_pays_the_whole_budget_as_settled() {
+    let (from_key, from) = signer();
+    let unsigned = Actor::new(AccountId::new([2_u8; 32]), scripted_id());
+    let state = V03State::new()
+        .with_public_account_balances([(from, 100)])
+        .with_empty_public_accounts([unsigned.account_id])
+        .with_programs([crate::test_methods::scripted()]);
+    let panics = public_tx(
+        unsigned,
+        vec![unsigned],
+        vec![Nonce(0)],
+        Script::default().authorized(),
+        &[&from_key],
+    );
+    let budget = crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET;
+    assert_eq!(
+        charged_alike(&panics, &state, &scripted_catalog(), budget),
+        (budget, true)
+    );
+}
+
+#[test]
+fn a_simulated_nonzero_exit_pays_what_it_ran_as_settled() {
+    let (from_key, from) = signer();
+    let exits = AccountId::from_builtin_program(crate::test_methods::exits_nonzero().id());
+    let state = V03State::new()
+        .with_public_account_balances([(from, 100)])
+        .with_named_programs(std::iter::once((
+            exits,
+            crate::test_methods::exits_nonzero(),
+        )));
+    let exiting = Actor::new(from, exits);
+    let tx = public_tx(exiting, vec![exiting], vec![Nonce(0)], (), &[&from_key]);
+    let budget = crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET;
+    let (cycles, reverts) = charged_alike(
+        &tx,
+        &state,
+        &[(exits, crate::test_methods::exits_nonzero())],
+        budget,
+    );
+    assert!(reverts && cycles < budget);
+}
+
+#[test]
+fn a_simulated_loader_call_runs_as_rust_at_no_cycles_as_settled() {
+    let (from_key, from) = signer();
+    let state = V03State::new().with_public_account_balances([(from, 100)]);
+    let loader = Actor::new(from, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID);
+    let write = public_tx(
+        loader,
+        vec![loader],
+        vec![Nonce(0)],
+        program_loader_core::Message::WriteSegment {
+            bytecode: vec![1, 2, 3],
+            next_segment: None,
+        },
+        &[&from_key],
+    );
+    assert_eq!(
+        charged_alike(
+            &write,
+            &state,
+            &[],
+            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET
+        ),
+        (0, false)
+    );
 }

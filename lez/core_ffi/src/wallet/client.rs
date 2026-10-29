@@ -115,22 +115,29 @@ impl WalletSequencerClient for WalletClient {
     async fn get_proofs_and_root(
         &self,
         commitments: Vec<lee_core::Commitment>,
-        message_position: Option<CommitmentPosition>,
+        message_positions: Vec<CommitmentPosition>,
     ) -> Result<
         (
             Vec<Option<lee_core::MembershipProof>>,
-            Option<lee_core::MembershipProof>,
+            Vec<Option<lee_core::MembershipProof>>,
             lee_core::CommitmentSetDigest,
         ),
         Self::Error,
     > {
         match self {
             Self::Embedded(client) => Ok(client
-                .get_proofs_and_root(commitments, message_position)
+                .get_proofs_and_root(commitments, message_positions)
                 .await?),
             Self::Http(client) => Ok(client
-                .get_proofs_and_root(commitments, message_position)
+                .get_proofs_and_root(commitments, message_positions)
                 .await?),
+        }
+    }
+
+    async fn get_fee_state(&self) -> Result<wallet::FeeStateQuote, Self::Error> {
+        match self {
+            Self::Embedded(client) => Ok(client.get_fee_state().await?),
+            Self::Http(client) => Ok(client.get_fee_state().await?),
         }
     }
 
