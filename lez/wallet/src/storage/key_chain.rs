@@ -1,7 +1,7 @@
 use core::panic;
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, HashMap, HashSet, btree_map::Entry},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, btree_map::Entry},
 };
 
 use anyhow::{Context as _, Result, anyhow, ensure};
@@ -138,6 +138,9 @@ pub struct UserKeyChain {
     shared_private_accounts: BTreeMap<lee::AccountId, SharedAccountEntry>,
     /// Group key holders for shared account management, keyed by a human-readable label.
     group_key_holders: BTreeMap<Label, GroupKeyHolder>,
+    /// The labels of the groups this wallet made itself, whose accounts cannot predate it. A
+    /// joined group is absent, since nothing says how long its GMS has been in use.
+    locally_created_groups: BTreeSet<Label>,
     /// Dedicated sealing secret key for GMS distribution. Generated once via
     /// `wallet group new-sealing-key`. The corresponding public key is shared with
     /// group members so they can seal GMS for this wallet.
@@ -156,6 +159,7 @@ impl UserKeyChain {
             public_key_tree,
             private_key_tree,
             group_key_holders: BTreeMap::new(),
+            locally_created_groups: BTreeSet::new(),
             shared_private_accounts: BTreeMap::new(),
             sealing_secret_key: None,
         }
@@ -679,6 +683,10 @@ impl UserKeyChain {
             .insert(account_id, private_key);
     }
 
+    pub fn remove_imported_public_account(&mut self, account_id: &AccountId) {
+        self.imported_public_accounts.remove(account_id);
+    }
+
     pub fn add_imported_private_account(
         &mut self,
         key_chain: KeyChain,
@@ -866,12 +874,23 @@ impl UserKeyChain {
     ///
     /// If a holder already exists under this label, it is silently replaced and the old
     /// GMS is lost. Callers must ensure label uniqueness across groups.
-    pub fn insert_group_key_holder(&mut self, label: Label, holder: GroupKeyHolder) {
+    pub fn insert_group_key_holder(&mut self, label: Label, holder: GroupKeyHolder, created: bool) {
+        if created {
+            self.locally_created_groups.insert(label.clone());
+        } else {
+            self.locally_created_groups.remove(&label);
+        }
         self.group_key_holders.insert(label, holder);
+    }
+
+    #[must_use]
+    pub fn is_locally_created_group(&self, label: &Label) -> bool {
+        self.locally_created_groups.contains(label)
     }
 
     /// Removes the `GroupKeyHolder` under the given label, if it exists.
     pub fn remove_group_key_holder(&mut self, label: &Label) -> Option<GroupKeyHolder> {
+        self.locally_created_groups.remove(label);
         self.group_key_holders.remove(label)
     }
 
@@ -912,6 +931,7 @@ impl UserKeyChain {
             private_key_tree,
             shared_private_accounts,
             group_key_holders,
+            locally_created_groups,
             sealing_secret_key,
         } = self;
 
@@ -972,6 +992,7 @@ impl UserKeyChain {
             accounts,
             sealing_secret_key: sealing_secret_key.clone(),
             group_key_holders: group_key_holders.clone(),
+            locally_created_groups: locally_created_groups.clone(),
             shared_private_accounts: shared_private_accounts.clone(),
         }
     }
@@ -985,6 +1006,7 @@ impl UserKeyChain {
             accounts: persistent_accounts,
             sealing_secret_key,
             group_key_holders,
+            locally_created_groups,
             shared_private_accounts,
         } = key_chain_data;
 
@@ -1051,6 +1073,7 @@ impl UserKeyChain {
             private_key_tree,
             shared_private_accounts,
             group_key_holders,
+            locally_created_groups,
             sealing_secret_key,
         })
     }
@@ -1247,7 +1270,7 @@ pub(crate) mod tests {
         let vpk = keys.generate_viewing_public_key();
         let nsk = keys.nullifier_secret_key();
         let account_id = AccountId::from((&keys.generate_nullifier_public_key(), &vpk));
-        kc.insert_group_key_holder(label.clone(), holder);
+        kc.insert_group_key_holder(label.clone(), holder, false);
         kc.insert_shared_private_account(
             account_id,
             SharedAccountEntry {
@@ -1569,7 +1592,7 @@ pub(crate) mod tests {
     fn a_kind_received_under_shared_keys_is_recorded_under_their_derivation() {
         let mut kc = UserKeyChain::default();
         let label = Label::new("group");
-        kc.insert_group_key_holder(label.clone(), GroupKeyHolder::from_gms([0; 32]));
+        kc.insert_group_key_holder(label.clone(), GroupKeyHolder::from_gms([0; 32]), false);
         let regular = SharedAccountEntry {
             group_label: label,
             derivation: SharedAccountDerivation::Regular {
@@ -1883,12 +1906,27 @@ pub(crate) mod tests {
         );
 
         let holder = GroupKeyHolder::from_gms([42_u8; 32]);
-        user_data.insert_group_key_holder(Label::new("test-group"), holder.clone());
+        user_data.insert_group_key_holder(Label::new("test-group"), holder.clone(), false);
 
         let retrieved = user_data
             .group_key_holder(&Label::new("test-group"))
             .expect("should exist");
         assert_eq!(retrieved.dangerous_raw_gms(), holder.dangerous_raw_gms());
+    }
+
+    #[test]
+    fn only_a_created_group_is_recorded_as_local_and_removal_forgets_it() {
+        let mut user_data = UserKeyChain::default();
+        let mine = Label::new("mine");
+        let theirs = Label::new("theirs");
+
+        user_data.insert_group_key_holder(mine.clone(), GroupKeyHolder::new(), true);
+        user_data.insert_group_key_holder(theirs.clone(), GroupKeyHolder::new(), false);
+        assert!(user_data.is_locally_created_group(&mine));
+        assert!(!user_data.is_locally_created_group(&theirs));
+
+        user_data.remove_group_key_holder(&mine);
+        assert!(!user_data.is_locally_created_group(&mine));
     }
 
     #[test]
@@ -1902,7 +1940,7 @@ pub(crate) mod tests {
     fn distinct_derivation_ids_select_distinct_shared_regular_accounts() {
         let label = Label::new("group");
         let mut kc = UserKeyChain::default();
-        kc.insert_group_key_holder(label.clone(), GroupKeyHolder::new());
+        kc.insert_group_key_holder(label.clone(), GroupKeyHolder::new(), false);
         let account_id = |derivation_id| {
             let keys = kc
                 .derive_shared_account_keys(&SharedAccountEntry {
@@ -1962,7 +2000,7 @@ pub(crate) mod tests {
 
         let mut user_data = UserKeyChain::default();
         let gms_holder = GroupKeyHolder::from_gms([42_u8; 32]);
-        user_data.insert_group_key_holder(Label::new("my-group"), gms_holder);
+        user_data.insert_group_key_holder(Label::new("my-group"), gms_holder, false);
 
         let holder = user_data.group_key_holder(&Label::new("my-group")).unwrap();
 
