@@ -12,6 +12,7 @@ use key_protocol::key_management::{
     secret_holders::SeedHolder,
 };
 use lee_core::BlockId;
+use serde::Deserialize;
 
 pub use crate::storage::encryption::StorageKey;
 use crate::{
@@ -79,7 +80,7 @@ impl Storage {
 
     /// Whether the storage file at `path` is encrypted.
     pub fn is_encrypted(path: &Path) -> Result<bool> {
-        Ok(is_encrypted(&read_storage_json(path)?))
+        Ok(read_layout(&read_storage_bytes(path)?)?.is_encrypted())
     }
 
     /// Replaces the file at `path` with the storage, sealed under `key` if there is one.
@@ -225,6 +226,20 @@ enum StorageFile {
     Plaintext(PersistentStorage),
 }
 
+/// Never route the file through `serde_json::Value`: with no `arbitrary_precision` it reads a
+/// hash-derived `u128` nonce back as an `f64`.
+#[derive(Deserialize)]
+struct Layout {
+    #[serde(default)]
+    ciphertext: Option<serde::de::IgnoredAny>,
+}
+
+impl Layout {
+    const fn is_encrypted(&self) -> bool {
+        self.ciphertext.is_some()
+    }
+}
+
 /// The key to encrypt the storage under `password`, or none for an empty one.
 pub fn storage_key_for(password: &str) -> Result<Option<StorageKey>> {
     (!password.is_empty())
@@ -253,20 +268,24 @@ fn replace_synced(path: &Path, content: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+fn read_layout(content: &[u8]) -> Result<Layout> {
+    serde_json::from_slice(content).context("Failed to parse storage file")
+}
+
 fn read_storage_file(path: &Path) -> Result<StorageFile> {
-    let file = read_storage_json(path)?;
-    if is_encrypted(&file) {
+    let content = read_storage_bytes(path)?;
+    if read_layout(&content)?.is_encrypted() {
         Ok(StorageFile::Encrypted(
-            serde_json::from_value(file).context("Failed to parse storage file")?,
+            serde_json::from_slice(&content).context("Failed to parse storage file")?,
         ))
     } else {
         Ok(StorageFile::Plaintext(
-            serde_json::from_value(file).context("Failed to parse storage file")?,
+            serde_json::from_slice(&content).context("Failed to parse storage file")?,
         ))
     }
 }
 
-fn read_storage_json(path: &Path) -> Result<serde_json::Value> {
+fn read_storage_bytes(path: &Path) -> Result<Vec<u8>> {
     #[expect(
         clippy::wildcard_enum_match_arm,
         reason = "We want to provide a specific error message for not found case"
@@ -285,11 +304,7 @@ fn read_storage_json(path: &Path) -> Result<serde_json::Value> {
             }
         },
     };
-    serde_json::from_slice(&content).context("Failed to parse storage file")
-}
-
-fn is_encrypted(file: &serde_json::Value) -> bool {
-    file.get("ciphertext").is_some()
+    Ok(content)
 }
 
 #[cfg(test)]
@@ -339,6 +354,30 @@ mod tests {
 
             assert_eq!(loaded_store, storage);
         }
+    }
+
+    /// A hash-derived nonce, above `u64::MAX`, as observed in the field.
+    #[test]
+    fn an_unencrypted_storage_round_trips_a_hash_derived_nonce() {
+        let (mut storage, _) = Storage::new();
+
+        let key_chain = key_protocol::key_management::KeyChain::new_os_random();
+        let account = lee::Account {
+            nonce: lee_core::account::Nonce(67_732_032_158_988_449_503_199_738_826_851_017_774),
+            ..lee::Account::default()
+        };
+        storage
+            .key_chain_mut()
+            .add_imported_private_account(key_chain, None, account);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage_path = temp_dir.path().join("storage.json");
+        storage.save_to_path(&storage_path, None).unwrap();
+
+        assert!(!Storage::is_encrypted(&storage_path).unwrap());
+        let (loaded, key) = Storage::from_path(&storage_path, "").unwrap();
+        assert!(key.is_none());
+        assert_eq!(loaded, storage);
     }
 
     #[test]
