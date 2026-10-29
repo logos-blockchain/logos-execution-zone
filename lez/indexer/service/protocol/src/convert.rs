@@ -8,11 +8,11 @@ use crate::{
     Account, AccountData, AccountId, Actor, ActorState, BedrockStatus, Block, BlockBody,
     BlockHeader, BlockId, BlockIngestError, BoundaryStep, Ciphertext, Commitment,
     CommitmentSetDigest, CrossZoneHalt, Delivery, EncryptedNote, EphemeralPublicKey, EventRecord,
-    FeeDeclaration, HashType, IndexerStatus, IndexerSyncState, MessageEnvelope, Nullifier, PdaSeed,
-    PeerHealth, PeerStatus, PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
-    Proof, PublicAccountEvidence, PublicExecutionContext, PublicKey, PublicMessage,
-    PublicTransaction, RecoveryBinding, RootCall, SealedMessage, Selector, Signature, StallReason,
-    Transaction, ValidityWindow, WitnessSet,
+    FeeDeclaration, FeeFallback, HashType, IndexerStatus, IndexerSyncState, MessageEnvelope,
+    Nullifier, PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage,
+    PrivacyPreservingTransaction, PrivateAction, Proof, ProvenFee, PublicAccountEvidence,
+    PublicExecutionContext, PublicKey, PublicMessage, PublicTransaction, RecoveryBinding, RootCall,
+    SealedMessage, Selector, Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -582,6 +582,7 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
                     // on `lee_core::ProvenExecution`. FFI/wallet plumbing for address-flexible
                     // program dispatch is tracked separately.
                     program_image_claims: _,
+                    fee,
                 },
             nonces,
             admission_evidence,
@@ -597,6 +598,39 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
             block_validity_window: validity.blocks.into(),
             timestamp_validity_window: validity.timestamps.into(),
             admission_evidence: admission_evidence.into_iter().map(Into::into).collect(),
+            fee: fee.map(Into::into),
+        }
+    }
+}
+
+impl From<lee_core::ProvenFee> for ProvenFee {
+    fn from(value: lee_core::ProvenFee) -> Self {
+        let lee_core::ProvenFee {
+            refund_to,
+            fallback,
+        } = value;
+        Self {
+            refund_to: refund_to.map(Into::into),
+            fallback: fallback.map(|lee_core::FeeFallback { action, boundary }| FeeFallback {
+                action: action.into(),
+                boundary: boundary.into_iter().map(Into::into).collect(),
+            }),
+        }
+    }
+}
+
+impl From<ProvenFee> for lee_core::ProvenFee {
+    fn from(value: ProvenFee) -> Self {
+        let ProvenFee {
+            refund_to,
+            fallback,
+        } = value;
+        Self {
+            refund_to: refund_to.map(Into::into),
+            fallback: fallback.map(|FeeFallback { action, boundary }| lee_core::FeeFallback {
+                action: action.into(),
+                boundary: boundary.into_iter().map(Into::into).collect(),
+            }),
         }
     }
 }
@@ -627,6 +661,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             block_validity_window,
             timestamp_validity_window,
             admission_evidence,
+            fee,
         } = value;
 
         let private_actions = private_actions.into_iter().map(Into::into).collect();
@@ -651,6 +686,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
                 // A privacy-preserving tx submitted through this protocol will fail proof
                 // verification for any program not at its bijection address until this is wired.
                 program_image_claims: Vec::new(),
+                fee: fee.map(Into::into),
             },
             nonces: nonce_map(nonces)?,
             admission_evidence: admission_evidence
@@ -851,7 +887,10 @@ impl From<BlockHeader> for common::block::BlockHeader {
 
 impl From<common::block::BlockBody> for BlockBody {
     fn from(value: common::block::BlockBody) -> Self {
-        let common::block::BlockBody { transactions } = value;
+        let common::block::BlockBody {
+            transactions,
+            reverted,
+        } = value;
 
         let transactions = transactions
             .into_iter()
@@ -863,7 +902,10 @@ impl From<common::block::BlockBody> for BlockBody {
             })
             .collect();
 
-        Self { transactions }
+        Self {
+            transactions,
+            reverted,
+        }
     }
 }
 
@@ -871,7 +913,10 @@ impl TryFrom<BlockBody> for common::block::BlockBody {
     type Error = lee::error::LeeError;
 
     fn try_from(value: BlockBody) -> Result<Self, Self::Error> {
-        let BlockBody { transactions } = value;
+        let BlockBody {
+            transactions,
+            reverted,
+        } = value;
 
         let transactions = transactions
             .into_iter()
@@ -881,7 +926,10 @@ impl TryFrom<BlockBody> for common::block::BlockBody {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(Self { transactions })
+        Ok(Self {
+            transactions,
+            reverted,
+        })
     }
 }
 
@@ -1084,6 +1132,9 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
             }
             indexer_core::BlockIngestError::NonPublicGenesisTransaction => {
                 Self::NonPublicGenesisTransaction
+            }
+            indexer_core::BlockIngestError::RevertMismatch { listed, settled } => {
+                Self::RevertMismatch { listed, settled }
             }
             indexer_core::BlockIngestError::StateTransition { tx_index, reason } => {
                 Self::StateTransition { tx_index, reason }
@@ -1380,6 +1431,19 @@ mod tests {
                 ..lee_core::execution_state::PublicExecutionContext::default()
             },
             execution: lee_core::ProvenExecution {
+                // The proof commits to its fee, so a mirror dropping it breaks verification.
+                fee: Some(lee_core::ProvenFee {
+                    refund_to: Some(account_id(70)),
+                    fallback: Some(lee_core::FeeFallback {
+                        action: lee_core::PrivateAction::default(),
+                        boundary: vec![
+                            lee_core::execution_state::BoundaryStep::PrivateToPublic(
+                                repeated.clone(),
+                            ),
+                            lee_core::execution_state::BoundaryStep::EndPublicSubtree,
+                        ],
+                    }),
+                }),
                 boundary: vec![
                     lee_core::execution_state::BoundaryStep::PrivateToPublic(repeated.clone()),
                     lee_core::execution_state::BoundaryStep::PrivateToPublic(

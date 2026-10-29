@@ -243,6 +243,15 @@ pub fn joining_setup_with_stake() -> Result<JoiningSetup> {
         })
     })?;
 
+    // The fixture orders its initial accounts by id so `existing_public_accounts()` is stable.
+    // The funding key is only needed to sign the stake, so drop it rather than leave a randomly
+    // keyed, now empty account in that list.
+    ctx.ctx_mut()
+        .wallet_mut()
+        .storage_mut()
+        .key_chain_mut()
+        .remove_imported_public_account(&funding_id);
+
     let ownership_account = ctx.block_on(|ctx| async {
         get_account(ctx, ownership_id)
             .await

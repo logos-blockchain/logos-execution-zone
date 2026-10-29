@@ -23,11 +23,13 @@ use core_ffi::{
 };
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS,
+    config::min_private_fee,
     ffi_helpers::{
         primitives as primitives_ffi_helpers, sequencer as sequencer_ffi_helpers, wallet::*,
     },
 };
 use lee::{AccountId, PrivateKey, PublicKey};
+use test_fixtures::BlockingTestContext;
 
 #[test]
 fn wallet_ffi_save_and_load_persistent_storage() -> Result<()> {
@@ -457,7 +459,8 @@ fn a_pending_private_credit_survives_seed_restoration_ffi() -> Result<()> {
         (FfiBytes32::from(account_id), out_keys)
     };
     let from: FfiBytes32 = ctx.ctx().existing_private_accounts()[0].into();
-    let amount: [u8; 16] = 100_u128.to_le_bytes();
+    // The restored account pays the receipt's fee out of the credit it receives.
+    let amount: [u8; 16] = (100 + min_private_fee()).to_le_bytes();
 
     let mut transfer_result = FfiTransferResult::default();
     unsafe {
@@ -548,3 +551,45 @@ fn a_pending_private_credit_survives_seed_restoration_ffi() -> Result<()> {
 
 //     Ok(())
 // }
+
+#[test]
+fn a_null_sequencer_pointer_reaches_the_configured_sequencer() -> Result<()> {
+    // A null pointer stands for a process with no embedded sequencer, so do not
+    // start one.
+    let ctx = BlockingTestContext::new_default()?;
+    let home = tempfile::tempdir()?;
+
+    let height = unsafe {
+        let FfiCreateWalletOutput {
+            wallet: wallet_ffi_handle,
+            mnemonic: _,
+        } = new_wallet_ffi_with_test_context_config(&ctx, home.path(), std::ptr::null())?;
+        assert!(
+            !wallet_ffi_handle.is_null(),
+            "A null sequencer must fall back to the configured address, not fail"
+        );
+
+        let mut height = 0_u64;
+        wallet_ffi_get_current_block_height(wallet_ffi_handle, &raw mut height).unwrap();
+        wallet_ffi_save(wallet_ffi_handle).unwrap();
+        wallet_ffi_destroy(wallet_ffi_handle);
+        height
+    };
+
+    let reopened_height = unsafe {
+        let wallet_ffi_handle =
+            load_existing_ffi_wallet(home.path(), std::ptr::null(), ctx.ctx().wallet_password())?
+                .unwrap();
+        let mut height = 0_u64;
+        wallet_ffi_get_current_block_height(wallet_ffi_handle, &raw mut height).unwrap();
+        wallet_ffi_destroy(wallet_ffi_handle);
+        height
+    };
+
+    assert!(
+        reopened_height >= height,
+        "The chain cannot go backwards between two reads"
+    );
+
+    Ok(())
+}

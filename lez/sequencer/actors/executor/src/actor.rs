@@ -1,6 +1,7 @@
 use std::future::Future;
 
 use common::{PageLimit, block::Block, transaction::LeeTransaction};
+use fee_core::validity::FeeError;
 use futures::{
     FutureExt as _, StreamExt as _, TryFutureExt as _, TryStreamExt as _, future::ready, stream,
 };
@@ -253,7 +254,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
         self.sequencer
             .with_state(|state| sequencer_core::fees::screen(&transaction, state))
             .await
-            .map_err(|err| Error::IncorrectFee(err.into()))?;
+            .map_err(|err| {
+                if let sequencer_core::fees::Error::FeeCore(FeeError::PrivateFeeBelowRequired {
+                    required,
+                    reserve,
+                }) = err
+                {
+                    Error::PrivateFeeBelowHead { required, reserve }
+                } else {
+                    Error::IncorrectFee(err.into())
+                }
+            })?;
 
         self.mempool_handle
             .try_push((origin.into(), transaction))
@@ -398,7 +409,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetProofsAndRoot> for E
         &mut self,
         GetProofsAndRoot {
             commitments,
-            message_position,
+            message_positions,
         }: GetProofsAndRoot,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
@@ -408,9 +419,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetProofsAndRoot> for E
                     .iter()
                     .map(|commitment| state.get_proof_for_commitment(commitment))
                     .collect();
-                let message_path =
-                    message_position.and_then(|position| state.get_proof_for_position(position));
-                (proofs, message_path, state.commitment_root())
+                let message_paths = message_positions
+                    .iter()
+                    .map(|position| state.get_proof_for_position(*position))
+                    .collect();
+                (proofs, message_paths, state.commitment_root())
             })
             .await
     }

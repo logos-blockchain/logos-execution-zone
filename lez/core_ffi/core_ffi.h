@@ -501,6 +501,18 @@ typedef struct FfiVec_FfiProgramImageClaim {
 
 typedef struct FfiVec_FfiProgramImageClaim FfiProgramImageClaims;
 
+/**
+ * What a proof commits about its in-proof fee. The `has_*` flags mark which parts are present;
+ * an absent part holds an empty value.
+ */
+typedef struct FfiProvenFee {
+  bool has_refund_to;
+  FfiAccountId refund_to;
+  bool has_fallback;
+  struct FfiPrivateAction fallback_action;
+  FfiBoundaryStepList fallback_boundary;
+} FfiProvenFee;
+
 typedef struct FfiPrivacyPreservingMessage {
   struct FfiPublicExecutionContext public_context;
   FfiBoundaryStepList boundary;
@@ -514,6 +526,8 @@ typedef struct FfiPrivacyPreservingMessage {
   uint64_t timestamp_validity_window[2];
   FfiProgramImageClaims program_image_claims;
   FfiPublicAccountEvidenceList admission_evidence;
+  bool has_fee;
+  struct FfiProvenFee fee;
 } FfiPrivacyPreservingMessage;
 
 typedef FfiVecU8 FfiProof;
@@ -1956,6 +1970,34 @@ enum FfiOperationError wallet_ffi_get_private_account_keys(struct WalletHandle *
                                                            struct FfiPrivateAccountKeys *out_keys);
 
 /**
+ * Create keys for a private account from pointer.
+ *
+ * Returns the nullifier public key (NPK) and viewing public key (VPK)
+ * for the specified private account. These keys are safe to share publicly.
+ *
+ * # Parameters
+ * - `nullifier_public_key`: Nullifier public key, 32 bytes.
+ * - `viewing_public_key`: pointer into u8 for viewing public key.
+ * - `viewing_public_key_len`: length of `viewing_public_key`.
+ * - `out_keys`: Output pointer for the key data
+ *
+ * # Returns
+ * - `Success` on successful creation
+ * - Error code on other failures
+ *
+ * # Memory
+ * The keys structure must be freed with `wallet_ffi_free_private_account_keys()`.
+ *
+ * # Safety
+ * - `viewing_public_key` must be a valid pointer to u8,
+ * - `out_keys` must be a valid pointer to a `FfiPrivateAccountKeys` struct
+ */
+enum FfiOperationError wallet_ffi_make_private_account_keys_from_raw(struct FfiBytes32 nullifier_public_key,
+                                                                     const uint8_t *viewing_public_key,
+                                                                     uintptr_t viewing_public_key_len,
+                                                                     struct FfiPrivateAccountKeys *out_keys);
+
+/**
  * Convert an account ID to a Base58 string.
  *
  * # Parameters
@@ -2130,22 +2172,24 @@ enum FfiOperationError wallet_ffi_free_label_list(struct LabelList *label_list);
 /**
  * Create a new wallet with fresh storage.
  *
- * This initializes a new wallet with a fresh mnemonic.
+ * This initializes a new wallet with a fresh mnemonic, its sync cursor at the chain tip.
+ * An unreachable node leaves the cursor at genesis.
  * Use this for first-time wallet creation.
  *
  * # Parameters
  * - `config_path`: Path to the wallet configuration file (JSON)
  * - `storage_path`: Path where wallet data will be stored
  * - `password`: Password the wallet storage is encrypted under, or empty to leave it unencrypted
- * - `sequencer`: Valid pointer into `SequencerServiceFFI`
+ * - `sequencer`: A `SequencerServiceFFI` in this process, or null to use the address in
+ *   `config_path`
  *
  * # Returns
  * - Result, which contains opaque wallet handle and mnemonic words on success
  * - Result with null pointers on error, whose details are printed to stderr
  *
  * # Safety
- * All string parameters must be valid null-terminated UTF-8 strings. Sequencer pointer must be
- * valid.
+ * All string parameters must be valid null-terminated UTF-8 strings. A non-null sequencer must
+ * outlive the returned handle.
  */
 struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
                                                    const char *storage_path,
@@ -2163,7 +2207,8 @@ struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
  * - `password`: Password the wallet storage is encrypted under, or empty for an unencrypted
  *   storage (see `wallet_ffi_storage_is_encrypted`)
  * - `out_handle`: Output pointer for the opaque wallet handle
- * - `sequencer`: Valid pointer into `SequencerServiceFFI`
+ * - `sequencer`: A `SequencerServiceFFI` in this process, or null to use the address in
+ *   `config_path`
  *
  * # Returns
  * - `Success` with the handle written to `out_handle`
@@ -2172,8 +2217,8 @@ struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
  * - Another error code on any other failure, whose details are printed to stderr
  *
  * # Safety
- * - All string parameters must be valid null-terminated UTF-8 strings. Sequencer pointer must be
- *   valid.
+ * - All string parameters must be valid null-terminated UTF-8 strings. A non-null sequencer must
+ *   outlive the handle written to `out_handle`.
  * - `out_handle` must be a valid pointer to a `WalletHandle *`.
  */
 enum FfiOperationError wallet_ffi_open(const char *config_path,

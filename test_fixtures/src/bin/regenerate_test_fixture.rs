@@ -55,7 +55,7 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     let initial_private_accounts = config::default_private_accounts_for_wallet();
     let genesis = config::genesis_from_accounts(
         &initial_public_accounts,
-        config::private_total(&initial_private_accounts),
+        config::private_funding_cost(&initial_private_accounts),
     );
 
     let (sequencer_handle, temp_sequencer_dir) =
