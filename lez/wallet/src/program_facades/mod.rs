@@ -4,7 +4,10 @@
 use lee::{AccountId, Actor};
 use lee_core::account::ActorState;
 
-use crate::{AccountIdentity, AccountMention, AsyncDelivery, ExecutionFailureKind, WalletCore};
+use crate::{
+    AccountIdentity, AccountMention, AsyncDelivery, ExecutionFailureKind, WalletCore,
+    WalletSequencerClient,
+};
 
 pub mod bridge;
 pub mod native_token_transfer;
@@ -19,8 +22,8 @@ pub enum CreditDelivery {
 
 // What `sender`'s credit to `recipient` at `program` adds to a transaction: the recipient's account
 // when it takes part now, or the recovery binding or seal of a credit left pending.
-pub(crate) fn credit_destination(
-    wallet: &WalletCore,
+pub(crate) fn credit_destination<C: WalletSequencerClient>(
+    wallet: &WalletCore<C>,
     sender: &AccountIdentity,
     recipient: AccountIdentity,
     program: AccountId,
@@ -43,8 +46,8 @@ pub(crate) fn credit_destination(
     Ok((None, async_delivery))
 }
 
-pub(crate) async fn actor_state(
-    wallet: &WalletCore,
+pub(crate) async fn actor_state<C: WalletSequencerClient>(
+    wallet: &WalletCore<C>,
     account: &AccountIdentity,
     program_account_id: AccountId,
 ) -> Result<ActorState, ExecutionFailureKind> {

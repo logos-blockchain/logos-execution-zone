@@ -11,6 +11,7 @@ use common::HashType;
 use lee::{AccountId, PrivateKey, PublicKey, program::Program};
 use lee_core::program::MessageData;
 use program_loader_core::MAX_SEGMENT_DATA_LEN;
+use sequencer_service_rpc::SequencerClient;
 use tempfile::TempDir;
 use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
 use testing_framework_core::scenario::DynError;
@@ -35,7 +36,7 @@ use crate::{
 };
 
 struct WalletComponents {
-    wallet: WalletCore,
+    wallet: WalletCore<SequencerClient>,
     _state_dir: Option<TempDir>,
     password: String,
 }
@@ -495,7 +496,7 @@ pub struct LezRuntime {
 
 impl LezRuntime {
     fn new(
-        wallet: WalletCore,
+        wallet: WalletCore<SequencerClient>,
         state_dir: Option<TempDir>,
         password: String,
     ) -> Result<Self, DynError> {
@@ -848,7 +849,7 @@ impl AppDeployment<AppHostEnv> for WalletApp {
         // dedicated blocking thread/runtime; scenario operations use the
         // actor below and never create nested runtimes.
         let (wallet, state_dir, password) = tokio::task::spawn_blocking(
-            move || -> anyhow::Result<(WalletCore, Option<TempDir>, String)> {
+            move || -> anyhow::Result<(WalletCore<SequencerClient>, Option<TempDir>, String)> {
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()

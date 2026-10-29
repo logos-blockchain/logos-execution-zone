@@ -20,7 +20,7 @@ use lee_core::{
 };
 use rand::{RngCore as _, rngs::OsRng};
 
-use crate::{ExecutionFailureKind, WalletCore};
+use crate::{ExecutionFailureKind, WalletCore, WalletSequencerClient};
 
 /// Length every note ciphertext the wallet emits is padded up to.
 ///
@@ -379,8 +379,8 @@ impl AccountManager {
     /// application and that all users share the value for a larger anonymity set.
     const PADDED_PRIVATE_ACTIONS: usize = 7;
 
-    pub async fn new(
-        wallet: &WalletCore,
+    pub async fn new<C: WalletSequencerClient>(
+        wallet: &WalletCore<C>,
         mentions: Vec<AccountMention>,
         message: Option<(CommitmentPosition, Commitment)>,
     ) -> Result<Self, ExecutionFailureKind> {
@@ -689,9 +689,9 @@ impl AccountManager {
     /// A fee-exempt transaction carries a vestigial fee declaration the sequencer
     /// never charges, so it still needs a payer id to fill. Only a wallet with no
     /// signing account at all yields `None`.
-    pub async fn fee_payer_account_id(
+    pub async fn fee_payer_account_id<C: WalletSequencerClient>(
         &mut self,
-        wallet: &WalletCore,
+        wallet: &WalletCore<C>,
     ) -> Result<Option<AccountId>, ExecutionFailureKind> {
         self.fee_payer_account_id_with(|selector| async move {
             public_account_view(wallet, selector)
@@ -837,8 +837,8 @@ fn witness_kind(kind: &PrivateAccountKind, key: RegularKey) -> WitnessKind {
     }
 }
 
-async fn public_account_view(
-    wallet: &WalletCore,
+async fn public_account_view<C: WalletSequencerClient>(
+    wallet: &WalletCore<C>,
     actor_state_selector: Actor,
 ) -> Result<Option<Account>, ExecutionFailureKind> {
     wallet
@@ -861,8 +861,8 @@ fn merge_public_view(
     Ok(())
 }
 
-async fn prepare_public_account(
-    wallet: &WalletCore,
+async fn prepare_public_account<C: WalletSequencerClient>(
+    wallet: &WalletCore<C>,
     actor_state_selector: Actor,
 ) -> Result<(PreparedAccount, bool), ExecutionFailureKind> {
     let view = public_account_view(wallet, actor_state_selector).await?;
@@ -876,8 +876,8 @@ async fn prepare_public_account(
     ))
 }
 
-async fn prepare_account(
-    wallet: &WalletCore,
+async fn prepare_account<C: WalletSequencerClient>(
+    wallet: &WalletCore<C>,
     identity: AccountIdentity,
     actor_state_selector: Actor,
     authorizes: bool,
@@ -974,8 +974,8 @@ fn key_evidence(key: &PrivateKey) -> PublicAccountEvidence {
     PublicAccountEvidence::Key(PublicKey::new_from_private_key(key))
 }
 
-fn private_shared_acc_preparation(
-    wallet: &WalletCore,
+fn private_shared_acc_preparation<C: WalletSequencerClient>(
+    wallet: &WalletCore<C>,
     account_id: AccountId,
     vpk: ViewingPublicKey,
     kind: WitnessKind,
@@ -1006,8 +1006,8 @@ fn prepared_data(
     }
 }
 
-async fn fetch_private_proofs_and_root(
-    wallet: &WalletCore,
+async fn fetch_private_proofs_and_root<C: WalletSequencerClient>(
+    wallet: &WalletCore<C>,
     states: &mut [State],
     message: Option<(CommitmentPosition, Commitment)>,
 ) -> Result<(CommitmentSetDigest, Option<MembershipProof>), ExecutionFailureKind> {
@@ -1083,7 +1083,10 @@ fn validate_proofs_against_root(
 }
 
 // The derivation a recovery binding proves for a private identity, at its canonical address.
-pub fn recipient(wallet: &WalletCore, identity: &AccountIdentity) -> Option<Recipient> {
+pub fn recipient<C: WalletSequencerClient>(
+    wallet: &WalletCore<C>,
+    identity: &AccountIdentity,
+) -> Option<Recipient> {
     let (npk, vpk, kind) = match identity {
         AccountIdentity::PrivateOwned(account_id) => {
             let managed = wallet

@@ -10,6 +10,7 @@ use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use lee::{AccountId, Actor};
 use sequencer_core::config::GenesisAction;
 use sequencer_service::SequencerConfig;
+use sequencer_service_rpc::SequencerClient;
 use sequencer_stake_core::{SequencerKey, SequencerStakeConfig};
 use wallet::{
     AccountIdentity, WalletCore, account::AccountIdWithPrivacy, cli::CliAccountMention,
@@ -22,7 +23,7 @@ pub const CONFIG_FILE: &str = "sequencer_config.json";
 /// Creates `home` with its config, channel signing key and Bedrock funding public key.
 pub fn setup(
     home: &Path,
-    template: &Path,
+    template: &str,
     funding_public_key: &str,
     create_channel: bool,
 ) -> Result<()> {
@@ -40,11 +41,8 @@ pub fn setup(
         .with_context(|| format!("Failed to resolve {}", home.display()))?;
 
     // Not `SequencerConfig::from_path`: its genesis checks don't apply to a joiner, who drops it.
-    let template_file = std::fs::File::open(template)
-        .with_context(|| format!("Failed to open the config at {}", template.display()))?;
     let mut config: SequencerConfig =
-        serde_json::from_reader(std::io::BufReader::new(template_file))
-            .with_context(|| format!("Failed to read the config at {}", template.display()))?;
+        serde_json::from_str(template).context("Failed to read the config")?;
     config.home.clone_from(&home);
     if create_channel {
         let genesis = config
@@ -205,7 +203,7 @@ pub async fn unstake(
     confirm(&wallet, tx_hash).await
 }
 
-fn open_wallet(home: Option<PathBuf>) -> Result<WalletCore> {
+fn open_wallet(home: Option<PathBuf>) -> Result<WalletCore<SequencerClient>> {
     let home = match home {
         Some(home) => home,
         None => wallet::utils::get_home()?,
@@ -223,14 +221,17 @@ fn open_wallet(home: Option<PathBuf>) -> Result<WalletCore> {
         .with_context(|| format!("Failed to open the wallet in {}", home.display()))
 }
 
-fn public_account(wallet: &WalletCore, mention: &CliAccountMention) -> Result<AccountId> {
+fn public_account(
+    wallet: &WalletCore<SequencerClient>,
+    mention: &CliAccountMention,
+) -> Result<AccountId> {
     match mention.resolve(wallet.storage())? {
         AccountIdWithPrivacy::Public(account) => Ok(account),
         AccountIdWithPrivacy::Private(_) => bail!("{mention} is private; stakes move public funds"),
     }
 }
 
-async fn stake_config(wallet: &WalletCore) -> Result<SequencerStakeConfig> {
+async fn stake_config(wallet: &WalletCore<SequencerClient>) -> Result<SequencerStakeConfig> {
     let program_id = programs::sequencer_stake_account_id();
     let account = wallet
         .get_account_view(Actor::new(
@@ -251,7 +252,7 @@ fn minimum_stake(config: &SequencerStakeConfig) -> Result<u128> {
         .minimum_sequencer_stake)
 }
 
-async fn confirm(wallet: &WalletCore, tx_hash: common::HashType) -> Result<()> {
+async fn confirm(wallet: &WalletCore<SequencerClient>, tx_hash: common::HashType) -> Result<()> {
     let (_, block_id) = wallet
         .poll_transaction(tx_hash)
         .await

@@ -13,7 +13,7 @@ use lee_core::{
 use rpds::{HashTrieMapSync, HashTrieSetSync, RedBlackTreeMapSync, RedBlackTreeSetSync};
 
 use crate::{
-    encoding::persistent::serialize_ordered_map,
+    encoding::persistent::{serialize_map, serialize_ordered_map},
     ensure,
     error::LeeError,
     merkle_tree::MerkleTree,
@@ -542,7 +542,7 @@ impl V03State {
 
     /// Order-independent fingerprint of the genesis-relevant state: the public account set
     /// (which includes deployed programs' storage accounts), the commitment-set digest, the
-    /// publications and the recovery bindings.
+    /// commitments, the nullifiers, the publications and the recovery bindings.
     ///
     /// The sequencer and the indexer build the directly-seeded part of genesis
     /// (base builtins plus any directly-seeded accounts) separately from their own
@@ -557,7 +557,7 @@ impl V03State {
         // whether it belongs in the genesis fingerprint.
         let Self {
             public_state,
-            private_state,
+            private_state: (commitment_set, nullifier_set),
             publications,
             recovery_bindings,
         } = self;
@@ -575,9 +575,11 @@ impl V03State {
             hasher.update(len.to_le_bytes());
             hasher.update(&bytes);
         }
-        hasher.update(private_state.0.digest());
+        hasher.update(commitment_set.digest());
         let mut encoded = Vec::new();
-        serialize_ordered_map(publications, &mut encoded)
+        serialize_map(&commitment_set.commitments, &mut encoded)
+            .and_then(|()| nullifier_set.serialize(&mut encoded))
+            .and_then(|()| serialize_ordered_map(publications, &mut encoded))
             .and_then(|()| serialize_ordered_map(recovery_bindings, &mut encoded))
             .expect("borsh serialization is infallible");
         hasher.update(encoded);

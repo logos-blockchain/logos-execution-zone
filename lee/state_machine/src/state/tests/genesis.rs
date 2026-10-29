@@ -43,6 +43,28 @@ fn new_includes_nullifiers_for_private_accounts() {
 }
 
 #[test]
+fn the_genesis_fingerprint_changes_when_a_nullifier_is_added() {
+    let keys = test_private_account_keys_1();
+    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk());
+    let mut state = V03State::new();
+    state
+        .private_state
+        .0
+        .extend(&[Commitment::new(&account_id, &Account::funded(100))]);
+    let fingerprint = state.genesis_fingerprint();
+
+    state
+        .private_state
+        .1
+        .extend(&[Nullifier::for_account_initialization(
+            &account_id,
+            &keys.nsk(),
+        )]);
+
+    assert_ne!(state.genesis_fingerprint(), fingerprint);
+}
+
+#[test]
 fn insert_program() {
     let mut state = V03State::new();
     let program_to_insert = crate::test_methods::scripted();

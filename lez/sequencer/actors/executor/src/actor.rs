@@ -16,7 +16,7 @@ use lee_core::{
     account::{Actor, Balance, Nonce},
     program::Publication,
 };
-use log::{info, warn};
+use log::{debug, warn};
 use mempool::MemPoolHandle;
 use sequencer_actors_common::EraseMessage as _;
 use sequencer_bedrock_actor::BedrockActorTrait;
@@ -182,11 +182,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         if !self.is_our_turn {
-            info!("Not our turn to produce a block, skipping");
+            debug!("Not our turn to produce a block, skipping");
             return Ok(());
         }
 
-        info!("Our turn: producing a block and any committee update");
+        debug!("Our turn: producing a block and any committee update");
         // A failed turn costs this block only. Returning the error would stop
         // this actor, and the scheduler's interval task gives up for good the
         // first time it finds us not running — the node then looks healthy and

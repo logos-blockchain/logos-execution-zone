@@ -32,9 +32,13 @@ use wallet::{
     program_facades::program_loader::ProgramLoader,
 };
 
-const BLOAT_ACTOR_STATE_BYTES: usize = 96 * 1024;
+// Each write is ~79% of `MAX_GAS_EXEC` at the ~15 cycles/byte in
+// `docs/benchmarks/cycle_bench.md`, and half of `MAX_GAS_STOR`. The six
+// together put a whole-account read past the 10 MiB response cap, since
+// `0xFF` costs four JSON bytes.
+const BLOAT_ACTOR_STATE_BYTES: usize = 512 * 1024;
 
-const BLOAT_WRITERS: usize = 30;
+const BLOAT_WRITERS: usize = 6;
 
 // This test only exercises chain *resolution* under a bloated account, never `CreateHeader`,
 // so `bytecode` is never decoded or validated as a real program - arbitrary filler well under
@@ -501,9 +505,13 @@ async fn loader_reads_survive_a_bloated_segment_account() -> Result<()> {
 
     bloat_account(&mut ctx, segment_id).await?;
 
+    let error = get_account(&ctx, segment_id)
+        .await
+        .map(|_| ())
+        .expect_err("the segment account must be past the whole-account response limit");
     assert!(
-        get_account(&ctx, segment_id).await.is_err(),
-        "the segment account must be past the whole-account response limit"
+        is_oversized_response(&error),
+        "the read must fail on response size specifically: {error:?}"
     );
 
     let head_id = new_account(&mut ctx, false, None).await?;

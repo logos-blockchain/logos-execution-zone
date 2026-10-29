@@ -154,6 +154,7 @@ async fn main() -> Result<()> {
         funding_pk: sequencer_core::load_funding_public_key(&home)?,
         priority_fee_percent: config.bedrock_config.priority_fee_percent,
         resubmit_interval: Duration::from_secs(5),
+        stale_refund_slots: config.bedrock_config.stale_refund_slots,
     };
 
     let mut mock_storage = sequencer_storage_actor::mock::MockStorageActor::default();
