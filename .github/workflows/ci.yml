@@ -409,11 +409,35 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # `download-artifact` can return a truncated file and still succeed, so
+      # verify before the corrupt stream surfaces as a test failure.
       - name: Download integration test archive
+        id: archive
+        timeout-minutes: 12
+        continue-on-error: true
+        uses: actions/download-artifact@v5
+        with:
+          name: integration-tests-archive
+
+      - name: Verify the archive
+        id: verify
+        continue-on-error: true
+        run: zstd -t integration-tests.tar.zst
+
+      - name: Discard a bad archive
+        if: steps.archive.outcome == 'failure' || steps.verify.outcome == 'failure'
+        run: rm -f integration-tests.tar.zst
+
+      - name: Download integration test archive, second attempt
+        if: steps.archive.outcome == 'failure' || steps.verify.outcome == 'failure'
         timeout-minutes: 20
         uses: actions/download-artifact@v5
         with:
           name: integration-tests-archive
+
+      - name: Verify the archive after the second attempt
+        if: steps.archive.outcome == 'failure' || steps.verify.outcome == 'failure'
+        run: zstd -t integration-tests.tar.zst
 
       - name: Download resolved Bedrock node
         timeout-minutes: 20
@@ -429,7 +453,7 @@ jobs:
       - name: Report disk headroom before extraction
         run: |
           ls -l --block-size=M integration-tests.tar.zst
-          zstd -l integration-tests.tar.zst || true
+          zstd -l integration-tests.tar.zst
           df -h / /tmp /mnt || true
 
       - name: Run tests
