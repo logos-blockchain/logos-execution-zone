@@ -483,7 +483,8 @@ fn refund_invocation(
 /// apply.
 ///
 /// The one exception is a private transaction's in-proof fee, which may only raise the inbox's
-/// native balance.
+/// native balance; settlement holds the raise to the proof's reserve
+/// ([`validate_private_fee_credit`]).
 ///
 /// The bridge account has its own increase-only rule ([`validate_bridge_account_modification`]) and
 /// is not included here.
@@ -507,6 +508,35 @@ fn validate_no_restricted_account_modification(
         }
     }
     Ok(())
+}
+
+/// Rejects a private transaction's diff unless it raises the fee inbox by exactly `reserve`.
+///
+/// Classify reads the reserve off the proof's one crossing into the inbox, but the public part may
+/// also credit the inbox from public execution, which no crossing records. Any such extra would
+/// leave the inbox above the block's revenue, which the fee distribution refuses.
+pub fn validate_private_fee_credit(
+    state: &V03State,
+    diff: &ValidatedStateDiff,
+    reserve: Balance,
+) -> Result<(), lee::error::LeeError> {
+    let fee_inbox = system_accounts::fee_inbox_account_id();
+    let balance = |account: &lee::Account| account.data.native_balance().ok();
+    let pre = state.get_account_by_id(fee_inbox);
+    let credited = diff
+        .public_diff()
+        .get(&fee_inbox)
+        .and_then(balance)
+        .zip(balance(&pre))
+        .and_then(|(after, before)| after.checked_sub(before));
+    if credited == Some(reserve) {
+        Ok(())
+    } else {
+        Err(lee::error::LeeError::InvalidInput(format!(
+            "Private transaction credits the fee inbox {credited:?} instead of its reserve \
+             {reserve}"
+        )))
+    }
 }
 
 fn validate_doesnt_modify_account(
@@ -634,7 +664,7 @@ mod tests {
 
     use super::{
         validate_bridge_account_modification, validate_doesnt_modify_account,
-        validate_reward_target, validate_user_state_modification,
+        validate_private_fee_credit, validate_reward_target, validate_user_state_modification,
     };
     use crate::test_utils::{create_transaction_native_token_transfer, state_and_diff};
 
@@ -896,6 +926,23 @@ mod tests {
             lee::ActorState::from(vec![1]),
         );
         state_and_diff(AccountId::new([5; 32]), pre, post)
+    }
+
+    #[test]
+    fn a_private_transaction_credits_the_inbox_its_reserve_and_nothing_more() {
+        let credit = |amount: u128| {
+            let pre = Account::funded(1_000);
+            let mut post = pre.clone();
+            post.data
+                .set_actor_state(NATIVE_TOKEN_PROGRAM_ID, encode_balance(1_000 + amount));
+            state_and_diff(system_accounts::fee_inbox_account_id(), pre, post)
+        };
+
+        let (state, diff) = credit(50);
+        validate_private_fee_credit(&state, &diff, 50).unwrap();
+        // A public part crediting the inbox beside the reserve, or less than the reserve.
+        assert!(validate_private_fee_credit(&state, &diff, 49).is_err());
+        assert!(validate_private_fee_credit(&state, &diff, 51).is_err());
     }
 
     #[test]

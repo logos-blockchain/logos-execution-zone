@@ -9,7 +9,8 @@ use common::{
     block::{Block, BlockMeta},
     transaction::{
         LeeTransaction, TxEvents, clock_invocation, fee_invocation, fee_refund_invocation,
-        fee_reserve_invocation, private_fee_refund_invocation, validate_user_state_modification,
+        fee_reserve_invocation, private_fee_refund_invocation, validate_private_fee_credit,
+        validate_user_state_modification,
     },
 };
 use fee_core::{
@@ -496,12 +497,12 @@ fn settle_private_transaction(
         )
     })?;
 
-    validate_user_state_modification(transaction, state, &diff).map_err(|err| {
-        BlockIngestError::RestrictedAccountModification {
+    validate_user_state_modification(transaction, state, &diff)
+        .and_then(|()| validate_private_fee_credit(state, &diff, *reserve))
+        .map_err(|err| BlockIngestError::RestrictedAccountModification {
             tx_index,
             reason: err.to_string(),
-        }
-    })?;
+        })?;
     let events = state
         .apply_state_diff(diff)
         .map_err(|err| fee_validity(format!("private action failed: {err}")))?;
