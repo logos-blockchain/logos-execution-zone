@@ -441,9 +441,6 @@ jobs:
             RUST_LOG=info,kameo=warn
             LOGOS_BLOCKCHAIN_NODE_BIN=${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
           run: |
-            # `--retries` names the flaky test, `with_retry` covers a bad runner.
-            source .github/scripts/with_retry.sh
-
             # A `binary::test` target is one test alone on this runner.
             target='${{ matrix.target }}'
             binary="${target%%::*}"
@@ -453,6 +450,8 @@ jobs:
               filter="binary($binary)"
             fi
 
+            # Four attempts as before, but inside nextest, which names the
+            # flaky test and reruns only it rather than the whole command.
             if [[ "$binary" == "tf_bedrock_builder" || \
                   "$binary" == "tf_app_deployments" ]]; then
               # The nextest archive contains the absolute Cargo git checkout
@@ -461,9 +460,11 @@ jobs:
               # allowing TF to use its local build provider.
               cargo fetch --locked
 
-              with_retry "env -u GITHUB_ACTIONS -u CI cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E '$filter'" 2
+              env -u GITHUB_ACTIONS -u CI cargo nextest run --retries 3 \
+                --archive-file integration-tests.tar.zst -E "$filter"
             else
-              with_retry "cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E '$filter'" 2
+              cargo nextest run --retries 3 \
+                --archive-file integration-tests.tar.zst -E "$filter"
             fi
 
       - name: Report disk headroom after the tests
