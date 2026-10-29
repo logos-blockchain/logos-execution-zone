@@ -118,6 +118,19 @@ pub struct JoiningSetup {
     pub sequencer_home: TempDir,
 }
 
+/// `existing_public_accounts` is ordered by account id and a staked joiner's funding account is
+/// left empty by its stake, so an index into that list is not a sender.
+pub fn funded_public_account(ctx: &BlockingTestContext, balance: u128) -> Result<AccountId> {
+    ctx.block_on(|ctx| async move {
+        for account_id in ctx.existing_public_accounts() {
+            if account_balance(ctx, account_id).await? >= balance {
+                return Ok(account_id);
+            }
+        }
+        anyhow::bail!("No public account holds the {balance} this transfer spends")
+    })
+}
+
 /// Short block cadence for the joining.
 #[must_use]
 pub fn fast_blocks() -> SequencerPartialConfig {
