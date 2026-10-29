@@ -89,7 +89,9 @@ unsafe fn client_for(
     WalletCore::<SequencerClient>::client_from_config(&config)
         .map(WalletClient::Http)
         .map_err(|e| {
-            print_error(format!("Failed to reach the configured sequencer: {e:#}"));
+            print_error(format!(
+                "Failed to build a client for the configured sequencer: {e:#}"
+            ));
             FfiOperationError::ConfigError
         })
 }

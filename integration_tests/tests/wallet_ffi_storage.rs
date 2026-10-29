@@ -28,6 +28,7 @@ use integration_tests::{
     },
 };
 use lee::{AccountId, PrivateKey, PublicKey};
+use test_fixtures::BlockingTestContext;
 
 #[test]
 fn wallet_ffi_save_and_load_persistent_storage() -> Result<()> {
@@ -551,16 +552,9 @@ fn a_pending_private_credit_survives_seed_restoration_ffi() -> Result<()> {
 
 #[test]
 fn a_null_sequencer_pointer_reaches_the_configured_sequencer() -> Result<()> {
-    let sequencer_ffi_helpers::JoiningSetup {
-        ctx,
-        node: _,
-        ownership_id: _,
-        sequencer_ffi: sequencer_ffi_res,
-        sequencer_home,
-    } = sequencer_ffi_helpers::joining_setup(false)?;
-
-    log::info!("Joining sequencer home: {sequencer_home:?}");
-
+    // A null pointer stands for a process with no embedded sequencer, so do not
+    // start one.
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
 
     let height = unsafe {
@@ -594,11 +588,6 @@ fn a_null_sequencer_pointer_reaches_the_configured_sequencer() -> Result<()> {
         reopened_height >= height,
         "The chain cannot go backwards between two reads"
     );
-
-    // SAFETY: sequencer_ffi created by FFI, it is valid.
-    unsafe {
-        sequencer_ffi_helpers::sequencer_ffi_stop_sequencer(sequencer_ffi_res.value);
-    }
 
     Ok(())
 }
