@@ -1956,6 +1956,34 @@ enum FfiOperationError wallet_ffi_get_private_account_keys(struct WalletHandle *
                                                            struct FfiPrivateAccountKeys *out_keys);
 
 /**
+ * Create keys for a private account from pointer.
+ *
+ * Returns the nullifier public key (NPK) and viewing public key (VPK)
+ * for the specified private account. These keys are safe to share publicly.
+ *
+ * # Parameters
+ * - `nullifier_public_key`: Nullifier public key, 32 bytes.
+ * - `viewing_public_key`: pointer into u8 for viewing public key.
+ * - `viewing_public_key_len`: length of `viewing_public_key`.
+ * - `out_keys`: Output pointer for the key data
+ *
+ * # Returns
+ * - `Success` on successful creation
+ * - Error code on other failures
+ *
+ * # Memory
+ * The keys structure must be freed with `wallet_ffi_free_private_account_keys()`.
+ *
+ * # Safety
+ * - `viewing_public_key` must be a valid pointer to u8,
+ * - `out_keys` must be a valid pointer to a `FfiPrivateAccountKeys` struct
+ */
+enum FfiOperationError wallet_ffi_make_private_account_keys_from_raw(struct FfiBytes32 nullifier_public_key,
+                                                                     const uint8_t *viewing_public_key,
+                                                                     uintptr_t viewing_public_key_len,
+                                                                     struct FfiPrivateAccountKeys *out_keys);
+
+/**
  * Convert an account ID to a Base58 string.
  *
  * # Parameters
@@ -2130,7 +2158,8 @@ enum FfiOperationError wallet_ffi_free_label_list(struct LabelList *label_list);
 /**
  * Create a new wallet with fresh storage.
  *
- * This initializes a new wallet with a fresh mnemonic.
+ * This initializes a new wallet with a fresh mnemonic, its sync cursor at the chain tip.
+ * An unreachable node leaves the cursor at genesis.
  * Use this for first-time wallet creation.
  *
  * # Parameters
