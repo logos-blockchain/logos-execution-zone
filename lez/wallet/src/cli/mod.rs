@@ -333,7 +333,11 @@ pub async fn execute_continuous_run<C: WalletSequencerClient>(
     }
 }
 
-async fn execute_restore_keys(wallet_core: &mut WalletCore, depth: u32, yes: bool) -> Result<()> {
+async fn execute_restore_keys<C: WalletSequencerClient>(
+    wallet_core: &mut WalletCore<C>,
+    depth: u32,
+    yes: bool,
+) -> Result<()> {
     if !yes {
         let blocks = wallet_core.get_last_block_id().await?;
         let question = format!(

@@ -121,14 +121,6 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
         return FfiCreateWalletOutput::default();
     };
 
-    match WalletCore::new_init_storage(config_path, storage_path, None, &password) {
-        Ok((mut core, mnemonic)) => {
-            if let Err(e) = block_on(core.start_at_chain_tip()) {
-                print_error(format!(
-                    "Could not read the chain tip, the new wallet syncs from block 0: {e}"
-                ));
-            }
-
     if sequencer.is_null() {
         return FfiCreateWalletOutput::default();
     }
@@ -142,7 +134,13 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
         &password,
         SequencerServiceFFIWrapper::wrap(sequencer),
     ) {
-        Ok((core, mnemonic)) => {
+        Ok((mut core, mnemonic)) => {
+            if let Err(e) = block_on(core.start_at_chain_tip()) {
+                print_error(format!(
+                    "Could not read the chain tip, the new wallet syncs from block 0: {e}"
+                ));
+            }
+
             let wrapper = Box::new(WalletWrapper {
                 core: Mutex::new(core),
             });

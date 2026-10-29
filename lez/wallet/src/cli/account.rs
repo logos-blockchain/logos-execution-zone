@@ -362,7 +362,6 @@ impl AccountSubcommand {
         }
     }
 
-    async fn handle_get(
     async fn handle_get<C: WalletSequencerClient>(
         raw: bool,
         keys: bool,
