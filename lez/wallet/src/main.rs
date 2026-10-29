@@ -8,7 +8,9 @@ use clap::{CommandFactory as _, Parser as _};
 use wallet::{
     WalletCore,
     cli::{Args, execute_continuous_run, execute_subcommand},
-    utils::{fetch_config_path, fetch_persistent_storage_path, read_new_password, read_password},
+    utils::{
+        fetch_config_path, fetch_persistent_storage_path, read_new_password, read_password, warn,
+    },
 };
 
 // TODO #169: We have sample configs for sequencer, but not for wallet
@@ -39,8 +41,15 @@ async fn main() -> Result<()> {
             println!("Persistent storage not found, need to execute setup");
 
             let password = read_new_password()?;
-            let (wallet, mnemonic) =
+            let (mut wallet, mnemonic) =
                 WalletCore::new_init_storage(config_path, storage_path, None, &password)?;
+
+            match wallet.start_at_chain_tip().await {
+                Ok(tip) => println!("New wallet starts synced at block {tip}"),
+                Err(err) => warn(&format!(
+                    "Could not read the chain tip, syncing from block 0: {err:#}"
+                )),
+            }
 
             println!();
             println!("IMPORTANT: Write down your recovery phrase and store it securely.");

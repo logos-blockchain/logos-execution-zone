@@ -64,7 +64,7 @@ impl GroupSubcommand {
         }
 
         let holder = GroupKeyHolder::new();
-        wallet_core.insert_group_key_holder(name.clone(), holder);
+        wallet_core.insert_group_key_holder(name.clone(), holder, true);
         wallet_core.store_persistent_data()?;
 
         println!("Created group '{name}'");
@@ -142,7 +142,7 @@ impl GroupSubcommand {
         let holder = GroupKeyHolder::unseal(&sealed_bytes, sealing_key)
             .map_err(|e| anyhow::anyhow!("Failed to unseal: {e:?}"))?;
 
-        wallet_core.insert_group_key_holder(name.clone(), holder);
+        wallet_core.insert_group_key_holder(name.clone(), holder, false);
         wallet_core.store_persistent_data()?;
 
         println!("Joined group '{name}'");

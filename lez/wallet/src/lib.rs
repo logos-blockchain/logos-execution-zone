@@ -1,5 +1,6 @@
 #![expect(
     clippy::print_stdout,
+    clippy::print_stderr,
     reason = "This is a CLI application, printing to stdout and stderr is expected and convenient"
 )]
 #![expect(
@@ -478,6 +479,14 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         self.storage.restore(mnemonic);
     }
 
+    /// Starts this wallet's history at the chain tip, which only a wallet with no older key may do.
+    pub async fn start_at_chain_tip(&mut self) -> Result<BlockId> {
+        let tip = self.get_last_block_id().await?;
+        self.storage.set_synced_from_block(tip);
+        self.storage.set_last_synced_block(tip);
+        Ok(tip)
+    }
+
     /// Saves the storage encrypted under `password`, or unencrypted for an empty one, and keeps
     /// saving it so.
     pub fn set_password(&mut self, password: &str) -> Result<()> {
@@ -505,7 +514,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 )
             })?;
 
-        println!(
+        log::info!(
             "Stored persistent accounts at {}",
             self.storage_path.display()
         );
@@ -551,15 +560,17 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .generate_new_privacy_preserving_transaction_key_chain(chain_index)
     }
 
-    /// Insert a group key holder into storage.
+    /// Insert a group key holder into storage. `created` only for a group this wallet made
+    /// itself, whose accounts cannot predate this wallet's history.
     pub fn insert_group_key_holder(
         &mut self,
         name: Label,
         holder: key_protocol::key_management::group_key_holder::GroupKeyHolder,
+        created: bool,
     ) {
         self.storage
             .key_chain_mut()
-            .insert_group_key_holder(name, holder);
+            .insert_group_key_holder(name, holder, created);
     }
 
     /// Set the wallet's dedicated sealing secret key.
@@ -675,6 +686,10 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             &vpk,
         );
 
+        let joined = !self
+            .storage
+            .key_chain()
+            .is_locally_created_group(&group_name);
         let entry = SharedAccountEntry {
             group_label: group_name,
             derivation: SharedAccountDerivation::Pda {
@@ -687,6 +702,9 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             },
             account: Account::default(),
         };
+        if joined {
+            self.storage.rewind_skipped_history();
+        }
         self.record_caught_up(
             |key_chain| {
                 key_chain.insert_shared_private_account(account_id, entry);
@@ -722,12 +740,19 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         let vpk = keys.generate_viewing_public_key();
         let account_id = AccountId::from((&npk, &vpk));
 
+        let joined = !self
+            .storage
+            .key_chain()
+            .is_locally_created_group(&group_name);
         let entry = SharedAccountEntry {
             group_label: group_name,
             derivation: SharedAccountDerivation::Regular { derivation_id },
             kind: lee_core::PrivateAccountKind::Regular,
             account: Account::default(),
         };
+        if joined {
+            self.storage.rewind_skipped_history();
+        }
         self.record_caught_up(
             |key_chain| {
                 key_chain.insert_shared_private_account(account_id, entry);
@@ -1725,11 +1750,14 @@ impl<C: WalletSequencerClient> WalletCore<C> {
     async fn sync(&mut self, block_id: u64, discover: bool) -> Result<()> {
         use futures::TryStreamExt as _;
 
-        // The cursor and the spent-nullifier cache claim the same blocks.
+        // The cursor and the cache claim the same blocks above where this history starts.
         let cursor = self.storage.last_synced_block();
-        self.spent_nullifiers.keep(cursor)?;
-        self.storage
-            .set_last_synced_block(cursor.min(self.spent_nullifiers.covered()));
+        let from = self.storage.synced_from_block().min(cursor);
+        self.storage.set_synced_from_block(from);
+        self.spent_nullifiers.keep(cursor.saturating_sub(from))?;
+        self.storage.set_last_synced_block(
+            cursor.min(from.saturating_add(self.spent_nullifiers.covered())),
+        );
         let last_synced_block = self.storage.last_synced_block();
         if last_synced_block >= block_id {
             return Ok(());
@@ -2791,6 +2819,62 @@ mod tests {
             );
             assert_eq!(std::fs::read(&cache_path).unwrap(), synced);
         }
+    }
+
+    #[tokio::test]
+    async fn a_wallet_started_at_the_tip_keeps_its_cursor_and_scans_nothing_earlier() {
+        let (mut wallet, _home, _sequencer, _served) = wallet_with_a_received_message().await;
+
+        assert_eq!(wallet.start_at_chain_tip().await.unwrap(), 3);
+        assert_eq!(wallet.sync_to_latest_block().await.unwrap(), 3);
+        assert_eq!(wallet.storage.last_synced_block(), 3);
+        assert_eq!(wallet.spent_nullifiers.covered(), 0);
+
+        wallet.storage.set_last_synced_block(0);
+        wallet.sync_to_latest_block().await.unwrap();
+        assert_eq!(wallet.storage.synced_from_block(), 0);
+        assert_eq!(wallet.spent_nullifiers.covered(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_tip_start_hands_its_blocks_back_before_an_older_key_reads_them() {
+        let (mut wallet, _home, _sequencer, _served) = wallet_with_a_received_message().await;
+
+        // Position 0's receipt was spent in block 2, which a tip start never read.
+        wallet.start_at_chain_tip().await.unwrap();
+        assert_eq!(
+            positions(wallet.owned_pending_messages().await.unwrap()),
+            [0, 1]
+        );
+
+        wallet.storage.rewind_skipped_history();
+        assert_eq!(
+            positions(wallet.owned_pending_messages().await.unwrap()),
+            [1]
+        );
+    }
+
+    #[tokio::test]
+    async fn only_a_joined_group_hands_the_skipped_blocks_back() {
+        use key_protocol::key_management::group_key_holder::GroupKeyHolder;
+
+        let (mut wallet, _home, _sequencer, _served) = wallet_with_a_received_message().await;
+        let (mine, theirs) = (Label::new("mine"), Label::new("theirs"));
+        wallet.insert_group_key_holder(mine.clone(), GroupKeyHolder::new(), true);
+        wallet.insert_group_key_holder(theirs.clone(), GroupKeyHolder::new(), false);
+        wallet.start_at_chain_tip().await.unwrap();
+
+        wallet
+            .create_shared_regular_account(mine, [1; 32])
+            .await
+            .unwrap();
+        assert_eq!(wallet.storage.synced_from_block(), 3);
+
+        wallet
+            .create_shared_regular_account(theirs, [2; 32])
+            .await
+            .unwrap();
+        assert_eq!(wallet.storage.synced_from_block(), 0);
     }
 
     #[tokio::test]
