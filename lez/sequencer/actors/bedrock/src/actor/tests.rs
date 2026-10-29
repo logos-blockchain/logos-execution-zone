@@ -96,6 +96,7 @@ fn the_genesis_config_op_and_its_proof_pass_bedrock_verification() {
             max_block_size: 1 << 20,
         },
         1,
+        1,
     );
     let tx_hash_view = TxHashView::new(TxHash::from([7; 32]));
 

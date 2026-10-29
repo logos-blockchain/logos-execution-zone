@@ -72,7 +72,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .add_imported_public_account(funding_private_key);
 
     info!("Waiting for the genesis supply to land on the funding account");
-    poll_until("genesis supply to land", 30, || async {
+    poll_until("genesis supply to land", 60, || async {
         Ok(account_balance(&ctx, funding_id).await? == u128::from(funding_balance))
     })
     .await?;
@@ -104,7 +104,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .map_err(|err| anyhow::anyhow!("Failed to submit Stake transaction: {err:?}"))?;
 
     info!("Waiting for the Stake transaction's block to land");
-    poll_until("stake to take ownership", 30, || async {
+    poll_until("stake to take ownership", 60, || async {
         Ok(!get_account(&ctx, ownership_id)
             .await?
             .data

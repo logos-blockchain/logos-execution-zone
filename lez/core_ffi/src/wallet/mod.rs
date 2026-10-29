@@ -43,6 +43,7 @@ use crate::{
 
 pub mod account;
 pub mod bridge;
+pub mod client;
 pub mod generic_transaction;
 pub mod keys;
 pub mod label;
