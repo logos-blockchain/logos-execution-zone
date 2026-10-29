@@ -137,6 +137,58 @@ pub unsafe extern "C" fn wallet_ffi_get_private_account_keys(
     FfiOperationError::Success
 }
 
+/// Create keys for a private account from pointer.
+///
+/// Returns the nullifier public key (NPK) and viewing public key (VPK)
+/// for the specified private account. These keys are safe to share publicly.
+///
+/// # Parameters
+/// - `nullifier_public_key`: Nullifier public key, 32 bytes.
+/// - `viewing_public_key`: pointer into u8 for viewing public key.
+/// - `viewing_public_key_len`: length of `viewing_public_key`.
+/// - `out_keys`: Output pointer for the key data
+///
+/// # Returns
+/// - `Success` on successful creation
+/// - Error code on other failures
+///
+/// # Memory
+/// The keys structure must be freed with `wallet_ffi_free_private_account_keys()`.
+///
+/// # Safety
+/// - `viewing_public_key` must be a valid pointer to u8,
+/// - `out_keys` must be a valid pointer to a `FfiPrivateAccountKeys` struct
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn wallet_ffi_make_private_account_keys_from_raw(
+    nullifier_public_key: FfiBytes32,
+    viewing_public_key: *const u8,
+    viewing_public_key_len: usize,
+    out_keys: *mut FfiPrivateAccountKeys,
+) -> FfiOperationError {
+    if viewing_public_key.is_null() || out_keys.is_null() {
+        print_error("Null pointer argument");
+        return FfiOperationError::NullPointer;
+    }
+
+    if viewing_public_key_len > 1184 {
+        print_error("viewing_public_key too long");
+        return FfiOperationError::InvalidArgument;
+    }
+
+    // VPK is an ML-KEM-768 encapsulation key (1184 bytes)
+    let vpk_ffi_vec =
+        unsafe { std::slice::from_raw_parts(viewing_public_key, viewing_public_key_len) }
+            .to_vec()
+            .into();
+
+    unsafe {
+        (*out_keys).nullifier_public_key = nullifier_public_key;
+        (*out_keys).viewing_public_key = vpk_ffi_vec;
+    }
+
+    FfiOperationError::Success
+}
+
 /// Convert an account ID to a Base58 string.
 ///
 /// # Parameters
