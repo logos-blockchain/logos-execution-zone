@@ -8,8 +8,13 @@ use lee_core::{
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
 };
 
-/// A spent received message: its nullifier and root, and the dummy output standing in for it.
-type MessageSpend = ((Nullifier, CommitmentSetDigest), DummyOutput);
+/// A nullifier spent with no private action of its own, a received message's or a dummy
+/// input's, and the dummy output standing in for its commitment.
+pub struct MessageSpend {
+    pub nullifier: Nullifier,
+    pub root: CommitmentSetDigest,
+    pub filler: DummyOutput,
+}
 
 #[expect(
     clippy::too_many_arguments,
@@ -66,19 +71,15 @@ pub fn compute_circuit_output(
     }
 
     // Pad the output with dummy commitment/nullifier pairs.
-    let padding = dummy_inputs.into_iter().map(|dummy| {
-        (
-            (
-                Nullifier::for_dummy(&dummy.nullifier_seed),
-                dummy.commitment_root,
-            ),
-            dummy.output,
-        )
+    let padding = dummy_inputs.into_iter().map(|dummy| MessageSpend {
+        nullifier: Nullifier::for_dummy(&dummy.nullifier_seed),
+        root: dummy.commitment_root,
+        filler: dummy.output,
     });
 
     // Each consumed message's nullifier is padded with a dummy commitment.
-    for (spend, filler) in message_spends.into_iter().chain(padding) {
-        emit_dummy_output(&mut output, spend, filler, ciphertext_padding);
+    for spend in message_spends.into_iter().chain(padding) {
+        emit_dummy_output(&mut output, spend, ciphertext_padding);
     }
 
     obfuscate_output_ordering(&mut output);
@@ -108,8 +109,11 @@ fn obfuscate_output_ordering(output: &mut ProvenExecution) {
 
 fn emit_dummy_output(
     output: &mut ProvenExecution,
-    (nullifier, root): (Nullifier, CommitmentSetDigest),
-    filler: DummyOutput,
+    MessageSpend {
+        nullifier,
+        root,
+        filler,
+    }: MessageSpend,
     ciphertext_padding: Option<u32>,
 ) {
     if let Some(padding) = ciphertext_padding {
@@ -404,7 +408,7 @@ mod tests {
                 })
                 .collect()
         };
-        let spend = (Nullifier::from_byte_array([5; 32]), [6; 32]);
+        let (nullifier, root) = (Nullifier::from_byte_array([5; 32]), [6; 32]);
         let filler = DummyOutput {
             commitment_seed: [7; 32],
             note: note(7).encrypted_post_state,
@@ -413,7 +417,11 @@ mod tests {
         let receipt = emit(
             private(),
             &witnesses,
-            Some((spend, filler.clone())),
+            Some(MessageSpend {
+                nullifier,
+                root,
+                filler: filler.clone(),
+            }),
             padding(5),
         );
         let call = emit(private(), &witnesses, None, padding(6));
@@ -432,17 +440,17 @@ mod tests {
             .execution
             .private_actions
             .iter()
-            .find(|action| action.nullifier == spend.0)
+            .find(|action| action.nullifier == nullifier)
             .expect("the message's nullifier is spent in one action");
         assert_eq!(
             (action.root, action.encrypted_post_state.clone()),
-            (spend.1, filler.note)
+            (root, filler.note)
         );
         assert!(
             receipt
                 .execution
                 .commitments()
-                .contains(&Commitment::for_dummy(&spend.0, &filler.commitment_seed))
+                .contains(&Commitment::for_dummy(&nullifier, &filler.commitment_seed))
         );
     }
 
@@ -523,7 +531,11 @@ mod tests {
         emit(
             Vec::new(),
             &[],
-            Some(((Nullifier::from_byte_array([5; 32]), [6; 32]), filler)),
+            Some(MessageSpend {
+                nullifier: Nullifier::from_byte_array([5; 32]),
+                root: [6; 32],
+                filler,
+            }),
             Vec::new(),
         );
     }

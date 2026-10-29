@@ -62,10 +62,14 @@ fn main() {
     // Extract the top-level message and whether it is a consumed async message, then the claims.
     let mut message_spends = Vec::with_capacity(claims.len().saturating_add(1));
     let mut spend = |witness: MessageWitness| {
-        let spend = witness
+        let (nullifier, spent_under) = witness
             .spend(&private_witnesses)
             .unwrap_or_else(|e| panic!("{e}"));
-        message_spends.push((spend, witness.filler));
+        message_spends.push(output::MessageSpend {
+            nullifier,
+            root: spent_under,
+            filler: witness.filler,
+        });
         witness.body
     };
     let root = match root {
