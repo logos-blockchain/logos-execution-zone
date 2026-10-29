@@ -9,8 +9,8 @@ use lee_core::{
     RecoveryBinding, RootCall, Timestamp,
     account::{Account, AccountId, Actor, ActorState, Cycles, Nonce},
     execution_state::{
-        PublicExecutionContext, PublicOutcome, PublicPart, TransactionEntry, TransitionView,
-        WholeExecution,
+        BoundaryStep, PublicExecutionContext, PublicOutcome, PublicPart, TransactionEntry,
+        TransitionView, WholeExecution,
     },
     program::{MessageBody, PROGRAM_LOADER_ACCOUNT_ID, Publication, TransactionEvent},
 };
@@ -311,8 +311,9 @@ impl ValidatedStateDiff {
     ///
     /// A public part failing in a chargeable way reverts to the proof's fee fallback when it
     /// carries one: the diff then spends only the payer's nullifier, commits its post-state
-    /// after the fee transfer and replays that transfer's crossing. It records no recovery
-    /// binding, since the notes those bind never exist. Without a fallback the
+    /// after the fee transfer and replays that transfer's crossing. Of the recovery bindings it
+    /// keeps only the payer's, which a refund is published through; the notes the others bind
+    /// never exist. Without a fallback the
     /// failure is an error, as every pre-execution check is.
     pub fn from_privacy_preserving_transaction_metered(
         tx: &PrivacyPreservingTransaction,
@@ -423,6 +424,13 @@ impl ValidatedStateDiff {
                     fallback.boundary.clone(),
                 )
                 .map_err(|error| LeeError::InvalidInput(error.to_string()))?;
+                let payer = if let Some(BoundaryStep::PrivateToPublic(crossing)) =
+                    fallback.boundary.first()
+                {
+                    Some(crossing.envelope.from.account_id)
+                } else {
+                    None
+                };
                 let mut fallback_cycles = 0;
                 let fallback_backend = PublicBackend::new(
                     state,
@@ -440,6 +448,12 @@ impl ValidatedStateDiff {
                         signer_account_ids,
                         new_commitments: vec![fallback.action.commitment],
                         new_nullifiers: vec![(fallback.action.nullifier, fallback.action.root)],
+                        recovery_bindings: execution
+                            .recovery_bindings
+                            .iter()
+                            .filter(|binding| Some(binding.address) == payer)
+                            .cloned()
+                            .collect(),
                         ..StateDiff::default()
                     },
                 )?;
