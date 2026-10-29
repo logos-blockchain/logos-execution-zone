@@ -31,6 +31,19 @@ pub const BLOCK_OVERHEAD: u64 = 2_048;
 pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 =
     logos_blockchain_core::mantle::ops::channel::inscribe::MAX_BYTES as u64;
 
+/// The largest Bedrock transaction: the L1 caps a block's transactions at this
+/// many bytes.
+#[expect(
+    clippy::as_conversions,
+    reason = "usize::try_from is not const & usize fits u64 on every supported target"
+)]
+pub const MAX_BEDROCK_TX_SIZE: u64 =
+    logos_blockchain_core::block::MAX_BLOCK_TRANSACTIONS_SIZE as u64;
+
+/// Smallest nonzero `stale_refund_slots`, since a shorter window orphans blocks before L1 can
+/// mine them.
+const MIN_STALE_REFUND_SLOTS: u64 = 50;
+
 /// A transaction to be applied at genesis to supply initial balances.
 ///
 /// Amounts are [`BridgeAmount`], not [`lee::Balance`]: every one is funded through the bridge's
@@ -133,6 +146,8 @@ pub struct BedrockConfig {
     pub auth: Option<BasicAuth>,
     #[serde(default = "default_priority_fee_percent")]
     pub priority_fee_percent: u64,
+    #[serde(default = "default_stale_refund_slots")]
+    pub stale_refund_slots: u64,
 }
 
 /// The values a new channel is created with.
@@ -159,6 +174,12 @@ impl SequencerConfig {
         if let Some(genesis) = &config.genesis {
             check_channel_params(&genesis.channel_params, config.block_create_timeout)?;
         }
+        let stale_refund_slots = config.bedrock_config.stale_refund_slots;
+        ensure!(
+            stale_refund_slots == 0 || stale_refund_slots >= MIN_STALE_REFUND_SLOTS,
+            "stale_refund_slots ({stale_refund_slots}) must be 0 or at least \
+             {MIN_STALE_REFUND_SLOTS}"
+        );
         Ok(config)
     }
 
@@ -240,6 +261,13 @@ const fn default_metrics_listen_address() -> Option<SocketAddr> {
 #[must_use]
 pub const fn default_priority_fee_percent() -> u64 {
     12
+}
+
+/// LIB slots an unmined own inscription waits before zone-sdk orphans it, or re-funds it if
+/// zone-sdk funded it (5 minutes at 1s slots); zero disables both.
+#[must_use]
+pub const fn default_stale_refund_slots() -> u64 {
+    300
 }
 
 /// Production defaults for the values genesis fixes.

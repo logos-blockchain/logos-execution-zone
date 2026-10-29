@@ -8,19 +8,38 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Context as _;
+use anyhow::{Context as _, ensure};
+use bridge_core::{DepositMetadata, DepositRecipient};
 use common::transaction::LeeTransaction;
+use futures::StreamExt as _;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, no_seal, utils::account_balance,
 };
 use lee::{
-    Actor, execute_and_prove_with_cross_messages, privacy_preserving_transaction, program::Program,
+    AccountId, Actor, PrivateKey, PublicAccountEvidence, PublicKey,
+    execute_and_prove_with_cross_messages, privacy_preserving_transaction, program::Program,
     public_transaction,
 };
 use lee_core::{RootCall, execution_state::TransactionEntry};
+use logos_blockchain_core::mantle::{
+    Note, Value,
+    gas::GasCost,
+    ledger::{Inputs, NoteId, Utxo},
+    ops::{OpId as _, OpRef, channel::deposit::DepositOp},
+};
+use logos_blockchain_http_api_common::{
+    bodies::{
+        channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
+        wallet::transfer_funds::WalletTransferFundsRequestBody,
+    },
+    paths::CHANNEL_DEPOSIT,
+};
+use logos_blockchain_zone_sdk::{CommonHttpClient, node_types::ApiBlock};
 use sequencer_service_rpc::RpcClient as _;
+use test_fixtures::config::{UrlProtocol, addr_to_url, bedrock_channel_id, bedrock_funding_key};
 use tokio::test;
-// const TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK: Duration = Duration::from_mins(2);
+
+const TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK: Duration = Duration::from_mins(2);
 
 #[test]
 async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
@@ -222,159 +241,156 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     Ok(())
 }
 
-// async fn submit_bedrock_deposit(
-//     bedrock_addr: std::net::SocketAddr,
-//     bedrock_account_pk: &str,
-//     recipient_id: AccountId,
-//     amount: u64,
-// ) -> anyhow::Result<()> {
-//     #[derive(BorshSerialize)]
-//     struct DepositMetadata {
-//         recipient_id: AccountId,
-//     }
+/// Deposits `amount` from the Bedrock test node's wallet into the zone's
+/// channel for `recipient` and returns the channel note the deposit re-creates.
+async fn submit_bedrock_deposit(
+    ctx: &TestContext,
+    recipient: PublicKey,
+    amount: u64,
+) -> anyhow::Result<NoteId> {
+    let node = CommonHttpClient::new(None);
+    let bedrock_url = addr_to_url(UrlProtocol::Http, ctx.bedrock_addr())?;
+    let funding_key = bedrock_funding_key();
 
-//     // Encode deposit metadata
-//     let metadata = borsh::to_vec(&DepositMetadata { recipient_id })
-//         .context("Failed to encode deposit metadata")?
-//         .try_into()
-//         .context("Encoded metadata is too big")?;
+    let exact_note = async || -> anyhow::Result<_> {
+        let balance = node
+            .get_wallet_balance(bedrock_url.clone(), funding_key, None)
+            .await
+            .context("Failed to query the Bedrock wallet balance")?;
+        Ok(balance
+            .notes
+            .iter()
+            .find_map(|(note_id, value)| (*value == amount).then_some(*note_id)))
+    };
 
-//     let channel_id = integration_tests::config::bedrock_channel_id();
-//     let client = reqwest::Client::new();
+    let mut note_id = exact_note().await?;
+    if note_id.is_none() {
+        node.transfer_funds(
+            bedrock_url.clone(),
+            WalletTransferFundsRequestBody {
+                tip: None,
+                change_public_key: funding_key,
+                funding_public_keys: vec![funding_key],
+                recipient_public_key: funding_key,
+                amount,
+            },
+        )
+        .await
+        .context("Failed to split off a note of the deposit amount")?;
+        for _ in 0..20 {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            note_id = exact_note().await?;
+            if note_id.is_some() {
+                break;
+            }
+        }
+    }
+    let note_id = note_id.context("The Bedrock wallet never held a note of the deposit amount")?;
 
-//     let mut balance = bedrock_wallet_balance(bedrock_addr, bedrock_account_pk).await?;
+    let metadata = borsh::to_vec(&DepositMetadata {
+        recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(recipient)),
+    })?
+    .try_into()
+    .map_err(|_err| anyhow::anyhow!("deposit metadata is too big"))?;
+    let deposit = DepositOp {
+        channel_id: bedrock_channel_id(),
+        inputs: Inputs::new(note_id),
+        metadata,
+    };
+    let deposited_note = Utxo::new(deposit.op_id(), 0, Note::new(amount, funding_key)).id();
+    let _: ChannelDepositResponseBody = node
+        .post(
+            bedrock_url.join(CHANNEL_DEPOSIT.trim_start_matches('/'))?,
+            &ChannelDepositRequestBody {
+                tip: None,
+                deposit,
+                change_public_key: funding_key,
+                funding_public_keys: vec![funding_key],
+                max_tx_fee: GasCost::new(Value::MAX),
+            },
+        )
+        .await
+        .context("Failed to submit the Bedrock deposit")?;
 
-//     log::info!(
-//         "Queried Bedrock balance for key {bedrock_account_pk}: {:?}",
-//         balance.balance
-//     );
+    Ok(deposited_note)
+}
 
-//     if balance.balance < amount {
-//         anyhow::bail!(
-//             "Bedrock wallet with key {bedrock_account_pk} has insufficient balance {:?} for
-// deposit amount {:?}",             balance.balance,
-//             amount
-//         );
-//     }
+/// Whether `block` carries a channel inscription bundled with a transfer that
+/// spends `note`, which only a block pinned on that deposited note does.
+fn pins_note(block: &ApiBlock, note: NoteId) -> bool {
+    let channel_id = bedrock_channel_id();
+    block.transactions.iter().any(|tx| {
+        tx.op_refs_iter().any(|op| {
+            matches!(op, OpRef::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id)
+        }) && tx.op_refs_iter().any(|op| {
+            matches!(
+                op,
+                OpRef::ChannelTransfer(transfer)
+                    if transfer.channel_id == channel_id
+                        && transfer.inputs.iter().any(|input| *input == note)
+            )
+        })
+    })
+}
 
-//     let mut selected_note_id = balance
-//         .notes
-//         .iter()
-//         .find_map(|(note_id, value)| (*value == amount).then_some(*note_id));
+/// A deposit is minted in a block published together with a transfer that
+/// spends the deposit's channel note, and its finalization does not mint it
+/// again.
+#[test]
+async fn a_bedrock_deposit_is_minted_in_a_block_pinned_on_it_and_only_once() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let recipient = PublicKey::new_from_private_key(&PrivateKey::new_os_random());
+    let recipient_id = AccountId::from(&recipient);
+    let amount = 1_u64;
 
-//     if selected_note_id.is_none() {
-//         let transfer_body = WalletTransferFundsRequestBody {
-//             tip: None,
-//             change_public_key: balance.address,
-//             funding_public_keys: vec![balance.address],
-//             recipient_public_key: balance.address,
-//             amount,
-//         };
+    // Subscribed before the deposit, so no block after it is missed.
+    let blocks = CommonHttpClient::new(None)
+        .get_blocks_stream(addr_to_url(UrlProtocol::Http, ctx.bedrock_addr())?)
+        .await
+        .context("Failed to subscribe to Bedrock blocks")?;
+    let mut blocks = std::pin::pin!(blocks);
+    let deposited_note = submit_bedrock_deposit(&ctx, recipient, amount).await?;
 
-//         let transfer_response = client
-//             .post(format!(
-//                 "http://{bedrock_addr}/wallet/transactions/transfer-funds"
-//             ))
-//             .json(&transfer_body)
-//             .send()
-//             .await
-//             .context("Failed to submit Bedrock transfer-funds request")?;
-//         let transfer_response = check_response_success(transfer_response).await?;
+    let pinned_at = tokio::time::timeout(TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK, async {
+        while let Some(event) = blocks.next().await {
+            if pins_note(&event.block, deposited_note) {
+                return anyhow::Ok(u64::from(event.block.header.slot));
+            }
+        }
+        anyhow::bail!("The Bedrock block stream ended")
+    })
+    .await
+    .context("No block was published pinned on the deposit")??;
 
-//         let transfer: WalletTransferFundsResponseBody = transfer_response
-//             .json()
-//             .await
-//             .context("Failed to decode Bedrock transfer-funds response")?;
+    tokio::time::timeout(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS), async {
+        while account_balance(&ctx, recipient_id).await? != u128::from(amount) {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        anyhow::Ok(())
+    })
+    .await
+    .context("The pinned block did not credit the deposit")??;
 
-//         log::info!(
-//             "Submitted transfer-funds to create exact deposit note, tx hash {:?}",
-//             transfer.hash
-//         );
+    tokio::time::timeout(TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK, async {
+        while let Some(event) = blocks.next().await {
+            if u64::from(event.lib_slot) >= pinned_at {
+                return anyhow::Ok(());
+            }
+        }
+        anyhow::bail!("The Bedrock block stream ended")
+    })
+    .await
+    .context("The deposit never became final")??;
+    // Time for the sequencer to see the deposit final and produce on it.
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS).saturating_mul(2)).await;
 
-//         let mut found_note = None;
-//         for _ in 0..20 {
-//             tokio::time::sleep(Duration::from_millis(500)).await;
-//             balance = bedrock_wallet_balance(bedrock_addr, bedrock_account_pk).await?;
-//             found_note = balance
-//                 .notes
-//                 .iter()
-//                 .find_map(|(note_id, value)| (*value == amount).then_some(*note_id));
-//             if found_note.is_some() {
-//                 break;
-//             }
-//         }
+    ensure!(
+        account_balance(&ctx, recipient_id).await? == u128::from(amount),
+        "The finalized deposit credited the recipient again"
+    );
 
-//         selected_note_id = found_note;
-//     }
-
-//     let Some(selected_note_id) = selected_note_id else {
-//         anyhow::bail!(
-//             "Failed to locate exact-value note {amount:?} for Bedrock deposit; available notes:
-// {:?}",             balance.notes,
-//         );
-//     };
-
-//     let body = ChannelDepositRequestBody {
-//         tip: None,
-//         deposit: DepositOp {
-//             channel_id,
-//             inputs: Inputs::new(selected_note_id),
-//             metadata,
-//         },
-//         change_public_key: balance.address,
-//         funding_public_keys: vec![balance.address],
-//         max_tx_fee: u64::MAX.into(),
-//     };
-
-//     let response = client
-//         .post(format!("http://{bedrock_addr}/channel/deposit"))
-//         .json(&body)
-//         .send()
-//         .await
-//         .context("Failed to submit Bedrock deposit request")?;
-//     let response = check_response_success(response).await?;
-
-//     let body_text = response
-//         .text()
-//         .await
-//         .unwrap_or_else(|_| "<failed to decode>".to_owned());
-//     log::info!(
-//         "Successfully submitted Bedrock deposit request for recipient {recipient_id} and amount
-// {amount}, response body: {body_text}",     );
-
-//     Ok(())
-// }
-
-// /// The Bedrock wallet state of `bedrock_account_pk`: its total balance and the
-// /// notes it owns, keyed by note id.
-// async fn bedrock_wallet_balance(
-//     bedrock_addr: std::net::SocketAddr,
-//     bedrock_account_pk: &str,
-// ) -> anyhow::Result<WalletBalanceResponseBody> {
-//     let response = reqwest::Client::new()
-//         .get(format!(
-//             "http://{bedrock_addr}/wallet/{bedrock_account_pk}/balance"
-//         ))
-//         .send()
-//         .await
-//         .context("Failed to query Bedrock wallet balance")?;
-
-//     check_response_success(response)
-//         .await?
-//         .json::<WalletBalanceResponseBody>()
-//         .await
-//         .context("Failed to decode Bedrock balance response")
-// }
-
-// async fn check_response_success(response: reqwest::Response) -> anyhow::Result<reqwest::Response>
-// {     if response.status().is_success() {
-//         Ok(response)
-//     } else {
-//         let status = response.status();
-//         let body_text = response.text().await.unwrap_or_default();
-//         anyhow::bail!("Request failed with status {status} and body {body_text}");
-//     }
-// }
+    Ok(())
+}
 
 // TODO(withdrawals): the vault program is deleted — deposits credit recipients
 // directly now, so this helper has no target account; rework when withdrawals

@@ -46,6 +46,7 @@ fn sequencer_config() -> (SequencerConfig, TempDir) {
             node_url: "http://not-used".parse().expect("Failed to parse URL"),
             auth: None,
             priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
+            stale_refund_slots: 0,
         },
         genesis: Some(sequencer_core::config::GenesisConfig {
             channel_params: sequencer_core::config::default_channel_params(),
