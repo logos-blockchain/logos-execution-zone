@@ -73,6 +73,12 @@ pub enum Error {
     #[error("Cannot publish block on parent with withdrawals")]
     CannotPublishBlockOnParentWithWithdrawals,
 
+    #[error("Deposited note {0:?} is not a channel note on the current branch")]
+    DepositNoteNotOnBranch(logos_blockchain_core::mantle::NoteId),
+
+    #[error("Failed to assemble the deposit pin transfer")]
+    DepositPinAssemblyFailed(#[source] anyhow::Error),
+
     #[error(
         "Tried to publish block which was built on channel sequence {provided} but the channel is at {current}"
     )]

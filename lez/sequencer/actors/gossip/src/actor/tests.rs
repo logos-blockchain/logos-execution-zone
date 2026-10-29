@@ -14,7 +14,7 @@ use kameo::{
 use logos_blockchain_core::proofs::channel_multi_sig_proof::IndexedSignature;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
 use mempool::{MemPool, MemPoolHandle};
-use sequencer_channel_config_actor::{Signature, Wire};
+use sequencer_channel_signing_actor::{Signature, Wire};
 use sequencer_core::{TransactionOrigin, config::GossipConfig, gossip::accredited_keys_channel};
 use sequencer_slasher_actor::{Approval, Offence};
 use sequencer_stake_core::SequencerKey;
@@ -67,7 +67,7 @@ impl Message<Approval> for ApprovalSink {
 }
 
 /// Forwards every channel-config message the gossip actor delivers into a
-/// channel the test can assert on; stands in for the channel-config actor.
+/// channel the test can assert on; stands in for the channel-signing actor.
 struct ConfigSink(mpsc::UnboundedSender<Wire>);
 
 impl Actor for ConfigSink {
@@ -550,7 +550,7 @@ async fn a_channel_config_signature_reaches_the_other_nodes() {
     drop((node_a, node_b, node_c));
 }
 
-/// The channel-config actor re-announces the same draft byte-identically, so
+/// The channel-signing actor re-announces the same draft byte-identically, so
 /// a verbatim re-announcement has to reach peers rather than count as a
 /// duplicate.
 #[tokio::test]

@@ -10,8 +10,8 @@ use kameo_actors::{
     scheduler::{Scheduler, SetInterval},
 };
 use log::info;
-use sequencer_channel_config_actor::{
-    ChannelConfigActor, SetPublisher, SetSubmitter, SubmitConfig,
+use sequencer_channel_signing_actor::{
+    ChannelSigningActor, SetPublisher, SetSubmitter, SubmitConfig,
 };
 pub use sequencer_core::config::*;
 use sequencer_core::{
@@ -296,7 +296,7 @@ pub fn run(
             .await
             .context("Failed to set up Executor Actor")?;
         let slasher_ref = executor.slasher_ref();
-        let config_manager_ref = executor.config_manager_ref();
+        let channel_signer_ref = executor.channel_signer_ref();
         // The core has already read a committee by the time this returns.
         let accredited_keys_rx = executor.accredited_keys_watch();
         let staked_keys_rx = executor.staked_keys_watch();
@@ -308,7 +308,7 @@ pub fn run(
         // A config needs no turn, so the actor tells the executor to submit it
         // the moment the signatures are in. Weak, because the executor owns
         // the actor that holds this.
-        config_manager_ref
+        channel_signer_ref
             .tell(SetSubmitter(
                 executor_ref.clone().recipient::<SubmitConfig>().downgrade(),
             ))
@@ -328,7 +328,7 @@ pub fn run(
                     staked_keys_rx,
                     &executor_ref,
                     &slasher_ref,
-                    &config_manager_ref,
+                    &channel_signer_ref,
                     &scheduler_ref,
                 )
                 .await?,
@@ -394,7 +394,7 @@ pub async fn setup_gossip(
     staked_keys_rx: AccreditedKeysReceiver,
     executor_ref: &ActorRef<ExecutorActor>,
     slasher_ref: &ActorRef<SlasherActor>,
-    config_manager_ref: &ActorRef<ChannelConfigActor>,
+    channel_signer_ref: &ActorRef<ChannelSigningActor>,
     scheduler_ref: &ActorRef<Scheduler>,
 ) -> Result<(Gossip, Recipient<PublishTransaction>)> {
     // The node's L1 channel signing key is deliberately reused as the
@@ -431,7 +431,7 @@ pub async fn setup_gossip(
         accredited_keys_rx,
         staked_keys_rx,
         // Screened inbound channel-config messages go straight to the actor.
-        config_manager_ref.clone().recipient(),
+        channel_signer_ref.clone().recipient(),
     ))
     .await
     .context("Failed to start sequencer gossip network")?;
@@ -463,7 +463,7 @@ pub async fn setup_gossip(
     // is above one can never collect the signatures it needs.
     let (outbound_config_tx, mut outbound_config_rx) =
         tokio::sync::mpsc::channel(OUTBOUND_CONFIG_CHANNEL_CAPACITY);
-    config_manager_ref
+    channel_signer_ref
         .tell(SetPublisher(outbound_config_tx))
         .await?;
     let config_gossip_ref = gossip_ref.clone();

@@ -1,14 +1,20 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use kameo::{
     Actor,
     actor::{ActorRef, WeakRecipient},
     message::{Context, Message},
+    reply::{DelegatedReply, ReplySender},
 };
 use log::{debug, warn};
 use logos_blockchain_core::{
     mantle::{
-        ops::{Op, channel::config::ChannelConfigOp},
+        NoteId,
+        ledger::Note,
+        ops::{
+            Op,
+            channel::{ChannelId, config::ChannelConfigOp},
+        },
         traits::Hashable as _,
         transactions::Ops,
     },
@@ -22,8 +28,9 @@ use tokio::sync::mpsc;
 use crate::{
     error::Error,
     protocol::{
-        Action, ChannelView, ConfigTarget, Draft, FundedTx, Propose, Reset, SetPublisher,
-        SetSubmitter, Signature, Submission, SubmitConfig, Wire,
+        Action, BlockDeposits, ChannelView, ConfigTarget, Draft, FinalMints, FundedTx,
+        ObservedDeposits, Propose, Reset, SetPublisher, SetSubmitter, SignPin, Signature,
+        Submission, SubmitConfig, Wire,
     },
 };
 
@@ -31,8 +38,21 @@ use crate::{
 ///
 /// A rotation where several nodes fund rivals puts one draft and one signature
 /// per peer per rival on the topic, so the inbound burst grows with the square
-/// of the committee; `try_send` drops past this, which costs one turn.
+/// of the committee, and a pinned block adds one draft and a signature per
+/// peer; `try_send` drops past this, which costs one turn or one pin.
 pub const MAILBOX_CAPACITY: usize = 256;
+
+/// Peers' pins held for deposits this node has not observed yet; the oldest
+/// goes past this.
+const PARKED_PINS: usize = 8;
+
+/// What to do with a peer's draft.
+enum Verdict {
+    Sign,
+    /// A pin of a deposit this node has not observed yet.
+    Park,
+    Refuse,
+}
 
 /// A draft this node funded and is collecting signatures for.
 struct OwnDraft {
@@ -45,30 +65,58 @@ struct OwnDraft {
     submission_sent: bool,
 }
 
-pub struct ChannelConfigActor {
+/// A pin this node funded, waiting on its transfer signatures.
+struct OwnPin {
+    tx_hash: [u8; 32],
+    /// Signatures by accredited-key index, so the choice below is ordered.
+    signatures: BTreeMap<u16, Ed25519Signature>,
+    reply: ReplySender<Option<Vec<IndexedSignature>>>,
+}
+
+pub struct ChannelSigningActor {
     signing_key: Ed25519Key,
     own_key: Ed25519PublicKey,
+    /// The channel a pin must inscribe and transfer on.
+    channel_id: ChannelId,
+    block_deposits: BlockDeposits,
+    /// Notes of the deposits seen on L1 and not yet minted in a final block,
+    /// with the deposit each belongs to.
+    deposit_notes: HashMap<NoteId, ([u8; 32], Note)>,
+    /// Peers' pins of deposits this node has not observed yet, checked again as
+    /// deposits arrive.
+    parked: VecDeque<Draft>,
     /// The live channel and the committee it should have, as of the last turn.
     view: Option<ChannelView>,
     /// Our own draft. Not persisted: a signature is only good for one funded
     /// transaction, and a restart funds a different one.
     draft: Option<OwnDraft>,
+    /// Our own pin, for as long as its producer waits on it.
+    pin: Option<OwnPin>,
     // TODO: Use messages instead of tokio's primitives.
     publisher: Option<mpsc::Sender<Wire>>,
     /// Sent the draft once it has its signatures.
     submitter: Option<WeakRecipient<SubmitConfig>>,
 }
 
-impl ChannelConfigActor {
+impl ChannelSigningActor {
     #[must_use]
-    pub fn new(signing_key: Ed25519Key) -> Self {
+    pub fn new(
+        signing_key: Ed25519Key,
+        channel_id: ChannelId,
+        block_deposits: BlockDeposits,
+    ) -> Self {
         let own_key = signing_key.public_key();
 
         Self {
             signing_key,
             own_key,
+            channel_id,
+            block_deposits,
+            deposit_notes: HashMap::new(),
+            parked: VecDeque::new(),
             view: None,
             draft: None,
+            pin: None,
             publisher: None,
             submitter: None,
         }
@@ -155,22 +203,103 @@ impl ChannelConfigActor {
         }))
     }
 
+    /// Whether a transaction is only a peer's block pinned on deposits it
+    /// mints: one block inscribed by another live accredited key, one transfer
+    /// re-creating unchanged notes of those deposits, and the fee.
+    fn check_pin(&self, tx: &Ops, live_keys: &[Ed25519PublicKey]) -> Verdict {
+        let mut inscription = None;
+        let mut transfer = None;
+        let mut funded = false;
+        for op in tx {
+            let first = match op {
+                // Our co-signature would also be the proof of an inscription
+                // signed as us, putting in our name a block we never built.
+                Op::ChannelInscribe(op)
+                    if op.channel_id == self.channel_id
+                        && op.signer != self.own_key.into_unverified()
+                        && live_keys
+                            .iter()
+                            .any(|key| key.into_unverified() == op.signer) =>
+                {
+                    inscription.replace(op).is_none()
+                }
+                Op::ChannelTransfer(op) if op.channel_id == self.channel_id => {
+                    transfer.replace(op).is_none()
+                }
+                // The fee the proposer's wallet added.
+                Op::Transfer(_) => !std::mem::replace(&mut funded, true),
+                // Nothing else may share a transaction our signatures cover.
+                Op::ChannelInscribe(_)
+                | Op::ChannelTransfer(_)
+                | Op::ChannelConfig(_)
+                | Op::ChannelDeposit(_)
+                | Op::ChannelWithdraw(_)
+                | Op::SDPDeclare(_)
+                | Op::SDPWithdraw(_)
+                | Op::SDPActive(_)
+                | Op::LeaderClaim(_)
+                | Op::ClaimPowReward(_) => return Verdict::Refuse,
+            };
+            if !first {
+                return Verdict::Refuse;
+            }
+        }
+        let (Some(inscription), Some(transfer)) = (inscription, transfer) else {
+            return Verdict::Refuse;
+        };
+        let Some(minted) = (self.block_deposits)(&inscription.inscription) else {
+            return Verdict::Refuse;
+        };
+        if transfer.inputs.is_empty() || transfer.inputs.len() != transfer.outputs.len() {
+            return Verdict::Refuse;
+        }
+
+        let mut verdict = Verdict::Sign;
+        for (input, output) in transfer.inputs.iter().zip(transfer.outputs.iter()) {
+            match self.deposit_notes.get(input) {
+                // Bedrock checks the balance but not the keys, and a note's key
+                // holds its stake, so each output must be its input exactly.
+                Some((op_id, note)) if note == output && minted.contains(op_id) => {}
+                Some(_) => return Verdict::Refuse,
+                None => verdict = Verdict::Park,
+            }
+        }
+
+        verdict
+    }
+
     /// A peer's draft, from gossip or from a direct send.
-    fn on_peer_draft(&self, msg: &Draft) {
-        // A peer is trusted for its signature, never for the config: sign only
-        // what this node derived from finalized state for itself.
+    fn on_peer_draft(&mut self, msg: Draft) {
         let Some(view) = &self.view else {
             return;
         };
-        let Some(target) = &view.target else {
-            return;
+        // A peer is trusted for its signature, never for the op: sign a config
+        // only if this node derived it from finalized state for itself.
+        let verdict = match config_op(&msg.tx) {
+            Some(op)
+                if view
+                    .target
+                    .as_ref()
+                    .is_some_and(|target| matches(target, op)) =>
+            {
+                Verdict::Sign
+            }
+            Some(_) => Verdict::Refuse,
+            None => self.check_pin(&msg.tx, &view.live_keys),
         };
-        let Some(op) = config_op(&msg.tx) else {
-            return;
-        };
-        if !matches(target, op) {
-            debug!("Ignoring a channel-config draft that is not the config we want");
-            return;
+        match verdict {
+            Verdict::Sign => {}
+            Verdict::Park => {
+                if self.parked.len() >= PARKED_PINS {
+                    self.parked.pop_front();
+                }
+                self.parked.push_back(msg);
+                return;
+            }
+            Verdict::Refuse => {
+                debug!("Ignoring a draft that is neither the config we want nor a pin");
+                return;
+            }
         }
 
         let Some(index) = self.own_index() else {
@@ -187,8 +316,16 @@ impl ChannelConfigActor {
         }));
     }
 
-    /// A peer's signature over the draft this node holds.
+    /// A peer's signature over the draft or the pin this node holds.
     fn on_peer_signature(&mut self, msg: &Signature) {
+        if self
+            .pin
+            .as_ref()
+            .is_some_and(|pin| pin.tx_hash == msg.tx_hash)
+        {
+            self.on_pin_signature(msg);
+            return;
+        }
         let Some(view) = &self.view else {
             return;
         };
@@ -225,9 +362,55 @@ impl ChannelConfigActor {
             in_flight.submission_sent = true;
         }
     }
+
+    /// A peer's signature over the pin this node holds.
+    fn on_pin_signature(&mut self, msg: &Signature) {
+        let Some(view) = &self.view else {
+            return;
+        };
+        let index = msg.signature.channel_key_index;
+        let Some(key) = view.live_keys.get(usize::from(index)) else {
+            return;
+        };
+        if key.verify(&msg.tx_hash, &msg.signature.signature).is_err() {
+            debug!("Dropping a pin signature that does not verify");
+            return;
+        }
+        if let Some(pin) = &mut self.pin {
+            pin.signatures.insert(index, msg.signature.signature);
+        }
+        self.complete_pin();
+    }
+
+    /// Answers the pin's producer once it holds the live transfer threshold.
+    fn complete_pin(&mut self) {
+        let Some(view) = &self.view else {
+            return;
+        };
+        let required = usize::from(view.transfer_signatures);
+        if self
+            .pin
+            .as_ref()
+            .is_none_or(|pin| pin.signatures.len() < required)
+        {
+            return;
+        }
+        let Some(pin) = self.pin.take() else {
+            return;
+        };
+        // Bedrock wants exactly the threshold, never more, so take the lowest
+        // indices and leave the rest.
+        let signatures = pin
+            .signatures
+            .iter()
+            .take(required)
+            .map(|(index, signature)| IndexedSignature::new(*index, *signature))
+            .collect();
+        pin.reply.send(Some(signatures));
+    }
 }
 
-impl Actor for ChannelConfigActor {
+impl Actor for ChannelSigningActor {
     type Args = Self;
     type Error = Error;
 
@@ -236,7 +419,7 @@ impl Actor for ChannelConfigActor {
     }
 }
 
-impl Message<ChannelView> for ChannelConfigActor {
+impl Message<ChannelView> for ChannelSigningActor {
     type Reply = ();
 
     async fn handle(&mut self, msg: ChannelView, _ctx: &mut Context<Self, Self::Reply>) {
@@ -252,7 +435,7 @@ impl Message<ChannelView> for ChannelConfigActor {
     }
 }
 
-impl Message<Propose> for ChannelConfigActor {
+impl Message<Propose> for ChannelSigningActor {
     type Reply = Action;
 
     async fn handle(&mut self, Propose: Propose, _ctx: &mut Context<Self, Self::Reply>) -> Action {
@@ -260,7 +443,7 @@ impl Message<Propose> for ChannelConfigActor {
     }
 }
 
-impl Message<FundedTx> for ChannelConfigActor {
+impl Message<FundedTx> for ChannelSigningActor {
     type Reply = Action;
 
     /// Answers as [`Propose`] would, so a channel that needs only this node's
@@ -309,20 +492,20 @@ impl Message<FundedTx> for ChannelConfigActor {
     }
 }
 
-impl Message<Wire> for ChannelConfigActor {
+impl Message<Wire> for ChannelSigningActor {
     type Reply = ();
 
     /// A gossiped message as it came off the wire, in the one shape gossip
     /// carries it.
     async fn handle(&mut self, msg: Wire, _ctx: &mut Context<Self, Self::Reply>) {
         match msg {
-            Wire::Draft(draft) => self.on_peer_draft(&draft),
+            Wire::Draft(draft) => self.on_peer_draft(draft),
             Wire::Signature(signature) => self.on_peer_signature(&signature),
         }
     }
 }
 
-impl Message<SetPublisher> for ChannelConfigActor {
+impl Message<SetPublisher> for ChannelSigningActor {
     type Reply = ();
 
     async fn handle(
@@ -334,7 +517,7 @@ impl Message<SetPublisher> for ChannelConfigActor {
     }
 }
 
-impl Message<SetSubmitter> for ChannelConfigActor {
+impl Message<SetSubmitter> for ChannelSigningActor {
     type Reply = ();
 
     async fn handle(
@@ -346,11 +529,79 @@ impl Message<SetSubmitter> for ChannelConfigActor {
     }
 }
 
-impl Message<Reset> for ChannelConfigActor {
+impl Message<Reset> for ChannelSigningActor {
     type Reply = ();
 
     async fn handle(&mut self, Reset: Reset, _ctx: &mut Context<Self, Self::Reply>) {
         self.draft = None;
+    }
+}
+
+impl Message<ObservedDeposits> for ChannelSigningActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        ObservedDeposits(deposits): ObservedDeposits,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) {
+        for deposit in deposits {
+            for note in deposit.notes {
+                self.deposit_notes.insert(
+                    note.note_id,
+                    (deposit.op_id, Note::new(note.value, note.pk)),
+                );
+            }
+        }
+        for draft in std::mem::take(&mut self.parked) {
+            self.on_peer_draft(draft);
+        }
+    }
+}
+
+impl Message<FinalMints> for ChannelSigningActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        FinalMints(op_ids): FinalMints,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) {
+        self.deposit_notes
+            .retain(|_note, (op_id, _)| !op_ids.contains(op_id));
+    }
+}
+
+impl Message<SignPin> for ChannelSigningActor {
+    type Reply = DelegatedReply<Option<Vec<IndexedSignature>>>;
+
+    /// Replaces any earlier pin: its producer has stopped waiting on it.
+    async fn handle(
+        &mut self,
+        SignPin(tx): SignPin,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let (delegated, reply) = ctx.reply_sender();
+        let Some(reply) = reply else {
+            return delegated;
+        };
+        let Some(index) = self.own_index() else {
+            warn!("Not in the live accredited list; cannot sign our pin");
+            reply.send(None);
+            return delegated;
+        };
+
+        self.pin = Some(OwnPin {
+            tx_hash: tx.hash().0,
+            signatures: BTreeMap::from([(index, self.sign(&tx))]),
+            reply,
+        });
+        self.complete_pin();
+        if self.pin.is_some() {
+            self.publish(Wire::Draft(Draft { tx }));
+        }
+
+        delegated
     }
 }
 
