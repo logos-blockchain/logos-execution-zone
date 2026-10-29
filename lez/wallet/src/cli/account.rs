@@ -8,7 +8,7 @@ use lee::{Account, AccountId, Actor, PublicKey};
 use lee_core::{account::AccountIdError, native_token::NATIVE_TOKEN_PROGRAM_ID};
 
 use crate::{
-    WalletCore,
+    WalletCore, WalletSequencerClient,
     account::{AccountIdWithPrivacy, HumanReadableAccount, Label},
     cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand, confirm},
 };
@@ -159,10 +159,10 @@ pub enum NewSubcommand {
 }
 
 impl NewSubcommand {
-    fn handle_public(
+    fn handle_public<C: WalletSequencerClient>(
         cci: Option<ChainIndex>,
         label: Option<Label>,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         if let Some(label) = &label {
             wallet_core.storage().check_label_availability(label)?;
@@ -192,10 +192,10 @@ impl NewSubcommand {
         Ok(SubcommandReturnValue::RegisterAccount { account_id })
     }
 
-    fn handle_private(
+    fn handle_private<C: WalletSequencerClient>(
         cci: Option<ChainIndex>,
         label: Option<Label>,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         if let Some(label) = &label {
             wallet_core.storage().check_label_availability(label)?;
@@ -230,14 +230,14 @@ impl NewSubcommand {
         Ok(SubcommandReturnValue::RegisterAccount { account_id })
     }
 
-    async fn handle_private_gms(
+    async fn handle_private_gms<C: WalletSequencerClient>(
         group: &Label,
         label: Option<Label>,
         pda: bool,
         seed: Option<String>,
         program_id: Option<String>,
         derivation_id: Option<String>,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         if let Some(label) = &label {
             wallet_core.storage().check_label_availability(label)?;
@@ -293,9 +293,9 @@ impl NewSubcommand {
         })
     }
 
-    fn handle_private_accounts_key(
+    fn handle_private_accounts_key<C: WalletSequencerClient>(
         cci: Option<ChainIndex>,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let chain_index = wallet_core.create_private_accounts_key(cci);
         let key_chain = wallet_core
@@ -318,9 +318,9 @@ impl NewSubcommand {
 }
 
 impl WalletSubcommand for NewSubcommand {
-    async fn handle_subcommand(
+    async fn handle_subcommand<C: WalletSequencerClient>(
         self,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::Public { cci, label } => Self::handle_public(cci, label, wallet_core),
@@ -363,11 +363,12 @@ impl AccountSubcommand {
     }
 
     async fn handle_get(
+    async fn handle_get<C: WalletSequencerClient>(
         raw: bool,
         keys: bool,
         account_id: CliAccountMention,
         scope: ReadScope,
-        wallet_core: &WalletCore,
+        wallet_core: &WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let resolved = account_id.resolve(wallet_core.storage())?;
         wallet_core
@@ -405,7 +406,7 @@ impl AccountSubcommand {
         };
 
         // Helper closure to display keys for the account
-        let display_keys = |wallet_core: &WalletCore| -> Result<()> {
+        let display_keys = |wallet_core: &WalletCore<C>| -> Result<()> {
             match resolved {
                 AccountIdWithPrivacy::Public(account_id) => {
                     let private_key = wallet_core
@@ -464,8 +465,8 @@ impl AccountSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    fn format_with_label(
-        wallet_core: &WalletCore,
+    fn format_with_label<C: WalletSequencerClient>(
+        wallet_core: &WalletCore<C>,
         id: AccountIdWithPrivacy,
         chain_index: Option<&ChainIndex>,
     ) -> String {
@@ -483,7 +484,10 @@ impl AccountSubcommand {
         }
     }
 
-    async fn handle_list(long: bool, wallet_core: &WalletCore) -> Result<SubcommandReturnValue> {
+    async fn handle_list<C: WalletSequencerClient>(
+        long: bool,
+        wallet_core: &WalletCore<C>,
+    ) -> Result<SubcommandReturnValue> {
         let (public_account_ids, private_account_ids) = {
             let key_chain = &wallet_core.storage.key_chain();
 
@@ -550,10 +554,10 @@ impl AccountSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    fn handle_label(
+    fn handle_label<C: WalletSequencerClient>(
         account_id: &CliAccountMention,
         label: &Label,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let account_id = account_id.resolve(wallet_core.storage())?;
 
@@ -568,9 +572,9 @@ impl AccountSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    fn handle_show_keys(
+    fn handle_show_keys<C: WalletSequencerClient>(
         account_id: &CliAccountMention,
-        wallet_core: &WalletCore,
+        wallet_core: &WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let resolved = account_id.resolve(wallet_core.storage())?;
         let AccountIdWithPrivacy::Private(account_id) = resolved else {
@@ -593,9 +597,9 @@ impl AccountSubcommand {
 }
 
 impl WalletSubcommand for AccountSubcommand {
-    async fn handle_subcommand(
+    async fn handle_subcommand<C: WalletSequencerClient>(
         self,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::Id { account_id } => {
@@ -665,9 +669,9 @@ pub enum ImportSubcommand {
 }
 
 impl WalletSubcommand for ImportSubcommand {
-    async fn handle_subcommand(
+    async fn handle_subcommand<C: WalletSequencerClient>(
         self,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::Public { private_key } => {

@@ -1,4 +1,4 @@
-# Shared build base: cargo-chef toolchain + risc0 r0vm.
+# Shared build base: Rust toolchain + risc0 r0vm.
 #
 # This is the single source of truth for the r0vm install that the sequencer
 # and indexer service images depend on. It is consumed as a named build context
@@ -7,7 +7,7 @@
 # Wiring:
 #   - docker-compose: `build.additional_contexts: { risc0_base: "service:risc0_base" }`
 #   - CI: built first and passed via `build-contexts: risc0_base=docker-image://...`
-FROM lukemathwalker/cargo-chef:latest-rust-1.98.1-slim-trixie
+FROM rust:1.98.1-slim-trixie
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \

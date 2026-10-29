@@ -17,12 +17,14 @@ use zeroize::Zeroizing;
 
 use crate::{
     error::{FfiOperationError, print_error},
+    sequencer::SequencerServiceFFI,
+    sequencer_ffi_client::SequencerServiceFFIWrapper,
     wallet::{block_on, c_str_to_string, types::WalletHandle},
 };
 
 /// Internal wrapper around `WalletCore` with mutex for thread safety.
 pub(crate) struct WalletWrapper {
-    pub core: Mutex<WalletCore>,
+    pub core: Mutex<WalletCore<SequencerServiceFFIWrapper>>,
 }
 
 #[repr(C)]
@@ -91,18 +93,21 @@ fn c_str_to_path(ptr: *const c_char, name: &str) -> Result<PathBuf, FfiOperation
 /// - `config_path`: Path to the wallet configuration file (JSON)
 /// - `storage_path`: Path where wallet data will be stored
 /// - `password`: Password the wallet storage is encrypted under, or empty to leave it unencrypted
+/// - `sequencer`: Valid pointer into `SequencerServiceFFI`
 ///
 /// # Returns
 /// - Result, which contains opaque wallet handle and mnemonic words on success
 /// - Result with null pointers on error, whose details are printed to stderr
 ///
 /// # Safety
-/// All string parameters must be valid null-terminated UTF-8 strings.
+/// All string parameters must be valid null-terminated UTF-8 strings. Sequencer pointer must be
+/// valid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn wallet_ffi_create_new(
     config_path: *const c_char,
     storage_path: *const c_char,
     password: *const c_char,
+    sequencer: *const SequencerServiceFFI,
 ) -> FfiCreateWalletOutput {
     let Ok(config_path) = c_str_to_path(config_path, "config_path") else {
         return FfiCreateWalletOutput::default();
@@ -124,6 +129,20 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
                 ));
             }
 
+    if sequencer.is_null() {
+        return FfiCreateWalletOutput::default();
+    }
+
+    let sequencer = unsafe { &*sequencer };
+
+    match WalletCore::new_init_storage_with_client(
+        config_path,
+        storage_path,
+        None,
+        &password,
+        SequencerServiceFFIWrapper::wrap(sequencer),
+    ) {
+        Ok((core, mnemonic)) => {
             let wrapper = Box::new(WalletWrapper {
                 core: Mutex::new(core),
             });
@@ -157,6 +176,7 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
 /// - `password`: Password the wallet storage is encrypted under, or empty for an unencrypted
 ///   storage (see `wallet_ffi_storage_is_encrypted`)
 /// - `out_handle`: Output pointer for the opaque wallet handle
+/// - `sequencer`: Valid pointer into `SequencerServiceFFI`
 ///
 /// # Returns
 /// - `Success` with the handle written to `out_handle`
@@ -165,12 +185,14 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
 /// - Another error code on any other failure, whose details are printed to stderr
 ///
 /// # Safety
-/// - All string parameters must be valid null-terminated UTF-8 strings.
+/// - All string parameters must be valid null-terminated UTF-8 strings. Sequencer pointer must be
+///   valid.
 /// - `out_handle` must be a valid pointer to a `WalletHandle *`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn wallet_ffi_open(
     config_path: *const c_char,
     storage_path: *const c_char,
+    sequencer: *const SequencerServiceFFI,
     password: *const c_char,
     out_handle: *mut *mut WalletHandle,
 ) -> FfiOperationError {
@@ -194,7 +216,20 @@ pub unsafe extern "C" fn wallet_ffi_open(
         Err(e) => return e,
     };
 
-    match WalletCore::new_update_chain(config_path, storage_path, None, &password) {
+    if sequencer.is_null() {
+        print_error("Null input pointer for sequencer");
+        return FfiOperationError::NullPointer;
+    }
+
+    let sequencer = unsafe { &*sequencer };
+
+    match WalletCore::new_update_chain_with_client(
+        config_path,
+        storage_path,
+        None,
+        &password,
+        SequencerServiceFFIWrapper::wrap(sequencer),
+    ) {
         Ok(core) => {
             let wrapper = Box::new(WalletWrapper {
                 core: Mutex::new(core),

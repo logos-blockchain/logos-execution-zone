@@ -687,10 +687,10 @@ typedef struct PointerResult_FfiOption_FfiAccount_____FfiOperationError {
  * Pointer is not guaranteed. You should check the error field before
  * dereferencing the pointer.
  */
-typedef struct PointerResult_u8__FfiOperationError {
-  uint8_t *value;
+typedef struct PointerResult_FfiHashType__FfiOperationError {
+  FfiHashType *value;
   enum FfiOperationError error;
-} PointerResult_u8__FfiOperationError;
+} PointerResult_FfiHashType__FfiOperationError;
 
 /**
  * Simple wrapper around a pointer to a value or an error.
@@ -1401,8 +1401,8 @@ struct PointerResult_FfiOption_FfiAccount_____FfiOperationError sequencer_ffi_qu
  *   `EndPublicSubtree` step, are converted and freed too, so they must be empty, not
  *   uninitialized.
  */
-struct PointerResult_u8__FfiOperationError sequencer_ffi_send_transaction(const struct SequencerServiceFFI *sequencer,
-                                                                          struct FfiTransaction transaction);
+struct PointerResult_FfiHashType__FfiOperationError sequencer_ffi_send_transaction(const struct SequencerServiceFFI *sequencer,
+                                                                                   struct FfiTransaction transaction);
 
 /**
  * Query the transaction by hash from sequencer.
@@ -2138,17 +2138,20 @@ enum FfiOperationError wallet_ffi_free_label_list(struct LabelList *label_list);
  * - `config_path`: Path to the wallet configuration file (JSON)
  * - `storage_path`: Path where wallet data will be stored
  * - `password`: Password the wallet storage is encrypted under, or empty to leave it unencrypted
+ * - `sequencer`: Valid pointer into `SequencerServiceFFI`
  *
  * # Returns
  * - Result, which contains opaque wallet handle and mnemonic words on success
  * - Result with null pointers on error, whose details are printed to stderr
  *
  * # Safety
- * All string parameters must be valid null-terminated UTF-8 strings.
+ * All string parameters must be valid null-terminated UTF-8 strings. Sequencer pointer must be
+ * valid.
  */
 struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
                                                    const char *storage_path,
-                                                   const char *password);
+                                                   const char *password,
+                                                   const struct SequencerServiceFFI *sequencer);
 
 /**
  * Open an existing wallet from storage.
@@ -2161,6 +2164,7 @@ struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
  * - `password`: Password the wallet storage is encrypted under, or empty for an unencrypted
  *   storage (see `wallet_ffi_storage_is_encrypted`)
  * - `out_handle`: Output pointer for the opaque wallet handle
+ * - `sequencer`: Valid pointer into `SequencerServiceFFI`
  *
  * # Returns
  * - `Success` with the handle written to `out_handle`
@@ -2169,11 +2173,13 @@ struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
  * - Another error code on any other failure, whose details are printed to stderr
  *
  * # Safety
- * - All string parameters must be valid null-terminated UTF-8 strings.
+ * - All string parameters must be valid null-terminated UTF-8 strings. Sequencer pointer must be
+ *   valid.
  * - `out_handle` must be a valid pointer to a `WalletHandle *`.
  */
 enum FfiOperationError wallet_ffi_open(const char *config_path,
                                        const char *storage_path,
+                                       const struct SequencerServiceFFI *sequencer,
                                        const char *password,
                                        struct WalletHandle **out_handle);
 

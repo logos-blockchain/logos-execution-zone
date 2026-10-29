@@ -86,9 +86,11 @@ pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
 pub(crate) fn map_execution_error(e: ExecutionFailureKind) -> FfiOperationError {
     match e {
         // TODO: Perform normal error (de-)encoding on both sides
-        ExecutionFailureKind::SequencerClientError(sequencer_service_rpc::ClientError::Call(
-            error,
-        )) if error.message().contains("Incorrect fee") => FfiOperationError::PayerCannotFund,
+        ExecutionFailureKind::SequencerClientError(message)
+            if message.contains("Incorrect fee") =>
+        {
+            FfiOperationError::PayerCannotFund
+        }
         ExecutionFailureKind::InsufficientFundsError => FfiOperationError::InsufficientFunds,
         ExecutionFailureKind::KeyNotFoundError => FfiOperationError::KeyNotFound,
         ExecutionFailureKind::StorageError(_) => FfiOperationError::StorageError,
