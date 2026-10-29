@@ -548,3 +548,57 @@ fn a_pending_private_credit_survives_seed_restoration_ffi() -> Result<()> {
 
 //     Ok(())
 // }
+
+#[test]
+fn a_null_sequencer_pointer_reaches_the_configured_sequencer() -> Result<()> {
+    let sequencer_ffi_helpers::JoiningSetup {
+        ctx,
+        node: _,
+        ownership_id: _,
+        sequencer_ffi: sequencer_ffi_res,
+        sequencer_home,
+    } = sequencer_ffi_helpers::joining_setup(false)?;
+
+    log::info!("Joining sequencer home: {sequencer_home:?}");
+
+    let home = tempfile::tempdir()?;
+
+    let height = unsafe {
+        let FfiCreateWalletOutput {
+            wallet: wallet_ffi_handle,
+            mnemonic: _,
+        } = new_wallet_ffi_with_test_context_config(&ctx, home.path(), std::ptr::null())?;
+        assert!(
+            !wallet_ffi_handle.is_null(),
+            "A null sequencer must fall back to the configured address, not fail"
+        );
+
+        let mut height = 0_u64;
+        wallet_ffi_get_current_block_height(wallet_ffi_handle, &raw mut height).unwrap();
+        wallet_ffi_save(wallet_ffi_handle).unwrap();
+        wallet_ffi_destroy(wallet_ffi_handle);
+        height
+    };
+
+    let reopened_height = unsafe {
+        let wallet_ffi_handle =
+            load_existing_ffi_wallet(home.path(), std::ptr::null(), ctx.ctx().wallet_password())?
+                .unwrap();
+        let mut height = 0_u64;
+        wallet_ffi_get_current_block_height(wallet_ffi_handle, &raw mut height).unwrap();
+        wallet_ffi_destroy(wallet_ffi_handle);
+        height
+    };
+
+    assert!(
+        reopened_height >= height,
+        "The chain cannot go backwards between two reads"
+    );
+
+    // SAFETY: sequencer_ffi created by FFI, it is valid.
+    unsafe {
+        sequencer_ffi_helpers::sequencer_ffi_stop_sequencer(sequencer_ffi_res.value);
+    }
+
+    Ok(())
+}

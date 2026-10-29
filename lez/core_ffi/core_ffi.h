@@ -2137,15 +2137,16 @@ enum FfiOperationError wallet_ffi_free_label_list(struct LabelList *label_list);
  * - `config_path`: Path to the wallet configuration file (JSON)
  * - `storage_path`: Path where wallet data will be stored
  * - `password`: Password the wallet storage is encrypted under, or empty to leave it unencrypted
- * - `sequencer`: Valid pointer into `SequencerServiceFFI`
+ * - `sequencer`: A `SequencerServiceFFI` in this process, or null to use the address in
+ *   `config_path`
  *
  * # Returns
  * - Result, which contains opaque wallet handle and mnemonic words on success
  * - Result with null pointers on error, whose details are printed to stderr
  *
  * # Safety
- * All string parameters must be valid null-terminated UTF-8 strings. Sequencer pointer must be
- * valid.
+ * All string parameters must be valid null-terminated UTF-8 strings. A non-null sequencer must
+ * outlive the returned handle.
  */
 struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
                                                    const char *storage_path,
@@ -2163,7 +2164,8 @@ struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
  * - `password`: Password the wallet storage is encrypted under, or empty for an unencrypted
  *   storage (see `wallet_ffi_storage_is_encrypted`)
  * - `out_handle`: Output pointer for the opaque wallet handle
- * - `sequencer`: Valid pointer into `SequencerServiceFFI`
+ * - `sequencer`: A `SequencerServiceFFI` in this process, or null to use the address in
+ *   `config_path`
  *
  * # Returns
  * - `Success` with the handle written to `out_handle`
@@ -2172,8 +2174,8 @@ struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
  * - Another error code on any other failure, whose details are printed to stderr
  *
  * # Safety
- * - All string parameters must be valid null-terminated UTF-8 strings. Sequencer pointer must be
- *   valid.
+ * - All string parameters must be valid null-terminated UTF-8 strings. A non-null sequencer must
+ *   outlive the handle written to `out_handle`.
  * - `out_handle` must be a valid pointer to a `WalletHandle *`.
  */
 enum FfiOperationError wallet_ffi_open(const char *config_path,

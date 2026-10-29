@@ -11,10 +11,10 @@ use wallet::{AsyncDelivery, Promotions, WalletCore};
 
 use crate::{
     error::{FfiOperationError, print_error},
-    sequencer_ffi_client::SequencerServiceFFIWrapper,
     wallet::{
         FfiAccountMention, FfiAsyncDelivery, FfiPendingMessage, FfiPendingMessageList,
         FfiTransferResult, WalletHandle, block_on, c_str_to_string,
+        client::WalletClient,
         generic_transaction::{FfiProgramCatalog, mentions},
         lifecycle::get_wallet,
         list, map_execution_error,
@@ -260,7 +260,7 @@ pub unsafe extern "C" fn wallet_ffi_receive_pending_message_with(
 }
 
 unsafe fn receive(
-    wallet: &mut WalletCore<SequencerServiceFFIWrapper>,
+    wallet: &mut WalletCore<WalletClient>,
     position: u64,
     account_mentions: *const FfiAccountMention,
     account_mentions_size: usize,
