@@ -654,6 +654,7 @@ fn direct_input(
     let keys = test_private_account_keys_1();
     PrivacyPreservingCircuitInput {
         input: ProvingInput {
+            claims: Vec::new(),
             root: root(Actor::new(keys.account_id(), program_account_id), script),
             public_context: PublicExecutionContext::default(),
             private_witnesses: vec![init_witness(&keys)],
@@ -661,6 +662,7 @@ fn direct_input(
             ciphertext_padding: None,
             recoveries: Vec::new(),
             private_promotions: BTreeSet::new(),
+            fee: None,
         },
         program_image_witnesses: claims_for(claims),
         shadow_program_witnesses: Vec::new(),
@@ -888,6 +890,8 @@ fn preparation_meters_a_public_self_call_chain_as_settlement_does() {
         WholeExecution::new(
             tx.message.public_context.clone(),
             TransactionEntry::Sync(tx.message.execution.root.clone()),
+            Vec::new(),
+            None,
             &[],
         )?
         .execute(&mut simulator)?;

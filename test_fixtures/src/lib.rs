@@ -1041,7 +1041,7 @@ pub async fn verify_commitment_is_in_state(
     seq_client: &SequencerClient,
 ) -> bool {
     seq_client
-        .get_proofs_and_root(vec![commitment], None)
+        .get_proofs_and_root(vec![commitment], Vec::new())
         .await
         .ok()
         .and_then(|(proofs, _, _)| proofs.into_iter().next().flatten())
@@ -1177,7 +1177,7 @@ async fn build_sequencer_components(
         // When a test supplies custom genesis, merge rather than replace.
         let wallet_genesis = config::genesis_from_accounts(
             initial_public_accounts,
-            config::private_total(initial_private_accounts),
+            config::private_funding_cost(initial_private_accounts),
         );
         match genesis_transactions {
             Some(mut custom) => {

@@ -256,9 +256,7 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
         (&out_account).try_into().unwrap()
     };
 
-    // A private account: private balances stay small (fee-exempt under the
-    // interim policy), so this asserts against the private constant, not the
-    // LGO-scaled public one.
+    // A private account, so this asserts against the private constant, not the public one.
     assert_eq!(
         account.data,
         Account::funded(INITIAL_PRIVATE_BALANCES_FOR_WALLET[0]).data

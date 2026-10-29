@@ -2,8 +2,9 @@ use std::{collections::BTreeSet, time::Duration};
 
 use anyhow::{Context as _, Result};
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, fetch_privacy_preserving_tx, no_seal,
-    private_mention, public_mention,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
+    config::{INITIAL_PRIVATE_BALANCES_FOR_WALLET, min_private_fee},
+    fetch_privacy_preserving_tx, no_seal, private_mention, public_mention,
     utils::{
         account_balance, assert_private_commitment_in_state, new_account, receive_pending, send,
         sync_private,
@@ -110,7 +111,10 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
         .wallet()
         .get_account_private(from)
         .context("Failed to get sender's private account")?;
-    assert_eq!(from_acc.data.native_balance().unwrap(), 10000);
+    assert_eq!(
+        from_acc.data.native_balance().unwrap(),
+        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0]
+    );
     let to_before = account_balance(&ctx, to).await?;
 
     send(&mut ctx, private_mention(from), public_mention(to), 100).await?;
@@ -126,9 +130,11 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
 
     let acc_2_balance = account_balance(&ctx, to).await?;
 
-    // A deshielded transfer is a privacy-preserving transaction — fee-exempt
-    // under the interim policy — so both sides move by exactly the amount.
-    assert_eq!(from_acc.data.native_balance().unwrap(), 9900);
+    // The private sender pays the amount and the in-proof fee; the recipient gains the amount.
+    assert_eq!(
+        from_acc.data.native_balance().unwrap(),
+        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0] - 100 - min_private_fee()
+    );
     assert_eq!(acc_2_balance, to_before + 100);
 
     log::info!("Successfully deshielded transfer to public account");
@@ -202,17 +208,16 @@ async fn concurrent_deshielded_transfers_settle_against_live_state() -> Result<(
     assert_private_commitment_in_state(&ctx, sender_1, "sender_1").await?;
     assert_private_commitment_in_state(&ctx, sender_2, "sender_2").await?;
 
-    // Deshielded transfers are fee-exempt under the interim policy, so each side moves by
-    // exactly the amount.
+    // Each private sender pays its amount and its in-proof fee; the receiver gains the amounts.
     assert_eq!(
         sender_1_after,
-        sender_1_before - 30,
-        "sender_1 must reflect its own debit"
+        sender_1_before - 30 - min_private_fee(),
+        "sender_1 must reflect its own debit and fee"
     );
     assert_eq!(
         sender_2_after,
-        sender_2_before - 20,
-        "sender_2 must reflect its own debit"
+        sender_2_before - 20 - min_private_fee(),
+        "sender_2 must reflect its own debit and fee"
     );
     assert_eq!(
         receiver_after,
@@ -353,10 +358,13 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
 
     let acc_from_balance = account_balance(&ctx, from).await?;
 
-    // A shielded transfer is a privacy-preserving transaction — fee-exempt
-    // under the interim policy — so the public sender pays exactly the amount.
+    // The public sender pays exactly the amount: the fee comes from a funded private account
+    // of the wallet, so no public account is linked to it.
     assert_eq!(acc_from_balance, from_before - 100);
-    assert_eq!(acc_to.data.native_balance().unwrap(), 20100);
+    assert_eq!(
+        acc_to.data.native_balance().unwrap(),
+        INITIAL_PRIVATE_BALANCES_FOR_WALLET[1] + 100
+    );
 
     log::info!("Successfully shielded transfer to owned private account");
 
@@ -399,7 +407,8 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 
-    // Privacy-preserving, so fee-exempt: the sender pays exactly the amount.
+    // The foreign recipient cannot pay, so a funded private account of the wallet pays the fee
+    // and the public sender pays exactly the amount.
     assert_eq!(acc_1_balance, from_before - 100);
 
     log::info!("Successfully shielded transfer to foreign account");
@@ -518,6 +527,7 @@ fn prove_init_with_commitment_root(
     let sender = Actor::native_balance(sender_id);
     let (output, _) = execute_and_prove(
         ProvingInput {
+            claims: Vec::new(),
             root: TransactionEntry::Sync(RootCall {
                 to: sender,
                 message: Program::serialize_message(native_token::Message::Transfer {
@@ -525,6 +535,7 @@ fn prove_init_with_commitment_root(
                     amount: 1,
                 })?,
             }),
+            fee: None,
             public_context: PublicExecutionContext::new(vec![sender], [sender_id]),
             private_witnesses: vec![PrivateWitness {
                 vpk,
@@ -559,7 +570,7 @@ async fn init_with_dummy_commitment_root_produces_valid_root() -> Result<()> {
 
     let (_, _, expected_digest) = ctx
         .sequencer_client()
-        .get_proofs_and_root(vec![], None)
+        .get_proofs_and_root(vec![], Vec::new())
         .await?;
 
     let ask = lee_core::AuthorizationSecretKey([7; 32]);
@@ -589,7 +600,7 @@ async fn init_nullifier_digest_is_bound_to_commitment_root() -> Result<()> {
 
     let (_, _, expected_digest) = ctx
         .sequencer_client()
-        .get_proofs_and_root(vec![], None)
+        .get_proofs_and_root(vec![], Vec::new())
         .await?;
 
     let output_with_root = prove_init_with_commitment_root(&ctx, expected_digest)?;
