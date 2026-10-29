@@ -311,7 +311,8 @@ impl ValidatedStateDiff {
     ///
     /// A public part failing in a chargeable way reverts to the proof's fee fallback when it
     /// carries one: the diff then spends only the payer's nullifier, commits its post-state
-    /// after the fee transfer and replays that transfer's crossing. Without a fallback the
+    /// after the fee transfer and replays that transfer's crossing. It records no recovery
+    /// binding, since the notes those bind never exist. Without a fallback the
     /// failure is an error, as every pre-execution check is.
     pub fn from_privacy_preserving_transaction_metered(
         tx: &PrivacyPreservingTransaction,
@@ -439,7 +440,6 @@ impl ValidatedStateDiff {
                         signer_account_ids,
                         new_commitments: vec![fallback.action.commitment],
                         new_nullifiers: vec![(fallback.action.nullifier, fallback.action.root)],
-                        recovery_bindings: execution.recovery_bindings.clone(),
                         ..StateDiff::default()
                     },
                 )?;

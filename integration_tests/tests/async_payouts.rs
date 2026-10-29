@@ -10,7 +10,6 @@ use common::transaction::LeeTransaction;
 use integration_tests::{
     TestContext, account_balance, fetch_privacy_preserving_tx, funded_private_account, new_account,
     no_seal, private_balance, restored_private_account, sync_private, wait_for_inclusion,
-    wait_until,
 };
 use lee::{
     AccountId, Actor, PrivacyPreservingTransaction, ProvingInput, PublicExecutionContext,
@@ -180,38 +179,10 @@ async fn settle(
     Ok(())
 }
 
-// Submits a prepared transaction and requires it to be dropped rather than included, leaving the
-// custody holding `custody_left`.
-async fn assert_dropped(
-    ctx: &TestContext,
-    custody: AccountId,
-    tx: &PrivacyPreservingTransaction,
-    custody_left: u128,
-) -> Result<()> {
-    let dropped = ctx
-        .sequencer_client()
-        .send_transaction(LeeTransaction::PrivacyPreserving(tx.clone()))
-        .await?;
-    let submitted_at = ctx.sequencer_client().get_last_block_id().await?;
-    wait_until("two more blocks", || async {
-        Ok(ctx.sequencer_client().get_last_block_id().await? >= submitted_at.saturating_add(2))
-    })
-    .await?;
-    assert!(
-        ctx.sequencer_client()
-            .get_transaction(dropped)
-            .await?
-            .is_none(),
-        "the transaction must not be included"
-    );
-    assert_eq!(account_balance(ctx, custody).await?, custody_left);
-    Ok(())
-}
-
 // Trades proven while the custody holds 1,900 settle later, unchanged, each paying out a tenth of
 // whatever the custody holds once the trade's deposit lands, and the custody sends that payout
 // asynchronously as a pending native credit the trader receives privately afterwards. One whose
-// minimum the live payout misses is refused without moving anything, its private deposit included.
+// minimum the live payout misses reverts, paying only its fee.
 #[test]
 async fn trades_proven_at_one_custody_balance_pay_out_at_the_live_balance() -> Result<()> {
     let mut ctx = TestContext::new().await?;
@@ -264,8 +235,8 @@ async fn trades_proven_at_one_custody_balance_pay_out_at_the_live_balance() -> R
     settle(&ctx, custody, &prepared[1], 1_710).await?;
 
     // A tenth of 1,710 + 100 is 181 < 200: the live payout misses the third trade's minimum, so it
-    // is dropped rather than included, and its recovery binding with it.
-    assert_dropped(&ctx, custody, &prepared[2], 1_710).await?;
+    // reverts to its fee fallback, paying only the fee, without its recovery binding.
+    settle(&ctx, custody, &prepared[2], 1_710).await?;
     assert_eq!(ctx.wallet().get_recovery_binding(traders[2].1).await?, None);
 
     // The custody's transfers send the payouts asynchronously: exactly the two credits are pending
@@ -304,9 +275,7 @@ async fn trades_proven_at_one_custody_balance_pay_out_at_the_live_balance() -> R
 
     sync_private(&mut ctx).await?;
     for ((input, output), (input_left, received)) in
-        traders
-            .iter()
-            .zip([(0, 200), (0, 190), (AMOUNT_IN + fee_reserve(), 0)])
+        traders.iter().zip([(0, 200), (0, 190), (AMOUNT_IN, 0)])
     {
         assert_eq!(private_balance(&ctx, *input)?, input_left, "input note");
         assert_eq!(private_balance(&ctx, *output)?, received, "payout");
