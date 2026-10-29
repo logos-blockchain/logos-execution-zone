@@ -683,6 +683,10 @@ impl UserKeyChain {
             .insert(account_id, private_key);
     }
 
+    pub fn remove_imported_public_account(&mut self, account_id: &AccountId) {
+        self.imported_public_accounts.remove(account_id);
+    }
+
     pub fn add_imported_private_account(
         &mut self,
         key_chain: KeyChain,

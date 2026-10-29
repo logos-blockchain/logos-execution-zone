@@ -60,7 +60,7 @@ fn wallet_ffi_public_credit_creates_only_the_native_actor_state() -> Result<()> 
         );
     }
 
-    let from: FfiBytes32 = sequencer_ffi_helpers::funded_public_account(&ctx, 100)?.into();
+    let from: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
     let amount: [u8; 16] = 100_u128.to_le_bytes();
     let mut credit_result = FfiTransferResult::default();
     unsafe {
@@ -118,15 +118,8 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
         wallet: wallet_ffi_handle,
         mnemonic: _,
     } = new_wallet_ffi_with_test_context_config(&ctx, home.path(), sequencer_ffi_res.value)?;
-    let from_id = sequencer_ffi_helpers::funded_public_account(&ctx, 100)?;
-    let to_id = ctx
-        .ctx()
-        .existing_public_accounts()
-        .into_iter()
-        .find(|account_id| *account_id != from_id)
-        .expect("The test wallet holds more than one public account");
-    let from: FfiBytes32 = from_id.into();
-    let to: FfiBytes32 = to_id.into();
+    let from: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
+    let to: FfiBytes32 = ctx.ctx().existing_public_accounts()[1].into();
     let amount: [u8; 16] = 100_u128.to_le_bytes();
 
     let from_before = ffi_balance(wallet_ffi_handle, &from, true);
@@ -209,7 +202,7 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
         wallet: wallet_ffi_handle,
         mnemonic: _,
     } = new_wallet_ffi_with_test_context_config(&ctx, home.path(), sequencer_ffi_res.value)?;
-    let from: FfiBytes32 = sequencer_ffi_helpers::funded_public_account(&ctx, 100)?.into();
+    let from: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
     let (to, to_keys) = unsafe {
         let mut out_keys = FfiPrivateAccountKeys::default();
         wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys).unwrap();
