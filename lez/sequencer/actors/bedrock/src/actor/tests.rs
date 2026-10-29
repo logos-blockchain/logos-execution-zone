@@ -50,6 +50,7 @@ fn inscribing_tx(channel: ChannelId, block: &Block) -> SignedOps<Unverified, Sta
 fn a_custom_tx_yields_its_block() {
     let channel = ChannelId::from([1; 32]);
     let block = HashableBlockData {
+        reverted: Vec::new(),
         block_id: 7,
         prev_block_hash: HashType([0; 32]),
         timestamp: 700,

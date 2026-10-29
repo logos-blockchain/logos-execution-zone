@@ -4,15 +4,22 @@ use jsonrpsee::proc_macros::rpc;
 pub use jsonrpsee::types::ErrorObjectOwned;
 #[cfg(feature = "client")]
 pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
+pub use sequencer_service_protocol::FeeStateQuote;
 use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
     CommitmentSetDigest, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, EncryptedNote,
-    FeeStateQuote, HashType, LeeTransaction, MembershipProof, Nonce, PageLimit, ProgramId,
-    Publication,
+    HashType, LeeTransaction, MembershipProof, Nonce, PageLimit, ProgramId, Publication,
 };
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
 compile_error!("At least one of `server` or `client` features must be enabled.");
+
+/// Error code of a transaction turned away because the mempool is full.
+pub const MEMPOOL_IS_FULL_ERROR_CODE: i32 = -31900;
+
+/// Error code of a privacy-preserving transaction turned away because its fee reserve is below
+/// the fee at the head: priced again off a fresh quote, it may pass.
+pub const PRIVATE_FEE_BELOW_HEAD_ERROR_CODE: i32 = -31901;
 
 /// Type alias for RPC client. Only available when `client` feature is enabled.
 ///
@@ -109,15 +116,17 @@ pub trait Rpc {
         address: AccountId,
     ) -> Result<Option<EncryptedNote>, ErrorObjectOwned>;
 
+    /// The membership paths of `commitments` and of the message leaves at `message_positions`,
+    /// all under the root returned with them.
     #[method(name = "getProofsAndRoot")]
     async fn get_proofs_and_root(
         &self,
         commitments: Vec<Commitment>,
-        message_position: Option<CommitmentPosition>,
+        message_positions: Vec<CommitmentPosition>,
     ) -> Result<
         (
             Vec<Option<MembershipProof>>,
-            Option<MembershipProof>,
+            Vec<Option<MembershipProof>>,
             CommitmentSetDigest,
         ),
         ErrorObjectOwned,

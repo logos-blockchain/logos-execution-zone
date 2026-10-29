@@ -1,10 +1,10 @@
-use ffi_types::empty_root_call;
 pub use ffi_types::{
     FfiActor, FfiBoundaryStep, FfiBoundaryStepKind, FfiDelivery, FfiEncryptedAccountData,
-    FfiFeeDeclaration, FfiPrivateAction, FfiPublicAccountEvidence, FfiPublicAccountEvidenceKind,
-    FfiPublicExecutionContext, FfiRecoveryBinding, FfiRootCall, FfiSealedMessage,
-    FfiSignaturePubKeyEntry,
+    FfiFeeDeclaration, FfiPrivateAction, FfiProvenFee, FfiPublicAccountEvidence,
+    FfiPublicAccountEvidenceKind, FfiPublicExecutionContext, FfiRecoveryBinding, FfiRootCall,
+    FfiSealedMessage, FfiSignaturePubKeyEntry,
 };
+use ffi_types::{empty_root_call, proven_fee_from_ffi};
 use indexer_service_protocol::{
     HashType, PdaSeed, PrivacyPreservingMessage, PrivacyPreservingTransaction, Proof,
     PublicAccountEvidence, PublicKey, PublicMessage, PublicTransaction, Signature, Transaction,
@@ -220,6 +220,7 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                         .map(public_account_evidence_from_ffi)
                         .collect()
                 },
+                fee: proven_fee_from_ffi(value.message.has_fee, value.message.fee).map(Into::into),
             },
             witness_set: WitnessSet {
                 signatures_and_public_keys: {
@@ -253,6 +254,8 @@ pub struct FfiPrivacyPreservingMessage {
     pub block_validity_window: [u64; 2],
     pub timestamp_validity_window: [u64; 2],
     pub admission_evidence: FfiPublicAccountEvidenceList,
+    pub has_fee: bool,
+    pub fee: FfiProvenFee,
 }
 
 impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
@@ -268,9 +271,12 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
             block_validity_window,
             timestamp_validity_window,
             admission_evidence,
+            fee,
         } = value;
 
         Self {
+            has_fee: fee.is_some(),
+            fee: fee.map(lee_core::ProvenFee::from).into(),
             public_context: lee::PublicExecutionContext::from(public_context).into(),
             boundary: boundary
                 .into_iter()
@@ -522,9 +528,9 @@ const fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> ValidityWindow {
 #[cfg(test)]
 mod tests {
     use indexer_service_protocol::{
-        AccountId, Actor, BoundaryStep, Ciphertext, Commitment, Delivery, EncryptedNote,
-        EphemeralPublicKey, FeeDeclaration, MessageEnvelope, PublicExecutionContext, RootCall,
-        SealedMessage,
+        AccountId, Actor, BoundaryStep, Ciphertext, Commitment, CommitmentSetDigest, Delivery,
+        EncryptedNote, EphemeralPublicKey, FeeDeclaration, FeeFallback, MessageEnvelope, Nullifier,
+        PrivateAction, ProvenFee, PublicExecutionContext, RootCall, SealedMessage,
     };
 
     use super::*;
@@ -622,7 +628,7 @@ mod tests {
                         ..delivery(actor(12, 62), actor(9, 10), 11)
                     }),
                     BoundaryStep::PrivateToPublic(delivery(actor(40, 90), actor(41, 42), 43)),
-                    BoundaryStep::PrivateToPublic(repeated),
+                    BoundaryStep::PrivateToPublic(repeated.clone()),
                     BoundaryStep::PublicToPrivate(Delivery {
                         inherits_entry_authorizations: false,
                         ..delivery(actor(17, 18), actor(19, 20), 21)
@@ -650,6 +656,24 @@ mod tests {
                 block_validity_window: ValidityWindow((None, None)),
                 timestamp_validity_window: ValidityWindow((None, None)),
                 admission_evidence: admission_evidence(),
+                fee: Some(ProvenFee {
+                    refund_to: Some(account_id(70)),
+                    fallback: Some(FeeFallback {
+                        action: PrivateAction {
+                            nullifier: Nullifier([71; 32]),
+                            root: CommitmentSetDigest([72; 32]),
+                            commitment: Commitment([73; 32]),
+                            encrypted_post_state: EncryptedNote {
+                                ciphertext: Ciphertext(vec![74; 3]),
+                                epk: EphemeralPublicKey(vec![75; 2]),
+                            },
+                        },
+                        boundary: vec![
+                            BoundaryStep::PrivateToPublic(repeated),
+                            BoundaryStep::EndPublicSubtree,
+                        ],
+                    }),
+                }),
             },
             witness_set: WitnessSet {
                 signatures_and_public_keys: vec![],

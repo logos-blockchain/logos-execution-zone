@@ -110,13 +110,13 @@ pub struct GetAccountNonces {
 
 pub struct GetProofsAndRoot {
     pub commitments: Vec<Commitment>,
-    pub message_position: Option<CommitmentPosition>,
+    pub message_positions: Vec<CommitmentPosition>,
 }
 
-/// The membership paths of the requested commitments and message, and the root they reach.
+/// The membership paths of the requested commitments and messages, and the root they reach.
 pub type ProofsAndRoot = (
     Vec<Option<MembershipProof>>,
-    Option<MembershipProof>,
+    Vec<Option<MembershipProof>>,
     CommitmentSetDigest,
 );
 

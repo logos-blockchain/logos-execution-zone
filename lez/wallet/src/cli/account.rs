@@ -10,7 +10,7 @@ use lee_core::{account::AccountIdError, native_token::NATIVE_TOKEN_PROGRAM_ID};
 use crate::{
     WalletCore, WalletSequencerClient,
     account::{AccountIdWithPrivacy, HumanReadableAccount, Label},
-    cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
+    cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand, confirm},
 };
 
 #[derive(Debug, Clone)]
@@ -68,6 +68,9 @@ pub enum AccountSubcommand {
         /// sync cursor.
         #[arg(long)]
         rescan: bool,
+        /// Skip the confirmation prompt.
+        #[arg(short, long)]
+        yes: bool,
     },
     /// List all accounts owned by the wallet.
     #[command(visible_alias = "ls")]
@@ -347,6 +350,18 @@ impl WalletSubcommand for NewSubcommand {
 }
 
 impl AccountSubcommand {
+    fn confirm_scan(blocks: u64, scan: &str) -> Result<()> {
+        if blocks == 0
+            || confirm(&format!(
+                "{scan} will read {blocks} blocks, which may take a while. Continue?"
+            ))?
+        {
+            Ok(())
+        } else {
+            anyhow::bail!("Sync cancelled")
+        }
+    }
+
     async fn handle_get<C: WalletSequencerClient>(
         raw: bool,
         keys: bool,
@@ -601,11 +616,20 @@ impl WalletSubcommand for AccountSubcommand {
                 scope,
             } => Self::handle_get(raw, keys, account_id, scope, wallet_core).await,
             Self::New(new_subcommand) => new_subcommand.handle_subcommand(wallet_core).await,
-            Self::SyncPrivate { rescan: true } => {
+            Self::SyncPrivate { rescan: true, yes } => {
+                if !yes {
+                    let blocks = wallet_core.get_last_block_id().await?;
+                    Self::confirm_scan(blocks, "Rescanning from genesis")?;
+                }
                 wallet_core.rescan_private_accounts().await?;
                 Ok(SubcommandReturnValue::Empty)
             }
-            Self::SyncPrivate { rescan: false } => {
+            Self::SyncPrivate { rescan: false, yes } => {
+                if !yes {
+                    let from = wallet_core.storage().last_synced_block();
+                    let blocks = wallet_core.get_last_block_id().await?.saturating_sub(from);
+                    Self::confirm_scan(blocks, "Syncing")?;
+                }
                 let curr_last_block = wallet_core.sync_to_latest_block().await?;
                 Ok(SubcommandReturnValue::SyncedToBlock(curr_last_block))
             }
@@ -681,6 +705,7 @@ impl WalletSubcommand for ImportSubcommand {
                     .storage_mut()
                     .key_chain_mut()
                     .add_imported_private_account(key_chain, chain_index, account);
+                wallet_core.storage_mut().rewind_skipped_history();
 
                 wallet_core.store_persistent_data()?;
 
