@@ -11321,7 +11321,6 @@ dependencies = [
  "anyhow",
  "borsh",
  "bridge_core",
- "bridge_lock_core",
  "chain_state",
  "chrono",
  "clock_core",
@@ -11481,7 +11480,6 @@ dependencies = [
 name = "sequencer_rpc_server_actor"
 version = "0.1.0"
 dependencies = [
- "borsh",
  "bytesize",
  "common",
  "jsonrpsee",
