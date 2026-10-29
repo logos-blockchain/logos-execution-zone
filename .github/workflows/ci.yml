@@ -323,6 +323,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       targets: ${{ steps.discover-targets.outputs.targets }}
+      archive_mib: ${{ steps.archive-size.outputs.mib }}
+      test_binaries: ${{ steps.archive-size.outputs.binaries }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -366,6 +368,17 @@ jobs:
                 --message-format json \
                 --no-pager > integration-tests-binaries.json
 
+      - name: Measure the archive
+        id: archive-size
+        run: |
+          mib="$(du -m integration-tests.tar.zst | cut -f1)"
+          binaries="$(jq '[.["rust-suites"][] | select(.kind == "test")] | length' \
+            integration-tests-binaries.json)"
+
+          echo "mib=$mib" >> "$GITHUB_OUTPUT"
+          echo "binaries=$binaries" >> "$GITHUB_OUTPUT"
+          echo "Archive $mib MiB across $binaries test binaries."
+
       - name: Upload integration test archive
         uses: actions/upload-artifact@v4
         with:
@@ -387,6 +400,42 @@ jobs:
 
           echo "targets=$targets_json" >> "$GITHUB_OUTPUT"
           echo "Discovered integration targets: $targets_json"
+
+  # Every shard downloads the whole archive, so its size is paid once per
+  # shard. Its own job so a regression reports without skipping those shards.
+  archive-size-budget:
+    needs: integration-tests-prebuild
+    runs-on: ubuntu-latest
+    env:
+      BUDGET_MIB: 4400
+    steps:
+      - name: Compare the archive against its budget
+        run: |
+          mib="${{ needs.integration-tests-prebuild.outputs.archive_mib }}"
+          binaries="${{ needs.integration-tests-prebuild.outputs.test_binaries }}"
+
+          # An empty output would be 0 to `((` and pass silently.
+          if ! [[ "$mib" =~ ^[0-9]+$ ]]; then
+            echo "::error::The prebuild reported no archive size (got '$mib')."
+            exit 1
+          fi
+
+          {
+            echo "### Integration test archive"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| size | ${mib} MiB |"
+            echo "| budget | ${BUDGET_MIB} MiB |"
+            echo "| test binaries | ${binaries} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if (( mib > BUDGET_MIB )); then
+            echo "::error::The integration test archive is ${mib} MiB, over the ${BUDGET_MIB} MiB budget. Each of the ${binaries} test targets statically links the whole workspace, so a new one costs ~80 MiB on every shard's download. Grouping tests as modules of an existing target costs nothing. If the growth is intended, raise BUDGET_MIB in ci.yml."
+            exit 1
+          fi
+
+          echo "Archive ${mib} MiB across ${binaries} test binaries, within the ${BUDGET_MIB} MiB budget."
 
   integration-tests:
     needs: [ci-image, bedrock-node, integration-tests-prebuild]
@@ -563,6 +612,7 @@ jobs:
       - unit-tests
       - test-fixtures-tests
       - integration-tests-prebuild
+      - archive-size-budget
       - integration-tests
       - artifacts
       - dashboards
