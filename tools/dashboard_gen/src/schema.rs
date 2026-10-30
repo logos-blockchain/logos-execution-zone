@@ -5,12 +5,13 @@
 
 use serde::Serialize;
 
-use crate::{DATASOURCE_UID, FieldOverride, Target, unit::Unit};
+use crate::{DATASOURCE_UID, FieldOverride, LOGS_DATASOURCE_UID, Target, unit::Unit};
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DatasourceKind {
     Prometheus,
+    Loki,
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -93,6 +94,7 @@ pub enum PanelType {
     Gauge,
     #[serde(rename = "bargauge")]
     BarGauge,
+    Logs,
     StateTimeline,
     StatusHistory,
 }
@@ -248,6 +250,13 @@ impl Datasource {
         Self {
             kind: DatasourceKind::Prometheus,
             uid: DATASOURCE_UID.to_owned(),
+        }
+    }
+
+    pub fn loki() -> Self {
+        Self {
+            kind: DatasourceKind::Loki,
+            uid: LOGS_DATASOURCE_UID.to_owned(),
         }
     }
 }
@@ -479,6 +488,21 @@ pub struct StatusHistoryOptions {
     pub tooltip: Tooltip,
 }
 
+#[derive(Clone, Copy, Serialize)]
+pub enum LogsSortOrder {
+    Descending,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogsOptions {
+    /// Each line's labels and parsed fields, on click.
+    pub enable_log_details: bool,
+    pub show_time: bool,
+    pub sort_order: LogsSortOrder,
+    pub wrap_log_message: bool,
+}
+
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum Options {
@@ -488,6 +512,7 @@ pub enum Options {
     BarGauge(BarGaugeOptions),
     StateTimeline(StateTimelineOptions),
     StatusHistory(StatusHistoryOptions),
+    Logs(LogsOptions),
 }
 
 /// One choice in a [`CustomVariable`] dropdown: `text` is displayed, `value` is
@@ -602,6 +627,15 @@ pub struct GridPos {
     pub y: u32,
 }
 
+/// A link in a panel's header.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelLink {
+    pub target_blank: bool,
+    pub title: String,
+    pub url: String,
+}
+
 /// A fully positioned panel, ready to serialize.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -616,6 +650,8 @@ pub struct PanelModel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interval: Option<String>,
     /// Upper bound on the points per series, and so a lower one on the step.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<PanelLink>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_data_points: Option<u32>,
     pub options: Options,

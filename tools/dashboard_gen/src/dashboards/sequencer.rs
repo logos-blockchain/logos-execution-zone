@@ -8,7 +8,7 @@
 
 use dashboard_gen::{
     Color, Dashboard, FieldOverride, GradientMode, Panel, Selector, Target, Thresholds, Unit, avg,
-    label_values_variable, percentile_legend, percentile_variable, rate_per_min,
+    explore_logs_url, label_values_variable, percentile_legend, percentile_variable, rate_per_min,
     selected_percentile,
 };
 
@@ -290,4 +290,24 @@ pub fn dashboard() -> Dashboard {
                     ),
             ],
         )
+        .row(12, [warnings_and_errors()])
+}
+
+/// The selected sequencer's warnings and errors; the header links to all its
+/// logs in Explore.
+fn warnings_and_errors() -> Panel {
+    let sequencer = format!(
+        r#"{label}="${SEQUENCER_VAR}""#,
+        label = sequencer_service_metrics::names::SEQUENCER_LABEL,
+    );
+    Panel::logs("Warnings and errors")
+        .width(24)
+        .header_link(
+            "All logs in Explore",
+            explore_logs_url(&super::logs(&[&sequencer])),
+        )
+        .target(Target::logs(super::logs(&[
+            &sequencer,
+            super::WARNINGS_AND_ERRORS,
+        ])))
 }

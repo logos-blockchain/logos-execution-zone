@@ -562,6 +562,30 @@
       ],
       "title": "Peer watchers suspended on the committee floor",
       "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "loki", "uid": "loki" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [ ] },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 61 },
+      "id": 18,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "All logs in Explore",
+          "url": "/explore?schemaVersion=1&panes={\"logs\":{\"datasource\":\"loki\",\"queries\":[{\"datasource\":{\"type\":\"loki\",\"uid\":\"loki\"},\"expr\":\"{sequencer=\\\"$sequencer\\\"}\",\"refId\":\"A\"}],\"range\":{\"from\":\"${__from}\",\"to\":\"${__to}\"}}}"
+        }
+      ],
+      "options": { "enableLogDetails": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki" },
+          "expr": "{sequencer=\"$sequencer\", level=~\"WARN|ERROR\"}",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "title": "Warnings and errors",
+      "type": "logs"
     }
   ],
   "refresh": "5s",

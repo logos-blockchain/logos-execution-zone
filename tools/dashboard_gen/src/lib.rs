@@ -17,11 +17,12 @@ use schema::{
     AlignValue, BarGaugeDisplay, BarGaugeOptions, BarGaugeValueMode, Calc, Custom, CustomConfig,
     CustomVariable, DashboardLink, DashboardLinkKind, DataLink, Datasource, Defaults, DrawStyle,
     EmptyList, FieldConfig, Fill, GaugeOptions, GraphMode, GridPos, Legend, LegendDisplay,
-    LineStyle, Matcher, MatcherKind, Options, Orientation, OverrideProperty, PanelModel, PanelType,
-    Placement, PropertyId, PropertyValue, QueryVariable, ReduceOptions, ShowValue, SortOrder,
-    Stacking, StatColorMode, StatOptions, StateTimelineOptions, StatusHistoryOptions, Templating,
-    TimeRange, TimeSeriesOptions, TimelineCustom, Tooltip, TooltipMode, ValueMapping,
-    ValueMappingKind, ValueMappingResult, VariableOption, VariableRefresh, VariableSort,
+    LineStyle, LogsOptions, LogsSortOrder, Matcher, MatcherKind, Options, Orientation,
+    OverrideProperty, PanelLink, PanelModel, PanelType, Placement, PropertyId, PropertyValue,
+    QueryVariable, ReduceOptions, ShowValue, SortOrder, Stacking, StatColorMode, StatOptions,
+    StateTimelineOptions, StatusHistoryOptions, Templating, TimeRange, TimeSeriesOptions,
+    TimelineCustom, Tooltip, TooltipMode, ValueMapping, ValueMappingKind, ValueMappingResult,
+    VariableOption, VariableRefresh, VariableSort,
 };
 pub use schema::{
     AxisPlacement, Color, GradientMode, LineInterpolation, ShowPoints, StackingMode, Thresholds,
@@ -38,6 +39,9 @@ mod unit;
 /// environments because they reference the datasource by this stable uid rather
 /// than by a per-environment URL.
 pub const DATASOURCE_UID: &str = "prometheus";
+
+/// Datasource uid of the logs every [`Target::logs`] queries.
+pub const LOGS_DATASOURCE_UID: &str = "loki";
 
 /// Window every rate query — counter and histogram alike — rates over.
 /// `$__rate_interval` tracks the panel's zoom, so the window always covers the
@@ -144,6 +148,15 @@ impl Target {
         self
     }
 
+    /// A query against the logs, e.g. `{sequencer="$sequencer"}` for a
+    /// logs panel, or `count_over_time(…)` for a graph.
+    pub fn logs(expr: impl Into<String>) -> Self {
+        Self {
+            datasource: Datasource::loki(),
+            ..Self::new(expr)
+        }
+    }
+
     /// Evaluate once, at the end of the time range, instead of at every step.
     /// For panels that show one value per series, e.g. over `$__range`.
     #[must_use]
@@ -200,6 +213,7 @@ enum Kind {
     TimeSeries,
     Gauge,
     BarGauge,
+    Logs,
     StateTimeline,
     StatusHistory,
 }
@@ -222,6 +236,7 @@ pub struct Panel {
     overrides: Vec<FieldOverride>,
     mappings: Vec<(String, String, String)>,
     links: Vec<DataLink>,
+    header_links: Vec<PanelLink>,
     min_interval: Option<String>,
     max_data_points: Option<u32>,
     // Optional timeseries styling, set via the `styling` setters.
@@ -252,6 +267,7 @@ impl Panel {
             overrides: Vec::new(),
             mappings: Vec::new(),
             links: Vec::new(),
+            header_links: Vec::new(),
             min_interval: None,
             max_data_points: None,
             fill_opacity: None,
@@ -291,6 +307,11 @@ impl Panel {
         Self::new(title, Kind::StateTimeline)
     }
 
+    /// Log lines, newest first. Pair it with [`Target::logs`].
+    pub fn logs(title: impl Into<String>) -> Self {
+        Self::new(title, Kind::Logs)
+    }
+
     /// One row per series, a cell per query step colored by its value: a
     /// heatmap of series over time.
     pub fn status_history(title: impl Into<String>) -> Self {
@@ -322,6 +343,18 @@ impl Panel {
     #[must_use]
     pub fn link(mut self, title: impl Into<String>, url: impl Into<String>) -> Self {
         self.links.push(DataLink {
+            title: title.into(),
+            url: url.into(),
+        });
+        self
+    }
+
+    /// A link in the panel's header, e.g. to [`explore_logs_url`]. `url` may use
+    /// dashboard variables.
+    #[must_use]
+    pub fn header_link(mut self, title: impl Into<String>, url: impl Into<String>) -> Self {
+        self.header_links.push(PanelLink {
+            target_blank: false,
             title: title.into(),
             url: url.into(),
         });
@@ -554,6 +587,26 @@ impl Panel {
                 });
                 (defaults, options, PanelType::BarGauge)
             }
+            Kind::Logs => {
+                let defaults = Defaults {
+                    color: None,
+                    custom: None,
+                    unit,
+                    decimals: None,
+                    min: None,
+                    max: None,
+                    thresholds: None,
+                    mappings: Vec::new(),
+                    links: Vec::new(),
+                };
+                let options = Options::Logs(LogsOptions {
+                    enable_log_details: true,
+                    show_time: true,
+                    sort_order: LogsSortOrder::Descending,
+                    wrap_log_message: true,
+                });
+                (defaults, options, PanelType::Logs)
+            }
             Kind::StateTimeline | Kind::StatusHistory => {
                 let defaults = Defaults {
                     color: self.color,
@@ -610,7 +663,10 @@ impl Panel {
         };
 
         PanelModel {
-            datasource: Datasource::prometheus(),
+            // A panel queries one datasource, so its queries pick it.
+            datasource: targets
+                .first()
+                .map_or_else(Datasource::prometheus, |target| target.datasource.clone()),
             description: self.description,
             field_config: FieldConfig {
                 defaults,
@@ -619,6 +675,7 @@ impl Panel {
             grid_pos,
             id,
             interval: self.min_interval,
+            links: self.header_links,
             max_data_points: self.max_data_points,
             options,
             targets,
@@ -888,6 +945,44 @@ fn value_mappings(mappings: Vec<(String, String, String)>) -> Vec<ValueMapping> 
     }]
 }
 
+/// A link opening `logql` in Explore over the dashboard's time range.
+/// `logql` may use dashboard variables, e.g. `{sequencer="${sequencer}"}`.
+#[must_use]
+pub fn explore_logs_url(logql: &str) -> String {
+    let pane = serde_json::json!({
+        "logs": {
+            "datasource": LOGS_DATASOURCE_UID,
+            "queries": [{
+                "refId": "A",
+                "expr": logql,
+                "datasource": Datasource::loki(),
+            }],
+            "range": { "from": "${__from}", "to": "${__to}" },
+        }
+    });
+    format!(
+        "/explore?schemaVersion=1&panes={}",
+        query_value(&pane.to_string())
+    )
+}
+
+/// `value` safe to put in a URL's query string: there `+` reads as a space, and
+/// `&` and `#` end the value. Grafana's `$variables` stay as they are, for it
+/// to fill in.
+fn query_value(value: &str) -> String {
+    value
+        .chars()
+        .map(|char| match char {
+            '%' => "%25".to_owned(),
+            '+' => "%2B".to_owned(),
+            '&' => "%26".to_owned(),
+            '#' => "%23".to_owned(),
+            ' ' => "%20".to_owned(),
+            other => other.to_string(),
+        })
+        .collect()
+}
+
 /// A per-minute rate target summing `metric`'s series, keeping `by` labels
 /// apart, e.g. `&["sequencer"]` for one line per sequencer.
 #[must_use]
@@ -908,4 +1003,22 @@ const fn default_unit() -> Unit {
 fn ref_letter(index: usize) -> String {
     let offset = u8::try_from(index).unwrap_or(0);
     char::from(b'A'.saturating_add(offset)).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explore_links_keep_a_regex_plus_and_the_dashboard_variables() {
+        let url = explore_logs_url(r#"{sequencer=~".+", level="$level"}"#);
+
+        assert!(url.contains(r#"=~\".%2B\""#), "{url}");
+        assert!(url.contains("$level"), "{url}");
+        assert!(
+            url.contains(r#""from":"${__from}","to":"${__to}""#),
+            "{url}"
+        );
+        assert!(!url.contains('+'), "{url}");
+    }
 }
