@@ -108,7 +108,7 @@ resolve-host-bedrock-node:
         --target-directory target/bedrock-node-host
 
 # Run Prometheus + Grafana in docker. Grafana: http://localhost:3000 (anonymous
-# admin), Prometheus: http://localhost:9090. Scrapes the sequencer's /metrics.
+# admin), Prometheus: http://localhost:9090. Scrapes the sequencers' /metrics.
 run-monitoring:
     @echo "📊 Running Prometheus (http://localhost:9090) + Grafana (http://localhost:3000)"
     docker compose --profile monitoring up prometheus grafana

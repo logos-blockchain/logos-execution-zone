@@ -18,11 +18,12 @@ pub use schema::{
     Variable,
 };
 use schema::{
-    Calc, Custom, Datasource, Defaults, DrawStyle, EmptyList, FieldConfig, Fill, GaugeOptions,
-    GraphMode, GridPos, Legend, LegendDisplay, LineStyle, Matcher, MatcherKind, Options,
-    OverrideProperty, PanelModel, PanelType, Placement, PropertyId, PropertyValue, ReduceOptions,
-    SortOrder, Stacking, StatColorMode, StatOptions, Templating, TimeRange, TimeSeriesOptions,
-    Tooltip, TooltipMode, VariableKind, VariableOption,
+    Calc, Custom, CustomVariable, Datasource, Defaults, DrawStyle, EmptyList, FieldConfig, Fill,
+    GaugeOptions, GraphMode, GridPos, Legend, LegendDisplay, LineStyle, Matcher, MatcherKind,
+    Options, OverrideProperty, PanelModel, PanelType, Placement, PropertyId, PropertyValue,
+    QueryVariable, ReduceOptions, SortOrder, Stacking, StatColorMode, StatOptions, Templating,
+    TimeRange, TimeSeriesOptions, Tooltip, TooltipMode, VariableOption, VariableRefresh,
+    VariableSort,
 };
 use serde::Serialize;
 pub use unit::Unit;
@@ -48,6 +49,57 @@ const PERCENTILE_VAR: &str = "percentile";
 /// Area fill under a timeseries line, as a percentage. Enough to read a series'
 /// shape at a glance without drowning the ones stacked behind it.
 pub(crate) const DEFAULT_FILL_OPACITY: u32 = 10;
+
+/// A metric name plus label matchers, rendered as a Prometheus selector:
+/// `metric{label="value", …}`.
+///
+/// Query helpers take a `Selector` rather than a bare metric name, so a
+/// dashboard scoped to one source (see [`label_values_variable`]) scopes every
+/// series it reads.
+#[derive(Clone)]
+pub struct Selector {
+    metric: String,
+    matchers: Vec<(String, String)>,
+}
+
+impl Selector {
+    pub fn new(metric: impl Into<String>) -> Self {
+        Self {
+            metric: metric.into(),
+            matchers: Vec::new(),
+        }
+    }
+
+    /// Keep only series whose `label` equals `value`. `value` may reference a
+    /// dashboard variable, e.g. `$sequencer`.
+    #[must_use]
+    pub fn label_eq(mut self, label: impl Into<String>, value: impl Into<String>) -> Self {
+        self.matchers.push((label.into(), value.into()));
+        self
+    }
+
+    /// The selector for one of the series a histogram expands into, e.g.
+    /// `_bucket`.
+    fn suffixed(&self, suffix: &str) -> String {
+        let matchers = self
+            .matchers
+            .iter()
+            .map(|(label, value)| format!("{label}=\"{value}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if matchers.is_empty() {
+            format!("{}{suffix}", self.metric)
+        } else {
+            format!("{}{suffix}{{{matchers}}}", self.metric)
+        }
+    }
+}
+
+impl std::fmt::Display for Selector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.suffixed(""))
+    }
+}
 
 /// A single Prometheus query within a panel.
 #[derive(Clone, Serialize)]
@@ -522,7 +574,7 @@ pub fn percentile_variable(percentiles: &[u32], default: u32) -> Variable {
         .collect::<Vec<_>>()
         .join(", ");
 
-    Variable {
+    Variable::Custom(CustomVariable {
         current,
         include_all: false,
         label: "Percentile".to_owned(),
@@ -532,8 +584,25 @@ pub fn percentile_variable(percentiles: &[u32], default: u32) -> Variable {
         name: PERCENTILE_VAR.to_owned(),
         options,
         query,
-        kind: VariableKind::Custom,
-    }
+    })
+}
+
+/// A single-choice dropdown named `name` (referenced as `$name`), titled
+/// `title`, offering every value `label` takes across `metric`'s series.
+#[must_use]
+pub fn label_values_variable(name: &str, title: &str, metric: &str, label: &str) -> Variable {
+    let query = format!("label_values({metric}, {label})");
+    Variable::Query(QueryVariable {
+        datasource: Datasource::prometheus(),
+        definition: query.clone(),
+        include_all: false,
+        label: title.to_owned(),
+        multi: false,
+        name: name.to_owned(),
+        query,
+        refresh: VariableRefresh::OnTimeRangeChange,
+        sort: VariableSort::NaturalAsc,
+    })
 }
 
 /// The legend fragment that renders the dropdown's current choice, e.g. `p95`.
@@ -548,15 +617,16 @@ pub fn percentile_legend() -> String {
 ///
 /// [`histogram_quantile`]: https://prometheus.io/docs/prometheus/latest/querying/functions/#histogram_quantile
 #[must_use]
-pub fn selected_percentile(metric: &str, labels: &[&str], legend: &str) -> Target {
+pub fn selected_percentile(metric: &Selector, labels: &[&str], legend: &str) -> Target {
     // `le` carries the bucket boundary, so it must survive the aggregation.
     let grouping = std::iter::once("le")
         .chain(labels.iter().copied())
         .collect::<Vec<_>>()
         .join(", ");
 
+    let buckets = metric.suffixed("_bucket");
     Target::new(format!(
-        "histogram_quantile(${{{PERCENTILE_VAR}}}, sum by ({grouping}) (rate({metric}_bucket[{RATE_WINDOW}])))"
+        "histogram_quantile(${{{PERCENTILE_VAR}}}, sum by ({grouping}) (rate({buckets}[{RATE_WINDOW}])))"
     ))
     .legend(legend)
 }
@@ -578,16 +648,18 @@ fn quantile(percentile: u32) -> String {
 
 /// An `avg` target for a histogram metric: `rate(sum) / rate(count)`.
 #[must_use]
-pub fn avg(metric: &str) -> Target {
+pub fn avg(metric: &Selector) -> Target {
+    let sum = metric.suffixed("_sum");
+    let count = metric.suffixed("_count");
     Target::new(format!(
-        "rate({metric}_sum[{RATE_WINDOW}]) / rate({metric}_count[{RATE_WINDOW}])"
+        "rate({sum}[{RATE_WINDOW}]) / rate({count}[{RATE_WINDOW}])"
     ))
     .legend("avg")
 }
 
 /// A per-minute rate target for a counter metric.
 #[must_use]
-pub fn rate_per_min(metric: &str, legend: &str) -> Target {
+pub fn rate_per_min(metric: &Selector, legend: &str) -> Target {
     //`rate` is per-second whatever the window, so `* 60` is per-minute regardless of the panel's
     //`rate` zoom.
     Target::new(format!("rate({metric}[{RATE_WINDOW}]) * 60")).legend(legend)

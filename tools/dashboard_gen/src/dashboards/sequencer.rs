@@ -1,5 +1,5 @@
 //! The sequencer dashboard: chain progress, block timings, mempool and
-//! transaction outcomes.
+//! transaction outcomes of one sequencer, picked from a dropdown.
 
 #![expect(
     clippy::non_ascii_literal,
@@ -7,16 +7,34 @@
 )]
 
 use dashboard_gen::{
-    Color, Dashboard, FieldOverride, GradientMode, Panel, Target, Thresholds, Unit, avg,
-    percentile_legend, percentile_variable, rate_per_min, selected_percentile,
+    Color, Dashboard, FieldOverride, GradientMode, Panel, Selector, Target, Thresholds, Unit, avg,
+    label_values_variable, percentile_legend, percentile_variable, rate_per_min,
+    selected_percentile,
 };
 
 const PERCENTILES: &[u32] = &[50, 90, 95, 99];
 const DEFAULT_PERCENTILE: u32 = 95;
 
+/// Dashboard variable holding the sequencer every panel shows.
+const SEQUENCER_VAR: &str = "sequencer";
+
+/// `metric`'s series from the selected sequencer only.
+fn seq(metric: &str) -> Selector {
+    Selector::new(metric).label_eq(
+        sequencer_service_metrics::names::SEQUENCER_LABEL,
+        format!("${SEQUENCER_VAR}"),
+    )
+}
+
 pub fn dashboard() -> Dashboard {
     Dashboard::new("Sequencer", "sequencer")
         .tag("sequencer")
+        .variable(label_values_variable(
+            SEQUENCER_VAR,
+            "Sequencer",
+            sequencer_core_metrics::names::CHAIN_HEIGHT,
+            sequencer_service_metrics::names::SEQUENCER_LABEL,
+        ))
         .variable(percentile_variable(PERCENTILES, DEFAULT_PERCENTILE))
         .row(
             7,
@@ -27,7 +45,7 @@ pub fn dashboard() -> Dashboard {
                     .decimals(0)
                     .color(Color::fixed("blue"))
                     .target(
-                        Target::new(sequencer_core_metrics::names::CHAIN_HEIGHT).legend("height"),
+                        Target::new(seq(sequencer_core_metrics::names::CHAIN_HEIGHT).to_string()).legend("height"),
                     ),
                 Panel::stat("Blocks produced by this sequencer since startup")
                     .width(6)
@@ -35,14 +53,13 @@ pub fn dashboard() -> Dashboard {
                     .decimals(0)
                     .color(Color::fixed("green"))
                     .target(
-                        Target::new(sequencer_core_metrics::names::BLOCKS_PRODUCED_TOTAL)
+                        Target::new(seq(sequencer_core_metrics::names::BLOCKS_PRODUCED_TOTAL).to_string())
                             .legend("produced"),
                     ),
                 Panel::timeseries("Block production rate")
                     .width(12)
                     .unit(Unit::Short)
-                    .target(rate_per_min(
-                        sequencer_core_metrics::names::BLOCKS_PRODUCED_TOTAL,
+                    .target(rate_per_min(&seq(sequencer_core_metrics::names::BLOCKS_PRODUCED_TOTAL),
                         "produced · blocks/min",
                     ))
                     .with_override(
@@ -55,12 +72,11 @@ pub fn dashboard() -> Dashboard {
             [Panel::timeseries("Block creation time")
                 .width(24)
                 .unit(Unit::Seconds)
-                .target(selected_percentile(
-                    sequencer_core_metrics::names::BLOCK_CREATION_TIME,
+                .target(selected_percentile(&seq(sequencer_core_metrics::names::BLOCK_CREATION_TIME),
                     &[],
                     &percentile_legend(),
                 ))
-                .target(avg(sequencer_core_metrics::names::BLOCK_CREATION_TIME))
+                .target(avg(&seq(sequencer_core_metrics::names::BLOCK_CREATION_TIME)))
                 .with_override(
                     FieldOverride::by_name("avg")
                         .dashed_line()
@@ -73,20 +89,18 @@ pub fn dashboard() -> Dashboard {
                 Panel::timeseries("Transaction application time")
                     .width(12)
                     .unit(Unit::Seconds)
-                    .target(selected_percentile(
-                        sequencer_core_metrics::names::MEMPOOL_TRANSACTION_APPLICATION_TIME,
+                    .target(selected_percentile(&seq(sequencer_core_metrics::names::MEMPOOL_TRANSACTION_APPLICATION_TIME),
                         &["kind", "origin", "status"],
                         "{{kind}} · {{origin}} · {{status}}",
                     )),
                 Panel::timeseries("Transactions per block")
                     .width(12)
                     .unit(Unit::Short)
-                    .target(selected_percentile(
-                        sequencer_core_metrics::names::TRANSACTIONS_PER_BLOCK,
+                    .target(selected_percentile(&seq(sequencer_core_metrics::names::TRANSACTIONS_PER_BLOCK),
                         &[],
                         &percentile_legend(),
                     ))
-                    .target(avg(sequencer_core_metrics::names::TRANSACTIONS_PER_BLOCK))
+                    .target(avg(&seq(sequencer_core_metrics::names::TRANSACTIONS_PER_BLOCK)))
                     .with_override(
                         FieldOverride::by_name("avg")
                             .dashed_line()
@@ -111,8 +125,8 @@ pub fn dashboard() -> Dashboard {
                     .target(
                         Target::new(format!(
                             "100 * {size} / {max_size}",
-                            size = sequencer_core_metrics::names::MEMPOOL_SIZE,
-                            max_size = sequencer_core_metrics::names::MEMPOOL_MAX_SIZE,
+                            size = seq(sequencer_core_metrics::names::MEMPOOL_SIZE),
+                            max_size = seq(sequencer_core_metrics::names::MEMPOOL_MAX_SIZE),
                         ))
                         .legend("utilization"),
                     ),
@@ -122,10 +136,10 @@ pub fn dashboard() -> Dashboard {
                     .span_nulls()
                     .min(0.0)
                     .target(
-                        Target::new(sequencer_core_metrics::names::MEMPOOL_SIZE).legend("queued"),
+                        Target::new(seq(sequencer_core_metrics::names::MEMPOOL_SIZE).to_string()).legend("queued"),
                     )
                     .target(
-                        Target::new(sequencer_core_metrics::names::MEMPOOL_MAX_SIZE)
+                        Target::new(seq(sequencer_core_metrics::names::MEMPOOL_MAX_SIZE).to_string())
                             .legend("capacity"),
                     )
                     .with_override(
@@ -156,9 +170,9 @@ pub fn dashboard() -> Dashboard {
                             // `clamp_min` keeps an idle window (nothing submitted)
                             // reading as 0% instead of a division by zero.
                             "100 * (increase({before_mempool}[$__range]) + increase({in_mempool}[$__range])) / clamp_min(increase({submitted}[$__range]), 1)",
-                            before_mempool = sequencer_rpc_server_actor_metrics::names::BEFORE_MEMPOOL_FAILED_TRANSACTIONS_TOTAL,
-                            in_mempool = sequencer_core_metrics::names::MEMPOOL_FAILED_TRANSACTIONS_TOTAL,
-                            submitted = sequencer_rpc_server_actor_metrics::names::SUBMITTED_TRANSACTIONS_TOTAL,
+                            before_mempool = seq(sequencer_rpc_server_actor_metrics::names::BEFORE_MEMPOOL_FAILED_TRANSACTIONS_TOTAL),
+                            in_mempool = seq(sequencer_core_metrics::names::MEMPOOL_FAILED_TRANSACTIONS_TOTAL),
+                            submitted = seq(sequencer_rpc_server_actor_metrics::names::SUBMITTED_TRANSACTIONS_TOTAL),
                         ))
                         .legend("failed"),
                     ),
@@ -168,16 +182,13 @@ pub fn dashboard() -> Dashboard {
                     .min(0.0)
                     .fill_opacity(35)
                     .gradient_mode(GradientMode::Opacity)
-                    .target(rate_per_min(
-                        sequencer_rpc_server_actor_metrics::names::SUBMITTED_TRANSACTIONS_TOTAL,
+                    .target(rate_per_min(&seq(sequencer_rpc_server_actor_metrics::names::SUBMITTED_TRANSACTIONS_TOTAL),
                         "submitted",
                     ))
-                    .target(rate_per_min(
-                        sequencer_rpc_server_actor_metrics::names::BEFORE_MEMPOOL_FAILED_TRANSACTIONS_TOTAL,
+                    .target(rate_per_min(&seq(sequencer_rpc_server_actor_metrics::names::BEFORE_MEMPOOL_FAILED_TRANSACTIONS_TOTAL),
                         "failed · before mempool",
                     ))
-                    .target(rate_per_min(
-                        sequencer_core_metrics::names::MEMPOOL_FAILED_TRANSACTIONS_TOTAL,
+                    .target(rate_per_min(&seq(sequencer_core_metrics::names::MEMPOOL_FAILED_TRANSACTIONS_TOTAL),
                         "failed · in mempool",
                     ))
                     .with_override(
@@ -203,9 +214,7 @@ pub fn dashboard() -> Dashboard {
                     .decimals(0)
                     .color(Color::fixed("red"))
                     .target(
-                        Target::new(
-                            sequencer_core_metrics::names::CROSS_ZONE_DISPATCHES_RETIRED_TOTAL,
-                        )
+                        Target::new(seq(sequencer_core_metrics::names::CROSS_ZONE_DISPATCHES_RETIRED_TOTAL).to_string())
                         .legend("given up on"),
                     ),
                 Panel::stat("Dead letters retained")
@@ -214,17 +223,14 @@ pub fn dashboard() -> Dashboard {
                     .decimals(0)
                     .color(Color::fixed("orange"))
                     .target(
-                        Target::new(
-                            sequencer_core_metrics::names::CROSS_ZONE_DEAD_LETTER_DISPATCHES,
-                        )
+                        Target::new(seq(sequencer_core_metrics::names::CROSS_ZONE_DEAD_LETTER_DISPATCHES).to_string())
                         .legend("retained"),
                     ),
                 Panel::timeseries("Cross-zone deliveries given up on (per minute)")
                     .width(12)
                     .unit(Unit::Short)
                     .min(0.0)
-                    .target(rate_per_min(
-                        sequencer_core_metrics::names::CROSS_ZONE_DISPATCHES_RETIRED_TOTAL,
+                    .target(rate_per_min(&seq(sequencer_core_metrics::names::CROSS_ZONE_DISPATCHES_RETIRED_TOTAL),
                         "given up on",
                     ))
                     .with_override(
@@ -242,9 +248,7 @@ pub fn dashboard() -> Dashboard {
                     .unit(Unit::Short)
                     .min(0.0)
                     .target(
-                        Target::new(
-                            sequencer_core_metrics::names::CROSS_ZONE_PEER_COMMITTEE_SUSPENDED,
-                        )
+                        Target::new(seq(sequencer_core_metrics::names::CROSS_ZONE_PEER_COMMITTEE_SUSPENDED).to_string())
                         .legend("peer {{peer}}"),
                     ),
             ],

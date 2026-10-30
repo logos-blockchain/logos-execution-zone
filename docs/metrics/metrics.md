@@ -89,10 +89,24 @@ Panels are built fluently, and every query is composed from the `names` consts:
 ```rust
 Panel::timeseries("Block production rate")
     .width(18)
-    .target(rate_per_min(sequencer_core_metrics::names::BLOCKS_PRODUCED_TOTAL, "blocks/min"))
+    .target(rate_per_min(&seq(sequencer_core_metrics::names::BLOCKS_PRODUCED_TOTAL), "blocks/min"))
 ```
 
 Query helpers: `rate_per_min` for counters, `avg` for histograms, and `selected_percentile` for percentile lines — the latter reads a `percentile` dashboard dropdown created by `percentile_variable`, so one panel serves p50/p90/p95/p99 instead of drawing all four. Rate windows use `$__rate_interval`, which tracks the panel's zoom.
+
+Helpers take a `Selector` (metric name plus label matchers) rather than a bare name, so a scoped dashboard scopes every series, histogram `_bucket`/`_sum`/`_count` included.
+
+### One sequencer at a time
+
+Every sequencer exports the same metric names, so an unscoped query mixes all of them. To tell them apart, `sequencer_service` labels every series it exports with its channel signing public key, in hex — the key `setup` prints and `stake --sequencer-key` takes:
+
+```
+chain_height{sequencer="b0af2105…c68c"} 42
+```
+
+The label name is `sequencer_service_metrics::names::SEQUENCER_LABEL`. The sequencer dashboard has a **Sequencer** dropdown (`label_values_variable`, listing the `sequencer` values of `chain_height`), and its `seq(name)` helper pins every query to `sequencer="$sequencer"`.
+
+Keys identify any sequencer, external ones included, with no scrape config. Where readable names are known, the scrape config can set them instead: a target label wins over a scraped one, and Prometheus keeps the scraped value as `exported_sequencer`. The devnet's `monitoring/prometheus/prometheus.yml` does this, naming its nodes `sequencer_0`…`sequencer_3`.
 
 **Extending it:**
 
@@ -109,5 +123,5 @@ The builder deliberately models only the subset of Grafana's schema we use.
 | Recipe | Purpose |
 |---|---|
 | `just regenerate-dashboards` | Rebuild the committed dashboard JSON. Run after touching metric names or dashboard code — CI checks it is current. |
-| `just run-monitoring` | Prometheus (`:9090`) + Grafana (`:3000`, anonymous admin) in docker, scraping the sequencer every 5 s |
+| `just run-monitoring` | Prometheus (`:9090`) + Grafana (`:3000`, anonymous admin) in docker, scraping the sequencers every 5 s |
 | `just get-sequencer-metrics` | `curl` the raw `/metrics` endpoint — quickest way to confirm a metric name and value |
