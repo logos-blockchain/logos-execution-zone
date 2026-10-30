@@ -39,7 +39,8 @@ use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::config::{UrlProtocol, addr_to_url, bedrock_channel_id, bedrock_funding_key};
 use tokio::test;
 
-const TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK: Duration = Duration::from_mins(2);
+// A pinning block waits for the sequencer's next committee turn.
+const TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK: Duration = Duration::from_mins(5);
 
 #[test]
 async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
