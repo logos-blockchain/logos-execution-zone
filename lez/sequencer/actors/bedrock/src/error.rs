@@ -55,6 +55,9 @@ pub enum Error {
     #[error("Invalid channel key list")]
     InvalidChannelKeyList(#[source] anyhow::Error),
 
+    #[error("Invalid channel config")]
+    InvalidChannelConfig(#[source] anyhow::Error),
+
     #[error("Failed to assemble channel multi-sig proof")]
     ChannelMultiSigProofAssemblyFailed(#[source] anyhow::Error),
 
