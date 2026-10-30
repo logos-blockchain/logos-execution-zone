@@ -646,12 +646,12 @@ fn config_op(tx: &Ops) -> Option<&ChannelConfigOp> {
 
 /// Whether `op` installs exactly what this node wants installed.
 fn matches(target: &ConfigTarget, op: &ChannelConfigOp) -> bool {
-    op.parent == target.parent
-        && op.keys.iter().eq(target.keys.iter())
-        && u32::from(op.posting_timeframe.clone()) == target.posting_timeframe
-        && u32::from(op.posting_timeout.clone()) == target.posting_timeout
-        && op.configuration_threshold == target.configuration_threshold
-        && op.transfer_threshold == target.transfer_threshold
+    op.parent() == target.parent
+        && op.keys().iter().eq(target.keys.iter())
+        && u32::from(op.posting_timeframe().clone()) == target.posting_timeframe
+        && u32::from(op.posting_timeout().clone()) == target.posting_timeout
+        && op.configuration_threshold() == target.configuration_threshold
+        && op.transfer_threshold() == target.transfer_threshold
 }
 
 #[cfg(test)]
