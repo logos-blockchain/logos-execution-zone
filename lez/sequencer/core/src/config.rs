@@ -1,5 +1,6 @@
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    num::NonZero,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -117,6 +118,8 @@ pub struct BedrockConfig {
     pub priority_fee_percent: u64,
     #[serde(default = "default_stale_refund_slots")]
     pub stale_refund_slots: u64,
+    #[serde(default = "default_backfill_batch_slots")]
+    pub backfill_batch_slots: NonZero<u64>,
 }
 
 /// The values a new channel is created with.
@@ -275,6 +278,11 @@ pub const fn default_priority_fee_percent() -> u64 {
 #[must_use]
 pub const fn default_stale_refund_slots() -> u64 {
     300
+}
+
+#[must_use]
+pub const fn default_backfill_batch_slots() -> NonZero<u64> {
+    chain_state::zone_indexer::DEFAULT_BACKFILL_BATCH_SLOTS
 }
 
 /// Production defaults for the values genesis fixes.

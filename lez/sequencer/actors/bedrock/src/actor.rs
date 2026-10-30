@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, num::NonZero};
 
 use anyhow::anyhow;
 use chain_state::timeout_node::TimeoutNode;
@@ -52,6 +52,8 @@ pub struct Args<S: StorageActorTrait> {
     pub node_url: Url,
     pub basic_auth: Option<BasicAuthCredentials>,
     pub channel_id: ChannelId,
+    /// Slots of finalized history each read covers.
+    pub backfill_batch_slots: NonZero<u64>,
     pub storage_ref: ActorRef<S>,
     pub broker_ref: ActorRef<Broker<ChannelEvent>>,
 }
@@ -80,6 +82,7 @@ pub struct Args<S: StorageActorTrait> {
 ///     [`PublisherEvent::Deposits`](crate::protocol::PublisherEvent::Deposits)
 pub struct BedrockActor<S: StorageActorTrait> {
     channel_id: ChannelId,
+    backfill_batch_slots: NonZero<u64>,
     node: TimeoutNode<NodeHttpClient>,
     node_stream: node_stream::NodeStream,
     /// [`Some`] after [`InitializeChannelPublisher`] has been handled.
@@ -113,6 +116,7 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
             channel_id,
             storage_ref,
             broker_ref,
+            backfill_batch_slots,
         } = args;
         let anchor = storage_ref.ask(GetZoneAnchor).await?;
 
@@ -128,12 +132,14 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
                 channel_id,
                 anchor,
                 broker_ref.clone(),
+                backfill_batch_slots,
             )
             .await?,
             node,
             publisher: None,
             broker_ref,
             storage_ref,
+            backfill_batch_slots,
         })
     }
 
@@ -195,6 +201,7 @@ impl<S: StorageActorTrait> Message<InitializeChannelPublisher> for BedrockActor<
                 priority_fee_percent,
                 resubmit_interval,
                 stale_refund_slots,
+                backfill_batch_slots: self.backfill_batch_slots,
             },
             self.node.clone(),
             initial_checkpoint,
@@ -468,8 +475,6 @@ impl<S: StorageActorTrait> Message<ReadChannel> for BedrockActor<S> {
         ReadChannel { channel_id, after }: ReadChannel,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        const BATCH_SIZE: Slot = Slot::new(100);
-
         self.assert_channel_id(channel_id);
 
         let lib_slot = self
@@ -482,6 +487,7 @@ impl<S: StorageActorTrait> Message<ReadChannel> for BedrockActor<S> {
         let start_slot = after.map_or_else(Slot::genesis, |s| s.strict_add(1.into()));
 
         let node = self.node.clone();
+        let batch_slots = self.backfill_batch_slots.get();
         let stream = futures::stream::unfold(Some(start_slot), move |next| {
             let node = node.clone();
             async move {
@@ -493,7 +499,7 @@ impl<S: StorageActorTrait> Message<ReadChannel> for BedrockActor<S> {
                 let end_slot = (Slot::from(
                     current_slot
                         .into_inner()
-                        .saturating_add(BATCH_SIZE.into_inner())
+                        .saturating_add(batch_slots)
                         .checked_sub(1)
                         .expect("slot shouldn't overflow"),
                 ))
