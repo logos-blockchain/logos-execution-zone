@@ -2,6 +2,16 @@
   "annotations": { "list": [ ] },
   "editable": true,
   "graphTooltip": 1,
+  "links": [
+    {
+      "asDropdown": false,
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [ "sequencer" ],
+      "title": "Sequencer dashboards",
+      "type": "dashboards"
+    }
+  ],
   "panels": [
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -82,6 +92,104 @@
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 0, "fillOpacity": 70 },
+          "unit": "short",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "color": "transparent", "index": 0, "text": "waiting" },
+                "1": { "color": "blue", "index": 1, "text": "writing" }
+              }
+            }
+          ]
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 5, "w": 12, "x": 0, "y": 7 },
+      "id": 4,
+      "options": {
+        "alignValue": "left",
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": [ ] },
+        "mergeValues": true,
+        "rowHeight": 0.9,
+        "showValue": "never",
+        "tooltip": { "mode": "single" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "turn_to_write{sequencer=\"$sequencer\"}",
+          "legendFormat": "turn",
+          "refId": "A"
+        }
+      ],
+      "title": "Turn to write",
+      "type": "state-timeline"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" }, "unit": "short", "decimals": 0 },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 7 },
+      "id": 5,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "turns_to_write_total{sequencer=\"$sequencer\"}",
+          "legendFormat": "turns",
+          "refId": "A"
+        }
+      ],
+      "title": "Turns to write since startup",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1.0 },
+              { "color": "red", "value": 3.0 }
+            ]
+          }
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 7 },
+      "id": 6,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "production_failed_attempts{sequencer=\"$sequencer\"}",
+          "legendFormat": "failed",
+          "refId": "A"
+        }
+      ],
+      "title": "Failed production turns in a row",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
         "defaults": { "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 }, "unit": "s" },
         "overrides": [
           {
@@ -93,8 +201,8 @@
           }
         ]
       },
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 7 },
-      "id": 4,
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 12 },
+      "id": 7,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -122,8 +230,8 @@
         "defaults": { "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 }, "unit": "s" },
         "overrides": [ ]
       },
-      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 16 },
-      "id": 5,
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 21 },
+      "id": 8,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -153,8 +261,8 @@
           }
         ]
       },
-      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 16 },
-      "id": 6,
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 21 },
+      "id": 9,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -195,8 +303,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 25 },
-      "id": 7,
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 30 },
+      "id": 10,
       "options": {
         "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
         "showThresholdLabels": false,
@@ -235,8 +343,8 @@
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 25 },
-      "id": 8,
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 30 },
+      "id": 11,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -277,8 +385,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 33 },
-      "id": 9,
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 38 },
+      "id": 12,
       "options": {
         "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
         "showThresholdLabels": false,
@@ -318,8 +426,8 @@
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 33 },
-      "id": 10,
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 38 },
+      "id": 13,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -353,8 +461,8 @@
         "defaults": { "color": { "mode": "fixed", "fixedColor": "red" }, "unit": "short", "decimals": 0 },
         "overrides": [ ]
       },
-      "gridPos": { "h": 7, "w": 6, "x": 0, "y": 41 },
-      "id": 11,
+      "gridPos": { "h": 7, "w": 6, "x": 0, "y": 46 },
+      "id": 14,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -377,8 +485,8 @@
         "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" }, "unit": "short", "decimals": 0 },
         "overrides": [ ]
       },
-      "gridPos": { "h": 7, "w": 6, "x": 6, "y": 41 },
-      "id": 12,
+      "gridPos": { "h": 7, "w": 6, "x": 6, "y": 46 },
+      "id": 15,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -410,8 +518,8 @@
           }
         ]
       },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 41 },
-      "id": 13,
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 46 },
+      "id": 16,
       "options": {
         "legend": { "displayMode": "list", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "single" }
@@ -437,8 +545,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 48 },
-      "id": 14,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 53 },
+      "id": 17,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }

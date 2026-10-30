@@ -15,8 +15,10 @@ use dashboard_gen::{
 const PERCENTILES: &[u32] = &[50, 90, 95, 99];
 const DEFAULT_PERCENTILE: u32 = 95;
 
+pub const UID: &str = "sequencer";
+
 /// Dashboard variable holding the sequencer every panel shows.
-const SEQUENCER_VAR: &str = "sequencer";
+pub const SEQUENCER_VAR: &str = "sequencer";
 
 /// `metric`'s series from the selected sequencer only.
 fn seq(metric: &str) -> Selector {
@@ -27,8 +29,9 @@ fn seq(metric: &str) -> Selector {
 }
 
 pub fn dashboard() -> Dashboard {
-    Dashboard::new("Sequencer", "sequencer")
-        .tag("sequencer")
+    Dashboard::new("Sequencer", UID)
+        .tag(super::TAG)
+        .link_tagged("Sequencer dashboards", super::TAG)
         .variable(label_values_variable(
             SEQUENCER_VAR,
             "Sequencer",
@@ -64,6 +67,39 @@ pub fn dashboard() -> Dashboard {
                     ))
                     .with_override(
                         FieldOverride::by_name("produced · blocks/min").color(Color::fixed("green")),
+                    ),
+            ],
+        )
+        .row(
+            5,
+            [
+                Panel::state_timeline("Turn to write")
+                    .width(12)
+                    .value_mapping("0", "waiting", "transparent")
+                    .value_mapping("1", "writing", "blue")
+                    .target(
+                        Target::new(seq(sequencer_executor_actor_metrics::names::TURN_TO_WRITE).to_string())
+                            .legend("turn"),
+                    ),
+                Panel::stat("Turns to write since startup")
+                    .width(6)
+                    .unit(Unit::Short)
+                    .decimals(0)
+                    .color(Color::fixed("blue"))
+                    .target(
+                        Target::new(seq(sequencer_executor_actor_metrics::names::TURNS_TO_WRITE_TOTAL).to_string())
+                            .legend("turns"),
+                    ),
+                // Each failed turn costs a block, while every other signal
+                // reads like an idle sequencer.
+                Panel::stat("Failed production turns in a row")
+                    .width(6)
+                    .unit(Unit::Short)
+                    .decimals(0)
+                    .thresholds(Thresholds::base("green").step(1.0, "orange").step(3.0, "red"))
+                    .target(
+                        Target::new(seq(sequencer_executor_actor_metrics::names::PRODUCTION_FAILED_ATTEMPTS).to_string())
+                            .legend("failed"),
                     ),
             ],
         )

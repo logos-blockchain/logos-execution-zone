@@ -81,7 +81,7 @@ Ladders are matched by name suffix, so a new timing metric is covered automatica
 ```
 src/lib.rs, schema.rs, styling.rs, unit.rs   the builder library
 src/dashboards/<name>.rs                     one dashboard per module
-src/main.rs                                  CLI: `dashboard_gen sequencer`
+src/main.rs                                  CLI: `dashboard_gen sequencer|network`
 ```
 
 Panels are built fluently, and every query is composed from the `names` consts:
@@ -107,6 +107,19 @@ chain_height{sequencer="b0af2105…c68c"} 42
 The label name is `sequencer_service_metrics::names::SEQUENCER_LABEL`. The sequencer dashboard has a **Sequencer** dropdown (`label_values_variable`, listing the `sequencer` values of `chain_height`), and its `seq(name)` helper pins every query to `sequencer="$sequencer"`.
 
 Keys identify any sequencer, external ones included, with no scrape config. Where readable names are known, the scrape config can set them instead: a target label wins over a scraped one, and Prometheus keeps the scraped value as `exported_sequencer`. The devnet's `monitoring/prometheus/prometheus.yml` does this, naming its nodes `sequencer_0`…`sequencer_3`.
+
+### The network at a glance
+
+The **Sequencer network** dashboard (`dashboards/network.rs`) puts every sequencer side by side; both dashboards link to each other in the top bar, and clicking a sequencer's series opens its own dashboard.
+
+| Question | Panel |
+|---|---|
+| Who may write now, and how does the turn rotate? | **Turn to write** — a state timeline of `turn_to_write`, one row per sequencer |
+| Who proposes the blocks? | **Blocks proposed over time** — a heatmap: a cell per sequencer per slice of time (≥ 1 min), darker for more blocks |
+| Is the rotation fair, and are turns used? | **Share of turns**, **Share of blocks proposed**, **Blocks per turn** over the time range |
+| Is anyone falling behind or failing? | **Blocks behind the network**, **Failed production turns in a row** |
+
+Turns come from Bedrock: the zone SDK notifies a sequencer when its turn to write starts and ends, and the Bedrock actor forwards that to the executor. `sequencer_executor_actor_metrics` records them as `turn_to_write` (1 while held) and `turns_to_write_total` (turns started; a turn notified several times counts once, while a new starting slot is a new turn even for the same holder).
 
 **Extending it:**
 

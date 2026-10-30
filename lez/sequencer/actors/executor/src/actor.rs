@@ -32,6 +32,7 @@ use sequencer_storage_actor::StorageActorTrait;
 
 use crate::{
     ExecutorActorTrait, Result,
+    actor::turn::Turn,
     error::Error,
     protocol::{
         ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
@@ -46,6 +47,7 @@ use crate::{
 mod conversions;
 #[cfg(test)]
 mod tests;
+mod turn;
 
 /// How many block lookups a single [`GetBlockRange`] keeps in flight.
 const BLOCK_RANGE_CONCURRENCY: usize = 16;
@@ -57,8 +59,8 @@ pub struct ExecutorActor<S: StorageActorTrait, B: BedrockActorTrait> {
     storage_ref: ActorRef<S>,
     bedrock_ref: ActorRef<B>,
 
-    /// Is it our turn to produce a blocks.
-    is_our_turn: bool,
+    /// Whose turn it is to write: blocks are only produced in ours.
+    turn: Turn,
 
     // TODO: Remove this field
     background_task: TaskGroup,
@@ -95,6 +97,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
                     Error::BedrockRequestFailed(err.erase_message())
                 })?;
 
+            sequencer_executor_actor_metrics::record_turn_to_write(is_our_turn);
+            if is_our_turn {
+                sequencer_executor_actor_metrics::increment_turns_to_write_total();
+            }
+
             let background_task = sequencer.background_task();
 
             Ok(Self {
@@ -102,7 +109,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
                 sequencer,
                 storage_ref,
                 bedrock_ref,
-                is_our_turn,
+                turn: Turn::new(is_our_turn),
                 background_task,
                 failed_attempts: 0,
             })
@@ -182,7 +189,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
         ProduceBlock: ProduceBlock,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        if !self.is_our_turn {
+        if !self.turn.is_ours() {
             debug!("Not our turn to produce a block, skipping");
             return Ok(());
         }
@@ -629,8 +636,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait>
             sequencer_bedrock_actor::protocol::ChannelEvent::Update(channel_update) => {
                 self.sequencer.on_channel_update(channel_update).await;
             }
-            sequencer_bedrock_actor::protocol::ChannelEvent::Turn { our_turn_to_write } => {
-                self.is_our_turn = our_turn_to_write;
+            sequencer_bedrock_actor::protocol::ChannelEvent::Turn {
+                our_turn_to_write,
+                starting_slot,
+            } => {
+                if self.turn.update(our_turn_to_write, starting_slot) {
+                    sequencer_executor_actor_metrics::increment_turns_to_write_total();
+                }
+                sequencer_executor_actor_metrics::record_turn_to_write(self.turn.is_ours());
             }
             sequencer_bedrock_actor::protocol::ChannelEvent::Config(live_channel_config) => {
                 self.sequencer
