@@ -1,15 +1,14 @@
 use std::collections::btree_map::Entry;
 
 use lee_core::{
-    BlockId,
     account::{AccountId, Actor},
     native_token::{self, custody_transfer},
-    program::{BlockValidityWindow, ReceiveInput, Response, SyncMessage},
+    program::{ReceiveInput, Response, SyncMessage},
 };
 use sequencer_stake_core::{
     ChannelParams, CommitteeApproval, Message, PendingUnstake, SLASH_APPROVAL_DOMAIN,
     SequencerEntry, SequencerKey, SequencerStakeConfig, SlashApproval, StakeRecord,
-    UNSTAKE_REQUEST_WINDOW, committee_approval_message,
+    committee_approval_message,
     ed25519_dalek::{Signature, VerifyingKey},
     sequencer_stake_config_account_id, slash_approval_message, slash_approval_threshold,
     slash_sink_account_id, stake_funds_account_id, stake_funds_seed,
@@ -29,8 +28,7 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
             sequencer_key,
             amount,
             destination,
-            requested_at,
-        } => unstake_request(input, sequencer_key, amount, destination, requested_at),
+        } => unstake_request(input, sequencer_key, amount, destination),
         Message::FinalizeUnstake { sequencer_key } => finalize_unstake(input, sequencer_key),
         Message::Slash {
             sequencer_key,
@@ -51,7 +49,6 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
             ownership,
             amount,
             destination,
-            requested_at,
         } => track_unstake_request(
             input,
             sequencer_key,
@@ -59,7 +56,6 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
             PendingUnstake {
                 amount,
                 destination,
-                requested_at,
             },
         ),
         Message::VerifyApprovals {
@@ -123,7 +119,6 @@ fn unstake_request(
     sequencer_key: SequencerKey,
     amount: u128,
     destination: AccountId,
-    requested_at: BlockId,
 ) -> Response {
     assert_root_origin(
         input,
@@ -137,18 +132,15 @@ fn unstake_request(
     );
 
     // The config holds the request; the transfer happens in FinalizeUnstake.
-    Response::keep_state()
-        .block_window(request_window(requested_at))
-        .send(to_config(
-            input.receiver.program_account_id,
-            &Message::TrackUnstakeRequest {
-                sequencer_key,
-                ownership: input.receiver.account_id,
-                amount,
-                destination,
-                requested_at,
-            },
-        ))
+    Response::keep_state().send(to_config(
+        input.receiver.program_account_id,
+        &Message::TrackUnstakeRequest {
+            sequencer_key,
+            ownership: input.receiver.account_id,
+            amount,
+            destination,
+        },
+    ))
 }
 
 /// Unsigned, so the release is sized and addressed only by the config's pending request, and sent
@@ -160,7 +152,6 @@ fn finalize_unstake(input: &ReceiveInput, sequencer_key: SequencerKey) -> Respon
     );
     assert_config_account(input);
     let mut config = decode_config(&input.pre_state);
-    let exit_delay = channel_params(&config).exit_delay;
     let entry = config
         .entries
         .get_mut(&sequencer_key)
@@ -179,14 +170,12 @@ fn finalize_unstake(input: &ReceiveInput, sequencer_key: SequencerKey) -> Respon
     }
 
     let program = input.receiver.program_account_id;
-    Response::set_state(config.to_bytes())
-        .block_window(pending.releasable_at(exit_delay)..)
-        .send(custody_transfer(
-            stake_funds_account_id(program, &ownership),
-            stake_funds_seed(&ownership),
-            pending.destination,
-            pending.amount,
-        ))
+    Response::set_state(config.to_bytes()).send(custody_transfer(
+        stake_funds_account_id(program, &ownership),
+        stake_funds_seed(&ownership),
+        pending.destination,
+        pending.amount,
+    ))
 }
 
 fn slash(
@@ -245,7 +234,7 @@ fn init_channel_params(
         params.minimum_sequencer_stake > 0,
         "minimum_sequencer_stake must be non-zero"
     );
-    assert!(params.exit_delay > 0, "exit_delay must be non-zero");
+    assert!(params.finality_depth > 0, "finality_depth must be non-zero");
     assert!(
         params.max_block_size >= sequencer_stake_core::MIN_MAX_BLOCK_SIZE,
         "max_block_size must be at least MIN_MAX_BLOCK_SIZE"
@@ -484,19 +473,11 @@ const fn channel_id(config: &SequencerStakeConfig) -> [u8; 32] {
         .expect("genesis sets the channel id before any stake exists")
 }
 
-/// The blocks an `UnstakeRequest` dated `requested_at` may land in, so the date is never
-/// earlier than the block that records it.
-fn request_window(requested_at: BlockId) -> BlockValidityWindow {
-    (requested_at.saturating_sub(UNSTAKE_REQUEST_WINDOW)..requested_at.saturating_add(1))
-        .try_into()
-        .expect("a request window is never empty")
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use lee_core::{account::ActorState, program::Transition};
+    use lee_core::{BlockId, account::ActorState, program::Transition};
     use sequencer_stake_core::ed25519_dalek::{Signer as _, SigningKey};
 
     use super::*;
@@ -511,8 +492,6 @@ mod tests {
     const INSCRIPTION: [u8; 32] = [8; 32];
     const CHANNEL_ID: [u8; 32] = [9; 32];
     const MINIMUM: u128 = 1_000;
-    const EXIT_DELAY: u64 = 10;
-    const REQUESTED_AT: u64 = 7;
     const DOMAIN: [u8; 32] = [11; 32];
     const PAYLOAD: &[u8] = b"a change";
 
@@ -531,8 +510,8 @@ mod tests {
                 minimum_sequencer_stake: MINIMUM,
                 posting_timeframe: 300,
                 posting_timeout: 25,
-                exit_delay: EXIT_DELAY,
                 max_block_size: 1 << 20,
+                finality_depth: 5,
             }),
             channel_id: Some(CHANNEL_ID),
             entries: entries.iter().copied().collect::<BTreeMap<_, _>>(),
@@ -555,7 +534,6 @@ mod tests {
             pending_unstake: (pending > 0).then_some(PendingUnstake {
                 amount: pending,
                 destination: DESTINATION,
-                requested_at: REQUESTED_AT,
             }),
         }
     }
@@ -643,7 +621,6 @@ mod tests {
             sequencer_key,
             amount,
             destination: DESTINATION,
-            requested_at: REQUESTED_AT,
         }
     }
 
@@ -671,7 +648,6 @@ mod tests {
             ownership,
             amount,
             destination: DESTINATION,
-            requested_at: REQUESTED_AT,
         }
     }
 
@@ -701,10 +677,7 @@ mod tests {
             decoded_config(&transition).entries.get(&key(1)).copied(),
             Some(entry(OWNER, 2_500, 0))
         );
-        assert_eq!(
-            transition.response.validity.blocks.start(),
-            Some(REQUESTED_AT + EXIT_DELAY)
-        );
+        assert_eq!(transition.response.validity.blocks.start(), None);
         assert_eq!(transition.response.validity.blocks.end(), None);
         assert_eq!(
             (
@@ -771,11 +744,8 @@ mod tests {
         let transition = at_owner(true, &record(key(1)), request(key(1), 500));
 
         assert!(transition.response.post_state.is_none());
-        assert_eq!(transition.response.validity.blocks.start(), Some(0));
-        assert_eq!(
-            transition.response.validity.blocks.end(),
-            Some(REQUESTED_AT + 1)
-        );
+        assert_eq!(transition.response.validity.blocks.start(), None);
+        assert_eq!(transition.response.validity.blocks.end(), None);
         assert_eq!(
             (
                 transition.response.sync_messages,
@@ -1010,8 +980,8 @@ mod tests {
                     minimum_sequencer_stake: 1,
                     posting_timeframe: 1,
                     posting_timeout: 1,
-                    exit_delay: 1,
                     max_block_size: 1 << 20,
+                    finality_depth: 1,
                 },
                 channel_id: CHANNEL_ID,
             },

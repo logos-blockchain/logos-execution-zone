@@ -1,4 +1,4 @@
-use std::{num::NonZero, sync::Arc, time::Duration};
+use std::{collections::BTreeSet, num::NonZero, sync::Arc, time::Duration};
 
 pub use chain_state::ChannelEntry;
 use common::block::Block;
@@ -19,7 +19,7 @@ pub use logos_blockchain_zone_sdk::{
         SequencerCheckpoint, WithdrawArg, WithdrawInfo,
     },
 };
-pub use sequencer_stake_core::ChannelParams;
+pub use sequencer_stake_core::{ChannelParams, SequencerKey};
 use sharding_pool_actor::ShardingKey;
 
 /// What [`ReadChannel`] serves: a failed read is an `Err` item, not the stream's end.
@@ -599,6 +599,38 @@ pub struct GetChannelTipMessageId {
 }
 
 impl ShardingKey for GetChannelTipMessageId {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
+
+/// Where on L1 a block to judge sits, as far as the asker knows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum L1Position {
+    /// Not on L1 yet.
+    Unknown,
+    /// In the L1 block holding the inscription with this id, final or not.
+    Msg(MsgId),
+    /// In the final L1 block at this slot.
+    FinalSlot(u64),
+    /// In the final L1 block holding the inscription `msg`, at or under the final block at
+    /// `descendant_slot`.
+    FinalAncestor { msg: MsgId, descendant_slot: u64 },
+}
+
+/// The keys of `keys` the L1 block at `at` may release in full: those absent from the config in
+/// effect `depth` L1 blocks under it and from every config since.
+#[derive(Debug, Clone)]
+pub struct FilterFinallyAbsent {
+    pub channel_id: ChannelId,
+    pub at: L1Position,
+    pub keys: BTreeSet<SequencerKey>,
+    pub depth: u64,
+}
+
+impl ShardingKey for FilterFinallyAbsent {
     type Key = ChannelId;
 
     fn sharding_key(&self) -> Self::Key {

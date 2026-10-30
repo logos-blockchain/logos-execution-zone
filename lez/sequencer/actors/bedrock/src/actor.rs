@@ -1,4 +1,8 @@
-use std::{collections::HashSet, num::NonZero};
+use std::{
+    collections::{BTreeSet, HashMap, HashSet},
+    num::NonZero,
+    time::Duration,
+};
 
 use anyhow::anyhow;
 use chain_state::timeout_node::TimeoutNode;
@@ -29,21 +33,27 @@ use tracing::{Instrument as _, info_span, warn};
 use crate::protocol::PublishRawInscription;
 use crate::{
     BedrockActorTrait, Result, Url,
+    actor::finality::{BlockSummary, ConfigIndex, L1Reader},
     error::Error,
     protocol::{
         AccreditedKeys, ChangeChannelConfig, ChannelEvent, ChannelId, ChannelReadStream,
-        ChannelSeq, CheckChannelExists, CheckIsOurTurn, CreateChannel, Ed25519PublicKey,
-        FollowChannel, GetAccreditedKeys, GetChannelNotes, GetChannelTipMessageId,
-        GetChannelTipSlot, InitializeChannelPublisher, LiveChannelConfig, MsgId, PrepareConfig,
-        PreparePin, PreparedConfig, PreparedPin, PublishBlock, PublishOutcome, PublishPin,
-        ReadChannel, Slot, UnverifiedEd25519PublicKey,
+        ChannelSeq, CheckChannelExists, CheckIsOurTurn, CreateChannel, DeserializeOp as _,
+        Ed25519PublicKey, FilterFinallyAbsent, FollowChannel, GetAccreditedKeys, GetChannelNotes,
+        GetChannelTipMessageId, GetChannelTipSlot, HeaderId, InitializeChannelPublisher,
+        LiveChannelConfig, MsgId, PrepareConfig, PreparePin, PreparedConfig, PreparedPin,
+        PublishBlock, PublishOutcome, PublishPin, ReadChannel, SequencerCheckpoint, SequencerKey,
+        Slot, UnverifiedEd25519PublicKey,
     },
 };
 
+mod finality;
 mod node_stream;
 mod publisher;
 #[cfg(test)]
 mod tests;
+
+/// Time one [`FilterFinallyAbsent`] may hold the actor; the blocks and configs it read are kept.
+const FILTER_FINALLY_ABSENT_BUDGET: Duration = Duration::from_secs(10);
 
 pub struct Args<S: StorageActorTrait> {
     pub node_url: Url,
@@ -93,6 +103,11 @@ pub struct BedrockActor<S: StorageActorTrait> {
     publisher: Option<publisher::Publisher>,
     broker_ref: ActorRef<Broker<ChannelEvent>>,
     storage_ref: ActorRef<S>,
+    /// Summaries of the L1 blocks [`FilterFinallyAbsent`] walked, by id.
+    block_summary_cache: HashMap<HeaderId, BlockSummary>,
+    /// The channel's final configs, from zone-sdk's finalized events and [`FilterFinallyAbsent`]
+    /// reads.
+    config_index: ConfigIndex,
 }
 
 impl<S: StorageActorTrait> BedrockActor<S> {
@@ -128,6 +143,16 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
             node_url,
         ));
 
+        // The publisher starts zone-sdk from this stored checkpoint: a cold start backfills from
+        // slot 0, a restart's events start after its LIB.
+        let config_index = match storage_ref.ask(GetZoneCheckpoint).await? {
+            None => ConfigIndex::starting_at(0),
+            Some(stored) => {
+                let checkpoint = SequencerCheckpoint::from_bytes(&stored.bytes)?;
+                ConfigIndex::starting_at(checkpoint.lib_slot.into_inner().saturating_add(1))
+            }
+        };
+
         Ok(Self {
             channel_id,
             node_stream: None,
@@ -136,6 +161,8 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
             broker_ref,
             storage_ref,
             backfill_batch_slots,
+            block_summary_cache: HashMap::new(),
+            config_index,
         })
     }
 
@@ -157,7 +184,12 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
                 }
                 Some(event) = OptionFuture::from(self.publisher.as_mut().map(publisher::Publisher::next_event)) => {
                     let span = info_span!("bedrock_event", otel.name = publisher::span_name(&event));
-                    self.publisher().expect("Publisher is initialized").on_event(event).instrument(span).await?;
+                    self.publisher
+                        .as_mut()
+                        .expect("Publisher is initialized")
+                        .on_event(event, &mut self.config_index)
+                        .instrument(span)
+                        .await?;
                 }
                 signal = mailbox_rx.recv() => {
                     return Ok(signal)
@@ -229,6 +261,7 @@ impl<S: StorageActorTrait> Message<InitializeChannelPublisher> for BedrockActor<
             initial_checkpoint,
             replayed_up_to,
             self.broker_ref.clone(),
+            &mut self.config_index,
         )
         .await?;
         self.publisher = Some(publisher);
@@ -485,6 +518,113 @@ impl<S: StorageActorTrait> Message<GetChannelTipMessageId> for BedrockActor<S> {
             .await
             .map_err(|err| Error::NodeRequestFailed(err.into()))?
             .map(|state| state.tip_message))
+    }
+}
+
+impl<S: StorageActorTrait> Message<FilterFinallyAbsent> for BedrockActor<S> {
+    type Reply = Result<BTreeSet<SequencerKey>>;
+
+    async fn handle(
+        &mut self,
+        FilterFinallyAbsent {
+            channel_id,
+            at,
+            keys,
+            depth,
+        }: FilterFinallyAbsent,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.assert_channel_id(channel_id);
+
+        let mut reader = NodeReader {
+            node: &self.node,
+            block_summary_cache: &mut self.block_summary_cache,
+            channel_id,
+        };
+        let walk =
+            finality::filter_finally_absent(&mut reader, &mut self.config_index, at, &keys, depth);
+        let verdict = tokio::time::timeout(FILTER_FINALLY_ABSENT_BUDGET, walk)
+            .await
+            .map_err(|_elapsed| Error::VerdictTimedOut)?;
+        if verdict.is_ok() && self.block_summary_cache.len() >= NodeReader::CACHE_CAPACITY {
+            self.block_summary_cache.clear();
+        }
+        verdict
+    }
+}
+
+/// [`L1Reader`] over the node, caching the block summaries it reads by id.
+struct NodeReader<'actor> {
+    node: &'actor TimeoutNode<NodeHttpClient>,
+    block_summary_cache: &'actor mut HashMap<HeaderId, BlockSummary>,
+    channel_id: ChannelId,
+}
+
+impl NodeReader<'_> {
+    /// Block summaries cached before a walk that returns a verdict empties the cache.
+    const CACHE_CAPACITY: usize = 4096;
+
+    fn summarize(&self, block: &logos_blockchain_zone_sdk::node_types::ApiBlock) -> BlockSummary {
+        BlockSummary::new(
+            block.header.id,
+            block.header.parent_block,
+            block.header.slot.into_inner(),
+            &block.transactions,
+            self.channel_id,
+        )
+    }
+}
+
+impl L1Reader for NodeReader<'_> {
+    async fn tip_block_summary(&mut self) -> Result<BlockSummary> {
+        let tip = self
+            .node
+            .consensus_info()
+            .await
+            .map_err(|err| Error::NodeRequestFailed(err.into()))?
+            .cryptarchia_info
+            .tip;
+        self.block_summary(tip).await
+    }
+
+    async fn block_summary(&mut self, id: HeaderId) -> Result<BlockSummary> {
+        if let Some(block_summary) = self.block_summary_cache.get(&id) {
+            return Ok(block_summary.clone());
+        }
+        let block = self
+            .node
+            .block(id)
+            .await
+            .map_err(|err| Error::NodeRequestFailed(err.into()))?
+            .ok_or(Error::BlockMissing(id))?;
+        let block_summary = self.summarize(&block);
+        self.block_summary_cache
+            .insert(block_summary.id, block_summary.clone());
+        Ok(block_summary)
+    }
+
+    async fn final_block_summaries(&mut self, from: u64, to: u64) -> Result<Vec<BlockSummary>> {
+        let lib_slot = self
+            .node
+            .consensus_info()
+            .await
+            .map_err(|err| Error::NodeRequestFailed(err.into()))?
+            .cryptarchia_info
+            .lib_slot
+            .into_inner();
+        // A slot past the node's LIB is refused, not read as empty.
+        if to > lib_slot {
+            return Err(Error::SlotNotFinal(to));
+        }
+        let blocks = self
+            .node
+            .immutable_blocks(Slot::from(from), Slot::from(to))
+            .await
+            .map_err(|err| Error::NodeRequestFailed(err.into()))?;
+        Ok(blocks
+            .into_iter()
+            .map(|block| self.summarize(&block))
+            .collect())
     }
 }
 
