@@ -1,6 +1,6 @@
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
-pub use chain_state::ChannelEntry;
+pub use chain_state::{ChannelEntry, L1Position};
 use common::block::Block;
 use kameo::Reply;
 pub use logos_blockchain_core::mantle::NoteId;
@@ -15,7 +15,7 @@ pub use logos_blockchain_zone_sdk::{
     },
 };
 pub use sequencer_channel_signing_actor::protocol::ConfigTarget;
-pub use sequencer_stake_core::ChannelParams;
+pub use sequencer_stake_core::{ChannelParams, SequencerKey};
 
 /// A boxed, pinned, Send stream.
 pub type BoxStream<T> = std::pin::Pin<Box<dyn futures::Stream<Item = T> + Send>>;
@@ -318,6 +318,15 @@ pub struct GetChannelTipSlot;
 
 /// Get live channel tip message id.
 pub struct GetChannelTipMessageId;
+
+/// The keys of `keys` the L1 block at `at` may release in full: those absent from the config in
+/// effect `depth` L1 blocks under it and from every config since.
+#[derive(Debug, Clone)]
+pub struct FilterFinallyAbsent {
+    pub at: L1Position,
+    pub keys: BTreeSet<SequencerKey>,
+    pub depth: u64,
+}
 
 /// Finalized channel messages from `after` (exclusive) up to LIB, capped at
 /// zone-sdk's LIB when it became ready.

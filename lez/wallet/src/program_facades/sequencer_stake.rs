@@ -4,9 +4,7 @@ use lee::{
     program::Program,
 };
 use lee_core::SharedSecretKey;
-use sequencer_stake_core::{
-    Message, SequencerKey, StakeRecord, UNSTAKE_REQUEST_WINDOW, stake_funds_seed,
-};
+use sequencer_stake_core::{Message, SequencerKey, StakeRecord, stake_funds_seed};
 
 use crate::{
     AccountIdentity, AsyncDelivery, ExecutionFailureKind, WalletCore, WalletSequencerClient,
@@ -95,17 +93,10 @@ impl<C: WalletSequencerClient> SequencerStake<'_, C> {
         let owner = AccountIdentity::Public(ownership);
         let record = StakeRecord::from_bytes(&super::actor_state(self.0, &owner, program).await?)
             .ok_or(ExecutionFailureKind::AccountDataError(ownership))?;
-        let requested_at = self
-            .0
-            .get_last_block_id()
-            .await
-            .map_err(ExecutionFailureKind::SequencerError)?
-            .saturating_add(UNSTAKE_REQUEST_WINDOW);
         let message = Program::serialize_message(Message::UnstakeRequest {
             sequencer_key: record.sequencer_key,
             amount,
             destination,
-            requested_at,
         })
         .expect("Message should serialize");
         let accounts = vec![

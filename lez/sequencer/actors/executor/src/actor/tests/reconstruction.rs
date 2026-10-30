@@ -3,7 +3,7 @@
 //! different chain.
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     sync::{Arc, Mutex},
 };
 
@@ -609,13 +609,15 @@ fn final_through(block2: &Block, final_msg: Option<MsgId>, held: &[Block]) -> St
     let (final_state, final_meta) = stored.final_snapshot.clone().expect("final snapshot");
     let mut chain = ChainState::from_final(final_state, Some(Tip::from(final_meta)));
     let mut parent = final_msg.unwrap_or_else(MsgId::root);
-    chain.apply_reconstructed(parent, None);
+    chain.apply_reconstructed(parent, None, &BTreeSet::new());
     for block in held {
         stored = stored.with_head(block.clone());
         chain.apply_extension(vec![ChannelEntry {
             msg: msg_of(block),
             parent,
             block: Some(block.clone()),
+            finally_absent_keys: BTreeSet::new(),
+            l1_position: chain_state::L1Position::Unknown,
         }]);
         parent = msg_of(block);
     }

@@ -27,8 +27,8 @@ pub const TEST_POSTING_TIMEFRAME: u32 = 20;
 /// Idle slots before the turn passes on; the production 25 outlasts the shortened timeframe.
 pub const TEST_POSTING_TIMEOUT: u32 = TEST_POSTING_TIMEFRAME;
 
-/// Blocks an unstake waits; the production 100 would outlast the exit tests.
-pub const TEST_EXIT_DELAY: u64 = 3;
+/// L1 blocks on top of a key's removal config before its whole stake is released.
+pub const TEST_FINALITY_DEPTH: u64 = 10;
 
 // Balances are LGO-scale (`testnet_initial_state` precedent): a charged public
 // transaction reserves `gas_limit x base_fee` up front (~16M at wallet defaults)
@@ -96,7 +96,7 @@ impl Default for SequencerPartialConfig {
             channel_params: ChannelParams {
                 posting_timeframe: TEST_POSTING_TIMEFRAME,
                 posting_timeout: TEST_POSTING_TIMEOUT,
-                exit_delay: TEST_EXIT_DELAY,
+                finality_depth: TEST_FINALITY_DEPTH,
                 ..sequencer_core::config::default_channel_params()
             },
         }

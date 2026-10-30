@@ -2,7 +2,7 @@
 //! indexer. Pure and storage-free: callers apply on a scratch clone of state and
 //! commit only on `Ok`.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use common::{
     HashType,
@@ -24,9 +24,11 @@ use fee_core::{
 };
 use lee::{GENESIS_BLOCK_ID, V03State};
 use lee_core::{BlockId, Timestamp, program::TransactionEvent};
+use sequencer_stake_core::SequencerKey;
 
 use crate::{
     classify::{ClassifyError, FeeClass, classify},
+    full_stake_releases,
     ingest_error::BlockIngestError,
 };
 
@@ -146,6 +148,16 @@ pub fn apply_block_to_state(
     block: &Block,
     state: &mut V03State,
 ) -> Result<Vec<TxEvents>, BlockIngestError> {
+    apply_judged_block_to_state(block, state, None)
+}
+
+/// [`apply_block_to_state`], refusing a full stake release of a key outside `finally_absent_keys`
+/// when it is given.
+pub fn apply_judged_block_to_state(
+    block: &Block,
+    state: &mut V03State,
+    finally_absent_keys: Option<&BTreeSet<SequencerKey>>,
+) -> Result<Vec<TxEvents>, BlockIngestError> {
     let (clock_entry, front) = block
         .body
         .transactions
@@ -195,6 +207,9 @@ pub fn apply_block_to_state(
                 )
                 .map_err(|err| state_transition(err.into()))?
         } else {
+            let entries_before = finally_absent_keys
+                .filter(|_| full_stake_releases::can_release_stake(transaction))
+                .map(|_| full_stake_releases::stake_entries(state));
             let (events, tx_reverted) = settle_transaction(
                 transaction,
                 state,
@@ -206,6 +221,18 @@ pub fn apply_block_to_state(
             )?;
             if tx_reverted {
                 reverted.push(tx_index_u64);
+            }
+            if let (Some(allowed), Some(before)) = (finally_absent_keys, entries_before) {
+                let released = full_stake_releases::full_releases(
+                    &before,
+                    &full_stake_releases::stake_entries(state),
+                );
+                if let Some(key) = released.iter().find(|key| !allowed.contains(key)) {
+                    return Err(BlockIngestError::UnfinalizedRelease {
+                        tx_index: tx_index_u64,
+                        key: hex::encode(key.to_bytes()),
+                    });
+                }
             }
             events
         };

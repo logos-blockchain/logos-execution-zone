@@ -225,17 +225,11 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     let destination_id = funding_id;
     let destination_balance = account_balance(&ctx, destination_id).await?;
 
-    let requested_at = ctx
-        .sequencer_client()
-        .get_last_block_id()
-        .await?
-        .saturating_add(sequencer_stake_core::UNSTAKE_REQUEST_WINDOW);
     let unstake_request_message =
         Program::serialize_message(sequencer_stake_core::Message::UnstakeRequest {
             sequencer_key: demo_stake_key,
             amount: u128::from(funding_balance),
             destination: destination_id,
-            requested_at,
         })
         .context("Failed to serialize UnstakeRequest message")?;
     ctx.wallet()

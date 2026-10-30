@@ -15,8 +15,8 @@
       "minimum_sequencer_stake": 149,
       "posting_timeframe": 60,
       "posting_timeout": 25,
-      "exit_delay": 100,
-      "max_block_size": 1048576
+      "max_block_size": 1048576,
+      "finality_depth": 35
     },
     "actions": [
       {

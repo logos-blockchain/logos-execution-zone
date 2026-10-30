@@ -277,7 +277,7 @@ pub const fn default_channel_params() -> ChannelParams {
         minimum_sequencer_stake: system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE,
         posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
         posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
-        exit_delay: system_accounts::DEFAULT_SEQUENCER_EXIT_DELAY,
         max_block_size: system_accounts::DEFAULT_MAX_BLOCK_SIZE,
+        finality_depth: system_accounts::DEFAULT_FINALITY_DEPTH,
     }
 }

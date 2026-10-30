@@ -29,6 +29,12 @@ pub enum Error {
     #[error("Node request failed")]
     NodeRequestFailed(#[source] anyhow::Error),
 
+    #[error("The node holds no final block at slot {0}")]
+    FinalBlockMissing(u64),
+
+    #[error("Slot {0} is not final on the node yet")]
+    SlotNotFinal(u64),
+
     #[error("Failed to fetch zone messages from blocks {from:?}..={to:?}")]
     ChannelReadFailed {
         from: Slot,
@@ -56,6 +62,9 @@ pub enum Error {
 
     #[error("Invalid channel key list")]
     InvalidChannelKeyList(#[source] anyhow::Error),
+
+    #[error("Channel config thresholds must be non-zero and reachable by its keys")]
+    InvalidChannelConfig,
 
     #[error("Failed to assemble channel multi-sig proof")]
     ChannelMultiSigProofAssemblyFailed(#[source] anyhow::Error),

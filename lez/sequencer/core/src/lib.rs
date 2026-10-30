@@ -1,7 +1,7 @@
 #![allow(dead_code, reason = "TODO")]
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     path::Path,
     sync::Arc,
     time::{Duration, Instant},
@@ -12,7 +12,7 @@ use borsh::BorshDeserialize as _;
 use bridge_core::{BridgeAmount, DepositMetadata, DepositRecipient};
 use chain_state::{
     AcceptOutcome, Anchor, AnchorConsistencyCheck, ChainConsistency, ChainMismatch, ChainState,
-    ChannelEntry, PublishRecord, Tip,
+    ChannelEntry, L1Position, PublishRecord, Tip, full_stake_releases,
 };
 use common::{
     HashType,
@@ -79,6 +79,7 @@ mod faults;
 pub mod fees;
 pub mod gossip;
 pub mod logging;
+mod release_finality;
 pub mod task_group;
 
 /// Failed production attempts before a cross-zone dispatch is given up on.
@@ -571,10 +572,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                             )
                         }),
                 };
+                // Our own blocks are trusted for every key they name.
                 published.push(ChannelEntry {
                     msg: outcome.this_msg,
                     parent: outcome.parent,
                     block: Some(block.clone()),
+                    finally_absent_keys: full_stake_releases::finalize_unstake_keys(block),
+                    l1_position: L1Position::Unknown,
                 });
                 last_checkpoint = Some((outcome.checkpoint, outcome.seq));
             }
@@ -762,6 +766,19 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     );
                 })
                 .ok();
+            let finally_absent_keys = match &block {
+                Some(block) => {
+                    let depth = release_finality::finality_depth(chain.lock().await.final_state());
+                    release_finality::finally_absent_keys(
+                        bedrock_ref,
+                        L1Position::FinalSlot(slot.into_inner()),
+                        block,
+                        depth,
+                    )
+                    .await
+                }
+                None => BTreeSet::new(),
+            };
             // Locked per message, not across the stream `await`.
             let mut chain = chain.lock().await;
             Self::apply_reconstructed_entry(
@@ -769,6 +786,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 &mut chain,
                 zone_block.id,
                 block,
+                &finally_absent_keys,
                 on_lineage,
                 slot,
             )
@@ -801,6 +819,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         chain: &mut ChainState,
         msg: MsgId,
         entry_block: Option<Block>,
+        finally_absent_keys: &BTreeSet<sequencer_stake_core::SequencerKey>,
         on_lineage: bool,
         slot: Slot,
     ) -> Result<()> {
@@ -808,9 +827,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             chain.head_blocks().map(|block| block.header.hash).collect();
         let was_empty = chain.final_tip().is_none();
         let outcome = if on_lineage {
-            chain.apply_reconstructed(msg, entry_block.as_ref())
+            chain.apply_reconstructed(msg, entry_block.as_ref(), finally_absent_keys)
         } else {
-            chain.apply_finalized_redelivery(msg, entry_block.as_ref())
+            chain.apply_finalized_redelivery(msg, entry_block.as_ref(), finally_absent_keys)
         };
         // The channel's first finalized block is its genesis: one that is not
         // ours means a different chain, not an offence to step over.
@@ -922,6 +941,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 ViewChange::Conflict { .. } => true,
             };
 
+        // Read off L1 before the lock is taken.
+        let (finalized, view, held_finally_absent_keys) =
+            &release_finality::judged_update(&self.bedrock_ref, &self.chain, finalized, view).await;
+
         let checkpoint_record = ZoneCheckpointRecord {
             bytes: checkpoint_bytes(checkpoint).unwrap_or_else(|err| {
                 panic!(
@@ -964,6 +987,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             let pin_before = chain.pin();
             log_update(view, finalized, head_tip_before);
 
+            // Before the finalized entries, which apply these held entries to the final tier.
+            chain.set_finally_absent_keys(held_finally_absent_keys.iter().cloned());
+
             // Finalized first: the view below is what lies above it.
             let mut irreversible_redelivered: Vec<Block> = Vec::new();
             let mut events = Vec::new();
@@ -971,7 +997,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             for entry in finalized {
                 // A root lineage over a held tier is a store restored without its view.
                 let judgeable = chain.final_tip().is_some() && chain.final_msg() != MsgId::root();
-                let outcome = chain.apply_finalized(entry.msg, entry.parent, entry.block.as_ref());
+                let outcome = chain.apply_finalized(
+                    entry.msg,
+                    entry.parent,
+                    entry.block.as_ref(),
+                    &entry.finally_absent_keys,
+                );
                 let (Some(block), Some(outcome)) = (&entry.block, outcome) else {
                     continue;
                 };
@@ -1676,6 +1707,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             msg: this_msg,
             parent,
             block: Some(block.clone()),
+            finally_absent_keys: full_stake_releases::finalize_unstake_keys(&block),
+            l1_position: L1Position::Unknown,
         });
         match record {
             PublishRecord::Extended | PublishRecord::Skipped => {
@@ -1974,6 +2007,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let mut valid_transactions = Vec::new();
         let mut reverted = Vec::new();
         let mut withdrawals = Vec::new();
+        let producible_releases =
+            release_finality::producible_releases(&self.bedrock_ref, &working_state).await;
 
         // Bridge deposit mints are drained from the store, not the mempool: the
         // follow path records the event durably but cannot enqueue the mint
@@ -2191,6 +2226,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             }
 
             let before_tx_apply = Instant::now();
+            // Taken before a transaction that may release a stake.
+            let snapshot = full_stake_releases::can_release_stake(&tx).then(|| {
+                (
+                    full_stake_releases::stake_entries(&working_state),
+                    working_state.clone(),
+                    summary,
+                    withdrawals.len(),
+                )
+            });
             let applied = Self::apply_mempool_transaction(
                 &mut working_state,
                 origin,
@@ -2202,6 +2246,30 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 valid_transactions.len().try_into().expect("fits u64"),
                 &mut summary,
             );
+            if applied.is_some()
+                && let Some((entries, state, summary_before, withdrawal_count)) = snapshot
+            {
+                let released = full_stake_releases::full_releases(
+                    &entries,
+                    &full_stake_releases::stake_entries(&working_state),
+                );
+                // Only a public `FinalizeUnstake` call's own key may be released.
+                let refused = released.into_iter().find(|key| {
+                    full_stake_releases::finalize_unstake_key(&tx) != Some(*key)
+                        || !producible_releases.contains(key)
+                });
+                if let Some(key) = refused {
+                    info!(
+                        "Leaving out {tx_hash}: it releases the whole stake of {} before its \
+                         removal is final",
+                        hex::encode(key.to_bytes())
+                    );
+                    working_state = state;
+                    summary = summary_before;
+                    withdrawals.truncate(withdrawal_count);
+                    continue;
+                }
+            }
             if let Some(tx_reverted) = applied {
                 if tx_reverted {
                     reverted.push(u64::try_from(valid_transactions.len()).expect("fits u64"));

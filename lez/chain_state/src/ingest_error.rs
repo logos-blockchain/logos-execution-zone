@@ -60,6 +60,13 @@ pub enum BlockIngestError {
     NonPublicGenesisTransaction,
     #[error("the block lists transactions {listed:?} as reverted, settlement reverted {settled:?}")]
     RevertMismatch { listed: Vec<u64>, settled: Vec<u64> },
+    #[error("Transaction {tx_index} releases the whole stake of {key} before its removal is final")]
+    UnfinalizedRelease {
+        /// Index of the offending transaction within the block body.
+        tx_index: u64,
+        /// The released sequencer key, hex.
+        key: String,
+    },
     #[error("State transition failed at transaction {tx_index}: {reason}")]
     StateTransition {
         /// Index of the failing transaction within the block body.
@@ -100,6 +107,7 @@ impl BlockIngestError {
             | Self::RestrictedAccountModification { .. }
             | Self::NonPublicGenesisTransaction
             | Self::RevertMismatch { .. }
+            | Self::UnfinalizedRelease { .. }
             | Self::StateTransition { .. } => true,
         }
     }
