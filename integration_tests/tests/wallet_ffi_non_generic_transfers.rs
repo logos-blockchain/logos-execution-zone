@@ -17,7 +17,7 @@ use core_ffi::{
     primitives::types::{FfiBytes32, FfiPrivateAccountKeys, account::FfiAccount},
     wallet::{
         FfiTransferResult,
-        fees::{FfiFeeKind, FfiFeeState},
+        fees::{FfiFeeKind, FfiFeeParams, FfiFeeState},
         lifecycle::FfiCreateWalletOutput,
     },
 };
@@ -27,7 +27,7 @@ use integration_tests::{
     ffi_helpers::{sequencer as sequencer_ffi_helpers, wallet::*},
 };
 use lee::Account;
-use wallet::DEFAULT_MAX_FEE;
+use wallet::DEFAULT_GAS_LIMIT;
 
 #[test]
 fn wallet_ffi_public_credit_creates_only_the_native_actor_state() -> Result<()> {
@@ -149,7 +149,9 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
     assert!(!transfer_result.fee.is_dry_run);
     assert_eq!(declared.kind, FfiFeeKind::Public);
     assert_eq!(declared.public_fee.payer, from);
-    assert_eq!(u128::from(declared.public_fee.max_fee), DEFAULT_MAX_FEE);
+    // The gas limit is measured, well below the configured ceiling.
+    assert!(declared.public_fee.gas_limit < DEFAULT_GAS_LIMIT);
+    let declared_max_fee = u128::from(declared.public_fee.max_fee);
 
     // The sleep is barely longer than one block period, so on a loaded machine the
     // transfer may still be unconfirmed. Balances only move once the transaction is
@@ -180,8 +182,8 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
         .and_then(|rest| rest.checked_sub(from_balance))
         .expect("sender must be debited at least the transferred amount");
     assert!(
-        fee > 0 && fee <= DEFAULT_MAX_FEE,
-        "a charged transfer pays a positive fee within the ceiling, got {fee}"
+        fee > 0 && fee <= declared_max_fee,
+        "a charged transfer pays a positive fee within its cap {declared_max_fee}, got {fee}"
     );
 
     unsafe {
@@ -511,6 +513,16 @@ fn test_wallet_ffi_dry_runs_report_without_sending() -> Result<()> {
     assert!(public_send.is_dry_run);
     assert_eq!(public_send.declared.kind, FfiFeeKind::Public);
     assert_eq!(public_send.declared.public_fee.payer, public);
+    // The test wallet prices no headroom, so the default cap is the reserve at head, and the
+    // gas limit is the measured cycles plus the 25% margin.
+    assert_eq!(
+        public_send.declared.public_fee.gas_limit,
+        (public_send.dry_run.cycles * 125).div_ceil(100)
+    );
+    assert_eq!(
+        u128::from(public_send.declared.public_fee.max_fee),
+        u128::from(public_send.dry_run.reserve_at_head)
+    );
     assert!(public_send.dry_run.wire_bytes > 0);
     assert!(
         public_send.dry_run.revert_reason.is_null(),
@@ -548,7 +560,59 @@ fn test_wallet_ffi_dry_runs_report_without_sending() -> Result<()> {
     );
     assert!(u128::from(private_send.dry_run.fee_at_head) >= min_private_fee());
 
+    // Fee params replace the defaults a send declares.
+    let params = FfiFeeParams {
+        has_gas_limit: true,
+        gas_limit: 500_000,
+        tip: 7,
+        has_headroom_blocks: true,
+        headroom_blocks: 2,
+        ..FfiFeeParams::default()
+    };
+    let mut tuned_public_result = FfiTransferResult::default();
+    let mut tuned_private_result = FfiTransferResult::default();
     unsafe {
+        wallet_ffi_set_fee_params(wallet_ffi_handle, &raw const params).unwrap();
+        wallet_ffi_transfer_public(
+            wallet_ffi_handle,
+            &raw const public,
+            &raw const other_public,
+            &raw const amount,
+            &raw mut tuned_public_result,
+        )
+        .unwrap();
+        wallet_ffi_transfer_deshielded(
+            wallet_ffi_handle,
+            &raw const private,
+            &raw const public,
+            &raw const amount,
+            &raw mut tuned_private_result,
+        )
+        .unwrap();
+    }
+    let tuned_public = &tuned_public_result.fee;
+    let declared = tuned_public.declared.public_fee;
+    assert_eq!(declared.gas_limit, 500_000);
+    assert_eq!(declared.tip, 7);
+    // The sequencer admits a cap of at least the reserve, priced at the gas limit.
+    assert_eq!(
+        u128::from(declared.max_fee),
+        u128::from(tuned_public.dry_run.reserve_at_head)
+    );
+    assert_eq!(
+        u128::from(tuned_public.dry_run.reserve_at_head),
+        500_000 * u128::from(tuned_public.dry_run.fee_state.base_fee_exec)
+            + u128::from(tuned_public.dry_run.wire_bytes)
+                * u128::from(tuned_public.dry_run.fee_state.base_fee_stor)
+            + 7
+    );
+    let tuned_private = &tuned_private_result.fee.dry_run;
+    assert_eq!(tuned_private.headroom_blocks, 2);
+    assert!(u128::from(tuned_private.headroom_reserve) >= u128::from(tuned_private.fee_at_head));
+
+    unsafe {
+        wallet_ffi_free_transfer_result(&raw mut tuned_public_result);
+        wallet_ffi_free_transfer_result(&raw mut tuned_private_result);
         wallet_ffi_free_transfer_result(&raw mut public_result);
         wallet_ffi_free_transfer_result(&raw mut private_result);
         wallet_ffi_destroy(wallet_ffi_handle);

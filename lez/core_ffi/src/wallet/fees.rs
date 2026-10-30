@@ -6,8 +6,8 @@ use std::{
 };
 
 use wallet::{
-    DeclaredFee, DryRunReport, ExecutionFailureKind, FeeStateQuote, PrivateFee, WalletCore,
-    WalletSequencerClient as _,
+    DeclaredFee, DryRunReport, ExecutionFailureKind, FeeParams, FeeStateQuote, PrivateFee,
+    WalletCore, WalletSequencerClient as _,
 };
 
 use crate::{
@@ -128,6 +128,9 @@ pub struct FfiDryRunReport {
     pub cycles: u64,
     /// Public: includes the tip.
     pub fee_at_head: FfiU128,
+    /// Public: what admission holds from the payer, priced at the gas limit: the least
+    /// `max_fee` the sequencer accepts.
+    pub reserve_at_head: FfiU128,
     /// Public: the transaction's wire size, priced at the storage base fee.
     pub wire_bytes: u64,
     /// Public: why the action reverts, or null when it applies. A reverted action still pays its
@@ -152,6 +155,7 @@ impl Default for FfiDryRunReport {
             fee_state: FfiFeeState::default(),
             cycles: 0,
             fee_at_head: FfiU128::default(),
+            reserve_at_head: FfiU128::default(),
             wire_bytes: 0,
             revert_reason: ptr::null_mut(),
             headroom_blocks: 0,
@@ -172,12 +176,14 @@ impl From<DryRunReport> for FfiDryRunReport {
                 cycles,
                 wire_bytes,
                 fee_at_head,
+                reserve_at_head,
                 revert_reason,
                 ..
             } => Self {
                 fee_state: (&quote).into(),
                 cycles,
                 fee_at_head: fee_at_head.into(),
+                reserve_at_head: reserve_at_head.into(),
                 wire_bytes,
                 revert_reason: c_string_or_null(revert_reason),
                 ..Self::default()
@@ -255,6 +261,48 @@ impl FfiSendFee {
     }
 }
 
+/// What every send declares in place of the wallet's defaults. A field whose `has_*` flag is
+/// false keeps the default.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FfiFeeParams {
+    /// Public: the execution gas limit, else the cycles a simulation measures plus the configured
+    /// margin.
+    pub has_gas_limit: bool,
+    pub gas_limit: u64,
+    /// Public: the fee cap, else the reserve at the headroom's base fees. A cap below the dry
+    /// run's `reserve_at_head` is rejected by the sequencer.
+    pub has_max_fee: bool,
+    pub max_fee: FfiU128,
+    /// Public: the tip, charged on top of the base fees.
+    pub tip: u64,
+    /// Blocks of steepest base fee climb a fee is priced to cover (a public cap, a private
+    /// reserve), else the configured ones.
+    pub has_headroom_blocks: bool,
+    pub headroom_blocks: u64,
+    /// Private: the owned private account paying every in-proof fee, else each send picks its
+    /// payer.
+    pub has_payer: bool,
+    pub payer: FfiAccountId,
+    /// Private: the public account the surplus is refunded to, else the payer's alias. Any
+    /// account the transaction does not credit publicly is linked to it.
+    pub has_refund_to: bool,
+    pub refund_to: FfiAccountId,
+}
+
+impl From<&FfiFeeParams> for FeeParams {
+    fn from(value: &FfiFeeParams) -> Self {
+        Self {
+            gas_limit: value.has_gas_limit.then_some(value.gas_limit),
+            max_fee: value.has_max_fee.then(|| value.max_fee.into()),
+            tip: value.tip,
+            headroom_blocks: value.has_headroom_blocks.then_some(value.headroom_blocks),
+            payer: value.has_payer.then(|| value.payer.into()),
+            refund_to: value.has_refund_to.then(|| value.refund_to.into()),
+        }
+    }
+}
+
 /// Simulate sends and report their cost instead of sending them. A send then succeeds with a
 /// null `tx_hash` and its result's `fee.is_dry_run` set.
 ///
@@ -273,6 +321,37 @@ pub unsafe extern "C" fn wallet_ffi_set_dry_run(
     match wrapper.core.lock() {
         Ok(mut wallet) => {
             wallet.set_dry_run(dry_run);
+            FfiOperationError::Success
+        }
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            FfiOperationError::InternalError
+        }
+    }
+}
+
+/// Declare every later send's fee with `params` in place of the wallet's defaults, replacing any
+/// set before; null restores the defaults. A dry run shows what a send would then declare.
+///
+/// # Safety
+/// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+/// - `params` must be null or a valid pointer to a `FfiFeeParams` struct
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn wallet_ffi_set_fee_params(
+    handle: *mut WalletHandle,
+    params: *const FfiFeeParams,
+) -> FfiOperationError {
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    let params = unsafe { params.as_ref() }
+        .map(FeeParams::from)
+        .unwrap_or_default();
+    match wrapper.core.lock() {
+        Ok(mut wallet) => {
+            wallet.set_fee_params(params);
             FfiOperationError::Success
         }
         Err(e) => {
