@@ -1,7 +1,7 @@
 use kameo::error::Infallible;
 use sequencer_actors_common::{EraseMessage as _, ErasedMessage};
 
-use crate::protocol::{ChannelSeq, Slot};
+use crate::protocol::{ChannelSeq, MsgId, Slot};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -28,6 +28,18 @@ pub enum Error {
 
     #[error("Node request failed")]
     NodeRequestFailed(#[source] anyhow::Error),
+
+    #[error("The node holds no final block at slot {0}")]
+    FinalBlockMissing(u64),
+
+    #[error("Slot {0} is not final on the node yet")]
+    SlotNotFinal(u64),
+
+    #[error("No final block at or under slot {descendant_slot} holds inscription {msg:?}")]
+    FinalInscriptionMissing { msg: MsgId, descendant_slot: u64 },
+
+    #[error("Reading L1 for a stake release verdict ran out of time")]
+    VerdictTimedOut,
 
     #[error("Failed to fetch zone messages from blocks {from:?}..={to:?}")]
     ChannelReadFailed {
@@ -56,6 +68,9 @@ pub enum Error {
 
     #[error("Invalid channel key list")]
     InvalidChannelKeyList(#[source] anyhow::Error),
+
+    #[error("Channel config thresholds must be non-zero and reachable by its keys")]
+    InvalidChannelConfig,
 
     #[error("Failed to assemble channel multi-sig proof")]
     ChannelMultiSigProofAssemblyFailed(#[source] anyhow::Error),

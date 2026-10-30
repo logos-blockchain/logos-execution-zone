@@ -86,20 +86,12 @@ pub fn committee_update(
     (desired != live || stale_threshold).then_some(desired)
 }
 
-/// Ownership-account id, sequencer key and payout destination for every release that may land in
-/// the block after the one the clock in `state` holds.
+/// Ownership-account id, sequencer key and payout destination for every pending release.
 #[must_use]
 pub fn finalize_unstake_candidates(
     state: &lee::V03State,
 ) -> Vec<(lee::AccountId, SequencerKey, lee::AccountId)> {
     let Some(config) = read_config(state) else {
-        return Vec::new();
-    };
-    let Some(params) = config.channel_params else {
-        return Vec::new();
-    };
-    let Some(next_block_id) = clock_block_id(state).map(|block_id| block_id.saturating_add(1))
-    else {
         return Vec::new();
     };
 
@@ -108,23 +100,9 @@ pub fn finalize_unstake_candidates(
         .into_iter()
         .filter_map(|(sequencer_key, entry)| {
             let pending = entry.pending_unstake?;
-            (next_block_id >= pending.releasable_at(params.exit_delay)).then_some((
-                entry.account_id,
-                sequencer_key,
-                pending.destination,
-            ))
+            Some((entry.account_id, sequencer_key, pending.destination))
         })
         .collect()
-}
-
-/// The block id the per-block clock account holds, or `None` if it does not decode.
-pub(crate) fn clock_block_id(state: &lee::V03State) -> Option<u64> {
-    let clock = state.get_account_by_id(system_accounts::clock_account_ids()[0]);
-    borsh::from_slice::<clock_core::ClockAccountData>(
-        clock.data.actor_state(programs::clock_account_id()),
-    )
-    .ok()
-    .map(|clock| clock.block_id)
 }
 
 /// Reads the `sequencer_stake` config account — a single account read, not a
@@ -167,8 +145,6 @@ mod tests {
     use super::*;
 
     const MINIMUM: u128 = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
-    /// Blocks an unstake waits in [`state_with`].
-    const EXIT_DELAY: u64 = 10;
 
     /// One staked key's config entry.
     #[derive(Clone, Copy)]
@@ -190,28 +166,13 @@ mod tests {
             }
         }
 
-        fn pending(mut self, amount: u128, requested_at: u64) -> Self {
+        fn pending(mut self, amount: u128) -> Self {
             self.pending = Some(PendingUnstake {
                 amount,
                 destination: lee::AccountId::new([200; 32]),
-                requested_at,
             });
             self
         }
-    }
-
-    /// [`state_with`], with the clock at `block_id`.
-    fn state_at(stakes: impl IntoIterator<Item = Staked>, block_id: u64) -> lee::V03State {
-        let clock = Account::default().with_actor_state(
-            programs::clock_account_id(),
-            clock_core::ClockAccountData {
-                block_id,
-                timestamp: 0,
-            }
-            .to_bytes()
-            .into(),
-        );
-        state_with(stakes).with_public_accounts([(system_accounts::clock_account_ids()[0], clock)])
     }
 
     /// LEZ state holding the config account.
@@ -226,8 +187,8 @@ mod tests {
                     minimum_sequencer_stake: MINIMUM,
                     posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
                     posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
-                    exit_delay: EXIT_DELAY,
                     max_block_size: 1 << 20,
+                    finality_depth: 5,
                 }),
                 channel_id: Some([0xC1; 32]),
                 entries: stakes
@@ -354,7 +315,7 @@ mod tests {
 
     #[test]
     fn key_below_minimum_but_still_live_is_removed() {
-        let exiting = Staked::new(4, MINIMUM).pending(MINIMUM, 0);
+        let exiting = Staked::new(4, MINIMUM).pending(MINIMUM);
         let staying = Staked::new(6, MINIMUM);
 
         assert_eq!(
@@ -370,7 +331,7 @@ mod tests {
 
     #[test]
     fn a_pending_unstake_discounts_the_stake_backing_a_key() {
-        let discounted = Staked::new(5, 2 * MINIMUM).pending(2 * MINIMUM, 0);
+        let discounted = Staked::new(5, 2 * MINIMUM).pending(2 * MINIMUM);
         let staying = Staked::new(7, MINIMUM);
 
         assert_eq!(
@@ -386,7 +347,7 @@ mod tests {
 
     #[test]
     fn an_empty_committee_is_never_submitted() {
-        let exiting = Staked::new(4, MINIMUM).pending(MINIMUM, 0);
+        let exiting = Staked::new(4, MINIMUM).pending(MINIMUM);
 
         assert_eq!(
             committee_update(&state_with([exiting]), &[exiting.key], 1, 1),
@@ -416,13 +377,11 @@ mod tests {
     }
 
     #[test]
-    fn a_release_is_a_candidate_once_its_exit_delay_passes() {
-        let staked = Staked::new(5, MINIMUM).pending(MINIMUM, 3);
-        let releasable_at = 3 + EXIT_DELAY;
+    fn a_pending_release_is_a_candidate() {
+        let staked = Staked::new(5, MINIMUM).pending(MINIMUM);
 
-        assert!(finalize_unstake_candidates(&state_at([staked], releasable_at - 2)).is_empty());
         assert_eq!(
-            finalize_unstake_candidates(&state_at([staked], releasable_at - 1)),
+            finalize_unstake_candidates(&state_with([staked])),
             vec![(
                 staked.account_id,
                 staked.key,
@@ -435,6 +394,6 @@ mod tests {
     fn an_entry_with_no_pending_unstake_is_not_a_candidate() {
         let staked = Staked::new(7, MINIMUM);
 
-        assert!(finalize_unstake_candidates(&state_at([staked], 100)).is_empty());
+        assert!(finalize_unstake_candidates(&state_with([staked])).is_empty());
     }
 }

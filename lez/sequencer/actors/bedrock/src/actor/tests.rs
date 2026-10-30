@@ -93,12 +93,13 @@ fn the_genesis_config_op_and_its_proof_pass_bedrock_verification() {
             minimum_sequencer_stake: 0,
             posting_timeframe: 10,
             posting_timeout: 20,
-            exit_delay: 10,
             max_block_size: 1 << 20,
+            finality_depth: 5,
         },
         1,
         1,
-    );
+    )
+    .expect("Thresholds of 1 should be valid for one key");
     let tx_hash_view = TxHashView::new(TxHash::from([7; 32]));
 
     let signed =

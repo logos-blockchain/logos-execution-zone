@@ -14,8 +14,6 @@ const SLASH_APPROVAL_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/SlashApproval/NonBlock";
 const SLASH_SINK_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/SlashedStakeSink/00000";
 
 pub const SEQUENCER_STAKE_NAME: [u8; 15] = *b"sequencer_stake";
-/// Blocks before `requested_at` in which an `UnstakeRequest` may land.
-pub const UNSTAKE_REQUEST_WINDOW: u64 = 16;
 
 /// Smallest `max_block_size` genesis accepts, leaving room for the header and the fee and clock
 /// transactions.
@@ -91,13 +89,13 @@ pub enum Message {
         sequencer_key: SequencerKey,
         amount: u128,
         destination: AccountId,
-        /// The latest block the request may land in, dating the exit delay.
-        requested_at: u64,
     },
 
     /// Unsigned, permissionless: releases the key's pending unstake, as the config records it,
-    /// once [`ChannelParams::exit_delay`] blocks have passed since it. The payout is sent
-    /// asynchronously to the destination.
+    /// sending the payout asynchronously to the destination.
+    ///
+    /// Nodes refuse a block that releases a key's whole stake before the config removing the
+    /// key is [`ChannelParams::finality_depth`] L1 blocks deep.
     FinalizeUnstake { sequencer_key: SequencerKey },
 
     /// Burns the key's whole tracked stake, pending unstake included, to the sink and removes
@@ -130,7 +128,6 @@ pub enum Message {
         ownership: AccountId,
         amount: u128,
         destination: AccountId,
-        requested_at: u64,
     },
 }
 
@@ -167,16 +164,6 @@ impl StakeRecord {
 pub struct PendingUnstake {
     pub amount: u128,
     pub destination: AccountId,
-    /// The latest block the request could land in.
-    pub requested_at: u64,
-}
-
-impl PendingUnstake {
-    /// The first block `FinalizeUnstake` may land in.
-    #[must_use]
-    pub const fn releasable_at(&self, exit_delay: u64) -> u64 {
-        self.requested_at.saturating_add(exit_delay)
-    }
 }
 
 /// The values genesis fixes for the chain's life.
@@ -202,10 +189,11 @@ pub struct ChannelParams {
     /// above `block_create_timeout`, or a healthy sequencer loses its turn
     /// between its own blocks.
     pub posting_timeout: u32,
-    /// Blocks an unstake waits before `FinalizeUnstake` may release it.
-    pub exit_delay: u64,
     /// Largest block a sequencer builds, in borsh-encoded bytes.
     pub max_block_size: u64,
+    /// L1 blocks on top of the config removing a key before its whole stake can be released,
+    /// which must exceed Bedrock's `security_param`.
+    pub finality_depth: u64,
 }
 
 /// Minimum stake and per-key standing, stored in this program's config actor state.
@@ -420,8 +408,8 @@ mod tests {
                 minimum_sequencer_stake: 1_000_000,
                 posting_timeframe: 300,
                 posting_timeout: 25,
-                exit_delay: 10,
                 max_block_size: 1 << 20,
+                finality_depth: 5,
             }),
             channel_id: Some([0xC1; 32]),
             entries,
@@ -459,7 +447,6 @@ mod tests {
             pending_unstake: (pending > 0).then_some(PendingUnstake {
                 amount: pending,
                 destination: test_destination(),
-                requested_at: 0,
             }),
         }
     }
@@ -597,8 +584,8 @@ mod tests {
                 minimum_sequencer_stake: 1_000,
                 posting_timeframe: 300,
                 posting_timeout: 25,
-                exit_delay: 10,
                 max_block_size: 1 << 20,
+                finality_depth: 5,
             }),
             channel_id: Some([0xC1; 32]),
             entries: BTreeMap::from([(staying, entry(1_000, 0)), (leaving, entry(1_000, 1_000))]),

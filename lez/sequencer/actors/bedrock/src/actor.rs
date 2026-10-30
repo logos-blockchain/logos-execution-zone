@@ -1,6 +1,8 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
+    num::NonZero,
     sync::Arc,
+    time::Duration,
 };
 
 use anyhow::{Context as _, anyhow};
@@ -48,21 +50,28 @@ use tokio::{select, sync::watch};
 use crate::protocol::PublishRawInscription;
 use crate::{
     BedrockActorTrait, Result,
-    actor::config::Config,
+    actor::{
+        config::Config,
+        finality::{BlockSummary, ConfigIndex, L1Reader},
+    },
     error::Error,
     protocol::{
         AccreditedKeys, ChangeChannelConfig, ChannelEntry, ChannelEvent, ChannelId, ChannelParams,
         ChannelReadStream, ChannelSeq, ChannelUpdate, CheckChannelExists, CheckIsOurTurn,
-        CreateChannel, Ed25519PublicKey, GetAccreditedKeys, GetChannelId, GetChannelIdReply,
-        GetChannelNotes, GetChannelTipMessageId, GetChannelTipSlot, LiveChannelConfig, MsgId,
-        PrepareConfig, PreparePin, PreparedChannelConfig, PreparedPin, PublishBlock,
-        PublishOutcome, PublishPin, ReadChannel, Slot, ViewChange, verified_keys,
+        CreateChannel, Ed25519PublicKey, FilterFinallyAbsent, GetAccreditedKeys, GetChannelId,
+        GetChannelIdReply, GetChannelNotes, GetChannelTipMessageId, GetChannelTipSlot,
+        LiveChannelConfig, MsgId, PrepareConfig, PreparePin, PreparedChannelConfig, PreparedPin,
+        PublishBlock, PublishOutcome, PublishPin, ReadChannel, Slot, ViewChange, verified_keys,
     },
 };
 
 pub mod config;
+mod finality;
 #[cfg(test)]
 mod tests;
+
+/// Time one [`FilterFinallyAbsent`] may hold the actor; the blocks and configs it read are kept.
+const FILTER_FINALLY_ABSENT_BUDGET: Duration = Duration::from_secs(10);
 
 /// Bedrock Actor responsible for interacting with the Bedrock node and managing channel events.
 ///
@@ -83,6 +92,11 @@ pub struct BedrockActor {
     /// zone-sdk's LIB slot when it became ready; its events cover everything
     /// finalized after it, so [`ReadChannel`] reads no further.
     ready_lib_slot: Option<Slot>,
+    /// Summaries of the L1 blocks [`FilterFinallyAbsent`] walked, by id.
+    block_summary_cache: HashMap<logos_blockchain_zone_sdk::node_types::HeaderId, BlockSummary>,
+    /// The channel's final configs, from zone-sdk's finalized events and [`FilterFinallyAbsent`]
+    /// reads.
+    config_index: ConfigIndex,
 }
 
 impl BedrockActor {
@@ -99,6 +113,13 @@ impl BedrockActor {
             .as_ref()
             .map(|stored| SequencerCheckpoint::from_bytes(&stored.bytes))
             .transpose()?;
+        // A cold start backfills from slot 0, and a restart's events start after the stored LIB.
+        let config_index = initial_checkpoint.as_ref().map_or_else(
+            || ConfigIndex::starting_at(0),
+            |checkpoint| {
+                ConfigIndex::starting_at(checkpoint.lib_slot.into_inner().saturating_add(1))
+            },
+        );
 
         let Config {
             channel_id,
@@ -154,6 +175,8 @@ impl BedrockActor {
             broker_ref,
             seq,
             ready_lib_slot: None,
+            block_summary_cache: HashMap::new(),
+            config_index,
         };
 
         // Wait for cold-start backfill to complete before returning so callers
@@ -184,6 +207,23 @@ impl BedrockActor {
                 finalized,
                 deposits: observed_deposits,
             } => {
+                let config_keys: Vec<_> = finalized
+                    .iter()
+                    .flat_map(|item| {
+                        item.ops.iter().filter_map(|op| {
+                            if let FinalizedOp::Config(info) = op {
+                                Some((
+                                    item.l1_slot.into_inner(),
+                                    finality::config_key_bytes(&info.config),
+                                ))
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                    .collect();
+                self.config_index
+                    .extend_final(config_keys, checkpoint.lib_slot.into_inner());
                 // Apart from the update: they carry no checkpoint and move no channel sequence.
                 if !observed_deposits.is_empty() {
                     self.broker_ref
@@ -221,10 +261,13 @@ impl BedrockActor {
                 let mut withdrawals = Vec::new();
                 let mut undecodable = Vec::new();
                 let mut finalized_signers = Vec::new();
-                for op in finalized.into_iter().flat_map(|item| item.ops) {
+                for (slot, op) in finalized
+                    .into_iter()
+                    .flat_map(|item| item.ops.into_iter().map(move |op| (item.l1_slot, op)))
+                {
                     match op {
                         FinalizedOp::Inscription(inscription) => {
-                            let entry = channel_entry(&inscription);
+                            let entry = channel_entry(&inscription, Some(slot.into_inner()));
                             let signed = inscription
                                 .signer
                                 .and_then(|signer| Ed25519PublicKey::try_from(signer).ok())
@@ -489,7 +532,7 @@ impl Message<CreateChannel> for BedrockActor {
             &channel_params,
             configuration_threshold,
             transfer_threshold,
-        );
+        )?;
 
         let data = borsh::to_vec(&genesis).map_err(Error::BlockEncodingFailed)?;
         let inscription: Inscription = data.try_into().map_err(|_rr| Error::BlockTooLarge)?;
@@ -841,6 +884,114 @@ impl Message<GetChannelTipMessageId> for BedrockActor {
     }
 }
 
+impl Message<FilterFinallyAbsent> for BedrockActor {
+    type Reply = Result<BTreeSet<sequencer_stake_core::SequencerKey>>;
+
+    async fn handle(
+        &mut self,
+        FilterFinallyAbsent { at, keys, depth }: FilterFinallyAbsent,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let mut reader = NodeReader {
+            node: &self.node,
+            block_summary_cache: &mut self.block_summary_cache,
+            channel_id: self.config.channel_id,
+        };
+        let walk =
+            finality::filter_finally_absent(&mut reader, &mut self.config_index, at, &keys, depth);
+        let verdict = tokio::time::timeout(FILTER_FINALLY_ABSENT_BUDGET, walk)
+            .await
+            .map_err(|_elapsed| Error::VerdictTimedOut)?;
+        if verdict.is_ok() && self.block_summary_cache.len() >= NodeReader::CACHE_CAPACITY {
+            self.block_summary_cache.clear();
+        }
+        verdict
+    }
+}
+
+/// [`L1Reader`] over the node, caching the block summaries it reads by id.
+struct NodeReader<'actor> {
+    node: &'actor NodeHttpClient,
+    block_summary_cache:
+        &'actor mut HashMap<logos_blockchain_zone_sdk::node_types::HeaderId, BlockSummary>,
+    channel_id: ChannelId,
+}
+
+impl NodeReader<'_> {
+    /// Block summaries cached before a walk that returns a verdict empties the cache.
+    const CACHE_CAPACITY: usize = 4096;
+
+    fn summarize(&self, block: &logos_blockchain_zone_sdk::node_types::ApiBlock) -> BlockSummary {
+        BlockSummary::new(
+            block.header.id,
+            block.header.parent_block,
+            block.header.slot.into_inner(),
+            &block.transactions,
+            self.channel_id,
+        )
+    }
+}
+
+impl L1Reader for NodeReader<'_> {
+    async fn tip_block_summary(&mut self) -> Result<BlockSummary> {
+        let tip = self
+            .node
+            .consensus_info()
+            .await
+            .map_err(|err| Error::NodeRequestFailed(err.into()))?
+            .cryptarchia_info
+            .tip;
+        self.block_summary(tip)
+            .await?
+            .ok_or_else(|| Error::NodeRequestFailed(anyhow!("the node lacks its tip {tip}")))
+    }
+
+    async fn block_summary(
+        &mut self,
+        id: logos_blockchain_zone_sdk::node_types::HeaderId,
+    ) -> Result<Option<BlockSummary>> {
+        if let Some(block_summary) = self.block_summary_cache.get(&id) {
+            return Ok(Some(block_summary.clone()));
+        }
+        let Some(block) = self
+            .node
+            .block(id)
+            .await
+            .map_err(|err| Error::NodeRequestFailed(err.into()))?
+        else {
+            return Ok(None);
+        };
+        let block_summary = self.summarize(&block);
+        self.block_summary_cache
+            .insert(block_summary.id, block_summary.clone());
+        Ok(Some(block_summary))
+    }
+
+    async fn final_block_summaries(&mut self, from: u64, to: u64) -> Result<Vec<BlockSummary>> {
+        let lib_slot = self
+            .node
+            .consensus_info()
+            .await
+            .map_err(|err| Error::NodeRequestFailed(err.into()))?
+            .cryptarchia_info
+            .lib_slot
+            .into_inner();
+        // A slot past the node's LIB is refused, not read as empty.
+        if to > lib_slot {
+            return Err(Error::SlotNotFinal(to));
+        }
+        let blocks = self
+            .node
+            .immutable_blocks(Slot::from(from), Slot::from(to))
+            .await
+            .map_err(|err| Error::NodeRequestFailed(err.into()))?;
+        Ok(blocks
+            .into_iter()
+            .map(|block| self.summarize(&block))
+            .collect())
+    }
+}
+
 impl Message<ReadChannel> for BedrockActor {
     type Reply = Result<ChannelReadStream>;
 
@@ -958,17 +1109,19 @@ fn genesis_config_op(
     channel_params: &ChannelParams,
     configuration_threshold: u16,
     transfer_threshold: u16,
-) -> ChannelConfigOp {
-    ChannelConfigOp {
-        channel: channel_id,
+) -> Result<ChannelConfigOp> {
+    let threshold = |value| NonZero::new(value).ok_or(Error::InvalidChannelConfig);
+    ChannelConfigOp::new(
+        channel_id,
         // The channel does not exist yet, so the config lineage starts here.
-        parent: MsgId::root(),
+        MsgId::root(),
         keys,
-        posting_timeframe: SlotTimeframe::from(channel_params.posting_timeframe),
-        posting_timeout: SlotTimeout::from(channel_params.posting_timeout),
-        configuration_threshold,
-        transfer_threshold,
-    }
+        SlotTimeframe::from(channel_params.posting_timeframe),
+        SlotTimeout::from(channel_params.posting_timeout),
+        threshold(configuration_threshold)?,
+        threshold(transfer_threshold)?,
+    )
+    .map_err(|_err| Error::InvalidChannelConfig)
 }
 
 /// The proof a channel-creating config op carries. No key is accredited before
@@ -983,8 +1136,9 @@ fn has_channel_activity(checkpoint: &SequencerCheckpoint) -> bool {
     checkpoint.last_msg_id != MsgId::root() || !checkpoint.pending_txs.is_empty()
 }
 
-/// A message-lineage entry, with its block when the payload decodes to one.
-fn channel_entry(inscription: &InscriptionInfo) -> ChannelEntry {
+/// A message-lineage entry, with its block when the payload decodes to one, in the final block at
+/// `final_slot` or in the view when `None`.
+fn channel_entry(inscription: &InscriptionInfo, final_slot: Option<u64>) -> ChannelEntry {
     let block = if <Inscription as AsRef<[u8]>>::as_ref(&inscription.payload).is_empty() {
         None
     } else {
@@ -994,6 +1148,8 @@ fn channel_entry(inscription: &InscriptionInfo) -> ChannelEntry {
         msg: inscription.this_msg,
         parent: inscription.parent_msg,
         block,
+        finally_absent_keys: BTreeSet::new(),
+        final_slot,
     }
 }
 
@@ -1002,14 +1158,14 @@ fn channel_entry(inscription: &InscriptionInfo) -> ChannelEntry {
 /// A config op is on the config lineage, not this one, so it is skipped.
 fn channel_entries(tx: &ChannelUpdateTx, channel_id: ChannelId) -> Vec<ChannelEntry> {
     match tx {
-        ChannelUpdateTx::Inscription(info) => vec![channel_entry(info)],
-        ChannelUpdateTx::AtomicWithdraw(bundle) => vec![channel_entry(&bundle.inscription)],
-        ChannelUpdateTx::PinDeposit(bundle) => vec![channel_entry(&bundle.inscription)],
+        ChannelUpdateTx::Inscription(info) => vec![channel_entry(info, None)],
+        ChannelUpdateTx::AtomicWithdraw(bundle) => vec![channel_entry(&bundle.inscription, None)],
+        ChannelUpdateTx::PinDeposit(bundle) => vec![channel_entry(&bundle.inscription, None)],
         ChannelUpdateTx::Config(_) => Vec::new(),
         ChannelUpdateTx::Custom(signed_tx) => {
             logos_blockchain_zone_sdk::sequencer::channel_inscriptions(signed_tx, channel_id)
                 .iter()
-                .map(channel_entry)
+                .map(|info| channel_entry(info, None))
                 .collect()
         }
     }

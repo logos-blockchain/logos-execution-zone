@@ -1,7 +1,7 @@
 //! A [`MockBedrockActor`] serving a canned channel.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::{Arc, Mutex},
 };
 
@@ -17,10 +17,11 @@ use sequencer_bedrock_actor::{
     error::Error,
     mock::MockBedrockActor,
     protocol::{
-        AccreditedKeys, ChannelReadStream, CreateChannel, PreparePin, PreparedPin, PublishBlock,
-        PublishOutcome, PublishPin, ReadChannel,
+        AccreditedKeys, ChannelReadStream, CreateChannel, FilterFinallyAbsent, PreparePin,
+        PreparedPin, PublishBlock, PublishOutcome, PublishPin, ReadChannel,
     },
 };
+use sequencer_stake_core::SequencerKey;
 
 use super::{checkpoint_at, mock_msg_of, next_channel_seq};
 
@@ -45,6 +46,8 @@ pub struct CannedChannel {
     pub channel_notes: HashSet<NoteId>,
     /// The deposit notes each publish pinned, in publish order.
     pub pins: Arc<Mutex<Vec<Vec<NoteId>>>>,
+    /// Keys whose removal config is reported not yet final; every other key's is.
+    pub pending_removals: BTreeSet<SequencerKey>,
 }
 
 impl CannedChannel {
@@ -71,6 +74,7 @@ impl CannedChannel {
             publish_pin_fails,
             channel_notes,
             pins,
+            pending_removals,
         } = self;
         let tip = Arc::new(Mutex::new(tip));
 
@@ -98,6 +102,11 @@ impl CannedChannel {
             let channel_notes = channel_notes.clone();
             move |_msg, _ctx| channel_notes.clone()
         });
+        mock.expect_handle_filter_finally_absent().returning(
+            move |FilterFinallyAbsent { keys, .. }, _ctx| {
+                Ok(keys.difference(&pending_removals).copied().collect())
+            },
+        );
         mock.expect_handle_read_channel()
             .returning(move |ReadChannel { after }, _ctx| Ok(history_after(&messages, after)));
         mock.expect_handle_create_channel().returning({
