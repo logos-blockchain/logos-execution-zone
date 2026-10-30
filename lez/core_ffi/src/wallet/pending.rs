@@ -1,20 +1,18 @@
 //! Discovery and receipt of messages sent to this wallet's accounts.
 
-use std::{
-    ffi::{CString, c_char},
-    ptr,
-};
+use std::{ffi::c_char, ptr};
 
 use common::HashType;
 use lee::privacy_preserving_transaction::circuit::ProgramCatalog;
-use wallet::{AsyncDelivery, Promotions, WalletCore};
+use wallet::{AsyncDelivery, ExecutionFailureKind, Promotions, WalletCore};
 
 use crate::{
     error::{FfiOperationError, print_error},
     wallet::{
         FfiAccountMention, FfiAsyncDelivery, FfiPendingMessage, FfiPendingMessageList,
-        FfiTransferResult, WalletHandle, block_on, c_str_to_string,
+        FfiTransferResult, WalletHandle, block_on, c_str_to_string, c_string_or_null,
         client::WalletClient,
+        fees::FfiSendFee,
         generic_transaction::{FfiProgramCatalog, mentions},
         lifecycle::get_wallet,
         list, map_execution_error,
@@ -230,7 +228,7 @@ pub unsafe extern "C" fn wallet_ffi_receive_pending_message_with(
         }
     };
 
-    match unsafe {
+    let received = unsafe {
         receive(
             &mut wallet,
             position,
@@ -240,11 +238,17 @@ pub unsafe extern "C" fn wallet_ffi_receive_pending_message_with(
             async_delivery,
             cross_messages_json,
         )
-    } {
+    }
+    .and_then(|sent| {
+        unsafe { (*out_result).fee.record(&wallet, sent) }.map_err(|e| {
+            print_error(format!("Receipt failed: {e:?}"));
+            map_execution_error(e)
+        })
+    });
+    match received {
         Ok(tx_hash) => {
             unsafe {
-                (*out_result).tx_hash =
-                    CString::new(tx_hash.to_string()).map_or(ptr::null_mut(), CString::into_raw);
+                (*out_result).tx_hash = c_string_or_null(tx_hash);
                 (*out_result).success = true;
             }
             FfiOperationError::Success
@@ -253,6 +257,7 @@ pub unsafe extern "C" fn wallet_ffi_receive_pending_message_with(
             unsafe {
                 (*out_result).tx_hash = ptr::null_mut();
                 (*out_result).success = false;
+                (*out_result).fee = FfiSendFee::default();
             }
             e
         }
@@ -267,7 +272,7 @@ unsafe fn receive(
     programs: *const FfiProgramCatalog,
     async_delivery: *const FfiAsyncDelivery,
     cross_messages_json: *const c_char,
-) -> Result<HashType, FfiOperationError> {
+) -> Result<Result<HashType, ExecutionFailureKind>, FfiOperationError> {
     let mut accounts = mentions(unsafe { list(account_mentions, account_mentions_size) }?)?;
     let programs = match unsafe { programs.as_ref() } {
         Some(programs) => programs.try_into()?,
@@ -334,16 +339,12 @@ unsafe fn receive(
             return Err(FfiOperationError::NetworkError);
         }
     };
-    block_on(wallet.receive_pending_message_with(
+    Ok(block_on(wallet.receive_pending_message_with(
         pending,
         accounts,
         &programs,
         cross_messages,
         async_delivery,
     ))
-    .map(|(tx_hash, _)| tx_hash)
-    .map_err(|e| {
-        print_error(format!("Receipt failed: {e:?}"));
-        map_execution_error(e)
-    })
+    .map(|(tx_hash, _)| tx_hash))
 }

@@ -19,6 +19,7 @@ use core_ffi::{
     primitives::types::{FfiBytes32, account::FfiAccount},
     wallet::{
         FfiAccountIdentity, FfiAccountMention,
+        fees::FfiFeeKind,
         generic_transaction::{FfiDependency, FfiProgramCatalog, FfiTransactionResult},
         lifecycle::FfiCreateWalletOutput,
     },
@@ -103,6 +104,7 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
         )
         .unwrap();
     }
+    assert_eq!(transaction_result.fee.declared.kind, FfiFeeKind::Public);
 
     log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
@@ -239,6 +241,8 @@ fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
         )
         .unwrap();
     }
+    assert_eq!(transaction_result.fee.declared.kind, FfiFeeKind::Private);
+    assert!(transaction_result.secrets_size > 0);
 
     assert_eq!(transaction_result.secrets_size, 2);
 
