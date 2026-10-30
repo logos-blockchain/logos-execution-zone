@@ -51,6 +51,7 @@ pub fn dashboard() -> Dashboard {
                         Target::new(seq(sequencer_core_metrics::names::CHAIN_HEIGHT).to_string()).legend("height"),
                     ),
                 Panel::stat("Blocks produced by this sequencer since startup")
+                    .description("Counted once finalized: until then a conflict can orphan a block.")
                     .width(6)
                     .unit(Unit::Short)
                     .decimals(0)

@@ -115,9 +115,11 @@ The **Sequencer network** dashboard (`dashboards/network.rs`) puts every sequenc
 | Question | Panel |
 |---|---|
 | Who may write now, and how does the turn rotate? | **Turn to write** — a state timeline of `turn_to_write`, one row per sequencer |
-| Who proposes the blocks? | **Blocks proposed over time** — a heatmap: a cell per sequencer per slice of time (≥ 1 min), darker for more blocks |
-| Is the rotation fair, and are turns used? | **Share of turns**, **Share of blocks proposed**, **Blocks per turn** over the time range |
+| Who produces the blocks? | **Blocks produced over time** — a heatmap: a cell per sequencer per slice of time (≥ 1 min), darker for more blocks |
+| Is the rotation fair, and are turns used? | **Share of turns**, **Share of blocks produced**, **Blocks per turn** over the time range |
 | Is anyone falling behind or failing? | **Blocks behind the network**, **Failed production turns in a row** |
+
+`blocks_produced_total` counts a block once the channel finalizes it, signed by this sequencer: a block on the head can still be orphaned when another sequencer's inscription wins the same position, typically around a turn handover. Summed over sequencers it equals the finalized chain height, as long as none restarted.
 
 Turns come from Bedrock: the zone SDK notifies a sequencer when its turn to write starts and ends, and the Bedrock actor forwards that to the executor. `sequencer_executor_actor_metrics` records them as `turn_to_write` (1 while held) and `turns_to_write_total` (turns started; a turn notified several times counts once, while a new starting slot is a new turn even for the same holder).
 

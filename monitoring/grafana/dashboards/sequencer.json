@@ -39,6 +39,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Counted once finalized: until then a conflict can orphan a block.",
       "fieldConfig": {
         "defaults": { "color": { "mode": "fixed", "fixedColor": "green" }, "unit": "short", "decimals": 0 },
         "overrides": [ ]

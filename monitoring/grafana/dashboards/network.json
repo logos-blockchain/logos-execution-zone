@@ -232,7 +232,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "Blocks each sequencer proposed in each slice of time; darker is more.",
+      "description": "Blocks each sequencer produced that the channel finalized, per slice of time; darker is more.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "continuous-blues" },
@@ -268,7 +268,7 @@
           "refId": "A"
         }
       ],
-      "title": "Blocks proposed over time",
+      "title": "Blocks produced over time",
       "type": "status-history"
     },
     {
@@ -314,7 +314,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "Each sequencer's part of the blocks proposed over the time range.",
+      "description": "Each sequencer's part of the blocks finalized over the time range.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "fixed", "fixedColor": "blue" },
@@ -350,12 +350,12 @@
           "refId": "A"
         }
       ],
-      "title": "Share of blocks proposed",
+      "title": "Share of blocks produced",
       "type": "bargauge"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "Blocks proposed per turn to write over the time range. A sequencer well below the rest lets its turns go by.",
+      "description": "Finalized blocks per turn to write over the time range. A sequencer well below the rest lets its turns go by, or loses its blocks to conflicts.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "fixed", "fixedColor": "blue" },
