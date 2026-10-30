@@ -1,3 +1,5 @@
+use std::num::NonZero;
+
 use common::{
     HashType,
     block::{Block, HashableBlockData},
@@ -96,9 +98,10 @@ fn the_genesis_config_op_and_its_proof_pass_bedrock_verification() {
             exit_delay: 10,
             max_block_size: 1 << 20,
         },
-        1,
-        1,
-    );
+        NonZero::<u16>::MIN,
+        NonZero::<u16>::MIN,
+    )
+    .expect("one key reaches a threshold of one");
     let tx_hash_view = TxHashView::new(TxHash::from([7; 32]));
 
     let signed = SignedOperation::<_, Unverified, StandardMode>::new(op, genesis_config_proof())

@@ -1,3 +1,5 @@
+use std::num::NonZero;
+
 use kameo::Reply;
 use logos_blockchain_binary_codec::canonical::{BinaryDecodeExt as _, BinaryEncode as _};
 use logos_blockchain_core::{
@@ -30,8 +32,8 @@ pub struct ConfigTarget {
     pub posting_timeframe: u32,
     pub posting_timeout: u32,
     /// Signatures the *next* config will have to carry, not this one.
-    pub configuration_threshold: u16,
-    pub transfer_threshold: u16,
+    pub configuration_threshold: NonZero<u16>,
+    pub transfer_threshold: NonZero<u16>,
 }
 
 /// What this node last saw of the live channel, plus the committee it should

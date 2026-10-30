@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{num::NonZero, sync::Arc, time::Duration};
 
 pub use chain_state::ChannelEntry;
 use common::block::Block;
@@ -214,8 +214,8 @@ pub struct CreateChannel {
     pub genesis: Block,
     pub keys: Vec<Ed25519PublicKey>,
     pub channel_params: ChannelParams,
-    pub configuration_threshold: u16,
-    pub transfer_threshold: u16,
+    pub configuration_threshold: NonZero<u16>,
+    pub transfer_threshold: NonZero<u16>,
 }
 
 impl ShardingKey for CreateChannel {
@@ -374,8 +374,8 @@ pub struct PrepareConfig {
     pub posting_timeframe: u32,
     pub posting_timeout: u32,
     /// Signatures the *next* config will have to carry, not this one.
-    pub configuration_threshold: u16,
-    pub transfer_threshold: u16,
+    pub configuration_threshold: NonZero<u16>,
+    pub transfer_threshold: NonZero<u16>,
 }
 
 impl ShardingKey for PrepareConfig {

@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    num::NonZero,
     sync::Arc,
     time::Duration,
 };
@@ -325,8 +326,8 @@ impl Publisher {
         genesis: Block,
         keys: Vec<Ed25519PublicKey>,
         channel_params: ChannelParams,
-        configuration_threshold: u16,
-        transfer_threshold: u16,
+        configuration_threshold: NonZero<u16>,
+        transfer_threshold: NonZero<u16>,
     ) -> Result<PublishOutcome> {
         let own_key = self.channel_signing_key.public_key();
         if keys.first() != Some(&own_key) {
@@ -343,7 +344,7 @@ impl Publisher {
             &channel_params,
             configuration_threshold,
             transfer_threshold,
-        );
+        )?;
 
         let data = borsh::to_vec(&genesis).map_err(Error::BlockEncodingFailed)?;
         let inscription: Inscription = data.try_into().map_err(|_rr| Error::BlockTooLarge)?;
@@ -514,8 +515,8 @@ impl Publisher {
         keys: Vec<Ed25519PublicKey>,
         posting_timeframe: u32,
         posting_timeout: u32,
-        configuration_threshold: u16,
-        transfer_threshold: u16,
+        configuration_threshold: NonZero<u16>,
+        transfer_threshold: NonZero<u16>,
     ) -> Result<PreparedConfig> {
         let keys = VerifiedChannelKeys::try_from(keys)
             .map_err(|err| Error::InvalidChannelKeyList(err.into()))?;
@@ -527,8 +528,8 @@ impl Publisher {
                 keys,
                 SlotTimeframe::from(posting_timeframe),
                 SlotTimeout::from(posting_timeout),
-                configuration_threshold,
-                transfer_threshold,
+                configuration_threshold.get(),
+                transfer_threshold.get(),
             )
             .await?;
         let accredited_keys = verified_keys(&prepared.accredited_keys)?;
@@ -716,19 +717,20 @@ pub(super) fn genesis_config_op(
     channel_id: ChannelId,
     keys: VerifiedChannelKeys,
     channel_params: &ChannelParams,
-    configuration_threshold: u16,
-    transfer_threshold: u16,
-) -> ChannelConfigOp {
-    ChannelConfigOp {
-        channel: channel_id,
+    configuration_threshold: NonZero<u16>,
+    transfer_threshold: NonZero<u16>,
+) -> Result<ChannelConfigOp> {
+    ChannelConfigOp::new(
+        channel_id,
         // The channel does not exist yet, so the config lineage starts here.
-        parent: MsgId::root(),
+        MsgId::root(),
         keys,
-        posting_timeframe: SlotTimeframe::from(channel_params.posting_timeframe),
-        posting_timeout: SlotTimeout::from(channel_params.posting_timeout),
+        SlotTimeframe::from(channel_params.posting_timeframe),
+        SlotTimeout::from(channel_params.posting_timeout),
         configuration_threshold,
         transfer_threshold,
-    }
+    )
+    .map_err(|err| Error::InvalidChannelConfig(err.into()))
 }
 
 /// The proof a channel-creating config op carries. No key is accredited before
