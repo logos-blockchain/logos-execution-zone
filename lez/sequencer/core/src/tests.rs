@@ -9,7 +9,7 @@ use std::{
 
 use bridge_core::{DepositMetadata, DepositRecipient};
 use canned_channel::CannedChannel;
-use chain_state::{ChainState, ChannelEntry};
+use chain_state::{ChainState, ChannelEntry, L1Position};
 use common::{
     HashType,
     block::{BedrockStatus, Block, HashableBlockData},
@@ -223,6 +223,8 @@ fn entry_of(block: &Block, parent: MsgId) -> ChannelEntry {
         msg: mock_msg_of(block),
         parent,
         block: Some(block.clone()),
+        finally_absent_keys: BTreeSet::new(),
+        l1_position: L1Position::Unknown,
     }
 }
 
@@ -2686,6 +2688,8 @@ async fn production_chains_on_a_garbage_entry_at_the_tip() {
                 msg: junk,
                 parent: pin,
                 block: None,
+                finally_absent_keys: BTreeSet::new(),
+                l1_position: L1Position::Unknown,
             }]),
             ..empty_channel_update()
         }))
@@ -2759,6 +2763,8 @@ async fn a_conflict_dropping_a_garbage_entry_rewinds_only_the_pin() {
                 msg: junk,
                 parent: pin,
                 block: None,
+                finally_absent_keys: BTreeSet::new(),
+                l1_position: L1Position::Unknown,
             }]),
             ..empty_channel_update()
         }))
@@ -4751,13 +4757,6 @@ fn stake_test_state(funding_id: AccountId, funding_balance: u128) -> V03State {
         ])
 }
 
-/// The exit delay genesis set in `state`.
-fn exit_delay(state: &V03State) -> u64 {
-    crate::committee_discovery::channel_params(state)
-        .expect("genesis sets the channel params")
-        .exit_delay
-}
-
 /// Builds an `UnstakeRequest` against `ownership`.
 fn unstake_request_transaction(
     state: &V03State,
@@ -4765,7 +4764,6 @@ fn unstake_request_transaction(
     sequencer_key: sequencer_stake_core::SequencerKey,
     amount: u128,
     destination: AccountId,
-    requested_at: u64,
 ) -> PublicTransaction {
     let (ownership_id, ownership_key) = ownership;
     let sequencer_stake_program_id = programs::sequencer_stake_account_id();
@@ -4784,7 +4782,6 @@ fn unstake_request_transaction(
             sequencer_key,
             amount,
             destination,
-            requested_at,
         },
     )
     .unwrap();
@@ -4885,7 +4882,6 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
         sequencer_key,
         balance,
         funding_id,
-        3,
     );
     state
         .transition_from_public_transaction(&over, 3, 0)
@@ -4898,7 +4894,6 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
         sequencer_key,
         amount,
         funding_id,
-        4,
     );
     state
         .transition_from_public_transaction(&exact, 4, 0)
@@ -5064,7 +5059,6 @@ fn a_top_up_is_rejected_while_an_unstake_request_is_pending() {
         sequencer_key,
         minimum,
         funding_id,
-        2,
     );
     state
         .transition_from_public_transaction(&request, 2, 0)
@@ -5142,7 +5136,6 @@ fn a_fully_exited_ownership_account_can_stake_again() {
             sequencer_key,
             amount,
             destination: funding_id,
-            requested_at: 2,
         },
     )
     .unwrap();
@@ -5156,7 +5149,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
     let LeeTransaction::Public(finalize) = finalize else {
         panic!("FinalizeUnstake should be a public transaction");
     };
-    let released_at = exit_delay(&state).saturating_add(2);
+    let released_at = 3;
     state
         .transition_from_public_transaction(&finalize, released_at, 0)
         .expect("FinalizeUnstake should succeed");
@@ -5300,7 +5293,6 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
             sequencer_key: bootstrap_sequencer_key,
             amount: system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE,
             destination,
-            requested_at: 1,
         },
     )
     .unwrap();
@@ -5527,7 +5519,6 @@ fn a_finalize_unstake_releases_from_funds_carrying_a_stranger_actor_state() {
         sequencer_key,
         amount,
         destination,
-        2,
     );
     state
         .transition_from_public_transaction(&request, 2, 0)
@@ -5540,7 +5531,7 @@ fn a_finalize_unstake_releases_from_funds_carrying_a_stranger_actor_state() {
         panic!("FinalizeUnstake should be a public transaction");
     };
     state
-        .transition_from_public_transaction(&finalize, exit_delay(&state).saturating_add(2), 0)
+        .transition_from_public_transaction(&finalize, 3, 0)
         .expect("a stranger record does not block the release");
 
     assert_eq!(
@@ -5560,82 +5551,6 @@ fn a_finalize_unstake_releases_from_funds_carrying_a_stranger_actor_state() {
         amount
     );
     assert_eq!(stake_entry(&state, sequencer_key), None);
-}
-
-#[test]
-fn a_finalize_unstake_waits_for_the_exit_delay() {
-    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
-    let (mut state, sequencer_key, ownership_id, ownership_key) = slashable_state(amount);
-    let destination = signed_destination(&mut state, 68);
-    let requested_at = 7;
-    let request = unstake_request_transaction(
-        &state,
-        (ownership_id, &ownership_key),
-        sequencer_key,
-        amount,
-        destination,
-        requested_at,
-    );
-    state
-        .transition_from_public_transaction(&request, requested_at, 0)
-        .expect("UnstakeRequest should succeed");
-    let LeeTransaction::Public(finalize) =
-        build_finalize_unstake_tx(&state, ownership_id, sequencer_key, destination).unwrap()
-    else {
-        unreachable!("build_finalize_unstake_tx builds a public transaction")
-    };
-
-    let due = exit_delay(&state).saturating_add(requested_at);
-    assert!(
-        state
-            .transition_from_public_transaction(&finalize, due.saturating_sub(1), 0)
-            .is_err(),
-        "a release before the exit delay must be rejected"
-    );
-
-    state
-        .transition_from_public_transaction(&finalize, due, 0)
-        .expect("the release is due once the exit delay has passed");
-    assert_eq!(
-        state
-            .get_account_by_id(destination)
-            .data
-            .native_balance()
-            .unwrap(),
-        amount
-    );
-}
-
-#[test]
-fn an_unstake_request_lands_only_within_its_dating_window() {
-    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
-    let (mut state, sequencer_key, ownership_id, ownership_key) = slashable_state(amount);
-    let requested_at = 2 * sequencer_stake_core::UNSTAKE_REQUEST_WINDOW;
-    let request = unstake_request_transaction(
-        &state,
-        (ownership_id, &ownership_key),
-        sequencer_key,
-        amount,
-        AccountId::new([69; 32]),
-        requested_at,
-    );
-
-    // Dated before its block, the request would shorten its own exit delay.
-    assert!(
-        state
-            .transition_from_public_transaction(&request, requested_at + 1, 0)
-            .is_err()
-    );
-    // Dated too far ahead, it could park the stake indefinitely.
-    let too_early = requested_at - sequencer_stake_core::UNSTAKE_REQUEST_WINDOW - 1;
-    assert!(
-        state
-            .transition_from_public_transaction(&request, too_early, 0)
-            .is_err()
-    );
-    state
-        .transition_from_public_transaction(&request, requested_at, 0)
-        .expect("a request dated at its block lands");
 }
 
 #[test]
@@ -5693,7 +5608,6 @@ fn a_slash_claws_back_a_pending_unstake() {
         sequencer_key,
         amount,
         destination,
-        4,
     );
     state
         .transition_from_public_transaction(&unstake, 4, 0)
@@ -5735,7 +5649,7 @@ fn a_slash_claws_back_a_pending_unstake() {
     };
     assert!(
         state
-            .transition_from_public_transaction(&finalize, exit_delay(&state).saturating_add(4), 0)
+            .transition_from_public_transaction(&finalize, 5, 0)
             .is_err()
     );
 }
@@ -5781,7 +5695,6 @@ fn an_old_unstake_request_never_releases_a_restake_after_a_slash() {
         sequencer_key,
         amount,
         destination,
-        4,
     );
     state
         .transition_from_public_transaction(&request, 4, 0)
@@ -5812,7 +5725,7 @@ fn an_old_unstake_request_never_releases_a_restake_after_a_slash() {
     );
 
     let err = state
-        .transition_from_public_transaction(&finalize, exit_delay(&state).saturating_add(4), 0)
+        .transition_from_public_transaction(&finalize, 5, 0)
         .expect_err("the request died with the slashed entry");
     assert!(
         format!("{err:?}").contains("no unstake request pending for this key"),
@@ -5847,7 +5760,6 @@ fn a_released_unstake_request_never_releases_a_restake() {
         sequencer_key,
         amount,
         destination,
-        4,
     );
     state
         .transition_from_public_transaction(&request, 4, 0)
@@ -5857,10 +5769,9 @@ fn a_released_unstake_request_never_releases_a_restake() {
     else {
         unreachable!("build_finalize_unstake_tx builds a public transaction")
     };
-    let due = exit_delay(&state).saturating_add(4);
     state
-        .transition_from_public_transaction(&finalize, due, 0)
-        .expect("the release is due once the exit delay has passed");
+        .transition_from_public_transaction(&finalize, 5, 0)
+        .expect("FinalizeUnstake should succeed");
     assert_eq!(balance_of(&state, destination), amount);
     assert_eq!(stake_entry(&state, sequencer_key), None);
 
@@ -5869,11 +5780,11 @@ fn a_released_unstake_request_never_releases_a_restake() {
         (ownership_id, &ownership_key),
         sequencer_key,
         amount,
-        due.saturating_add(1),
+        6,
     );
 
     let err = state
-        .transition_from_public_transaction(&finalize, due.saturating_add(2), 0)
+        .transition_from_public_transaction(&finalize, 7, 0)
         .expect_err("a replayed release has no request behind it");
     assert!(
         format!("{err:?}").contains("no unstake request pending for this key"),
@@ -6213,7 +6124,7 @@ fn a_private_withdrawal_to_a_private_destination_is_received_only_by_proof() {
                 .into(),
         )
     };
-    let requested_at = 4;
+    let request_block = 4;
     let private_witnesses = vec![update_witness(&state, &ownership, staked_ownership)];
     // The request proves the destination's recovery binding, which the keeper's release reuses.
     prove_and_settle(
@@ -6224,7 +6135,6 @@ fn a_private_withdrawal_to_a_private_destination_is_received_only_by_proof() {
                 sequencer_key,
                 amount,
                 destination: destination.account_id(),
-                requested_at,
             })
             .unwrap(),
         }),
@@ -6235,7 +6145,7 @@ fn a_private_withdrawal_to_a_private_destination_is_received_only_by_proof() {
         private_witnesses,
         vec![recovery(&destination)],
         Vec::new(),
-        requested_at,
+        request_block,
     );
 
     let LeeTransaction::Public(finalize) = build_finalize_unstake_tx(
@@ -6247,7 +6157,7 @@ fn a_private_withdrawal_to_a_private_destination_is_received_only_by_proof() {
     .unwrap() else {
         unreachable!("build_finalize_unstake_tx builds a public transaction")
     };
-    let released_at = exit_delay(&state).saturating_add(requested_at);
+    let released_at = request_block + 1;
     state
         .transition_from_public_transaction(&finalize, released_at, 0)
         .expect("the release should need no witness from the owner");
@@ -6394,15 +6304,8 @@ fn a_private_genesis_allocation_is_a_pending_credit_its_owner_receives_once() {
 
 #[tokio::test]
 async fn a_slash_lands_over_a_pending_partial_unstake() {
-    // The release falls due in the block the slash is proposed for; it must not pre-empt it.
-    let mut sequencer_config = setup_sequencer_config();
-    sequencer_config
-        .genesis
-        .as_mut()
-        .unwrap()
-        .channel_params
-        .exit_delay = 1;
-    let (mut sequencer, _mempool_handle) = common_setup_with_config(sequencer_config).await;
+    // The release is due in the block the slash is proposed for; it must not pre-empt it.
+    let (mut sequencer, _mempool_handle) = common_setup_with_config(setup_sequencer_config()).await;
     let amount = 2 * system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let offender = test_sequencer_key(0x44);
     let (offender_id, offender_key) = committee_ownership(0x44);
@@ -6433,7 +6336,6 @@ async fn a_slash_lands_over_a_pending_partial_unstake() {
             offender,
             1,
             offender_id,
-            1,
         );
         state
             .transition_from_public_transaction(&unstake, 1, 0)
@@ -6495,6 +6397,252 @@ async fn a_slash_lands_over_a_pending_partial_unstake() {
                 if sequencer_key == offender
         )
     }));
+}
+
+/// A sequencer on `channel` whose head holds `seed`'s key with its whole stake pending release.
+async fn sequencer_with_a_full_exit(
+    channel: CannedChannel,
+    seed: u8,
+) -> (
+    SequencerCore<StorageActor, MockBedrockActor>,
+    MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
+) {
+    let (sequencer, mempool_handle) = start_sequencer_on(setup_sequencer_config(), channel).await;
+    set_up_a_full_exit(&sequencer, seed).await;
+    (sequencer, mempool_handle)
+}
+
+/// Gives the head `seed`'s key with its whole stake pending release.
+async fn set_up_a_full_exit(sequencer: &SequencerCore<StorageActor, MockBedrockActor>, seed: u8) {
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let (ownership_id, ownership_key) = committee_ownership(seed);
+    let funding_key = PrivateKey::try_new([41; 32]).unwrap();
+    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+    {
+        let chain = sequencer.chain();
+        let mut chain = chain.lock().await;
+        let state = chain.head_state_mut();
+        state.force_insert_account(funding_id, Account::funded(amount));
+        let stake = stake_transaction(
+            state,
+            (funding_id, &funding_key),
+            (ownership_id, &ownership_key),
+            test_sequencer_key(seed),
+            amount,
+        );
+        state
+            .transition_from_public_transaction(&stake, 1, 0)
+            .expect("Stake should succeed");
+        let unstake = unstake_request_transaction(
+            state,
+            (ownership_id, &ownership_key),
+            test_sequencer_key(seed),
+            amount,
+            ownership_id,
+        );
+        state
+            .transition_from_public_transaction(&unstake, 1, 0)
+            .expect("UnstakeRequest should succeed");
+    }
+}
+
+#[tokio::test]
+async fn a_full_exit_is_left_out_until_its_removal_is_final() {
+    let channel = CannedChannel {
+        pending_removals: [test_sequencer_key(0x46)].into(),
+        ..CannedChannel::empty()
+    };
+    let (mut sequencer, _mempool_handle) = sequencer_with_a_full_exit(channel, 0x46).await;
+
+    let built = sequencer.build_block_from_mempool().await.unwrap();
+
+    assert!(
+        !chain_state::full_stake_releases::finalize_unstake_keys(&built.block)
+            .contains(&test_sequencer_key(0x46))
+    );
+}
+
+#[tokio::test]
+async fn a_full_exit_lands_once_its_removal_is_final() {
+    let (mut sequencer, _mempool_handle) =
+        sequencer_with_a_full_exit(CannedChannel::empty(), 0x46).await;
+
+    let built = sequencer.build_block_from_mempool().await.unwrap();
+
+    let leaving = test_sequencer_key(0x46);
+    assert!(
+        chain_state::full_stake_releases::finalize_unstake_keys(&built.block).contains(&leaving)
+    );
+}
+
+#[tokio::test]
+async fn a_block_releasing_a_stake_before_its_removal_is_final_is_invalid() {
+    let (mut sequencer, _mempool_handle) =
+        sequencer_with_a_full_exit(CannedChannel::empty(), 0x46).await;
+    let built = sequencer.build_block_from_mempool().await.unwrap();
+    let mut state = sequencer.chain().lock().await.head_state().clone();
+
+    let err = chain_state::apply_judged_block_to_state(
+        &built.block,
+        &mut state.clone(),
+        Some(&BTreeSet::new()),
+    )
+    .expect_err("a release before its removal is final is refused");
+    assert!(matches!(
+        err,
+        chain_state::BlockIngestError::UnfinalizedRelease { .. }
+    ));
+    assert!(err.is_invalid_block());
+
+    chain_state::apply_judged_block_to_state(
+        &built.block,
+        &mut state,
+        Some(&BTreeSet::from([test_sequencer_key(0x46)])),
+    )
+    .expect("a release whose removal is final applies");
+}
+
+#[tokio::test]
+async fn a_held_block_finalized_by_its_child_is_judged_from_final_blocks() {
+    let leaving = test_sequencer_key(0x46);
+    let (mut sequencer, _mempool_handle) =
+        start_sequencer_on(setup_sequencer_config(), CannedChannel::empty()).await;
+    // Finalized first, so the stake below is on the final state too.
+    let bootstrap = sequencer.chain().lock().await.view().to_vec();
+    sequencer
+        .on_channel_update(Arc::new(ChannelUpdate {
+            finalized: bootstrap,
+            ..empty_channel_update()
+        }))
+        .await;
+    assert!(
+        sequencer.chain().lock().await.view().is_empty(),
+        "the bootstrap entries should be final"
+    );
+    set_up_a_full_exit(&sequencer, 0x46).await;
+    let releasing = sequencer.run_production_turn().await.unwrap();
+    let child = sequencer.run_production_turn().await.unwrap();
+    let releasing_block = block_at(&sequencer, releasing).await.unwrap();
+    assert!(
+        chain_state::full_stake_releases::finalize_unstake_keys(&releasing_block)
+            .contains(&leaving)
+    );
+
+    // The release looked final when it was produced; read from final blocks, it is not.
+    serve_channel(
+        &sequencer,
+        CannedChannel {
+            pending_removals: [leaving].into(),
+            ..CannedChannel::empty()
+        },
+    )
+    .await;
+    let child_block = block_at(&sequencer, child).await.unwrap();
+    let finalized = finalized_as_held(&sequencer.chain(), &child_block).await;
+    sequencer
+        .on_channel_update(Arc::new(ChannelUpdate {
+            finalized: vec![finalized],
+            ..empty_channel_update()
+        }))
+        .await;
+
+    let final_tip = sequencer.chain().lock().await.final_tip();
+    assert!(
+        final_tip.is_none_or(|tip| tip.block_id < releasing),
+        "the releasing block should not reach the final tier"
+    );
+}
+
+#[tokio::test]
+async fn a_slash_of_a_fully_pending_stake_is_not_a_release() {
+    let channel = CannedChannel {
+        pending_removals: [test_sequencer_key(0x44)].into(),
+        ..CannedChannel::empty()
+    };
+    let (mut sequencer, _mempool_handle) =
+        start_sequencer_on(setup_sequencer_config(), channel).await;
+    let amount = 2 * system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let offender = test_sequencer_key(0x44);
+    let (offender_id, offender_key) = committee_ownership(0x44);
+    let funding_key = PrivateKey::try_new([41; 32]).unwrap();
+    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+
+    let config = {
+        let chain = sequencer.chain();
+        let mut chain = chain.lock().await;
+        let state = chain.head_state_mut();
+        state.force_insert_account(funding_id, Account::funded(2 * amount));
+        for seed in [0x44, 0x45] {
+            let (ownership_id, ownership_key) = committee_ownership(seed);
+            let stake = stake_transaction(
+                state,
+                (funding_id, &funding_key),
+                (ownership_id, &ownership_key),
+                test_sequencer_key(seed),
+                amount,
+            );
+            state
+                .transition_from_public_transaction(&stake, 1, 0)
+                .expect("Stake should succeed");
+        }
+        let unstake = unstake_request_transaction(
+            state,
+            (offender_id, &offender_key),
+            offender,
+            amount,
+            offender_id,
+        );
+        state
+            .transition_from_public_transaction(&unstake, 1, 0)
+            .expect("UnstakeRequest should succeed");
+        crate::committee_discovery::read_config(state).expect("genesis writes the stake config")
+    };
+    let channel_id = config.channel_id.expect("genesis sets the channel id");
+    let approval = test_approval_on(channel_id, 0x45, offender);
+
+    let slasher = sequencer.slasher_ref();
+    slasher
+        .ask(sequencer_slasher_actor::SetCommittee(config))
+        .await
+        .unwrap();
+    slasher
+        .ask(sequencer_slasher_actor::Report {
+            offences: vec![sequencer_slasher_actor::ReportedOffence {
+                signer: offender.to_bytes(),
+                inscription: TEST_INSCRIPTION,
+                fault: sequencer_slasher_actor::Fault::NotABlock,
+            }],
+        })
+        .await
+        .unwrap();
+    slasher
+        .ask(sequencer_slasher_actor::Approval {
+            offence: sequencer_slasher_actor::Offence {
+                offender,
+                inscription: TEST_INSCRIPTION,
+            },
+            signer: approval.signer,
+            signature: approval.signature.try_into().unwrap(),
+        })
+        .await
+        .unwrap();
+
+    let block = sequencer.build_block_from_mempool().await.unwrap().block;
+    let slashed = block.body.transactions.iter().any(|tx| {
+        let Some((to, message)) = tx.public_call() else {
+            return false;
+        };
+        to.program_account_id == programs::sequencer_stake_account_id()
+            && matches!(
+                borsh::from_slice(message),
+                Ok(sequencer_stake_core::Message::Slash { sequencer_key, .. })
+                    if sequencer_key == offender
+            )
+    });
+    assert!(
+        slashed,
+        "the slash burns the stake rather than releasing it"
+    );
 }
 
 /// The account backing `seed`'s stake, and the key that owns it.
@@ -6642,7 +6790,6 @@ fn a_sequencer_on_its_way_out_neither_approves_nor_raises_the_threshold() {
         test_sequencer_key(seeds[3]),
         amount,
         AccountId::new([78; 32]),
-        5,
     );
     state
         .transition_from_public_transaction(&exit, 5, 0)

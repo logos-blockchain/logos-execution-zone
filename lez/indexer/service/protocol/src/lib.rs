@@ -603,6 +603,11 @@ pub enum BlockIngestError {
         listed: Vec<u64>,
         settled: Vec<u64>,
     },
+    UnfinalizedRelease {
+        tx_index: u64,
+        /// The released sequencer key, hex.
+        key: String,
+    },
     StateTransition {
         /// Index of the failing transaction within the block body.
         tx_index: u64,

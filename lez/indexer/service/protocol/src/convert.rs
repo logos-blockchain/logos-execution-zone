@@ -1136,6 +1136,9 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
             indexer_core::BlockIngestError::RevertMismatch { listed, settled } => {
                 Self::RevertMismatch { listed, settled }
             }
+            indexer_core::BlockIngestError::UnfinalizedRelease { tx_index, key } => {
+                Self::UnfinalizedRelease { tx_index, key }
+            }
             indexer_core::BlockIngestError::StateTransition { tx_index, reason } => {
                 Self::StateTransition { tx_index, reason }
             }

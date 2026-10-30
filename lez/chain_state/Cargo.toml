@@ -12,6 +12,8 @@ common.workspace = true
 fee_core.workspace = true
 lee.workspace = true
 lee_core = { workspace = true, features = ["host"] }
+programs.workspace = true
+sequencer_stake_core.workspace = true
 system_accounts.workspace = true
 logos-blockchain-core.workspace = true
 logos-blockchain-zone-sdk.workspace = true
@@ -19,6 +21,7 @@ logos-blockchain-zone-sdk.workspace = true
 anyhow.workspace = true
 borsh.workspace = true
 futures.workspace = true
+hex.workspace = true
 log.workspace = true
 serde.workspace = true
 thiserror.workspace = true
