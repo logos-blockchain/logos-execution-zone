@@ -153,8 +153,8 @@ pub fn dashboard() -> Dashboard {
         )
         .row(
             8,
-            [per_sequencer(Panel::status_history("Blocks proposed over time"))
-                .description("Blocks each sequencer proposed in each slice of time; darker is more.")
+            [per_sequencer(Panel::status_history("Blocks produced over time"))
+                .description("Blocks each sequencer produced that the channel finalized, per slice of time; darker is more.")
                 .width(24)
                 .decimals(0)
                 .min(0.0)
@@ -183,8 +183,8 @@ pub fn dashboard() -> Dashboard {
                     .min(0.0)
                     .max(100.0)
                     .target(share_over_range(TURNS_TO_WRITE_TOTAL)),
-                ranking("Share of blocks proposed")
-                    .description("Each sequencer's part of the blocks proposed over the time range.")
+                ranking("Share of blocks produced")
+                    .description("Each sequencer's part of the blocks finalized over the time range.")
                     .width(8)
                     .unit(Unit::Percent)
                     .decimals(0)
@@ -192,7 +192,7 @@ pub fn dashboard() -> Dashboard {
                     .max(100.0)
                     .target(share_over_range(BLOCKS_PRODUCED_TOTAL)),
                 ranking("Blocks per turn")
-                    .description("Blocks proposed per turn to write over the time range. A sequencer well below the rest lets its turns go by.")
+                    .description("Finalized blocks per turn to write over the time range. A sequencer well below the rest lets its turns go by, or loses its blocks to conflicts.")
                     .width(8)
                     .decimals(1)
                     .min(0.0)
