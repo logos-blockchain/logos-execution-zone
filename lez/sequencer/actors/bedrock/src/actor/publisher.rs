@@ -57,6 +57,7 @@ pub struct PublisherConfig {
     pub priority_fee_percent: u64,
     pub resubmit_interval: Duration,
     pub stale_refund_slots: u64,
+    pub backfill_batch_slots: NonZero<u64>,
 }
 
 pub struct Publisher {
@@ -90,6 +91,7 @@ impl Publisher {
             priority_fee_percent,
             resubmit_interval,
             stale_refund_slots,
+            backfill_batch_slots,
         } = config;
 
         let seq = initial_checkpoint
@@ -113,6 +115,7 @@ impl Publisher {
         let zone_sdk_config = SequencerConfig {
             resubmit_interval,
             stale_refund_slots,
+            backfill_batch_slots: backfill_batch_slots.get(),
             ..SequencerConfig::new(FundingConfig {
                 funding_pk,
                 // Withdraw change goes back to the funding key.

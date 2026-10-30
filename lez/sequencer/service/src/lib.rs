@@ -1,4 +1,4 @@
-use std::{future::Future, net::SocketAddr, path::Path, time::Duration};
+use std::{future::Future, net::SocketAddr, num::NonZero, path::Path, time::Duration};
 
 use anyhow::{Context as _, Result};
 use futures::never::Never;
@@ -302,6 +302,7 @@ pub fn run(
                     channel_id,
                     storage_ref_clone.clone(),
                     bedrock_broker_ref_clone.clone(),
+                    config_clone.bedrock_config.backfill_batch_slots,
                 )
             },
         );
@@ -585,6 +586,7 @@ const fn bedrock_actor_args(
     channel_id: ChannelId,
     storage_ref: ActorRef<StorageActor>,
     broker_ref: ActorRef<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
+    backfill_batch_slots: NonZero<u64>,
 ) -> sequencer_bedrock_actor::actor::Args<StorageActor> {
     sequencer_bedrock_actor::actor::Args {
         node_url,
@@ -592,6 +594,7 @@ const fn bedrock_actor_args(
         channel_id,
         storage_ref,
         broker_ref,
+        backfill_batch_slots,
     }
 }
 
@@ -602,6 +605,7 @@ fn bedrock_actor_args(
     _channel_id: ChannelId,
     _storage_ref: ActorRef<StorageActor>,
     _broker_ref: ActorRef<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
+    _backfill_batch_slots: NonZero<u64>,
 ) -> BedrockActor {
     use std::sync::{Arc, Mutex};
 

@@ -185,6 +185,7 @@ async fn main() -> Result<()> {
         channel_id,
         storage_ref,
         broker_ref,
+        backfill_batch_slots: config.bedrock_config.backfill_batch_slots,
     });
     bedrock_ref
         .ask(InitializeChannelPublisher {
