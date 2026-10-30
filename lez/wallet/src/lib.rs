@@ -20,6 +20,7 @@ use anyhow::{Context as _, Result, ensure};
 use bip39::Mnemonic;
 use common::{HashType, PageLimit, block::Block, transaction::LeeTransaction};
 use config::WalletConfig;
+pub use fees::{DeclaredFee, DryRunReport, PrivateFee};
 use futures::TryFutureExt as _;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
@@ -59,6 +60,7 @@ pub mod account;
 mod account_manager;
 pub mod cli;
 pub mod config;
+mod fees;
 pub mod poller;
 pub mod program_facades;
 pub mod storage;
@@ -188,7 +190,7 @@ pub enum ExecutionFailureKind {
     #[error("Failed to sign transaction: {0}")]
     SignError(anyhow::Error),
     #[error("Dry run: the transaction was simulated and not sent")]
-    DryRun,
+    DryRun(Box<DryRunReport>),
     #[error("Sending transaction failed for each client")]
     MultiSequencerTransactionSendError,
     #[error("Failed to store wallet data")]
@@ -416,6 +418,8 @@ pub struct WalletCore<C: WalletSequencerClient> {
     /// which a later send leaves alone until the spent-nullifier cache covers them. A
     /// transaction seen reverted or not included gives its claims back.
     swept: std::sync::Mutex<HashMap<HashType, Vec<Nullifier>>>,
+    /// The fee the last send of this process declared, see [`Self::take_declared_fee`].
+    declared_fee: std::sync::Mutex<Option<DeclaredFee>>,
 }
 
 impl<C: WalletSequencerClient> WalletCore<C> {
@@ -509,6 +513,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             fee_payer: None,
             refund_to: None,
             swept: std::sync::Mutex::new(HashMap::new()),
+            declared_fee: std::sync::Mutex::new(None),
         })
     }
 
@@ -599,6 +604,21 @@ impl<C: WalletSequencerClient> WalletCore<C> {
     /// with [`ExecutionFailureKind::DryRun`].
     pub const fn set_dry_run(&mut self, dry_run: bool) {
         self.dry_run = dry_run;
+    }
+
+    /// Takes the fee the last send that reached the sequencer declared, leaving none.
+    pub fn take_declared_fee(&self) -> Option<DeclaredFee> {
+        self.declared_fee
+            .lock()
+            .expect("the declared fee is not poisoned")
+            .take()
+    }
+
+    fn declare_fee(&self, fee: DeclaredFee) {
+        *self
+            .declared_fee
+            .lock()
+            .expect("the declared fee is not poisoned") = Some(fee);
     }
 
     /// Get configuration with applied overrides.
@@ -1706,30 +1726,26 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             } = self.reserve_pricing(&quote, cycles);
             // Never reserve more than the payer holds, nor less than the fee at head.
             let reserve = headroom_reserve.min(balance).max(fee_at_head);
+            let fee = PrivateFee {
+                payer,
+                reserve,
+                refund_to,
+            };
             if self.dry_run {
-                let blocks = self.config.private_fee_headroom_blocks;
-                println!("Dry run: nothing proven or sent");
-                println!("  public cycles:  {cycles}");
-                println!(
-                    "  base fees:      exec {} / stor {} (height {})",
-                    quote.base_fee_exec, quote.base_fee_stor, quote.height
-                );
-                println!("  fee at head:    {fee_at_head}");
-                println!(
-                    "  headroom:       {blocks} blocks, up to exec {exec_ceiling} / stor \
-                     {stor_ceiling} ({headroom_reserve})"
-                );
-                println!("  reserve:        {reserve} (surplus refunded)");
-                println!("  fee payer:      {payer}");
-                println!(
-                    "  claims:         {} pending credit(s), {swept} to the payer",
-                    claims.len()
-                );
-                println!(
-                    "  refund to:      {}",
-                    refund_to.map_or_else(|| "the payer's alias".to_owned(), |t| t.to_string())
-                );
-                return Err(ExecutionFailureKind::DryRun);
+                return Err(ExecutionFailureKind::DryRun(Box::new(
+                    DryRunReport::Private {
+                        fee,
+                        quote,
+                        cycles,
+                        fee_at_head,
+                        headroom_blocks: self.config.private_fee_headroom_blocks,
+                        exec_ceiling,
+                        stor_ceiling,
+                        headroom_reserve,
+                        claims: claims.len(),
+                        swept,
+                    },
+                )));
             }
 
             let mut priced = input.clone();
@@ -1805,6 +1821,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 .map_err(Into::into)
             {
                 Ok(tx_hash) => {
+                    self.declare_fee(DeclaredFee::Private(fee));
                     if !claims.is_empty() {
                         self.swept
                             .lock()
@@ -2062,17 +2079,18 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             }
         };
 
+        let fee = lee::FeeDeclaration::new(
+            payer,
+            self.config.gas_limit,
+            0,
+            max_fee_for(self.config.gas_limit),
+        );
         let message = lee::public_transaction::Message::new(
             to,
             message,
             public_actors,
             nonces,
-            Some(lee::FeeDeclaration::new(
-                payer,
-                self.config.gas_limit,
-                0,
-                max_fee_for(self.config.gas_limit),
-            )),
+            Some(fee),
             acc_manager.admission_evidence(),
         );
 
@@ -2092,28 +2110,27 @@ impl<C: WalletSequencerClient> WalletCore<C> {
 
         let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
         if self.dry_run {
-            self.report_public_dry_run(tx, &acc_manager).await?;
-            return Err(ExecutionFailureKind::DryRun);
+            let report = self.public_dry_run(tx, fee, &acc_manager).await?;
+            return Err(ExecutionFailureKind::DryRun(Box::new(report)));
         }
 
-        self.sequencer_client
+        let tx_hash = self
+            .sequencer_client
             .send_transaction(LeeTransaction::Public(tx))
             .await
-            .map_err(Into::into)
+            .map_err(Into::into)?;
+        self.declare_fee(DeclaredFee::Public(fee));
+        Ok(tx_hash)
     }
 
-    /// Simulates `tx` against the fetched states of its accounts and prints what it would cost at
-    /// the head fee state.
-    async fn report_public_dry_run(
+    /// Simulates `tx`, declaring `fee`, against the fetched states of its accounts and reports
+    /// what it would cost at the head fee state.
+    async fn public_dry_run(
         &self,
         tx: lee::PublicTransaction,
+        fee: lee::FeeDeclaration,
         acc_manager: &account_manager::AccountManager,
-    ) -> Result<(), ExecutionFailureKind> {
-        let fee = tx
-            .message()
-            .execution
-            .fee
-            .expect("the wallet always declares a fee");
+    ) -> Result<DryRunReport, ExecutionFailureKind> {
         // Every program the transaction may call is a declared actor's; the native token and the
         // loader run as protocol code.
         let mut programs = ProgramCatalog::default();
@@ -2147,12 +2164,12 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         };
         let budget = fee.gas_limit.min(fee_core::market::MAX_GAS_EXEC);
         // Storage gas is the wire size settlement sees: the whole `LeeTransaction`.
-        let data_bytes = u128::try_from(
+        let wire_bytes = u64::try_from(
             borsh::to_vec(&LeeTransaction::Public(tx.clone()))
                 .map_err(|err| ExecutionFailureKind::SignError(err.into()))?
                 .len(),
         )
-        .expect("transaction size fits u128");
+        .expect("transaction size fits u64");
         let (cycles, result) = tokio::task::spawn_blocking(move || {
             lee::simulate_public_transaction(&tx, &simulation, &programs, budget)
         })
@@ -2168,26 +2185,18 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .get_fee_state()
             .await
             .map_err(Into::into)?;
-        let actual_fee = u128::from(cycles)
+        let fee_at_head = u128::from(cycles)
             .saturating_mul(u128::from(quote.base_fee_exec))
-            .saturating_add(data_bytes.saturating_mul(u128::from(quote.base_fee_stor)))
+            .saturating_add(u128::from(wire_bytes).saturating_mul(u128::from(quote.base_fee_stor)))
             .saturating_add(u128::from(fee.tip));
-
-        println!("Dry run: nothing sent");
-        println!("  fee payer:        {}", fee.payer);
-        println!("  declared gas:     {}", fee.gas_limit);
-        println!("  metered cycles:   {cycles}");
-        println!("  wire bytes:       {data_bytes}");
-        println!(
-            "  base fees:        exec {} / stor {} (height {})",
-            quote.base_fee_exec, quote.base_fee_stor, quote.height
-        );
-        println!("  fee at head:      {actual_fee} (tip {})", fee.tip);
-        match revert_reason {
-            Some(reason) => println!("  action REVERTS:   {reason} (fee is still charged)"),
-            None => println!("  action:           applies"),
-        }
-        Ok(())
+        Ok(DryRunReport::Public {
+            fee,
+            quote,
+            cycles,
+            wire_bytes,
+            fee_at_head,
+            revert_reason,
+        })
     }
 
     pub async fn receive_pending_message(
@@ -2534,6 +2543,7 @@ impl WalletCore<SequencerClient> {
             fee_payer: None,
             refund_to: None,
             swept: std::sync::Mutex::new(HashMap::new()),
+            declared_fee: std::sync::Mutex::new(None),
         })
     }
 

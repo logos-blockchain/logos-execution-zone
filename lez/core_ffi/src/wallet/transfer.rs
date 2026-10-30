@@ -18,7 +18,7 @@ use crate::{
     error::{FfiOperationError, print_error},
     primitives::types::{FfiBytes32, FfiPrivateAccountKeys},
     wallet::{
-        block_on,
+        block_on, c_string_or_null,
         lifecycle::get_wallet,
         map_execution_error,
         types::{FfiTransferResult, WalletHandle},
@@ -94,15 +94,16 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.transfer(
+    let sent = block_on(transfer.transfer(
         AccountIdentity::Public(from_id),
         AccountIdentity::Public(to_id),
         amount,
         CreditDelivery::Automatic,
-    )) {
-        Ok((tx_hash, _)) => {
-            let tx_hash = CString::new(tx_hash.to_string())
-                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
+    ))
+    .map(|(tx_hash, _)| tx_hash);
+    match unsafe { (*out_result).fee.record(&wallet, sent) } {
+        Ok(tx_hash) => {
+            let tx_hash = c_string_or_null(tx_hash);
 
             unsafe {
                 (*out_result).tx_hash = tx_hash;
@@ -191,7 +192,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.transfer(
+    let sent = block_on(transfer.transfer(
         from_mention.into_public_identity(from_id, true),
         AccountIdentity::PrivateForeign {
             npk: to_npk,
@@ -200,10 +201,11 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
         },
         amount,
         CreditDelivery::Automatic,
-    )) {
-        Ok((tx_hash, _)) => {
-            let tx_hash = CString::new(tx_hash.to_string())
-                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
+    ))
+    .map(|(tx_hash, _)| tx_hash);
+    match unsafe { (*out_result).fee.record(&wallet, sent) } {
+        Ok(tx_hash) => {
+            let tx_hash = c_string_or_null(tx_hash);
 
             unsafe {
                 (*out_result).tx_hash = tx_hash;
@@ -279,15 +281,16 @@ pub unsafe extern "C" fn wallet_ffi_transfer_deshielded(
     let amount = u128::from_le_bytes(unsafe { *amount });
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.transfer(
+    let sent = block_on(transfer.transfer(
         AccountIdentity::PrivateOwned(from_id),
         AccountIdentity::PublicNoSign(to_id),
         amount,
         CreditDelivery::Automatic,
-    )) {
-        Ok((tx_hash, _)) => {
-            let tx_hash = CString::new(tx_hash.to_string())
-                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
+    ))
+    .map(|(tx_hash, _)| tx_hash);
+    match unsafe { (*out_result).fee.record(&wallet, sent) } {
+        Ok(tx_hash) => {
+            let tx_hash = c_string_or_null(tx_hash);
 
             unsafe {
                 (*out_result).tx_hash = tx_hash;
@@ -370,7 +373,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
     let amount = u128::from_le_bytes(unsafe { *amount });
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.transfer(
+    let sent = block_on(transfer.transfer(
         AccountIdentity::PrivateOwned(from_id),
         AccountIdentity::PrivateForeign {
             npk: to_npk,
@@ -379,10 +382,11 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
         },
         amount,
         CreditDelivery::Automatic,
-    )) {
-        Ok((tx_hash, _)) => {
-            let tx_hash = CString::new(tx_hash.to_string())
-                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
+    ))
+    .map(|(tx_hash, _)| tx_hash);
+    match unsafe { (*out_result).fee.record(&wallet, sent) } {
+        Ok(tx_hash) => {
+            let tx_hash = c_string_or_null(tx_hash);
 
             unsafe {
                 (*out_result).tx_hash = tx_hash;
@@ -467,15 +471,16 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded_owned(
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.transfer(
+    let sent = block_on(transfer.transfer(
         from_mention.into_public_identity(from_id, true),
         AccountIdentity::PrivateOwned(to_id),
         amount,
         CreditDelivery::Automatic,
-    )) {
-        Ok((tx_hash, _)) => {
-            let tx_hash = CString::new(tx_hash.to_string())
-                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
+    ))
+    .map(|(tx_hash, _)| tx_hash);
+    match unsafe { (*out_result).fee.record(&wallet, sent) } {
+        Ok(tx_hash) => {
+            let tx_hash = c_string_or_null(tx_hash);
 
             unsafe {
                 (*out_result).tx_hash = tx_hash;
@@ -554,15 +559,16 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private_owned(
     let amount = u128::from_le_bytes(unsafe { *amount });
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.transfer(
+    let sent = block_on(transfer.transfer(
         AccountIdentity::PrivateOwned(from_id),
         AccountIdentity::PrivateOwned(to_id),
         amount,
         CreditDelivery::Automatic,
-    )) {
-        Ok((tx_hash, _)) => {
-            let tx_hash = CString::new(tx_hash.to_string())
-                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
+    ))
+    .map(|(tx_hash, _)| tx_hash);
+    match unsafe { (*out_result).fee.record(&wallet, sent) } {
+        Ok(tx_hash) => {
+            let tx_hash = c_string_or_null(tx_hash);
 
             unsafe {
                 (*out_result).tx_hash = tx_hash;
@@ -592,9 +598,10 @@ pub unsafe extern "C" fn wallet_ffi_free_transfer_result(result: *mut FfiTransfe
     }
 
     unsafe {
-        let result = &*result;
+        let result = &mut *result;
         if !result.tx_hash.is_null() {
             drop(CString::from_raw(result.tx_hash));
         }
+        result.fee.free();
     }
 }
