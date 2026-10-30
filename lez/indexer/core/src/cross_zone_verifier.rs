@@ -693,11 +693,16 @@ impl CrossZoneVerifier {
                 Arc::new(ZoneIndexer::new(
                     ChannelId::from(peer.channel_id),
                     node.clone(),
+                    config.backfill_batch_slots,
                 )),
             );
             watch.register(peer.channel_id);
             tokio::spawn(read_peer(
-                ZoneIndexer::new(ChannelId::from(peer.channel_id), node),
+                ZoneIndexer::new(
+                    ChannelId::from(peer.channel_id),
+                    node,
+                    config.backfill_batch_slots,
+                ),
                 tip_node,
                 peer.channel_id,
                 peer.min_committee_size,

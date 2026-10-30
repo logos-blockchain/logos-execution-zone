@@ -1,3 +1,5 @@
+use std::num::NonZero;
+
 use kameo::Reply;
 use logos_blockchain_binary_codec::canonical::{BinaryDecodeExt as _, BinaryEncode as _};
 use logos_blockchain_core::{
@@ -6,7 +8,7 @@ use logos_blockchain_core::{
         ops::channel::{ChannelKeyIndex, MsgId},
         transactions::Ops,
     },
-    proofs::channel_multi_sig_proof::IndexedSignature,
+    proofs::channel_multi_sig_proof::{IndexedSignature, IndexedSignatures},
 };
 use logos_blockchain_key_management_system_service::keys::{Ed25519PublicKey, Ed25519Signature};
 
@@ -30,8 +32,8 @@ pub struct ConfigTarget {
     pub posting_timeframe: u32,
     pub posting_timeout: u32,
     /// Signatures the *next* config will have to carry, not this one.
-    pub configuration_threshold: u16,
-    pub transfer_threshold: u16,
+    pub configuration_threshold: NonZero<u16>,
+    pub transfer_threshold: NonZero<u16>,
 }
 
 /// What this node last saw of the live channel, plus the committee it should
@@ -68,8 +70,8 @@ pub enum Action {
 pub struct Submission {
     /// The draft they were signed over.
     pub tx_hash: [u8; 32],
-    /// Exactly the threshold, ascending by index.
-    pub signatures: Vec<IndexedSignature>,
+    /// Exactly the threshold.
+    pub signatures: IndexedSignatures,
 }
 
 /// A draft zone-sdk funded for the target the actor asked to build.

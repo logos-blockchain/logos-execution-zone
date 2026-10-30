@@ -36,7 +36,13 @@ use logos_blockchain_http_api_common::{
 };
 use logos_blockchain_zone_sdk::{CommonHttpClient, node_types::ApiBlock};
 use sequencer_service_rpc::RpcClient as _;
-use test_fixtures::config::{UrlProtocol, addr_to_url, bedrock_channel_id, bedrock_funding_key};
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder,
+    config::{
+        MultiNodeTestContextConfig, SequencerPartialConfig, UrlProtocol, addr_to_url,
+        bedrock_channel_id, bedrock_funding_key,
+    },
+};
 use tokio::test;
 
 const TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK: Duration = Duration::from_mins(2);
@@ -341,7 +347,20 @@ fn pins_note(block: &ApiBlock, note: NoteId) -> bool {
 /// again.
 #[test]
 async fn a_bedrock_deposit_is_minted_in_a_block_pinned_on_it_and_only_once() -> anyhow::Result<()> {
-    let ctx = TestContext::new().await?;
+    // The devnet finalizes a deposit within seconds, so production must take a turn before that
+    // for the pinned path to mint it.
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
+                .with_sequencer_partial_config(SequencerPartialConfig {
+                    block_create_timeout: Duration::from_secs(2),
+                    // Covers the storage price doubling at the devnet's first epoch rotations.
+                    priority_fee_percent: 150,
+                    ..SequencerPartialConfig::default()
+                }),
+        )
+        .build()
+        .await?;
     let recipient = PublicKey::new_from_private_key(&PrivateKey::new_os_random());
     let recipient_id = AccountId::from(&recipient);
     let amount = 1_u64;

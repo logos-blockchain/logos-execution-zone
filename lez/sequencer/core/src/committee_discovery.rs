@@ -1,5 +1,7 @@
 //! Discovery process for the `sequencer_stake` committee.
 
+use std::num::NonZero;
+
 use log::warn;
 use sequencer_stake_core::{SequencerKey, SequencerStakeConfig};
 
@@ -24,14 +26,13 @@ use sequencer_stake_core::{SequencerKey, SequencerStakeConfig};
 ///
 /// Channel transfers take the same threshold, since a config op can rewrite theirs.
 #[must_use]
-pub fn channel_config_threshold(committee_size: usize) -> u16 {
+pub fn channel_config_threshold(committee_size: usize) -> NonZero<u16> {
     let threshold = committee_size
         .saturating_mul(2)
         .div_ceil(3)
-        .min(committee_size.saturating_sub(1))
-        .max(1);
+        .min(committee_size.saturating_sub(1));
 
-    u16::try_from(threshold).unwrap_or(u16::MAX)
+    NonZero::new(u16::try_from(threshold).unwrap_or(u16::MAX)).unwrap_or(NonZero::<u16>::MIN)
 }
 
 /// The accredited-keys list LEZ state says the channel should have, or `None`
@@ -79,7 +80,7 @@ pub fn committee_update(
     live.sort_unstable();
 
     // A mismatch in either threshold triggers a channel update too.
-    let threshold = channel_config_threshold(desired.len());
+    let threshold = channel_config_threshold(desired.len()).get();
     let stale_threshold =
         live_configuration_threshold != threshold || live_transfer_threshold != threshold;
 
@@ -127,11 +128,14 @@ pub(crate) fn clock_block_id(state: &lee::V03State) -> Option<u64> {
     .map(|clock| clock.block_id)
 }
 
-/// Reads the `sequencer_stake` config account — a single account read, not a
-/// scan, since every `Stake`/`UnstakeRequest`/`FinalizeUnstake` keeps its
-/// `entries` map current as it executes. `None` only if the account is absent
-/// or undecodable, which genesis rules out.
-pub(crate) fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig> {
+/// Reads the `sequencer_stake` config account.
+///
+/// A single account read, not a scan, since every
+/// `Stake`/`UnstakeRequest`/`FinalizeUnstake` keeps its `entries` map current
+/// as it executes. `None` only if the account is absent or undecodable, which
+/// genesis rules out.
+#[must_use]
+pub fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig> {
     let Some(account) =
         state.get_account_by_id_ref(system_accounts::sequencer_stake_config_account_id())
     else {
@@ -153,7 +157,8 @@ pub(crate) fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig>
 
 /// Channel posting params from the config account. `None` before genesis set
 /// them, which a live chain rules out.
-pub(crate) fn channel_params(state: &lee::V03State) -> Option<crate::config::ChannelParams> {
+#[must_use]
+pub fn channel_params(state: &lee::V03State) -> Option<crate::config::ChannelParams> {
     read_config(state)?.channel_params
 }
 
@@ -272,7 +277,7 @@ mod tests {
         ];
         for (committee_size, threshold) in expected {
             assert_eq!(
-                channel_config_threshold(committee_size),
+                channel_config_threshold(committee_size).get(),
                 threshold,
                 "committee of {committee_size}"
             );
@@ -289,7 +294,7 @@ mod tests {
         // the committee has to clear the bar without it. Slashing needs this.
         for committee_size in 2..=64_usize {
             assert!(
-                usize::from(channel_config_threshold(committee_size)) < committee_size,
+                usize::from(channel_config_threshold(committee_size).get()) < committee_size,
                 "a committee of {committee_size} could never eject a member"
             );
         }

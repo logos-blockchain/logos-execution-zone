@@ -9,8 +9,10 @@ use std::time::Duration;
 use anyhow::Result;
 use indexer_service_rpc::RpcClient as _;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
-    config::INITIAL_PUBLIC_BALANCES_FOR_WALLET,
+    MultiZoneTestContextBuilder, TIME_TO_WAIT_FOR_BLOCK_SECONDS, ZoneTestContextBuilder,
+    config::{
+        INITIAL_PUBLIC_BALANCES_FOR_WALLET, MultiNodeTestContextConfig, SequencerPartialConfig,
+    },
     public_mention,
     utils::{account_balance, get_account, send, wait_for_indexer_to_catch_up},
 };
@@ -21,7 +23,17 @@ use wallet::{
 
 #[tokio::test]
 async fn indexer_state_consistency_with_labels() -> Result<()> {
-    let mut ctx = TestContext::new().await?;
+    let mut ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
+                .with_sequencer_partial_config(SequencerPartialConfig {
+                    // Covers the storage price doubling at the devnet's first epoch rotations.
+                    priority_fee_percent: 150,
+                    ..SequencerPartialConfig::default()
+                }),
+        )
+        .build()
+        .await?;
 
     // Assign labels to both accounts
     let from_label = Label::new("idx-sender-label");

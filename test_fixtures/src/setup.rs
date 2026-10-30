@@ -13,7 +13,8 @@ use lee::{AccountId, PrivateKey, PublicKey};
 use log::{debug, warn};
 use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
 use sequencer_service::{GenesisAction, SequencerConfig, SequencerHandle};
-use sequencer_service_rpc::{SequencerClient, SequencerClientBuilder};
+use sequencer_service_protocol::SequencerStatus;
+use sequencer_service_rpc::{ClientError, RpcClient as _, SequencerClient, SequencerClientBuilder};
 use sequencer_storage_actor::{StorageActor, protocol::DbDump};
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
@@ -121,9 +122,8 @@ impl SequencerSetup {
         let temp_sequencer_dir =
             tempfile::tempdir().context("Failed to create temp dir for sequencer home")?;
 
-        let sequencer_handle = self
-            .setup_owned(temp_sequencer_dir.path().to_owned())
-            .await?;
+        let sequencer_handle =
+            Box::pin(self.setup_owned(temp_sequencer_dir.path().to_owned())).await?;
 
         Ok((sequencer_handle, temp_sequencer_dir))
     }
@@ -133,16 +133,21 @@ impl SequencerSetup {
     /// The caller is responsible for creating and retaining the directory.
     /// Useful for tests that restart the sequencer against the same on-disk store.
     pub async fn setup_at(self, home: &Path) -> Result<SequencerHandle> {
-        self.setup_owned(home.to_owned()).await
+        Box::pin(self.setup_owned(home.to_owned())).await
     }
 
     async fn setup_owned(self, home: PathBuf) -> Result<SequencerHandle> {
-        sequencer_service::run(
+        let handle = sequencer_service::run(
             self.prepare_sequencers_config(home)?,
             SocketAddr::from(([127, 0, 0, 1], 0)),
         )
         .await
-        .context("Failed to run Sequencer Service")
+        .context("Failed to run Sequencer Service")?;
+
+        wait_until_online(&sequencer_client(handle.addr())?)
+            .await
+            .context("Encountered an error while waiting for the sequencer to come online")?;
+        Ok(handle)
     }
 
     /// Prepare just config for sequencer, without running the service.
@@ -220,6 +225,31 @@ impl SequencerSetup {
 
         Ok(config)
     }
+}
+
+/// Waits until the sequencer behind `client` is online, i.e. done bootstrapping from the channel.
+async fn wait_until_online(client: &SequencerClient) -> Result<()> {
+    let mut last_status = None;
+    let wait = async {
+        loop {
+            match client.get_sequencer_status().await {
+                Ok(SequencerStatus::Online { .. }) => return Ok(()),
+                Ok(status @ SequencerStatus::Bootstrapping { .. }) => {
+                    debug!("Sequencer is not online yet: {status:?}");
+                    last_status = Some(status);
+                }
+                // Going online can keep the sequencer busy past a request's timeout.
+                Err(ClientError::RequestTimeout) => continue,
+                Err(err) => return Err(err.into()),
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(360), wait)
+        .await
+        .with_context(|| {
+            format!("Timed out waiting for the sequencer to come online, last seen {last_status:?}")
+        })?
 }
 
 /// Committed single-file dump of the prebuilt sequencer database (`just regenerate-test-fixture`).
@@ -395,14 +425,6 @@ pub async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {
             .expect("resolved binary has a parent directory"),
     )?;
 
-    let mut compose = DockerCompose::with_auto_client(&[bedrock_compose_path])
-        .await
-        .context("Failed to setup docker compose for Bedrock")?
-        .with_build(true)
-        // Setting port to 0 to avoid conflicts between parallel tests, actual port will be
-        // retrieved after container is up
-        .with_env("LEZ_COMPOSE_BEDROCK_PORT", "0");
-
     #[expect(
         clippy::items_after_statements,
         reason = "This is more readable is this function used just after its definition"
@@ -437,30 +459,32 @@ pub async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {
             })
     }
 
-    let mut port = None;
-    let mut attempt = 0_u32;
     let max_attempts = 5_u32;
-    while port.is_none() && attempt < max_attempts {
-        attempt = attempt
-            .checked_add(1)
-            .expect("We check that attempt < max_attempts, so this won't overflow");
+    for attempt in 1..=max_attempts {
+        // A fresh project per attempt: when the host port Docker picks is taken, the container
+        // still starts, just unpublished, and a repeated `up` leaves it that way.
+        let mut compose = DockerCompose::with_auto_client(&[&bedrock_compose_path])
+            .await
+            .context("Failed to setup docker compose for Bedrock")?
+            .with_build(true)
+            // Setting port to 0 to avoid conflicts between parallel tests, actual port will be
+            // retrieved after container is up
+            .with_env("LEZ_COMPOSE_BEDROCK_PORT", "0");
+
         match up_and_retrieve_port(&mut compose).await {
-            Ok(p) => {
-                port = Some(p);
-            }
+            Ok(port) => return Ok((compose, SocketAddr::from(([127, 0, 0, 1], port)))),
             Err(err) => {
                 warn!(
                     "Failed to bring up Bedrock services: {err:?}, attempt {attempt}/{max_attempts}"
                 );
+                if let Err(down_err) = compose.down().await {
+                    warn!("Failed to tear down the failed Bedrock services: {down_err:?}");
+                }
             }
         }
     }
-    let Some(port) = port else {
-        bail!("Failed to bring up Bedrock services after {max_attempts} attempts");
-    };
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    Ok((compose, addr))
+    bail!("Failed to bring up Bedrock services after {max_attempts} attempts");
 }
 
 pub async fn setup_indexer(

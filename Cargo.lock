@@ -1118,7 +1118,7 @@ dependencies = [
 [[package]]
 name = "blockchain-test-logos"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1165,7 +1165,7 @@ dependencies = [
 [[package]]
 name = "blockchain-test-support"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "hex",
  "logos-blockchain-binary-codec",
@@ -2765,6 +2765,7 @@ dependencies = [
  "lee",
  "logos-blockchain-key-management-system-service",
  "sequencer_core",
+ "sequencer_genesis",
  "sequencer_stake_core",
  "serde_json",
 ]
@@ -6528,7 +6529,7 @@ checksum = "113b30b4cd05f7c06868fdb2854f66a7b9fece9a48425351cd532e810d74024f"
 [[package]]
 name = "logos-blockchain-api-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "futures",
@@ -6560,7 +6561,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-binary-codec"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "bincode",
  "bytes",
@@ -6576,7 +6577,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-binary-codec-macros"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "hex",
  "proc-macro2",
@@ -6587,7 +6588,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "logos-blockchain-blend-crypto",
  "logos-blockchain-blend-membership",
@@ -6602,7 +6603,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-crypto"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "blake2",
  "logos-blockchain-groth16",
@@ -6617,7 +6618,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-membership"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "logos-blockchain-key-management-system-keys",
  "multiaddr",
@@ -6628,7 +6629,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-message"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "blake2",
  "educe 0.7.6",
@@ -6655,7 +6656,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-network"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "either",
  "futures",
@@ -6676,7 +6677,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-primitives"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "futures",
  "tokio",
@@ -6685,7 +6686,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-proofs"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "ed25519-dalek",
  "generic-array 1.4.3",
@@ -6707,7 +6708,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-provers"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "educe 0.7.6",
@@ -6731,7 +6732,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-scheduling"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "fork_stream",
  "futures",
@@ -6752,7 +6753,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "futures",
@@ -6793,7 +6794,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-chain-broadcast-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "educe 0.7.6",
@@ -6808,7 +6809,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-chain-leader-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "futures",
@@ -6841,7 +6842,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-chain-network-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "backon",
@@ -6875,7 +6876,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-chain-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6960,7 +6961,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-prover"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "rust-rapidsnark",
 ]
@@ -6987,7 +6988,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-common-http-client"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "futures",
  "hex",
@@ -7012,7 +7013,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-config"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "hex",
  "logos-blockchain-binary-codec",
@@ -7034,7 +7035,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-core"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "ark-ff",
  "bincode",
@@ -7069,7 +7070,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-cryptarchia-engine"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "logos-blockchain-log-targets",
  "logos-blockchain-pol",
@@ -7085,7 +7086,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-cryptarchia-sync"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "bytes",
  "educe 0.7.6",
@@ -7095,7 +7096,6 @@ dependencies = [
  "logos-blockchain-binary-codec",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
- "logos-blockchain-key-management-system-keys",
  "logos-blockchain-log-targets",
  "logos-blockchain-utils",
  "rand 0.8.6",
@@ -7109,7 +7109,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-dynamic-merkle"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "serde",
 ]
@@ -7117,7 +7117,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-groth16"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "ark-bn254",
  "ark-ec",
@@ -7138,7 +7138,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-http-api-common"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "axum 0.8.9",
  "logos-blockchain-core",
@@ -7159,7 +7159,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-key-management-system-keys"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "arbitrary-int",
  "async-trait",
@@ -7191,7 +7191,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-key-management-system-macros"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7201,7 +7201,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-key-management-system-operators"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "logos-blockchain-blend-proofs",
@@ -7219,7 +7219,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-key-management-system-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "logos-blockchain-key-management-system-keys",
@@ -7236,7 +7236,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-ledger"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "educe 0.7.6",
  "logos-blockchain-binary-codec",
@@ -7265,7 +7265,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-libp2p"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "backon",
@@ -7296,7 +7296,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-log-targets"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "logos-blockchain-log-targets-macros",
 ]
@@ -7304,7 +7304,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-log-targets-macros"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7314,7 +7314,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-merkle-tree"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "logos-blockchain-dynamic-merkle",
  "rpds",
@@ -7325,7 +7325,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-mmr"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "ark-ff",
  "logos-blockchain-groth16",
@@ -7339,7 +7339,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-network-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "educe 0.7.6",
@@ -7366,7 +7366,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-node"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "axum 0.8.9",
@@ -7431,7 +7431,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-poc"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "logos-blockchain-circuits-poc-sys",
  "logos-blockchain-circuits-prover",
@@ -7448,7 +7448,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-pol"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "astro-float",
  "logos-blockchain-circuits-pol-sys",
@@ -7468,7 +7468,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-poq"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "logos-blockchain-circuits-poq-sys",
  "logos-blockchain-circuits-prover",
@@ -7486,7 +7486,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-poseidon2"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "ark-bn254",
  "ark-ff",
@@ -7497,7 +7497,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-pow-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "futures",
@@ -7529,7 +7529,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-proofs-error"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "logos-blockchain-circuits-types",
  "logos-blockchain-groth16",
@@ -7540,7 +7540,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-sdp-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "logos-blockchain-chain-service",
@@ -7563,7 +7563,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-services-utils"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -7579,7 +7579,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-storage-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -7602,7 +7602,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-system-sig-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-ctrlc",
  "async-trait",
@@ -7614,7 +7614,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-time"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "logos-blockchain-binary-codec",
  "logos-blockchain-utils",
@@ -7627,7 +7627,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-time-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "futures",
@@ -7650,7 +7650,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-tracing"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "flate2",
  "logos-blockchain-log-targets",
@@ -7677,7 +7677,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-tracing-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "logos-blockchain-log-targets",
@@ -7695,7 +7695,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-tx-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "futures",
@@ -7725,7 +7725,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-utils"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "const-hex",
@@ -7749,7 +7749,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-utxotree"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "ark-ff",
  "logos-blockchain-dynamic-merkle",
@@ -7762,7 +7762,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-version"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "serde",
  "utoipa",
@@ -7771,7 +7771,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-wallet"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
@@ -7790,12 +7790,13 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-wallet-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "bytes",
  "futures",
  "hex",
+ "logos-blockchain-binary-codec",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
@@ -7820,7 +7821,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-zksign"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "logos-blockchain-circuits-prover",
  "logos-blockchain-circuits-signature-sys",
@@ -7840,7 +7841,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-zone-sdk"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=d480efc6bbb48fb493c10fe9afefd84c18a04f02#d480efc6bbb48fb493c10fe9afefd84c18a04f02"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?branch=arjentix%2Ffeat%2Fzone-sdk-fast-backfill-for-empty-range#fc8447307a343ed33a8597db4472d20ac8d9c0f2"
 dependencies = [
  "async-trait",
  "futures",
@@ -11251,6 +11252,7 @@ dependencies = [
  "futures",
  "kameo",
  "kameo_actors",
+ "lee_core",
  "log",
  "logos-blockchain-binary-codec",
  "logos-blockchain-common-http-client",
@@ -11260,12 +11262,22 @@ dependencies = [
  "mockall",
  "rand 0.8.6",
  "sequencer_actors_common",
- "sequencer_channel_signing_actor",
  "sequencer_stake_core",
  "sequencer_storage_actor",
+ "sharding_pool_actor",
  "thiserror 2.0.18",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "sequencer_bridge"
+version = "0.1.0"
+dependencies = [
+ "bridge_core",
+ "lee",
+ "programs",
+ "system_accounts",
 ]
 
 [[package]]
@@ -11288,7 +11300,6 @@ dependencies = [
  "anyhow",
  "borsh",
  "bridge_core",
- "bridge_lock_core",
  "chain_state",
  "chrono",
  "clock_core",
@@ -11300,6 +11311,7 @@ dependencies = [
  "hex",
  "humantime-serde",
  "kameo",
+ "kameo_actors",
  "key_protocol",
  "lee",
  "lee_core",
@@ -11316,13 +11328,16 @@ dependencies = [
  "programs",
  "rand 0.8.6",
  "sequencer_bedrock_actor",
+ "sequencer_bridge",
  "sequencer_channel_signing_actor",
  "sequencer_core_metrics",
+ "sequencer_genesis",
  "sequencer_slasher_actor",
  "sequencer_stake_core",
  "sequencer_storage_actor",
  "serde",
  "serde_json",
+ "sharding_pool_actor",
  "system_accounts",
  "tempfile",
  "test_guest_core",
@@ -11330,7 +11345,6 @@ dependencies = [
  "testnet_initial_state",
  "thiserror 2.0.18",
  "tokio",
- "tokio-retry",
  "url",
 ]
 
@@ -11359,12 +11373,12 @@ dependencies = [
  "fee_core",
  "futures",
  "kameo",
+ "kameo_actors",
  "lee",
  "lee_core",
  "log",
  "logos-blockchain-binary-codec",
  "logos-blockchain-core",
- "logos-blockchain-zone-sdk",
  "mempool",
  "mockall",
  "num-traits",
@@ -11372,11 +11386,15 @@ dependencies = [
  "programs",
  "sequencer_actors_common",
  "sequencer_bedrock_actor",
+ "sequencer_channel_signing_actor",
  "sequencer_core",
+ "sequencer_core_metrics",
  "sequencer_executor_actor_metrics",
+ "sequencer_genesis",
  "sequencer_slasher_actor",
  "sequencer_stake_core",
  "sequencer_storage_actor",
+ "sharding_pool_actor",
  "system_accounts",
  "tempfile",
  "testnet_initial_state",
@@ -11389,6 +11407,29 @@ name = "sequencer_executor_actor_metrics"
 version = "0.1.0"
 dependencies = [
  "metrics",
+]
+
+[[package]]
+name = "sequencer_genesis"
+version = "0.1.0"
+dependencies = [
+ "bridge_core",
+ "bridge_lock_core",
+ "chain_state",
+ "common",
+ "cross_zone",
+ "cross_zone_inbox_core",
+ "fee_core",
+ "hex",
+ "lee",
+ "lee_core",
+ "log",
+ "programs",
+ "sequencer_bridge",
+ "sequencer_stake_core",
+ "serde",
+ "system_accounts",
+ "testnet_initial_state",
 ]
 
 [[package]]
@@ -11419,7 +11460,6 @@ dependencies = [
 name = "sequencer_rpc_server_actor"
 version = "0.1.0"
 dependencies = [
- "borsh",
  "bytesize",
  "common",
  "jsonrpsee",
@@ -11474,6 +11514,7 @@ dependencies = [
  "sequencer_stake_core",
  "sequencer_storage_actor",
  "serde_json",
+ "sharding_pool_actor",
  "system_accounts",
  "tokio",
  "tokio-util",
@@ -11485,7 +11526,6 @@ name = "sequencer_service_protocol"
 version = "0.1.0"
 dependencies = [
  "common",
- "hex",
  "lee",
  "lee_core",
  "serde",
@@ -11920,6 +11960,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
+]
+
+[[package]]
+name = "sharding_pool_actor"
+version = "0.1.0"
+dependencies = [
+ "env_logger",
+ "kameo",
+ "log",
+ "sequencer_actors_common",
+ "tokio",
 ]
 
 [[package]]
@@ -12586,7 +12637,9 @@ dependencies = [
  "programs",
  "sequencer_bedrock_actor",
  "sequencer_core",
+ "sequencer_genesis",
  "sequencer_service",
+ "sequencer_service_protocol",
  "sequencer_service_rpc",
  "sequencer_stake_core",
  "sequencer_storage_actor",
@@ -14969,27 +15022,27 @@ dependencies = [
 
 [[package]]
 name = "zstd"
-version = "0.13.3"
+version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
+checksum = "db3ae9bf90af6e40197bef767eeefc46ad6397420fe873830bd85e5fbbfb3c70"
 dependencies = [
  "zstd-safe",
 ]
 
 [[package]]
 name = "zstd-safe"
-version = "7.2.4"
+version = "8.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f49c4d5f0abb602a93fb8736af2a4f4dd9512e36f7f570d66e65ff867ed3b9d"
+checksum = "ded520f16b29e1a9b771c722221b2b0a0398c2316d9bb3c42b458a5414d7434b"
 dependencies = [
  "zstd-sys",
 ]
 
 [[package]]
 name = "zstd-sys"
-version = "2.0.16+zstd.1.5.7"
+version = "2.1.2+zstd.1.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91e19ebc2adc8f83e43039e79776e3fda8ca919132d68a1fed6a5faca2683748"
+checksum = "481ada9c543b2323cbb7bbdbb5249177fbf0188ed959ed2c15e4b22421c84ed3"
 dependencies = [
  "cc",
  "pkg-config",

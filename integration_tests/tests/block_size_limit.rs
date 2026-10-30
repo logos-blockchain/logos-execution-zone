@@ -36,13 +36,11 @@ async fn reject_oversized_transaction() -> Result<()> {
         .build()
         .await?;
 
-    // Larger than any block Bedrock can carry. The size check runs before any signature/fee
-    // check (see `gossip::validation::evaluate_transaction`), so an unsigned, unfunded
-    // `WriteSegment` is enough to exercise it.
+    // Larger than any block Bedrock can carry. The size check runs before the fee check, so a
+    // signed but unfunded `WriteSegment` is enough to exercise it.
     let oversized_binary = vec![0_u8; 1900 * 1024];
-    let segment_id = AccountId::from(&PublicKey::new_from_private_key(
-        &PrivateKey::try_new([220; 32]).unwrap(),
-    ));
+    let segment_key = PrivateKey::try_new([220; 32]).unwrap();
+    let segment_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
     let segment = Actor::new(segment_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID);
     let message = lee::public_transaction::Message::try_new(
         segment,
@@ -53,10 +51,8 @@ async fn reject_oversized_transaction() -> Result<()> {
             next_segment: None,
         },
     )?;
-    let tx = LeeTransaction::Public(lee::PublicTransaction::new(
-        message,
-        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
-    ));
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&segment_key]);
+    let tx = LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set));
 
     // Try to submit the transaction and expect an error
     let result = ctx.sequencer_client().send_transaction(tx).await;

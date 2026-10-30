@@ -114,7 +114,8 @@ impl IndexerCore {
             CommonHttpClient::new(basic_auth),
             config.bedrock_config.addr.clone(),
         );
-        let zone_indexer = ZoneIndexer::new(config.channel_id, node.clone());
+        let zone_indexer =
+            ZoneIndexer::new(config.channel_id, node.clone(), config.backfill_batch_slots);
 
         // Option B verifier: re-derives each cross-zone dispatch from the peer's
         // finalized blocks. `None` when cross-zone messaging is disabled.
@@ -161,7 +162,13 @@ impl IndexerCore {
             return Ok(ChainConsistency::Inconclusive);
         };
 
-        chain_state::verify_chain_consistency(&self.node, self.config.channel_id, &anchor).await
+        chain_state::verify_chain_consistency(
+            &self.node,
+            self.config.channel_id,
+            &anchor,
+            self.config.backfill_batch_slots,
+        )
+        .await
     }
 
     /// Builds the anchor for the startup check.
@@ -658,6 +665,7 @@ mod tests {
             cross_zone: None,
             cross_zone_accept_unverified,
             peer_block_cache_window: NonZeroU32::new(1024).expect("1024 is nonzero"),
+            backfill_batch_slots: crate::config::default_backfill_batch_slots(),
             event_filter: EventFilterConfig::default(),
         };
         IndexerCore::open(config, dir).expect("open core")

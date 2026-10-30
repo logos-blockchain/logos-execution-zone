@@ -1,3 +1,5 @@
+use std::num::NonZero;
+
 use kameo::actor::Spawn as _;
 use logos_blockchain_core::{
     crypto::ZkHash,
@@ -68,9 +70,13 @@ fn target() -> ConfigTarget {
         parent: MsgId::root(),
         posting_timeframe: 300,
         posting_timeout: 25,
-        configuration_threshold: 2,
-        transfer_threshold: 1,
+        configuration_threshold: threshold(2),
+        transfer_threshold: threshold(1),
     }
+}
+
+fn threshold(signatures: u16) -> NonZero<u16> {
+    NonZero::new(signatures).expect("test thresholds are non-zero")
 }
 
 /// The view every accredited node derives for itself each turn.
@@ -85,15 +91,16 @@ fn view(target: Option<ConfigTarget>) -> ChannelView {
 
 /// A transaction carrying exactly the config `target` asks for.
 fn draft_tx(target: &ConfigTarget) -> Ops {
-    let op = ChannelConfigOp {
-        channel: ChannelId::from(CHANNEL),
-        parent: target.parent,
-        keys: VerifiedChannelKeys::try_from(target.keys.clone()).expect("a non-empty key list"),
-        posting_timeframe: SlotTimeframe::from(target.posting_timeframe),
-        posting_timeout: SlotTimeout::from(target.posting_timeout),
-        configuration_threshold: target.configuration_threshold,
-        transfer_threshold: target.transfer_threshold,
-    };
+    let op = ChannelConfigOp::new(
+        ChannelId::from(CHANNEL),
+        target.parent,
+        VerifiedChannelKeys::try_from(target.keys.clone()).expect("a non-empty key list"),
+        SlotTimeframe::from(target.posting_timeframe),
+        SlotTimeout::from(target.posting_timeout),
+        target.configuration_threshold,
+        target.transfer_threshold,
+    )
+    .expect("the target's threshold is reachable with its keys");
     Ops::from([Op::ChannelConfig(op)])
 }
 
@@ -196,8 +203,8 @@ fn committee_target() -> ConfigTarget {
         parent: MsgId::root(),
         posting_timeframe: 300,
         posting_timeout: 25,
-        configuration_threshold: 4,
-        transfer_threshold: 1,
+        configuration_threshold: threshold(4),
+        transfer_threshold: threshold(1),
     }
 }
 
@@ -476,11 +483,7 @@ async fn a_submission_carries_exactly_the_threshold_in_index_order() {
     };
 
     assert_eq!(submission.tx_hash, tx.hash().0);
-    let indices: Vec<u16> = submission
-        .signatures
-        .iter()
-        .map(|indexed| indexed.channel_key_index)
-        .collect();
+    let indices: Vec<u16> = submission.signatures.keys().copied().collect();
     assert_eq!(indices, vec![0, 1]);
 }
 
@@ -501,11 +504,7 @@ async fn the_signature_that_meets_the_threshold_wakes_the_submitter() {
         .await
         .expect("the draft has its threshold and must not wait for a turn");
     assert_eq!(submission.tx_hash, tx.hash().0);
-    let indices: Vec<u16> = submission
-        .signatures
-        .iter()
-        .map(|indexed| indexed.channel_key_index)
-        .collect();
+    let indices: Vec<u16> = submission.signatures.keys().copied().collect();
     assert_eq!(indices, vec![0, 1]);
 }
 
@@ -670,6 +669,7 @@ async fn a_peer_does_not_sign_a_config_it_did_not_ask_for() {
     // Same shape, but installing a committee this node never derived.
     let mut rogue = target();
     rogue.keys = vec![key(PEER_SECRET).public_key()];
+    rogue.configuration_threshold = threshold(1);
     actor
         .ask(Wire::Draft(Draft {
             tx: Box::new(draft_tx(&rogue)),

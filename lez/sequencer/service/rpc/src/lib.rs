@@ -9,6 +9,7 @@ use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
     CommitmentSetDigest, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, EncryptedNote,
     HashType, LeeTransaction, MembershipProof, Nonce, PageLimit, ProgramId, Publication,
+    SequencerStatus,
 };
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
@@ -20,6 +21,10 @@ pub const MEMPOOL_IS_FULL_ERROR_CODE: i32 = -31900;
 /// Error code of a privacy-preserving transaction turned away because its fee reserve is below
 /// the fee at the head: priced again off a fresh quote, it may pass.
 pub const PRIVATE_FEE_BELOW_HEAD_ERROR_CODE: i32 = -31901;
+
+/// Error code the sequencer replies with while it is not online yet, e.g. still bootstrapping
+/// from the channel.
+pub const SEQUENCER_IS_NOT_ONLINE_ERROR_CODE: i32 = -31902;
 
 /// Type alias for RPC client. Only available when `client` feature is enabled.
 ///
@@ -141,6 +146,10 @@ pub trait Rpc {
 
     #[method(name = "getChannelId")]
     async fn get_channel_id(&self) -> Result<ChannelId, ErrorObjectOwned>;
+
+    /// What the sequencer is doing: bootstrapping from the channel, or online.
+    #[method(name = "getSequencerStatus")]
+    async fn get_sequencer_status(&self) -> Result<SequencerStatus, ErrorObjectOwned>;
 
     /// The cross-zone deliveries this sequencer has given up on.
     ///

@@ -22,5 +22,4 @@ tokio.workspace = true
 log.workspace = true
 thiserror.workspace = true
 jsonrpsee.workspace = true
-borsh.workspace = true
 bytesize.workspace = true

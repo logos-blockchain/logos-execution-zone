@@ -1,24 +1,26 @@
-use std::sync::Arc;
+use std::{num::NonZero, sync::Arc, time::Duration};
 
 pub use chain_state::ChannelEntry;
 use common::block::Block;
 use kameo::Reply;
-pub use logos_blockchain_core::mantle::NoteId;
-use logos_blockchain_core::mantle::{OpProof, transactions::Ops};
-pub use logos_blockchain_key_management_system_service::keys::Ed25519PublicKey;
+pub use logos_blockchain_binary_codec::bincode::{DeserializeOp, SerializeOp};
+use logos_blockchain_core::mantle::OpProof;
+pub use logos_blockchain_core::mantle::{NoteId, transactions::Ops};
+pub use logos_blockchain_key_management_system_service::keys::{
+    Ed25519Key, Ed25519PublicKey, ZkPublicKey,
+};
+use logos_blockchain_zone_sdk::sequencer::PreparedChannelConfig;
 pub use logos_blockchain_zone_sdk::{
-    Slot, ZoneMessage,
+    Slot, UnverifiedEd25519PublicKey, ZoneMessage,
+    adapter::BoxStream,
     node_types::{ChannelId, HeaderId, MsgId},
     sequencer::{
-        DepositInfo, Ed25519Key, IndexedSignature, PreparedChannelConfig,
-        SequencerCheckpoint as Checkpoint, WithdrawArg, WithdrawInfo,
+        DepositInfo, IndexedSignature, IndexedSignatures, SequencerCheckpoint as Checkpoint,
+        SequencerCheckpoint, WithdrawArg, WithdrawInfo,
     },
 };
-pub use sequencer_channel_signing_actor::protocol::ConfigTarget;
 pub use sequencer_stake_core::ChannelParams;
-
-/// A boxed, pinned, Send stream.
-pub type BoxStream<T> = std::pin::Pin<Box<dyn futures::Stream<Item = T> + Send>>;
+use sharding_pool_actor::ShardingKey;
 
 /// What [`ReadChannel`] serves: a failed read is an `Err` item, not the stream's end.
 pub type ChannelReadStream = BoxStream<crate::Result<(ZoneMessage, Slot)>>;
@@ -64,25 +66,6 @@ impl std::fmt::Display for ChannelSeq {
     }
 }
 
-/// Event happened on configured chain.
-#[derive(Debug, Clone)]
-pub enum ChannelEvent {
-    Update(
-        /// Arc is used to not to deep-clone the update for each broker consumer.
-        Arc<ChannelUpdate>,
-    ),
-
-    Turn {
-        our_turn_to_write: bool,
-    },
-
-    Config(LiveChannelConfig),
-
-    /// Deposits seen in L1 blocks before finality. Observations, not view: a
-    /// reorg can drop one or deliver it again.
-    Deposits(Vec<DepositInfo>),
-}
-
 /// How the unfinalized message lineage moved across one update.
 #[derive(Debug, Clone)]
 pub enum ViewChange {
@@ -93,6 +76,70 @@ pub enum ViewChange {
         canonical: Vec<ChannelEntry>,
         orphaned: Vec<ChannelEntry>,
     },
+}
+
+/// Event happened on configured chain and published to the broker.
+#[derive(Debug, Clone)]
+pub struct ChannelEvent {
+    pub channel_id: ChannelId,
+    pub event: ChannelEventKind,
+}
+
+/// Concrete kinds of events that can happen on a channel.
+#[derive(Debug, Clone)]
+pub enum ChannelEventKind {
+    /// A block that has been finalized on chain since configured `stream_from` arriving to
+    /// `channel/<channel_id>/finalized_block` topic.
+    FinalizedBlock(Arc<FinalizedBlock>),
+
+    /// A deposit that has been finalized on chain since configured `stream_from` arriving to
+    /// `channel/<channel_id>/finalized_deposit` topic.
+    FinalizedDeposit(Arc<DepositInfo>),
+
+    /// A withdrawal that has been finalized on chain since configured `stream_from` arriving to
+    /// `channel/<channel_id>/finalized_withdrawal` topic.
+    FinalizedWithdrawal(Arc<WithdrawInfo>),
+
+    /// Events related to the channel publisher arriving to `channel/<channel_id>/publisher/`
+    /// topics.
+    Publisher(Arc<PublisherEvent>),
+}
+
+#[derive(Debug, Clone)]
+pub struct FinalizedBlock {
+    pub block: BlockData,
+    pub msg_id: MsgId,
+    pub slot: Slot,
+    /// The key that signed the inscription, [`None`] if it is not a valid one.
+    pub signer: Option<Ed25519PublicKey>,
+}
+
+#[derive(Debug, Clone)]
+pub enum BlockData {
+    /// Successfully decoded block.
+    Block(Block),
+    /// Raw bytes of a block that could not be decoded.
+    Undecodable(Vec<u8>),
+}
+
+/// Events related to the channel publisher, published to the broker.
+///
+/// Will arrive only if [`InitializeChannelPublisher`] has been successfully handled.
+#[derive(Debug, Clone)]
+pub enum PublisherEvent {
+    /// Message arriving to `channel/<channel_id>/publisher/update` topic.
+    Update(Box<ChannelUpdate>),
+
+    /// Message arriving to `channel/<channel_id>/publisher/turn` topic.
+    Turn { our_turn_to_write: bool },
+
+    /// Message arriving to `channel/<channel_id>/publisher/config` topic.
+    Config(LiveChannelConfig),
+
+    /// Deposits seen in L1 blocks before finality, arriving to
+    /// `channel/<channel_id>/publisher/deposits` topic. Observations, not view: a reorg can drop
+    /// one or deliver it again.
+    Deposits(Vec<DepositInfo>),
 }
 
 /// Everything one channel update carries.
@@ -132,20 +179,57 @@ pub struct LiveChannelConfig {
     pub transfer_threshold: u16,
 }
 
+/// Initialize the channel publisher. This will make using messages like [`PublishBlock`] possible.
+///
+/// If no previous channel publisher exists, this will initialize it and return channel sequence it
+/// started at; otherwise, it will just return `None` without reinitializing the channel publisher.
+#[derive(Debug, Clone)]
+pub struct InitializeChannelPublisher {
+    pub channel_id: ChannelId,
+    pub channel_signing_key: Ed25519Key,
+    pub funding_pk: ZkPublicKey,
+    pub priority_fee_percent: u64,
+    pub resubmit_interval: Duration,
+    pub stale_refund_slots: u64,
+    /// Last slot the caller has applied everything the `finalized_*` topics carry up to.
+    /// [`None`] if nothing was replayed.
+    pub replayed_up_to: Option<Slot>,
+}
+
+impl ShardingKey for InitializeChannelPublisher {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
+
 /// Create the channel and write `genesis` into it in one Mantle tx.
 ///
 /// Only valid while the channel does not exist, and `keys[0]` must be this sequencer's own key,
 /// since creation hands the first turn to index 0.
+#[derive(Debug, Clone)]
 pub struct CreateChannel {
+    pub channel_id: ChannelId,
     pub genesis: Block,
     pub keys: Vec<Ed25519PublicKey>,
     pub channel_params: ChannelParams,
-    pub configuration_threshold: u16,
-    pub transfer_threshold: u16,
+    pub configuration_threshold: NonZero<u16>,
+    pub transfer_threshold: NonZero<u16>,
+}
+
+impl ShardingKey for CreateChannel {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
 }
 
 /// Publish block to the configured channel.
+#[derive(Debug, Clone)]
 pub struct PublishBlock {
+    pub channel_id: ChannelId,
     pub block: Block,
     pub withdrawals: Vec<WithdrawArg>,
     /// Parent message ID to inscribe the block on.
@@ -159,9 +243,19 @@ pub struct PublishBlock {
     pub expected_seq: Option<ChannelSeq>,
 }
 
+impl ShardingKey for PublishBlock {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
+
 /// Funds `block` chained on `parent` and bundled with a transfer re-creating
 /// `notes` unchanged, so it lands only where they exist; submits nothing.
+#[derive(Debug, Clone)]
 pub struct PreparePin {
+    pub channel_id: ChannelId,
     pub block: Block,
     pub parent: MsgId,
     /// Deposited channel notes the block mints from.
@@ -171,6 +265,7 @@ pub struct PreparePin {
 }
 
 /// A funded pinned block, short of the signatures its transfer needs.
+#[derive(Debug, Clone)]
 pub struct PreparedPin {
     pub(crate) tx: Ops,
     pub(crate) msg_id: MsgId,
@@ -193,6 +288,14 @@ pub struct PreparedPin {
         expect(dead_code, reason = "Only the actor publishes a pin")
     )]
     pub(crate) block_size: usize,
+}
+
+impl ShardingKey for PreparePin {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
 }
 
 impl PreparedPin {
@@ -229,14 +332,25 @@ impl PreparedPin {
 
 /// Publishes a prepared pin with exactly the channel's transfer threshold of
 /// signatures.
+#[derive(Debug, Clone)]
 pub struct PublishPin {
+    pub channel_id: ChannelId,
     pub prepared: PreparedPin,
     pub signatures: Vec<IndexedSignature>,
     /// As in [`PublishBlock::expected_seq`].
     pub expected_seq: Option<ChannelSeq>,
 }
 
+impl ShardingKey for PublishPin {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
+
 /// Outcome of a publish operation.
+#[derive(Debug, Clone)]
 pub struct PublishOutcome {
     /// The `MsgId` zone-sdk assigned the published inscription.
     pub this_msg: MsgId,
@@ -251,54 +365,145 @@ pub struct PublishOutcome {
     pub released_notes: Vec<NoteId>,
 }
 
-/// Inscribe raw bytes on top of the channel tip. Only a test that provokes an
-/// offence needs it.
-#[cfg(feature = "test-utils")]
-pub struct PublishRawInscription {
-    pub data: Vec<u8>,
+/// Fund a channel config moving the channel to the config described here, ready to be signed.
+#[derive(Debug, Clone)]
+pub struct PrepareConfig {
+    pub channel_id: ChannelId,
+    /// The committee to install, in the order the op will carry it.
+    pub keys: Vec<Ed25519PublicKey>,
+    pub posting_timeframe: u32,
+    pub posting_timeout: u32,
+    /// Signatures the *next* config will have to carry, not this one.
+    pub configuration_threshold: NonZero<u16>,
+    pub transfer_threshold: NonZero<u16>,
 }
 
-pub struct PrepareConfig {
-    pub target: ConfigTarget,
+impl ShardingKey for PrepareConfig {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
+
+/// A channel config funded by [`PrepareConfig`], waiting for the accredited signatures
+/// [`ChangeChannelConfig`] submits it with.
+#[derive(Debug, Clone, Reply)]
+pub struct PreparedConfig {
+    prepared: PreparedChannelConfig,
+    accredited_keys: Vec<Ed25519PublicKey>,
+}
+
+impl PreparedConfig {
+    #[cfg(feature = "actor")]
+    pub(crate) const fn new(
+        prepared: PreparedChannelConfig,
+        accredited_keys: Vec<Ed25519PublicKey>,
+    ) -> Self {
+        Self {
+            prepared,
+            accredited_keys,
+        }
+    }
+
+    /// The funded transaction the signatures are over.
+    #[must_use]
+    pub const fn tx(&self) -> &Ops {
+        self.prepared.tx()
+    }
+
+    /// The channel's accredited keys, in the index order a signature names.
+    #[must_use]
+    pub fn accredited_keys(&self) -> &[Ed25519PublicKey] {
+        &self.accredited_keys
+    }
+
+    /// How many of [`Self::accredited_keys`] must sign.
+    #[must_use]
+    pub const fn signing_threshold(&self) -> u16 {
+        self.prepared.signing_threshold
+    }
+
+    #[cfg(feature = "actor")]
+    pub(crate) fn into_inner(self) -> PreparedChannelConfig {
+        self.prepared
+    }
 }
 
 /// Change the configuration of the channel.
+#[derive(Debug, Clone)]
 pub struct ChangeChannelConfig {
-    pub prepared: PreparedChannelConfig,
-    pub signatures: Vec<IndexedSignature>,
+    pub channel_id: ChannelId,
+    pub prepared: PreparedConfig,
+    pub signatures: IndexedSignatures,
+}
+
+impl ShardingKey for ChangeChannelConfig {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
 }
 
 /// Check if configured channel exists.
-pub struct CheckChannelExists;
-
-/// Get the ID of the configured channel.
-pub struct GetChannelId;
-
-#[derive(Reply)]
-pub struct GetChannelIdReply {
+#[derive(Debug, Clone)]
+pub struct CheckChannelExists {
     pub channel_id: ChannelId,
+}
+
+impl ShardingKey for CheckChannelExists {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
 }
 
 /// Whether this sequencer is currently authorized to write to the channel.
 ///
 /// Prefer subscribing to `channel/<channel_id>/turn` topic instead of polling this.
-pub struct CheckIsOurTurn;
+#[derive(Debug, Clone)]
+pub struct CheckIsOurTurn {
+    pub channel_id: ChannelId,
+}
+
+impl ShardingKey for CheckIsOurTurn {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
 
 /// Get live (adopted, possibly not yet finalized) accredited-key snapshot for
 /// this channel with the config entry it comes from.
 ///
 /// The config entry is what tells a caller whether this committee is the
 /// finalized one: compare it to the checkpoint's `finalized_config`.
-pub struct GetAccreditedKeys;
+#[derive(Debug, Clone)]
+pub struct GetAccreditedKeys {
+    pub channel_id: ChannelId,
+}
+
+impl ShardingKey for GetAccreditedKeys {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
 
 /// The channel's accredited keys, the config entry they come from, and whose
 /// turn the tip was written on.
-#[derive(Reply)]
+#[derive(Debug, Clone, Reply)]
 pub struct AccreditedKeys {
     pub keys: Vec<Ed25519PublicKey>,
     pub config_tip: MsgId,
     /// Position in `keys` of the sequencer whose turn the tip was written on.
     pub tip_sequencer: u16,
+    /// Channel frontier slot at the time the keys were read.
+    pub tip_slot: Slot,
 }
 
 impl AccreditedKeys {
@@ -311,31 +516,77 @@ impl AccreditedKeys {
 }
 
 /// The channel's notes on the current L1 branch, finalized or not.
-pub struct GetChannelNotes;
+#[derive(Debug, Clone)]
+pub struct GetChannelNotes {
+    pub channel_id: ChannelId,
+}
+
+impl ShardingKey for GetChannelNotes {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
 
 /// Get current channel frontier slot on the connected chain.
-pub struct GetChannelTipSlot;
+#[derive(Debug, Clone)]
+pub struct GetChannelTipSlot {
+    pub channel_id: ChannelId,
+}
+
+impl ShardingKey for GetChannelTipSlot {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
 
 /// Get live channel tip message id.
-pub struct GetChannelTipMessageId;
+#[derive(Debug, Clone)]
+pub struct GetChannelTipMessageId {
+    pub channel_id: ChannelId,
+}
 
-/// Finalized channel messages from `after` (exclusive) up to LIB, capped at
-/// zone-sdk's LIB when it became ready.
+impl ShardingKey for GetChannelTipMessageId {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
+
+/// Finalized channel messages from `after` (exclusive) up to LIB.
+#[derive(Debug, Clone)]
 pub struct ReadChannel {
+    pub channel_id: ChannelId,
     /// Passing [`None`] will read from the channel's genesis.
     pub after: Option<Slot>,
 }
 
-/// The node reports keys unverified; a committee position is an index, so one
-/// bad key fails the whole list.
-pub fn verified_keys(
-    keys: &[logos_blockchain_zone_sdk::UnverifiedEd25519PublicKey],
-) -> crate::Result<Vec<Ed25519PublicKey>> {
-    keys.iter()
-        .map(|key| {
-            Ed25519PublicKey::try_from(*key).map_err(|err| {
-                crate::error::Error::InvalidChannelKeyList(anyhow::anyhow!("{err:?}"))
-            })
-        })
-        .collect()
+impl ShardingKey for ReadChannel {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
+
+/// Inscribe raw bytes on top of the channel tip. Only a test that provokes an
+/// offence needs it.
+#[cfg(feature = "test-utils")]
+#[derive(Debug, Clone)]
+pub struct PublishRawInscription {
+    pub channel_id: ChannelId,
+    pub data: Vec<u8>,
+}
+
+#[cfg(feature = "test-utils")]
+impl ShardingKey for PublishRawInscription {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
 }
