@@ -11,6 +11,7 @@ workspace = true
 sequencer_core_metrics.workspace = true
 sequencer_rpc_server_actor_metrics.workspace = true
 sequencer_service_metrics.workspace = true
+sequencer_executor_actor_metrics.workspace = true
 
 clap = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive", "alloc"] }

@@ -1,0 +1,629 @@
+{
+  "annotations": { "list": [ ] },
+  "editable": true,
+  "graphTooltip": 1,
+  "links": [
+    {
+      "asDropdown": false,
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [ "sequencer" ],
+      "title": "Sequencer dashboards",
+      "type": "dashboards"
+    }
+  ],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "fixed", "fixedColor": "text" }, "unit": "short", "decimals": 0 },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "count(sum by (sequencer) (chain_height))",
+          "legendFormat": "sequencers",
+          "refId": "A"
+        }
+      ],
+      "title": "Sequencers reporting",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" }, "unit": "short", "decimals": 0 },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 0 },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max(chain_height)",
+          "legendFormat": "height",
+          "refId": "A"
+        }
+      ],
+      "title": "Network height",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Blocks between the highest and the lowest sequencer. A growing spread is a sequencer falling behind.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 2.0 },
+              { "color": "red", "value": 5.0 }
+            ]
+          }
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 8, "y": 0 },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max(chain_height) - min(chain_height)",
+          "legendFormat": "spread",
+          "refId": "A"
+        }
+      ],
+      "title": "Height spread",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Average over the time range.",
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "fixed", "fixedColor": "green" }, "unit": "short", "decimals": 1 },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 12, "y": 0 },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(increase(blocks_produced_total[$__range])) / ($__range_s / 60)",
+          "instant": true,
+          "legendFormat": "blocks/min",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Blocks per minute",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Transactions submitted, averaged over the time range.",
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "fixed", "fixedColor": "text" }, "unit": "short", "decimals": 1 },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 0 },
+      "id": 5,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(increase(submitted_transactions_total[$__range])) / ($__range_s / 60)",
+          "instant": true,
+          "legendFormat": "txs/min",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Txs per minute",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Sequencers whose last production turn failed.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1.0 } ]
+          }
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 0 },
+      "id": 6,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "count(production_failed_attempts > 0) or vector(0)",
+          "legendFormat": "failing",
+          "refId": "A"
+        }
+      ],
+      "title": "Failing sequencers",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Which sequencer may write to the channel, over time.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 0, "fillOpacity": 70 },
+          "unit": "short",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "color": "transparent", "index": 0, "text": "waiting" },
+                "1": { "color": "blue", "index": 1, "text": "writing" }
+              }
+            }
+          ],
+          "links": [
+            {
+              "title": "Open this sequencer's dashboard",
+              "url": "/d/sequencer?var-sequencer=${__field.labels.sequencer}&${__url_time_range}"
+            }
+          ]
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 5 },
+      "id": 7,
+      "options": {
+        "alignValue": "left",
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": [ ] },
+        "mergeValues": true,
+        "rowHeight": 0.9,
+        "showValue": "never",
+        "tooltip": { "mode": "single" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (sequencer) (turn_to_write)",
+          "legendFormat": "{{sequencer}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Turn to write",
+      "type": "state-timeline"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Blocks each sequencer proposed in each slice of time; darker is more.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "continuous-blues" },
+          "custom": { "lineWidth": 0, "fillOpacity": 70 },
+          "unit": "short",
+          "decimals": 0,
+          "min": 0.0,
+          "links": [
+            {
+              "title": "Open this sequencer's dashboard",
+              "url": "/d/sequencer?var-sequencer=${__field.labels.sequencer}&${__url_time_range}"
+            }
+          ]
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 12 },
+      "id": 8,
+      "interval": "1m",
+      "maxDataPoints": 60,
+      "options": {
+        "colWidth": 0.9,
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": [ ], "showLegend": false },
+        "rowHeight": 0.9,
+        "showValue": "auto",
+        "tooltip": { "mode": "single" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (sequencer) (clamp_min(blocks_produced_total - blocks_produced_total offset $__interval, 0))",
+          "legendFormat": "{{sequencer}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Blocks proposed over time",
+      "type": "status-history"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Each sequencer's part of the turns to write given out over the time range.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "blue" },
+          "unit": "percent",
+          "decimals": 0,
+          "min": 0.0,
+          "max": 100.0,
+          "links": [
+            {
+              "title": "Open this sequencer's dashboard",
+              "url": "/d/sequencer?var-sequencer=${__field.labels.sequencer}&${__url_time_range}"
+            }
+          ]
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 20 },
+      "id": 9,
+      "options": {
+        "displayMode": "basic",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
+        "showUnfilled": true,
+        "valueMode": "text"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sort_desc(100 * sum by (sequencer) (increase(turns_to_write_total[$__range])) / on() group_left() clamp_min(sum(increase(turns_to_write_total[$__range])), 1))",
+          "instant": true,
+          "legendFormat": "{{sequencer}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Share of turns",
+      "type": "bargauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Each sequencer's part of the blocks proposed over the time range.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "blue" },
+          "unit": "percent",
+          "decimals": 0,
+          "min": 0.0,
+          "max": 100.0,
+          "links": [
+            {
+              "title": "Open this sequencer's dashboard",
+              "url": "/d/sequencer?var-sequencer=${__field.labels.sequencer}&${__url_time_range}"
+            }
+          ]
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 20 },
+      "id": 10,
+      "options": {
+        "displayMode": "basic",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
+        "showUnfilled": true,
+        "valueMode": "text"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sort_desc(100 * sum by (sequencer) (increase(blocks_produced_total[$__range])) / on() group_left() clamp_min(sum(increase(blocks_produced_total[$__range])), 1))",
+          "instant": true,
+          "legendFormat": "{{sequencer}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Share of blocks proposed",
+      "type": "bargauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Blocks proposed per turn to write over the time range. A sequencer well below the rest lets its turns go by.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "blue" },
+          "unit": "short",
+          "decimals": 1,
+          "min": 0.0,
+          "links": [
+            {
+              "title": "Open this sequencer's dashboard",
+              "url": "/d/sequencer?var-sequencer=${__field.labels.sequencer}&${__url_time_range}"
+            }
+          ]
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 20 },
+      "id": 11,
+      "options": {
+        "displayMode": "basic",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
+        "showUnfilled": true,
+        "valueMode": "text"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sort_desc(sum by (sequencer) (increase(blocks_produced_total[$__range])) / (sum by (sequencer) (increase(turns_to_write_total[$__range])) > 0))",
+          "instant": true,
+          "legendFormat": "{{sequencer}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Blocks per turn",
+      "type": "bargauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "How far each sequencer's chain height trails the highest one.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "short",
+          "min": 0.0,
+          "links": [
+            {
+              "title": "Open this sequencer's dashboard",
+              "url": "/d/sequencer?var-sequencer=${__field.labels.sequencer}&${__url_time_range}"
+            }
+          ]
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 11, "w": 12, "x": 0, "y": 28 },
+      "id": 12,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "scalar(max(chain_height)) - max by (sequencer) (chain_height)",
+          "legendFormat": "{{sequencer}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Blocks behind the network",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "short",
+          "min": 0.0,
+          "links": [
+            {
+              "title": "Open this sequencer's dashboard",
+              "url": "/d/sequencer?var-sequencer=${__field.labels.sequencer}&${__url_time_range}"
+            }
+          ]
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 11, "w": 12, "x": 12, "y": 28 },
+      "id": 13,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (sequencer) (production_failed_attempts)",
+          "legendFormat": "{{sequencer}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Failed production turns in a row",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "s",
+          "links": [
+            {
+              "title": "Open this sequencer's dashboard",
+              "url": "/d/sequencer?var-sequencer=${__field.labels.sequencer}&${__url_time_range}"
+            }
+          ]
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 11, "w": 12, "x": 0, "y": 39 },
+      "id": 14,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(${percentile}, sum by (le, sequencer) (rate(block_creation_time_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{sequencer}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Block creation time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "percent",
+          "min": 0.0,
+          "max": 100.0,
+          "links": [
+            {
+              "title": "Open this sequencer's dashboard",
+              "url": "/d/sequencer?var-sequencer=${__field.labels.sequencer}&${__url_time_range}"
+            }
+          ]
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 11, "w": 12, "x": 12, "y": 39 },
+      "id": 15,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "100 * max by (sequencer) (mempool_size) / max by (sequencer) (mempool_max_size)",
+          "legendFormat": "{{sequencer}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Mempool utilization",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "short",
+          "min": 0.0,
+          "links": [
+            {
+              "title": "Open this sequencer's dashboard",
+              "url": "/d/sequencer?var-sequencer=${__field.labels.sequencer}&${__url_time_range}"
+            }
+          ]
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 11, "w": 12, "x": 0, "y": 50 },
+      "id": 16,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (sequencer) (rate(submitted_transactions_total[$__rate_interval])) * 60",
+          "legendFormat": "{{sequencer}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Transactions submitted per minute",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Rejected before reaching the mempool, plus dropped from it.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "short",
+          "min": 0.0,
+          "links": [
+            {
+              "title": "Open this sequencer's dashboard",
+              "url": "/d/sequencer?var-sequencer=${__field.labels.sequencer}&${__url_time_range}"
+            }
+          ]
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 11, "w": 12, "x": 12, "y": 50 },
+      "id": 17,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "60 * (sum by (sequencer) (rate(before_mempool_failed_transactions_total[$__rate_interval])) + sum by (sequencer) (rate(mempool_failed_transactions_total[$__rate_interval])))",
+          "legendFormat": "{{sequencer}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Failed transactions per minute",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": [ "sequencer" ],
+  "templating": {
+    "list": [
+      {
+        "type": "custom",
+        "current": { "selected": true, "text": "p95", "value": "0.95" },
+        "includeAll": false,
+        "label": "Percentile",
+        "multi": false,
+        "name": "percentile",
+        "options": [
+          { "selected": false, "text": "p50", "value": "0.5" },
+          { "selected": false, "text": "p90", "value": "0.9" },
+          { "selected": true, "text": "p95", "value": "0.95" },
+          { "selected": false, "text": "p99", "value": "0.99" }
+        ],
+        "query": "p50 : 0.5, p90 : 0.9, p95 : 0.95, p99 : 0.99"
+      }
+    ]
+  },
+  "time": { "from": "now-15m", "to": "now" },
+  "timezone": "",
+  "title": "Sequencer network",
+  "uid": "sequencer-network"
+}

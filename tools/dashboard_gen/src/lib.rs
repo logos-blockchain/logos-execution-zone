@@ -13,17 +13,19 @@
 
 // Styling vocabularies passed to the optional `styling` setters are part of the
 // public API (and are used by this module's `Panel` fields and `finalize`).
+use schema::{
+    AlignValue, BarGaugeDisplay, BarGaugeOptions, BarGaugeValueMode, Calc, Custom, CustomConfig,
+    CustomVariable, DashboardLink, DashboardLinkKind, DataLink, Datasource, Defaults, DrawStyle,
+    EmptyList, FieldConfig, Fill, GaugeOptions, GraphMode, GridPos, Legend, LegendDisplay,
+    LineStyle, Matcher, MatcherKind, Options, Orientation, OverrideProperty, PanelModel, PanelType,
+    Placement, PropertyId, PropertyValue, QueryVariable, ReduceOptions, ShowValue, SortOrder,
+    Stacking, StatColorMode, StatOptions, StateTimelineOptions, StatusHistoryOptions, Templating,
+    TimeRange, TimeSeriesOptions, TimelineCustom, Tooltip, TooltipMode, ValueMapping,
+    ValueMappingKind, ValueMappingResult, VariableOption, VariableRefresh, VariableSort,
+};
 pub use schema::{
     AxisPlacement, Color, GradientMode, LineInterpolation, ShowPoints, StackingMode, Thresholds,
     Variable,
-};
-use schema::{
-    Calc, Custom, CustomVariable, Datasource, Defaults, DrawStyle, EmptyList, FieldConfig, Fill,
-    GaugeOptions, GraphMode, GridPos, Legend, LegendDisplay, LineStyle, Matcher, MatcherKind,
-    Options, OverrideProperty, PanelModel, PanelType, Placement, PropertyId, PropertyValue,
-    QueryVariable, ReduceOptions, SortOrder, Stacking, StatColorMode, StatOptions, Templating,
-    TimeRange, TimeSeriesOptions, Tooltip, TooltipMode, VariableOption, VariableRefresh,
-    VariableSort,
 };
 use serde::Serialize;
 pub use unit::Unit;
@@ -49,6 +51,14 @@ const PERCENTILE_VAR: &str = "percentile";
 /// Area fill under a timeseries line, as a percentage. Enough to read a series'
 /// shape at a glance without drowning the ones stacked behind it.
 pub(crate) const DEFAULT_FILL_OPACITY: u32 = 10;
+
+/// Fill of a timeline panel's bars and cells: solid enough to read the color,
+/// translucent enough to stay calm next to line charts.
+const TIMELINE_FILL_OPACITY: u32 = 70;
+
+/// Share of a timeline row (and status history column) its bars fill, leaving
+/// a gap between neighbours.
+const TIMELINE_ROW_HEIGHT: f64 = 0.9;
 
 /// A metric name plus label matchers, rendered as a Prometheus selector:
 /// `metric{label="value", …}`.
@@ -107,8 +117,12 @@ impl std::fmt::Display for Selector {
 pub struct Target {
     datasource: Datasource,
     expr: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    instant: Option<bool>,
     #[serde(rename = "legendFormat")]
     legend: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    range: Option<bool>,
     ref_id: String,
 }
 
@@ -117,7 +131,9 @@ impl Target {
         Self {
             datasource: Datasource::prometheus(),
             expr: expr.into(),
+            instant: None,
             legend: String::new(),
+            range: None,
             ref_id: ref_letter(0),
         }
     }
@@ -125,6 +141,15 @@ impl Target {
     #[must_use]
     pub fn legend(mut self, legend: impl Into<String>) -> Self {
         self.legend = legend.into();
+        self
+    }
+
+    /// Evaluate once, at the end of the time range, instead of at every step.
+    /// For panels that show one value per series, e.g. over `$__range`.
+    #[must_use]
+    pub const fn instant(mut self) -> Self {
+        self.instant = Some(true);
+        self.range = Some(false);
         self
     }
 }
@@ -174,12 +199,16 @@ enum Kind {
     Stat,
     TimeSeries,
     Gauge,
+    BarGauge,
+    StateTimeline,
+    StatusHistory,
 }
 
 /// A dashboard panel builder. Grid position and panel id are assigned by
 /// [`Dashboard::row`]; everything else is set here.
 pub struct Panel {
     title: String,
+    description: Option<String>,
     kind: Kind,
     targets: Vec<Target>,
     width: u32,
@@ -191,6 +220,10 @@ pub struct Panel {
     thresholds: Option<Thresholds>,
     span_nulls: bool,
     overrides: Vec<FieldOverride>,
+    mappings: Vec<(String, String, String)>,
+    links: Vec<DataLink>,
+    min_interval: Option<String>,
+    max_data_points: Option<u32>,
     // Optional timeseries styling, set via the `styling` setters.
     fill_opacity: Option<u32>,
     line_interpolation: Option<LineInterpolation>,
@@ -205,6 +238,7 @@ impl Panel {
     fn new(title: impl Into<String>, kind: Kind) -> Self {
         Self {
             title: title.into(),
+            description: None,
             kind,
             targets: Vec::new(),
             width: 0,
@@ -216,6 +250,10 @@ impl Panel {
             thresholds: None,
             span_nulls: false,
             overrides: Vec::new(),
+            mappings: Vec::new(),
+            links: Vec::new(),
+            min_interval: None,
+            max_data_points: None,
             fill_opacity: None,
             line_interpolation: None,
             show_points: None,
@@ -240,6 +278,69 @@ impl Panel {
     /// dial needs a range to fill — and [`Panel::thresholds`] for its coloring.
     pub fn gauge(title: impl Into<String>) -> Self {
         Self::new(title, Kind::Gauge)
+    }
+
+    /// One horizontal bar per series, e.g. to compare shares.
+    pub fn bar_gauge(title: impl Into<String>) -> Self {
+        Self::new(title, Kind::BarGauge)
+    }
+
+    /// One row per series, a bar wherever the value holds. Pair it with
+    /// [`Panel::value_mapping`] to name and color the states.
+    pub fn state_timeline(title: impl Into<String>) -> Self {
+        Self::new(title, Kind::StateTimeline)
+    }
+
+    /// One row per series, a cell per query step colored by its value: a
+    /// heatmap of series over time.
+    pub fn status_history(title: impl Into<String>) -> Self {
+        Self::new(title, Kind::StatusHistory)
+    }
+
+    /// Shown behind the `i` next to the title.
+    #[must_use]
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Show `value` as `text` in `color`.
+    #[must_use]
+    pub fn value_mapping(
+        mut self,
+        value: impl Into<String>,
+        text: impl Into<String>,
+        color: impl Into<String>,
+    ) -> Self {
+        self.mappings
+            .push((value.into(), text.into(), color.into()));
+        self
+    }
+
+    /// A link on every value; `url` may use Grafana's data link variables,
+    /// e.g. `${__field.labels.sequencer}`.
+    #[must_use]
+    pub fn link(mut self, title: impl Into<String>, url: impl Into<String>) -> Self {
+        self.links.push(DataLink {
+            title: title.into(),
+            url: url.into(),
+        });
+        self
+    }
+
+    /// Lower bound on the query step (`$__interval`), e.g. `"1m"`.
+    #[must_use]
+    pub fn min_interval(mut self, interval: impl Into<String>) -> Self {
+        self.min_interval = Some(interval.into());
+        self
+    }
+
+    /// Upper bound on the points per series, so the step grows with the range
+    /// rather than with the panel's width.
+    #[must_use]
+    pub const fn max_data_points(mut self, points: u32) -> Self {
+        self.max_data_points = Some(points);
+        self
     }
 
     /// Grid width in Grafana's 24-column units. Unset panels split the row's
@@ -334,6 +435,8 @@ impl Panel {
                     min: self.min,
                     max: self.max,
                     thresholds: self.thresholds,
+                    mappings: Vec::new(),
+                    links: Vec::new(),
                 };
                 let options = Options::Stat(StatOptions {
                     color_mode: StatColorMode::Value,
@@ -355,6 +458,8 @@ impl Panel {
                     min: self.min,
                     max: self.max,
                     thresholds: self.thresholds,
+                    mappings: Vec::new(),
+                    links: Vec::new(),
                 };
                 let options = Options::Gauge(GaugeOptions {
                     reduce_options: ReduceOptions {
@@ -369,8 +474,8 @@ impl Panel {
             }
             Kind::TimeSeries => {
                 let defaults = Defaults {
-                    color: None,
-                    custom: Some(Custom {
+                    color: self.color,
+                    custom: Some(CustomConfig::TimeSeries(Custom {
                         draw_style: DrawStyle::Line,
                         line_width: 1,
                         fill_opacity: self.fill_opacity.unwrap_or(DEFAULT_FILL_OPACITY),
@@ -384,12 +489,14 @@ impl Panel {
                         }),
                         axis_placement: self.axis_placement,
                         axis_label: self.axis_label,
-                    }),
+                    })),
                     unit,
                     decimals: None,
                     min: self.min,
                     max: self.max,
                     thresholds: self.thresholds,
+                    mappings: Vec::new(),
+                    links: Vec::new(),
                 };
                 // Panels with several series read better as a sortable table with
                 // a multi-series tooltip; single-series panels stay compact. A
@@ -406,6 +513,7 @@ impl Panel {
                         },
                         placement: Placement::Bottom,
                         calcs: vec![Calc::Last, Calc::Max],
+                        shown: None,
                     },
                     tooltip: if multi {
                         Tooltip {
@@ -421,16 +529,97 @@ impl Panel {
                 });
                 (defaults, options, PanelType::Timeseries)
             }
+            Kind::BarGauge => {
+                let defaults = Defaults {
+                    color: self.color,
+                    custom: None,
+                    unit,
+                    decimals: self.decimals,
+                    min: self.min,
+                    max: self.max,
+                    thresholds: self.thresholds,
+                    mappings: Vec::new(),
+                    links: Vec::new(),
+                };
+                let options = Options::BarGauge(BarGaugeOptions {
+                    display_mode: BarGaugeDisplay::Basic,
+                    orientation: Orientation::Horizontal,
+                    reduce_options: ReduceOptions {
+                        calcs: vec![Calc::LastNotNull],
+                        fields: String::new(),
+                        values: false,
+                    },
+                    show_unfilled: true,
+                    value_mode: BarGaugeValueMode::Text,
+                });
+                (defaults, options, PanelType::BarGauge)
+            }
+            Kind::StateTimeline | Kind::StatusHistory => {
+                let defaults = Defaults {
+                    color: self.color,
+                    custom: Some(CustomConfig::Timeline(TimelineCustom {
+                        line_width: 0,
+                        fill_opacity: self.fill_opacity.unwrap_or(TIMELINE_FILL_OPACITY),
+                    })),
+                    unit,
+                    decimals: self.decimals,
+                    min: self.min,
+                    max: self.max,
+                    thresholds: self.thresholds,
+                    mappings: Vec::new(),
+                    links: Vec::new(),
+                };
+                let tooltip = Tooltip {
+                    mode: TooltipMode::Single,
+                    sort: None,
+                };
+                // A mapped state names itself in the legend; a color scale
+                // has nothing to list.
+                let legend = Legend {
+                    display_mode: LegendDisplay::List,
+                    placement: Placement::Bottom,
+                    calcs: Vec::new(),
+                    shown: self.mappings.is_empty().then_some(false),
+                };
+                if matches!(self.kind, Kind::StateTimeline) {
+                    let options = Options::StateTimeline(StateTimelineOptions {
+                        align_value: AlignValue::Left,
+                        legend,
+                        merge_values: true,
+                        row_height: TIMELINE_ROW_HEIGHT,
+                        show_value: ShowValue::Never,
+                        tooltip,
+                    });
+                    (defaults, options, PanelType::StateTimeline)
+                } else {
+                    let options = Options::StatusHistory(StatusHistoryOptions {
+                        col_width: TIMELINE_ROW_HEIGHT,
+                        legend,
+                        row_height: TIMELINE_ROW_HEIGHT,
+                        show_value: ShowValue::Auto,
+                        tooltip,
+                    });
+                    (defaults, options, PanelType::StatusHistory)
+                }
+            }
+        };
+        let defaults = Defaults {
+            mappings: value_mappings(self.mappings),
+            links: self.links,
+            ..defaults
         };
 
         PanelModel {
             datasource: Datasource::prometheus(),
+            description: self.description,
             field_config: FieldConfig {
                 defaults,
                 overrides: self.overrides,
             },
             grid_pos,
             id,
+            interval: self.min_interval,
+            max_data_points: self.max_data_points,
             options,
             targets,
             title: self.title,
@@ -446,6 +635,8 @@ pub struct Dashboard {
     annotations: EmptyList,
     editable: bool,
     graph_tooltip: u32,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    links: Vec<DashboardLink>,
     panels: Vec<PanelModel>,
     refresh: String,
     schema_version: u32,
@@ -469,6 +660,7 @@ impl Dashboard {
             annotations: EmptyList::default(),
             editable: true,
             graph_tooltip: 1,
+            links: Vec::new(),
             panels: Vec::new(),
             refresh: "5s".to_owned(),
             schema_version: 39,
@@ -495,6 +687,21 @@ impl Dashboard {
     #[must_use]
     pub fn refresh(mut self, refresh: impl Into<String>) -> Self {
         self.refresh = refresh.into();
+        self
+    }
+
+    /// Add a top-bar link to every dashboard tagged `tag`, keeping the time
+    /// range.
+    #[must_use]
+    pub fn link_tagged(mut self, title: impl Into<String>, tag: impl Into<String>) -> Self {
+        self.links.push(DashboardLink {
+            as_dropdown: false,
+            include_vars: false,
+            keep_time: true,
+            tags: vec![tag.into()],
+            title: title.into(),
+            kind: DashboardLinkKind::Dashboards,
+        });
         self
     }
 
@@ -663,6 +870,35 @@ pub fn rate_per_min(metric: &Selector, legend: &str) -> Target {
     //`rate` is per-second whatever the window, so `* 60` is per-minute regardless of the panel's
     //`rate` zoom.
     Target::new(format!("rate({metric}[{RATE_WINDOW}]) * 60")).legend(legend)
+}
+
+/// [`Panel::value_mapping`]s as Grafana's single `value` mapping.
+fn value_mappings(mappings: Vec<(String, String, String)>) -> Vec<ValueMapping> {
+    if mappings.is_empty() {
+        return Vec::new();
+    }
+    let options = mappings
+        .into_iter()
+        .zip(0_u32..)
+        .map(|((value, text, color), index)| (value, ValueMappingResult { color, index, text }))
+        .collect();
+    vec![ValueMapping {
+        kind: ValueMappingKind::Value,
+        options,
+    }]
+}
+
+/// A per-minute rate target summing `metric`'s series, keeping `by` labels
+/// apart, e.g. `&["sequencer"]` for one line per sequencer.
+#[must_use]
+pub fn sum_rate_per_min(metric: &Selector, by: &[&str], legend: &str) -> Target {
+    let rate = format!("rate({metric}[{RATE_WINDOW}])");
+    let sum = if by.is_empty() {
+        format!("sum({rate})")
+    } else {
+        format!("sum by ({}) ({rate})", by.join(", "))
+    };
+    Target::new(format!("{sum} * 60")).legend(legend)
 }
 
 const fn default_unit() -> Unit {

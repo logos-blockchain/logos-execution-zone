@@ -2577,6 +2577,7 @@ dependencies = [
  "clap",
  "json-pretty-compact",
  "sequencer_core_metrics",
+ "sequencer_executor_actor_metrics",
  "sequencer_rpc_server_actor_metrics",
  "sequencer_service_metrics",
  "serde",

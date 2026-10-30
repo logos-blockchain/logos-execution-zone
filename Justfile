@@ -68,6 +68,7 @@ regenerate-dashboards:
     @echo "📊 Regenerating Grafana dashboards"
     @cargo build -q -p dashboard_gen
     @cargo run -q -p dashboard_gen -- sequencer > monitoring/grafana/dashboards/sequencer.json
+    @cargo run -q -p dashboard_gen -- network > monitoring/grafana/dashboards/network.json
 
 # Run criterion benches: fast crypto primitives, then the slow PPE verify (real proving setup).
 bench:
