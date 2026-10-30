@@ -1,6 +1,6 @@
 //! The channel's finalized history, read from the node and published to the broker.
 
-use std::{sync::Arc, time::Duration};
+use std::{num::NonZero, sync::Arc, time::Duration};
 
 use anyhow::anyhow;
 use common::block::Block;
@@ -46,6 +46,7 @@ impl NodeStream {
         channel_id: ChannelId,
         anchor: Option<ZoneAnchorRecord>,
         broker_ref: ActorRef<Broker<ChannelEvent>>,
+        batch_slots: NonZero<u64>,
     ) -> Result<Self> {
         let stream = Self::stream(
             node,
@@ -54,6 +55,7 @@ impl NodeStream {
                 .and_then(|anchor| anchor.slot.checked_sub(1))
                 .map(Slot::from),
             channel_id,
+            batch_slots,
         )
         .await?;
 
@@ -76,8 +78,8 @@ impl NodeStream {
         node: NodeHttpClient,
         last_seen_slot: Option<Slot>,
         channel_id: ChannelId,
+        batch_slots: NonZero<u64>,
     ) -> Result<impl Stream<Item = Result<(ZoneMessage, Slot)>>> {
-        const BATCH_SIZE: Slot = Slot::new(100);
         const STREAM_ATTEMPT_LIMIT: usize = 5;
         const STREAM_RETRY_TIMEOUT: Duration = Duration::from_millis(100);
 
@@ -140,12 +142,9 @@ impl NodeStream {
                 let start_slot = stream_state
                     .last_processed_slot
                     .map_or_else(Slot::genesis, |slot| slot.strict_add(1.into()));
-                let end_slot = (Slot::from(
-                    start_slot
-                        .into_inner()
-                        .saturating_add(BATCH_SIZE.into_inner()),
-                ))
-                .min(stream_state.last_known_lib_slot);
+                let end_slot =
+                    (Slot::from(start_slot.into_inner().saturating_add(batch_slots.get())))
+                        .min(stream_state.last_known_lib_slot);
 
                 let backfill_stream = node
                     .zone_messages_in_blocks(start_slot, end_slot, channel_id)

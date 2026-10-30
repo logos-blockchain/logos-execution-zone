@@ -1124,6 +1124,7 @@ pub fn spawn_standalone_bedrock_actor(
             channel_id,
             storage_ref,
             broker_ref,
+            backfill_batch_slots: sequencer_core::config::default_backfill_batch_slots(),
         },
     ))
 }

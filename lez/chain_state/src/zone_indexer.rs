@@ -4,13 +4,17 @@
 //! read-only-`ZoneSequencer` migration the removal asks for. Delete this
 //! module once that migration lands.
 
+use std::num::NonZero;
+
 use futures::{Stream, StreamExt as _, future::Either};
 use logos_blockchain_zone_sdk::{
     ZoneMessage, adapter,
     node_types::{ChannelId, Error as NodeError, Slot},
 };
 
-const BATCH_SIZE: Slot = Slot::new(100);
+/// Slots of finalized history each read covers by default. Bedrock slots follow the wall clock,
+/// so history is mostly empty slots that wide batches cross in few requests.
+pub const DEFAULT_BACKFILL_BATCH_SLOTS: NonZero<u64> = NonZero::new(10_000).expect("nonzero");
 
 /// Indexer errors.
 #[derive(Debug, thiserror::Error)]
@@ -30,6 +34,8 @@ pub enum Error {
 pub struct ZoneIndexer<Node> {
     channel_id: ChannelId,
     node: Node,
+    /// Slots each read covers.
+    batch_slots: NonZero<u64>,
 }
 
 impl<Node> ZoneIndexer<Node>
@@ -37,8 +43,12 @@ where
     Node: adapter::Node + Clone + Sync,
 {
     #[must_use]
-    pub const fn new(channel_id: ChannelId, node: Node) -> Self {
-        Self { channel_id, node }
+    pub const fn new(channel_id: ChannelId, node: Node, batch_slots: NonZero<u64>) -> Self {
+        Self {
+            channel_id,
+            node,
+            batch_slots,
+        }
     }
 
     /// Stream finalized [`ZoneMessage`]s from `last_slot` (exclusive) up to
@@ -69,7 +79,7 @@ where
             let end_slot = (Slot::from(
                 current_slot
                     .into_inner()
-                    .saturating_add(BATCH_SIZE.into_inner())
+                    .saturating_add(self.batch_slots.get())
                     .checked_sub(1)
                     .expect("slot shouldn't overflow"),
             ))
@@ -128,9 +138,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
+    use std::{
+        num::NonZero,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     use async_trait::async_trait;
@@ -146,9 +159,10 @@ mod tests {
     };
 
     use super::{
-        BATCH_SIZE, ChannelId, Error, NodeError, Slot, ZoneIndexer, ZoneMessage, adapter,
-        stop_at_read_error,
+        ChannelId, Error, NodeError, Slot, ZoneIndexer, ZoneMessage, adapter, stop_at_read_error,
     };
+
+    const BATCH_SLOTS: NonZero<u64> = NonZero::new(100).expect("nonzero");
 
     /// `lib_slot` far enough ahead that at least one batch is attempted.
     const CONSENSUS_INFO: &str = r#"{
@@ -270,7 +284,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_read_is_one_error_item_naming_the_range_it_could_not_read() {
-        let indexer = ZoneIndexer::new(channel_id(), ScriptedNode::serving(0));
+        let indexer = ZoneIndexer::new(channel_id(), ScriptedNode::serving(0), BATCH_SLOTS);
         let stream = indexer
             .next_messages(None)
             .await
@@ -284,8 +298,8 @@ mod tests {
         assert_eq!(*from, Slot::genesis(), "a cold start reads from genesis");
         assert_eq!(
             *to,
-            Slot::from(BATCH_SIZE.into_inner().saturating_sub(1)),
-            "the first batch spans BATCH_SIZE slots"
+            Slot::from(BATCH_SLOTS.get().saturating_sub(1)),
+            "the first batch spans BATCH_SLOTS slots"
         );
     }
 
@@ -314,7 +328,7 @@ mod tests {
 
     #[tokio::test]
     async fn batches_advance_and_end_at_lib_slot() {
-        let indexer = ZoneIndexer::new(channel_id(), ScriptedNode::always_serving());
+        let indexer = ZoneIndexer::new(channel_id(), ScriptedNode::always_serving(), BATCH_SLOTS);
         let stream = indexer
             .next_messages(None)
             .await
@@ -335,7 +349,7 @@ mod tests {
 
     #[tokio::test]
     async fn messages_served_before_a_failure_are_still_delivered() {
-        let indexer = ZoneIndexer::new(channel_id(), ScriptedNode::serving(1));
+        let indexer = ZoneIndexer::new(channel_id(), ScriptedNode::serving(1), BATCH_SLOTS);
         let stream = indexer
             .next_messages(None)
             .await

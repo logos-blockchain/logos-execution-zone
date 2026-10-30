@@ -1,6 +1,8 @@
 //! Startup check that a local store still belongs to the chain the connected
 //! channel serves.
 
+use std::num::NonZero;
+
 use anyhow::Result;
 use common::{HashType, block::Block};
 use futures::StreamExt as _;
@@ -245,11 +247,12 @@ enum AnchorProbe {
 /// [`ChainConsistency::Inconclusive`].
 ///
 /// `node` need only implement the zone-sdk [`adapter::Node`] trait; a throwaway
-/// [`ZoneIndexer`] is built internally for the channel read.
+/// [`ZoneIndexer`] reading `batch_slots` per request is built internally for the channel read.
 pub async fn verify_chain_consistency<N>(
     node: &N,
     channel_id: ChannelId,
     anchor: &Anchor,
+    batch_slots: NonZero<u64>,
 ) -> Result<ChainConsistency>
 where
     N: adapter::Node + Clone + Sync,
@@ -268,7 +271,7 @@ where
         return Ok(ChainConsistency::Inconclusive);
     };
 
-    let zone_indexer = ZoneIndexer::new(channel_id, node.clone());
+    let zone_indexer = ZoneIndexer::new(channel_id, node.clone(), batch_slots);
     let scan = async {
         let stream = zone_indexer
             .next_messages(Some(Slot::from(from_slot)))

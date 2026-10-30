@@ -1,9 +1,16 @@
 use std::{
-    collections::HashMap, fmt::Display, fs::File, io::BufReader, num::NonZeroU32, path::Path,
-    str::FromStr, time::Duration,
+    collections::HashMap,
+    fmt::Display,
+    fs::File,
+    io::BufReader,
+    num::{NonZero, NonZeroU32},
+    path::Path,
+    str::FromStr,
+    time::Duration,
 };
 
 use anyhow::{Context as _, Result, ensure};
+use chain_state::zone_indexer::DEFAULT_BACKFILL_BATCH_SLOTS;
 use common::{HashType, config::BasicAuth};
 use cross_zone_inbox_core::CrossZoneConfig;
 use humantime_serde;
@@ -50,6 +57,9 @@ pub struct IndexerConfig {
     /// is unrepresentable and rejected at config parse.
     #[serde(default = "default_peer_block_cache_window")]
     pub peer_block_cache_window: NonZeroU32,
+    /// Slots of finalized history each channel read covers.
+    #[serde(default = "default_backfill_batch_slots")]
+    pub backfill_batch_slots: NonZero<u64>,
     /// Whether to wipe the indexer store and re-index from scratch when the startup
     /// chain-identity check finds the channel serving a different block than the one
     /// stored at the same id.
@@ -158,6 +168,11 @@ impl EventFilterConfig {
 /// The window applied when the config omits `peer_block_cache_window`.
 pub(crate) const fn default_peer_block_cache_window() -> NonZeroU32 {
     NonZeroU32::new(1024).expect("1024 is nonzero")
+}
+
+#[must_use]
+pub const fn default_backfill_batch_slots() -> NonZero<u64> {
+    DEFAULT_BACKFILL_BATCH_SLOTS
 }
 
 #[cfg(test)]
