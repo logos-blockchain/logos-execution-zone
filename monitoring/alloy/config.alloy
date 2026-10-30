@@ -1,0 +1,64 @@
+// Ships this compose project's container logs to Loki.
+//
+// Each stream is labelled `service_name` (the compose service), and a sequencer's also
+// `sequencer` (`sequencer_service_0` → `sequencer_0`), matching Prometheus' label so a
+// dashboard's Sequencer dropdown filters metrics and logs alike. Every line gets the
+// `level` it was logged at.
+
+discovery.docker "containers" {
+	host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "containers" {
+	targets = discovery.docker.containers.targets
+
+	// Only this stack: other compose projects (e.g. the Docker-backed tests' Bedrock nodes)
+	// share the daemon.
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+		regex         = sys.env("COMPOSE_PROJECT")
+		action        = "keep"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+		target_label  = "service_name"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+		regex         = "sequencer_service_(\\d+)"
+		target_label  = "sequencer"
+		replacement   = "sequencer_$1"
+	}
+}
+
+loki.source.docker "containers" {
+	host             = "unix:///var/run/docker.sock"
+	targets          = discovery.relabel.containers.output
+	forward_to       = [loki.process.levels.receiver]
+	refresh_interval = "5s"
+}
+
+loki.process "levels" {
+	// The Bedrock node colors its output for a terminal.
+	stage.decolorize { }
+
+	// `[2026-10-30T22:34:52Z INFO  module] …` (ours) and `2026-10-30T22:34:53Z ERROR module: …`
+	// (the Bedrock node's).
+	stage.regex {
+		expression = "^\\[?\\S+\\s+(?P<level>TRACE|DEBUG|INFO|WARN|ERROR)\\b"
+	}
+
+	stage.labels {
+		values = {level = ""}
+	}
+
+	forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+	endpoint {
+		url = "http://loki:3100/loki/api/v1/push"
+	}
+}

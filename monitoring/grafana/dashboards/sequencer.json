@@ -2,6 +2,16 @@
   "annotations": { "list": [ ] },
   "editable": true,
   "graphTooltip": 1,
+  "links": [
+    {
+      "asDropdown": false,
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [ "sequencer" ],
+      "title": "Sequencer dashboards",
+      "type": "dashboards"
+    }
+  ],
   "panels": [
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -19,7 +29,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "chain_height",
+          "expr": "chain_height{sequencer=\"$sequencer\"}",
           "legendFormat": "height",
           "refId": "A"
         }
@@ -29,6 +39,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Counted once finalized: until then a conflict can orphan a block.",
       "fieldConfig": {
         "defaults": { "color": { "mode": "fixed", "fixedColor": "green" }, "unit": "short", "decimals": 0 },
         "overrides": [ ]
@@ -43,7 +54,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "blocks_produced_total",
+          "expr": "blocks_produced_total{sequencer=\"$sequencer\"}",
           "legendFormat": "produced",
           "refId": "A"
         }
@@ -71,13 +82,111 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(blocks_produced_total[$__rate_interval]) * 60",
+          "expr": "rate(blocks_produced_total{sequencer=\"$sequencer\"}[$__rate_interval]) * 60",
           "legendFormat": "produced · blocks/min",
           "refId": "A"
         }
       ],
       "title": "Block production rate",
       "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 0, "fillOpacity": 70 },
+          "unit": "short",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "color": "transparent", "index": 0, "text": "waiting" },
+                "1": { "color": "blue", "index": 1, "text": "writing" }
+              }
+            }
+          ]
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 5, "w": 12, "x": 0, "y": 7 },
+      "id": 4,
+      "options": {
+        "alignValue": "left",
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": [ ] },
+        "mergeValues": true,
+        "rowHeight": 0.9,
+        "showValue": "never",
+        "tooltip": { "mode": "single" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "turn_to_write{sequencer=\"$sequencer\"}",
+          "legendFormat": "turn",
+          "refId": "A"
+        }
+      ],
+      "title": "Turn to write",
+      "type": "state-timeline"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" }, "unit": "short", "decimals": 0 },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 7 },
+      "id": 5,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "turns_to_write_total{sequencer=\"$sequencer\"}",
+          "legendFormat": "turns",
+          "refId": "A"
+        }
+      ],
+      "title": "Turns to write since startup",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1.0 },
+              { "color": "red", "value": 3.0 }
+            ]
+          }
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 7 },
+      "id": 6,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "production_failed_attempts{sequencer=\"$sequencer\"}",
+          "legendFormat": "failed",
+          "refId": "A"
+        }
+      ],
+      "title": "Failed production turns in a row",
+      "type": "stat"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -93,8 +202,8 @@
           }
         ]
       },
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 7 },
-      "id": 4,
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 12 },
+      "id": 7,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -102,13 +211,13 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(${percentile}, sum by (le) (rate(block_creation_time_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(${percentile}, sum by (le) (rate(block_creation_time_seconds_bucket{sequencer=\"$sequencer\"}[$__rate_interval])))",
           "legendFormat": "${percentile:text}",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(block_creation_time_seconds_sum[$__rate_interval]) / rate(block_creation_time_seconds_count[$__rate_interval])",
+          "expr": "rate(block_creation_time_seconds_sum{sequencer=\"$sequencer\"}[$__rate_interval]) / rate(block_creation_time_seconds_count{sequencer=\"$sequencer\"}[$__rate_interval])",
           "legendFormat": "avg",
           "refId": "B"
         }
@@ -122,8 +231,8 @@
         "defaults": { "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 }, "unit": "s" },
         "overrides": [ ]
       },
-      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 16 },
-      "id": 5,
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 21 },
+      "id": 8,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -131,7 +240,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(${percentile}, sum by (le, kind, origin, status) (rate(mempool_transaction_application_time_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(${percentile}, sum by (le, kind, origin, status) (rate(mempool_transaction_application_time_seconds_bucket{sequencer=\"$sequencer\"}[$__rate_interval])))",
           "legendFormat": "{{kind}} · {{origin}} · {{status}}",
           "refId": "A"
         }
@@ -153,8 +262,8 @@
           }
         ]
       },
-      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 16 },
-      "id": 6,
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 21 },
+      "id": 9,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -162,13 +271,13 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(${percentile}, sum by (le) (rate(transactions_per_block_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(${percentile}, sum by (le) (rate(transactions_per_block_bucket{sequencer=\"$sequencer\"}[$__rate_interval])))",
           "legendFormat": "${percentile:text}",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(transactions_per_block_sum[$__rate_interval]) / rate(transactions_per_block_count[$__rate_interval])",
+          "expr": "rate(transactions_per_block_sum{sequencer=\"$sequencer\"}[$__rate_interval]) / rate(transactions_per_block_count{sequencer=\"$sequencer\"}[$__rate_interval])",
           "legendFormat": "avg",
           "refId": "B"
         }
@@ -195,8 +304,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 25 },
-      "id": 7,
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 30 },
+      "id": 10,
       "options": {
         "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
         "showThresholdLabels": false,
@@ -205,7 +314,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "100 * mempool_size / mempool_max_size",
+          "expr": "100 * mempool_size{sequencer=\"$sequencer\"} / mempool_max_size{sequencer=\"$sequencer\"}",
           "legendFormat": "utilization",
           "refId": "A"
         }
@@ -235,8 +344,8 @@
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 25 },
-      "id": 8,
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 30 },
+      "id": 11,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -244,13 +353,13 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "mempool_size",
+          "expr": "mempool_size{sequencer=\"$sequencer\"}",
           "legendFormat": "queued",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "mempool_max_size",
+          "expr": "mempool_max_size{sequencer=\"$sequencer\"}",
           "legendFormat": "capacity",
           "refId": "B"
         }
@@ -277,8 +386,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 33 },
-      "id": 9,
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 38 },
+      "id": 12,
       "options": {
         "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
         "showThresholdLabels": false,
@@ -287,7 +396,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "100 * (increase(before_mempool_failed_transactions_total[$__range]) + increase(mempool_failed_transactions_total[$__range])) / clamp_min(increase(submitted_transactions_total[$__range]), 1)",
+          "expr": "100 * (increase(before_mempool_failed_transactions_total{sequencer=\"$sequencer\"}[$__range]) + increase(mempool_failed_transactions_total{sequencer=\"$sequencer\"}[$__range])) / clamp_min(increase(submitted_transactions_total{sequencer=\"$sequencer\"}[$__range]), 1)",
           "legendFormat": "failed",
           "refId": "A"
         }
@@ -318,8 +427,8 @@
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 33 },
-      "id": 10,
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 38 },
+      "id": 13,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -327,19 +436,19 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(submitted_transactions_total[$__rate_interval]) * 60",
+          "expr": "rate(submitted_transactions_total{sequencer=\"$sequencer\"}[$__rate_interval]) * 60",
           "legendFormat": "submitted",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(before_mempool_failed_transactions_total[$__rate_interval]) * 60",
+          "expr": "rate(before_mempool_failed_transactions_total{sequencer=\"$sequencer\"}[$__rate_interval]) * 60",
           "legendFormat": "failed · before mempool",
           "refId": "B"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(mempool_failed_transactions_total[$__rate_interval]) * 60",
+          "expr": "rate(mempool_failed_transactions_total{sequencer=\"$sequencer\"}[$__rate_interval]) * 60",
           "legendFormat": "failed · in mempool",
           "refId": "C"
         }
@@ -353,8 +462,8 @@
         "defaults": { "color": { "mode": "fixed", "fixedColor": "red" }, "unit": "short", "decimals": 0 },
         "overrides": [ ]
       },
-      "gridPos": { "h": 7, "w": 6, "x": 0, "y": 41 },
-      "id": 11,
+      "gridPos": { "h": 7, "w": 6, "x": 0, "y": 46 },
+      "id": 14,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -363,7 +472,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "cross_zone_dispatches_retired_total",
+          "expr": "cross_zone_dispatches_retired_total{sequencer=\"$sequencer\"}",
           "legendFormat": "given up on",
           "refId": "A"
         }
@@ -377,8 +486,8 @@
         "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" }, "unit": "short", "decimals": 0 },
         "overrides": [ ]
       },
-      "gridPos": { "h": 7, "w": 6, "x": 6, "y": 41 },
-      "id": 12,
+      "gridPos": { "h": 7, "w": 6, "x": 6, "y": 46 },
+      "id": 15,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -387,7 +496,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "cross_zone_dead_letter_dispatches",
+          "expr": "cross_zone_dead_letter_dispatches{sequencer=\"$sequencer\"}",
           "legendFormat": "retained",
           "refId": "A"
         }
@@ -410,8 +519,8 @@
           }
         ]
       },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 41 },
-      "id": 13,
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 46 },
+      "id": 16,
       "options": {
         "legend": { "displayMode": "list", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "single" }
@@ -419,7 +528,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(cross_zone_dispatches_retired_total[$__rate_interval]) * 60",
+          "expr": "rate(cross_zone_dispatches_retired_total{sequencer=\"$sequencer\"}[$__rate_interval]) * 60",
           "legendFormat": "given up on",
           "refId": "A"
         }
@@ -437,8 +546,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 48 },
-      "id": 14,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 53 },
+      "id": 17,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -446,13 +555,37 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "cross_zone_peer_committee_suspended",
+          "expr": "cross_zone_peer_committee_suspended{sequencer=\"$sequencer\"}",
           "legendFormat": "peer {{peer}}",
           "refId": "A"
         }
       ],
       "title": "Peer watchers suspended on the committee floor",
       "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "loki", "uid": "loki" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [ ] },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 61 },
+      "id": 18,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "All logs in Explore",
+          "url": "/explore?schemaVersion=1&panes={\"logs\":{\"datasource\":\"loki\",\"queries\":[{\"datasource\":{\"type\":\"loki\",\"uid\":\"loki\"},\"expr\":\"{sequencer=\\\"$sequencer\\\"}\",\"refId\":\"A\"}],\"range\":{\"from\":\"${__from}\",\"to\":\"${__to}\"}}}"
+        }
+      ],
+      "options": { "enableLogDetails": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki" },
+          "expr": "{sequencer=\"$sequencer\", level=~\"WARN|ERROR\"}",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "title": "Warnings and errors",
+      "type": "logs"
     }
   ],
   "refresh": "5s",
@@ -461,6 +594,19 @@
   "templating": {
     "list": [
       {
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(chain_height, sequencer)",
+        "includeAll": false,
+        "label": "Sequencer",
+        "multi": false,
+        "name": "sequencer",
+        "query": "label_values(chain_height, sequencer)",
+        "refresh": 2,
+        "sort": 7
+      },
+      {
+        "type": "custom",
         "current": { "selected": true, "text": "p95", "value": "0.95" },
         "includeAll": false,
         "label": "Percentile",
@@ -472,8 +618,7 @@
           { "selected": true, "text": "p95", "value": "0.95" },
           { "selected": false, "text": "p99", "value": "0.99" }
         ],
-        "query": "p50 : 0.5, p90 : 0.9, p95 : 0.95, p99 : 0.99",
-        "type": "custom"
+        "query": "p50 : 0.5, p90 : 0.9, p95 : 0.95, p99 : 0.99"
       }
     ]
   },

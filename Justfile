@@ -68,6 +68,7 @@ regenerate-dashboards:
     @echo "📊 Regenerating Grafana dashboards"
     @cargo build -q -p dashboard_gen
     @cargo run -q -p dashboard_gen -- sequencer > monitoring/grafana/dashboards/sequencer.json
+    @cargo run -q -p dashboard_gen -- network > monitoring/grafana/dashboards/network.json
 
 # Run criterion benches: fast crypto primitives, then the slow PPE verify (real proving setup).
 bench:
@@ -107,11 +108,12 @@ resolve-host-bedrock-node:
         --output-directory bedrock/.resolved-host \
         --target-directory target/bedrock-node-host
 
-# Run Prometheus + Grafana in docker. Grafana: http://localhost:3000 (anonymous
-# admin), Prometheus: http://localhost:9090. Scrapes the sequencer's /metrics.
+# Run Prometheus, Loki (fed by Alloy) and Grafana in docker. Grafana: http://localhost:3000
+# (anonymous admin), Prometheus: http://localhost:9090. Scrapes the sequencers' /metrics and
+# collects the stack's container logs.
 run-monitoring:
-    @echo "📊 Running Prometheus (http://localhost:9090) + Grafana (http://localhost:3000)"
-    docker compose --profile monitoring up prometheus grafana
+    @echo "📊 Running Prometheus (http://localhost:9090), Loki + Grafana (http://localhost:3000)"
+    docker compose --profile monitoring up prometheus loki alloy grafana
 
 # ---- Decentralized sequencing tools ----
 

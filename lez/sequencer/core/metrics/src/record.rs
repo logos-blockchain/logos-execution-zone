@@ -89,7 +89,7 @@ pub fn record_chain_height(height: u64) {
 
 fn blocks_produced_total_counter() -> Counter {
     counter!(
-        description: "Number of blocks produced by this sequencer and applied to the head",
+        description: "Number of blocks produced by this sequencer and finalized on the channel",
         unit: Unit::Count,
         names::BLOCKS_PRODUCED_TOTAL
     )

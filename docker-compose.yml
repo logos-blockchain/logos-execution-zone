@@ -1,5 +1,6 @@
 # The local stack: a dev Bedrock node, the four-sequencer committee devnet, the indexer and the
-# explorer. `--profile monitoring` adds Prometheus and Grafana.
+# explorer. `--profile monitoring` adds Prometheus, Loki (with Alloy shipping container logs) and
+# Grafana.
 #
 # Bedrock, sequencer and indexer state live in volumes, so the stack resumes where it stopped,
 # rebuilds included. `docker compose down -v` (or `just clean`) starts over from a fresh chain.
@@ -176,6 +177,35 @@ services:
       - grafana_data:/var/lib/grafana
     depends_on:
       - prometheus
+      - loki
+
+  loki:
+    image: grafana/loki:3.7.9
+    container_name: loki
+    profiles: [monitoring]
+    command:
+      - -config.file=/etc/loki/loki.yml
+    volumes:
+      - ./monitoring/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/loki
+
+  # Reads every container's output through the Docker socket and ships this project's to Loki.
+  alloy:
+    image: grafana/alloy:v1.21.3
+    container_name: alloy
+    profiles: [monitoring]
+    command:
+      - run
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    environment:
+      COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME}
+    volumes:
+      - ./monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy_data:/var/lib/alloy/data
+    depends_on:
+      - loki
 
 volumes:
   sequencer_data_0:
@@ -184,4 +214,6 @@ volumes:
   sequencer_data_3:
   indexer_data:
   prometheus_data:
+  loki_data:
+  alloy_data:
   grafana_data:
