@@ -103,7 +103,7 @@ jobs:
       group: cucumber-${{ github.event.pull_request.number || github.sha }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-  bedrock-resolver-tests:
+  ci-python-scripts-tests:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
@@ -120,6 +120,9 @@ jobs:
 
       - name: Test integration test target discovery
         run: python3 .github/scripts/test_discover_integration_test_targets.py -v
+
+      - name: Test CODEOWNERS and its pull request comment
+        run: python3 .github/scripts/test_codeowners_comment.py -v
 
   fmt-rs:
     needs: ci-image
@@ -628,7 +631,7 @@ jobs:
       - ci-image
       - bedrock-node
       - cucumber
-      - bedrock-resolver-tests
+      - ci-python-scripts-tests
       - fmt-rs
       - fmt-toml
       - machete
