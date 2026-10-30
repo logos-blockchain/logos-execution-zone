@@ -28,7 +28,8 @@
 )]
 
 use std::{
-    ffi::{CStr, c_char},
+    ffi::{CStr, CString, c_char},
+    ptr,
     sync::OnceLock,
 };
 
@@ -44,6 +45,7 @@ use crate::{
 pub mod account;
 pub mod bridge;
 pub mod client;
+pub mod fees;
 pub mod generic_transaction;
 pub mod keys;
 pub mod label;
@@ -100,6 +102,13 @@ pub(crate) fn map_execution_error(e: ExecutionFailureKind) -> FfiOperationError 
         }
         _ => FfiOperationError::InternalError,
     }
+}
+
+/// `value` as an owned C string, or null when absent.
+pub(crate) fn c_string_or_null(value: Option<impl ToString>) -> *mut c_char {
+    value
+        .and_then(|value| CString::new(value.to_string()).ok())
+        .map_or(ptr::null_mut(), CString::into_raw)
 }
 
 /// Reads a nullable `FfiBytes32` pointer as an optional `AccountId`.

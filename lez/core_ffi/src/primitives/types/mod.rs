@@ -378,7 +378,7 @@ impl<T> From<FfiOption<T>> for Option<T> {
 /// pointer): a fee-exempt transaction carries `has_fee == false` and a zeroed
 /// declaration.
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct FfiFeeDeclaration {
     pub payer: FfiAccountId,
     pub gas_limit: u64,

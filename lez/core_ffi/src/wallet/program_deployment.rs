@@ -1,13 +1,14 @@
-use std::{ffi::CString, ptr, slice};
+use std::{ptr, slice};
 
 use lee::AccountId;
-use wallet::program_facades::program_loader::ProgramLoader;
+use wallet::{ExecutionFailureKind, program_facades::program_loader::ProgramLoader};
 
 use crate::{
     error::{FfiOperationError, print_error},
     primitives::types::FfiBytes32,
     wallet::{
-        WalletHandle, block_on,
+        WalletHandle, block_on, c_string_or_null,
+        fees::FfiSendFee,
         generic_transaction::{FfiProgram, FfiTransactionResult},
         lifecycle::get_wallet,
         read_optional_account_id,
@@ -27,11 +28,18 @@ unsafe fn read_account_ids(data: *const FfiBytes32, len: usize) -> Vec<AccountId
         .collect()
 }
 
-fn write_result(out_result: *mut FfiTransactionResult, tx_hash: common::HashType) {
-    let tx_hash = CString::new(tx_hash.to_string()).map_or(ptr::null_mut(), CString::into_raw);
+fn write_result(out_result: *mut FfiTransactionResult, tx_hash: Option<impl ToString>) {
     unsafe {
-        (*out_result).tx_hash = tx_hash;
+        (*out_result).tx_hash = c_string_or_null(tx_hash);
         (*out_result).success = true;
+    }
+}
+
+/// The wallet failure behind a multi-transaction upload's `error`, so its dry run is recorded.
+fn upload_failure(error: anyhow::Error) -> ExecutionFailureKind {
+    match error.downcast_ref() {
+        Some(ExecutionFailureKind::DryRun(report)) => ExecutionFailureKind::DryRun(report.clone()),
+        _ => ExecutionFailureKind::SequencerError(error),
     }
 }
 
@@ -39,6 +47,7 @@ fn write_failure(out_result: *mut FfiTransactionResult) {
     unsafe {
         (*out_result).tx_hash = ptr::null_mut();
         (*out_result).success = false;
+        (*out_result).fee = FfiSendFee::default();
     }
 }
 
@@ -84,7 +93,9 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_write_segment(
     let next_segment = unsafe { read_optional_account_id(next_segment) };
     let payer = unsafe { read_optional_account_id(payer) };
 
-    match block_on(ProgramLoader(&wallet).write_segment(target, bytecode, next_segment, payer)) {
+    let sent =
+        block_on(ProgramLoader(&wallet).write_segment(target, bytecode, next_segment, payer));
+    match unsafe { (*out_result).fee.record(&wallet, sent) } {
         Ok(tx_hash) => {
             write_result(out_result, tx_hash);
             FfiOperationError::Success
@@ -142,7 +153,8 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_create_header(
         return FfiOperationError::NetworkError;
     }
 
-    match block_on(loader.create_header(target, first_segment, immutable, payer)) {
+    let sent = block_on(loader.create_header(target, first_segment, immutable, payer));
+    match unsafe { (*out_result).fee.record(&wallet, sent) } {
         Ok(tx_hash) => {
             write_result(out_result, tx_hash);
             FfiOperationError::Success
@@ -202,7 +214,8 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update_header(
         return FfiOperationError::NetworkError;
     }
 
-    match block_on(loader.update_header(header, first_segment, immutable, payer)) {
+    let sent = block_on(loader.update_header(header, first_segment, immutable, payer));
+    match unsafe { (*out_result).fee.record(&wallet, sent) } {
         Ok(tx_hash) => {
             write_result(out_result, tx_hash);
             FfiOperationError::Success
@@ -264,14 +277,11 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_deploy(
     let elf = unsafe { read_bytes(elf_data, elf_size) };
     let payer = unsafe { read_optional_account_id(payer) };
 
-    match block_on(ProgramLoader(&wallet).deploy(header, &segment_ids, elf, immutable, payer)) {
+    let sent = block_on(ProgramLoader(&wallet).deploy(header, &segment_ids, elf, immutable, payer))
+        .map_err(upload_failure);
+    match unsafe { (*out_result).fee.record(&wallet, sent) } {
         Ok(header_account_id) => {
-            let tx_hash_str = header_account_id.to_string();
-            let tx_hash = CString::new(tx_hash_str).map_or(ptr::null_mut(), CString::into_raw);
-            unsafe {
-                (*out_result).tx_hash = tx_hash;
-                (*out_result).success = true;
-            }
+            write_result(out_result, header_account_id);
             FfiOperationError::Success
         }
         Err(e) => {
@@ -333,14 +343,11 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update(
     let elf = unsafe { read_bytes(elf_data, elf_size) };
     let payer = unsafe { read_optional_account_id(payer) };
 
-    match block_on(ProgramLoader(&wallet).update(header, &segment_ids, elf, immutable, payer)) {
-        Ok(()) => {
-            let tx_hash =
-                CString::new(header.to_string()).map_or(ptr::null_mut(), CString::into_raw);
-            unsafe {
-                (*out_result).tx_hash = tx_hash;
-                (*out_result).success = true;
-            }
+    let sent = block_on(ProgramLoader(&wallet).update(header, &segment_ids, elf, immutable, payer))
+        .map_err(upload_failure);
+    match unsafe { (*out_result).fee.record(&wallet, sent) } {
+        Ok(updated) => {
+            write_result(out_result, updated.map(|()| header));
             FfiOperationError::Success
         }
         Err(e) => {

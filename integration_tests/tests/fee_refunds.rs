@@ -65,8 +65,7 @@ async fn a_fee_refund_is_claimed_by_the_next_send() -> Result<()> {
     let mut ctx = TestContext::new().await?;
     let from: AccountId = ctx.existing_private_accounts()[0];
     let to: AccountId = ctx.existing_public_accounts()[1];
-    ctx.wallet_mut()
-        .set_private_fee_headroom_blocks(HEADROOM_BLOCKS);
+    ctx.wallet_mut().set_fee_headroom_blocks(HEADROOM_BLOCKS);
     let reserve = reserve_at_floor();
     let surplus = reserve - min_private_fee();
     assert!(surplus > fee_core::market::MIN_PRIVATE_REFUND);
@@ -101,8 +100,7 @@ async fn a_fee_refund_goes_to_the_public_target() -> Result<()> {
     let mut ctx = TestContext::new().await?;
     let from: AccountId = ctx.existing_private_accounts()[0];
     let to: AccountId = ctx.existing_public_accounts()[1];
-    ctx.wallet_mut()
-        .set_private_fee_headroom_blocks(HEADROOM_BLOCKS);
+    ctx.wallet_mut().set_fee_headroom_blocks(HEADROOM_BLOCKS);
     ctx.wallet_mut().set_private_refund_target(Some(to));
     let reserve = reserve_at_floor();
     let surplus = reserve - min_private_fee();

@@ -48,12 +48,21 @@ pub struct WalletConfig {
     pub seq_poll_max_retries: u64,
     /// Max amount of blocks to poll in one request.
     pub seq_block_poll_max_amount: u64,
+    /// The most execution gas a public transaction declares, and the budget it is simulated
+    /// within to measure its gas.
     #[serde(default = "default_gas_limit")]
     pub gas_limit: u64,
-    /// How many blocks of the steepest base fee climb a privacy-preserving transaction's reserve
-    /// covers past the quote; the surplus over the fee settled at inclusion is refunded.
-    #[serde(default = "default_private_fee_headroom_blocks")]
-    pub private_fee_headroom_blocks: u64,
+    /// The gas a public transaction declares above the cycles it measured, in percent.
+    #[serde(default = "default_public_gas_margin_percent")]
+    pub public_gas_margin_percent: u64,
+    /// How many blocks of the steepest base fee climb a fee is priced to cover past the quote:
+    /// a public transaction's `max_fee` and a privacy-preserving transaction's reserve. The
+    /// surplus over the fee settled at inclusion is refunded.
+    #[serde(
+        default = "default_fee_headroom_blocks",
+        alias = "private_fee_headroom_blocks"
+    )]
+    pub fee_headroom_blocks: u64,
 }
 
 impl Default for WalletConfig {
@@ -68,7 +77,8 @@ impl Default for WalletConfig {
             seq_poll_max_retries: 5,
             seq_block_poll_max_amount: 100,
             gas_limit: default_gas_limit(),
-            private_fee_headroom_blocks: default_private_fee_headroom_blocks(),
+            public_gas_margin_percent: default_public_gas_margin_percent(),
+            fee_headroom_blocks: default_fee_headroom_blocks(),
         }
     }
 }
@@ -119,7 +129,8 @@ impl WalletConfig {
             seq_poll_max_retries,
             seq_block_poll_max_amount,
             gas_limit,
-            private_fee_headroom_blocks,
+            public_gas_margin_percent,
+            fee_headroom_blocks,
         } = self;
 
         let WalletConfigOverrides {
@@ -129,7 +140,8 @@ impl WalletConfig {
             seq_poll_max_retries: o_seq_poll_max_retries,
             seq_block_poll_max_amount: o_seq_block_poll_max_amount,
             gas_limit: o_gas_limit,
-            private_fee_headroom_blocks: o_private_fee_headroom_blocks,
+            public_gas_margin_percent: o_public_gas_margin_percent,
+            fee_headroom_blocks: o_fee_headroom_blocks,
         } = overrides;
 
         if let Some(v) = o_sequencer {
@@ -152,9 +164,13 @@ impl WalletConfig {
             warn!("Overriding wallet config 'seq_block_poll_max_amount' to {v}");
             *seq_block_poll_max_amount = v;
         }
-        if let Some(v) = o_private_fee_headroom_blocks {
-            warn!("Overriding wallet config 'private_fee_headroom_blocks' to {v}");
-            *private_fee_headroom_blocks = v;
+        if let Some(v) = o_public_gas_margin_percent {
+            warn!("Overriding wallet config 'public_gas_margin_percent' to {v}");
+            *public_gas_margin_percent = v;
+        }
+        if let Some(v) = o_fee_headroom_blocks {
+            warn!("Overriding wallet config 'fee_headroom_blocks' to {v}");
+            *fee_headroom_blocks = v;
         }
         if let Some(v) = o_gas_limit {
             warn!("Overriding wallet config 'gas_limit' to {v}");
@@ -167,8 +183,13 @@ const fn default_gas_limit() -> u64 {
     crate::DEFAULT_GAS_LIMIT
 }
 
+/// Covers a measured transaction whose state moves a little before inclusion.
+const fn default_public_gas_margin_percent() -> u64 {
+    25
+}
+
 /// A proof plus a block or two in the mempool; about 80% above the quote at the 12.5%
 /// per-block cap.
-const fn default_private_fee_headroom_blocks() -> u64 {
+const fn default_fee_headroom_blocks() -> u64 {
     5
 }

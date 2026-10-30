@@ -20,6 +20,7 @@ use anyhow::{Context as _, Result, ensure};
 use bip39::Mnemonic;
 use common::{HashType, PageLimit, block::Block, transaction::LeeTransaction};
 use config::WalletConfig;
+pub use fees::{DeclaredFee, DryRunReport, FeeParams, PrivateFee};
 use futures::TryFutureExt as _;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
@@ -59,6 +60,7 @@ pub mod account;
 mod account_manager;
 pub mod cli;
 pub mod config;
+mod fees;
 pub mod poller;
 pub mod program_facades;
 pub mod storage;
@@ -188,7 +190,7 @@ pub enum ExecutionFailureKind {
     #[error("Failed to sign transaction: {0}")]
     SignError(anyhow::Error),
     #[error("Dry run: the transaction was simulated and not sent")]
-    DryRun,
+    DryRun(Box<DryRunReport>),
     #[error("Sending transaction failed for each client")]
     MultiSequencerTransactionSendError,
     #[error("Failed to store wallet data")]
@@ -216,6 +218,16 @@ impl From<sequencer_service_rpc::ClientError> for ExecutionFailureKind {
             other => Self::SequencerError(anyhow::Error::from(other)),
         }
     }
+}
+
+/// What simulating a public transaction measured, see [`WalletCore::measure_public`].
+struct PublicMeasure {
+    cycles: u64,
+    /// Why the action reverts; a reverted action still pays its fee.
+    revert_reason: Option<String>,
+    /// The size of the signed transaction.
+    wire_bytes: u64,
+    quote: FeeStateQuote,
 }
 
 /// The reserve a send prices at a quote, see [`WalletCore::reserve_pricing`].
@@ -407,15 +419,14 @@ pub struct WalletCore<C: WalletSequencerClient> {
 
     /// Simulate transactions and report their cost instead of sending them.
     dry_run: bool,
-    /// The owned private account paying every in-proof fee, unless a send names one.
-    fee_payer: Option<AccountId>,
-    /// The public account every in-proof fee's surplus is refunded to, instead of the payer's
-    /// alias.
-    refund_to: Option<AccountId>,
+    /// What every send declares in place of the wallet's defaults.
+    fee_params: FeeParams,
     /// Receipts of the pending messages each send of this process claimed, by its transaction,
     /// which a later send leaves alone until the spent-nullifier cache covers them. A
     /// transaction seen reverted or not included gives its claims back.
     swept: std::sync::Mutex<HashMap<HashType, Vec<Nullifier>>>,
+    /// The fee the last send of this process declared, see [`Self::take_declared_fee`].
+    declared_fee: std::sync::Mutex<Option<DeclaredFee>>,
 }
 
 impl<C: WalletSequencerClient> WalletCore<C> {
@@ -506,29 +517,43 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             spent_nullifiers,
             sequencer_client,
             dry_run: false,
-            fee_payer: None,
-            refund_to: None,
+            fee_params: FeeParams::default(),
             swept: std::sync::Mutex::new(HashMap::new()),
+            declared_fee: std::sync::Mutex::new(None),
         })
     }
 
     /// Pays every in-proof fee from `fee_payer`, an owned private account, unless a send names
     /// its own; `None` lets each send pick its payer.
     pub const fn set_private_fee_payer(&mut self, fee_payer: Option<AccountId>) {
-        self.fee_payer = fee_payer;
+        self.fee_params.payer = fee_payer;
     }
 
     /// Refunds every in-proof fee's surplus to `target`, a public account, instead of the payer's
     /// alias: for a transaction that already credits `target` publicly (a deshield), which then
     /// leaves nothing behind. Any other target links the transaction to it.
     pub const fn set_private_refund_target(&mut self, target: Option<AccountId>) {
-        self.refund_to = target;
+        self.fee_params.refund_to = target;
     }
 
-    /// Reserves every in-proof fee at the base fees after `blocks` of the steepest climb past
-    /// the quote, instead of the configured headroom.
-    pub const fn set_private_fee_headroom_blocks(&mut self, blocks: u64) {
-        self.config.private_fee_headroom_blocks = blocks;
+    /// Prices every fee at the base fees after `blocks` of the steepest climb past the quote,
+    /// instead of the configured headroom.
+    pub const fn set_fee_headroom_blocks(&mut self, blocks: u64) {
+        self.fee_params.headroom_blocks = Some(blocks);
+    }
+
+    /// Declares every fee with `params` in place of the wallet's defaults, replacing any set
+    /// before.
+    pub const fn set_fee_params(&mut self, params: FeeParams) {
+        self.fee_params = params;
+    }
+
+    /// Blocks of steepest base fee climb a fee is priced to cover.
+    const fn fee_headroom_blocks(&self) -> u64 {
+        match self.fee_params.headroom_blocks {
+            Some(blocks) => blocks,
+            None => self.config.fee_headroom_blocks,
+        }
     }
 
     /// The private account to pay `reserve` when no mentioned private account is authorized and
@@ -599,6 +624,21 @@ impl<C: WalletSequencerClient> WalletCore<C> {
     /// with [`ExecutionFailureKind::DryRun`].
     pub const fn set_dry_run(&mut self, dry_run: bool) {
         self.dry_run = dry_run;
+    }
+
+    /// Takes the fee the last send that reached the sequencer declared, leaving none.
+    pub fn take_declared_fee(&self) -> Option<DeclaredFee> {
+        self.declared_fee
+            .lock()
+            .expect("the declared fee is not poisoned")
+            .take()
+    }
+
+    fn declare_fee(&self, fee: DeclaredFee) {
+        *self
+            .declared_fee
+            .lock()
+            .expect("the declared fee is not poisoned") = Some(fee);
     }
 
     /// Get configuration with applied overrides.
@@ -1510,7 +1550,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .get_fee_state()
             .await
             .map_err(Into::into)?;
-        let fee_payer = fee_payer.or(self.fee_payer).or_else(|| {
+        let fee_payer = fee_payer.or(self.fee_params.payer).or_else(|| {
             self.auto_fee_payer(&accounts, self.reserve_pricing(&quote, 0).headroom_reserve)
         });
         // Pending native credits to the transaction's private accounts are claimed before the
@@ -1678,7 +1718,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .filter_map(PendingMessage::native_credit)
             .sum();
         let balance = acc_manager.native_balance(payer).saturating_add(swept);
-        let refund_to = self.refund_to;
+        let refund_to = self.fee_params.refund_to;
         if let Some(target) = refund_to
             && !acc_manager
                 .public_actors()
@@ -1706,30 +1746,26 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             } = self.reserve_pricing(&quote, cycles);
             // Never reserve more than the payer holds, nor less than the fee at head.
             let reserve = headroom_reserve.min(balance).max(fee_at_head);
+            let fee = PrivateFee {
+                payer,
+                reserve,
+                refund_to,
+            };
             if self.dry_run {
-                let blocks = self.config.private_fee_headroom_blocks;
-                println!("Dry run: nothing proven or sent");
-                println!("  public cycles:  {cycles}");
-                println!(
-                    "  base fees:      exec {} / stor {} (height {})",
-                    quote.base_fee_exec, quote.base_fee_stor, quote.height
-                );
-                println!("  fee at head:    {fee_at_head}");
-                println!(
-                    "  headroom:       {blocks} blocks, up to exec {exec_ceiling} / stor \
-                     {stor_ceiling} ({headroom_reserve})"
-                );
-                println!("  reserve:        {reserve} (surplus refunded)");
-                println!("  fee payer:      {payer}");
-                println!(
-                    "  claims:         {} pending credit(s), {swept} to the payer",
-                    claims.len()
-                );
-                println!(
-                    "  refund to:      {}",
-                    refund_to.map_or_else(|| "the payer's alias".to_owned(), |t| t.to_string())
-                );
-                return Err(ExecutionFailureKind::DryRun);
+                return Err(ExecutionFailureKind::DryRun(Box::new(
+                    DryRunReport::Private {
+                        fee,
+                        quote,
+                        cycles,
+                        fee_at_head,
+                        headroom_blocks: self.fee_headroom_blocks(),
+                        exec_ceiling,
+                        stor_ceiling,
+                        headroom_reserve,
+                        claims: claims.len(),
+                        swept,
+                    },
+                )));
             }
 
             let mut priced = input.clone();
@@ -1805,6 +1841,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 .map_err(Into::into)
             {
                 Ok(tx_hash) => {
+                    self.declare_fee(DeclaredFee::Private(fee));
                     if !claims.is_empty() {
                         self.swept
                             .lock()
@@ -1831,14 +1868,33 @@ impl<C: WalletSequencerClient> WalletCore<C> {
     }
 
     /// The reserve a privacy-preserving transaction of `cycles` public cycles takes at `quote`:
-    /// the fee at the head and at the base fees after the configured blocks of full blocks,
-    /// the steepest climb allowed.
+    /// the fee at the head and at the [`Self::base_fee_ceilings`].
     fn reserve_pricing(
         &self,
         quote: &sequencer_service_rpc::FeeStateQuote,
         cycles: u64,
     ) -> ReservePricing {
-        let blocks = self.config.private_fee_headroom_blocks;
+        let (exec_ceiling, stor_ceiling) = self.base_fee_ceilings(quote);
+        ReservePricing {
+            fee_at_head: fee_core::assess::private_fee_required(
+                cycles,
+                quote.base_fee_exec,
+                quote.base_fee_stor,
+            ),
+            exec_ceiling,
+            stor_ceiling,
+            headroom_reserve: fee_core::assess::private_fee_required(
+                cycles,
+                exec_ceiling,
+                stor_ceiling,
+            ),
+        }
+    }
+
+    /// The execution and storage base fees after the headroom blocks of full blocks past
+    /// `quote`, the steepest climb allowed.
+    fn base_fee_ceilings(&self, quote: &sequencer_service_rpc::FeeStateQuote) -> (u64, u64) {
+        let blocks = self.fee_headroom_blocks();
         let climb = |base, max_gas, target, damping, lo, hi| {
             (0..blocks).fold(base, |fee, _| {
                 fee_core::market::next_base_fee(fee, max_gas, target, damping, lo, hi)
@@ -1860,20 +1916,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             fee_core::market::BASE_FEE_STOR_MIN,
             fee_core::market::BASE_FEE_STOR_MAX,
         );
-        ReservePricing {
-            fee_at_head: fee_core::assess::private_fee_required(
-                cycles,
-                quote.base_fee_exec,
-                quote.base_fee_stor,
-            ),
-            exec_ceiling,
-            stor_ceiling,
-            headroom_reserve: fee_core::assess::private_fee_required(
-                cycles,
-                exec_ceiling,
-                stor_ceiling,
-            ),
-        }
+        (exec_ceiling, stor_ceiling)
     }
 
     /// Gives the claims of `tx_hash` back to the pending messages: it reverted or was not
@@ -2062,19 +2105,58 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             }
         };
 
-        let message = lee::public_transaction::Message::new(
+        let FeeParams {
+            gas_limit,
+            max_fee,
+            tip,
+            ..
+        } = self.fee_params;
+        // Simulated within the limit it declares; a measured limit stays under the configured one.
+        let budget = gas_limit
+            .unwrap_or(self.config.gas_limit)
+            .min(fee_core::market::MAX_GAS_EXEC);
+        // Signed later: the fee is filled in once measured, and its fields are fixed width.
+        let mut message = lee::public_transaction::Message::new(
             to,
             message,
             public_actors,
             nonces,
-            Some(lee::FeeDeclaration::new(
-                payer,
-                self.config.gas_limit,
-                0,
-                max_fee_for(self.config.gas_limit),
-            )),
+            Some(lee::FeeDeclaration::new(payer, budget, tip, 0)),
             acc_manager.admission_evidence(),
         );
+        let signers = acc_manager
+            .signers()
+            .len()
+            .saturating_add(usize::from(co_signer.is_some()));
+        let measured = if self.dry_run || gas_limit.is_none() || max_fee.is_none() {
+            Some(
+                self.measure_public(&message, signers, budget, &acc_manager)
+                    .await?,
+            )
+        } else {
+            None
+        };
+        let gas_limit = gas_limit.unwrap_or_else(|| {
+            let cycles = measured.as_ref().map_or(budget, |measured| measured.cycles);
+            cycles
+                .saturating_mul(self.config.public_gas_margin_percent.saturating_add(100))
+                .div_ceil(100)
+                .min(budget)
+        });
+        let max_fee = max_fee.unwrap_or_else(|| {
+            let measured = measured
+                .as_ref()
+                .expect("a public send without a cap is measured");
+            let (exec_ceiling, stor_ceiling) = self.base_fee_ceilings(&measured.quote);
+            u128::from(gas_limit)
+                .saturating_mul(u128::from(exec_ceiling))
+                .saturating_add(
+                    u128::from(measured.wire_bytes).saturating_mul(u128::from(stor_ceiling)),
+                )
+                .saturating_add(u128::from(tip))
+        });
+        let fee = lee::FeeDeclaration::new(payer, gas_limit, tip, max_fee);
+        message.execution.fee = Some(fee);
 
         let message_hash = message.hash();
         let mut signatures_public_keys = acc_manager
@@ -2091,34 +2173,67 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             lee::public_transaction::WitnessSet::from_raw_parts(signatures_public_keys);
 
         let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
-        if self.dry_run {
-            self.report_public_dry_run(tx, &acc_manager).await?;
-            return Err(ExecutionFailureKind::DryRun);
+        if self.dry_run
+            && let Some(PublicMeasure {
+                cycles,
+                revert_reason,
+                quote,
+                ..
+            }) = measured
+        {
+            let wire_bytes = u64::try_from(
+                borsh::to_vec(&LeeTransaction::Public(tx))
+                    .map_err(|err| ExecutionFailureKind::SignError(err.into()))?
+                    .len(),
+            )
+            .expect("transaction size fits u64");
+            // The fee of `gas` execution gas at the head base fees; the reserve prices the limit.
+            let at_head = |gas: u64| {
+                u128::from(gas)
+                    .saturating_mul(u128::from(quote.base_fee_exec))
+                    .saturating_add(
+                        u128::from(wire_bytes).saturating_mul(u128::from(quote.base_fee_stor)),
+                    )
+                    .saturating_add(u128::from(tip))
+            };
+            return Err(ExecutionFailureKind::DryRun(Box::new(
+                DryRunReport::Public {
+                    fee,
+                    cycles,
+                    wire_bytes,
+                    fee_at_head: at_head(cycles),
+                    reserve_at_head: at_head(gas_limit),
+                    revert_reason,
+                    quote,
+                },
+            )));
         }
 
-        self.sequencer_client
+        if let Some(reason) = measured.and_then(|measured| measured.revert_reason) {
+            warn!("The transaction reverts when simulated, and still pays its fee: {reason}");
+        }
+        let tx_hash = self
+            .sequencer_client
             .send_transaction(LeeTransaction::Public(tx))
             .await
-            .map_err(Into::into)
+            .map_err(Into::into)?;
+        self.declare_fee(DeclaredFee::Public(fee));
+        Ok(tx_hash)
     }
 
-    /// Simulates `tx` against the fetched states of its accounts and prints what it would cost at
-    /// the head fee state.
-    async fn report_public_dry_run(
+    /// Simulates `message`, to be signed by `signers`, within `budget` cycles against the
+    /// fetched states of its accounts, at the head fee state.
+    async fn measure_public(
         &self,
-        tx: lee::PublicTransaction,
+        message: &lee::public_transaction::Message,
+        signers: usize,
+        budget: u64,
         acc_manager: &account_manager::AccountManager,
-    ) -> Result<(), ExecutionFailureKind> {
-        let fee = tx
-            .message()
-            .execution
-            .fee
-            .expect("the wallet always declares a fee");
+    ) -> Result<PublicMeasure, ExecutionFailureKind> {
         // Every program the transaction may call is a declared actor's; the native token and the
         // loader run as protocol code.
         let mut programs = ProgramCatalog::default();
-        let declared: BTreeSet<AccountId> = tx
-            .message()
+        let declared: BTreeSet<AccountId> = message
             .public_context
             .actors
             .iter()
@@ -2145,14 +2260,19 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             public_actor_states: acc_manager.public_actor_states(),
             admitted_accounts: Some(acc_manager.admitted_accounts()),
         };
-        let budget = fee.gas_limit.min(fee_core::market::MAX_GAS_EXEC);
-        // Storage gas is the wire size settlement sees: the whole `LeeTransaction`.
-        let data_bytes = u128::try_from(
+        let tx = lee::PublicTransaction::new(
+            message.clone(),
+            lee::public_transaction::WitnessSet::from_raw_parts(Vec::new()),
+        );
+        // Storage gas is the wire size settlement sees: the whole signed `LeeTransaction`.
+        let witness_bytes = size_of::<lee::Signature>().saturating_add(size_of::<lee::PublicKey>());
+        let wire_bytes = u64::try_from(
             borsh::to_vec(&LeeTransaction::Public(tx.clone()))
                 .map_err(|err| ExecutionFailureKind::SignError(err.into()))?
-                .len(),
+                .len()
+                .saturating_add(signers.saturating_mul(witness_bytes)),
         )
-        .expect("transaction size fits u128");
+        .expect("transaction size fits u64");
         let (cycles, result) = tokio::task::spawn_blocking(move || {
             lee::simulate_public_transaction(&tx, &simulation, &programs, budget)
         })
@@ -2168,26 +2288,12 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .get_fee_state()
             .await
             .map_err(Into::into)?;
-        let actual_fee = u128::from(cycles)
-            .saturating_mul(u128::from(quote.base_fee_exec))
-            .saturating_add(data_bytes.saturating_mul(u128::from(quote.base_fee_stor)))
-            .saturating_add(u128::from(fee.tip));
-
-        println!("Dry run: nothing sent");
-        println!("  fee payer:        {}", fee.payer);
-        println!("  declared gas:     {}", fee.gas_limit);
-        println!("  metered cycles:   {cycles}");
-        println!("  wire bytes:       {data_bytes}");
-        println!(
-            "  base fees:        exec {} / stor {} (height {})",
-            quote.base_fee_exec, quote.base_fee_stor, quote.height
-        );
-        println!("  fee at head:      {actual_fee} (tip {})", fee.tip);
-        match revert_reason {
-            Some(reason) => println!("  action REVERTS:   {reason} (fee is still charged)"),
-            None => println!("  action:           applies"),
-        }
-        Ok(())
+        Ok(PublicMeasure {
+            cycles,
+            revert_reason,
+            wire_bytes,
+            quote,
+        })
     }
 
     pub async fn receive_pending_message(
@@ -2531,9 +2637,9 @@ impl WalletCore<SequencerClient> {
             spent_nullifiers,
             sequencer_client,
             dry_run: false,
-            fee_payer: None,
-            refund_to: None,
+            fee_params: FeeParams::default(),
             swept: std::sync::Mutex::new(HashMap::new()),
+            declared_fee: std::sync::Mutex::new(None),
         })
     }
 
@@ -3126,6 +3232,21 @@ mod tests {
                     Vec::<Option<lee_core::MembershipProof>>::new(),
                     [0_u8; 32],
                 ))
+            })
+            .unwrap();
+        sequencer
+            .register_method("getFeeState", |_, _, _| {
+                Ok::<_, ErrorObjectOwned>(sequencer_service_rpc::FeeStateQuote {
+                    height: 2,
+                    base_fee_exec: 0,
+                    base_fee_stor: 0,
+                    next_base_fee_exec_floor: 0,
+                    next_base_fee_exec_ceiling: 0,
+                    next_base_fee_stor_floor: 0,
+                    next_base_fee_stor_ceiling: 0,
+                    max_gas_exec: u64::MAX,
+                    max_gas_stor: u64::MAX,
+                })
             })
             .unwrap();
         sequencer

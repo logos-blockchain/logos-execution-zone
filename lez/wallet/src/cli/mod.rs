@@ -118,8 +118,20 @@ pub struct Args {
     /// Simulate the transaction a command would send and report its cost instead of sending it.
     #[arg(long, global = true)]
     pub dry_run: bool,
-    /// Reserve a privacy-preserving transaction's fee at the base fees this many blocks of the
-    /// steepest climb past the quote for this command, instead of the configured headroom.
+    /// Declare this execution gas limit on a public transaction for this command, instead of the
+    /// cycles a simulation measures plus the configured margin.
+    #[arg(long, global = true, value_name = "GAS")]
+    pub gas_limit: Option<u64>,
+    /// Cap a public transaction's fee at this amount for this command, instead of its reserve at
+    /// the headroom's base fees. The sequencer rejects a cap below the reserve a dry run reports.
+    #[arg(long, global = true, value_name = "AMOUNT")]
+    pub max_fee: Option<u128>,
+    /// Tip a public transaction this amount on top of its base fees for this command.
+    #[arg(long, global = true, value_name = "AMOUNT", default_value_t = 0)]
+    pub tip: u64,
+    /// Price a transaction's fee (a public `max_fee`, a privacy-preserving reserve) at the base
+    /// fees this many blocks of the steepest climb past the quote for this command, instead of
+    /// the configured headroom.
     #[arg(long, global = true, value_name = "BLOCKS")]
     pub fee_headroom: Option<u64>,
     /// Pay a privacy-preserving transaction's fee from this owned private account for this
