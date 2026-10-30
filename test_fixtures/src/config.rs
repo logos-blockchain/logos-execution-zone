@@ -302,9 +302,10 @@ pub fn wallet_config(sequencer_addr: &SocketAddr) -> Result<WalletConfig> {
         seq_poll_max_retries: 10,
         seq_block_poll_max_amount: 100,
         gas_limit: wallet::DEFAULT_GAS_LIMIT,
+        public_gas_margin_percent: 25,
         // Test chains never leave the floor base fees, so an exact reserve needs no refund and
         // the balance assertions need no refund accounting.
-        private_fee_headroom_blocks: 0,
+        fee_headroom_blocks: 0,
     })
 }
 

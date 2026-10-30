@@ -14,6 +14,24 @@ pub struct PrivateFee {
     pub refund_to: Option<AccountId>,
 }
 
+/// What every send declares in place of the wallet's defaults; `None` keeps the default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FeeParams {
+    /// Public: the execution gas limit, else the measured cycles plus the configured margin.
+    pub gas_limit: Option<u64>,
+    /// Public: the fee cap, else the reserve at the headroom's base fees plus the tip.
+    pub max_fee: Option<u128>,
+    /// Public: the tip, charged on top of the base fees.
+    pub tip: u64,
+    /// Blocks of steepest base fee climb a fee is priced to cover, else the configured ones.
+    pub headroom_blocks: Option<u64>,
+    /// Private: the owned private account paying every in-proof fee, unless a send names its
+    /// own, else each send picks its payer.
+    pub payer: Option<AccountId>,
+    /// Private: the public account the surplus is refunded to, else the payer's alias.
+    pub refund_to: Option<AccountId>,
+}
+
 /// The fee a send declared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeclaredFee {
@@ -32,6 +50,9 @@ pub enum DryRunReport {
         wire_bytes: u64,
         /// Includes the tip.
         fee_at_head: u128,
+        /// What admission holds from the payer, priced at the gas limit: the least `max_fee`
+        /// the sequencer accepts.
+        reserve_at_head: u128,
         /// Why the action reverts; a reverted action still pays its fee.
         revert_reason: Option<String>,
     },
@@ -85,6 +106,7 @@ impl std::fmt::Display for DryRunReport {
                 cycles,
                 wire_bytes,
                 fee_at_head,
+                reserve_at_head,
                 revert_reason,
                 ..
             } => {
@@ -99,6 +121,11 @@ impl std::fmt::Display for DryRunReport {
                      {height})"
                 )?;
                 writeln!(f, "  fee at head:      {fee_at_head} (tip {})", fee.tip)?;
+                writeln!(
+                    f,
+                    "  reserve at head:  {reserve_at_head} (max fee {})",
+                    fee.max_fee
+                )?;
                 match revert_reason {
                     Some(reason) => {
                         write!(f, "  action REVERTS:   {reason} (fee is still charged)")
