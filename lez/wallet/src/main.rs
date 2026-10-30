@@ -75,20 +75,19 @@ async fn main() -> Result<()> {
         wallet.set_private_fee_payer(fee_payer);
         wallet.set_private_refund_target(refund_to);
         match execute_subcommand(&mut wallet, command).await {
-            // A dry run stops the command once it has reported; that is its success.
+            // A dry run stops the command with its report; that is its success.
             //
             // TODO: a dry run travels on the error channel to stop the command deep inside
             // `WalletCore` without touching every send caller. Rework it into a typed send
             // outcome (sent hash or dry-run report) so that we dont need this ugly error to success
             // case.
-            Err(err)
-                if matches!(
-                    err.root_cause().downcast_ref(),
-                    Some(ExecutionFailureKind::DryRun)
-                ) =>
-            {
-                Ok(())
-            }
+            Err(err) => match err.root_cause().downcast_ref() {
+                Some(ExecutionFailureKind::DryRun(report)) => {
+                    println!("{report}");
+                    Ok(())
+                }
+                _ => Err(err),
+            },
             result => result.map(drop),
         }
     } else if continuous_run {

@@ -1,6 +1,6 @@
 //! Bridge program functions (deposit/withdraw between L1 Bedrock and L2).
 
-use std::{ffi::CString, ptr};
+use std::ptr;
 
 use lee::AccountId;
 use wallet::program_facades::bridge::Bridge;
@@ -9,7 +9,7 @@ use crate::{
     error::{FfiOperationError, print_error},
     primitives::types::FfiBytes32,
     wallet::{
-        block_on,
+        block_on, c_string_or_null,
         lifecycle::get_wallet,
         map_execution_error,
         types::{FfiTransferResult, WalletHandle},
@@ -71,10 +71,10 @@ pub unsafe extern "C" fn wallet_ffi_bridge_withdraw(
 
     let bridge = Bridge(&wallet);
 
-    match block_on(bridge.send_withdraw(from_id, amount, bedrock_account_pk)) {
+    let sent = block_on(bridge.send_withdraw(from_id, amount, bedrock_account_pk));
+    match unsafe { (*out_result).fee.record(&wallet, sent) } {
         Ok(tx_hash) => {
-            let tx_hash = CString::new(tx_hash.to_string())
-                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
+            let tx_hash = c_string_or_null(tx_hash);
 
             unsafe {
                 (*out_result).tx_hash = tx_hash;

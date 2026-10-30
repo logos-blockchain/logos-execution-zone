@@ -148,6 +148,15 @@ typedef enum FfiOperationError {
 } FfiOperationError;
 
 /**
+ * Which part of an `FfiDeclaredFee` is set.
+ */
+typedef enum FfiFeeKind {
+  FfiFeeKind_None = 0,
+  FfiFeeKind_Public = 1,
+  FfiFeeKind_Private = 2,
+} FfiFeeKind;
+
+/**
  * Enumeration to represent kinds of `FfiAccountIdentity`.
  */
 typedef enum FfiAccountIdentityKind {
@@ -793,6 +802,100 @@ typedef struct FfiAccountList {
 } FfiAccountList;
 
 /**
+ * The in-proof fee of a privacy-preserving transaction.
+ *
+ * Its proof debits `reserve` from `payer`. The surplus over the fee charged is refunded to
+ * `refund_to` when `has_refund_to`, else to the payer's alias.
+ */
+typedef struct FfiPrivateFee {
+  FfiAccountId payer;
+  struct FfiU128 reserve;
+  bool has_refund_to;
+  FfiAccountId refund_to;
+} FfiPrivateFee;
+
+/**
+ * The fee a send declared. Only the part `kind` names is set; the other is zeroed.
+ */
+typedef struct FfiDeclaredFee {
+  enum FfiFeeKind kind;
+  struct FfiFeeDeclaration public_fee;
+  struct FfiPrivateFee private_fee;
+} FfiDeclaredFee;
+
+/**
+ * The fee market priced off the head state.
+ */
+typedef struct FfiFeeState {
+  /**
+   * The block height the state settled at.
+   */
+  uint64_t height;
+  uint64_t base_fee_exec;
+  uint64_t base_fee_stor;
+  uint64_t next_base_fee_exec_floor;
+  uint64_t next_base_fee_exec_ceiling;
+  uint64_t next_base_fee_stor_floor;
+  uint64_t next_base_fee_stor_ceiling;
+  uint64_t max_gas_exec;
+  uint64_t max_gas_stor;
+} FfiFeeState;
+
+/**
+ * What a dry run simulated a send to cost at `fee_state`. The fields marked public or private
+ * apply to that kind of send only and are zeroed for the other.
+ */
+typedef struct FfiDryRunReport {
+  struct FfiFeeState fee_state;
+  /**
+   * Cycles the transaction (private: its public part) metered.
+   */
+  uint64_t cycles;
+  /**
+   * Public: includes the tip.
+   */
+  struct FfiU128 fee_at_head;
+  /**
+   * Public: the transaction's wire size, priced at the storage base fee.
+   */
+  uint64_t wire_bytes;
+  /**
+   * Public: why the action reverts, or null when it applies. A reverted action still pays its
+   * fee.
+   */
+  char *revert_reason;
+  /**
+   * Private: blocks of steepest base fee climb the reserve covers, and the base fees after
+   * them.
+   */
+  uint64_t headroom_blocks;
+  uint64_t exec_ceiling;
+  uint64_t stor_ceiling;
+  /**
+   * Private: the fee at the ceilings; the reserve is this clamped to the payer's balance.
+   */
+  struct FfiU128 headroom_reserve;
+  /**
+   * Private: pending credits claimed before the root.
+   */
+  uint64_t claims;
+  /**
+   * Private: the part of the claims reaching the payer.
+   */
+  struct FfiU128 swept;
+} FfiDryRunReport;
+
+/**
+ * The fee a send declared or, when `is_dry_run`, would declare, with the dry run's report.
+ * A send of several transactions declares the fee of its last; its dry run reports its first.
+ */
+typedef struct FfiSendFee {
+  struct FfiDeclaredFee declared;
+  bool is_dry_run;
+  struct FfiDryRunReport dry_run;
+} FfiSendFee;
+
+/**
  * Result of a transfer operation.
  */
 typedef struct FfiTransferResult {
@@ -804,6 +907,10 @@ typedef struct FfiTransferResult {
    * Whether the transfer succeeded.
    */
   bool success;
+  /**
+   * The fee the transfer declared, or the report of a dry run, which leaves `tx_hash` null.
+   */
+  struct FfiSendFee fee;
 } FfiTransferResult;
 
 typedef struct FfiBytes32 FfiPdaSeed;
@@ -866,6 +973,11 @@ typedef struct FfiTransactionResult {
    * Public transactions have 0 secrets.
    */
   uintptr_t secrets_size;
+  /**
+   * The fee the transaction declared, or the report of a dry run, which leaves `tx_hash`
+   * null.
+   */
+  struct FfiSendFee fee;
 } FfiTransactionResult;
 
 /**
@@ -1822,6 +1934,25 @@ enum FfiOperationError wallet_ffi_bridge_withdraw(struct WalletHandle *handle,
                                                   uint64_t amount,
                                                   const struct FfiBytes32 *bedrock_account_pk,
                                                   struct FfiTransferResult *out_result);
+
+/**
+ * Simulate sends and report their cost instead of sending them. A send then succeeds with a
+ * null `tx_hash` and its result's `fee.is_dry_run` set.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ */
+enum FfiOperationError wallet_ffi_set_dry_run(struct WalletHandle *handle, bool dry_run);
+
+/**
+ * Get the fee market priced off the sequencer's head state.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `out_fee_state` must be a valid pointer to a `FfiFeeState` struct
+ */
+enum FfiOperationError wallet_ffi_get_fee_state(struct WalletHandle *handle,
+                                                struct FfiFeeState *out_fee_state);
 
 /**
  * Send generic public transaction.

@@ -21,6 +21,7 @@ use core_ffi::{
     wallet::{
         FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiAccountMention,
         FfiPendingMessageList, FfiTransferResult, WalletHandle,
+        fees::FfiFeeState,
         generic_transaction::{FfiProgramCatalog, FfiTransactionResult},
         label::{AccountIdResolvedFromLabel, LabelAvailability, LabelList},
         lifecycle::FfiCreateWalletOutput,
@@ -162,6 +163,16 @@ unsafe extern "C" {
     ) -> error::FfiOperationError;
 
     pub fn wallet_ffi_free_transfer_result(result: *mut FfiTransferResult);
+
+    pub fn wallet_ffi_set_dry_run(
+        handle: *mut WalletHandle,
+        dry_run: bool,
+    ) -> error::FfiOperationError;
+
+    pub fn wallet_ffi_get_fee_state(
+        handle: *mut WalletHandle,
+        out_fee_state: *mut FfiFeeState,
+    ) -> error::FfiOperationError;
 
     pub fn wallet_ffi_list_pending_messages(
         handle: *mut WalletHandle,

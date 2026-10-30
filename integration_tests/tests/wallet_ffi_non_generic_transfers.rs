@@ -15,7 +15,11 @@ use anyhow::Result;
 use core_ffi::{
     error,
     primitives::types::{FfiBytes32, FfiPrivateAccountKeys, account::FfiAccount},
-    wallet::{FfiTransferResult, lifecycle::FfiCreateWalletOutput},
+    wallet::{
+        FfiTransferResult,
+        fees::{FfiFeeKind, FfiFeeState},
+        lifecycle::FfiCreateWalletOutput,
+    },
 };
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS,
@@ -140,6 +144,12 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
 
     log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+
+    let declared = transfer_result.fee.declared;
+    assert!(!transfer_result.fee.is_dry_run);
+    assert_eq!(declared.kind, FfiFeeKind::Public);
+    assert_eq!(declared.public_fee.payer, from);
+    assert_eq!(u128::from(declared.public_fee.max_fee), DEFAULT_MAX_FEE);
 
     // The sleep is barely longer than one block period, so on a loaded machine the
     // transfer may still be unconfirmed. Balances only move once the transaction is
@@ -306,6 +316,13 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
     }
     .unwrap();
 
+    // The sender pays the in-proof fee out of a reserve of at least the fee it is charged.
+    let declared = transfer_result.fee.declared;
+    assert_eq!(declared.kind, FfiFeeKind::Private);
+    assert_eq!(declared.private_fee.payer, from);
+    assert!(u128::from(declared.private_fee.reserve) >= min_private_fee());
+    assert!(!declared.private_fee.has_refund_to);
+
     wait_for_inclusion(wallet_ffi_handle, &transfer_result);
 
     // Sync private account local storage with onchain encrypted state
@@ -438,6 +455,102 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
 
     unsafe {
         wallet_ffi_free_transfer_result(&raw mut transfer_result);
+        wallet_ffi_destroy(wallet_ffi_handle);
+    }
+
+    // SAFETY: sequencer_ffi created by FFI, it is valid.
+    unsafe {
+        sequencer_ffi_helpers::sequencer_ffi_stop_sequencer(sequencer_ffi_res.value);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_wallet_ffi_dry_runs_report_without_sending() -> Result<()> {
+    let sequencer_ffi_helpers::JoiningSetup {
+        ctx,
+        node: _,
+        ownership_id: _,
+        sequencer_ffi: sequencer_ffi_res,
+        sequencer_home,
+    } = sequencer_ffi_helpers::joining_setup(true)?;
+
+    log::info!("Joining sequencer home: {sequencer_home:?}");
+
+    let home = tempfile::tempdir()?;
+    let FfiCreateWalletOutput {
+        wallet: wallet_ffi_handle,
+        mnemonic: _,
+    } = new_wallet_ffi_with_test_context_config(&ctx, home.path(), sequencer_ffi_res.value)?;
+    let public: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
+    let other_public: FfiBytes32 = ctx.ctx().existing_public_accounts()[1].into();
+    let private: FfiBytes32 = ctx.ctx().existing_private_accounts()[0].into();
+    let amount: [u8; 16] = 100_u128.to_le_bytes();
+
+    let mut fee_state = FfiFeeState::default();
+    unsafe {
+        wallet_ffi_get_fee_state(wallet_ffi_handle, &raw mut fee_state).unwrap();
+        wallet_ffi_set_dry_run(wallet_ffi_handle, true).unwrap();
+    }
+    assert!(fee_state.base_fee_exec > 0 && fee_state.base_fee_stor > 0);
+
+    let mut public_result = FfiTransferResult::default();
+    unsafe {
+        wallet_ffi_transfer_public(
+            wallet_ffi_handle,
+            &raw const public,
+            &raw const other_public,
+            &raw const amount,
+            &raw mut public_result,
+        )
+        .unwrap();
+    }
+    assert!(public_result.success && public_result.tx_hash.is_null());
+    let public_send = &public_result.fee;
+    assert!(public_send.is_dry_run);
+    assert_eq!(public_send.declared.kind, FfiFeeKind::Public);
+    assert_eq!(public_send.declared.public_fee.payer, public);
+    assert!(public_send.dry_run.wire_bytes > 0);
+    assert!(
+        public_send.dry_run.revert_reason.is_null(),
+        "a funded transfer applies"
+    );
+    assert_eq!(
+        u128::from(public_send.dry_run.fee_at_head),
+        u128::from(public_send.dry_run.cycles)
+            * u128::from(public_send.dry_run.fee_state.base_fee_exec)
+            + u128::from(public_send.dry_run.wire_bytes)
+                * u128::from(public_send.dry_run.fee_state.base_fee_stor)
+    );
+
+    let mut private_result = FfiTransferResult::default();
+    unsafe {
+        wallet_ffi_transfer_deshielded(
+            wallet_ffi_handle,
+            &raw const private,
+            &raw const public,
+            &raw const amount,
+            &raw mut private_result,
+        )
+        .unwrap();
+    }
+    assert!(private_result.success && private_result.tx_hash.is_null());
+    let private_send = &private_result.fee;
+    assert!(private_send.is_dry_run);
+    assert_eq!(private_send.declared.kind, FfiFeeKind::Private);
+    assert_eq!(private_send.declared.private_fee.payer, private);
+    // The test wallet prices no headroom, so the reserve is the fee at head.
+    assert_eq!(private_send.dry_run.headroom_blocks, 0);
+    assert_eq!(
+        u128::from(private_send.declared.private_fee.reserve),
+        u128::from(private_send.dry_run.fee_at_head)
+    );
+    assert!(u128::from(private_send.dry_run.fee_at_head) >= min_private_fee());
+
+    unsafe {
+        wallet_ffi_free_transfer_result(&raw mut public_result);
+        wallet_ffi_free_transfer_result(&raw mut private_result);
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 
