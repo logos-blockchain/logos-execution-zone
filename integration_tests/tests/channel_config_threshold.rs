@@ -47,6 +47,8 @@ const COMMITTEE_POLL: Duration = Duration::from_secs(3);
 fn fast_blocks() -> SequencerPartialConfig {
     SequencerPartialConfig {
         block_create_timeout: Duration::from_secs(2),
+        // Covers the storage price doubling at the devnet's first epoch rotations.
+        priority_fee_percent: 150,
         ..SequencerPartialConfig::default()
     }
 }

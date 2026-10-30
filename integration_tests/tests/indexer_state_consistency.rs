@@ -8,8 +8,10 @@ use std::time::Duration;
 use anyhow::Result;
 use indexer_service_rpc::RpcClient as _;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
-    config::INITIAL_PUBLIC_BALANCES_FOR_WALLET,
+    MultiZoneTestContextBuilder, TIME_TO_WAIT_FOR_BLOCK_SECONDS, ZoneTestContextBuilder,
+    config::{
+        INITIAL_PUBLIC_BALANCES_FOR_WALLET, MultiNodeTestContextConfig, SequencerPartialConfig,
+    },
     private_mention, public_mention,
     utils::{
         account_balance, assert_private_commitment_in_state, get_account, send,
@@ -20,7 +22,17 @@ use lee::AccountId;
 
 #[tokio::test]
 async fn indexer_state_consistency() -> Result<()> {
-    let mut ctx = TestContext::new().await?;
+    let mut ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
+                .with_sequencer_partial_config(SequencerPartialConfig {
+                    // Covers the storage price doubling at the devnet's first epoch rotations.
+                    priority_fee_percent: 150,
+                    ..SequencerPartialConfig::default()
+                }),
+        )
+        .build()
+        .await?;
 
     let (acc0, acc1) = (
         ctx.existing_public_accounts()[0],
