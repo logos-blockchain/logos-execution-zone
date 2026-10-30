@@ -425,14 +425,6 @@ pub async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {
             .expect("resolved binary has a parent directory"),
     )?;
 
-    let mut compose = DockerCompose::with_auto_client(&[bedrock_compose_path])
-        .await
-        .context("Failed to setup docker compose for Bedrock")?
-        .with_build(true)
-        // Setting port to 0 to avoid conflicts between parallel tests, actual port will be
-        // retrieved after container is up
-        .with_env("LEZ_COMPOSE_BEDROCK_PORT", "0");
-
     #[expect(
         clippy::items_after_statements,
         reason = "This is more readable is this function used just after its definition"
@@ -467,30 +459,32 @@ pub async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {
             })
     }
 
-    let mut port = None;
-    let mut attempt = 0_u32;
     let max_attempts = 5_u32;
-    while port.is_none() && attempt < max_attempts {
-        attempt = attempt
-            .checked_add(1)
-            .expect("We check that attempt < max_attempts, so this won't overflow");
+    for attempt in 1..=max_attempts {
+        // A fresh project per attempt: when the host port Docker picks is taken, the container
+        // still starts, just unpublished, and a repeated `up` leaves it that way.
+        let mut compose = DockerCompose::with_auto_client(&[&bedrock_compose_path])
+            .await
+            .context("Failed to setup docker compose for Bedrock")?
+            .with_build(true)
+            // Setting port to 0 to avoid conflicts between parallel tests, actual port will be
+            // retrieved after container is up
+            .with_env("LEZ_COMPOSE_BEDROCK_PORT", "0");
+
         match up_and_retrieve_port(&mut compose).await {
-            Ok(p) => {
-                port = Some(p);
-            }
+            Ok(port) => return Ok((compose, SocketAddr::from(([127, 0, 0, 1], port)))),
             Err(err) => {
                 warn!(
                     "Failed to bring up Bedrock services: {err:?}, attempt {attempt}/{max_attempts}"
                 );
+                if let Err(down_err) = compose.down().await {
+                    warn!("Failed to tear down the failed Bedrock services: {down_err:?}");
+                }
             }
         }
     }
-    let Some(port) = port else {
-        bail!("Failed to bring up Bedrock services after {max_attempts} attempts");
-    };
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    Ok((compose, addr))
+    bail!("Failed to bring up Bedrock services after {max_attempts} attempts");
 }
 
 pub async fn setup_indexer(
