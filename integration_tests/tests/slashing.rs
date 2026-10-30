@@ -145,6 +145,8 @@ async fn assert_offender_is_slashed(payload: impl Fn(&Block) -> Vec<u8>) -> Resu
             .disable_wallet()
             .with_sequencer_partial_config(SequencerPartialConfig {
                 block_create_timeout: Duration::from_secs(2),
+                // Covers the storage price doubling at the devnet's first epoch rotations.
+                priority_fee_percent: 150,
                 ..SequencerPartialConfig::default()
             })
             .with_follower_sequencer_partial_config(SequencerPartialConfig {
