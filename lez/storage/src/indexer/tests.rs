@@ -517,6 +517,22 @@ fn block_batch() {
         .collect::<Vec<_>>();
 
     assert_eq!(block_batch_ids, vec![1, 2, 3, 4]);
+
+    let batch_ids = |before, limit| {
+        dbio.get_block_batch(before, limit)
+            .unwrap()
+            .into_iter()
+            .map(|block| block.header.block_id)
+            .collect::<Vec<_>>()
+    };
+
+    // A `before` past the stored tip is clamped to it, so the page starts at the tip.
+    assert_eq!(batch_ids(Some(u64::MAX), 3), vec![4, 3, 2]);
+    // A `limit` past the chain height returns the whole chain and no more.
+    assert_eq!(batch_ids(None, u64::MAX), vec![4, 3, 2, 1]);
+    assert_eq!(batch_ids(Some(u64::MAX), u64::MAX), vec![4, 3, 2, 1]);
+    assert!(batch_ids(Some(1), 10).is_empty());
+    assert!(batch_ids(None, 0).is_empty());
 }
 
 #[test]
