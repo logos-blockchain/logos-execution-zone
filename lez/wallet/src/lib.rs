@@ -2111,7 +2111,10 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             tip,
             ..
         } = self.fee_params;
-        let budget = self.config.gas_limit.min(fee_core::market::MAX_GAS_EXEC);
+        // Simulated within the limit it declares; a measured limit stays under the configured one.
+        let budget = gas_limit
+            .unwrap_or(self.config.gas_limit)
+            .min(fee_core::market::MAX_GAS_EXEC);
         // Signed later: the fee is filled in once measured, and its fields are fixed width.
         let mut message = lee::public_transaction::Message::new(
             to,
@@ -2170,12 +2173,13 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             lee::public_transaction::WitnessSet::from_raw_parts(signatures_public_keys);
 
         let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
-        if let Some(PublicMeasure {
-            cycles,
-            revert_reason,
-            quote,
-            ..
-        }) = measured.filter(|_| self.dry_run)
+        if self.dry_run
+            && let Some(PublicMeasure {
+                cycles,
+                revert_reason,
+                quote,
+                ..
+            }) = measured
         {
             let wire_bytes = u64::try_from(
                 borsh::to_vec(&LeeTransaction::Public(tx))
@@ -2205,6 +2209,9 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             )));
         }
 
+        if let Some(reason) = measured.and_then(|measured| measured.revert_reason) {
+            warn!("The transaction reverts when simulated, and still pays its fee: {reason}");
+        }
         let tx_hash = self
             .sequencer_client
             .send_transaction(LeeTransaction::Public(tx))
