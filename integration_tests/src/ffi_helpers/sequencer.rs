@@ -456,6 +456,16 @@ pub fn joining_setup_no_stake() -> Result<JoiningSetup> {
         anyhow::bail!("Sequencer FFI error {:?}", sequencer_ffi_res.error);
     }
 
+    // SAFETY: the start succeeded, so the pointer is valid.
+    if let Err(err) = wait_for_sequencer_ffi_online(unsafe { &*sequencer_ffi_res.value }) {
+        // SAFETY: the pointer is valid and not used after this.
+        unsafe {
+            sequencer_ffi_stop_sequencer(sequencer_ffi_res.value);
+        }
+        return Err(err);
+    }
+    log::info!("Joining sequencer is online");
+
     Ok(JoiningSetup {
         node,
         ownership_id: None,
