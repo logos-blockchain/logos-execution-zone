@@ -33,7 +33,7 @@ use ping_core::{
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
-use test_fixtures::config::source_only_cross_zone;
+use test_fixtures::{config::source_only_cross_zone, init_logger};
 use testnet_initial_state::{PublicAccountPrivateInitialData, initial_pub_accounts_private_keys};
 use tokio::test;
 
@@ -47,6 +47,8 @@ const PING_PAYLOAD: &[u8] = b"hello-cross-zone";
 
 #[test]
 async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Result<()> {
+    init_logger();
+
     // Declared first so it outlives both zones (drops run in reverse order).
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
