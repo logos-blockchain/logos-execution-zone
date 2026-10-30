@@ -357,15 +357,8 @@ pub enum Options {
     Gauge(GaugeOptions),
 }
 
-#[derive(Clone, Copy, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum VariableKind {
-    /// A fixed list of choices, spelled out in the dashboard itself.
-    Custom,
-}
-
-/// One choice in a [`Variable`] dropdown: `text` is displayed, `value` is what
-/// `$name` interpolates to in a query.
+/// One choice in a [`CustomVariable`] dropdown: `text` is displayed, `value` is
+/// what `$name` interpolates to in a query.
 #[derive(Clone, Serialize)]
 pub struct VariableOption {
     pub selected: bool,
@@ -375,8 +368,16 @@ pub struct VariableOption {
 
 /// A dashboard-level dropdown, rendered in the top bar.
 #[derive(Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum Variable {
+    Custom(CustomVariable),
+    Query(QueryVariable),
+}
+
+/// A fixed list of choices, spelled out in the dashboard itself.
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Variable {
+pub struct CustomVariable {
     pub current: VariableOption,
     pub include_all: bool,
     pub label: String,
@@ -385,8 +386,54 @@ pub struct Variable {
     pub options: Vec<VariableOption>,
     /// Grafana's own encoding of `options`, as `text : value` pairs.
     pub query: String,
-    #[serde(rename = "type")]
-    pub kind: VariableKind,
+}
+
+/// Choices fetched from the datasource. Grafana picks the first one on load.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryVariable {
+    pub datasource: Datasource,
+    /// What the variable editor displays; Grafana keeps it equal to `query`.
+    pub definition: String,
+    pub include_all: bool,
+    pub label: String,
+    pub multi: bool,
+    pub name: String,
+    pub query: String,
+    pub refresh: VariableRefresh,
+    pub sort: VariableSort,
+}
+
+/// When a [`QueryVariable`] re-fetches its choices.
+#[derive(Clone, Copy)]
+pub enum VariableRefresh {
+    /// Also picks up sources that appeared since the dashboard was opened.
+    OnTimeRangeChange,
+}
+
+impl Serialize for VariableRefresh {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let id = match self {
+            Self::OnTimeRangeChange => 2,
+        };
+        serializer.serialize_u8(id)
+    }
+}
+
+/// Order of a [`QueryVariable`]'s choices.
+#[derive(Clone, Copy)]
+pub enum VariableSort {
+    /// Ascending, with digit runs compared as numbers (`seq_2` before `seq_10`).
+    NaturalAsc,
+}
+
+impl Serialize for VariableSort {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let id = match self {
+            Self::NaturalAsc => 7,
+        };
+        serializer.serialize_u8(id)
+    }
 }
 
 #[derive(Serialize, Default)]

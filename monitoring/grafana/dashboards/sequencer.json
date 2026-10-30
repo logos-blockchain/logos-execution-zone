@@ -19,7 +19,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "chain_height",
+          "expr": "chain_height{sequencer=\"$sequencer\"}",
           "legendFormat": "height",
           "refId": "A"
         }
@@ -43,7 +43,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "blocks_produced_total",
+          "expr": "blocks_produced_total{sequencer=\"$sequencer\"}",
           "legendFormat": "produced",
           "refId": "A"
         }
@@ -71,7 +71,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(blocks_produced_total[$__rate_interval]) * 60",
+          "expr": "rate(blocks_produced_total{sequencer=\"$sequencer\"}[$__rate_interval]) * 60",
           "legendFormat": "produced · blocks/min",
           "refId": "A"
         }
@@ -102,13 +102,13 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(${percentile}, sum by (le) (rate(block_creation_time_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(${percentile}, sum by (le) (rate(block_creation_time_seconds_bucket{sequencer=\"$sequencer\"}[$__rate_interval])))",
           "legendFormat": "${percentile:text}",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(block_creation_time_seconds_sum[$__rate_interval]) / rate(block_creation_time_seconds_count[$__rate_interval])",
+          "expr": "rate(block_creation_time_seconds_sum{sequencer=\"$sequencer\"}[$__rate_interval]) / rate(block_creation_time_seconds_count{sequencer=\"$sequencer\"}[$__rate_interval])",
           "legendFormat": "avg",
           "refId": "B"
         }
@@ -131,7 +131,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(${percentile}, sum by (le, kind, origin, status) (rate(mempool_transaction_application_time_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(${percentile}, sum by (le, kind, origin, status) (rate(mempool_transaction_application_time_seconds_bucket{sequencer=\"$sequencer\"}[$__rate_interval])))",
           "legendFormat": "{{kind}} · {{origin}} · {{status}}",
           "refId": "A"
         }
@@ -162,13 +162,13 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(${percentile}, sum by (le) (rate(transactions_per_block_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(${percentile}, sum by (le) (rate(transactions_per_block_bucket{sequencer=\"$sequencer\"}[$__rate_interval])))",
           "legendFormat": "${percentile:text}",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(transactions_per_block_sum[$__rate_interval]) / rate(transactions_per_block_count[$__rate_interval])",
+          "expr": "rate(transactions_per_block_sum{sequencer=\"$sequencer\"}[$__rate_interval]) / rate(transactions_per_block_count{sequencer=\"$sequencer\"}[$__rate_interval])",
           "legendFormat": "avg",
           "refId": "B"
         }
@@ -205,7 +205,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "100 * mempool_size / mempool_max_size",
+          "expr": "100 * mempool_size{sequencer=\"$sequencer\"} / mempool_max_size{sequencer=\"$sequencer\"}",
           "legendFormat": "utilization",
           "refId": "A"
         }
@@ -244,13 +244,13 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "mempool_size",
+          "expr": "mempool_size{sequencer=\"$sequencer\"}",
           "legendFormat": "queued",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "mempool_max_size",
+          "expr": "mempool_max_size{sequencer=\"$sequencer\"}",
           "legendFormat": "capacity",
           "refId": "B"
         }
@@ -287,7 +287,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "100 * (increase(before_mempool_failed_transactions_total[$__range]) + increase(mempool_failed_transactions_total[$__range])) / clamp_min(increase(submitted_transactions_total[$__range]), 1)",
+          "expr": "100 * (increase(before_mempool_failed_transactions_total{sequencer=\"$sequencer\"}[$__range]) + increase(mempool_failed_transactions_total{sequencer=\"$sequencer\"}[$__range])) / clamp_min(increase(submitted_transactions_total{sequencer=\"$sequencer\"}[$__range]), 1)",
           "legendFormat": "failed",
           "refId": "A"
         }
@@ -327,19 +327,19 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(submitted_transactions_total[$__rate_interval]) * 60",
+          "expr": "rate(submitted_transactions_total{sequencer=\"$sequencer\"}[$__rate_interval]) * 60",
           "legendFormat": "submitted",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(before_mempool_failed_transactions_total[$__rate_interval]) * 60",
+          "expr": "rate(before_mempool_failed_transactions_total{sequencer=\"$sequencer\"}[$__rate_interval]) * 60",
           "legendFormat": "failed · before mempool",
           "refId": "B"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(mempool_failed_transactions_total[$__rate_interval]) * 60",
+          "expr": "rate(mempool_failed_transactions_total{sequencer=\"$sequencer\"}[$__rate_interval]) * 60",
           "legendFormat": "failed · in mempool",
           "refId": "C"
         }
@@ -363,7 +363,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "cross_zone_dispatches_retired_total",
+          "expr": "cross_zone_dispatches_retired_total{sequencer=\"$sequencer\"}",
           "legendFormat": "given up on",
           "refId": "A"
         }
@@ -387,7 +387,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "cross_zone_dead_letter_dispatches",
+          "expr": "cross_zone_dead_letter_dispatches{sequencer=\"$sequencer\"}",
           "legendFormat": "retained",
           "refId": "A"
         }
@@ -419,7 +419,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(cross_zone_dispatches_retired_total[$__rate_interval]) * 60",
+          "expr": "rate(cross_zone_dispatches_retired_total{sequencer=\"$sequencer\"}[$__rate_interval]) * 60",
           "legendFormat": "given up on",
           "refId": "A"
         }
@@ -446,7 +446,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "cross_zone_peer_committee_suspended",
+          "expr": "cross_zone_peer_committee_suspended{sequencer=\"$sequencer\"}",
           "legendFormat": "peer {{peer}}",
           "refId": "A"
         }
@@ -461,6 +461,19 @@
   "templating": {
     "list": [
       {
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(chain_height, sequencer)",
+        "includeAll": false,
+        "label": "Sequencer",
+        "multi": false,
+        "name": "sequencer",
+        "query": "label_values(chain_height, sequencer)",
+        "refresh": 2,
+        "sort": 7
+      },
+      {
+        "type": "custom",
         "current": { "selected": true, "text": "p95", "value": "0.95" },
         "includeAll": false,
         "label": "Percentile",
@@ -472,8 +485,7 @@
           { "selected": true, "text": "p95", "value": "0.95" },
           { "selected": false, "text": "p99", "value": "0.99" }
         ],
-        "query": "p50 : 0.5, p90 : 0.9, p95 : 0.95, p99 : 0.99",
-        "type": "custom"
+        "query": "p50 : 0.5, p90 : 0.9, p95 : 0.95, p99 : 0.99"
       }
     ]
   },
