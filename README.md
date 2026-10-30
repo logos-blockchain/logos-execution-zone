@@ -232,7 +232,7 @@ The root `docker-compose.yml` runs the whole local stack: a dev Bedrock node, a 
 
 ```bash
 just resolve-bedrock-node
-docker compose up                          # add --profile monitoring for Prometheus + Grafana
+docker compose up                          # add --profile monitoring for Prometheus, Loki + Grafana
 docker compose up indexer_service          # or just a service and what it depends on
 ```
 

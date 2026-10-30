@@ -11,3 +11,10 @@ datasources:
     jsonData:
       # Must match prometheus.yml's `scrape_interval`
       timeInterval: 5s
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: true

@@ -108,11 +108,12 @@ resolve-host-bedrock-node:
         --output-directory bedrock/.resolved-host \
         --target-directory target/bedrock-node-host
 
-# Run Prometheus + Grafana in docker. Grafana: http://localhost:3000 (anonymous
-# admin), Prometheus: http://localhost:9090. Scrapes the sequencers' /metrics.
+# Run Prometheus, Loki (fed by Alloy) and Grafana in docker. Grafana: http://localhost:3000
+# (anonymous admin), Prometheus: http://localhost:9090. Scrapes the sequencers' /metrics and
+# collects the stack's container logs.
 run-monitoring:
-    @echo "📊 Running Prometheus (http://localhost:9090) + Grafana (http://localhost:3000)"
-    docker compose --profile monitoring up prometheus grafana
+    @echo "📊 Running Prometheus (http://localhost:9090), Loki + Grafana (http://localhost:3000)"
+    docker compose --profile monitoring up prometheus loki alloy grafana
 
 # ---- Decentralized sequencing tools ----
 

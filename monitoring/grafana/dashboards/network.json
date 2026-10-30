@@ -598,6 +598,91 @@
       ],
       "title": "Failed transactions per minute",
       "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "loki", "uid": "loki" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "short",
+          "min": 0.0,
+          "links": [
+            {
+              "title": "Open this sequencer's dashboard",
+              "url": "/d/sequencer?var-sequencer=${__field.labels.sequencer}&${__url_time_range}"
+            }
+          ]
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 61 },
+      "id": 18,
+      "interval": "30s",
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Warnings and errors in Explore",
+          "url": "/explore?schemaVersion=1&panes={\"logs\":{\"datasource\":\"loki\",\"queries\":[{\"datasource\":{\"type\":\"loki\",\"uid\":\"loki\"},\"expr\":\"{sequencer=~\\\".%2B\\\",%20level=~\\\"WARN|ERROR\\\"}\",\"refId\":\"A\"}],\"range\":{\"from\":\"${__from}\",\"to\":\"${__to}\"}}}"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki" },
+          "expr": "sum by (sequencer) (rate({sequencer=~\".+\", level=\"WARN\"}[$__auto])) * 60",
+          "legendFormat": "{{sequencer}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Warnings per minute",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "loki", "uid": "loki" },
+      "description": "Empty while no sequencer logs an error.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "short",
+          "min": 0.0,
+          "links": [
+            {
+              "title": "Open this sequencer's dashboard",
+              "url": "/d/sequencer?var-sequencer=${__field.labels.sequencer}&${__url_time_range}"
+            }
+          ]
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 61 },
+      "id": 19,
+      "interval": "30s",
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Warnings and errors in Explore",
+          "url": "/explore?schemaVersion=1&panes={\"logs\":{\"datasource\":\"loki\",\"queries\":[{\"datasource\":{\"type\":\"loki\",\"uid\":\"loki\"},\"expr\":\"{sequencer=~\\\".%2B\\\",%20level=~\\\"WARN|ERROR\\\"}\",\"refId\":\"A\"}],\"range\":{\"from\":\"${__from}\",\"to\":\"${__to}\"}}}"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki" },
+          "expr": "sum by (sequencer) (rate({sequencer=~\".+\", level=\"ERROR\"}[$__auto])) * 60",
+          "legendFormat": "{{sequencer}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Errors per minute",
+      "type": "timeseries"
     }
   ],
   "refresh": "5s",

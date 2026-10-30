@@ -133,10 +133,25 @@ Turns come from Bedrock: the zone SDK notifies a sequencer when its turn to writ
 
 The builder deliberately models only the subset of Grafana's schema we use.
 
+## Logs
+
+`--profile monitoring` also runs **Loki** and **Alloy**: Alloy reads this compose project's container output through the Docker socket and ships it to Loki, which Grafana has as its `loki` datasource. Config: `monitoring/alloy/config.alloy`, `monitoring/loki/loki.yml`.
+
+Every stream is labelled `service_name` (the compose service), every line `level` (`INFO`, `WARN`, …), and a sequencer's stream also `sequencer` — `sequencer_0`…`sequencer_3`, the same names Prometheus gives them, so one Sequencer dropdown filters metrics and logs alike.
+
+Read logs in **Explore** or **Drilldown → Logs**; the dashboards only point at them:
+
+| Dashboard | Panel |
+|---|---|
+| Sequencer | **Warnings and errors** of the selected sequencer, with a header link to all its logs in Explore |
+| Sequencer network | **Warnings per minute** and **Errors per minute** per sequencer, linking to them in Explore |
+
+`dashboard_gen` builds log queries with `Target::logs`, a log list with `Panel::logs`, and Explore links with `explore_logs_url`. A natively run sequencer (`just run-sequencer`) is not in Docker, so its logs stay in the terminal.
+
 ## Justfile
 
 | Recipe | Purpose |
 |---|---|
 | `just regenerate-dashboards` | Rebuild the committed dashboard JSON. Run after touching metric names or dashboard code — CI checks it is current. |
-| `just run-monitoring` | Prometheus (`:9090`) + Grafana (`:3000`, anonymous admin) in docker, scraping the sequencers every 5 s |
+| `just run-monitoring` | Prometheus (`:9090`), Loki + Alloy, and Grafana (`:3000`, anonymous admin) in docker, scraping the sequencers every 5 s and collecting container logs |
 | `just get-sequencer-metrics` | `curl` the raw `/metrics` endpoint — quickest way to confirm a metric name and value |

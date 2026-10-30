@@ -2,8 +2,8 @@
 //! write, who proposes the blocks, and who falls behind.
 
 use dashboard_gen::{
-    Color, Dashboard, Panel, Selector, Target, Thresholds, Unit, percentile_variable,
-    selected_percentile, sum_rate_per_min,
+    Color, Dashboard, Panel, Selector, Target, Thresholds, Unit, explore_logs_url,
+    percentile_variable, selected_percentile, sum_rate_per_min,
 };
 use sequencer_core_metrics::names::{
     BLOCK_CREATION_TIME, BLOCKS_PRODUCED_TOTAL, CHAIN_HEIGHT, MEMPOOL_FAILED_TRANSACTIONS_TOTAL,
@@ -296,5 +296,40 @@ pub fn dashboard() -> Dashboard {
                         .legend(PER_SEQUENCER),
                     ),
             ],
+        )
+        .row(
+            9,
+            [
+                logged_per_minute("Warnings per minute", "WARN"),
+                logged_per_minute("Errors per minute", "ERROR")
+                    .description("Empty while no sequencer logs an error."),
+            ],
+        )
+}
+
+/// How many lines each sequencer logs at `level` per minute; the header opens
+/// every sequencer's warnings and errors in Explore.
+fn logged_per_minute(title: &str, level: &str) -> Panel {
+    let any_sequencer = format!(r#"{SEQUENCER_LABEL}=~".+""#);
+    let at_level = format!(r#"level="{level}""#);
+    per_sequencer(Panel::timeseries(title))
+        .width(12)
+        .min(0.0)
+        // Lines are sparse: a window of a second or two, as short ranges get,
+        // mostly holds none.
+        .min_interval("30s")
+        .header_link(
+            "Warnings and errors in Explore",
+            explore_logs_url(&super::logs(&[&any_sequencer, super::WARNINGS_AND_ERRORS])),
+        )
+        .target(
+            Target::logs(format!(
+                "{} * 60",
+                by_sequencer(&format!(
+                    "rate({}[$__auto])",
+                    super::logs(&[&any_sequencer, &at_level])
+                ))
+            ))
+            .legend(PER_SEQUENCER),
         )
 }
