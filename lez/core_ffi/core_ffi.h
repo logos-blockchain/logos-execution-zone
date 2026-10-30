@@ -856,6 +856,11 @@ typedef struct FfiDryRunReport {
    */
   struct FfiU128 fee_at_head;
   /**
+   * Public: what admission holds from the payer, priced at the gas limit: the least
+   * `max_fee` the sequencer accepts.
+   */
+  struct FfiU128 reserve_at_head;
+  /**
    * Public: the transaction's wire size, priced at the storage base fee.
    */
   uint64_t wire_bytes;
@@ -912,6 +917,47 @@ typedef struct FfiTransferResult {
    */
   struct FfiSendFee fee;
 } FfiTransferResult;
+
+/**
+ * What every send declares in place of the wallet's defaults. A field whose `has_*` flag is
+ * false keeps the default.
+ */
+typedef struct FfiFeeParams {
+  /**
+   * Public: the execution gas limit, else the cycles a simulation measures plus the configured
+   * margin.
+   */
+  bool has_gas_limit;
+  uint64_t gas_limit;
+  /**
+   * Public: the fee cap, else the reserve at the headroom's base fees. A cap below the dry
+   * run's `reserve_at_head` is rejected by the sequencer.
+   */
+  bool has_max_fee;
+  struct FfiU128 max_fee;
+  /**
+   * Public: the tip, charged on top of the base fees.
+   */
+  uint64_t tip;
+  /**
+   * Blocks of steepest base fee climb a fee is priced to cover (a public cap, a private
+   * reserve), else the configured ones.
+   */
+  bool has_headroom_blocks;
+  uint64_t headroom_blocks;
+  /**
+   * Private: the owned private account paying every in-proof fee, else each send picks its
+   * payer.
+   */
+  bool has_payer;
+  FfiAccountId payer;
+  /**
+   * Private: the public account the surplus is refunded to, else the payer's alias. Any
+   * account the transaction does not credit publicly is linked to it.
+   */
+  bool has_refund_to;
+  FfiAccountId refund_to;
+} FfiFeeParams;
 
 typedef struct FfiBytes32 FfiPdaSeed;
 
@@ -1943,6 +1989,17 @@ enum FfiOperationError wallet_ffi_bridge_withdraw(struct WalletHandle *handle,
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
  */
 enum FfiOperationError wallet_ffi_set_dry_run(struct WalletHandle *handle, bool dry_run);
+
+/**
+ * Declare every later send's fee with `params` in place of the wallet's defaults, replacing any
+ * set before; null restores the defaults. A dry run shows what a send would then declare.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `params` must be null or a valid pointer to a `FfiFeeParams` struct
+ */
+enum FfiOperationError wallet_ffi_set_fee_params(struct WalletHandle *handle,
+                                                 const struct FfiFeeParams *params);
 
 /**
  * Get the fee market priced off the sequencer's head state.
