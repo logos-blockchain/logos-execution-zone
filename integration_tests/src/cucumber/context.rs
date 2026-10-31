@@ -259,15 +259,42 @@ impl LezScenarioContext {
     }
 
     /// Signs and submits a public transaction delivering `message` to the actor of
-    /// `accounts[root]` through the scenario wallet.
+    /// `accounts[root]` through the scenario wallet, with the wallet picking the
+    /// fee payer, if any, from the signing accounts.
     pub async fn send_program_transaction(
         &self,
         accounts: Vec<wallet::AccountMention>,
         root: usize,
         message: lee_core::program::MessageData,
     ) -> Result<HashType, StepError> {
+        self.send_program_transaction_paid_by(accounts, root, message, None)
+            .await
+    }
+
+    /// Signs and submits a public transaction delivering `message` to the actor of
+    /// `accounts[root]` through the scenario wallet, paid by `payer` if given.
+    pub async fn send_program_transaction_paid_by(
+        &self,
+        accounts: Vec<wallet::AccountMention>,
+        root: usize,
+        message: lee_core::program::MessageData,
+        payer: Option<AccountId>,
+    ) -> Result<HashType, StepError> {
         self.wallet()
-            .send_program_transaction(accounts, root, message)
+            .send_program_transaction_paid_by(accounts, root, message, payer)
+            .await
+            .map_err(StepError::query_failed_boxed)
+    }
+
+    /// Deploys `program` at runtime through the scenario wallet, paid by
+    /// `payer`, and returns the header account the deployment claimed.
+    pub async fn deploy_program(
+        &self,
+        program: lee::program::Program,
+        payer: AccountId,
+    ) -> Result<AccountId, StepError> {
+        self.wallet()
+            .deploy_program(program, payer)
             .await
             .map_err(StepError::query_failed_boxed)
     }

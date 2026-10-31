@@ -9,8 +9,8 @@ use sequencer_service_rpc::RpcClient as _;
 use super::{
     super::log_step,
     helpers::{
-        config_entry, first_configured_public_account, get_account, native_balance, stake_config,
-        stake_state, submit_accepted_stake,
+        config_entry, deploy_program, first_configured_public_account, get_account, native_balance,
+        stake_config, stake_state, submit_accepted_stake,
     },
 };
 use crate::cucumber::{
@@ -64,7 +64,7 @@ async fn sequencer_key_has_no_entry(world: &mut CucumberWorld, step: &Step) -> S
     Ok(())
 }
 
-#[given("a default-owned, unclaimed ownership account for the sequencer key")]
+#[given("a fresh, unclaimed ownership account for the sequencer key")]
 async fn ownership_account_is_unclaimed(world: &mut CucumberWorld, step: &Step) -> StepResult {
     log_step(step);
     let context = world.lez()?;
@@ -143,5 +143,16 @@ async fn stake_second_sequencer_key(world: &mut CucumberWorld, step: &Step) -> S
 fn off_curve_key_bytes(world: &mut CucumberWorld, step: &Step) -> StepResult {
     log_step(step);
     world.stake_mut()?.set_off_curve_bytes(OFF_CURVE_BYTES);
+    Ok(())
+}
+
+#[given("the scripted test program is deployed")]
+async fn deploy_scripted_program(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
+    let program = test_programs::scripted();
+    let account_id = deploy_program(world.lez()?, &program).await?;
+    world
+        .stake_mut()?
+        .set_deployed_program(&program, account_id);
     Ok(())
 }
