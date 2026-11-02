@@ -169,6 +169,11 @@ unsafe extern "C" {
         dry_run: bool,
     ) -> error::FfiOperationError;
 
+    pub fn wallet_ffi_set_allow_revert(
+        handle: *mut WalletHandle,
+        allow_revert: bool,
+    ) -> error::FfiOperationError;
+
     pub fn wallet_ffi_set_fee_params(
         handle: *mut WalletHandle,
         params: *const FfiFeeParams,
@@ -192,13 +197,13 @@ unsafe extern "C" {
         out_result: *mut FfiTransferResult,
     ) -> error::FfiOperationError;
 
-    // pub fn wallet_ffi_bridge_withdraw(
-    //     handle: *mut WalletHandle,
-    //     from: *const FfiBytes32,
-    //     amount: u64,
-    //     bedrock_account_pk: *const FfiBytes32,
-    //     out_result: *mut FfiTransferResult,
-    // ) -> error::FfiOperationError;
+    pub fn wallet_ffi_bridge_withdraw(
+        handle: *mut WalletHandle,
+        from: *const FfiBytes32,
+        amount: u64,
+        bedrock_account_pk: *const FfiBytes32,
+        out_result: *mut FfiTransferResult,
+    ) -> error::FfiOperationError;
 
     pub fn wallet_ffi_save(handle: *mut WalletHandle) -> error::FfiOperationError;
 

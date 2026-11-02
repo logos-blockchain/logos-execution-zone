@@ -361,6 +361,33 @@ pub unsafe extern "C" fn wallet_ffi_set_fee_params(
     }
 }
 
+/// Send public transactions whose simulation reverts, which pay their fee for nothing, instead of
+/// refusing them with `WouldRevert`.
+///
+/// # Safety
+/// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn wallet_ffi_set_allow_revert(
+    handle: *mut WalletHandle,
+    allow_revert: bool,
+) -> FfiOperationError {
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    match wrapper.core.lock() {
+        Ok(mut wallet) => {
+            wallet.set_allow_revert(allow_revert);
+            FfiOperationError::Success
+        }
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            FfiOperationError::InternalError
+        }
+    }
+}
+
 /// Get the fee market priced off the sequencer's head state.
 ///
 /// # Safety

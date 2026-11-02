@@ -23,6 +23,7 @@ async fn main() -> Result<()> {
     let Args {
         continuous_run,
         dry_run,
+        allow_revert,
         gas_limit,
         max_fee,
         tip,
@@ -78,6 +79,7 @@ async fn main() -> Result<()> {
             wallet
         };
         wallet.set_dry_run(dry_run);
+        wallet.set_allow_revert(allow_revert);
         wallet.set_fee_params(fee_params);
         match execute_subcommand(&mut wallet, command).await {
             // A dry run stops the command with its report; that is its success.

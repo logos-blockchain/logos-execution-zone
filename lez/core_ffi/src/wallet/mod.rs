@@ -95,6 +95,7 @@ pub(crate) fn map_execution_error(e: ExecutionFailureKind) -> FfiOperationError 
             FfiOperationError::PayerCannotFund
         }
         ExecutionFailureKind::InsufficientFundsError => FfiOperationError::InsufficientFunds,
+        ExecutionFailureKind::SimulatedRevert(_) => FfiOperationError::WouldRevert,
         ExecutionFailureKind::KeyNotFoundError => FfiOperationError::KeyNotFound,
         ExecutionFailureKind::StorageError(_) => FfiOperationError::StorageError,
         ExecutionFailureKind::SequencerError(_) | ExecutionFailureKind::SequencerClientError(_) => {

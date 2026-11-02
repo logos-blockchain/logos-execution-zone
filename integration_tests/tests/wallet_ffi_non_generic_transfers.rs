@@ -625,3 +625,59 @@ fn test_wallet_ffi_dry_runs_report_without_sending() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_wallet_ffi_refuses_a_public_send_whose_simulation_reverts() -> Result<()> {
+    let sequencer_ffi_helpers::JoiningSetup {
+        ctx,
+        node: _,
+        ownership_id: _,
+        sequencer_ffi: sequencer_ffi_res,
+        sequencer_home,
+    } = sequencer_ffi_helpers::joining_setup(true)?;
+
+    log::info!("Joining sequencer home: {sequencer_home:?}");
+
+    let home = tempfile::tempdir()?;
+    let FfiCreateWalletOutput {
+        wallet: wallet_ffi_handle,
+        mnemonic: _,
+    } = new_wallet_ffi_with_test_context_config(&ctx, home.path(), sequencer_ffi_res.value)?;
+    let from: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
+    let bedrock_account_pk = FfiBytes32::from_bytes([1; 32]);
+
+    // A guest program call runs out of a 1000-cycle limit, and a failed action is charged its
+    // whole limit.
+    let params = FfiFeeParams {
+        has_gas_limit: true,
+        gas_limit: 1000,
+        ..FfiFeeParams::default()
+    };
+    let mut result = FfiTransferResult::default();
+    unsafe {
+        wallet_ffi_set_fee_params(wallet_ffi_handle, &raw const params).unwrap();
+        assert_eq!(
+            wallet_ffi_bridge_withdraw(
+                wallet_ffi_handle,
+                &raw const from,
+                100,
+                &raw const bedrock_account_pk,
+                &raw mut result,
+            ),
+            error::FfiOperationError::WouldRevert
+        );
+    }
+    assert!(!result.success && result.tx_hash.is_null());
+
+    unsafe {
+        wallet_ffi_free_transfer_result(&raw mut result);
+        wallet_ffi_destroy(wallet_ffi_handle);
+    }
+
+    // SAFETY: sequencer_ffi created by FFI, it is valid.
+    unsafe {
+        sequencer_ffi_helpers::sequencer_ffi_stop_sequencer(sequencer_ffi_res.value);
+    }
+
+    Ok(())
+}
