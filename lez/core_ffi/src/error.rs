@@ -64,6 +64,8 @@ pub enum FfiOperationError {
     MessageNotFound = 24,
     /// The password does not open the wallet storage, or the storage is corrupted.
     WrongPassword = 25,
+    /// The transaction reverts when simulated and would still pay its fee, so it was not sent.
+    WouldRevert = 26,
     /// Internal error (catch-all).
     InternalError = 99,
 }

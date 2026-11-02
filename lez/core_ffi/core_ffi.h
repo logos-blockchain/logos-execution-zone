@@ -142,6 +142,10 @@ typedef enum FfiOperationError {
    */
   FfiOperationError_WrongPassword = 25,
   /**
+   * The transaction reverts when simulated and would still pay its fee, so it was not sent.
+   */
+  FfiOperationError_WouldRevert = 26,
+  /**
    * Internal error (catch-all).
    */
   FfiOperationError_InternalError = 99,
@@ -2000,6 +2004,15 @@ enum FfiOperationError wallet_ffi_set_dry_run(struct WalletHandle *handle, bool 
  */
 enum FfiOperationError wallet_ffi_set_fee_params(struct WalletHandle *handle,
                                                  const struct FfiFeeParams *params);
+
+/**
+ * Send public transactions whose simulation reverts, which pay their fee for nothing, instead of
+ * refusing them with `WouldRevert`.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ */
+enum FfiOperationError wallet_ffi_set_allow_revert(struct WalletHandle *handle, bool allow_revert);
 
 /**
  * Get the fee market priced off the sequencer's head state.

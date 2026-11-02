@@ -191,6 +191,11 @@ pub enum ExecutionFailureKind {
     SignError(anyhow::Error),
     #[error("Dry run: the transaction was simulated and not sent")]
     DryRun(Box<DryRunReport>),
+    #[error(
+        "The transaction reverts when simulated and would still pay its fee, so it was not sent: \
+         {0}"
+    )]
+    SimulatedRevert(String),
     #[error("Sending transaction failed for each client")]
     MultiSequencerTransactionSendError,
     #[error("Failed to store wallet data")]
@@ -419,6 +424,8 @@ pub struct WalletCore<C: WalletSequencerClient> {
 
     /// Simulate transactions and report their cost instead of sending them.
     dry_run: bool,
+    /// Send a public transaction whose simulation reverts instead of refusing it.
+    allow_revert: bool,
     /// What every send declares in place of the wallet's defaults.
     fee_params: FeeParams,
     /// Receipts of the pending messages each send of this process claimed, by its transaction,
@@ -517,6 +524,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             spent_nullifiers,
             sequencer_client,
             dry_run: false,
+            allow_revert: false,
             fee_params: FeeParams::default(),
             swept: std::sync::Mutex::new(HashMap::new()),
             declared_fee: std::sync::Mutex::new(None),
@@ -624,6 +632,12 @@ impl<C: WalletSequencerClient> WalletCore<C> {
     /// with [`ExecutionFailureKind::DryRun`].
     pub const fn set_dry_run(&mut self, dry_run: bool) {
         self.dry_run = dry_run;
+    }
+
+    /// Send a public transaction whose simulation reverts, which pays its fee for nothing,
+    /// instead of refusing it with [`ExecutionFailureKind::SimulatedRevert`].
+    pub const fn set_allow_revert(&mut self, allow_revert: bool) {
+        self.allow_revert = allow_revert;
     }
 
     /// Takes the fee the last send that reached the sequencer declared, leaving none.
@@ -2209,7 +2223,11 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             )));
         }
 
+        // A failed action is charged its whole gas limit.
         if let Some(reason) = measured.and_then(|measured| measured.revert_reason) {
+            if !self.allow_revert {
+                return Err(ExecutionFailureKind::SimulatedRevert(reason));
+            }
             warn!("The transaction reverts when simulated, and still pays its fee: {reason}");
         }
         let tx_hash = self
@@ -2637,6 +2655,7 @@ impl WalletCore<SequencerClient> {
             spent_nullifiers,
             sequencer_client,
             dry_run: false,
+            allow_revert: false,
             fee_params: FeeParams::default(),
             swept: std::sync::Mutex::new(HashMap::new()),
             declared_fee: std::sync::Mutex::new(None),

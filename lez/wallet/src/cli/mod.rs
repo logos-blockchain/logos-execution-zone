@@ -118,6 +118,9 @@ pub struct Args {
     /// Simulate the transaction a command would send and report its cost instead of sending it.
     #[arg(long, global = true)]
     pub dry_run: bool,
+    /// Send a public transaction even though its simulation reverts; it still pays its fee.
+    #[arg(long, global = true)]
+    pub allow_revert: bool,
     /// Declare this execution gas limit on a public transaction for this command, instead of the
     /// cycles a simulation measures plus the configured margin.
     #[arg(long, global = true, value_name = "GAS")]
