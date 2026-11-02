@@ -35,6 +35,27 @@ impl<'de> Deserialize<'de> for LeeTransaction {
 }
 
 impl LeeTransaction {
+    /// The bytes the transaction's storage is charged for: its serialized size, with a
+    /// privacy-preserving transaction's proof counted at the fixed [`PROOF_BYTES`] it may not
+    /// exceed.
+    ///
+    /// [`PROOF_BYTES`]: fee_core::market::PROOF_BYTES
+    pub fn charged_bytes(&self) -> borsh::io::Result<u64> {
+        let size =
+            u64::try_from(borsh::object_length(self)?).expect("a transaction's size fits u64");
+        Ok(match self {
+            Self::Public(_) => size,
+            // Classification refuses a longer proof, so a shorter one (a dev-mode receipt, or none
+            // when the wallet measures before proving) is charged as a real one.
+            Self::PrivacyPreserving(tx) => {
+                let proof = u64::try_from(tx.witness_set().proof().size())
+                    .expect("a proof's size fits u64");
+                size.saturating_sub(proof)
+                    .saturating_add(fee_core::market::PROOF_BYTES)
+            }
+        })
+    }
+
     #[must_use]
     pub const fn public_call(&self) -> Option<(Actor, &[u8])> {
         let Self::Public(tx) = self else {
