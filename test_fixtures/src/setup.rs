@@ -379,6 +379,12 @@ fn validate_resolved_bedrock_node(resolved_directory: &Path) -> Result<()> {
 }
 
 pub async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {
+    setup_bedrock_node_with_settings(None).await
+}
+
+pub async fn setup_bedrock_node_with_settings(
+    settings_file: Option<&str>,
+) -> Result<(DockerCompose, SocketAddr)> {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let bedrock_compose_path = PathBuf::from(manifest_dir).join("../bedrock/docker-compose.yml");
     let resolved_binary =
@@ -402,6 +408,18 @@ pub async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {
         // Setting port to 0 to avoid conflicts between parallel tests, actual port will be
         // retrieved after container is up
         .with_env("LEZ_COMPOSE_BEDROCK_PORT", "0");
+    if let Some(settings_file) = settings_file {
+        let settings_path = PathBuf::from(manifest_dir)
+            .join("../bedrock")
+            .join(settings_file);
+        if !settings_path.is_file() {
+            bail!(
+                "Bedrock settings override is missing at {}",
+                settings_path.display()
+            );
+        }
+        compose = compose.with_env("LEZ_COMPOSE_BEDROCK_SETTINGS", format!("./{settings_file}"));
+    }
 
     #[expect(
         clippy::items_after_statements,
@@ -637,6 +655,23 @@ pub async fn sync_wallet_from_prebuilt(wallet: &mut WalletCore<SequencerClient>)
 #[cfg(test)]
 mod tests {
     use super::{bedrock_platform_for_docker_arch, ensure_node_runs_on_docker_daemon};
+
+    #[test]
+    fn slow_finality_settings_differ_from_the_default_only_in_security_param() {
+        let bedrock = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../bedrock");
+        let default = std::fs::read_to_string(bedrock.join("deployment-settings.yaml")).unwrap();
+        let slow = std::fs::read_to_string(bedrock.join("deployment-settings-slow-finality.yaml"))
+            .unwrap();
+        let patched = default.replacen("security_param: 5", "security_param: 20", 1);
+        assert_ne!(
+            patched, default,
+            "the default settings no longer carry `security_param: 5`; regenerate the slow-finality file"
+        );
+        assert_eq!(
+            slow, patched,
+            "deployment-settings-slow-finality.yaml drifted from deployment-settings.yaml"
+        );
+    }
 
     #[test]
     fn maps_docker_architectures_to_resolved_platforms() {

@@ -14,6 +14,7 @@ status-level = "slow"
 [test-groups]
 slashing = { max-threads = 1 }
 sequencer_bootstrap = { max-threads = 1 }
+bridge = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = 'binary(slashing)'
@@ -22,3 +23,7 @@ test-group = 'slashing'
 [[profile.default.overrides]]
 filter = 'binary(sequencer_bootstrap)'
 test-group = 'sequencer_bootstrap'
+
+[[profile.default.overrides]]
+filter = 'binary(bridge)'
+test-group = 'bridge'
