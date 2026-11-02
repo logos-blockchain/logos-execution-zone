@@ -843,7 +843,7 @@ typedef struct FfiDryRunReport {
    */
   struct FfiU128 reserve_at_head;
   /**
-   * Public: the transaction's wire size, priced at the storage base fee.
+   * The transaction's wire size, priced at the storage base fee.
    */
   uint64_t wire_bytes;
   /**

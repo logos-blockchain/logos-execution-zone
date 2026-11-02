@@ -26,8 +26,9 @@ pub use privacy_preserving_circuit::{
 pub use privacy_preserving_transaction::{
     PrivacyPreservingTransaction,
     circuit::{
-        Simulation, execute_and_prove, execute_and_prove_with_cross_messages,
-        simulate_privacy_preserving_transaction, simulate_public_transaction,
+        Simulation, execute_and_prove, execute_and_prove_with_cross_messages, execute_unproven,
+        execute_unproven_with_cross_messages, simulate_privacy_preserving_transaction,
+        simulate_public_transaction,
     },
 };
 pub use public_transaction::PublicTransaction;

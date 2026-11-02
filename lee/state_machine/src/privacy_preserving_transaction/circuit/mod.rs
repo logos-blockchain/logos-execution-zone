@@ -18,7 +18,8 @@ use lee_core::{
     to_frame,
 };
 use risc0_zkvm::{
-    ExecutorEnv, ExecutorEnvBuilder, InnerReceipt, ProverOpts, Receipt, default_prover,
+    AssumptionReceipt, ExecutorEnv, ExecutorEnvBuilder, InnerReceipt, MaybePruned, ProverOpts,
+    Receipt, default_executor, default_prover, sha::Digestible as _,
 };
 
 use crate::{
@@ -44,6 +45,12 @@ impl Proof {
         self.0
     }
 
+    /// The proof's length in bytes.
+    #[must_use]
+    pub const fn size(&self) -> usize {
+        self.0.len()
+    }
+
     #[must_use]
     pub const fn from_inner(inner: Vec<u8>) -> Self {
         Self(inner)
@@ -57,6 +64,16 @@ impl Proof {
         let Ok(inner) = borsh::from_slice::<InnerReceipt>(&self.0) else {
             return false;
         };
+        // One encoding per proof: a succinct receipt, or a fake one that only a dev-mode verifier
+        // accepts, with its claim pruned to the digest verification compares.
+        let canonical = match &inner {
+            InnerReceipt::Succinct(receipt) => matches!(receipt.claim, MaybePruned::Pruned(_)),
+            InnerReceipt::Fake(receipt) => matches!(receipt.claim, MaybePruned::Pruned(_)),
+            InnerReceipt::Composite(_) | InnerReceipt::Groth16(_) | _ => false,
+        };
+        if !canonical {
+            return false;
+        }
         let receipt = Receipt::new(
             inner,
             lee_core::to_borsh_frame(&(public_context, execution)),
@@ -308,6 +325,7 @@ struct Prover<'programs> {
     recorder: SenderPresentationRecorder<'programs>,
     select: &'programs mut dyn FnMut(u64, &MessageBody) -> bool,
     promotions: BTreeSet<u64>,
+    proving: bool,
 }
 
 impl ExecutionEnvironment for Prover<'_> {
@@ -319,9 +337,11 @@ impl ExecutionEnvironment for Prover<'_> {
         _view: &TransitionView<'_>,
     ) -> Result<Transition, LeeError> {
         handle_message_with(self.programs, input, |program| {
-            let receipt = prove_session(program, |env| Program::write_receive_input(input, env))?;
-            let transition = transition_journal(&receipt.journal.bytes)?;
-            self.env_builder.add_assumption(receipt);
+            let (journal, assumption) = run_session(self.proving, program, |env| {
+                Program::write_receive_input(input, env)
+            })?;
+            let transition = transition_journal(&journal)?;
+            self.env_builder.add_assumption(assumption);
             self.responses.push(transition.response.clone());
             self.invoked.insert(input.receiver.program_account_id);
             Ok(transition)
@@ -371,13 +391,56 @@ fn handle_message_with(
 /// delivers, and executes at once each async message to an undeclared destination that `input`
 /// selects or `select_promotion` accepts.
 pub fn execute_and_prove(
-    mut input: ProvingInput,
+    input: ProvingInput,
     simulation: &Simulation,
     programs: &ProgramCatalog,
     mut present_sender: impl FnMut(Actor) -> SenderPresentation,
     mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
     mut choose_seal: impl FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
+    simulate_and_run(
+        input,
+        simulation,
+        programs,
+        &mut present_sender,
+        &mut select_promotion,
+        &mut choose_seal,
+        true,
+    )
+    .map(|(output, proof)| (output, proof.expect("a proving run returns its proof")))
+}
+
+/// Runs [`execute_and_prove`] without proving: the circuit's output, for measuring the
+/// transaction before proving it.
+pub fn execute_unproven(
+    input: ProvingInput,
+    simulation: &Simulation,
+    programs: &ProgramCatalog,
+    mut present_sender: impl FnMut(Actor) -> SenderPresentation,
+    mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
+    mut choose_seal: impl FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
+) -> Result<PrivacyPreservingCircuitOutput, LeeError> {
+    simulate_and_run(
+        input,
+        simulation,
+        programs,
+        &mut present_sender,
+        &mut select_promotion,
+        &mut choose_seal,
+        false,
+    )
+    .map(|(output, _)| output)
+}
+
+fn simulate_and_run(
+    mut input: ProvingInput,
+    simulation: &Simulation,
+    programs: &ProgramCatalog,
+    present_sender: &mut dyn FnMut(Actor) -> SenderPresentation,
+    select_promotion: &mut dyn FnMut(Placement, &MessageBody) -> bool,
+    choose_seal: &mut dyn FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
+    proving: bool,
+) -> Result<(PrivacyPreservingCircuitOutput, Option<Proof>), LeeError> {
     let Simulated {
         predicted_cross_messages,
         public_promotions,
@@ -389,7 +452,7 @@ pub fn execute_and_prove(
         simulation,
         programs,
         &mut |sender| Some(present_sender(sender)),
-        &mut select_promotion,
+        select_promotion,
     )?;
     input.public_context.promotions = public_promotions;
     input.private_promotions = private_promotions;
@@ -402,7 +465,8 @@ pub fn execute_and_prove(
         programs,
         &mut |_| presented.next(),
         &mut |index, _| recorded.contains(&index),
-        &mut choose_seal,
+        choose_seal,
+        proving,
     )
 }
 
@@ -538,12 +602,55 @@ fn simulate_whole(
 /// produce a proof settlement refuses.
 pub fn execute_and_prove_with_cross_messages(
     input: ProvingInput,
-    mut predicted_cross_messages: PredictedCrossMessages,
+    predicted_cross_messages: PredictedCrossMessages,
     programs: &ProgramCatalog,
     mut present_sender: impl FnMut(Actor) -> SenderPresentation,
     mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
     mut choose_seal: impl FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
+    run_with_cross_messages(
+        input,
+        predicted_cross_messages,
+        programs,
+        &mut present_sender,
+        &mut select_promotion,
+        &mut choose_seal,
+        true,
+    )
+    .map(|(output, proof)| (output, proof.expect("a proving run returns its proof")))
+}
+
+/// Runs [`execute_and_prove_with_cross_messages`] without proving: the circuit's output, for
+/// measuring the transaction before proving it.
+pub fn execute_unproven_with_cross_messages(
+    input: ProvingInput,
+    predicted_cross_messages: PredictedCrossMessages,
+    programs: &ProgramCatalog,
+    mut present_sender: impl FnMut(Actor) -> SenderPresentation,
+    mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
+    mut choose_seal: impl FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
+) -> Result<PrivacyPreservingCircuitOutput, LeeError> {
+    run_with_cross_messages(
+        input,
+        predicted_cross_messages,
+        programs,
+        &mut present_sender,
+        &mut select_promotion,
+        &mut choose_seal,
+        false,
+    )
+    .map(|(output, _)| output)
+}
+
+fn run_with_cross_messages(
+    input: ProvingInput,
+    mut predicted_cross_messages: PredictedCrossMessages,
+    programs: &ProgramCatalog,
+    present_sender: &mut dyn FnMut(Actor) -> SenderPresentation,
+    select_promotion: &mut dyn FnMut(Placement, &MessageBody) -> bool,
+    choose_seal: &mut dyn FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
+    proving: bool,
+) -> Result<(PrivacyPreservingCircuitOutput, Option<Proof>), LeeError> {
     // The fee's credit reaches a native actor, which calls nothing back.
     if input.fee.is_some() {
         predicted_cross_messages.push(Vec::new());
@@ -555,7 +662,8 @@ pub fn execute_and_prove_with_cross_messages(
         programs,
         &mut |sender| Some(present_sender(sender)),
         &mut |index, body| requested.contains(&index) || select_promotion(Placement::Private, body),
-        &mut choose_seal,
+        choose_seal,
+        proving,
     )
 }
 
@@ -566,7 +674,8 @@ fn prove(
     choose: &mut dyn FnMut(Actor) -> Option<SenderPresentation>,
     select: &mut dyn FnMut(u64, &MessageBody) -> bool,
     choose_seal: &mut dyn FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
-) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
+    proving: bool,
+) -> Result<(PrivacyPreservingCircuitOutput, Option<Proof>), LeeError> {
     let ProgramCatalog { programs } = programs;
 
     let mut backend = Prover {
@@ -580,6 +689,7 @@ fn prove(
         },
         select,
         promotions: BTreeSet::new(),
+        proving,
     };
     let outcome = PrivatePart::new(
         input.public_context.clone(),
@@ -654,24 +764,72 @@ fn prove(
     let circuit_input_payload = borsh::to_vec(&circuit_input)?;
     env_builder.write_slice(&to_frame(&circuit_input_payload));
     let env = env_builder.build().unwrap();
-    let prover = default_prover();
-    let opts = ProverOpts::succinct();
-    let prove_info = prover
-        .prove_with_opts(env, PRIVACY_PRESERVING_CIRCUIT_ELF, &opts)
-        .map_err(|e| LeeError::CircuitProvingError(e.to_string()))?;
+    let (journal, proof) = if proving {
+        let prove_info = default_prover()
+            .prove_with_opts(env, PRIVACY_PRESERVING_CIRCUIT_ELF, &ProverOpts::succinct())
+            .map_err(|e| LeeError::CircuitProvingError(e.to_string()))?;
+        let proof = Proof(borsh::to_vec(&pruned(prove_info.receipt.inner))?);
+        (prove_info.receipt.journal.bytes, Some(proof))
+    } else {
+        let session = default_executor()
+            .execute(env, PRIVACY_PRESERVING_CIRCUIT_ELF)
+            .map_err(|e| LeeError::CircuitProvingError(e.to_string()))?;
+        (session.journal.bytes, None)
+    };
 
-    let proof = Proof(borsh::to_vec(&prove_info.receipt.inner)?);
-
-    let circuit_output: PrivacyPreservingCircuitOutput = borsh::from_slice(
-        from_frame(&prove_info.receipt.journal.bytes).ok_or_else(|| {
+    let circuit_output: PrivacyPreservingCircuitOutput =
+        borsh::from_slice(from_frame(&journal).ok_or_else(|| {
             LeeError::CircuitOutputDeserializationError(
                 "malformed circuit journal frame".to_owned(),
             )
-        })?,
-    )
-    .map_err(|e| LeeError::CircuitOutputDeserializationError(e.to_string()))?;
+        })?)
+        .map_err(|e| LeeError::CircuitOutputDeserializationError(e.to_string()))?;
 
     Ok((circuit_output, proof))
+}
+
+/// `inner` with its claim pruned to its digest, which is all verification compares, so the proof
+/// does not carry a second copy of the journal the message holds.
+fn pruned(inner: InnerReceipt) -> InnerReceipt {
+    match inner {
+        InnerReceipt::Succinct(mut receipt) => {
+            receipt.claim = MaybePruned::Pruned(receipt.claim.digest());
+            InnerReceipt::Succinct(receipt)
+        }
+        InnerReceipt::Fake(mut receipt) => {
+            receipt.claim = MaybePruned::Pruned(receipt.claim.digest());
+            InnerReceipt::Fake(receipt)
+        }
+        other @ (InnerReceipt::Composite(_) | InnerReceipt::Groth16(_) | _) => other,
+    }
+}
+
+/// Proves `program`'s session, or only executes it when not `proving`: its journal and the
+/// assumption the circuit verifies it by.
+fn run_session(
+    proving: bool,
+    program: &Program,
+    write: impl FnOnce(&mut ExecutorEnvBuilder) -> Result<(), LeeError>,
+) -> Result<(Vec<u8>, AssumptionReceipt), LeeError> {
+    if proving {
+        let receipt = prove_session(program, write)?;
+        return Ok((receipt.journal.bytes.clone(), receipt.into()));
+    }
+    let mut env_builder = ExecutorEnv::builder();
+    write(&mut env_builder)?;
+    let env = env_builder.build().unwrap();
+    let session = default_executor()
+        .execute(env, program.elf())
+        .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?;
+    check_exit_code(
+        session.exit_code,
+        session.cycles(),
+        LeeError::ProgramProveFailed,
+    )?;
+    let claim = session.receipt_claim.ok_or_else(|| {
+        LeeError::ProgramProveFailed("the executor returned no receipt claim".to_owned())
+    })?;
+    Ok((session.journal.bytes, claim.into()))
 }
 
 fn prove_session(

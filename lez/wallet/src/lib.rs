@@ -1611,7 +1611,11 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .await
             .map_err(Into::into)?;
         let fee_payer = fee_payer.or(self.fee_params.payer).or_else(|| {
-            self.auto_fee_payer(&accounts, self.reserve_pricing(&quote, 0).headroom_reserve)
+            self.auto_fee_payer(
+                &accounts,
+                self.reserve_pricing(&quote, 0, fee_core::market::PROOF_BYTES)
+                    .headroom_reserve,
+            )
         });
         // Pending native credits to the transaction's private accounts are claimed before the
         // root, so they count as balance; they take the action slots its accounts and root leave.
@@ -1764,7 +1768,11 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             Some(_) => (input, simulation, programs, 0),
         };
         let payer = acc_manager
-            .private_fee_payer_account_id(self.reserve_pricing(&quote, cycles).headroom_reserve)
+            .private_fee_payer_account_id(
+                // The transaction is measured once its payer is known; its proof bounds it below.
+                self.reserve_pricing(&quote, cycles, fee_core::market::PROOF_BYTES)
+                    .headroom_reserve,
+            )
             .ok_or_else(|| {
                 ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
                     "Privacy-preserving transaction has no private account to pay its fee"
@@ -1793,19 +1801,115 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         input
             .recoveries
             .push(acc_manager.fee_recovery(payer, opening)?);
+        let priced = |amount| {
+            let mut priced = input.clone();
+            priced.fee = Some(FeeTransfer {
+                payer,
+                recipient: fee_inbox,
+                amount,
+                refund_to,
+            });
+            priced
+        };
+        let assemble = |output, proof| {
+            let message = Message {
+                admission_evidence: acc_manager.admission_evidence(),
+                ..Message::from_circuit_output(acc_manager.public_account_nonces(), output)
+            };
+            let signatures_public_keys = acc_manager
+                .sign_message(message.hash())
+                .map_err(ExecutionFailureKind::SignError)?;
+            Ok::<_, ExecutionFailureKind>(PrivacyPreservingTransaction::new(
+                message,
+                lee::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
+                    signatures_public_keys,
+                    proof,
+                ),
+            ))
+        };
+
+        // The fee's amount is fixed-width, so an unproven run paying nothing measures the
+        // transaction, its proof charged at a fixed size. Its payer covers that fee, so it carries
+        // the fee fallback a payer whose note falls short of the reserve goes without.
+        let (wire_bytes, fallback_bytes) = {
+            let measured = priced(0);
+            let present = acc_manager.presenter(Some((payer, opening)));
+            let (select, choose_seal) = (select.clone(), choose_seal_with(seals.clone()));
+            let (programs, simulation, cross_messages) =
+                (programs.clone(), simulation.clone(), cross_messages.clone());
+            let output = tokio::task::spawn_blocking(move || match cross_messages {
+                None => lee::execute_unproven(
+                    measured,
+                    &simulation,
+                    &programs,
+                    present,
+                    select,
+                    choose_seal,
+                ),
+                Some(cross_messages) => lee::execute_unproven_with_cross_messages(
+                    measured,
+                    cross_messages,
+                    &programs,
+                    present,
+                    select,
+                    choose_seal,
+                ),
+            })
+            .await??;
+            let proof = lee::privacy_preserving_transaction::circuit::Proof::from_inner(Vec::new());
+            let tx = assemble(output, proof)?;
+            let fallback = tx
+                .message()
+                .execution
+                .fee
+                .as_ref()
+                .and_then(|fee| fee.fallback.as_ref())
+                .map_or(0, |fallback| {
+                    borsh::object_length(fallback).expect("a fee fallback serializes")
+                });
+            (
+                LeeTransaction::PrivacyPreserving(tx)
+                    .charged_bytes()
+                    .expect("a transaction serializes"),
+                u64::try_from(fallback).expect("a fee fallback's size fits u64"),
+            )
+        };
+        let note = acc_manager.native_balance(payer);
 
         // Base fees move between the quote and inclusion; a reserve the screen finds below the
         // head fee is priced again off a fresh quote and proven again.
         let mut reprices = 0;
         loop {
-            let ReservePricing {
-                fee_at_head,
-                exec_ceiling,
-                stor_ceiling,
-                headroom_reserve,
-            } = self.reserve_pricing(&quote, cycles);
             // Never reserve more than the payer holds, nor less than the fee at head.
-            let reserve = headroom_reserve.min(balance).max(fee_at_head);
+            let at = |bytes| {
+                let pricing = self.reserve_pricing(&quote, cycles, bytes);
+                let reserve = pricing
+                    .headroom_reserve
+                    .min(balance)
+                    .max(pricing.fee_at_head);
+                (bytes, pricing, reserve)
+            };
+            // A note short of the reserve gets no fee fallback, so the transaction is shorter by
+            // it, unless pricing the shorter one lets the note cover it again.
+            let full = at(wire_bytes);
+            let (
+                wire_bytes,
+                ReservePricing {
+                    fee_at_head,
+                    exec_ceiling,
+                    stor_ceiling,
+                    headroom_reserve,
+                },
+                reserve,
+            ) = if note < full.2 {
+                let shorter = at(wire_bytes.saturating_sub(fallback_bytes));
+                if note < shorter.2 { shorter } else { full }
+            } else {
+                full
+            };
+            if balance < fee_at_head {
+                return Err(ExecutionFailureKind::InsufficientFundsError);
+            }
             let fee = PrivateFee {
                 payer,
                 reserve,
@@ -1817,6 +1921,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                         fee,
                         quote,
                         cycles,
+                        wire_bytes,
                         fee_at_head,
                         headroom_blocks: self.fee_headroom_blocks(),
                         exec_ceiling,
@@ -1828,13 +1933,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 )));
             }
 
-            let mut priced = input.clone();
-            priced.fee = Some(FeeTransfer {
-                payer,
-                recipient: fee_inbox,
-                amount: reserve,
-                refund_to,
-            });
+            let priced = priced(reserve);
             let present = acc_manager.presenter(Some((payer, opening)));
             let (select, choose_seal) = (select.clone(), choose_seal_with(seals.clone()));
             let (programs, simulation) = (programs.clone(), simulation.clone());
@@ -1876,23 +1975,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 }
             };
 
-            let message = Message {
-                admission_evidence: acc_manager.admission_evidence(),
-                ..Message::from_circuit_output(acc_manager.public_account_nonces(), output)
-            };
-
-            let message_hash = message.hash();
-            let signatures_public_keys = acc_manager
-                .sign_message(message_hash)
-                .map_err(ExecutionFailureKind::SignError)?;
-
-            let witness_set =
-                lee::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
-                    signatures_public_keys,
-                    proof,
-                );
-
-            let tx = PrivacyPreservingTransaction::new(message, witness_set);
+            let tx = assemble(output, proof)?;
 
             match self
                 .sequencer_client
@@ -1927,17 +2010,20 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         }
     }
 
-    /// The reserve a privacy-preserving transaction of `cycles` public cycles takes at `quote`:
-    /// the fee at the head and at the [`Self::base_fee_ceilings`].
+    /// The reserve a privacy-preserving transaction of `cycles` public cycles and `wire_bytes`
+    /// serialized bytes takes at `quote`: the fee at the head and at the
+    /// [`Self::base_fee_ceilings`].
     fn reserve_pricing(
         &self,
         quote: &sequencer_service_rpc::FeeStateQuote,
         cycles: u64,
+        wire_bytes: u64,
     ) -> ReservePricing {
         let (exec_ceiling, stor_ceiling) = self.base_fee_ceilings(quote);
         ReservePricing {
             fee_at_head: fee_core::assess::private_fee_required(
                 cycles,
+                wire_bytes,
                 quote.base_fee_exec,
                 quote.base_fee_stor,
             ),
@@ -1945,6 +2031,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             stor_ceiling,
             headroom_reserve: fee_core::assess::private_fee_required(
                 cycles,
+                wire_bytes,
                 exec_ceiling,
                 stor_ceiling,
             ),
@@ -2275,12 +2362,9 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 ..
             }) = measured
         {
-            let wire_bytes = u64::try_from(
-                borsh::to_vec(&LeeTransaction::Public(tx))
-                    .map_err(|err| ExecutionFailureKind::SignError(err.into()))?
-                    .len(),
-            )
-            .expect("transaction size fits u64");
+            let wire_bytes = LeeTransaction::Public(tx)
+                .charged_bytes()
+                .map_err(|err| ExecutionFailureKind::SignError(err.into()))?;
             // The fee of `gas` execution gas at the head base fees; the reserve prices the limit.
             let at_head = |gas| {
                 fee_core::assess::fee_for(

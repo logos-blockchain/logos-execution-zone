@@ -310,9 +310,11 @@ pub fn wait_for_inclusion(handle: *mut WalletHandle, result: &FfiTransferResult)
     assert!(is_included, "the transfer must land");
 }
 
-/// Receives every message pending for the wallet's accounts, syncing once each receipt lands so a
-/// later one to the same account builds on it.
-pub fn receive_pending(handle: *mut WalletHandle) {
+/// Receives every message pending for the wallet's accounts, returning the fees the receipts paid.
+///
+/// It syncs once each receipt lands so a later one to the same account builds on it. Without
+/// headroom, the fee each receipt declares is the fee it paid.
+pub fn receive_pending(handle: *mut WalletHandle) -> u128 {
     let mut list = FfiPendingMessageList::default();
     let positions: Vec<u64> = unsafe {
         wallet_ffi_list_pending_messages(handle, &raw mut list).unwrap();
@@ -327,11 +329,15 @@ pub fn receive_pending(handle: *mut WalletHandle) {
         wallet_ffi_free_pending_message_list(&raw mut list);
         positions
     };
+    let mut fees = 0;
     for position in positions {
         let mut receipt = FfiTransferResult::default();
         unsafe {
             wallet_ffi_receive_pending_message(handle, position, &raw mut receipt).unwrap();
         }
+        fees = u128::from(receipt.fee.private_fee.reserve)
+            .checked_add(fees)
+            .expect("receipt fees fit u128");
         wait_for_inclusion(handle, &receipt);
         unsafe {
             wallet_ffi_free_transfer_result(&raw mut receipt);
@@ -340,6 +346,7 @@ pub fn receive_pending(handle: *mut WalletHandle) {
             wallet_ffi_sync_to_block(handle, current_height).unwrap();
         }
     }
+    fees
 }
 
 /// Reads an account's balance through the FFI, panicking on error.
