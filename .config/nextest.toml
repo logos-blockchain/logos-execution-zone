@@ -10,7 +10,7 @@ fail-fast = false
 status-level = "slow"
 
 # Each slashing test runs a Bedrock node and three sequencers, so they run one at a time.
-# The sequencer_bootstrap tests each run a Bedrock node and wait on its finality, which stalls when they overlap.
+# The sequencer_bootstrap and bridge tests each run a Bedrock node and wait on its finality, which stalls when they overlap.
 [test-groups]
 slashing = { max-threads = 1 }
 sequencer_bootstrap = { max-threads = 1 }
