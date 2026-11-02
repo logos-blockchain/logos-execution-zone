@@ -9,7 +9,7 @@ eras:
       core:
         scheduler:
           cover:
-            message_frequency_per_round: 0.0
+            message_frequency_per_round: 1.0
           delayer:
             maximum_release_delay_in_rounds: 1
         target_peering_degree: 4
@@ -55,7 +55,7 @@ eras:
           threshold: 1
           timestamp: 0
     time:
-      slot_duration_in_seconds: 1
+      slot_duration_in_seconds: 4
 genesis_block:
   header:
     slot: 0
