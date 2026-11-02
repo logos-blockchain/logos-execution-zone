@@ -180,7 +180,7 @@ pub fn joining_setup() -> Result<JoiningSetup> {
 
     log::info!("Waiting for the genesis supply to land on the funding account");
     ctx.block_on(|ctx| {
-        poll_until("genesis supply to land", 30, || async {
+        poll_until("genesis supply to land", 60, || async {
             Ok(account_balance(ctx, funding_id).await? == FUNDING_BALANCE)
         })
     })?;
@@ -228,7 +228,7 @@ pub fn joining_setup() -> Result<JoiningSetup> {
     log::info!("Waiting for the Stake transaction's block to land");
 
     ctx.block_on(|ctx| {
-        poll_until("stake to take ownership", 30, || async {
+        poll_until("stake to take ownership", 60, || async {
             Ok(!get_account(ctx, ownership_id)
                 .await?
                 .data

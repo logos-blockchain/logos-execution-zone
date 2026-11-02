@@ -1,5 +1,5 @@
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Channel config actor failed")]
+    #[error("Channel signing actor failed")]
     Actor,
 }
