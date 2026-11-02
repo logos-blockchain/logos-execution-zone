@@ -95,6 +95,7 @@ fn the_genesis_config_op_and_its_proof_pass_bedrock_verification() {
             exit_delay: 10,
         },
         1,
+        1,
     );
     let tx_hash_view = TxHashView::new(TxHash::from([7; 32]));
 
