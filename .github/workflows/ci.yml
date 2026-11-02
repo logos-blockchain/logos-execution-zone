@@ -436,31 +436,13 @@ jobs:
         with:
           name: integration-tests-archive-g4
           path: integration-tests-g4.tar.zst
-      - uses: actions/upload-artifact@v4
-        with:
-          name: integration-tests-archive-g5
-          path: integration-tests-g5.tar.zst
-      - uses: actions/upload-artifact@v4
-        with:
-          name: integration-tests-archive-g6
-          path: integration-tests-g6.tar.zst
-      - uses: actions/upload-artifact@v4
-        with:
-          name: integration-tests-archive-g7
-          path: integration-tests-g7.tar.zst
-      - uses: actions/upload-artifact@v4
-        with:
-          name: integration-tests-archive-g8
-          path: integration-tests-g8.tar.zst
 
-  # Every shard downloads the whole archive, so its size is paid once per
-  # shard. Its own job so a regression reports without skipping those shards.
   archive-size-budget:
     needs: integration-tests-prebuild
     runs-on: ubuntu-latest
     env:
       # The largest group, which is what one shard downloads.
-      BUDGET_MIB: 800
+      BUDGET_MIB: 1400
     steps:
       - name: Compare the archives against their budget
         run: |

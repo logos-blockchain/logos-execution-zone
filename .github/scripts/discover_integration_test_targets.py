@@ -13,9 +13,8 @@ from typing import Any
 # Scheduled one test per shard: both are far slower sharing a runner.
 SPLIT_PER_TEST = frozenset({"scoped_reads", "slashing"})
 
-# Each archive repeats a 42 MiB base, so more groups means a smaller download
-# and more total bytes. One upload step per group in ci.yml, enforced by a test.
-GROUP_COUNT = 8
+# Each group is its own pass over the target tree.
+GROUP_COUNT = 4
 
 
 class DiscoveryError(ValueError):

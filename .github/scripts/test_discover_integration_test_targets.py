@@ -108,12 +108,13 @@ class DiscoverIntegrationTestTargetsTests(unittest.TestCase):
             f"integration-tests-archive-g{index + 1}" for index in range(GROUP_COUNT)
         }
 
-        for name in uploads:
-            self.assertIn(name, workflow, f"ci.yml has no upload step for {name}")
-        self.assertNotIn(
-            f"integration-tests-archive-g{GROUP_COUNT + 1}",
-            workflow,
-            "ci.yml uploads more groups than GROUP_COUNT assigns",
+        missing = sorted(name for name in uploads if name not in workflow)
+        self.assertEqual(missing, [], f"ci.yml has no upload step for {missing}")
+
+        extra = f"integration-tests-archive-g{GROUP_COUNT + 1}"
+        self.assertTrue(
+            extra not in workflow,
+            f"ci.yml uploads {extra}, which GROUP_COUNT never assigns",
         )
 
     def test_groups_a_split_binary_as_one_unit(self) -> None:
