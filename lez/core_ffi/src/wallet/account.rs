@@ -701,6 +701,7 @@ pub unsafe extern "C" fn wallet_ffi_import_private_account(
         .storage_mut()
         .key_chain_mut()
         .add_imported_private_account(key_chain, chain_index, account);
+    wallet.storage_mut().rewind_skipped_history();
 
     match wallet.store_persistent_data() {
         Ok(()) => FfiOperationError::Success,

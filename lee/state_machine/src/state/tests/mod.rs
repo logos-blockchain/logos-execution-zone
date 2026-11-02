@@ -159,6 +159,7 @@ pub fn root(to: Actor, message: &impl BorshSerialize) -> TransactionEntry<Messag
 
 pub fn proving_input(root: TransactionEntry<MessageWitness>) -> ProvingInput {
     ProvingInput {
+        claims: Vec::new(),
         root,
         public_context: PublicExecutionContext::default(),
         private_witnesses: Vec::new(),
@@ -166,6 +167,7 @@ pub fn proving_input(root: TransactionEntry<MessageWitness>) -> ProvingInput {
         ciphertext_padding: None,
         recoveries: Vec::new(),
         private_promotions: BTreeSet::new(),
+        fee: None,
     }
 }
 

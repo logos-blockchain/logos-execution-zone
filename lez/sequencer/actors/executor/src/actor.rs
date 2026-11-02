@@ -1,6 +1,7 @@
 use std::future::Future;
 
 use common::{PageLimit, block::Block, transaction::LeeTransaction};
+use fee_core::validity::FeeError;
 use futures::{
     FutureExt as _, StreamExt as _, TryFutureExt as _, TryStreamExt as _, future::ready, stream,
 };
@@ -21,7 +22,7 @@ use mempool::MemPoolHandle;
 use sequencer_actors_common::EraseMessage as _;
 use sequencer_bedrock_actor::BedrockActorTrait;
 use sequencer_core::{
-    ChannelConfigActor, SequencerCore, SubmitConfig, TransactionOrigin,
+    ChannelSigningActor, SequencerCore, SubmitConfig, TransactionOrigin,
     config::SequencerConfig,
     gossip::{AccreditedKeysReceiver, MaxBlockSizeReceiver},
     task_group::TaskGroup,
@@ -114,10 +115,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
         self.sequencer.slasher_ref().clone()
     }
 
-    /// Handle to the channel-config actor, for the service to feed gossip into.
+    /// Handle to the channel-signing actor, for the service to feed gossip into.
     #[must_use]
-    pub fn config_manager_ref(&self) -> ActorRef<ChannelConfigActor> {
-        self.sequencer.config_manager_ref().clone()
+    pub fn channel_signer_ref(&self) -> ActorRef<ChannelSigningActor> {
+        self.sequencer.channel_signer_ref().clone()
     }
 
     /// The committee the gossip mesh screens slash approvals against.
@@ -253,7 +254,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
         self.sequencer
             .with_state(|state| sequencer_core::fees::screen(&transaction, state))
             .await
-            .map_err(|err| Error::IncorrectFee(err.into()))?;
+            .map_err(|err| {
+                if let sequencer_core::fees::Error::FeeCore(FeeError::PrivateFeeBelowRequired {
+                    required,
+                    reserve,
+                }) = err
+                {
+                    Error::PrivateFeeBelowHead { required, reserve }
+                } else {
+                    Error::IncorrectFee(err.into())
+                }
+            })?;
 
         self.mempool_handle
             .try_push((origin.into(), transaction))
@@ -398,7 +409,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetProofsAndRoot> for E
         &mut self,
         GetProofsAndRoot {
             commitments,
-            message_position,
+            message_positions,
         }: GetProofsAndRoot,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
@@ -408,9 +419,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetProofsAndRoot> for E
                     .iter()
                     .map(|commitment| state.get_proof_for_commitment(commitment))
                     .collect();
-                let message_path =
-                    message_position.and_then(|position| state.get_proof_for_position(position));
-                (proofs, message_path, state.commitment_root())
+                let message_paths = message_positions
+                    .iter()
+                    .map(|position| state.get_proof_for_position(*position))
+                    .collect();
+                (proofs, message_paths, state.commitment_root())
             })
             .await
     }
@@ -623,6 +636,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait>
                 self.sequencer
                     .on_channel_config_update(live_channel_config)
                     .await;
+            }
+            sequencer_bedrock_actor::protocol::ChannelEvent::Deposits(deposits) => {
+                self.sequencer.on_observed_deposits(deposits).await;
             }
         }
     }

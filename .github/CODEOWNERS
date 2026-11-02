@@ -1,0 +1,180 @@
+# Code owners are requested for review automatically when a pull request
+# touches their files. For each file the LAST matching rule wins, so keep
+# broad rules above the narrower ones that refine them.
+#
+# A `## <Area>` heading names the rules below it. The "Suggested reviewers"
+# pull request comment (.github/workflows/codeowners-comment.yml) uses it to
+# explain why someone was requested, so keep it short and descriptive.
+#
+# Every file must match some rule (enforced by
+# .github/scripts/test_codeowners_comment.py). A rule without owners marks
+# files that intentionally have none.
+
+## Unowned: touched by most pull requests, so owning them would ping everyone
+/Cargo.toml
+/Cargo.lock
+/artifacts/
+/README.md
+/CONTRIBUTING.md
+/LICENSE
+/.gitignore
+
+## CI and build tooling
+/.github/                                     @moudyellaz @arjentix
+/.github/docker/                              @arjentix
+/.config/nextest.toml                         @schouhy @moudyellaz
+/.deny.toml                                   @moudyellaz @arjentix
+/Justfile                                     @arjentix @schouhy
+/build_utils/                                 @arjentix
+
+## Rust toolchain and lints
+/rust-toolchain.toml                          @arjentix @schouhy
+/clippy.toml                                  @arjentix
+/rustfmt.toml                                 @arjentix
+
+## Code owners setup
+/.github/CODEOWNERS                           @arjentix
+/.github/workflows/codeowners-comment.yml     @arjentix
+/.github/scripts/*codeowners*                 @arjentix
+
+## Nix build
+/flake.nix                                    @Pravdyvy
+/flake.lock                                   @Pravdyvy
+
+## Local deployment and devnet configs
+/docker-compose.yml                           @arjentix @erhant
+/.dockerignore                                @arjentix
+/.env.local                                   @erhant
+/lez/docker/                                  @arjentix @erhant
+/lez/configs/                                 @arjentix @schouhy
+/tools/devnet_configs/                        @arjentix @schouhy
+
+## Committee and channel health tools
+/tools/channel_health.py                      @schouhy
+/tools/committee_watch.py                     @schouhy @agureev
+
+## Monitoring and dashboards
+/monitoring/                                  @arjentix
+/tools/dashboard_gen/                         @arjentix
+/docs/metrics/                                @arjentix
+
+## Documentation
+/docs/                                        @jonesmarvin8 @moudyellaz
+
+## Shell completions
+/completions/                                 @agureev
+
+## Bedrock node integration
+/bedrock/                                     @arjentix @schouhy
+
+## LEE state machine
+/lee/state_machine/                           @agureev @jonesmarvin8 @moudyellaz @schouhy
+/test_guest_core/                             @agureev @jonesmarvin8
+/test_programs/                               @agureev @jonesmarvin8
+
+## LEE privacy-preserving circuit
+/lee/privacy_preserving_circuit/              @agureev @jonesmarvin8 @moudyellaz @schouhy
+
+## LEE key protocol
+/lee/key_protocol/                            @jonesmarvin8 @Pravdyvy @agureev @schouhy
+
+## Sequencer core
+/lez/src/                                     @arjentix @schouhy
+/lez/Cargo.toml                               @arjentix @schouhy
+/lez/sequencer/core/                          @schouhy @erhant @arjentix
+/lez/sequencer/service/                       @arjentix @schouhy @erhant
+/lez/mempool/                                 @arjentix @erhant
+
+## Sequencer cross-zone watcher
+/lez/sequencer/core/src/cross_zone_watcher.rs @moudyellaz @schouhy
+
+## Sequencer gossip
+/lez/sequencer/core/src/gossip/               @erhant @schouhy
+/lez/sequencer/actors/gossip/                 @erhant @schouhy
+
+## Sequencer actors
+/lez/sequencer/actors/                        @arjentix
+/lez/sequencer/actors/executor/               @arjentix @schouhy
+/lez/sequencer/actors/rpc_server/             @arjentix @erhant
+/lez/sequencer/actors/storage/                @arjentix @Pravdyvy
+/lez/sequencer/actors/bedrock/                @arjentix @schouhy
+/lez/sequencer/actors/channel_signing/        @schouhy
+/lez/sequencer/actors/slasher/                @schouhy
+
+## Chain state and storage
+/lez/chain_state/                             @erhant @schouhy
+/lez/storage/                                 @Pravdyvy @erhant
+/lez/common/                                  @erhant @agureev @arjentix
+/lez/system_accounts/                         @arjentix @schouhy @erhant
+/lez/testnet_initial_state/                   @agureev @Pravdyvy
+
+## Indexer
+/lez/indexer/                                 @erhant @moudyellaz @Pravdyvy
+/lez/explorer_service/                        @arjentix @schouhy @agureev
+
+## FFI bindings
+/lez/core_ffi/                                @Pravdyvy
+/lez/indexer/ffi/                             @Pravdyvy @erhant
+/lez/ffi_types/                               @Pravdyvy
+
+## Wallet
+/lez/wallet/                                  @Pravdyvy @moudyellaz @arjentix @erhant @schouhy
+/lez/keycard_wallet/                          @jonesmarvin8
+
+## Built-in programs
+/lez/programs/                                @agureev
+/lez/programs/fee/                            @erhant @agureev
+/lez/programs/sequencer_stake/                @agureev @schouhy
+/lez/programs/program_loader/                 @agureev @jonesmarvin8
+/lez/programs/bridge/                         @agureev @moudyellaz @arjentix
+/lez/programs/bridge_lock/                    @agureev @moudyellaz
+/lez/programs/wrapped_token/                  @agureev @moudyellaz
+/lez/programs/ping_*/                         @agureev @moudyellaz
+
+## Cross-zone messaging
+/lez/cross_zone/                              @moudyellaz @agureev
+/lez/programs/cross_zone_*/                   @moudyellaz @agureev
+/tools/cross_zone_chat/                       @moudyellaz
+
+## Examples
+/examples/                                    @agureev @schouhy
+
+## Benchmarks
+/tools/cycle_bench/                           @moudyellaz @agureev
+/tools/crypto_primitives_bench/               @moudyellaz @agureev
+/tools/integration_bench/                     @moudyellaz @Pravdyvy
+/docs/benchmarks/                             @moudyellaz
+
+## Test fixtures
+/test_fixtures/                               @schouhy @Pravdyvy @arjentix
+
+## Integration tests
+/integration_tests/                           @agureev @Pravdyvy
+/integration_tests/src/testing_framework/     @agureev @schouhy
+/integration_tests/src/cucumber/              @arjentix @schouhy @agureev
+/integration_tests/tests/sequencer_bootstrap.rs @arjentix
+/integration_tests/tests/bridge.rs            @arjentix @schouhy
+/integration_tests/tests/async_payouts.rs     @agureev
+/integration_tests/tests/scoped_reads.rs      @agureev
+/integration_tests/tests/sealed_messages.rs   @agureev
+/integration_tests/tests/private_*.rs         @agureev @jonesmarvin8
+
+## Integration tests: sequencer and indexer
+/integration_tests/tests/channel_config_threshold.rs @schouhy
+/integration_tests/tests/slashing.rs          @schouhy
+/integration_tests/tests/sequencer_rejoin.rs  @schouhy @agureev
+/integration_tests/tests/multi_sequencer.rs   @schouhy @erhant
+/integration_tests/tests/sequencer_stake_demo.rs @erhant @schouhy
+/integration_tests/tests/gossip.rs            @erhant
+/integration_tests/tests/indexer_*            @schouhy @erhant
+
+## Integration tests: cross-zone
+/integration_tests/tests/cross_zone_*.rs      @moudyellaz @agureev
+/integration_tests/tests/two_zone.rs          @Pravdyvy @moudyellaz
+/integration_tests/tests/shared_accounts.rs   @moudyellaz @agureev
+/integration_tests/tests/wallet_setup.rs      @moudyellaz
+
+## Integration tests: FFI
+/integration_tests/src/ffi_helpers/           @Pravdyvy
+/integration_tests/tests/sequencer_ffi.rs     @Pravdyvy
+/integration_tests/tests/wallet_ffi_*.rs      @Pravdyvy

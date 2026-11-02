@@ -567,6 +567,7 @@ fn mock_privacy_preserving_tx(
             block_validity_window: ValidityWindow((None, None)),
             timestamp_validity_window: ValidityWindow((None, None)),
             admission_evidence: vec![],
+            fee: None,
         },
         witness_set: WitnessSet {
             signatures_and_public_keys: vec![],
@@ -617,6 +618,7 @@ fn build_mock_block(
         },
         body: BlockBody {
             transactions: block_transactions,
+            reverted: Vec::new(),
         },
         bedrock_status,
     }

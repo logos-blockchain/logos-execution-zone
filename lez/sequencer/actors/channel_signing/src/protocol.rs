@@ -1,6 +1,7 @@
 use kameo::Reply;
 use logos_blockchain_binary_codec::canonical::{BinaryDecodeExt as _, BinaryEncode as _};
 use logos_blockchain_core::{
+    events::DepositNote,
     mantle::{
         ops::channel::{ChannelKeyIndex, MsgId},
         transactions::Ops,
@@ -41,6 +42,8 @@ pub struct ChannelView {
     pub live_keys: Vec<Ed25519PublicKey>,
     /// Signatures the live channel demands of the next config op.
     pub required_signatures: u16,
+    /// Signatures the live channel demands of a channel transfer.
+    pub transfer_signatures: u16,
     /// The config to install, or `None` when live already matches.
     pub target: Option<ConfigTarget>,
 }
@@ -79,8 +82,8 @@ pub struct FundedTx {
     pub signing_threshold: u16,
 }
 
-/// A funded config transaction on the wire, for whoever receives it to
-/// check and sign.
+/// A funded config or pin transaction on the wire, for whoever receives it
+/// to check and sign.
 #[derive(Clone, Debug)]
 pub struct Draft {
     pub tx: Box<Ops>,
@@ -109,6 +112,29 @@ pub struct SetSubmitter(pub kameo::actor::WeakRecipient<SubmitConfig>);
 
 /// Drops the draft this node holds, for a core that has given up on it.
 pub struct Reset;
+
+/// Collects signatures over a funded pin, starting with this node's own, and
+/// answers with exactly the live transfer threshold in index order, or `None`
+/// when this node cannot sign.
+pub struct SignPin(pub Box<Ops>);
+
+/// The deposit op ids a block inscription mints, or `None` when it is not a
+/// block.
+pub type BlockDeposits = fn(&[u8]) -> Option<Vec<[u8; 32]>>;
+
+/// A deposit seen on L1, whose notes a peer's pin may re-create.
+#[derive(Clone, Debug)]
+pub struct ObservedDeposit {
+    pub op_id: [u8; 32],
+    pub notes: Vec<DepositNote>,
+}
+
+/// Deposits seen on L1 since the last of these.
+pub struct ObservedDeposits(pub Vec<ObservedDeposit>);
+
+/// Op ids of deposits minted in final blocks. A pin lands only on the channel
+/// tip, which holds their mints already, so no valid pin carries them.
+pub struct FinalMints(pub Vec<[u8; 32]>);
 
 /// The two message shapes the channel-config topic carries, either way.
 #[derive(Clone, Debug)]

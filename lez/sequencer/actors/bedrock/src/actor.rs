@@ -1,6 +1,9 @@
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
-use anyhow::Context as _;
+use anyhow::{Context as _, anyhow};
 use common::block::Block;
 use futures::{StreamExt as _, future::Either};
 use kameo::{
@@ -14,12 +17,16 @@ use log::{info, warn};
 use logos_blockchain_binary_codec::bincode::DeserializeOp as _;
 use logos_blockchain_core::{
     mantle::{
-        NoteId, Op, OpProof, SignedOps,
+        Note, NoteId, Op, OpProof, SignedOps,
         channel::{SlotTimeframe, SlotTimeout},
         gas::GasCost,
-        ops::channel::{VerifiedChannelKeys, config::ChannelConfigOp, inscribe::InscriptionOp},
+        ledger::{Inputs, Outputs},
+        ops::channel::{
+            VerifiedChannelKeys, channel_transfer::ChannelTransferOp, config::ChannelConfigOp,
+            inscribe::InscriptionOp,
+        },
         traits::Hashable as _,
-        transactions::{MantleTxBuilder, OpProofs},
+        transactions::{MantleTxBuilder, OpProofs, Ops},
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
 };
@@ -47,9 +54,9 @@ use crate::{
         AccreditedKeys, ChangeChannelConfig, ChannelEntry, ChannelEvent, ChannelId, ChannelParams,
         ChannelReadStream, ChannelSeq, ChannelUpdate, CheckChannelExists, CheckIsOurTurn,
         CreateChannel, Ed25519PublicKey, GetAccreditedKeys, GetChannelId, GetChannelIdReply,
-        GetChannelTipMessageId, GetChannelTipSlot, LiveChannelConfig, MsgId, PrepareConfig,
-        PreparedChannelConfig, PublishBlock, PublishOutcome, ReadChannel, Slot, ViewChange,
-        verified_keys,
+        GetChannelNotes, GetChannelTipMessageId, GetChannelTipSlot, LiveChannelConfig, MsgId,
+        PrepareConfig, PreparePin, PreparedChannelConfig, PreparedPin, PublishBlock,
+        PublishOutcome, PublishPin, ReadChannel, Slot, ViewChange, verified_keys,
     },
 };
 
@@ -63,6 +70,7 @@ mod tests;
 /// - `channel/<channel_id>/update`: for [`ChannelEvent::Update`]
 /// - `channel/<channel_id>/turn`: for [`ChannelEvent::Turn`]
 /// - `channel/<channel_id>/config`: for [`ChannelEvent::Config`]
+/// - `channel/<channel_id>/deposits`: for [`ChannelEvent::Deposits`]
 pub struct BedrockActor {
     config: Config,
     node: NodeHttpClient,
@@ -100,6 +108,7 @@ impl BedrockActor {
             funding_pk,
             priority_fee_percent,
             resubmit_interval,
+            stale_refund_slots,
         } = &config;
 
         let node = NodeHttpClient::new(CommonHttpClient::new(basic_auth.clone()), node_url.clone());
@@ -117,9 +126,7 @@ impl BedrockActor {
 
         let zone_sdk_config = SequencerConfig {
             resubmit_interval: *resubmit_interval,
-            // Zero disables the pending-tx expiry, recovering the pre-expiry sdk behavior.
-            // TODO: set a sensible value.
-            stale_refund_slots: 0,
+            stale_refund_slots: *stale_refund_slots,
             ..SequencerConfig::new(FundingConfig {
                 funding_pk: *funding_pk,
                 // Withdraw change goes back to the funding key.
@@ -175,8 +182,18 @@ impl BedrockActor {
                 checkpoint,
                 channel_update,
                 finalized,
-                deposits: _,
+                deposits: observed_deposits,
             } => {
+                // Apart from the update: they carry no checkpoint and move no channel sequence.
+                if !observed_deposits.is_empty() {
+                    self.broker_ref
+                        .tell(kameo_actors::broker::Publish {
+                            topic: format!("channel/{}/deposits", self.config.channel_id),
+                            message: ChannelEvent::Deposits(observed_deposits),
+                        })
+                        .await
+                        .map_err(|err| Error::BrokerPublishFailed(err.erase_message()))?;
+                }
                 // An L1 block that moved nothing on this channel: it only advances the checkpoint.
                 if matches!(&channel_update, SdkChannelUpdate::Extension { adopted } if adopted.is_empty())
                     && finalized.is_empty()
@@ -318,6 +335,87 @@ impl BedrockActor {
         })
     }
 
+    /// Refuses a publish built on a channel sequence other than the current one.
+    fn check_seq(&self, expected_seq: Option<ChannelSeq>) -> Result<()> {
+        if let Some(expected) = expected_seq
+            && expected != self.seq
+        {
+            return Err(Error::ChannelMoved {
+                provided: expected,
+                current: self.seq,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// This node's inscription of `inscription` chained on `parent`.
+    fn inscription_op(&self, inscription: Inscription, parent: MsgId) -> InscriptionOp {
+        InscriptionOp {
+            channel_id: self.config.channel_id,
+            inscription,
+            parent,
+            signer: self
+                .config
+                .channel_signing_key
+                .public_key()
+                .into_unverified(),
+        }
+    }
+
+    /// Signs the inscription leading `tx` and submits it with the proofs of
+    /// the ops after it, in op order.
+    fn sign_and_submit(
+        &mut self,
+        tx: Ops,
+        msg_id: MsgId,
+        parent: MsgId,
+        proofs: impl IntoIterator<Item = OpProof>,
+    ) -> Result<PublishOutcome> {
+        let signature = self
+            .config
+            .channel_signing_key
+            .sign_payload(tx.hash().as_signing_bytes().as_ref());
+        let mut op_proofs = OpProofs::from([OpProof::Ed25519Sig(signature)]);
+        for proof in proofs {
+            op_proofs
+                .try_push(proof)
+                .map_err(|err| Error::TooManyOperationProofs(err.into()))?;
+        }
+
+        let tx = SignedOps::from_parts(tx, op_proofs)?;
+        self.submit_tx(tx, msg_id, parent)
+    }
+
+    /// A transfer spending each of `notes` and re-creating it unchanged, so the
+    /// tx carrying it is valid only on a branch holding all of them.
+    fn deposit_pin_transfer(&self, notes: &[NoteId]) -> Result<ChannelTransferOp> {
+        let wallet = self.sequencer.channel_wallet();
+        let channel_notes: HashMap<NoteId, Note> = wallet
+            .finalized
+            .iter()
+            .chain(&wallet.unfinalized)
+            .map(|note| (note.note_id, Note::new(note.value, note.pk)))
+            .collect();
+        let outputs = notes
+            .iter()
+            .map(|id| {
+                channel_notes
+                    .get(id)
+                    .copied()
+                    .ok_or(Error::DepositNoteNotOnBranch(*id))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(ChannelTransferOp {
+            channel_id: self.config.channel_id,
+            inputs: Inputs::try_new(notes.to_vec())
+                .map_err(|err| Error::DepositPinAssemblyFailed(anyhow!("{err:?}")))?,
+            outputs: Outputs::try_new(outputs)
+                .map_err(|err| Error::DepositPinAssemblyFailed(anyhow!("{err:?}")))?,
+        })
+    }
+
     /// Bumps the channel sequence and hands back the new one.
     const fn next_seq(&mut self) -> ChannelSeq {
         self.seq = self.seq.next();
@@ -371,6 +469,7 @@ impl Message<CreateChannel> for BedrockActor {
             keys,
             channel_params,
             configuration_threshold,
+            transfer_threshold,
         }: CreateChannel,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
@@ -388,6 +487,7 @@ impl Message<CreateChannel> for BedrockActor {
             keys,
             &channel_params,
             configuration_threshold,
+            transfer_threshold,
         );
 
         let data = borsh::to_vec(&genesis).map_err(Error::BlockEncodingFailed)?;
@@ -447,54 +547,21 @@ impl Message<PublishBlock> for BedrockActor {
         }: PublishBlock,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        if let Some(expected) = expected_seq
-            && expected != self.seq
-        {
-            return Err(Error::ChannelMoved {
-                provided: expected,
-                current: self.seq,
-            });
-        }
-
-        let data = borsh::to_vec(&block).map_err(Error::BlockEncodingFailed)?;
-        let data_byte_size = data.len();
-        let inscription: Inscription = data.try_into().map_err(|_err| Error::BlockTooLarge)?;
+        self.check_seq(expected_seq)?;
+        let inscription = block_inscription(&block)?;
+        let data_byte_size = inscription.len();
 
         let published = if let Some(parent) = parent {
             if !withdrawals.is_empty() {
                 return Err(Error::CannotPublishBlockOnParentWithWithdrawals);
             }
 
-            let inscribe_op = InscriptionOp {
-                channel_id: self.config.channel_id,
-                inscription,
-                parent,
-                signer: self
-                    .config
-                    .channel_signing_key
-                    .public_key()
-                    .into_unverified(),
-            };
-
+            let inscribe_op = self.inscription_op(inscription, parent);
             let msg_id = inscribe_op.id();
-
             let funded =
                 fund_ops(&self.node, &self.config, [Op::ChannelInscribe(inscribe_op)]).await?;
-            let mantle_tx = funded.funded_tx;
 
-            let signature = self
-                .config
-                .channel_signing_key
-                .sign_payload(mantle_tx.hash().as_signing_bytes().as_ref());
-            let mut op_proofs = OpProofs::from([OpProof::Ed25519Sig(signature)]);
-            if let Some(transfer_proof) = funded.transfer_proof {
-                op_proofs
-                    .try_push(transfer_proof)
-                    .map_err(|err| Error::TooManyOperationProofs(err.into()))?;
-            }
-
-            let tx = SignedOps::from_parts(mantle_tx, op_proofs)?;
-            self.submit_tx(tx, msg_id, parent)
+            self.sign_and_submit(funded.funded_tx, msg_id, parent, funded.transfer_proof)
         } else {
             let (result, checkpoint) = if withdrawals.is_empty() {
                 self.sequencer
@@ -523,6 +590,84 @@ impl Message<PublishBlock> for BedrockActor {
                 "Published block {} with the size of {data_byte_size} bytes",
                 block.header.block_id
             );
+        }
+        published
+    }
+}
+
+impl Message<PreparePin> for BedrockActor {
+    type Reply = Result<PreparedPin>;
+
+    async fn handle(
+        &mut self,
+        PreparePin {
+            block,
+            parent,
+            notes,
+            expected_seq,
+        }: PreparePin,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.check_seq(expected_seq)?;
+        let inscription = block_inscription(&block)?;
+        let block_size = inscription.len();
+        let inscribe_op = self.inscription_op(inscription, parent);
+        let msg_id = inscribe_op.id();
+        let transfer = self.deposit_pin_transfer(&notes)?;
+        let funded = fund_ops(
+            &self.node,
+            &self.config,
+            [
+                Op::ChannelInscribe(inscribe_op),
+                Op::ChannelTransfer(transfer),
+            ],
+        )
+        .await?;
+
+        Ok(PreparedPin {
+            tx: funded.funded_tx,
+            msg_id,
+            parent,
+            fee_proof: funded.transfer_proof,
+            block_id: block.header.block_id,
+            block_size,
+        })
+    }
+}
+
+impl Message<PublishPin> for BedrockActor {
+    type Reply = Result<PublishOutcome>;
+
+    async fn handle(
+        &mut self,
+        PublishPin {
+            prepared,
+            signatures,
+            expected_seq,
+        }: PublishPin,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.check_seq(expected_seq)?;
+        let PreparedPin {
+            tx,
+            msg_id,
+            parent,
+            fee_proof,
+            block_id,
+            block_size,
+        } = prepared;
+        let signatures = IndexedSignatures::try_from_iter(signatures.into_iter().map(Into::into))
+            .map_err(|err| Error::ChannelMultiSigProofAssemblyFailed(err.into()))?;
+        let transfer_proof = OpProof::ChannelMultiSigProof(ChannelMultiSigProof::new(signatures));
+
+        let published = self.sign_and_submit(
+            tx,
+            msg_id,
+            parent,
+            std::iter::once(transfer_proof).chain(fee_proof),
+        );
+        if published.is_ok() {
+            info!("Published block {block_id} with the size of {block_size} bytes");
         }
         published
     }
@@ -640,6 +785,24 @@ impl Message<GetAccreditedKeys> for BedrockActor {
                 })
             })
             .transpose()
+    }
+}
+
+impl Message<GetChannelNotes> for BedrockActor {
+    type Reply = HashSet<NoteId>;
+
+    async fn handle(
+        &mut self,
+        _msg: GetChannelNotes,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let wallet = self.sequencer.channel_wallet();
+        wallet
+            .finalized
+            .into_iter()
+            .chain(wallet.unfinalized)
+            .map(|note| note.note_id)
+            .collect()
     }
 }
 
@@ -782,6 +945,7 @@ impl TryFrom<&logos_blockchain_zone_sdk::node_types::ChannelState> for LiveChann
             keys: verified_keys(&state.accredited_keys)?,
             config_tip: state.config_tip_hash,
             required_signatures: state.configuration_threshold,
+            transfer_threshold: state.transfer_threshold,
         })
     }
 }
@@ -792,6 +956,7 @@ fn genesis_config_op(
     keys: VerifiedChannelKeys,
     channel_params: &ChannelParams,
     configuration_threshold: u16,
+    transfer_threshold: u16,
 ) -> ChannelConfigOp {
     ChannelConfigOp {
         channel: channel_id,
@@ -801,7 +966,7 @@ fn genesis_config_op(
         posting_timeframe: SlotTimeframe::from(channel_params.posting_timeframe),
         posting_timeout: SlotTimeout::from(channel_params.posting_timeout),
         configuration_threshold,
-        transfer_threshold: system_accounts::DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD,
+        transfer_threshold,
     }
 }
 
@@ -870,6 +1035,13 @@ fn released_notes(tx: &PendingTx) -> Vec<NoteId> {
             .flat_map(|withdraw| withdraw.op.inputs.iter().copied())
             .collect(),
     }
+}
+
+/// `block` as the bytes of an inscription.
+fn block_inscription(block: &Block) -> Result<Inscription> {
+    let data = borsh::to_vec(block).map_err(Error::BlockEncodingFailed)?;
+
+    data.try_into().map_err(|_err| Error::BlockTooLarge)
 }
 
 /// Funds `ops` from the node's wallet, which appends a fee transfer (paid from

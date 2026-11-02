@@ -25,9 +25,9 @@ use libp2p::{
     swarm::{NetworkBehaviour, Swarm, SwarmEvent},
 };
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
-use sequencer_channel_config_actor::Wire;
+use sequencer_channel_signing_actor::Wire;
 use sequencer_core::{
-    config::{GossipConfig, MAX_PUBLISHABLE_BLOCK_SIZE},
+    config::{GossipConfig, MAX_BEDROCK_TX_SIZE, MAX_PUBLISHABLE_BLOCK_SIZE},
     gossip::{AccreditedKeysReceiver, MaxBlockSizeReceiver},
 };
 use sequencer_slasher_actor::Approval;
@@ -50,9 +50,9 @@ const SEEN_CACHE_CAPACITY: usize = 4096;
 /// Mailbox depth to spawn the actor with; sized for local-publish bursts,
 /// `try_send` drops on overflow.
 pub const MAILBOX_CAPACITY: usize = 1024;
-/// Headroom over the largest block for `GossipSub` protobuf framing (signature,
-/// source, seqno, topic) so a maximum-size transaction still fits the transmit
-/// limit instead of being dropped at the transport before validation.
+/// Headroom over the largest message for `GossipSub` protobuf framing (signature,
+/// source, seqno, topic) so a maximum-size one still fits the transmit limit
+/// instead of being dropped at the transport before validation.
 const GOSSIP_FRAME_MARGIN: u64 = 4096;
 /// How often to send [`RetryBootstrap`], so a node that starts before its
 /// bootstrap peer still joins once that peer is up.
@@ -174,10 +174,14 @@ impl GossipActor {
             );
             gossipsub::MessageId::from(id)
         };
-        // A constant, so no node drops at the codec a frame its peers send.
-        let max_transmit_size =
-            usize::try_from(MAX_PUBLISHABLE_BLOCK_SIZE.saturating_add(GOSSIP_FRAME_MARGIN))
-                .unwrap_or(usize::MAX);
+        // A constant, so no node drops at the codec a frame its peers send, sized
+        // for the largest L2 transaction or channel-signing draft (one Bedrock transaction).
+        let max_transmit_size = usize::try_from(
+            MAX_PUBLISHABLE_BLOCK_SIZE
+                .max(MAX_BEDROCK_TX_SIZE)
+                .saturating_add(GOSSIP_FRAME_MARGIN),
+        )
+        .unwrap_or(usize::MAX);
         let gossipsub_config = gossipsub::ConfigBuilder::default()
             .validation_mode(gossipsub::ValidationMode::Strict)
             .message_id_fn(message_id_fn)

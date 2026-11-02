@@ -79,7 +79,7 @@ pub struct SequencerComponents {
 }
 
 pub struct WalletComponents {
-    wallet: WalletCore,
+    wallet: WalletCore<SequencerClient>,
     wallet_password: String,
     temp_wallet_dir: TempDir,
 }
@@ -190,7 +190,7 @@ impl TestContext {
     ///
     /// Panics in case if there is more than one zone.
     #[must_use]
-    pub fn wallet(&self) -> &WalletCore {
+    pub fn wallet(&self) -> &WalletCore<SequencerClient> {
         &self.default_zone().wallet.as_ref().unwrap().wallet
     }
 
@@ -205,13 +205,13 @@ impl TestContext {
     /// Get mutable reference to default the wallet.
     ///
     /// Panics in case if there is more than one zone.
-    pub fn wallet_mut(&mut self) -> &mut WalletCore {
+    pub fn wallet_mut(&mut self) -> &mut WalletCore<SequencerClient> {
         &mut self.default_zone_mut().wallet.as_mut().unwrap().wallet
     }
 
     /// Get reference to the zone wallet.
     #[must_use]
-    pub fn wallet_zone(&self, channel_id: ChannelId) -> Option<&WalletCore> {
+    pub fn wallet_zone(&self, channel_id: ChannelId) -> Option<&WalletCore<SequencerClient>> {
         self.zones
             .get(&channel_id)
             .map(|val| &val.wallet.as_ref().unwrap().wallet)
@@ -226,7 +226,10 @@ impl TestContext {
     }
 
     /// Get mutable reference to the zone wallet.
-    pub fn wallet_mut_zone(&mut self, channel_id: ChannelId) -> Option<&mut WalletCore> {
+    pub fn wallet_mut_zone(
+        &mut self,
+        channel_id: ChannelId,
+    ) -> Option<&mut WalletCore<SequencerClient>> {
         self.zones
             .get_mut(&channel_id)
             .map(|val| &mut val.wallet.as_mut().unwrap().wallet)
@@ -1038,7 +1041,7 @@ pub async fn verify_commitment_is_in_state(
     seq_client: &SequencerClient,
 ) -> bool {
     seq_client
-        .get_proofs_and_root(vec![commitment], None)
+        .get_proofs_and_root(vec![commitment], Vec::new())
         .await
         .ok()
         .and_then(|(proofs, _, _)| proofs.into_iter().next().flatten())
@@ -1126,6 +1129,7 @@ pub async fn spawn_channel_observer(
         funding_pk: config::bedrock_funding_key(),
         priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
         resubmit_interval: Duration::from_secs(2),
+        stale_refund_slots: 0,
     })
     .await
 }
@@ -1173,7 +1177,7 @@ async fn build_sequencer_components(
         // When a test supplies custom genesis, merge rather than replace.
         let wallet_genesis = config::genesis_from_accounts(
             initial_public_accounts,
-            config::private_total(initial_private_accounts),
+            config::private_funding_cost(initial_private_accounts),
         );
         match genesis_transactions {
             Some(mut custom) => {

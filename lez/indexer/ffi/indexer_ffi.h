@@ -129,6 +129,18 @@ typedef struct FfiPublicTransactionBody {
   FfiSignaturePubKeyList witness_set;
 } FfiPublicTransactionBody;
 
+/**
+ * What a proof commits about its in-proof fee. The `has_*` flags mark which parts are present;
+ * an absent part holds an empty value.
+ */
+typedef struct FfiProvenFee {
+  bool has_refund_to;
+  FfiAccountId refund_to;
+  bool has_fallback;
+  FfiPrivateAction fallback_action;
+  FfiBoundaryStepList fallback_boundary;
+} FfiProvenFee;
+
 typedef struct FfiPrivacyPreservingMessage {
   FfiPublicExecutionContext public_context;
   FfiBoundaryStepList boundary;
@@ -141,6 +153,8 @@ typedef struct FfiPrivacyPreservingMessage {
   uint64_t block_validity_window[2];
   uint64_t timestamp_validity_window[2];
   FfiPublicAccountEvidenceList admission_evidence;
+  bool has_fee;
+  struct FfiProvenFee fee;
 } FfiPrivacyPreservingMessage;
 
 typedef FfiVecU8 FfiProof;

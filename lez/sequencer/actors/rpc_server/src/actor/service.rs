@@ -248,11 +248,11 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
     async fn get_proofs_and_root(
         &self,
         commitments: Vec<Commitment>,
-        message_position: Option<CommitmentPosition>,
+        message_positions: Vec<CommitmentPosition>,
     ) -> Result<
         (
             Vec<Option<MembershipProof>>,
-            Option<MembershipProof>,
+            Vec<Option<MembershipProof>>,
             CommitmentSetDigest,
         ),
         ErrorObjectOwned,
@@ -260,7 +260,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetProofsAndRoot {
                 commitments,
-                message_position,
+                message_positions,
             })
             .await
             .map_err(map_infallible_error)
@@ -368,19 +368,26 @@ const fn map_fee_state_quote(
 fn map_executor_error<M>(
     err: SendError<M, sequencer_executor_actor::error::Error>,
 ) -> ErrorObjectOwned {
-    const MEMPOOL_IS_FULL_ERROR_CODE: i32 = -31900;
-
     match err {
         SendError::HandlerError(handle_err) => match handle_err {
-            incorrect_fee @ sequencer_executor_actor::error::Error::IncorrectFee(_) => {
+            // A reserve the head fee outgrew gets its own code: priced again, it may pass.
+            below @ sequencer_executor_actor::error::Error::PrivateFeeBelowHead { .. } => {
                 ErrorObjectOwned::owned(
-                    ErrorCode::InvalidParams.code(),
-                    format!("{incorrect_fee:#}"),
+                    sequencer_service_rpc::PRIVATE_FEE_BELOW_HEAD_ERROR_CODE,
+                    below.to_string(),
                     None::<()>,
                 )
             }
+            invalid @ sequencer_executor_actor::error::Error::IncorrectFee(_) => {
+                // With its cause, which the sender is shown.
+                let message = std::error::Error::source(&invalid).map_or_else(
+                    || invalid.to_string(),
+                    |cause| format!("{invalid}: {cause:#}"),
+                );
+                ErrorObjectOwned::owned(ErrorCode::InvalidParams.code(), message, None::<()>)
+            }
             sequencer_executor_actor::error::Error::MempoolIsFull => ErrorObjectOwned::owned(
-                MEMPOOL_IS_FULL_ERROR_CODE,
+                sequencer_service_rpc::MEMPOOL_IS_FULL_ERROR_CODE,
                 "Mempool is full".to_owned(),
                 None::<()>,
             ),
@@ -407,4 +414,24 @@ fn map_infallible_error<M>(err: SendError<M, Infallible>) -> ErrorObjectOwned {
 
 fn internal_error(err: impl std::fmt::Display) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_reserve_below_the_head_fee_gets_the_reprice_code() {
+        let below = map_executor_error(SendError::<(), _>::HandlerError(
+            sequencer_executor_actor::error::Error::PrivateFeeBelowHead {
+                required: 2,
+                reserve: 1,
+            },
+        ));
+        assert_eq!(
+            below.code(),
+            sequencer_service_rpc::PRIVATE_FEE_BELOW_HEAD_ERROR_CODE
+        );
+        assert!(below.message().contains("below the 2 required"));
+    }
 }

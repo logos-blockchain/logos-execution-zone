@@ -4,7 +4,7 @@
 //! side effects (those live in the gossip actor). Testable without a swarm.
 
 use common::transaction::LeeTransaction;
-use sequencer_channel_config_actor::Wire;
+use sequencer_channel_signing_actor::Wire;
 use sequencer_core::{config::BLOCK_OVERHEAD, gossip::AccreditedKeys};
 use sequencer_slasher_actor::Approval;
 
@@ -31,7 +31,7 @@ pub enum ApprovalEvaluation {
 
 #[derive(Debug)]
 pub enum ConfigEvaluation {
-    /// From a channel key; forward and hand to the channel-config actor.
+    /// From a channel key; forward and hand to the channel-signing actor.
     Accept(Wire),
     /// Nothing this node can use, but not the sender's fault.
     Ignore(String),
@@ -129,7 +129,7 @@ pub fn evaluate_config_message(
 mod tests {
     use logos_blockchain_core::proofs::channel_multi_sig_proof::IndexedSignature;
     use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-    use sequencer_channel_config_actor::Signature;
+    use sequencer_channel_signing_actor::Signature;
     use sequencer_slasher_actor::Offence;
     use sequencer_stake_core::SequencerKey;
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};

@@ -10,7 +10,7 @@ workspace = true
 
 [dependencies]
 sequencer_core.workspace = true
-sequencer_channel_config_actor.workspace = true
+sequencer_channel_signing_actor.workspace = true
 sequencer_gossip_actor = { workspace = true, features = ["actor"] }
 sequencer_rpc_server_actor = { workspace = true, optional = true }
 sequencer_executor_actor = { workspace = true, features = ["actor"] }
@@ -24,6 +24,7 @@ programs.workspace = true
 system_accounts.workspace = true
 wallet.workspace = true
 sequencer_stake_core.workspace = true
+sequencer_service_rpc.workspace = true
 
 clap = { workspace = true, features = ["derive", "env"] }
 anyhow.workspace = true

@@ -21,6 +21,8 @@ use sequencer_stake_core::{SequencerKey, SequencerStakeConfig};
 ///
 /// The op carries the threshold for the *next* config; the one it must satisfy
 /// itself is whatever the live channel already records.
+///
+/// Channel transfers take the same threshold, since a config op can rewrite theirs.
 #[must_use]
 pub fn channel_config_threshold(committee_size: usize) -> u16 {
     let threshold = committee_size
@@ -33,7 +35,7 @@ pub fn channel_config_threshold(committee_size: usize) -> u16 {
 }
 
 /// The accredited-keys list LEZ state says the channel should have, or `None`
-/// if the live Bedrock committee already matches it, threshold included.
+/// if the live Bedrock committee already matches it, thresholds included.
 ///
 /// Level-triggered: re-fires on every block where the two disagree, not just
 /// the block a key crossed the minimum in, so a submission that never lands
@@ -47,6 +49,7 @@ pub fn committee_update(
     state: &lee::V03State,
     live_accredited_keys: &[SequencerKey],
     live_configuration_threshold: u16,
+    live_transfer_threshold: u16,
 ) -> Option<Vec<SequencerKey>> {
     let config = read_config(state)?;
     // Absent only before genesis, which no committee update can precede.
@@ -75,8 +78,10 @@ pub fn committee_update(
     let mut live = live_accredited_keys.to_vec();
     live.sort_unstable();
 
-    // A mismatch in the threshold triggers a channel update too.
-    let stale_threshold = live_configuration_threshold != channel_config_threshold(desired.len());
+    // A mismatch in either threshold triggers a channel update too.
+    let threshold = channel_config_threshold(desired.len());
+    let stale_threshold =
+        live_configuration_threshold != threshold || live_transfer_threshold != threshold;
 
     (desired != live || stale_threshold).then_some(desired)
 }
@@ -294,7 +299,7 @@ mod tests {
     fn candidate_below_minimum_is_not_accredited() {
         let staked = Staked::new(1, MINIMUM - 1);
 
-        assert!(committee_update(&state_with([staked]), &[], 1).is_none());
+        assert!(committee_update(&state_with([staked]), &[], 1, 1).is_none());
     }
 
     #[test]
@@ -302,7 +307,7 @@ mod tests {
         let staked = Staked::new(2, MINIMUM);
 
         assert_eq!(
-            committee_update(&state_with([staked]), &[], 1),
+            committee_update(&state_with([staked]), &[], 1, 1),
             Some(vec![staked.key])
         );
     }
@@ -311,7 +316,7 @@ mod tests {
     fn already_matching_live_committee_is_not_re_submitted() {
         let staked = Staked::new(3, MINIMUM);
 
-        assert!(committee_update(&state_with([staked]), &[staked.key], 1).is_none());
+        assert!(committee_update(&state_with([staked]), &[staked.key], 1, 1).is_none());
     }
 
     #[test]
@@ -325,10 +330,26 @@ mod tests {
         live.sort_unstable();
 
         assert_eq!(
-            committee_update(&state_with(committee), &live, 1),
+            committee_update(&state_with(committee), &live, 1, 2),
             Some(live.to_vec())
         );
-        assert!(committee_update(&state_with(committee), &live, 2).is_none());
+        assert!(committee_update(&state_with(committee), &live, 2, 2).is_none());
+    }
+
+    #[test]
+    fn matching_keys_at_a_stale_transfer_threshold_are_re_submitted() {
+        let committee = [
+            Staked::new(1, MINIMUM),
+            Staked::new(2, MINIMUM),
+            Staked::new(3, MINIMUM),
+        ];
+        let mut live = committee.map(|staked| staked.key);
+        live.sort_unstable();
+
+        assert_eq!(
+            committee_update(&state_with(committee), &live, 2, 1),
+            Some(live.to_vec())
+        );
     }
 
     #[test]
@@ -340,6 +361,7 @@ mod tests {
             committee_update(
                 &state_with([exiting, staying]),
                 &[exiting.key, staying.key],
+                1,
                 1
             ),
             Some(vec![staying.key])
@@ -356,6 +378,7 @@ mod tests {
                 &state_with([discounted, staying]),
                 &[discounted.key, staying.key],
                 1,
+                1,
             ),
             Some(vec![staying.key])
         );
@@ -366,7 +389,7 @@ mod tests {
         let exiting = Staked::new(4, MINIMUM).pending(MINIMUM, 0);
 
         assert_eq!(
-            committee_update(&state_with([exiting]), &[exiting.key], 1),
+            committee_update(&state_with([exiting]), &[exiting.key], 1, 1),
             None
         );
     }
@@ -377,8 +400,8 @@ mod tests {
         // asked for once and forgotten.
         let state = state_with([Staked::new(8, MINIMUM)]);
 
-        assert!(committee_update(&state, &[], 1).is_some());
-        assert!(committee_update(&state, &[], 1).is_some());
+        assert!(committee_update(&state, &[], 1, 1).is_some());
+        assert!(committee_update(&state, &[], 1, 1).is_some());
     }
 
     #[test]
@@ -387,7 +410,7 @@ mod tests {
         let low = Staked::new(1, MINIMUM);
 
         assert_eq!(
-            committee_update(&state_with([high, low]), &[], 1),
+            committee_update(&state_with([high, low]), &[], 1, 1),
             Some(vec![low.key, high.key])
         );
     }

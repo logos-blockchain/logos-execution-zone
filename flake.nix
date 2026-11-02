@@ -181,18 +181,18 @@
             '';
           };
 
-          walletFfiPackage = craneLib.buildPackage (
+          coreFfiPackage = craneLib.buildPackage (
             commonArgs
             // {
-              pname = "logos-execution-zone-wallet-ffi";
+              pname = "logos-execution-zone-core-ffi";
               version = "0.1.0";
-              cargoExtraArgs = "-p wallet-ffi";
+              cargoExtraArgs = "-p core_ffi";
               postInstall = ''
                 mkdir -p $out/include
-                cp lez/wallet-ffi/wallet_ffi.h $out/include/
+                cp lez/core_ffi/core_ffi.h $out/include/
               ''
               + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
-                install_name_tool -id @rpath/libwallet_ffi.dylib $out/lib/libwallet_ffi.dylib
+                install_name_tool -id @rpath/libcore_ffi.dylib $out/lib/libcore_ffi.dylib
               '';
             }
           );
@@ -214,18 +214,18 @@
           );
         in
         {
-          wallet = walletFfiPackage;
+          core = coreFfiPackage;
           indexer = indexerFfiPackage;
-          default = walletFfiPackage;
+          default = coreFfiPackage;
         }
       );
       devShells = forAll (
         system:
         let
           pkgs = mkPkgs system;
-          walletFfiPackage = self.packages.${system}.wallet;
-          walletFfiShell = pkgs.mkShell {
-            inputsFrom = [ walletFfiPackage ];
+          coreFfiPackage = self.packages.${system}.core;
+          coreFfiShell = pkgs.mkShell {
+            inputsFrom = [ coreFfiPackage ];
           };
           indexerFfiPackage = self.packages.${system}.indexer;
           indexerFfiShell = pkgs.mkShell {
@@ -233,9 +233,9 @@
           };
         in
         {
-          wallet = walletFfiShell;
+          core = coreFfiShell;
           indexer = indexerFfiShell;
-          default = walletFfiShell;
+          default = coreFfiShell;
         }
       );
     };

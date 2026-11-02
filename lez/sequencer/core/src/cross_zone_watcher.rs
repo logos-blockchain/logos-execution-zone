@@ -749,7 +749,7 @@ mod tests {
     use futures::stream;
     use kameo::actor::Spawn as _;
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
-    use logos_blockchain_zone_sdk::ZoneBlock;
+    use logos_blockchain_zone_sdk::{UnverifiedEd25519PublicKey, ZoneBlock};
     use sequencer_storage_actor::{
         StorageActor,
         mock::MockStorageActor,
@@ -833,6 +833,7 @@ mod tests {
             ZoneMessage::Block(ZoneBlock {
                 id: MsgId::from([0; 32]),
                 data: Inscription::try_from(data).expect("test inscription is within bounds"),
+                signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
             }),
             Slot::from(slot),
         )

@@ -13,4 +13,5 @@ pub struct Config {
     pub funding_pk: ZkPublicKey,
     pub priority_fee_percent: u64,
     pub resubmit_interval: Duration,
+    pub stale_refund_slots: u64,
 }
