@@ -9,7 +9,7 @@ eras:
       core:
         scheduler:
           cover:
-            message_frequency_per_round: 1.0
+            message_frequency_per_round: 0.0
           delayer:
             maximum_release_delay_in_rounds: 1
         target_peering_degree: 4
