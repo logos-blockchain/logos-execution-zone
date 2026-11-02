@@ -1,10 +1,6 @@
 services:
 
   logos-blockchain-node-0:
-    # The node spins ~2 cores on blend cover traffic and PoW regardless of
-    # load, which halves a 4-vCPU CI runner. Cap it; block production at one
-    # block per ~2s fits well inside one core.
-    cpus: 1.0
     build:
       context: .
       dockerfile: Dockerfile
