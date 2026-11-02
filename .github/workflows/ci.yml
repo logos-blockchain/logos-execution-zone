@@ -501,6 +501,26 @@ jobs:
       - name: Make resolved Bedrock node executable
         run: chmod +x bedrock/.resolved/logos-blockchain-node
 
+      - name: Start resource sampler
+        if: matrix.target == 'cross_zone_verified' || matrix.target == 'cross_zone_bridge'
+        run: |
+          sampler() {
+            while true; do
+              echo "=== $(date -u +%T)"
+              cat /proc/loadavg
+              grep -E 'some|full' /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io
+              free -m | sed -n '2,3p'
+              grep pgmajfault /proc/vmstat
+              echo "--- top rss"
+              ps -eo rss=,pcpu=,comm= --sort=-rss | head -5
+              echo "--- top cpu"
+              ps -eo rss=,pcpu=,comm= --sort=-pcpu | head -5
+              sleep 10
+            done
+          }
+          sampler </dev/null >/tmp/resource-sampler.log 2>&1 &
+          disown
+
       # A shard that runs out of room reports only "error writing file to disk".
       - name: Report disk headroom before extraction
         run: |
@@ -546,6 +566,11 @@ jobs:
       - name: Report disk headroom after the tests
         if: always()
         run: df -h / /tmp /mnt || true
+
+      - name: Resource sampler report
+        if: always() && (matrix.target == 'cross_zone_verified' || matrix.target == 'cross_zone_bridge')
+        run: cat /tmp/resource-sampler.log
+
   # `just build-artifacts` drives the host's Docker daemon via `cargo risczero
   # build`, so it goes through the image rather than `container:`.
   artifacts:
