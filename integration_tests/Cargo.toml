@@ -66,6 +66,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 fee_core.workspace = true

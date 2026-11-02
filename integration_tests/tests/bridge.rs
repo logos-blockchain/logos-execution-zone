@@ -11,7 +11,6 @@ use std::{
 use anyhow::{Context as _, ensure};
 use bridge_core::{DepositMetadata, DepositRecipient};
 use common::transaction::LeeTransaction;
-use futures::StreamExt as _;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, no_seal, utils::account_balance,
 };
@@ -38,6 +37,7 @@ use logos_blockchain_zone_sdk::{CommonHttpClient, node_types::ApiBlock};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::config::{UrlProtocol, addr_to_url, bedrock_channel_id, bedrock_funding_key};
 use tokio::test;
+use url::Url;
 
 const TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK: Duration = Duration::from_mins(2);
 
@@ -336,6 +336,27 @@ fn pins_note(block: &ApiBlock, note: NoteId) -> bool {
     })
 }
 
+// `get_blocks_stream` parses raw transport chunks, so it drops split events.
+async fn tip_slot(node: &CommonHttpClient, bedrock: &Url) -> anyhow::Result<u64> {
+    Ok(node
+        .consensus_info(bedrock.clone())
+        .await
+        .context("Failed to read the Bedrock tip")?
+        .cryptarchia_info
+        .slot
+        .into())
+}
+
+async fn lib_slot(node: &CommonHttpClient, bedrock: &Url) -> anyhow::Result<u64> {
+    Ok(node
+        .consensus_info(bedrock.clone())
+        .await
+        .context("Failed to read the Bedrock LIB")?
+        .cryptarchia_info
+        .lib_slot
+        .into())
+}
+
 /// A deposit is minted in a block published together with a transfer that
 /// spends the deposit's channel note, and its finalization does not mint it
 /// again.
@@ -346,21 +367,25 @@ async fn a_bedrock_deposit_is_minted_in_a_block_pinned_on_it_and_only_once() -> 
     let recipient_id = AccountId::from(&recipient);
     let amount = 1_u64;
 
-    // Subscribed before the deposit, so no block after it is missed.
-    let blocks = CommonHttpClient::new(None)
-        .get_blocks_stream(addr_to_url(UrlProtocol::Http, ctx.bedrock_addr())?)
-        .await
-        .context("Failed to subscribe to Bedrock blocks")?;
-    let mut blocks = std::pin::pin!(blocks);
+    let node = CommonHttpClient::new(None);
+    let bedrock = addr_to_url(UrlProtocol::Http, ctx.bedrock_addr())?;
+    let from_slot = tip_slot(&node, &bedrock).await?;
     let deposited_note = submit_bedrock_deposit(&ctx, recipient, amount).await?;
 
     let pinned_at = tokio::time::timeout(TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK, async {
-        while let Some(event) = blocks.next().await {
-            if pins_note(&event.block, deposited_note) {
-                return anyhow::Ok(u64::from(event.block.header.slot));
+        loop {
+            let to_slot = tip_slot(&node, &bedrock).await?;
+            if to_slot >= from_slot {
+                let blocks = node
+                    .get_immutable_blocks(bedrock.clone(), from_slot, to_slot)
+                    .await
+                    .context("Failed to read the Bedrock block range")?;
+                if let Some(block) = blocks.iter().find(|block| pins_note(block, deposited_note)) {
+                    return anyhow::Ok(u64::from(block.header.slot));
+                }
             }
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
-        anyhow::bail!("The Bedrock block stream ended")
     })
     .await
     .context("No block was published pinned on the deposit")??;
@@ -375,12 +400,10 @@ async fn a_bedrock_deposit_is_minted_in_a_block_pinned_on_it_and_only_once() -> 
     .context("The pinned block did not credit the deposit")??;
 
     tokio::time::timeout(TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK, async {
-        while let Some(event) = blocks.next().await {
-            if u64::from(event.lib_slot) >= pinned_at {
-                return anyhow::Ok(());
-            }
+        while lib_slot(&node, &bedrock).await? < pinned_at {
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
-        anyhow::bail!("The Bedrock block stream ended")
+        anyhow::Ok(())
     })
     .await
     .context("The deposit never became final")??;
