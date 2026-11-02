@@ -418,7 +418,10 @@ pub async fn setup_bedrock_node_with_settings(
                 settings_path.display()
             );
         }
-        compose = compose.with_env("LEZ_COMPOSE_BEDROCK_SETTINGS", format!("./{settings_file}"));
+        compose = compose.with_env(
+            "LEZ_COMPOSE_BEDROCK_DEPLOYMENT_SETTINGS",
+            format!("./{settings_file}"),
+        );
     }
 
     #[expect(
