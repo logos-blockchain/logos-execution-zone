@@ -1,7 +1,10 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use chain_state::zone_indexer::{ZoneIndexer, stop_at_read_error};
+use chain_state::{
+    timeout_node::TimeoutNode,
+    zone_indexer::{ZoneIndexer, stop_at_read_error},
+};
 use common::{
     HashType,
     block::{Block, PeerChainTip},
@@ -44,7 +47,7 @@ struct PeerContext {
     min_committee_size: u32,
     /// The watcher's own handle for the committee read; the connection inside
     /// `ZoneIndexer` is consumed by the message stream.
-    node: NodeHttpClient,
+    node: TimeoutNode<NodeHttpClient>,
 }
 
 /// Why one pass over a peer's stream ended.
@@ -216,10 +219,10 @@ pub fn spawn_watchers<S: StorageActorTrait>(
     let mut tasks = Vec::new();
 
     for peer in cross_zone.peers.clone() {
-        let node = NodeHttpClient::new(
+        let node = TimeoutNode::new(NodeHttpClient::new(
             CommonHttpClient::new(bedrock_config.auth.clone().map(Into::into)),
             bedrock_config.node_url.clone(),
-        );
+        ));
         // The indexer consumes `node` for its message stream; this clone is the
         // watcher's own handle for the committee-floor read.
         let floor_node = node.clone();
@@ -249,7 +252,7 @@ pub fn spawn_watchers<S: StorageActorTrait>(
     reason = "the peer watcher runs for the lifetime of the sequencer process"
 )]
 async fn watch_peer<S: StorageActorTrait>(
-    zone_indexer: ZoneIndexer<NodeHttpClient>,
+    zone_indexer: ZoneIndexer<TimeoutNode<NodeHttpClient>>,
     peer: PeerContext,
     poll_interval: Duration,
     storage_ref: ActorRef<S>,
@@ -431,7 +434,10 @@ async fn held_below_committee_floor(floor: &mut CommitteeFloorState, peer: &Peer
 /// failure or an absent channel, both unknown rather than zero. The indexer's
 /// verifier holds the twin of this helper; the policy folding it is
 /// [`CommitteeFloorState`].
-async fn peer_committee(node: &NodeHttpClient, peer_zone: [u8; 32]) -> Option<(usize, u64)> {
+async fn peer_committee(
+    node: &TimeoutNode<NodeHttpClient>,
+    peer_zone: [u8; 32],
+) -> Option<(usize, u64)> {
     let state = node
         .channel_state(ChannelId::from(peer_zone))
         .await
@@ -767,10 +773,10 @@ mod tests {
             peer_zone: PEER_ZONE,
             self_zone: SELF_ZONE,
             min_committee_size: 0,
-            node: NodeHttpClient::new(
+            node: TimeoutNode::new(NodeHttpClient::new(
                 CommonHttpClient::new(None),
                 "http://127.0.0.1:0".parse().expect("valid url"),
-            ),
+            )),
         }
     }
 
