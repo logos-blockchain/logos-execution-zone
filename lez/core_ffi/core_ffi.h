@@ -906,6 +906,9 @@ typedef struct FfiSendFee {
 
 /**
  * Result of a transfer operation.
+ *
+ * A call overwrites the strings it holds without freeing them: free a filled result with
+ * `wallet_ffi_free_transfer_result` before passing it to another call, or they leak.
  */
 typedef struct FfiTransferResult {
   /**
@@ -1008,6 +1011,9 @@ typedef struct FfiAccountMention {
 
 /**
  * Result of a generic transaction operation.
+ *
+ * A call overwrites the strings and secrets it holds without freeing them: free a filled result
+ * with `wallet_ffi_free_transaction_result` before passing it to another call, or they leak.
  */
 typedef struct FfiTransactionResult {
   /**

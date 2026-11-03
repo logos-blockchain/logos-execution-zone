@@ -196,6 +196,9 @@ impl TryFrom<&FfiProgramCatalog> for ProgramCatalog {
 }
 
 /// Result of a generic transaction operation.
+///
+/// A call overwrites the strings and secrets it holds without freeing them: free a filled result
+/// with `wallet_ffi_free_transaction_result` before passing it to another call, or they leak.
 #[repr(C)]
 pub struct FfiTransactionResult {
     // TODO: Replace with HashType FFI representation
