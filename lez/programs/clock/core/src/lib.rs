@@ -51,6 +51,22 @@ pub enum Message {
         /// blocks past it; use a granularity of 1 for a strict deadline.
         at_most: u64,
     },
+    /// Read-only: sends [`Reply::State`] back to the sender, which must be an actor sending this
+    /// as a sync message.
+    ReadState {
+        /// The rounding step in blocks, at least 1.
+        granularity: u64,
+    },
+}
+
+/// The messages the Clock Program sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum Reply {
+    /// The answer to [`Message::ReadState`].
+    State {
+        /// The clock's block ID rounded down to a multiple of the read's granularity.
+        block_id: u64,
+    },
 }
 
 /// The data stored in the clock account.
