@@ -55,7 +55,7 @@ eras:
           threshold: 1
           timestamp: 0
     time:
-      slot_duration_in_seconds: 1
+      slot_duration_in_seconds: 4
 genesis_block:
   header:
     slot: 0
