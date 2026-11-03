@@ -31,13 +31,13 @@ use sequencer_storage_actor::{
 use tokio::test;
 
 use super::{
-    finalized_at, new_executor, sequencer_config, spawn_bedrock_pool,
+    finalized_at, sequencer_config, spawn_bedrock_pool, spawn_executor,
     stored_chain::{
         PEER_ZONE, block_at, cross_zone_genesis_store, finalized_genesis_store, genesis,
         with_finalized, with_head,
     },
 };
-use crate::{ExecutorActor, protocol::GetLastBlockId};
+use crate::protocol::GetLastBlockId;
 
 fn anchor_at(block: &Block, slot: u64) -> ZoneAnchorRecord {
     ZoneAnchorRecord {
@@ -95,14 +95,12 @@ async fn start_observing(
         })
         .share();
     let channel_id = config.bedrock_config.channel_id;
-    let executor = ExecutorActor::spawn(
-        Box::pin(new_executor(
-            config,
-            MockStorageActor::spawn(store.mock()),
-            spawn_bedrock_pool(move |_channel_id| channel.mock()),
-        ))
-        .await?,
-    );
+    let executor = Box::pin(spawn_executor(
+        config,
+        MockStorageActor::spawn(store.mock()),
+        spawn_bedrock_pool(move |_channel_id| channel.mock()),
+    ))
+    .await?;
     for finalized in history {
         executor
             .ask(ChannelEvent {

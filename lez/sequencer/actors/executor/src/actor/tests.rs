@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use common::{
     HashType,
     block::{BedrockStatus, Block, BlockBody, BlockHeader, BlockMeta},
@@ -11,7 +11,7 @@ use kameo::{
     error::SendError,
     supervision::RestartPolicy,
 };
-use kameo_actors::{DeliveryStrategy, pubsub::PubSub};
+use kameo_actors::{DeliveryStrategy, broker::Broker, pubsub::PubSub};
 use lee::{
     Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction,
     public_transaction::{Message, WitnessSet},
@@ -37,19 +37,25 @@ use sequencer_storage_actor::{
     mock::{MockStorageActor, SharedStore},
     protocol::StoreUpdateOutcome,
 };
-use sharding_pool_actor::{RestartConfig, ShardingPoolActor};
+use sharding_pool_actor::{RestartConfig, ShardingPoolActor, protocol::Reset};
 use tempfile::TempDir;
 use tokio::{sync::mpsc, test, time::timeout};
 
 use crate::{
     ExecutorActor,
-    actor::state::State,
+    actor::{Args, state::State},
     protocol::{self, ChannelId, TransactionOrigin},
 };
 
 mod reconstruction;
 mod startup;
 pub(super) mod stored_chain;
+
+type MockExecutor = ExecutorActor<MockStorageActor, MockBedrockActor>;
+
+/// Restarts the executor it supervises, as the service does.
+#[derive(kameo::Actor)]
+struct Supervisor;
 
 pub(super) fn sequencer_config() -> (SequencerConfig, TempDir) {
     let home = TempDir::new().expect("Failed to create temporary home directory");
@@ -321,11 +327,12 @@ pub(super) fn spawn_bedrock_pool(
     ))
 }
 
-async fn new_executor<S: StorageActorTrait>(
+/// What an executor over `storage_ref` starts from, against `bedrock_pool_ref`.
+pub(super) async fn executor_args<S: StorageActorTrait>(
     config: SequencerConfig,
     storage_ref: ActorRef<S>,
     bedrock_pool_ref: ActorRef<ShardingPoolActor<MockBedrockActor, ChannelId>>,
-) -> crate::Result<ExecutorActor<S, MockBedrockActor>> {
+) -> Args<S, MockBedrockActor> {
     let channel_signing_key = sequencer_core::load_or_create_signing_key(
         &config.home.join(sequencer_core::CHANNEL_SIGNING_KEY_FILE),
     )
@@ -334,16 +341,32 @@ async fn new_executor<S: StorageActorTrait>(
     let slasher_ref = spawn_slasher(&config, &storage_ref, &channel_signing_key).await;
     let channel_signer_ref = spawn_channel_signer(&config, &channel_signing_key);
 
-    ExecutorActor::new(
+    Args {
         config,
         channel_signing_key,
         storage_ref,
         bedrock_pool_ref,
-        PubSub::spawn(PubSub::new(DeliveryStrategy::Guaranteed)),
+        stake_config_pubsub_ref: PubSub::spawn(PubSub::new(DeliveryStrategy::Guaranteed)),
         slasher_ref,
         channel_signer_ref,
-    )
-    .await
+        bedrock_broker_ref: Broker::spawn(Broker::new(DeliveryStrategy::Guaranteed)),
+    }
+}
+
+/// Spawns an executor over `storage_ref` and waits until it has started.
+pub(super) async fn spawn_executor<S: StorageActorTrait>(
+    config: SequencerConfig,
+    storage_ref: ActorRef<S>,
+    bedrock_pool_ref: ActorRef<ShardingPoolActor<MockBedrockActor, ChannelId>>,
+) -> Result<ActorRef<ExecutorActor<S, MockBedrockActor>>> {
+    let executor =
+        ExecutorActor::spawn(Box::pin(executor_args(config, storage_ref, bedrock_pool_ref)).await);
+    executor
+        .wait_for_startup_with_result(|res| {
+            res.map_err(|err| anyhow::anyhow!("Executor failed to start: {err:?}"))
+        })
+        .await?;
+    Ok(executor)
 }
 
 /// A slasher over `storage_ref`, its committee empty until the executor hands it one.
@@ -390,15 +413,16 @@ pub(super) async fn initialize_state(
     let slasher_ref = spawn_slasher(&config, &storage_ref, &channel_signing_key).await;
     let channel_signer_ref = spawn_channel_signer(&config, &channel_signing_key);
 
-    Box::pin(State::initialize(
+    Box::pin(State::initialize(Args {
         config,
         channel_signing_key,
         storage_ref,
-        spawn_bedrock_pool(move |_channel_id| channel.mock()),
-        PubSub::spawn(PubSub::new(DeliveryStrategy::Guaranteed)),
+        bedrock_pool_ref: spawn_bedrock_pool(move |_channel_id| channel.mock()),
+        stake_config_pubsub_ref: PubSub::spawn(PubSub::new(DeliveryStrategy::Guaranteed)),
         slasher_ref,
         channel_signer_ref,
-    ))
+        bedrock_broker_ref: Broker::spawn(Broker::new(DeliveryStrategy::Guaranteed)),
+    }))
     .await
 }
 
@@ -409,8 +433,7 @@ async fn spawn_on_genesis(
     bedrock_pool_ref: ActorRef<ShardingPoolActor<MockBedrockActor, ChannelId>>,
 ) -> Result<ActorRef<ExecutorActor<MockStorageActor, MockBedrockActor>>> {
     let channel_id = config.bedrock_config.channel_id;
-    let executor =
-        ExecutorActor::spawn(Box::pin(new_executor(config, storage_ref, bedrock_pool_ref)).await?);
+    let executor = Box::pin(spawn_executor(config, storage_ref, bedrock_pool_ref)).await?;
     executor
         .ask(ChannelEvent {
             channel_id,
@@ -599,6 +622,111 @@ async fn a_publish_expects_the_sequence_the_publisher_started_at() -> Result<()>
         Some(Some(ChannelSeq::mocked(3))),
         "the publish has to expect the sequence the publisher started at"
     );
+
+    Ok(())
+}
+
+/// A supervised executor on [`empty_genesis`], whose Bedrock actors report every publisher they set
+/// up to the returned receiver.
+async fn spawn_supervised_on_genesis(
+    config: SequencerConfig,
+) -> Result<(
+    ActorRef<Supervisor>,
+    ActorRef<MockExecutor>,
+    ActorRef<ShardingPoolActor<MockBedrockActor, ChannelId>>,
+    mpsc::UnboundedReceiver<()>,
+)> {
+    let mut mock_storage = prepare_mock_storage_with_empty_genesis();
+    mock_storage
+        .expect_handle_get_pending_deposit_events()
+        .returning(|_msg, _ctx| Ok(Vec::new()));
+    let storage_ref = MockStorageActor::spawn(mock_storage);
+
+    let (publisher_init_tx, publisher_inits) = mpsc::unbounded_channel();
+    let bedrock_pool_ref = spawn_bedrock_pool(move |_channel_id| {
+        let mut mock_bedrock = MockBedrockActor::default();
+        mock_bedrock
+            .expect_handle_get_channel_tip_slot()
+            .returning(|_msg, _ctx| Ok(Some(Slot::from(0))));
+        mock_bedrock
+            .expect_handle_get_channel_tip_message_id()
+            .returning(|_msg, _ctx| Ok(Some(mock_msg_of(&empty_genesis()))));
+        let publisher_init_tx = publisher_init_tx.clone();
+        mock_bedrock
+            .expect_handle_initialize_channel_publisher()
+            .returning(move |_msg, _ctx| {
+                publisher_init_tx.send(()).expect("the test is listening");
+                Ok(Some(ChannelSeq::mocked(0)))
+            });
+        mock_bedrock
+            .expect_handle_check_is_our_turn()
+            .returning(|_msg, _ctx| Ok(true));
+        mock_bedrock
+    });
+    let args = Box::pin(executor_args(config, storage_ref, bedrock_pool_ref.clone())).await;
+    let supervisor = Supervisor::spawn(Supervisor);
+    let executor = ExecutorActor::supervise_with(&supervisor, move || args.clone())
+        .restart_policy(RestartPolicy::Permanent)
+        .restart_limit(5, Duration::from_mins(1))
+        .spawn_with_mailbox(kameo::mailbox::unbounded())
+        .await;
+    executor
+        .wait_for_startup_with_result(|res| {
+            res.map_err(|err| anyhow::anyhow!("Executor failed to start: {err:?}"))
+        })
+        .await?;
+
+    Ok((supervisor, executor, bedrock_pool_ref, publisher_inits))
+}
+
+/// Waits for the next publisher set up.
+async fn publisher_set_up(publisher_inits: &mut mpsc::UnboundedReceiver<()>) -> Result<()> {
+    timeout(Duration::from_secs(5), publisher_inits.recv())
+        .await?
+        .context("no Bedrock actor is left to set a publisher up")
+}
+
+/// Whether no further publisher gets set up for a while, so the executor stopped restarting.
+async fn settled(publisher_inits: &mut mpsc::UnboundedReceiver<()>) -> bool {
+    timeout(Duration::from_millis(500), publisher_inits.recv())
+        .await
+        .is_err()
+}
+
+/// The executor is linked to its Bedrock actor, so once that dies, the executor restarts and sets
+/// a fresh one's publisher up.
+#[test]
+async fn the_executor_restarts_once_its_bedrock_actor_dies() -> Result<()> {
+    let _res = env_logger::try_init();
+
+    let (config, _home) = sequencer_config();
+    let channel_id = config.bedrock_config.channel_id;
+    let (_supervisor, _executor, bedrock_pool_ref, mut publisher_inits) =
+        Box::pin(spawn_supervised_on_genesis(config)).await?;
+    publisher_set_up(&mut publisher_inits).await?;
+
+    bedrock_pool_ref.ask(Reset { key: channel_id }).await?;
+
+    publisher_set_up(&mut publisher_inits).await?;
+    assert!(settled(&mut publisher_inits).await);
+
+    Ok(())
+}
+
+/// A restarted executor replaces its Bedrock actor, whose death does not restart it again.
+#[test]
+async fn a_restarted_executor_replaces_its_bedrock_actor_once() -> Result<()> {
+    let _res = env_logger::try_init();
+
+    let (config, _home) = sequencer_config();
+    let (_supervisor, executor, _bedrock_pool_ref, mut publisher_inits) =
+        Box::pin(spawn_supervised_on_genesis(config)).await?;
+    publisher_set_up(&mut publisher_inits).await?;
+
+    executor.kill();
+
+    publisher_set_up(&mut publisher_inits).await?;
+    assert!(settled(&mut publisher_inits).await);
 
     Ok(())
 }

@@ -3,14 +3,21 @@ use std::{fmt::Display, time::Duration};
 use kameo::{
     Actor, Reply,
     actor::{ActorRef, Spawn as _},
-    error::SendError,
+    error::{ActorStopReason, SendError},
     message::{Context, Message},
     supervision::RestartPolicy,
 };
 use log::info;
 use sequencer_actors_common::SendErrorExt;
 
-use crate::{RestartConfig, ShardingKey, ShardingPoolActor, protocol::Spawn};
+use crate::{
+    RestartConfig, ShardingKey, ShardingPoolActor,
+    protocol::{Link, Reset, Spawn, Unlink},
+};
+
+/// Stops once an actor linked to it dies, as kameo does by default.
+#[derive(Actor)]
+struct Watcher;
 
 /// Counts received increments and remembers the key it was constructed for.
 #[derive(Actor)]
@@ -256,7 +263,7 @@ async fn actor_panicked_when_handling_message_is_restarted() {
 }
 
 #[tokio::test]
-async fn given_up_actor_is_not_restarted() {
+async fn a_given_up_actor_stays_stopped_until_reset() {
     let _err = env_logger::try_init();
 
     let pool = ShardingPoolActor::<TickingBomb, TickShardingKey>::new(
@@ -276,11 +283,187 @@ async fn given_up_actor_is_not_restarted() {
         pool.ask(Tick).await.map_err(SendErrorExt::flatten),
         Err(SendError::ActorStopped)
     );
-    // After being given up, the actor should not be restarted.
+    assert_eq!(
+        pool.ask(Tick).await.map_err(SendErrorExt::flatten),
+        Err(SendError::ActorStopped),
+        "The given up bomb must not be restarted"
+    );
+    assert!(
+        pool.is_alive(),
+        "Pool must outlive an actor it does not restart"
+    );
+
+    pool.ask(Reset {
+        key: TickShardingKey,
+    })
+    .await
+    .expect("Failed to reset");
+    assert_eq!(
+        pool.ask(Tick).await,
+        Ok(()),
+        "A fresh bomb must take the tick"
+    );
+}
+
+#[tokio::test]
+async fn spending_the_restart_budget_stops_the_pool() {
+    let _err = env_logger::try_init();
+
+    let pool = ShardingPoolActor::<TickingBomb, TickShardingKey>::new(
+        RestartConfig {
+            policy: RestartPolicy::Permanent,
+            limit: 0,
+            within: Duration::from_mins(1),
+        },
+        |TickShardingKey| 2,
+    );
+    let pool = ShardingPoolActor::spawn(pool);
+
+    assert_eq!(pool.ask(Tick).await, Ok(()));
     assert_eq!(
         pool.ask(Tick).await.map_err(SendErrorExt::flatten),
         Err(SendError::ActorStopped)
     );
+
+    let stopped_for_the_bomb = tokio::time::timeout(
+        Duration::from_secs(5),
+        pool.wait_for_shutdown_with_result(|res| {
+            matches!(
+                res,
+                Ok(ActorStopReason::LinkDied { reason, .. })
+                    if matches!(**reason, ActorStopReason::Panicked(_))
+            )
+        }),
+    )
+    .await
+    .expect("Pool must stop once the bomb spends its restart budget");
+    assert!(stopped_for_the_bomb, "Pool must stop for the bomb's panic");
+}
+
+#[tokio::test]
+async fn a_key_is_restarted_by_its_own_restart_config() {
+    const RESTARTED_KEY: u32 = 0;
+    const NEVER_RESTARTED_KEY: u32 = 1;
+
+    let _err = env_logger::try_init();
+
+    let pool = ShardingPoolActor::<TickingBomb, u32>::new(
+        RestartConfig {
+            policy: RestartPolicy::Never,
+            limit: 0,
+            within: Duration::ZERO,
+        },
+        |_key| 2,
+    )
+    .with_restart_config(
+        RESTARTED_KEY,
+        RestartConfig {
+            policy: RestartPolicy::Permanent,
+            limit: 1,
+            within: Duration::from_mins(1),
+        },
+    );
+    let pool = ShardingPoolActor::spawn(pool);
+    let (fire, trigger) = tokio::sync::watch::channel(true);
+    drop(fire);
+    let tick = |key| TriggeredTick {
+        key,
+        trigger: trigger.clone(),
+    };
+
+    for key in [RESTARTED_KEY, NEVER_RESTARTED_KEY] {
+        assert!(pool.ask(tick(key)).await.is_ok());
+    }
+    assert!(
+        pool.ask(tick(RESTARTED_KEY)).await.is_ok(),
+        "The exploded tick must be retried by the restarted bomb"
+    );
+    assert!(matches!(
+        pool.ask(tick(NEVER_RESTARTED_KEY))
+            .await
+            .map_err(SendErrorExt::flatten),
+        Err(SendError::ActorStopped)
+    ));
+}
+
+#[tokio::test]
+async fn a_linked_actor_learns_of_its_worker_dying() {
+    let pool = spawn_pool();
+    let watcher = Watcher::spawn(Watcher);
+
+    let started = pool
+        .ask(Link {
+            key: 1,
+            sibling: watcher.clone(),
+        })
+        .await
+        .expect("Failed to link");
+    assert!(started, "The linked worker must have started");
+    pool.ask(Reset { key: 1 }).await.expect("Failed to reset");
+
+    tokio::time::timeout(Duration::from_secs(5), watcher.wait_for_shutdown())
+        .await
+        .expect("Watcher must stop along with its worker");
+}
+
+#[tokio::test]
+async fn an_unlinked_actor_outlives_its_worker() {
+    let pool = spawn_pool();
+    let watcher = Watcher::spawn(Watcher);
+
+    pool.ask(Link {
+        key: 1,
+        sibling: watcher.clone(),
+    })
+    .await
+    .expect("Failed to link");
+    pool.ask(Unlink {
+        key: 1,
+        sibling: watcher.clone(),
+    })
+    .await
+    .expect("Failed to unlink");
+    pool.ask(Reset { key: 1 }).await.expect("Failed to reset");
+
+    // Room for a link death notice to arrive, had one been sent.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        watcher.is_alive(),
+        "Watcher must outlive the unlinked worker"
+    );
+}
+
+#[tokio::test]
+async fn linking_a_worker_that_failed_to_start_replies_so() {
+    let _err = env_logger::try_init();
+
+    let pool = ShardingPoolActor::spawn(ShardingPoolActor::<TickingBomb, TickShardingKey>::new(
+        RestartConfig {
+            policy: RestartPolicy::Never,
+            limit: 0,
+            within: Duration::ZERO,
+        },
+        |TickShardingKey| 0,
+    ));
+
+    let started = pool
+        .ask(Link {
+            key: TickShardingKey,
+            sibling: Watcher::spawn(Watcher),
+        })
+        .await
+        .expect("Failed to link");
+    assert!(!started);
+}
+
+#[tokio::test]
+async fn a_reset_worker_is_replaced_by_a_fresh_one() {
+    let pool = spawn_pool();
+
+    increment(&pool, 1).await;
+    pool.ask(Reset { key: 1 }).await.expect("Failed to reset");
+
+    assert_eq!(increment(&pool, 1).await, Observed { key: 1, count: 1 });
 }
 
 /// Multi-threaded so that the bomb can explode while the pool is blocked.
