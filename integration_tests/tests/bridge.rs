@@ -36,7 +36,13 @@ use logos_blockchain_http_api_common::{
 };
 use logos_blockchain_zone_sdk::{CommonHttpClient, node_types::ApiBlock};
 use sequencer_service_rpc::RpcClient as _;
-use test_fixtures::config::{UrlProtocol, addr_to_url, bedrock_channel_id, bedrock_funding_key};
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder,
+    config::{
+        MultiNodeTestContextConfig, UrlProtocol, addr_to_url, bedrock_channel_id,
+        bedrock_funding_key,
+    },
+};
 use tokio::test;
 
 const TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK: Duration = Duration::from_mins(2);
@@ -338,11 +344,18 @@ fn pins_note(block: &ApiBlock, note: NoteId) -> bool {
 
 /// A deposit the sequencer sees before its finality is minted in a block
 /// published together with a transfer that spends the deposit's channel note,
-/// and its finalization does not mint it again.
+/// and its finalization does not mint it again. Finality is slowed so the
+/// deposit cannot finalize before the first turn and mint unpinned instead.
 #[test]
 async fn a_bedrock_deposit_seen_before_finality_is_minted_in_a_block_pinned_on_it_and_only_once()
 -> anyhow::Result<()> {
-    let ctx = TestContext::new().await?;
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(ZoneTestContextBuilder::new(
+            MultiNodeTestContextConfig::default(),
+        ))
+        .with_bedrock_settings("deployment-settings-slow-finality.yaml")
+        .build()
+        .await?;
     let recipient = PublicKey::new_from_private_key(&PrivateKey::new_os_random());
     let recipient_id = AccountId::from(&recipient);
     let amount = 1_u64;

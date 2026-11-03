@@ -660,6 +660,23 @@ mod tests {
     use super::{bedrock_platform_for_docker_arch, ensure_node_runs_on_docker_daemon};
 
     #[test]
+    fn slow_finality_settings_differ_from_the_default_only_in_security_param() {
+        let bedrock = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../bedrock");
+        let default = std::fs::read_to_string(bedrock.join("deployment-settings.yaml")).unwrap();
+        let slow = std::fs::read_to_string(bedrock.join("deployment-settings-slow-finality.yaml"))
+            .unwrap();
+        let patched = default.replacen("security_param: 3", "security_param: 10", 1);
+        assert_ne!(
+            patched, default,
+            "the default settings no longer carry `security_param: 3`; regenerate the slow-finality file"
+        );
+        assert_eq!(
+            slow, patched,
+            "deployment-settings-slow-finality.yaml drifted from deployment-settings.yaml"
+        );
+    }
+
+    #[test]
     fn maps_docker_architectures_to_resolved_platforms() {
         assert_eq!(
             bedrock_platform_for_docker_arch("x86_64"),
