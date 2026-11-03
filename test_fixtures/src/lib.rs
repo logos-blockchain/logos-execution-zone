@@ -27,8 +27,8 @@ use crate::{
     config::{InitialPrivateAccountForWallet, MultiNodeTestContextConfig, SequencerPartialConfig},
     indexer_client::IndexerClient,
     setup::{
-        SequencerSetup, fund_private_accounts, setup_bedrock_node, setup_indexer, setup_wallet,
-        sync_wallet_from_prebuilt,
+        SequencerSetup, fund_private_accounts, setup_bedrock_node_with_settings, setup_indexer,
+        setup_wallet, sync_wallet_from_prebuilt,
     },
 };
 
@@ -820,6 +820,7 @@ impl ZoneTestContextBuilder {
 #[derive(Default)]
 pub struct MultiZoneTestContextBuilder {
     zone_builders: HashMap<ChannelId, ZoneTestContextBuilder>,
+    bedrock_settings: Option<String>,
 }
 
 impl MultiZoneTestContextBuilder {
@@ -828,9 +829,10 @@ impl MultiZoneTestContextBuilder {
             // Ensure logger is initialized only once
             *LOGGER;
 
-            let (bedrock_compose, bedrock_addr) = setup_bedrock_node()
-                .await
-                .context("Failed to setup Bedrock node")?;
+            let (bedrock_compose, bedrock_addr) =
+                setup_bedrock_node_with_settings(self.bedrock_settings.as_deref())
+                    .await
+                    .context("Failed to setup Bedrock node")?;
 
             let mut zones = HashMap::new();
 
@@ -853,6 +855,13 @@ impl MultiZoneTestContextBuilder {
             })
         })
         .await
+    }
+
+    /// A file under `bedrock/` mounted in place of `deployment-settings.yaml`.
+    #[must_use]
+    pub fn with_bedrock_settings(mut self, settings_file: &str) -> Self {
+        self.bedrock_settings = Some(settings_file.to_owned());
+        self
     }
 
     #[must_use]
@@ -963,7 +972,11 @@ impl BlockingTestContext {
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default()),
         );
 
-        MultiZoneTestContextBuilder { zone_builders }.build_blocking()
+        MultiZoneTestContextBuilder {
+            zone_builders,
+            ..MultiZoneTestContextBuilder::default()
+        }
+        .build_blocking()
     }
 
     pub const fn ctx(&self) -> &TestContext {
