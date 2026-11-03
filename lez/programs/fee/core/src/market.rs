@@ -49,7 +49,9 @@ pub const MIN_PRIVATE_REFUND: Balance = 1_000_000;
 pub const PRIVATE_VERIFY_GAS: u64 = 409_764;
 /// The bytes a private transaction's proof is charged at, and the most it may carry: a succinct
 /// receipt with its claim pruned to a digest, whatever the transaction proves.
-pub const PROOF_BYTES: u64 = 223_551;
+///
+/// RISC Zero 3.0.5, measured with `cycle_bench --ppe` (`proof_bytes`); re-pin on a RISC Zero bump.
+pub const PROOF_BYTES: u64 = 223_047;
 /// The most private actions one private transaction may carry.
 pub const MAX_PRIVATE_ACTIONS: usize = 8;
 
