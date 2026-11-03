@@ -22,7 +22,7 @@ eras:
         epoch_stake_distribution_stabilization: 3
         epoch_period_nonce_buffer: 3
         epoch_period_nonce_stabilization: 4
-      security_param: 5
+      security_param: 3
       slot_activation_coeff:
         numerator: 1
         denominator: 2
@@ -55,7 +55,7 @@ eras:
           threshold: 1
           timestamp: 0
     time:
-      slot_duration_in_seconds: 1
+      slot_duration_in_seconds: 4
 genesis_block:
   header:
     slot: 0

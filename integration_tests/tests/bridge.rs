@@ -286,7 +286,7 @@ async fn submit_bedrock_deposit(
         )
         .await
         .context("Failed to split off a note of the deposit amount")?;
-        for _ in 0..20 {
+        for _ in 0..240 {
             tokio::time::sleep(Duration::from_millis(500)).await;
             note_id = exact_note().await?;
             if note_id.is_some() {
