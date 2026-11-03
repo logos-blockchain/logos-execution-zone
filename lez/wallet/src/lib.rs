@@ -1907,9 +1907,6 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             } else {
                 full
             };
-            if balance < fee_at_head {
-                return Err(ExecutionFailureKind::InsufficientFundsError);
-            }
             let fee = PrivateFee {
                 payer,
                 reserve,
