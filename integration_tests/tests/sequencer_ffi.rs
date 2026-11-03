@@ -24,8 +24,9 @@ use integration_tests::{
 };
 use lee::{AccountId, Actor};
 use log::info;
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use logos_blockchain_zone_sdk::adapter::Node as _;
+use logos_blockchain_zone_sdk::{
+    adapter::Node as _, key_management_system_service::keys::Ed25519Key,
+};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::config::bedrock_channel_id;
 

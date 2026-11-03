@@ -28,13 +28,15 @@ use lee::{
 };
 use lee_core::GENESIS_BLOCK_ID;
 use log::{debug, error, info, warn};
-use logos_blockchain_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
-pub use logos_blockchain_core::mantle::{NoteId, ops::channel::MsgId};
-pub use logos_blockchain_key_management_system_service::keys::Ed25519PublicKey;
-use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, ZkPublicKey};
 use logos_blockchain_zone_sdk::{
     Slot, ZoneMessage,
+    binary_codec::bincode::{DeserializeOp as _, SerializeOp as _},
+    key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, ZkPublicKey},
     sequencer::{DepositInfo, SequencerCheckpoint, WithdrawArg},
+};
+pub use logos_blockchain_zone_sdk::{
+    core::mantle::{NoteId, ops::channel::MsgId},
+    key_management_system_service::keys::Ed25519PublicKey,
 };
 use mempool::{MemPool, MemPoolHandle};
 use num_bigint::BigUint;
@@ -1564,7 +1566,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// and discards it past the deadline.
     async fn submit_config(&mut self, submission: channel_signing::Submission) {
         let Some(draft) = self.config_draft.as_ref().filter(|draft| {
-            logos_blockchain_core::mantle::traits::Hashable::hash(draft.prepared.tx()).0
+            logos_blockchain_zone_sdk::core::mantle::traits::Hashable::hash(draft.prepared.tx()).0
                 == submission.tx_hash
         }) else {
             // The turn this raced funded a draft of its own.
@@ -2070,7 +2072,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             // next block.
             if pins.get(&tx_hash).is_some_and(|notes| {
                 pinned_deposit_notes.len().saturating_add(notes.len())
-                    > logos_blockchain_core::mantle::ledger::MAX_TRANSACTION_INPUTS
+                    > logos_blockchain_zone_sdk::core::mantle::ledger::MAX_TRANSACTION_INPUTS
             }) {
                 continue;
             }
@@ -3545,8 +3547,8 @@ fn extract_bridge_withdraw_data(tx: &LeeTransaction) -> Option<WithdrawArg> {
     let recipient_pk = ZkPublicKey::from(BigUint::from_bytes_le(&bedrock_account_pk));
 
     Some(WithdrawArg {
-        outputs: logos_blockchain_core::mantle::ledger::Outputs::new(
-            logos_blockchain_core::mantle::Note::new(amount, recipient_pk),
+        outputs: logos_blockchain_zone_sdk::core::mantle::ledger::Outputs::new(
+            logos_blockchain_zone_sdk::core::mantle::Note::new(amount, recipient_pk),
         ),
     })
 }

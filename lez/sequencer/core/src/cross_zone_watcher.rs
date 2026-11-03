@@ -16,10 +16,10 @@ use cross_zone_inbox_core::message_key;
 use futures::{Stream, StreamExt as _};
 use kameo::actor::ActorRef;
 use log::{debug, error, warn};
-use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, Slot, ZoneMessage,
     adapter::{Node as _, NodeHttpClient},
+    core::mantle::ops::channel::ChannelId,
 };
 use sequencer_storage_actor::{
     StorageActorTrait,
@@ -748,8 +748,10 @@ mod tests {
     use cross_zone::test_utils::{linked_chain_to, ping_emission};
     use futures::stream;
     use kameo::actor::Spawn as _;
-    use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
-    use logos_blockchain_zone_sdk::{UnverifiedEd25519PublicKey, ZoneBlock};
+    use logos_blockchain_zone_sdk::{
+        UnverifiedEd25519PublicKey, ZoneBlock,
+        core::mantle::ops::channel::{MsgId, inscribe::Inscription},
+    };
     use sequencer_storage_actor::{
         StorageActor,
         mock::MockStorageActor,

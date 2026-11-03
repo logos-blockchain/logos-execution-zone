@@ -8,7 +8,7 @@ use common::{HashType, config::BasicAuth};
 use cross_zone_inbox_core::CrossZoneConfig;
 use humantime_serde;
 use lee::AccountId;
-pub use logos_blockchain_core::mantle::ops::channel::ChannelId;
+pub use logos_blockchain_zone_sdk::core::mantle::ops::channel::ChannelId;
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 use url::Url;

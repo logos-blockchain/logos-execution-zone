@@ -134,9 +134,9 @@ mod tests {
 
     use async_trait::async_trait;
     use futures::StreamExt as _;
-    use logos_blockchain_core::mantle::ledger::verification_mode::StandardMode;
     use logos_blockchain_zone_sdk::{
         UnverifiedEd25519PublicKey, ZoneBlock,
+        core::mantle::ledger::verification_mode::StandardMode,
         node_types::{
             ApiBlock, BlockInfo, ChainServiceInfo, ChannelState, Events, HeaderId, Inscription,
             MsgId, ProcessedBlockEvent, SignedOps, TimeInfo, Unverified, WalletFundRequestBody,

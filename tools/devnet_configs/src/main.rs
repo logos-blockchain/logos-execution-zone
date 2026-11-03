@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 use lee::{PrivateKey, PublicKey};
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+use logos_blockchain_zone_sdk::key_management_system_service::keys::Ed25519Key;
 use sequencer_core::{
     config::{ChannelParams, GenesisAction, GossipConfig, SequencerConfig},
     sign_genesis_stake,

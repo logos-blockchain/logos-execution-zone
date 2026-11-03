@@ -14,7 +14,7 @@ pub enum Error {
     BrokerPublishFailed(#[source] kameo::error::SendError<ErasedMessage, Infallible>),
 
     #[error("Checkpoint (de-)serialization failed")]
-    CheckpointSerializationFailed(#[from] logos_blockchain_binary_codec::bincode::Error),
+    CheckpointSerializationFailed(#[from] logos_blockchain_zone_sdk::binary_codec::bincode::Error),
 
     #[error(
         "Stored checkpoint has channel activity but the channel does not exist on the \
@@ -39,7 +39,7 @@ pub enum Error {
 
     #[error("Transaction assemble failed")]
     TransactionAssembleFailed(
-        #[from] logos_blockchain_core::mantle::transactions::tx_list::signed_ops::Error,
+        #[from] logos_blockchain_zone_sdk::core::mantle::transactions::tx_list::signed_ops::Error,
     ),
 
     #[error("Creating the channel requires our own key first; creation gives the turn to index 0")]
@@ -53,6 +53,9 @@ pub enum Error {
 
     #[error("Inscription exceeds maximum allowed size")]
     InscriptionTooLarge,
+
+    #[error("Invalid channel config: thresholds must be non-zero and reachable by the keys")]
+    InvalidChannelConfig,
 
     #[error("Invalid channel key list")]
     InvalidChannelKeyList(#[source] anyhow::Error),
@@ -74,7 +77,7 @@ pub enum Error {
     CannotPublishBlockOnParentWithWithdrawals,
 
     #[error("Deposited note {0:?} is not a channel note on the current branch")]
-    DepositNoteNotOnBranch(logos_blockchain_core::mantle::NoteId),
+    DepositNoteNotOnBranch(logos_blockchain_zone_sdk::core::mantle::NoteId),
 
     #[error("Failed to assemble the deposit pin transfer")]
     DepositPinAssemblyFailed(#[source] anyhow::Error),

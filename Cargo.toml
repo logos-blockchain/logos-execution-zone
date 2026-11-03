@@ -225,17 +225,7 @@ async-stream = "0.3.6"
 strum = { version = "0.28.0", features = ["derive"] }
 mockall = "0.15.0"
 
-logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
-logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
-logos-blockchain-binary-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
-logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
-logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
-logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
-logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
-logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
-logos-blockchain-testing-framework = { package = "blockchain-test-logos", git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
-testing-framework-app = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
-testing-framework-core = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
+logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "70db4b301f78f08f287ad96c4438963ad93dbe2a" }
 
 keycard-rs = { git = "https://github.com/keycard-tech/keycard-rs", rev = "9535a657ba04b1e6916de51777e22b4837c1a84d" }
 

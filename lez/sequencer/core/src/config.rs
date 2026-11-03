@@ -11,8 +11,9 @@ use common::config::BasicAuth;
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use humantime_serde;
 use lee::{AccountId, PublicKey, Signature};
-use logos_blockchain_core::mantle::ops::channel::ChannelId;
-use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
+use logos_blockchain_zone_sdk::{
+    core::mantle::ops::channel::ChannelId, key_management_system_service::keys::ZkPublicKey,
+};
 pub use sequencer_stake_core::ChannelParams;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -29,7 +30,7 @@ pub const BLOCK_OVERHEAD: u64 = 2_048;
     reason = "usize::try_from is not const & usize fits u64 on every supported target"
 )]
 pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 =
-    logos_blockchain_core::mantle::ops::channel::inscribe::MAX_BYTES as u64;
+    logos_blockchain_zone_sdk::core::mantle::ops::channel::inscribe::MAX_BYTES as u64;
 
 /// The largest Bedrock transaction: the L1 caps a block's transactions at this
 /// many bytes.
@@ -38,7 +39,7 @@ pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 =
     reason = "usize::try_from is not const & usize fits u64 on every supported target"
 )]
 pub const MAX_BEDROCK_TX_SIZE: u64 =
-    logos_blockchain_core::block::MAX_BLOCK_TRANSACTIONS_SIZE as u64;
+    logos_blockchain_zone_sdk::core::block::MAX_BLOCK_TRANSACTIONS_SIZE as u64;
 
 /// Smallest nonzero `stale_refund_slots`, since a shorter window orphans blocks before L1 can
 /// mine them.

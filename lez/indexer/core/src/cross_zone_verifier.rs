@@ -27,10 +27,10 @@ use cross_zone_inbox_core::{
 use futures::{Stream, StreamExt as _};
 use lee::GENESIS_BLOCK_ID;
 use log::{debug, error, warn};
-use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, Slot, ZoneMessage,
     adapter::{Node as _, NodeHttpClient},
+    core::mantle::ops::channel::ChannelId,
 };
 use tokio::{sync::RwLock, time::Instant};
 
@@ -1382,8 +1382,10 @@ mod tests {
     use cross_zone::test_utils::{linked_chain_to, ping_emission};
     use futures::stream;
     use lee::Actor;
-    use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
-    use logos_blockchain_zone_sdk::{UnverifiedEd25519PublicKey, ZoneBlock};
+    use logos_blockchain_zone_sdk::{
+        UnverifiedEd25519PublicKey, ZoneBlock,
+        core::mantle::ops::channel::{MsgId, inscribe::Inscription},
+    };
     use ping_core::{ping_record_pda, receiver_config_account_id};
 
     use super::*;

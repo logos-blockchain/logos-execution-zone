@@ -4,7 +4,9 @@ use anyhow::{Context as _, Result};
 use indexer_service::{ChannelId, ClientConfig, EventFilterConfig, IndexerConfig};
 use key_protocol::key_management::{KeyChain, secret_holders::SeedHolder};
 use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey};
-use logos_blockchain_key_management_system_service::keys::{UnsecuredEd25519Key, ZkPublicKey};
+use logos_blockchain_zone_sdk::key_management_system_service::keys::{
+    UnsecuredEd25519Key, ZkPublicKey,
+};
 use num_bigint::BigUint;
 use sequencer_core::{
     config::{

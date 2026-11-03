@@ -6,8 +6,9 @@ use common::{HashType, block::Block};
 use futures::StreamExt as _;
 use lee_core::BlockId;
 use log::warn;
-use logos_blockchain_core::mantle::ops::channel::ChannelId;
-use logos_blockchain_zone_sdk::{Slot, ZoneMessage, adapter};
+use logos_blockchain_zone_sdk::{
+    Slot, ZoneMessage, adapter, core::mantle::ops::channel::ChannelId,
+};
 
 use crate::zone_indexer::ZoneIndexer;
 
@@ -320,8 +321,10 @@ fn frontier_verdict(anchor_slot: Slot, channel_tip_slot: Option<Slot>) -> Option
 #[cfg(test)]
 mod tests {
     use common::block::HashableBlockData;
-    use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
-    use logos_blockchain_zone_sdk::{UnverifiedEd25519PublicKey, ZoneBlock};
+    use logos_blockchain_zone_sdk::{
+        UnverifiedEd25519PublicKey, ZoneBlock,
+        core::mantle::ops::channel::{MsgId, inscribe::Inscription},
+    };
 
     use super::*;
 

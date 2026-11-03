@@ -127,8 +127,10 @@ pub fn evaluate_config_message(
 
 #[cfg(test)]
 mod tests {
-    use logos_blockchain_core::proofs::channel_multi_sig_proof::IndexedSignature;
-    use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+    use logos_blockchain_zone_sdk::{
+        core::proofs::channel_multi_sig_proof::IndexedSignature,
+        key_management_system_service::keys::Ed25519Key,
+    };
     use sequencer_channel_signing_actor::Signature;
     use sequencer_slasher_actor::Offence;
     use sequencer_stake_core::SequencerKey;

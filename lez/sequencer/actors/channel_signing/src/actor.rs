@@ -7,21 +7,21 @@ use kameo::{
     reply::{DelegatedReply, ReplySender},
 };
 use log::{debug, warn};
-use logos_blockchain_core::{
-    mantle::{
-        NoteId,
-        ledger::Note,
-        ops::{
-            Op,
-            channel::{ChannelId, config::ChannelConfigOp},
+use logos_blockchain_zone_sdk::{
+    core::{
+        mantle::{
+            NoteId,
+            ledger::Note,
+            ops::{
+                Op,
+                channel::{ChannelId, config::ChannelConfigOp},
+            },
+            traits::Hashable as _,
+            transactions::Ops,
         },
-        traits::Hashable as _,
-        transactions::Ops,
+        proofs::channel_multi_sig_proof::IndexedSignature,
     },
-    proofs::channel_multi_sig_proof::IndexedSignature,
-};
-use logos_blockchain_key_management_system_service::keys::{
-    Ed25519Key, Ed25519PublicKey, Ed25519Signature,
+    key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey, Ed25519Signature},
 };
 use tokio::sync::mpsc;
 
@@ -644,12 +644,12 @@ fn config_op(tx: &Ops) -> Option<&ChannelConfigOp> {
 
 /// Whether `op` installs exactly what this node wants installed.
 fn matches(target: &ConfigTarget, op: &ChannelConfigOp) -> bool {
-    op.parent == target.parent
-        && op.keys.iter().eq(target.keys.iter())
-        && u32::from(op.posting_timeframe.clone()) == target.posting_timeframe
-        && u32::from(op.posting_timeout.clone()) == target.posting_timeout
-        && op.configuration_threshold == target.configuration_threshold
-        && op.transfer_threshold == target.transfer_threshold
+    op.parent() == target.parent
+        && op.keys().iter().eq(target.keys.iter())
+        && u32::from(op.posting_timeframe().clone()) == target.posting_timeframe
+        && u32::from(op.posting_timeout().clone()) == target.posting_timeout
+        && op.configuration_threshold().get() == target.configuration_threshold
+        && op.transfer_threshold().get() == target.transfer_threshold
 }
 
 #[cfg(test)]

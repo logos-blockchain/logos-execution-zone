@@ -8,7 +8,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use common::{block::Block, transaction::TxEvents};
 use lee::V03State;
 use log::{error, warn};
-use logos_blockchain_core::mantle::ops::channel::MsgId;
+use logos_blockchain_zone_sdk::core::mantle::ops::channel::MsgId;
 
 use crate::{
     AcceptOutcome, BlockIngestError,

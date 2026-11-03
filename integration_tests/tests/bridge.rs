@@ -21,20 +21,23 @@ use lee::{
     public_transaction,
 };
 use lee_core::{RootCall, execution_state::TransactionEntry};
-use logos_blockchain_core::mantle::{
-    Note, Value,
-    gas::GasCost,
-    ledger::{Inputs, NoteId, Utxo},
-    ops::{OpId as _, OpRef, channel::deposit::DepositOp},
-};
-use logos_blockchain_http_api_common::{
-    bodies::{
-        channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
-        wallet::transfer_funds::WalletTransferFundsRequestBody,
+use logos_blockchain_zone_sdk::{
+    CommonHttpClient,
+    core::mantle::{
+        Note, Value,
+        gas::GasCost,
+        ledger::{Inputs, NoteId, Utxo},
+        ops::{OpId as _, OpRef, channel::deposit::DepositOp},
     },
-    paths::CHANNEL_DEPOSIT,
+    http_api_common::{
+        bodies::{
+            channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
+            wallet::transfer_funds::WalletTransferFundsRequestBody,
+        },
+        paths::CHANNEL_DEPOSIT,
+    },
+    node_types::ApiBlock,
 };
-use logos_blockchain_zone_sdk::{CommonHttpClient, node_types::ApiBlock};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder,

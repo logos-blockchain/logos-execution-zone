@@ -11,8 +11,7 @@ use common::{
 use lee::{Account, AccountId, Actor, V03State};
 use lee_core::BlockId;
 use log::warn;
-use logos_blockchain_core::header::HeaderId;
-use logos_blockchain_zone_sdk::Slot;
+use logos_blockchain_zone_sdk::{Slot, core::header::HeaderId};
 use storage::indexer::RocksDBIO;
 use tokio::sync::RwLock;
 

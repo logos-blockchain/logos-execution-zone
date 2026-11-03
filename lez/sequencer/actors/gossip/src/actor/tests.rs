@@ -11,8 +11,10 @@ use kameo::{
     actor::{ActorRef, Spawn as _},
     message::{Context, Message},
 };
-use logos_blockchain_core::proofs::channel_multi_sig_proof::IndexedSignature;
-use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
+use logos_blockchain_zone_sdk::{
+    core::proofs::channel_multi_sig_proof::IndexedSignature,
+    key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey},
+};
 use mempool::{MemPool, MemPoolHandle};
 use sequencer_channel_signing_actor::{Signature, Wire};
 use sequencer_core::{TransactionOrigin, config::GossipConfig, gossip::accredited_keys_channel};

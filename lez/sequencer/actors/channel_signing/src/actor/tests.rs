@@ -1,22 +1,26 @@
+use std::num::NonZero;
+
 use kameo::actor::Spawn as _;
-use logos_blockchain_core::{
-    crypto::ZkHash,
-    events::DepositNote,
-    mantle::{
-        channel::{SlotTimeframe, SlotTimeout},
-        ledger::{Inputs, Outputs},
-        ops::{
-            channel::{
-                ChannelId, MsgId, VerifiedChannelKeys,
-                channel_transfer::ChannelTransferOp,
-                inscribe::{Inscription, InscriptionOp},
-                withdraw::ChannelWithdrawOp,
+use logos_blockchain_zone_sdk::{
+    core::{
+        crypto::ZkHash,
+        events::DepositNote,
+        mantle::{
+            channel::{SlotTimeframe, SlotTimeout},
+            ledger::{Inputs, Outputs},
+            ops::{
+                channel::{
+                    ChannelId, MsgId, VerifiedChannelKeys,
+                    channel_transfer::ChannelTransferOp,
+                    inscribe::{Inscription, InscriptionOp},
+                    withdraw::ChannelWithdrawOp,
+                },
+                transfer::TransferOp,
             },
-            transfer::TransferOp,
         },
     },
+    key_management_system_service::keys::{Ed25519Signature, ZkPublicKey},
 };
-use logos_blockchain_key_management_system_service::keys::{Ed25519Signature, ZkPublicKey};
 
 use super::*;
 use crate::protocol::ObservedDeposit;
@@ -85,15 +89,16 @@ fn view(target: Option<ConfigTarget>) -> ChannelView {
 
 /// A transaction carrying exactly the config `target` asks for.
 fn draft_tx(target: &ConfigTarget) -> Ops {
-    let op = ChannelConfigOp {
-        channel: ChannelId::from(CHANNEL),
-        parent: target.parent,
-        keys: VerifiedChannelKeys::try_from(target.keys.clone()).expect("a non-empty key list"),
-        posting_timeframe: SlotTimeframe::from(target.posting_timeframe),
-        posting_timeout: SlotTimeout::from(target.posting_timeout),
-        configuration_threshold: target.configuration_threshold,
-        transfer_threshold: target.transfer_threshold,
-    };
+    let op = ChannelConfigOp::new(
+        ChannelId::from(CHANNEL),
+        target.parent,
+        VerifiedChannelKeys::try_from(target.keys.clone()).expect("a non-empty key list"),
+        SlotTimeframe::from(target.posting_timeframe),
+        SlotTimeout::from(target.posting_timeout),
+        NonZero::new(target.configuration_threshold).expect("a non-zero configuration threshold"),
+        NonZero::new(target.transfer_threshold).expect("a non-zero transfer threshold"),
+    )
+    .expect("a reachable configuration threshold");
     Ops::from([Op::ChannelConfig(op)])
 }
 
@@ -670,6 +675,7 @@ async fn a_peer_does_not_sign_a_config_it_did_not_ask_for() {
     // Same shape, but installing a committee this node never derived.
     let mut rogue = target();
     rogue.keys = vec![key(PEER_SECRET).public_key()];
+    rogue.configuration_threshold = 1;
     actor
         .ask(Wire::Draft(Draft {
             tx: Box::new(draft_tx(&rogue)),

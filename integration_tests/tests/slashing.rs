@@ -15,7 +15,7 @@ use common::{block::Block, transaction::LeeTransaction};
 use integration_tests::{assert_same_chain, committee, get_account, init_logger, wait_until};
 use lee::AccountId;
 use log::info;
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+use logos_blockchain_zone_sdk::key_management_system_service::keys::Ed25519Key;
 use sequencer_bedrock_actor::protocol::{CheckIsOurTurn, PublishRawInscription};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{

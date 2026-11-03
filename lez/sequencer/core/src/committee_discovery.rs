@@ -161,7 +161,7 @@ pub(crate) fn channel_params(state: &lee::V03State) -> Option<crate::config::Cha
 mod tests {
 
     use lee_core::account::Account;
-    use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+    use logos_blockchain_zone_sdk::key_management_system_service::keys::Ed25519Key;
     use sequencer_stake_core::{PendingUnstake, SequencerEntry};
 
     use super::*;

@@ -11,7 +11,7 @@ use kameo::actor::{ActorRef, Spawn as _};
 use lee::{AccountId, PrivacyPreservingTransaction, PrivateKey};
 use lee_core::Commitment;
 use log::{debug, error};
-use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
+use logos_blockchain_zone_sdk::key_management_system_service::keys::UnsecuredEd25519Key;
 use sequencer_core::config::GenesisAction;
 use sequencer_service::{CrossZoneConfig, GossipConfig, SequencerHandle};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};

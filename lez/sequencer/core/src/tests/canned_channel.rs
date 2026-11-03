@@ -7,11 +7,14 @@ use std::{
 
 use anyhow::anyhow;
 use common::block::Block;
-use logos_blockchain_core::mantle::{
-    ledger::{Inputs, NoteId, Utxo},
-    ops::channel::MsgId,
+use logos_blockchain_zone_sdk::{
+    Slot, ZoneMessage,
+    core::mantle::{
+        ledger::{Inputs, NoteId, Utxo},
+        ops::channel::MsgId,
+    },
+    sequencer::WithdrawArg,
 };
-use logos_blockchain_zone_sdk::{Slot, ZoneMessage, sequencer::WithdrawArg};
 use sequencer_bedrock_actor::{
     Result,
     error::Error,

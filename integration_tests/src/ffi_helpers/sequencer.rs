@@ -27,10 +27,10 @@ use core_ffi::{
     },
 };
 use lee::{Account, AccountId, PrivateKey, PublicAccountEvidence, PublicKey};
-use logos_blockchain_key_management_system_service::keys::{Ed25519Key, UnsecuredEd25519Key};
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
+    key_management_system_service::keys::{Ed25519Key, UnsecuredEd25519Key},
 };
 use sequencer_service::{DepositRecipient, GenesisAction};
 use tempfile::TempDir;

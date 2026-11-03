@@ -19,7 +19,9 @@ use integration_tests::cucumber::{
     },
     world::CucumberWorld,
 };
-use logos_blockchain_testing_framework::{hash_str, is_truthy_env, release_reserved_port_block};
+use logos_blockchain_zone_sdk::testing_framework::{
+    hash_str, is_truthy_env, release_reserved_port_block,
+};
 use tracing::{info, warn};
 use wallet::SUPPRESS_VERBOSE_PRINTS;
 
@@ -27,9 +29,12 @@ pub const TARGET: &str = "cucumber_main";
 type ScenarioAttempts = Arc<Mutex<HashMap<String, u8>>>;
 
 fn main() -> anyhow::Result<()> {
-    logos_blockchain_testing_framework::env::set_default_env(SUPPRESS_VERBOSE_PRINTS, "true");
-    logos_blockchain_testing_framework::env::set_default_env(RUST_LOG, "info");
-    logos_blockchain_testing_framework::env::set_default_env(TF_KEEP_LOGS, "true");
+    logos_blockchain_zone_sdk::testing_framework::env::set_default_env(
+        SUPPRESS_VERBOSE_PRINTS,
+        "true",
+    );
+    logos_blockchain_zone_sdk::testing_framework::env::set_default_env(RUST_LOG, "info");
+    logos_blockchain_zone_sdk::testing_framework::env::set_default_env(TF_KEEP_LOGS, "true");
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

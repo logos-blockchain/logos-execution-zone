@@ -2,26 +2,28 @@ use common::{
     HashType,
     block::{Block, HashableBlockData},
 };
-use logos_blockchain_core::mantle::{
-    SignedOps,
-    channel::Channels,
-    ledger::{VerifiableOperation as _, verification_mode::StandardMode},
-    ops::{
-        Op, OpProof, SignedOperation,
-        channel::{
-            ChannelId, MsgId, VerifiedChannelKeys,
-            config::ChannelConfigValidationContext,
-            inscribe::{Inscription, InscriptionOp},
+use logos_blockchain_zone_sdk::{
+    core::mantle::{
+        SignedOps,
+        channel::Channels,
+        ledger::{VerifiableOperation as _, verification_mode::StandardMode},
+        ops::{
+            Op, OpProof, SignedOperation,
+            channel::{
+                ChannelId, MsgId, VerifiedChannelKeys,
+                config::ChannelConfigValidationContext,
+                inscribe::{Inscription, InscriptionOp},
+            },
+        },
+        transactions::{
+            MantleTxBuilder, OpProofs,
+            hash::{TxHash, TxHashView},
+            states::Unverified,
         },
     },
-    transactions::{
-        MantleTxBuilder, OpProofs,
-        hash::{TxHash, TxHashView},
-        states::Unverified,
-    },
+    key_management_system_service::keys::Ed25519Key,
+    sequencer::ChannelUpdateTx,
 };
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use logos_blockchain_zone_sdk::sequencer::ChannelUpdateTx;
 
 use super::channel_entries;
 use crate::protocol::ChannelParams;
@@ -98,7 +100,8 @@ fn the_genesis_config_op_and_its_proof_pass_bedrock_verification() {
         },
         1,
         1,
-    );
+    )
+    .expect("valid thresholds");
     let tx_hash_view = TxHashView::new(TxHash::from([7; 32]));
 
     let signed =

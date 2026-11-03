@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    num::NonZero,
     sync::Arc,
 };
 
@@ -14,25 +15,25 @@ use kameo::{
 };
 use kameo_actors::broker::Broker;
 use log::{info, warn};
-use logos_blockchain_binary_codec::bincode::DeserializeOp as _;
-use logos_blockchain_core::{
-    mantle::{
-        Note, NoteId, Op, OpProof, SignedOps,
-        channel::{SlotTimeframe, SlotTimeout},
-        gas::GasCost,
-        ledger::{Inputs, Outputs},
-        ops::channel::{
-            VerifiedChannelKeys, channel_transfer::ChannelTransferOp, config::ChannelConfigOp,
-            inscribe::InscriptionOp,
-        },
-        traits::Hashable as _,
-        transactions::{MantleTxBuilder, OpProofs, Ops},
-    },
-    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
-};
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
+    binary_codec::bincode::DeserializeOp as _,
+    core::{
+        mantle::{
+            Note, NoteId, Op, OpProof, SignedOps,
+            channel::{SlotTimeframe, SlotTimeout},
+            gas::GasCost,
+            ledger::{Inputs, Outputs},
+            ops::channel::{
+                VerifiedChannelKeys, channel_transfer::ChannelTransferOp, config::ChannelConfigOp,
+                inscribe::InscriptionOp,
+            },
+            traits::Hashable as _,
+            transactions::{MantleTxBuilder, OpProofs, Ops},
+        },
+        proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
+    },
     node_types::{Inscription, WalletFundRequestBody, WalletFundResponseBody},
     sequencer::{
         ChannelUpdate as SdkChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FundingConfig,
@@ -131,7 +132,7 @@ impl BedrockActor {
                 funding_pk: *funding_pk,
                 // Withdraw change goes back to the funding key.
                 change_pk: None,
-                max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
+                max_tx_fee: GasCost::new(logos_blockchain_zone_sdk::core::mantle::Value::MAX),
                 priority_fee_percent: *priority_fee_percent,
             })
         };
@@ -315,7 +316,7 @@ impl BedrockActor {
         &mut self,
         tx: SignedOps<
             logos_blockchain_zone_sdk::node_types::Unverified,
-            logos_blockchain_core::mantle::ledger::verification_mode::StandardMode,
+            logos_blockchain_zone_sdk::core::mantle::ledger::verification_mode::StandardMode,
         >,
         msg_id: MsgId,
         parent: MsgId,
@@ -488,7 +489,7 @@ impl Message<CreateChannel> for BedrockActor {
             &channel_params,
             configuration_threshold,
             transfer_threshold,
-        );
+        )?;
 
         let data = borsh::to_vec(&genesis).map_err(Error::BlockEncodingFailed)?;
         let inscription: Inscription = data.try_into().map_err(|_rr| Error::BlockTooLarge)?;
@@ -957,17 +958,24 @@ fn genesis_config_op(
     channel_params: &ChannelParams,
     configuration_threshold: u16,
     transfer_threshold: u16,
-) -> ChannelConfigOp {
-    ChannelConfigOp {
-        channel: channel_id,
+) -> Result<ChannelConfigOp> {
+    let (Some(configuration_threshold), Some(transfer_threshold)) = (
+        NonZero::new(configuration_threshold),
+        NonZero::new(transfer_threshold),
+    ) else {
+        return Err(Error::InvalidChannelConfig);
+    };
+    ChannelConfigOp::new(
+        channel_id,
         // The channel does not exist yet, so the config lineage starts here.
-        parent: MsgId::root(),
+        MsgId::root(),
         keys,
-        posting_timeframe: SlotTimeframe::from(channel_params.posting_timeframe),
-        posting_timeout: SlotTimeout::from(channel_params.posting_timeout),
+        SlotTimeframe::from(channel_params.posting_timeframe),
+        SlotTimeout::from(channel_params.posting_timeout),
         configuration_threshold,
         transfer_threshold,
-    }
+    )
+    .map_err(|_err| Error::InvalidChannelConfig)
 }
 
 /// The proof a channel-creating config op carries. No key is accredited before
@@ -1060,7 +1068,7 @@ async fn fund_ops(
         tx_builder,
         change_public_key: config.funding_pk,
         funding_public_keys: vec![config.funding_pk],
-        max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
+        max_tx_fee: GasCost::new(logos_blockchain_zone_sdk::core::mantle::Value::MAX),
         priority_fee_percent: config.priority_fee_percent,
     })
     .await

@@ -1,8 +1,10 @@
 pub use std::time::Duration;
 
-pub use logos_blockchain_common_http_client::BasicAuthCredentials;
-pub use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
-pub use logos_blockchain_zone_sdk::node_types::ChannelId;
+pub use logos_blockchain_zone_sdk::{
+    common_http_client::BasicAuthCredentials,
+    key_management_system_service::keys::{Ed25519Key, ZkPublicKey},
+    node_types::ChannelId,
+};
 pub use url::Url;
 
 pub struct Config {

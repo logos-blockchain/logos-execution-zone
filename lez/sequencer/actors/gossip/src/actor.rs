@@ -24,7 +24,9 @@ use libp2p::{
     multiaddr::Protocol,
     swarm::{NetworkBehaviour, Swarm, SwarmEvent},
 };
-use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
+use logos_blockchain_zone_sdk::key_management_system_service::keys::{
+    Ed25519Key, Ed25519PublicKey,
+};
 use sequencer_channel_signing_actor::Wire;
 use sequencer_core::{
     config::{GossipConfig, MAX_BEDROCK_TX_SIZE, MAX_PUBLISHABLE_BLOCK_SIZE},

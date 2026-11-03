@@ -1,8 +1,10 @@
 use std::{path::PathBuf, time::Duration};
 
 use async_trait::async_trait;
-use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
-use testing_framework_core::scenario::DynError;
+use logos_blockchain_zone_sdk::{
+    testing_framework_app::{AppDeployment, AppHostEnv, DeployContext},
+    testing_framework_core::scenario::DynError,
+};
 use tokio::time::{Instant, sleep};
 
 use super::{BedrockApp, BedrockCluster, IndexerApp, SequencerApp, WalletApp};

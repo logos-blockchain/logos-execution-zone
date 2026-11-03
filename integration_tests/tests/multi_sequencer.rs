@@ -16,7 +16,7 @@ use integration_tests::{
     config::{self, SequencerPartialConfig},
     init_logger, wait_until,
 };
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+use logos_blockchain_zone_sdk::key_management_system_service::keys::Ed25519Key;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,

@@ -7,7 +7,7 @@ use std::{collections::HashSet, path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result};
 use kameo::actor::Spawn as _;
-use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
+use logos_blockchain_zone_sdk::key_management_system_service::keys::UnsecuredEd25519Key;
 use sequencer_storage_actor::{
     StorageActor,
     protocol::{

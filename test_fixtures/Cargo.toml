@@ -46,4 +46,4 @@ tokio-util.workspace = true
 url.workspace = true
 time.workspace = true
 
-logos-blockchain-key-management-system-service.workspace = true
+logos-blockchain-zone-sdk.workspace = true

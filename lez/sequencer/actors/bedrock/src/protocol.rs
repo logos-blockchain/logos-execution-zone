@@ -3,11 +3,11 @@ use std::sync::Arc;
 pub use chain_state::ChannelEntry;
 use common::block::Block;
 use kameo::Reply;
-pub use logos_blockchain_core::mantle::NoteId;
-use logos_blockchain_core::mantle::{OpProof, transactions::Ops};
-pub use logos_blockchain_key_management_system_service::keys::Ed25519PublicKey;
+use logos_blockchain_zone_sdk::core::mantle::{OpProof, transactions::Ops};
 pub use logos_blockchain_zone_sdk::{
     Slot, ZoneMessage,
+    core::mantle::NoteId,
+    key_management_system_service::keys::Ed25519PublicKey,
     node_types::{ChannelId, HeaderId, MsgId},
     sequencer::{
         DepositInfo, Ed25519Key, IndexedSignature, PreparedChannelConfig,

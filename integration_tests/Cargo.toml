@@ -41,13 +41,7 @@ jsonrpsee = { workspace = true, features = ["jsonrpsee-types"] }
 testnet_initial_state.workspace = true
 program_loader_core.workspace = true
 
-logos-blockchain-core.workspace = true
-logos-blockchain-http-api-common.workspace = true
-logos-blockchain-key-management-system-service.workspace = true
-logos-blockchain-testing-framework.workspace = true
-logos-blockchain-zone-sdk.workspace = true
-testing-framework-app.workspace = true
-testing-framework-core.workspace = true
+logos-blockchain-zone-sdk = { workspace = true, features = ["testing"] }
 
 # External dependencies.
 anyhow.workspace = true

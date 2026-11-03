@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use cucumber::{gherkin::Step, given, when};
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+use logos_blockchain_zone_sdk::key_management_system_service::keys::Ed25519Key;
 use sequencer_bedrock_actor::protocol::GetAccreditedKeys;
 use sequencer_core::Ed25519PublicKey;
 use sequencer_service_rpc::RpcClient as _;
