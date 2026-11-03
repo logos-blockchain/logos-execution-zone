@@ -1,18 +1,22 @@
-use std::future::Future;
+use std::ops::ControlFlow;
 
 use common::{PageLimit, block::Block, transaction::LeeTransaction};
 use fee_core::validity::FeeError;
 use futures::{
     FutureExt as _, StreamExt as _, TryFutureExt as _, TryStreamExt as _, future::ready, stream,
 };
+use glob::Pattern;
 use kameo::{
-    actor::{ActorRef, WeakActorRef},
+    actor::{ActorId, ActorRef, WeakActorRef},
     error::ActorStopReason,
     mailbox::{MailboxReceiver, Signal},
     message::{Context, Message},
     reply::DelegatedReply,
 };
-use kameo_actors::pubsub::PubSub;
+use kameo_actors::{
+    broker::{Broker, Subscribe, Unsubscribe},
+    pubsub::PubSub,
+};
 use lee::Account;
 use lee_core::{
     BlockId, CommitmentPosition, EncryptedNote, MembershipProof,
@@ -29,7 +33,10 @@ use sequencer_channel_signing_actor::{ChannelSigningActor, protocol as channel_s
 use sequencer_core::{StakeConfigUpdate, config::SequencerConfig};
 use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActorTrait;
-use sharding_pool_actor::ShardingPoolActor;
+use sharding_pool_actor::{
+    ShardingPoolActor,
+    protocol::{Link, Reset, Unlink},
+};
 
 use crate::{
     ExecutorActorTrait, Result,
@@ -54,59 +61,118 @@ mod tests;
 const BLOCK_RANGE_CONCURRENCY: usize = 16;
 const MAX_PUBLICATIONS_PER_REQUEST: PageLimit = 256;
 
+/// What [`ExecutorActor`] starts from, on every start.
+pub struct Args<S: StorageActorTrait, B: BedrockActorTrait> {
+    pub config: SequencerConfig,
+    pub channel_signing_key: Ed25519Key,
+    pub storage_ref: ActorRef<S>,
+    pub bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+    pub stake_config_pubsub_ref: ActorRef<PubSub<StakeConfigUpdate>>,
+    pub slasher_ref: ActorRef<SlasherActor<S>>,
+    pub channel_signer_ref: ActorRef<ChannelSigningActor>,
+    pub bedrock_broker_ref: ActorRef<Broker<ChannelEvent>>,
+}
+
+impl<S: StorageActorTrait, B: BedrockActorTrait> Clone for Args<S, B> {
+    fn clone(&self) -> Self {
+        Self {
+            config: self.config.clone(),
+            channel_signing_key: self.channel_signing_key.clone(),
+            storage_ref: self.storage_ref.clone(),
+            bedrock_pool_ref: self.bedrock_pool_ref.clone(),
+            stake_config_pubsub_ref: self.stake_config_pubsub_ref.clone(),
+            slasher_ref: self.slasher_ref.clone(),
+            channel_signer_ref: self.channel_signer_ref.clone(),
+            bedrock_broker_ref: self.bedrock_broker_ref.clone(),
+        }
+    }
+}
+
+/// Marks where the channel events published before this start end in the mailbox.
+struct ChannelEventsResumed;
+
+/// Restarts along with the Bedrock actor of its channel, so it is meant to be supervised.
 pub struct ExecutorActor<S: StorageActorTrait, B: BedrockActorTrait> {
     state: State<S, B>,
     channel_id: ChannelId,
     storage_ref: ActorRef<S>,
+    /// Whether [`ChannelEventsResumed`] was handled. A restart keeps the mailbox, so the events
+    /// ahead of it come from the Bedrock actor of an earlier start.
+    channel_events_resumed: bool,
 
     /// Consecutive production turns that failed outright. A run of these looks
     /// exactly like an idle node in every other signal, so it gets its own.
     failed_attempts: u32,
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
-    pub fn new(
-        config: SequencerConfig,
-        channel_signing_key: Ed25519Key,
-        storage_ref: ActorRef<S>,
-        bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
-        stake_config_pubsub_ref: ActorRef<PubSub<StakeConfigUpdate>>,
-        slasher_ref: ActorRef<SlasherActor<S>>,
-        channel_signer_ref: ActorRef<ChannelSigningActor>,
-    ) -> impl Future<Output = Result<Self>> + Send + 'static {
-        sequencer_executor_actor_metrics::init();
-
-        async move {
-            let channel_id = config.bedrock_config.channel_id;
-            let state = State::initialize(
-                config,
-                channel_signing_key,
-                storage_ref.clone(),
-                bedrock_pool_ref,
-                stake_config_pubsub_ref,
-                slasher_ref,
-                channel_signer_ref,
-            )
-            .await?;
-
-            Ok(Self {
-                state,
-                channel_id,
-                storage_ref,
-                failed_attempts: 0,
-            })
-        }
-    }
-}
-
 impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActorTrait for ExecutorActor<S, B> {}
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> kameo::Actor for ExecutorActor<S, B> {
-    type Args = Self;
+    type Args = Args<S, B>;
     type Error = Error;
 
-    async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self> {
-        Ok(args)
+    async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self> {
+        sequencer_executor_actor_metrics::init();
+
+        let channel_id = args.config.bedrock_config.channel_id;
+        let bedrock_pool_ref = args.bedrock_pool_ref.clone();
+
+        // A Bedrock actor of an earlier start holds that start's publisher. Unlinked first, as its
+        // death must not stop this start.
+        bedrock_pool_ref
+            .ask(Unlink {
+                key: channel_id,
+                sibling: actor_ref.clone(),
+            })
+            .await
+            .map_err(Error::from_infallible_bedrock_error)?;
+        bedrock_pool_ref
+            .ask(Reset { key: channel_id })
+            .await
+            .map_err(Error::from_infallible_bedrock_error)?;
+
+        // Once unsubscribed, the events published so far are all in the mailbox, ahead of the
+        // marker.
+        args.bedrock_broker_ref
+            .ask(Unsubscribe {
+                topic: None,
+                actor_id: actor_ref.id(),
+            })
+            .await
+            .map_err(Error::from_infallible_bedrock_error)?;
+        actor_ref
+            .tell(ChannelEventsResumed)
+            .await
+            .map_err(Error::from_infallible_bedrock_error)?;
+        args.bedrock_broker_ref
+            .ask(Subscribe {
+                topic: Pattern::new(&format!("channel/{channel_id}/**")).expect("Valid pattern"),
+                recipient: actor_ref.clone().recipient(),
+            })
+            .await
+            .map_err(Error::from_infallible_bedrock_error)?;
+
+        let bedrock_started = bedrock_pool_ref
+            .ask(Link {
+                key: channel_id,
+                sibling: actor_ref.clone(),
+            })
+            .await
+            .map_err(Error::from_infallible_bedrock_error)?;
+        if !bedrock_started {
+            return Err(Error::BedrockActorStartFailed);
+        }
+
+        let storage_ref = args.storage_ref.clone();
+        let state = State::initialize(args).await?;
+
+        Ok(Self {
+            state,
+            channel_id,
+            storage_ref,
+            channel_events_resumed: false,
+            failed_attempts: 0,
+        })
     }
 
     async fn next(
@@ -124,6 +190,23 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> kameo::Actor for ExecutorActor<
         Ok(mailbox_rx.recv().await)
     }
 
+    async fn on_link_died(
+        &mut self,
+        _actor_ref: WeakActorRef<Self>,
+        id: ActorId,
+        reason: ActorStopReason,
+    ) -> Result<ControlFlow<ActorStopReason>> {
+        // The only link is the Bedrock actor of the channel, whose publisher this start set up.
+        warn!(
+            "Bedrock actor of channel {} stopped ({reason}), so the executor restarts with a fresh one",
+            self.channel_id
+        );
+        Ok(ControlFlow::Break(ActorStopReason::LinkDied {
+            id,
+            reason: Box::new(reason),
+        }))
+    }
+
     async fn on_stop(
         &mut self,
         _actor_ref: WeakActorRef<Self>,
@@ -134,6 +217,20 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> kameo::Actor for ExecutorActor<
         }
 
         Ok(())
+    }
+}
+
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEventsResumed>
+    for ExecutorActor<S, B>
+{
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        ChannelEventsResumed: ChannelEventsResumed,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.channel_events_resumed = true;
     }
 }
 
@@ -674,12 +771,16 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
         msg: ChannelEvent,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        if !self.channel_events_resumed {
+            debug!("Dropping a channel event of the Bedrock actor of an earlier start");
+            return Ok(());
+        }
+
         if msg.channel_id != self.channel_id {
             warn!(
                 "Received a channel event for a different channel: {}",
                 msg.channel_id
             );
-            return Ok(());
         }
 
         match msg.event {
@@ -721,7 +822,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
             ChannelEventKind::Publisher(publisher_event) => match &mut self.state {
                 State::Error(details) => panic!("Actor has encountered an error state: {details}"),
                 State::Bootstrapping(_) => {
-                    panic!("Publisher should not be running while executor is bootstrapping");
+                    warn!(
+                        "Ignoring a publisher event while bootstrapping, as no publisher runs yet"
+                    );
                 }
                 State::Online(online) => match &*publisher_event {
                     PublisherEvent::Update(channel_update) => {

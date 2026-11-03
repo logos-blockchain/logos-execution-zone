@@ -18,11 +18,15 @@ use kameo::{
 };
 use log::{info, warn};
 
-use crate::{ShardingKey, protocol::Spawn};
+use crate::{
+    ShardingKey,
+    protocol::{Link, Reset, Spawn, Unlink},
+};
 
 #[cfg(test)]
 mod tests;
 
+#[derive(Clone, Copy)]
 pub struct RestartConfig {
     pub policy: RestartPolicy,
     pub limit: u32,
@@ -49,6 +53,8 @@ enum RestartState {
 struct WorkerMeta<K> {
     key: K,
     restart_sender: tokio::sync::watch::Sender<RestartState>,
+    /// Whether the pool restarts the worker, so giving up on it means its restart budget is spent.
+    restarted: bool,
 }
 
 /// See [`crate`] docs for information.
@@ -60,6 +66,8 @@ pub struct ShardingPoolActor<A: Actor<Error: Display>, K: Key> {
     died_worker: Option<ActorId>,
 
     restart_config: RestartConfig,
+    /// Keys restarted differently from [`Self::restart_config`].
+    key_restart_configs: HashMap<K, RestartConfig>,
     ctr: Arc<dyn Fn(K) -> A::Args + Send + Sync + 'static>,
 }
 
@@ -82,8 +90,16 @@ where
             workers_meta: HashMap::new(),
             died_worker: None,
             restart_config,
+            key_restart_configs: HashMap::new(),
             ctr: Arc::new(ctr),
         }
+    }
+
+    /// Restarts the worker of `key` according to `restart_config` instead of the pool's one.
+    #[must_use]
+    pub fn with_restart_config(mut self, key: K, restart_config: RestartConfig) -> Self {
+        self.key_restart_configs.insert(key, restart_config);
+        self
     }
 
     async fn get_or_spawn_worker(
@@ -104,11 +120,16 @@ where
             ),
             Entry::Vacant(vacant) => {
                 let ctr = Arc::clone(&self.ctr);
+                let restart_config = self
+                    .key_restart_configs
+                    .get(&key)
+                    .copied()
+                    .unwrap_or(self.restart_config);
 
                 let key_clone = key.clone();
                 let actor = A::supervise_with(self_ref, move || (ctr)(key_clone.clone()))
-                    .restart_policy(self.restart_config.policy)
-                    .restart_limit(self.restart_config.limit, self.restart_config.within)
+                    .restart_policy(restart_config.policy)
+                    .restart_limit(restart_config.limit, restart_config.within)
                     .spawn()
                     .await;
                 let actor = vacant.insert(actor);
@@ -118,6 +139,7 @@ where
                     WorkerMeta {
                         key,
                         restart_sender: tokio::sync::watch::channel(RestartState::Initial).0,
+                        restarted: restart_config.policy != RestartPolicy::Never,
                     },
                 );
 
@@ -126,15 +148,28 @@ where
         }
     }
 
-    fn give_up_worker(&self, id: ActorId) -> &K {
+    /// Returns the key of the worker and whether the pool was restarting it. A worker still in
+    /// place stays there, failing its messages, until reset.
+    fn give_up_worker(&mut self, id: ActorId) -> (K, bool) {
         let meta = self.workers_meta.get(&id).expect("Key must exist");
         meta.restart_sender
             .send_modify(|state| *state = RestartState::GivenUp);
-        &meta.key
+        let (key, restarted) = (meta.key.clone(), meta.restarted);
+        if self
+            .workers
+            .get(&key)
+            .is_none_or(|worker| worker.id() != id)
+        {
+            self.workers_meta.remove(&id);
+        }
+        (key, restarted)
     }
 
     fn notify_restart_watchers(&self, id: ActorId) {
-        let meta = self.workers_meta.get(&id).expect("Meta must exist");
+        // A reset worker is forgotten.
+        let Some(meta) = self.workers_meta.get(&id) else {
+            return;
+        };
         meta.restart_sender.send_if_modified(|state| match state {
             RestartState::Initial | RestartState::Restarted => {
                 // Updating the value to indicate that the actor has been restarted once again.
@@ -187,20 +222,21 @@ where
         id: ActorId,
         reason: ActorStopReason,
     ) -> Result<ControlFlow<ActorStopReason>, Self::Error> {
+        if matches!(reason, ActorStopReason::SupervisorRestart) {
+            warn!("Sharded actor with id {id} is being restarted");
+            return Ok(ControlFlow::Continue(()));
+        }
+
+        let (key, restarted) = self.give_up_worker(id);
         match &reason {
             ActorStopReason::Normal => {
-                let key = self.give_up_worker(id);
                 info!("Sharded actor with key {key} and id {id} stopped normally");
             }
-            ActorStopReason::SupervisorRestart => {
-                warn!("Sharded actor with id {id} is being restarted");
-            }
+            ActorStopReason::SupervisorRestart => unreachable!("Handled above"),
             ActorStopReason::Killed => {
-                let key = self.give_up_worker(id);
                 warn!("Sharded actor with key {key} and id {id} was killed");
             }
             ActorStopReason::Panicked(err) => {
-                let key = self.give_up_worker(id);
                 let panic_reason = err.reason();
                 let downcasted = err
                     .with_downcast_ref(|err: &A::Error| {
@@ -220,13 +256,20 @@ where
                 id: died_link_id,
                 reason,
             } => {
-                let key = self.give_up_worker(id);
                 warn!(
                     "Sharded actor with key {key} and id {id} died because its link with id {died_link_id} died with reason \"{reason}\""
                 );
             }
         }
 
+        // Given up on a worker it was restarting, the pool fails with it. A worker the pool does
+        // not restart is left to the actors linked to it.
+        if restarted && !reason.is_normal() {
+            return Ok(ControlFlow::Break(ActorStopReason::LinkDied {
+                id,
+                reason: Box::new(reason),
+            }));
+        }
         Ok(ControlFlow::Continue(()))
     }
 }
@@ -241,6 +284,81 @@ where
 
     async fn handle(&mut self, msg: Spawn<K>, ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         self.get_or_spawn_worker(ctx.actor_ref(), msg.key).await.0
+    }
+}
+
+impl<A, K, B> Message<Link<K, B>> for ShardingPoolActor<A, K>
+where
+    A: Actor,
+    K: Key,
+    A::Error: Display,
+    B: Actor,
+{
+    type Reply = DelegatedReply<bool>;
+
+    async fn handle(
+        &mut self,
+        Link { key, sibling }: Link<K, B>,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let self_ref = ctx.actor_ref().clone();
+        let worker = self.get_or_spawn_worker(&self_ref, key).await.1.clone();
+        worker.link(&sibling).await;
+        // Linked first, so a worker found running once it has started tells of its death.
+        ctx.spawn(async move {
+            worker.wait_for_startup_with_result(|res| res.is_ok()).await && worker.is_alive()
+        })
+    }
+}
+
+impl<A, K, B> Message<Unlink<K, B>> for ShardingPoolActor<A, K>
+where
+    A: Actor,
+    K: Key,
+    A::Error: Display,
+    B: Actor,
+{
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        Unlink { key, sibling }: Unlink<K, B>,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        if let Some(worker) = self.workers.get(&key) {
+            worker.unlink(&sibling).await;
+        }
+    }
+}
+
+impl<A, K> Message<Reset<K>> for ShardingPoolActor<A, K>
+where
+    A: Actor,
+    K: Key,
+    A::Error: Display,
+{
+    type Reply = DelegatedReply<()>;
+
+    async fn handle(&mut self, msg: Reset<K>, ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        let worker = self.workers.remove(&msg.key);
+        if let Some(worker) = &worker
+            && self
+                .workers_meta
+                .get(&worker.id())
+                .is_some_and(|meta| matches!(*meta.restart_sender.borrow(), RestartState::GivenUp))
+        {
+            // Its death is handled already, so nothing else forgets it.
+            self.workers_meta.remove(&worker.id());
+        }
+
+        // Waiting in the handler would deadlock: the worker's mailbox closes once this pool
+        // handles its death.
+        ctx.spawn(async move {
+            if let Some(worker) = worker {
+                worker.kill();
+                worker.wait_for_shutdown().await;
+            }
+        })
     }
 }
 

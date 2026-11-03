@@ -1,5 +1,5 @@
 use chain_state::ChainMismatch;
-use kameo::error::SendError;
+use kameo::error::{Infallible, SendError};
 use lee_core::BlockId;
 use sequencer_actors_common::{ErasedMessage, SendErrorExt as _};
 
@@ -63,8 +63,11 @@ pub enum Error {
     #[error("Storage request failed")]
     StorageRequestFailed(#[source] SendError<ErasedMessage, sequencer_storage_actor::error::Error>),
 
+    #[error("The Bedrock actor of the channel failed to start")]
+    BedrockActorStartFailed,
+
     #[error("Bedrock request failed")]
-    BedrockRequestFailed(#[source] SendError<ErasedMessage, sequencer_bedrock_actor::error::Error>),
+    BedrockRequestFailed(#[source] BedrockRequestError),
 
     #[error("Slasher request failed")]
     SlasherRequestFailed(#[source] SendError<ErasedMessage, sequencer_slasher_actor::error::Error>),
@@ -86,6 +89,19 @@ pub enum Error {
     PrivateFeeBelowHead { required: u128, reserve: u128 },
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub enum BedrockRequestError {
+    WithError(SendError<ErasedMessage, sequencer_bedrock_actor::error::Error>),
+    Infallible(SendError<ErasedMessage, Infallible>),
+}
+
+impl Error {
+    pub fn from_infallible_bedrock_error<M>(err: SendError<M, Infallible>) -> Self {
+        Self::BedrockRequestFailed(BedrockRequestError::Infallible(err.erase_message()))
+    }
+}
+
 impl<M> From<SendError<M, sequencer_storage_actor::error::Error>> for Error {
     fn from(err: SendError<M, sequencer_storage_actor::error::Error>) -> Self {
         Self::StorageRequestFailed(err.erase_message())
@@ -100,6 +116,6 @@ impl<M> From<SendError<M, sequencer_slasher_actor::error::Error>> for Error {
 
 impl<M> From<SendError<M, sequencer_bedrock_actor::error::Error>> for Error {
     fn from(err: SendError<M, sequencer_bedrock_actor::error::Error>) -> Self {
-        Self::BedrockRequestFailed(err.erase_message())
+        Self::BedrockRequestFailed(BedrockRequestError::WithError(err.erase_message()))
     }
 }

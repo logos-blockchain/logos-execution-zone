@@ -67,9 +67,12 @@ pub struct Args<S: StorageActorTrait> {
 /// message, otherwise [`Error::ChannelPublisherIsNotInitialized`] will be returned.
 ///
 /// [`BedrockActor`] will post [`ChannelEvent`]s to the provided broker using the following topics:
-/// - `channel/<channel_id>/finalized_block`: for [`ChannelEventKind::FinalizedBlock`].
-/// - `channel/<channel_id>/finalized_deposit`: for [`ChannelEventKind::FinalizedDeposit`].
-/// - `channel/<channel_id>/finalized_withdrawal`: for [`ChannelEventKind::FinalizedWithdrawal`].
+/// - `channel/<channel_id>/finalized_block`: for
+///   [`ChannelEventKind::FinalizedBlock`](crate::protocol::ChannelEventKind::FinalizedBlock).
+/// - `channel/<channel_id>/finalized_deposit`: for
+///   [`ChannelEventKind::FinalizedDeposit`](crate::protocol::ChannelEventKind::FinalizedDeposit).
+/// - `channel/<channel_id>/finalized_withdrawal`: for
+///   [`ChannelEventKind::FinalizedWithdrawal`](crate::protocol::ChannelEventKind::FinalizedWithdrawal).
 /// - If publisher was initialized with [`InitializeChannelPublisher`]:
 ///   - `channel/<channel_id>/publisher/update`: for
 ///     [`PublisherEvent::Update`](crate::protocol::PublisherEvent::Update)

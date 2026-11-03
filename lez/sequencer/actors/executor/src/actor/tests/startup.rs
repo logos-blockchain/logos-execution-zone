@@ -4,7 +4,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use common::{block::Block, transaction::LeeTransaction};
-use kameo::actor::{ActorRef, Spawn as _};
+use kameo::{
+    actor::{ActorRef, Spawn as _},
+    error::HookError,
+};
 use lee_core::BlockId;
 use logos_blockchain_core::{
     events::DepositRecreatedNotes,
@@ -26,7 +29,8 @@ use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_us
 use tokio::test;
 
 use super::{
-    finalized_at, new_executor, sequencer_config, spawn_bedrock_pool, stored_chain::genesis,
+    executor_args, finalized_at, sequencer_config, spawn_bedrock_pool, spawn_executor,
+    stored_chain::genesis,
 };
 use crate::{
     ExecutorActor,
@@ -46,13 +50,12 @@ async fn start(
     channel: &SharedChannel,
 ) -> Result<ActorRef<Executor>> {
     let channel = channel.clone();
-    let executor = Box::pin(new_executor(
+    Box::pin(spawn_executor(
         config.clone(),
         MockStorageActor::spawn(store.mock()),
         spawn_bedrock_pool(move |_channel_id| channel.mock()),
     ))
-    .await?;
-    Ok(ExecutorActor::spawn(executor))
+    .await
 }
 
 /// A follow update carrying nothing, to fill in the fields a test does not
@@ -156,15 +159,25 @@ async fn creating_a_channel_needs_a_genesis_config() {
     let channel_id = config.bedrock_config.channel_id;
     let channel = CannedChannel::empty().share();
 
-    let result = Box::pin(new_executor(
-        config,
-        MockStorageActor::spawn(SharedStore::default().mock()),
-        spawn_bedrock_pool(move |_channel_id| channel.mock()),
-    ))
-    .await;
+    let executor = ExecutorActor::spawn(
+        Box::pin(executor_args(
+            config,
+            MockStorageActor::spawn(SharedStore::default().mock()),
+            spawn_bedrock_pool(move |_channel_id| channel.mock()),
+        ))
+        .await,
+    );
 
+    let missing_genesis = executor
+        .wait_for_startup_with_result(|res| {
+            matches!(
+                res,
+                Err(HookError::Error(Error::MissingGenesisConfig(id))) if id == &channel_id
+            )
+        })
+        .await;
     assert!(
-        matches!(result, Err(Error::MissingGenesisConfig(id)) if id == channel_id),
+        missing_genesis,
         "a node without a genesis config created the channel"
     );
 }
