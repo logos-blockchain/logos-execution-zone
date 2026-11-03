@@ -594,11 +594,36 @@ fn test_wallet_ffi_dry_runs_report_without_sending() -> Result<()> {
     let declared = tuned_public.declared.public_fee;
     assert_eq!(declared.gas_limit, 500_000);
     assert_eq!(declared.tip, 7);
-    // The sequencer admits a cap of at least the reserve, priced at the gas limit.
+    // The cap is the reserve at the base fees after the 2 headroom blocks of the steepest climb.
+    let state = tuned_public.dry_run.fee_state;
+    let climb = |base, max_gas, target, damping, lo, hi| {
+        (0..2).fold(base, |fee, _| {
+            fee_core::market::next_base_fee(fee, max_gas, target, damping, lo, hi)
+        })
+    };
+    let exec_ceiling = climb(
+        state.base_fee_exec,
+        fee_core::market::MAX_GAS_EXEC,
+        fee_core::market::TARGET_GAS_EXEC,
+        fee_core::market::D_EXEC,
+        fee_core::market::BASE_FEE_EXEC_MIN,
+        fee_core::market::BASE_FEE_EXEC_MAX,
+    );
+    let stor_ceiling = climb(
+        state.base_fee_stor,
+        fee_core::market::MAX_GAS_STOR,
+        fee_core::market::TARGET_GAS_STOR,
+        fee_core::market::D_STOR,
+        fee_core::market::BASE_FEE_STOR_MIN,
+        fee_core::market::BASE_FEE_STOR_MAX,
+    );
     assert_eq!(
         u128::from(declared.max_fee),
-        u128::from(tuned_public.dry_run.reserve_at_head)
+        500_000 * u128::from(exec_ceiling)
+            + u128::from(tuned_public.dry_run.wire_bytes) * u128::from(stor_ceiling)
+            + 7
     );
+    // The sequencer admits a cap of at least the reserve, priced at the gas limit.
     assert_eq!(
         u128::from(tuned_public.dry_run.reserve_at_head),
         500_000 * u128::from(tuned_public.dry_run.fee_state.base_fee_exec)

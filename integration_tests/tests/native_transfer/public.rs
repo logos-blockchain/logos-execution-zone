@@ -287,6 +287,9 @@ async fn fresh_account_cannot_pay_for_its_own_transaction() -> Result<()> {
     let account_id = new_account(&mut ctx, false, None).await?;
     // A recipient this wallet holds no key for, so the fresh account is the only signer.
     let foreign_recipient = AccountId::new([7; 32]);
+    // The foreign recipient is not admitted, so the action would revert too; let the wallet send
+    // it so admission judges the payer first.
+    ctx.wallet_mut().set_allow_revert(true);
 
     let refused = send(
         &mut ctx,
