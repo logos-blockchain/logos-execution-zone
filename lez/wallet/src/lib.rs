@@ -2150,13 +2150,17 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         } else {
             None
         };
-        let gas_limit = gas_limit.unwrap_or_else(|| {
-            let cycles = measured.as_ref().map_or(budget, |measured| measured.cycles);
-            cycles
-                .saturating_mul(self.config.public_gas_margin_percent.saturating_add(100))
-                .div_ceil(100)
-                .min(budget)
-        });
+        let gas_limit = gas_limit.map_or_else(
+            || {
+                let cycles = measured.as_ref().map_or(budget, |measured| measured.cycles);
+                cycles
+                    .saturating_mul(self.config.public_gas_margin_percent.saturating_add(100))
+                    .div_ceil(100)
+                    .min(budget)
+            },
+            // Held to the protocol cap, which admission enforces.
+            |_| budget,
+        );
         let max_fee = max_fee.unwrap_or_else(|| {
             let measured = measured
                 .as_ref()
@@ -2258,26 +2262,41 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .map(|actor| actor.program_account_id)
             .collect();
         for program in declared {
-            if program != NATIVE_TOKEN_PROGRAM_ID
-                && program != PROGRAM_LOADER_ACCOUNT_ID
-                && let Some(deployed) = ProgramLoader(self)
-                    .program(program)
-                    .await
-                    .map_err(ExecutionFailureKind::SequencerError)?
-            {
-                programs.programs.insert(
-                    program,
-                    Dependency {
-                        program: deployed,
-                        kind: ProgramKind::Disclosed,
-                    },
-                );
+            if program == NATIVE_TOKEN_PROGRAM_ID || program == PROGRAM_LOADER_ACCOUNT_ID {
+                continue;
             }
+            let deployed = ProgramLoader(self)
+                .program(program)
+                .await
+                .map_err(ExecutionFailureKind::SequencerError)?
+                .ok_or_else(|| {
+                    ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
+                        format!("Program {program} is not deployed"),
+                    ))
+                })?;
+            programs.programs.insert(
+                program,
+                Dependency {
+                    program: deployed,
+                    kind: ProgramKind::Disclosed,
+                },
+            );
         }
-        let simulation = Simulation {
+        let mut simulation = Simulation {
             public_actor_states: acc_manager.public_actor_states(),
             admitted_accounts: Some(acc_manager.admitted_accounts()),
         };
+        // The loader reads segments the transaction does not declare, as settlement does.
+        for (segment, state) in ProgramLoader(self)
+            .undeclared_reads(&message.execution.root)
+            .await
+            .map_err(ExecutionFailureKind::SequencerError)?
+        {
+            simulation
+                .public_actor_states
+                .entry(Actor::new(segment, PROGRAM_LOADER_ACCOUNT_ID))
+                .or_insert(state);
+        }
         let tx = lee::PublicTransaction::new(
             message.clone(),
             lee::public_transaction::WitnessSet::from_raw_parts(Vec::new()),
@@ -2297,7 +2316,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         .await?;
         let revert_reason = match result {
             Ok(()) => None,
-            Err(err) if err.is_chargeable() => Some(err.to_string()),
+            Err(err) if err.is_chargeable() => Some(format!("{:#}", anyhow::Error::from(err))),
             // Settlement would reject it outright rather than charge it.
             Err(err) => return Err(ExecutionFailureKind::TransactionBuildError(err)),
         };
@@ -3254,21 +3273,6 @@ mod tests {
             })
             .unwrap();
         sequencer
-            .register_method("getFeeState", |_, _, _| {
-                Ok::<_, ErrorObjectOwned>(sequencer_service_rpc::FeeStateQuote {
-                    height: 2,
-                    base_fee_exec: 0,
-                    base_fee_stor: 0,
-                    next_base_fee_exec_floor: 0,
-                    next_base_fee_exec_ceiling: 0,
-                    next_base_fee_stor_floor: 0,
-                    next_base_fee_stor_ceiling: 0,
-                    max_gas_exec: u64::MAX,
-                    max_gas_stor: u64::MAX,
-                })
-            })
-            .unwrap();
-        sequencer
             .register_method("sendTransaction", |params, submitted, _| {
                 let tx = params.one::<LeeTransaction>()?;
                 let hash = tx.hash();
@@ -3281,6 +3285,12 @@ mod tests {
             .storage
             .key_chain_mut()
             .add_imported_public_account(owner_key);
+        // The mock serves no stake program to simulate, so the fee is pinned.
+        wallet.set_fee_params(crate::FeeParams {
+            gas_limit: Some(crate::DEFAULT_GAS_LIMIT),
+            max_fee: Some(crate::DEFAULT_MAX_FEE),
+            ..crate::FeeParams::default()
+        });
 
         for destination in [public, bound] {
             SequencerStake(&wallet)
