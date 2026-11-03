@@ -73,6 +73,11 @@ pub struct CrossZonePeer {
     /// refused above, so a misspelling fails startup instead of silently running floorless.
     #[serde(default)]
     pub min_committee_size: u32,
+    /// Recomputed hash of the peer's genesis block. Set, a first read that
+    /// hashes differently is refused; unset, the first genesis read is trusted
+    /// as-is. A production peer should set it.
+    #[serde(default)]
+    pub genesis_hash: Option<[u8; 32]>,
 }
 
 /// Cross-zone configuration shared by a zone's sequencer (watcher) and indexer

@@ -66,6 +66,7 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
                 mint_cap: None,
             }],
             min_committee_size: 0,
+            genesis_hash: None,
         }],
         source_authority: None,
         source_governance: None,

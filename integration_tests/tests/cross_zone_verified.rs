@@ -54,6 +54,7 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
                 mint_cap: None,
             }],
             min_committee_size: 0,
+            genesis_hash: None,
         }],
         source_authority: None,
         source_governance: None,

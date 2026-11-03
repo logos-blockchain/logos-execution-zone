@@ -62,6 +62,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
                 mint_cap: None,
             }],
             min_committee_size: 0,
+            genesis_hash: None,
         }],
         source_authority: None,
         source_governance: None,

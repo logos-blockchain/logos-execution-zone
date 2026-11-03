@@ -377,6 +377,7 @@ fn watch_peer(peer: ZoneId, receiver_id: AccountId) -> CrossZoneConfig {
                 mint_cap: None,
             }],
             min_committee_size: 0,
+            genesis_hash: None,
         }],
         source_authority: None,
         source_governance: None,

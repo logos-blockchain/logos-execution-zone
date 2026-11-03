@@ -58,6 +58,13 @@ pub enum OffChain {
     /// whatever arrived first would let the peer pick the id, and burn every
     /// replay key below it with one block.
     NotTheGenesis { block_id: u64 },
+    /// The peer's genesis, but not the one the operator pinned. Without the
+    /// pin the first read is trusted as-is, and whoever controls the channel
+    /// or the queried node at that moment picks the chain.
+    WrongGenesis {
+        recomputed: HashType,
+        pinned: HashType,
+    },
     /// An id above the next one on the chain.
     SkipsAhead { block_id: u64, next: u64 },
 }
@@ -77,6 +84,10 @@ impl Display for OffChain {
             Self::NotTheGenesis { block_id } => write!(
                 f,
                 "block {block_id} is the first one read, but with no stored chain tip acceptance has to start at the peer's genesis block {GENESIS_BLOCK_ID}"
+            ),
+            Self::WrongGenesis { recomputed, pinned } => write!(
+                f,
+                "the peer's genesis block hashes to {recomputed}, not the pinned {pinned}; this channel does not carry the configured peer chain"
             ),
             Self::SkipsAhead { block_id, next } => write!(
                 f,
@@ -309,15 +320,27 @@ pub fn equivocation_report(
 /// honest block would later use, and the inbox then refuses the real message as
 /// a replay. Off a hash link ids are only claimable in order, so the only id
 /// within reach is the one the peer is about to publish anyway.
+///
+/// `pinned_genesis` is the operator's pin for the peer's genesis hash; `None`
+/// anchors on the first genesis read, trust-on-first-use.
 #[must_use]
-pub fn link_to_tip(tip: Option<&PeerChainTip>, block: &Block, recomputed: HashType) -> Link {
+pub fn link_to_tip(
+    tip: Option<&PeerChainTip>,
+    block: &Block,
+    recomputed: HashType,
+    pinned_genesis: Option<HashType>,
+) -> Link {
     let block_id = block.header.block_id;
     let Some(tip) = tip else {
-        return if block_id == GENESIS_BLOCK_ID {
-            Link::Next(recomputed)
-        } else {
-            Link::OffChain(OffChain::NotTheGenesis { block_id })
-        };
+        if block_id != GENESIS_BLOCK_ID {
+            return Link::OffChain(OffChain::NotTheGenesis { block_id });
+        }
+        if let Some(pinned) = pinned_genesis
+            && recomputed != pinned
+        {
+            return Link::OffChain(OffChain::WrongGenesis { recomputed, pinned });
+        }
+        return Link::Next(recomputed);
     };
 
     if block_id <= tip.block_id {
@@ -400,7 +423,7 @@ mod tests {
 
         let next = chain_block(3);
         assert_eq!(
-            link_to_tip(Some(&tip), &next, screened(&next)),
+            link_to_tip(Some(&tip), &next, screened(&next), None),
             Link::Next(chain_hash(3)),
             "the block that continues the chain is the one accepted"
         );
@@ -414,7 +437,7 @@ mod tests {
             produce_dummy_block(5, None, vec![]),
         ] {
             assert_eq!(
-                link_to_tip(Some(&tip), &ahead, screened(&ahead)),
+                link_to_tip(Some(&tip), &ahead, screened(&ahead), None),
                 Link::OffChain(OffChain::SkipsAhead {
                     block_id: 5,
                     next: 3
@@ -425,7 +448,7 @@ mod tests {
         // Right id, wrong ancestry: the peer forked at our tip, or reset it.
         let forked = produce_dummy_block(3, Some(HashType([9; 32])), vec![]);
         assert!(matches!(
-            link_to_tip(Some(&tip), &forked, screened(&forked)),
+            link_to_tip(Some(&tip), &forked, screened(&forked), None),
             Link::OffChain(OffChain::DoesNotLink { .. })
         ));
     }
@@ -434,17 +457,47 @@ mod tests {
     fn a_reader_with_no_tip_starts_at_the_peers_genesis() {
         let genesis = chain_block(GENESIS_BLOCK_ID);
         assert_eq!(
-            link_to_tip(None, &genesis, screened(&genesis)),
+            link_to_tip(None, &genesis, screened(&genesis), None),
             Link::Next(chain_hash(GENESIS_BLOCK_ID))
         );
         // Anchoring on whatever arrived first is the whole attack: the peer
         // would pick the id, and every key below it with one block.
         let mid_chain = chain_block(GENESIS_BLOCK_ID + 1);
         assert_eq!(
-            link_to_tip(None, &mid_chain, screened(&mid_chain)),
+            link_to_tip(None, &mid_chain, screened(&mid_chain), None),
             Link::OffChain(OffChain::NotTheGenesis {
                 block_id: GENESIS_BLOCK_ID + 1
             })
+        );
+    }
+
+    #[test]
+    fn a_pinned_genesis_only_anchors_on_the_pinned_chain() {
+        let genesis = chain_block(GENESIS_BLOCK_ID);
+        let honest = screened(&genesis);
+        assert_eq!(
+            link_to_tip(None, &genesis, honest, Some(honest)),
+            Link::Next(honest)
+        );
+
+        let fabricated = HashType([9; 32]);
+        assert_eq!(
+            link_to_tip(None, &genesis, honest, Some(fabricated)),
+            Link::OffChain(OffChain::WrongGenesis {
+                recomputed: honest,
+                pinned: fabricated
+            })
+        );
+
+        let next = chain_block(GENESIS_BLOCK_ID + 1);
+        assert_eq!(
+            link_to_tip(
+                Some(&tip_at(GENESIS_BLOCK_ID)),
+                &next,
+                screened(&next),
+                Some(fabricated)
+            ),
+            Link::Next(chain_hash(GENESIS_BLOCK_ID + 1))
         );
     }
 
@@ -457,20 +510,20 @@ mod tests {
 
         let held = chain_block(2);
         assert_eq!(
-            link_to_tip(Some(&tip), &held, screened(&held)),
+            link_to_tip(Some(&tip), &held, screened(&held), None),
             Link::AlreadySeen { equivocates: false }
         );
 
         let differing = produce_dummy_block(2, Some(HashType([9; 32])), vec![]);
         assert_eq!(
-            link_to_tip(Some(&tip), &differing, screened(&differing)),
+            link_to_tip(Some(&tip), &differing, screened(&differing), None),
             Link::AlreadySeen { equivocates: true }
         );
 
         // Below the tip there is no held hash to compare against.
         let below = produce_dummy_block(1, Some(HashType([9; 32])), vec![]);
         assert_eq!(
-            link_to_tip(Some(&tip), &below, screened(&below)),
+            link_to_tip(Some(&tip), &below, screened(&below), None),
             Link::AlreadySeen { equivocates: false }
         );
     }
