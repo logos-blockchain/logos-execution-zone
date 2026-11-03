@@ -38,14 +38,14 @@ pub const SMOOTHING_WINDOW: usize = 50;
 
 /// A private reserve surplus at or below this is kept as tip instead of being
 /// refunded: a refund costs a publication, a note and a later nullifier.
-// TODO: agree the value with the tokenomics team.
 pub const MIN_PRIVATE_REFUND: Balance = 1_000_000;
 
-// FIXME: Provisional: re-pin with the LEZ wire-format numbers (spec Parameters TODO).
 /// Execution gas charged to every private transaction: succinct receipt verification.
 ///
 /// RISC Zero 3.0.5, `G_verify` ≈ 12.2 ms at 33,546 cycles/ms (`docs/benchmarks/cycle_bench.md`).
-/// Independent of the circuit's contents; re-pin on a RISC Zero bump.
+/// A flat charge because verification only accepts a succinct receipt, a STARK of RISC Zero's
+/// fixed recursion circuit: its work does not depend on the execution it proves.
+/// Re-pin on a RISC Zero bump.
 pub const PRIVATE_VERIFY_GAS: u64 = 409_764;
 /// The bytes a private transaction's proof is charged at, and the most it may carry: a succinct
 /// receipt with its claim pruned to a digest, whatever the transaction proves.
