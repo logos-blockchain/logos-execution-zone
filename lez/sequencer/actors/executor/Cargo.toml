@@ -30,6 +30,7 @@ actor = [
   "dep:borsh",
   "dep:kameo_actors",
   "dep:log",
+  "dep:glob",
 ]
 # Adds mock actor implementation.
 mock = ["sequencer_actors_common/mock", "dep:mockall"]
@@ -74,6 +75,7 @@ futures = { workspace = true, optional = true }
 borsh = { workspace = true, optional = true }
 kameo_actors = { workspace = true, optional = true }
 log = { workspace = true, optional = true }
+glob = { workspace = true, optional = true }
 mockall = { workspace = true, optional = true }
 
 [dev-dependencies]

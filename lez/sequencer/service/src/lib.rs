@@ -1,10 +1,10 @@
 use std::{future::Future, net::SocketAddr, num::NonZero, path::Path, time::Duration};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use futures::never::Never;
-use glob::Pattern;
 use kameo::{
     actor::{ActorRef, PreparedActor, Recipient, Spawn as _},
+    error::HookError,
     supervision::RestartPolicy,
 };
 use kameo_actors::{
@@ -32,14 +32,19 @@ use sequencer_storage_actor::StorageActor;
 use sharding_pool_actor::ShardingPoolActor;
 use tokio::select;
 
-use crate::actor_handle::ActorHandle;
+use crate::{actor_handle::ActorHandle, supervisor::SequencerSupervisor};
 
 mod actor_handle;
+mod supervisor;
 
 /// Depth of the slasher-to-gossip approval channel; it only absorbs bursts.
 const OUTBOUND_APPROVAL_CHANNEL_CAPACITY: usize = 256;
 /// Depth of the channel-config-actor-to-gossip channel; it only absorbs bursts.
 const OUTBOUND_CONFIG_CHANNEL_CAPACITY: usize = 64;
+/// Restarts the executor gets within [`EXECUTOR_RESTART_WINDOW`] before the supervisor gives up on
+/// it.
+const EXECUTOR_RESTART_LIMIT: u32 = 5;
+const EXECUTOR_RESTART_WINDOW: Duration = Duration::from_mins(2);
 
 #[cfg(not(feature = "standalone"))]
 pub type BedrockActor = sequencer_bedrock_actor::BedrockActor<StorageActor>;
@@ -75,6 +80,7 @@ impl RpcServer {
 ///
 /// Implements `Drop` to ensure all actors are killed when dropped.
 pub struct SequencerHandle {
+    supervisor: ActorHandle<SequencerSupervisor>,
     // NOTE: Order of fields matters as it affects drop order.
     scheduler: ActorHandle<Scheduler>,
     bedrock_broker: ActorHandle<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
@@ -82,7 +88,7 @@ pub struct SequencerHandle {
     rpc_server: RpcServer,
     /// `None` when gossip is unconfigured.
     gossip: Option<Gossip>,
-    executor: ActorHandle<ExecutorActor>,
+    executor_ref: ActorRef<ExecutorActor>,
     slasher: ActorHandle<SlasherActor<StorageActor>>,
     bedrock_pool: ActorHandle<ShardingPoolActor<BedrockActor, ChannelId>>,
     storage: ActorHandle<StorageActor>,
@@ -106,7 +112,8 @@ impl SequencerHandle {
             #[cfg(feature = "rpc")]
             rpc_server,
             gossip,
-            executor,
+            supervisor,
+            executor_ref: _,
             slasher,
             bedrock_pool: bedrock,
             storage,
@@ -120,7 +127,7 @@ impl SequencerHandle {
         if let Some(gossip) = gossip {
             gossip.actor.shutdown().await;
         }
-        executor.shutdown().await;
+        supervisor.shutdown().await;
         slasher.shutdown().await;
         bedrock.shutdown().await;
         storage.shutdown().await;
@@ -142,7 +149,8 @@ impl SequencerHandle {
             bedrock_broker,
             #[cfg(feature = "rpc")]
             rpc_server,
-            executor,
+            supervisor,
+            executor_ref: _,
             bedrock_pool: bedrock,
             storage,
             gossip: _,
@@ -165,7 +173,7 @@ impl SequencerHandle {
             Err(err) = rpc_failed => {
                 Err(err)
             }
-            Err(err) = executor.failed() => {
+            Err(err) = supervisor.failed() => {
                 Err(err)
             }
             Err(err) = slasher.failed() => {
@@ -195,7 +203,8 @@ impl SequencerHandle {
             bedrock_broker,
             #[cfg(feature = "rpc")]
             rpc_server,
-            executor,
+            supervisor,
+            executor_ref: _,
             bedrock_pool: bedrock,
             storage,
             gossip: _,
@@ -210,7 +219,7 @@ impl SequencerHandle {
             && bedrock_broker.is_healthy()
             && rpc_healthy
             && slasher.is_healthy()
-            && executor.is_healthy()
+            && supervisor.is_healthy()
             && bedrock.is_healthy()
             && storage.is_healthy()
     }
@@ -226,7 +235,7 @@ impl SequencerHandle {
     /// instead of over the RPC.
     #[must_use]
     pub const fn executor_ref(&self) -> &ActorRef<ExecutorActor> {
-        self.executor.actor_ref()
+        &self.executor_ref
     }
 
     /// The gossip actor, for cases where there is need for gossip-only fucntionality.
@@ -272,18 +281,8 @@ pub fn run(
         let storage_ref = StorageActor::spawn(storage);
         info!("Storage Actor spawned");
 
-        let executor_prepared = ExecutorActor::prepare_with_mailbox(kameo::mailbox::unbounded());
-
         let bedrock_broker = Broker::new(DeliveryStrategy::Guaranteed);
         let bedrock_broker_ref = Broker::spawn(bedrock_broker);
-        let topic = Pattern::new(&format!("channel/{}/**", config.bedrock_config.channel_id))
-            .expect("Valid pattern");
-        bedrock_broker_ref
-            .tell(kameo_actors::broker::Subscribe {
-                topic,
-                recipient: executor_prepared.actor_ref().clone().recipient(),
-            })
-            .await?;
         info!("Bedrock Broker Actor spawned");
 
         let config_clone = config.clone();
@@ -304,6 +303,16 @@ pub fn run(
                     bedrock_broker_ref_clone.clone(),
                     config_clone.bedrock_config.backfill_batch_slots,
                 )
+            },
+        )
+        // A restarted Bedrock actor of the channel would lack the publisher the executor set up, so
+        // the executor, linked to it, restarts instead and starts a fresh one.
+        .with_restart_config(
+            bedrock_config.channel_id,
+            sharding_pool_actor::RestartConfig {
+                policy: RestartPolicy::Never,
+                limit: 0,
+                within: Duration::ZERO,
             },
         );
         let bedrock_pool_ref = ShardingPoolActor::spawn(bedrock_pool);
@@ -355,20 +364,22 @@ pub fn run(
         );
         info!("Channel Signing Actor spawned");
 
-        let executor = ExecutorActor::new(
-            config,
-            channel_signing_key,
-            storage_ref.clone(),
-            bedrock_pool_ref.clone(),
-            stake_config_pubsub_ref,
-            slasher_ref.clone(),
-            channel_signer_ref.clone(),
+        let supervisor = ActorHandle::new(SequencerSupervisor::spawn(SequencerSupervisor));
+        let executor_ref = setup_executor(
+            supervisor.actor_ref(),
+            sequencer_executor_actor::actor::Args {
+                config,
+                channel_signing_key: channel_signing_key.clone(),
+                storage_ref: storage_ref.clone(),
+                bedrock_pool_ref: bedrock_pool_ref.clone(),
+                stake_config_pubsub_ref,
+                slasher_ref: slasher_ref.clone(),
+                channel_signer_ref: channel_signer_ref.clone(),
+                bedrock_broker_ref: bedrock_broker_ref.clone(),
+            },
         )
         .await
         .context("Failed to set up Executor Actor")?;
-        let executor_ref = executor_prepared.actor_ref().clone();
-        executor_prepared.spawn(executor);
-        info!("Executor Actor spawned");
 
         // A config needs no turn, so the actor tells the executor to submit it
         // the moment the signatures are in. Weak, because the executor holds
@@ -425,7 +436,8 @@ pub fn run(
             bedrock_broker: ActorHandle::new(bedrock_broker_ref),
             #[cfg(feature = "rpc")]
             rpc_server,
-            executor: ActorHandle::new(executor_ref),
+            supervisor,
+            executor_ref,
             bedrock_pool: ActorHandle::new(bedrock_pool_ref),
             slasher: ActorHandle::new(slasher_ref),
             storage: ActorHandle::new(storage_ref),
@@ -558,6 +570,39 @@ pub async fn setup_gossip(
         },
         publisher,
     ))
+}
+
+/// Spawns the executor under `supervisor_ref`, returning it once it has started.
+///
+/// Fails if the first start fails: that is a misconfiguration or a diverged store, which restarts
+/// won't fix.
+async fn setup_executor(
+    supervisor_ref: &ActorRef<SequencerSupervisor>,
+    args: sequencer_executor_actor::actor::Args<StorageActor, BedrockActor>,
+) -> Result<ActorRef<ExecutorActor>> {
+    let executor_ref = ExecutorActor::supervise_with(supervisor_ref, move || args.clone())
+        .restart_policy(RestartPolicy::Permanent)
+        .restart_limit(EXECUTOR_RESTART_LIMIT, EXECUTOR_RESTART_WINDOW)
+        .spawn_with_mailbox(kameo::mailbox::unbounded())
+        .await;
+    executor_ref
+        .wait_for_startup_with_result(|res| {
+            res.map_err(|err| match err {
+                HookError::Error(err) => {
+                    let err: &dyn std::error::Error = err;
+                    let causes = std::iter::successors(Some(err), |err| err.source())
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(": ");
+                    anyhow!(causes)
+                }
+                HookError::Panicked(err) => anyhow!(err),
+            })
+        })
+        .await?;
+    info!("Executor Actor spawned");
+
+    Ok(executor_ref)
 }
 
 #[cfg(feature = "rpc")]

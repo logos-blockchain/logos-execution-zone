@@ -22,7 +22,7 @@ use crate::{
 };
 
 pub trait ExecutorActorTrait:
-    Actor<Args = Self, Error = Error>
+    Actor<Error = Error>
     + Message<ProduceBlock, Reply = Result<()>>
     + Message<Transaction, Reply = Result<()>>
     + Message<GetBlock, Reply = Result<Option<Block>>>

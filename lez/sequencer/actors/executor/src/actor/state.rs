@@ -7,7 +7,7 @@ use log::{info, warn};
 use sequencer_actors_common::SendErrorExt;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
-    protocol::{ChannelId, ChannelSeq, Checkpoint, Ed25519Key, MsgId, SerializeOp as _, Slot},
+    protocol::{ChannelId, ChannelSeq, Checkpoint, MsgId, SerializeOp as _, Slot},
 };
 use sequencer_channel_signing_actor::ChannelSigningActor;
 use sequencer_core::{StakeConfigUpdate, config::SequencerConfig};
@@ -18,7 +18,7 @@ use sequencer_storage_actor::{
 };
 use sharding_pool_actor::ShardingPoolActor;
 
-use crate::{Result, error::Error};
+use crate::{Result, actor::Args, error::Error};
 
 pub mod bootstrapping;
 pub mod online;
@@ -35,13 +35,16 @@ pub enum State<S: StorageActorTrait, B: BedrockActorTrait> {
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
     pub async fn initialize(
-        mut config: SequencerConfig,
-        channel_signing_key: Ed25519Key,
-        storage_ref: ActorRef<S>,
-        bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
-        stake_config_pubsub_ref: ActorRef<PubSub<StakeConfigUpdate>>,
-        slasher_ref: ActorRef<SlasherActor<S>>,
-        channel_signer_ref: ActorRef<ChannelSigningActor>,
+        Args {
+            mut config,
+            channel_signing_key,
+            storage_ref,
+            bedrock_pool_ref,
+            stake_config_pubsub_ref,
+            slasher_ref,
+            channel_signer_ref,
+            bedrock_broker_ref: _,
+        }: Args<S, B>,
     ) -> Result<Self> {
         // TODO: Rework this encapsulation cringe
         sequencer_core_metrics::init();

@@ -11393,6 +11393,7 @@ dependencies = [
  "env_logger",
  "fee_core",
  "futures",
+ "glob",
  "kameo",
  "kameo_actors",
  "lee",

@@ -9,7 +9,7 @@ use futures::{Stream, StreamExt as _, TryStreamExt as _};
 use kameo::actor::ActorRef;
 use kameo_actors::broker::Broker;
 use lee_core::BlockId;
-use log::info;
+use log::{info, warn};
 use logos_blockchain_common_http_client::ProcessedBlockEvent;
 use logos_blockchain_core::mantle::ops::channel::withdraw::ChannelWithdrawOp;
 use logos_blockchain_zone_sdk::{
@@ -27,6 +27,12 @@ use crate::{
         Ed25519PublicKey, FinalizedBlock, Slot, WithdrawInfo, ZoneMessage,
     },
 };
+
+/// Attempts a node request gets before its failure ends the stream.
+const NODE_REQUEST_ATTEMPTS: u32 = 8;
+/// Wait before the first retry, doubling up to [`MAX_RETRY_DELAY`].
+const INITIAL_RETRY_DELAY: Duration = Duration::from_millis(200);
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(5);
 
 /// Follows the channel's finalized history from the stored anchor on, publishing it to the
 /// `channel/<channel_id>/finalized_*` topics.
@@ -79,26 +85,19 @@ impl NodeStream {
         channel_id: ChannelId,
         batch_slots: NonZero<u64>,
     ) -> Result<impl Stream<Item = Result<(ZoneMessage, Slot)>>> {
-        const STREAM_ATTEMPT_LIMIT: usize = 5;
-        const STREAM_RETRY_TIMEOUT: Duration = Duration::from_millis(100);
-
         struct StreamState {
             last_processed_slot: Option<Slot>,
             last_known_lib_slot: Slot,
             real_time_stream: BoxStream<ProcessedBlockEvent>,
         }
 
-        let lib_slot = node
-            .consensus_info()
-            .await
-            .map_err(|err| Error::NodeRequestFailed(err.into()))?
+        let lib_slot = with_retries("Reading consensus info", || node.consensus_info())
+            .await?
             .cryptarchia_info
             .lib_slot;
 
-        let real_time_stream = node
-            .block_stream()
-            .await
-            .map_err(|err| Error::NodeRequestFailed(err.into()))?;
+        let real_time_stream =
+            with_retries("Opening the block stream", || node.block_stream()).await?;
 
         let initial_state = StreamState {
             last_processed_slot: last_seen_slot,
@@ -114,24 +113,17 @@ impl NodeStream {
                     .last_processed_slot
                     .is_some_and(|slot| slot >= stream_state.last_known_lib_slot)
                 {
-                    let mut attempt_count: usize = 0;
+                    let mut backoff = Backoff::default();
                     let block_event = loop {
                         if let Some(block_event) = stream_state.real_time_stream.next().await {
                             break block_event;
                         }
-                        attempt_count = attempt_count.saturating_add(1);
-                        if attempt_count < STREAM_ATTEMPT_LIMIT {
-                            tokio::time::sleep(STREAM_RETRY_TIMEOUT).await;
-
-                            stream_state.real_time_stream = node
-                                .block_stream()
-                                .await
-                                .map_err(|err| Error::NodeRequestFailed(err.into()))?;
-                        } else {
-                            return Err(Error::NodeRequestFailed(anyhow!(
-                                "Stream attempt limit reached"
-                            )));
-                        }
+                        backoff
+                            .wait("Following the block stream", anyhow!("The stream ended"))
+                            .await?;
+                        stream_state.real_time_stream =
+                            with_retries("Reopening the block stream", || node.block_stream())
+                                .await?;
                     };
                     stream_state.last_known_lib_slot =
                         stream_state.last_known_lib_slot.max(block_event.lib_slot);
@@ -145,14 +137,14 @@ impl NodeStream {
                     (Slot::from(start_slot.into_inner().saturating_add(batch_slots.get())))
                         .min(stream_state.last_known_lib_slot);
 
-                let backfill_stream = node
-                    .zone_messages_in_blocks(start_slot, end_slot, channel_id)
-                    .await
-                    .map_err(|err| Error::NodeRequestFailed(err.into()))?
-                    .map(Ok);
+                let backfill_stream = with_retries("Reading finalized zone messages", || {
+                    node.zone_messages_in_blocks(start_slot, end_slot, channel_id)
+                })
+                .await?
+                .map(Ok);
 
                 stream_state.last_processed_slot = Some(end_slot);
-                Ok(Some((backfill_stream.boxed(), stream_state)))
+                Ok::<_, Error>(Some((backfill_stream.boxed(), stream_state)))
             }
         })
         .try_flatten();
@@ -228,6 +220,55 @@ impl NodeStream {
             })
             .await
             .map_err(|err| Error::BrokerPublishFailed(err.erase_message()))
+    }
+}
+
+/// Retry delays of one node request, so a node restart does not end the stream.
+struct Backoff {
+    failures: u32,
+    delay: Duration,
+}
+
+impl Default for Backoff {
+    fn default() -> Self {
+        Self {
+            failures: 0,
+            delay: INITIAL_RETRY_DELAY,
+        }
+    }
+}
+
+impl Backoff {
+    /// Waits out the delay after `what` failed with `err`, or fails once the attempts run out.
+    async fn wait(&mut self, what: &str, err: anyhow::Error) -> Result<()> {
+        self.failures = self.failures.saturating_add(1);
+        if self.failures >= NODE_REQUEST_ATTEMPTS {
+            return Err(Error::NodeRequestFailed(
+                err.context(format!("{what} failed {} times", self.failures)),
+            ));
+        }
+        warn!(
+            "{what} failed ({}/{NODE_REQUEST_ATTEMPTS}), retrying in {:?}: {err:#}",
+            self.failures, self.delay
+        );
+        tokio::time::sleep(self.delay).await;
+        self.delay = self.delay.saturating_mul(2).min(MAX_RETRY_DELAY);
+        Ok(())
+    }
+}
+
+/// Runs `request` until it succeeds, waiting out a [`Backoff`] between failures.
+async fn with_retries<T, E, Fut>(what: &str, mut request: impl FnMut() -> Fut) -> Result<T>
+where
+    Fut: Future<Output = std::result::Result<T, E>>,
+    E: Into<anyhow::Error>,
+{
+    let mut backoff = Backoff::default();
+    loop {
+        match request().await {
+            Ok(value) => return Ok(value),
+            Err(err) => backoff.wait(what, err.into()).await?,
+        }
     }
 }
 
@@ -350,5 +391,37 @@ mod tests {
             .await
             .expect("the anchor block is published");
         assert_eq!(republished, Some(msg_id));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_node_request_is_retried_until_it_succeeds() {
+        let mut failures_left = NODE_REQUEST_ATTEMPTS - 1;
+        let result = with_retries("Test request", || {
+            let fail = failures_left > 0;
+            failures_left = failures_left.saturating_sub(1);
+            async move {
+                if fail {
+                    Err(anyhow!("node down"))
+                } else {
+                    Ok(7)
+                }
+            }
+        })
+        .await;
+
+        assert_eq!(result.ok(), Some(7));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_node_request_fails_once_its_attempts_run_out() {
+        let mut attempts = 0_u32;
+        let result: Result<()> = with_retries("Test request", || {
+            attempts = attempts.saturating_add(1);
+            async { Err(anyhow!("node down")) }
+        })
+        .await;
+
+        assert!(matches!(result, Err(Error::NodeRequestFailed(_))));
+        assert_eq!(attempts, NODE_REQUEST_ATTEMPTS);
     }
 }
