@@ -1,13 +1,13 @@
 //! Clock Program.
 //!
 //! A system program that records the current block ID and timestamp into a single clock account.
-//! A message asserting either value names its granularity: the clock rounds the value down to a
-//! multiple of it before comparing.
+//! A message asserting either value, or stamping the block ID, names its granularity: the clock
+//! rounds the value down to a multiple of it.
 //!
 //! Only the sequencer may tick this program, as the last transaction in every block.
 //! The clock account uses this program's actor state.
 
-use clock_core::{CLOCK_PROGRAM_ACCOUNT_ID, ClockAccountData, Message};
+use clock_core::{CLOCK_PROGRAM_ACCOUNT_ID, ClockAccountData, Message, Reply};
 use lee_core::program::{ReceiveInput, Response};
 
 lee_core::actor_entrypoint!(handle_message);
@@ -60,6 +60,21 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
             );
             Response::keep_state()
         }
+        Message::Stamp {
+            granularity,
+            message,
+        } => {
+            let sender = input
+                .from
+                .expect("A stamp is sent back to its sender, so a root call cannot ask for one");
+            Response::keep_state().send_sync(
+                sender,
+                &Reply::Stamped {
+                    block_id: round_down(clock.block_id, granularity),
+                    message,
+                },
+            )
+        }
     }
 }
 
@@ -73,7 +88,7 @@ mod tests {
     use lee_core::{
         Timestamp,
         account::{AccountId, Actor, ActorState},
-        program::Transition,
+        program::{SyncMessage, Transition},
     };
 
     use super::*;
@@ -106,11 +121,16 @@ mod tests {
         }
     }
 
-    fn run_on(account_id: AccountId, pre: ClockAccountData, message: Message) -> Transition {
+    fn run_on(
+        account_id: AccountId,
+        from: Option<Actor>,
+        pre: ClockAccountData,
+        message: Message,
+    ) -> Transition {
         let receiver = Actor::new(account_id, CLOCK);
         let input = ReceiveInput {
             receiver,
-            from: None,
+            from,
             is_authorized: false,
             pre_state: ActorState::from(pre.to_bytes()),
             message: borsh::to_vec(&message).unwrap(),
@@ -119,7 +139,7 @@ mod tests {
     }
 
     fn run(pre: ClockAccountData, message: Message) -> Transition {
-        run_on(CLOCK_PROGRAM_ACCOUNT_ID, pre, message)
+        run_on(CLOCK_PROGRAM_ACCOUNT_ID, None, pre, message)
     }
 
     #[test]
@@ -151,7 +171,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "The clock program runs only on the clock account")]
     fn another_account_is_refused() {
-        let _transition = run_on(AccountId::new([2; 32]), data(9), tick(10));
+        let _transition = run_on(AccountId::new([2; 32]), None, data(9), tick(10));
     }
 
     #[test]
@@ -214,6 +234,45 @@ mod tests {
                 granularity: 50,
                 at_least: 57,
                 at_most: 57,
+            },
+        );
+    }
+
+    #[test]
+    fn a_stamp_sends_the_rounded_block_id_and_the_message_back_to_its_sender() {
+        let sender = Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32]));
+        let transition = run_on(
+            CLOCK_PROGRAM_ACCOUNT_ID,
+            Some(sender),
+            data(57),
+            Message::Stamp {
+                granularity: 10,
+                message: vec![7, 8, 9],
+            },
+        );
+
+        assert_eq!(transition.response.post_state, None);
+        assert_eq!(
+            transition.response.sync_messages,
+            vec![SyncMessage::new(
+                sender,
+                &Reply::Stamped {
+                    block_id: 50,
+                    message: vec![7, 8, 9],
+                },
+            )]
+        );
+        assert!(transition.response.async_messages.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "A stamp is sent back to its sender, so a root call cannot ask")]
+    fn a_stamp_from_a_root_call_is_refused() {
+        let _transition = run(
+            data(57),
+            Message::Stamp {
+                granularity: 1,
+                message: Vec::new(),
             },
         );
     }

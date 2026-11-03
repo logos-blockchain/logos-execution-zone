@@ -10,7 +10,7 @@ pub const CLOCK_NAME: [u8; 5] = *b"clock";
 
 /// The message type for the Clock Program. The sequencer ticks the clock as the last transaction
 /// of every block, so every other transaction sees the previous block's ID and timestamp.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Message {
     Tick {
         timestamp: Timestamp,
@@ -50,6 +50,26 @@ pub enum Message {
         /// The highest accepted **rounded** block ID, so the clock may be up to `granularity - 1`
         /// blocks past it; use a granularity of 1 for a strict deadline.
         at_most: u64,
+    },
+    /// Read-only: sends [`Reply::Stamped`] back to the sender, which must be an actor sending
+    /// this as a sync message.
+    Stamp {
+        /// The rounding step in blocks, at least 1.
+        granularity: u64,
+        /// Bytes returned unchanged, and made public when the sender is private.
+        message: Vec<u8>,
+    },
+}
+
+/// The messages the Clock Program sends.
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum Reply {
+    /// The answer to [`Message::Stamp`].
+    Stamped {
+        /// The clock's block ID rounded down to a multiple of the stamp's granularity.
+        block_id: u64,
+        /// The stamp's message, unchanged.
+        message: Vec<u8>,
     },
 }
 
