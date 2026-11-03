@@ -1,7 +1,7 @@
 #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
     pin::pin,
     sync::Arc,
     time::Duration,
@@ -74,7 +74,8 @@ use crate::{
         self, BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, SequencerConfig,
     },
     config_target, deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
-    extract_cross_zone_dispatch_key, is_sequencer_only_program, resubmittable_txs, zone_checkpoint,
+    extract_cross_zone_dispatch_key, is_sequencer_only_program, resubmittable_txs, round_robin,
+    zone_checkpoint,
 };
 
 mod canned_channel;
@@ -7177,4 +7178,24 @@ async fn a_turn_on_a_view_with_a_hole_is_skipped() {
     assert_eq!(sequencer.chain_height().await, 1);
     assert_eq!(sequencer.chain().lock().await.pin(), pin);
     assert_eq!(sequencer.mempool.len(), 1, "the user transaction is kept");
+}
+
+#[test]
+fn dispatch_slots_are_shared_round_robin_across_peers() {
+    let queues: BTreeMap<Option<[u8; 32]>, VecDeque<&str>> = BTreeMap::from([
+        (Some([1; 32]), VecDeque::from(["a0", "a1", "a2", "a3"])),
+        (Some([2; 32]), VecDeque::from(["b0", "b1"])),
+        (None, VecDeque::from(["n0"])),
+    ]);
+
+    let taken = round_robin(queues, 6);
+
+    assert_eq!(taken, VecDeque::from(["n0", "a0", "b0", "a1", "b1", "a2"]));
+
+    let one_queue: BTreeMap<u8, VecDeque<u8>> = BTreeMap::from([(1, VecDeque::from([7, 8, 9]))]);
+    assert_eq!(
+        round_robin(one_queue, 2),
+        VecDeque::from([7, 8]),
+        "the cap still binds a single queue"
+    );
 }

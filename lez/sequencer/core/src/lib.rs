@@ -1914,18 +1914,26 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             // delivery had already settled, which it does whenever it re-reads a
             // slot it has consumed. Already in the head state but not the final
             // one means the delivery is on this chain but could still orphan, so
-            // the record is skipped and kept. Otherwise it goes in this block.
-            let mut pending: VecDeque<LeeTransaction> = VecDeque::new();
+            // the record is skipped and kept. Otherwise it is eligible, queued
+            // per source zone: the store reads records in key-hash order,
+            // under which one busy peer starves every other.
+            let mut eligible: BTreeMap<Option<[u8; 32]>, VecDeque<LeeTransaction>> =
+                BTreeMap::new();
             for (key, message, tx) in recorded_dispatches {
-                match message {
+                let zone = match message {
                     Some(message) if dispatch_already_delivered(chain.final_state(), &message) => {
                         settled.push(key);
+                        continue;
                     }
-                    Some(message) if dispatch_already_delivered(chain.head_state(), &message) => {}
-                    _ if pending.len() >= MAX_DISPATCHES_PER_BLOCK => {}
-                    _ => pending.push_back(tx),
-                }
+                    Some(message) if dispatch_already_delivered(chain.head_state(), &message) => {
+                        continue;
+                    }
+                    Some(message) => Some(message.src_zone),
+                    None => None,
+                };
+                eligible.entry(zone).or_default().push_back(tx);
             }
+            let pending = round_robin(eligible, MAX_DISPATCHES_PER_BLOCK);
 
             (
                 prev,
@@ -2602,6 +2610,27 @@ fn dispatch_already_delivered(state: &lee::V03State, message: &CrossZoneMessage)
             seen.binds(&message.src_block_hash) && seen.contains(message.src_tx_index)
         })
     })
+}
+
+/// Takes up to `cap` items, one per queue per round, so no queue starves
+/// another.
+fn round_robin<K: Ord, T>(mut queues: BTreeMap<K, VecDeque<T>>, cap: usize) -> VecDeque<T> {
+    let mut taken = VecDeque::new();
+    while taken.len() < cap {
+        let before = taken.len();
+        for queue in queues.values_mut() {
+            if taken.len() >= cap {
+                break;
+            }
+            if let Some(item) = queue.pop_front() {
+                taken.push_back(item);
+            }
+        }
+        if taken.len() == before {
+            break;
+        }
+    }
+    taken
 }
 
 /// How the fee transaction pays this sequencer's stake ownership account, refusing production while
