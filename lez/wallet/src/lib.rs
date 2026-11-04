@@ -233,6 +233,52 @@ struct PublicMeasure {
     /// The size of the signed transaction.
     wire_bytes: u64,
     quote: FeeStateQuote,
+    /// What the simulation ran on, to run it again.
+    run: PublicRun,
+}
+
+/// An unsigned public transaction with the states and programs it is simulated against.
+#[derive(Clone)]
+struct PublicRun {
+    tx: lee::PublicTransaction,
+    simulation: Simulation,
+    programs: ProgramCatalog,
+}
+
+impl PublicRun {
+    /// Simulates the transaction within `budget` cycles, with `held` taken from its payer's
+    /// native balance first as settlement holds the fee: its cycles and why it reverts.
+    async fn simulate(
+        &self,
+        budget: u64,
+        held: Option<(AccountId, u128)>,
+    ) -> Result<(u64, Option<String>), ExecutionFailureKind> {
+        let Self {
+            tx,
+            mut simulation,
+            programs,
+        } = self.clone();
+        if let Some((payer, amount)) = held
+            && let Some(state) = simulation
+                .public_actor_states
+                .get_mut(&Actor::native_balance(payer))
+        {
+            let balance = lee_core::native_token::decode_balance(state).unwrap_or_default();
+            *state = lee_core::native_token::encode_balance(balance.saturating_sub(amount));
+        }
+        let (cycles, result) = tokio::task::spawn_blocking(move || {
+            lee::simulate_public_transaction(&tx, &simulation, &programs, budget)
+        })
+        .await?;
+        match result {
+            Ok(()) => Ok((cycles, None)),
+            Err(err) if err.is_chargeable() => {
+                Ok((cycles, Some(format!("{:#}", anyhow::Error::from(err)))))
+            }
+            // Settlement would reject it outright rather than charge it.
+            Err(err) => Err(ExecutionFailureKind::TransactionBuildError(err)),
+        }
+    }
 }
 
 /// The reserve a send prices at a quote, see [`WalletCore::reserve_pricing`].
@@ -2144,7 +2190,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .saturating_add(usize::from(co_signer.is_some()));
         // Measure if dry-run, or if either gas limit or max fee is unset;
         // pinning both fields skips the simulation and its revert check.
-        let measured = if self.dry_run || gas_limit.is_none() || max_fee.is_none() {
+        let mut measured = if self.dry_run || gas_limit.is_none() || max_fee.is_none() {
             Some(
                 self.measure_public(&message, signers, budget, &acc_manager)
                     .await?,
@@ -2168,13 +2214,41 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 .as_ref()
                 .expect("a public send without a cap is measured");
             let (exec_ceiling, stor_ceiling) = self.base_fee_ceilings(&measured.quote);
-            u128::from(gas_limit)
-                .saturating_mul(u128::from(exec_ceiling))
-                .saturating_add(
-                    u128::from(measured.wire_bytes).saturating_mul(u128::from(stor_ceiling)),
-                )
-                .saturating_add(u128::from(tip))
+            fee_core::assess::fee_for(
+                gas_limit,
+                measured.wire_bytes,
+                tip,
+                exec_ceiling,
+                stor_ceiling,
+            )
         });
+        // Settlement holds the reserve from the `payer` before the action runs,
+        // so an action that spends the `payer`'s balance runs on what is left of it.
+        if let Some(measured) = &mut measured
+            && measured
+                .run
+                .simulation
+                .public_actor_states
+                .contains_key(&Actor::native_balance(payer))
+        {
+            let reserve = fee_core::assess::fee_for(
+                gas_limit,
+                measured.wire_bytes,
+                tip,
+                measured.quote.base_fee_exec,
+                measured.quote.base_fee_stor,
+            );
+            // if payer has more balance than the measured reserve, do a second run to see
+            // see if "balance - reserve" passed the simulation as well,
+            //
+            // if not, sequencer will reject (as in "drop", not revert!) during its fee screening
+            if acc_manager.native_balance(payer) >= reserve {
+                (measured.cycles, measured.revert_reason) = measured
+                    .run
+                    .simulate(gas_limit, Some((payer, reserve)))
+                    .await?;
+            }
+        }
         let fee = lee::FeeDeclaration::new(payer, gas_limit, tip, max_fee);
         message.execution.fee = Some(fee);
 
@@ -2208,13 +2282,14 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             )
             .expect("transaction size fits u64");
             // The fee of `gas` execution gas at the head base fees; the reserve prices the limit.
-            let at_head = |gas: u64| {
-                u128::from(gas)
-                    .saturating_mul(u128::from(quote.base_fee_exec))
-                    .saturating_add(
-                        u128::from(wire_bytes).saturating_mul(u128::from(quote.base_fee_stor)),
-                    )
-                    .saturating_add(u128::from(tip))
+            let at_head = |gas| {
+                fee_core::assess::fee_for(
+                    gas,
+                    wire_bytes,
+                    tip,
+                    quote.base_fee_exec,
+                    quote.base_fee_stor,
+                )
             };
             return Err(ExecutionFailureKind::DryRun(Box::new(
                 DryRunReport::Public {
@@ -2312,16 +2387,12 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 .saturating_add(signers.saturating_mul(witness_bytes)),
         )
         .expect("transaction size fits u64");
-        let (cycles, result) = tokio::task::spawn_blocking(move || {
-            lee::simulate_public_transaction(&tx, &simulation, &programs, budget)
-        })
-        .await?;
-        let revert_reason = match result {
-            Ok(()) => None,
-            Err(err) if err.is_chargeable() => Some(format!("{:#}", anyhow::Error::from(err))),
-            // Settlement would reject it outright rather than charge it.
-            Err(err) => return Err(ExecutionFailureKind::TransactionBuildError(err)),
+        let run = PublicRun {
+            tx,
+            simulation,
+            programs,
         };
+        let (cycles, revert_reason) = run.simulate(budget, None).await?;
         let quote = self
             .sequencer_client
             .get_fee_state()
@@ -2332,6 +2403,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             revert_reason,
             wire_bytes,
             quote,
+            run,
         })
     }
 
