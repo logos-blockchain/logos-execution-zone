@@ -7,13 +7,16 @@ use std::{
 
 use wallet::{
     DeclaredFee, DryRunReport, ExecutionFailureKind, FeeParams, FeeStateQuote, PrivateFee,
-    WalletCore, WalletSequencerClient as _,
+    WalletCore, WalletSequencerClient,
 };
 
 use crate::{
     error::{FfiOperationError, print_error},
     primitives::types::{FfiAccountId, FfiFeeDeclaration, FfiU128},
-    wallet::{WalletHandle, block_on, c_string_or_null, lifecycle::get_wallet},
+    wallet::{
+        FfiTransferResult, WalletHandle, block_on, c_string_or_null,
+        generic_transaction::FfiTransactionResult, lifecycle::get_wallet,
+    },
 };
 
 /// Which part of an `FfiDeclaredFee` is set.
@@ -215,49 +218,68 @@ impl From<DryRunReport> for FfiDryRunReport {
     }
 }
 
-/// The fee a send declared or, when `is_dry_run`, would declare, with the dry run's report.
-/// A send of several transactions declares the fee of its last; its dry run reports its first.
-#[repr(C)]
-#[derive(Debug, Default)]
-pub struct FfiSendFee {
-    pub declared: FfiDeclaredFee,
-    pub is_dry_run: bool,
-    pub dry_run: FfiDryRunReport,
+impl FfiDryRunReport {
+    /// Frees what a dry run allocated.
+    ///
+    /// # Safety
+    /// `self` must have been filled by a send, and not freed before.
+    pub(crate) unsafe fn free(&mut self) {
+        if !self.revert_reason.is_null() {
+            drop(unsafe { CString::from_raw(self.revert_reason) });
+            self.revert_reason = ptr::null_mut();
+        }
+    }
 }
 
-impl FfiSendFee {
+/// A send's result: the fee it declared or, on a dry run, would declare, with the dry run's
+/// report. A send of several transactions declares the fee of its last; its dry run reports its
+/// first.
+pub(crate) trait SendResult {
+    /// The result's `fee`, `is_dry_run` and `dry_run`.
+    fn outcome(&mut self) -> (&mut FfiDeclaredFee, &mut bool, &mut FfiDryRunReport);
+
     /// Records the fee `wallet`'s send declared, or the report of a dry run that ended `result`,
     /// which then succeeds with nothing sent.
-    pub(crate) fn record<T, C: wallet::WalletSequencerClient>(
+    fn record<T, C: WalletSequencerClient>(
         &mut self,
         wallet: &WalletCore<C>,
         result: Result<T, ExecutionFailureKind>,
     ) -> Result<Option<T>, ExecutionFailureKind> {
-        *self = Self::default();
+        self.clear_outcome();
+        let (fee, is_dry_run, dry_run) = self.outcome();
         match result {
             Ok(sent) => {
-                self.declared = wallet.take_declared_fee().into();
+                *fee = wallet.take_declared_fee().into();
                 Ok(Some(sent))
             }
             Err(ExecutionFailureKind::DryRun(report)) => {
-                self.declared = Some(report.fee()).into();
-                self.is_dry_run = true;
-                self.dry_run = (*report).into();
+                *fee = Some(report.fee()).into();
+                *is_dry_run = true;
+                *dry_run = (*report).into();
                 Ok(None)
             }
             Err(e) => Err(e),
         }
     }
 
-    /// Frees what `record` allocated.
-    ///
-    /// # Safety
-    /// `self` must have been filled by `record`, and not freed before.
-    pub(crate) unsafe fn free(&mut self) {
-        if !self.dry_run.revert_reason.is_null() {
-            drop(unsafe { CString::from_raw(self.dry_run.revert_reason) });
-            self.dry_run.revert_reason = ptr::null_mut();
-        }
+    /// Resets what `record` sets, without freeing it.
+    fn clear_outcome(&mut self) {
+        let (fee, is_dry_run, dry_run) = self.outcome();
+        *fee = FfiDeclaredFee::default();
+        *is_dry_run = false;
+        *dry_run = FfiDryRunReport::default();
+    }
+}
+
+impl SendResult for FfiTransferResult {
+    fn outcome(&mut self) -> (&mut FfiDeclaredFee, &mut bool, &mut FfiDryRunReport) {
+        (&mut self.fee, &mut self.is_dry_run, &mut self.dry_run)
+    }
+}
+
+impl SendResult for FfiTransactionResult {
+    fn outcome(&mut self) -> (&mut FfiDeclaredFee, &mut bool, &mut FfiDryRunReport) {
+        (&mut self.fee, &mut self.is_dry_run, &mut self.dry_run)
     }
 }
 
@@ -304,7 +326,7 @@ impl From<&FfiFeeParams> for FeeParams {
 }
 
 /// Simulate sends and report their cost instead of sending them. A send then succeeds with a
-/// null `tx_hash` and its result's `fee.is_dry_run` set.
+/// null `tx_hash` and its result's `is_dry_run` set.
 ///
 /// # Safety
 /// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`

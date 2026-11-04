@@ -145,8 +145,8 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
     log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
-    let declared = transfer_result.fee.declared;
-    assert!(!transfer_result.fee.is_dry_run);
+    let declared = transfer_result.fee;
+    assert!(!transfer_result.is_dry_run);
     assert_eq!(declared.kind, FfiFeeKind::Public);
     assert_eq!(declared.public_fee.payer, from);
     // The gas limit is measured, well below the configured ceiling.
@@ -319,7 +319,7 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
     .unwrap();
 
     // The sender pays the in-proof fee out of a reserve of at least the fee it is charged.
-    let declared = transfer_result.fee.declared;
+    let declared = transfer_result.fee;
     assert_eq!(declared.kind, FfiFeeKind::Private);
     assert_eq!(declared.private_fee.payer, from);
     assert!(u128::from(declared.private_fee.reserve) >= min_private_fee());
@@ -509,18 +509,18 @@ fn test_wallet_ffi_dry_runs_report_without_sending() -> Result<()> {
         .unwrap();
     }
     assert!(public_result.success && public_result.tx_hash.is_null());
-    let public_send = &public_result.fee;
+    let public_send = &public_result;
     assert!(public_send.is_dry_run);
-    assert_eq!(public_send.declared.kind, FfiFeeKind::Public);
-    assert_eq!(public_send.declared.public_fee.payer, public);
+    assert_eq!(public_send.fee.kind, FfiFeeKind::Public);
+    assert_eq!(public_send.fee.public_fee.payer, public);
     // The test wallet prices no headroom, so the default cap is the reserve at head, and the
     // gas limit is the measured cycles plus the 25% margin.
     assert_eq!(
-        public_send.declared.public_fee.gas_limit,
+        public_send.fee.public_fee.gas_limit,
         (public_send.dry_run.cycles * 125).div_ceil(100)
     );
     assert_eq!(
-        u128::from(public_send.declared.public_fee.max_fee),
+        u128::from(public_send.fee.public_fee.max_fee),
         u128::from(public_send.dry_run.reserve_at_head)
     );
     assert!(public_send.dry_run.wire_bytes > 0);
@@ -548,14 +548,14 @@ fn test_wallet_ffi_dry_runs_report_without_sending() -> Result<()> {
         .unwrap();
     }
     assert!(private_result.success && private_result.tx_hash.is_null());
-    let private_send = &private_result.fee;
+    let private_send = &private_result;
     assert!(private_send.is_dry_run);
-    assert_eq!(private_send.declared.kind, FfiFeeKind::Private);
-    assert_eq!(private_send.declared.private_fee.payer, private);
+    assert_eq!(private_send.fee.kind, FfiFeeKind::Private);
+    assert_eq!(private_send.fee.private_fee.payer, private);
     // The test wallet prices no headroom, so the reserve is the fee at head.
     assert_eq!(private_send.dry_run.headroom_blocks, 0);
     assert_eq!(
-        u128::from(private_send.declared.private_fee.reserve),
+        u128::from(private_send.fee.private_fee.reserve),
         u128::from(private_send.dry_run.fee_at_head)
     );
     assert!(u128::from(private_send.dry_run.fee_at_head) >= min_private_fee());
@@ -590,8 +590,8 @@ fn test_wallet_ffi_dry_runs_report_without_sending() -> Result<()> {
         )
         .unwrap();
     }
-    let tuned_public = &tuned_public_result.fee;
-    let declared = tuned_public.declared.public_fee;
+    let tuned_public = &tuned_public_result;
+    let declared = tuned_public.fee.public_fee;
     assert_eq!(declared.gas_limit, 500_000);
     assert_eq!(declared.tip, 7);
     // The cap is the reserve at the base fees after the 2 headroom blocks of the steepest climb.
@@ -631,7 +631,7 @@ fn test_wallet_ffi_dry_runs_report_without_sending() -> Result<()> {
                 * u128::from(tuned_public.dry_run.fee_state.base_fee_stor)
             + 7
     );
-    let tuned_private = &tuned_private_result.fee.dry_run;
+    let tuned_private = &tuned_private_result.dry_run;
     assert_eq!(tuned_private.headroom_blocks, 2);
     assert!(u128::from(tuned_private.headroom_reserve) >= u128::from(tuned_private.fee_at_head));
 

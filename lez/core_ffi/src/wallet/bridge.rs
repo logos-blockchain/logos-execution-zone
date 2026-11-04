@@ -10,6 +10,7 @@ use crate::{
     primitives::types::FfiBytes32,
     wallet::{
         block_on, c_string_or_null,
+        fees::SendResult as _,
         lifecycle::get_wallet,
         map_execution_error,
         types::{FfiTransferResult, WalletHandle},
@@ -72,7 +73,7 @@ pub unsafe extern "C" fn wallet_ffi_bridge_withdraw(
     let bridge = Bridge(&wallet);
 
     let sent = block_on(bridge.send_withdraw(from_id, amount, bedrock_account_pk));
-    match unsafe { (*out_result).fee.record(&wallet, sent) } {
+    match unsafe { (*out_result).record(&wallet, sent) } {
         Ok(tx_hash) => {
             let tx_hash = c_string_or_null(tx_hash);
 

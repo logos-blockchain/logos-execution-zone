@@ -806,28 +806,6 @@ typedef struct FfiAccountList {
 } FfiAccountList;
 
 /**
- * The in-proof fee of a privacy-preserving transaction.
- *
- * Its proof debits `reserve` from `payer`. The surplus over the fee charged is refunded to
- * `refund_to` when `has_refund_to`, else to the payer's alias.
- */
-typedef struct FfiPrivateFee {
-  FfiAccountId payer;
-  struct FfiU128 reserve;
-  bool has_refund_to;
-  FfiAccountId refund_to;
-} FfiPrivateFee;
-
-/**
- * The fee a send declared. Only the part `kind` names is set; the other is zeroed.
- */
-typedef struct FfiDeclaredFee {
-  enum FfiFeeKind kind;
-  struct FfiFeeDeclaration public_fee;
-  struct FfiPrivateFee private_fee;
-} FfiDeclaredFee;
-
-/**
  * The fee market priced off the head state.
  */
 typedef struct FfiFeeState {
@@ -895,14 +873,26 @@ typedef struct FfiDryRunReport {
 } FfiDryRunReport;
 
 /**
- * The fee a send declared or, when `is_dry_run`, would declare, with the dry run's report.
- * A send of several transactions declares the fee of its last; its dry run reports its first.
+ * The in-proof fee of a privacy-preserving transaction.
+ *
+ * Its proof debits `reserve` from `payer`. The surplus over the fee charged is refunded to
+ * `refund_to` when `has_refund_to`, else to the payer's alias.
  */
-typedef struct FfiSendFee {
-  struct FfiDeclaredFee declared;
-  bool is_dry_run;
-  struct FfiDryRunReport dry_run;
-} FfiSendFee;
+typedef struct FfiPrivateFee {
+  FfiAccountId payer;
+  struct FfiU128 reserve;
+  bool has_refund_to;
+  FfiAccountId refund_to;
+} FfiPrivateFee;
+
+/**
+ * The fee a send declared. Only the part `kind` names is set; the other is zeroed.
+ */
+typedef struct FfiDeclaredFee {
+  enum FfiFeeKind kind;
+  struct FfiFeeDeclaration public_fee;
+  struct FfiPrivateFee private_fee;
+} FfiDeclaredFee;
 
 /**
  * Result of a transfer operation.
@@ -920,9 +910,15 @@ typedef struct FfiTransferResult {
    */
   bool success;
   /**
-   * The fee the transfer declared, or the report of a dry run, which leaves `tx_hash` null.
+   * Whether the transfer was only simulated, leaving `tx_hash` null; `dry_run` holds its
+   * report.
    */
-  struct FfiSendFee fee;
+  bool is_dry_run;
+  struct FfiDryRunReport dry_run;
+  /**
+   * The fee the transfer declared or, on a dry run, would declare.
+   */
+  struct FfiDeclaredFee fee;
 } FfiTransferResult;
 
 /**
@@ -1030,10 +1026,15 @@ typedef struct FfiTransactionResult {
    */
   uintptr_t secrets_size;
   /**
-   * The fee the transaction declared, or the report of a dry run, which leaves `tx_hash`
-   * null.
+   * Whether the transaction was only simulated, leaving `tx_hash` null; `dry_run` holds its
+   * report.
    */
-  struct FfiSendFee fee;
+  bool is_dry_run;
+  struct FfiDryRunReport dry_run;
+  /**
+   * The fee the transaction declared or, on a dry run, would declare.
+   */
+  struct FfiDeclaredFee fee;
 } FfiTransactionResult;
 
 /**
@@ -1993,7 +1994,7 @@ enum FfiOperationError wallet_ffi_bridge_withdraw(struct WalletHandle *handle,
 
 /**
  * Simulate sends and report their cost instead of sending them. A send then succeeds with a
- * null `tx_hash` and its result's `fee.is_dry_run` set.
+ * null `tx_hash` and its result's `is_dry_run` set.
  *
  * # Safety
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`

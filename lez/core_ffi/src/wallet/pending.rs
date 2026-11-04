@@ -12,7 +12,7 @@ use crate::{
         FfiAccountMention, FfiAsyncDelivery, FfiPendingMessage, FfiPendingMessageList,
         FfiTransferResult, WalletHandle, block_on, c_str_to_string, c_string_or_null,
         client::WalletClient,
-        fees::FfiSendFee,
+        fees::SendResult as _,
         generic_transaction::{FfiProgramCatalog, mentions},
         lifecycle::get_wallet,
         list, map_execution_error,
@@ -240,7 +240,7 @@ pub unsafe extern "C" fn wallet_ffi_receive_pending_message_with(
         )
     }
     .and_then(|sent| {
-        unsafe { (*out_result).fee.record(&wallet, sent) }.map_err(|e| {
+        unsafe { (*out_result).record(&wallet, sent) }.map_err(|e| {
             print_error(format!("Receipt failed: {e:?}"));
             map_execution_error(e)
         })
@@ -257,7 +257,7 @@ pub unsafe extern "C" fn wallet_ffi_receive_pending_message_with(
             unsafe {
                 (*out_result).tx_hash = ptr::null_mut();
                 (*out_result).success = false;
-                (*out_result).fee = FfiSendFee::default();
+                (*out_result).clear_outcome();
             }
             e
         }

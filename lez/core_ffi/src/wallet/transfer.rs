@@ -19,6 +19,7 @@ use crate::{
     primitives::types::{FfiBytes32, FfiPrivateAccountKeys},
     wallet::{
         block_on, c_string_or_null,
+        fees::SendResult as _,
         lifecycle::get_wallet,
         map_execution_error,
         types::{FfiTransferResult, WalletHandle},
@@ -101,7 +102,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
         CreditDelivery::Automatic,
     ))
     .map(|(tx_hash, _)| tx_hash);
-    match unsafe { (*out_result).fee.record(&wallet, sent) } {
+    match unsafe { (*out_result).record(&wallet, sent) } {
         Ok(tx_hash) => {
             let tx_hash = c_string_or_null(tx_hash);
 
@@ -203,7 +204,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
         CreditDelivery::Automatic,
     ))
     .map(|(tx_hash, _)| tx_hash);
-    match unsafe { (*out_result).fee.record(&wallet, sent) } {
+    match unsafe { (*out_result).record(&wallet, sent) } {
         Ok(tx_hash) => {
             let tx_hash = c_string_or_null(tx_hash);
 
@@ -288,7 +289,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_deshielded(
         CreditDelivery::Automatic,
     ))
     .map(|(tx_hash, _)| tx_hash);
-    match unsafe { (*out_result).fee.record(&wallet, sent) } {
+    match unsafe { (*out_result).record(&wallet, sent) } {
         Ok(tx_hash) => {
             let tx_hash = c_string_or_null(tx_hash);
 
@@ -384,7 +385,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
         CreditDelivery::Automatic,
     ))
     .map(|(tx_hash, _)| tx_hash);
-    match unsafe { (*out_result).fee.record(&wallet, sent) } {
+    match unsafe { (*out_result).record(&wallet, sent) } {
         Ok(tx_hash) => {
             let tx_hash = c_string_or_null(tx_hash);
 
@@ -478,7 +479,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded_owned(
         CreditDelivery::Automatic,
     ))
     .map(|(tx_hash, _)| tx_hash);
-    match unsafe { (*out_result).fee.record(&wallet, sent) } {
+    match unsafe { (*out_result).record(&wallet, sent) } {
         Ok(tx_hash) => {
             let tx_hash = c_string_or_null(tx_hash);
 
@@ -566,7 +567,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private_owned(
         CreditDelivery::Automatic,
     ))
     .map(|(tx_hash, _)| tx_hash);
-    match unsafe { (*out_result).fee.record(&wallet, sent) } {
+    match unsafe { (*out_result).record(&wallet, sent) } {
         Ok(tx_hash) => {
             let tx_hash = c_string_or_null(tx_hash);
 
@@ -602,6 +603,6 @@ pub unsafe extern "C" fn wallet_ffi_free_transfer_result(result: *mut FfiTransfe
         if !result.tx_hash.is_null() {
             drop(CString::from_raw(result.tx_hash));
         }
-        result.fee.free();
+        result.dry_run.free();
     }
 }
