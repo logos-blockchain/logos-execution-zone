@@ -11294,7 +11294,6 @@ dependencies = [
  "glob",
  "kameo",
  "kameo_actors",
- "lee_core",
  "log",
  "logos-blockchain-binary-codec",
  "logos-blockchain-common-http-client",
