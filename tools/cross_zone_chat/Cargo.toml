@@ -24,3 +24,5 @@ axum.workspace = true
 log.workspace = true
 env_logger.workspace = true
 rand.workspace = true
+lee_core.workspace = true
+testnet_initial_state.workspace = true

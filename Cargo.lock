@@ -2199,6 +2199,7 @@ dependencies = [
  "cross_zone_outbox_core",
  "env_logger",
  "lee",
+ "lee_core",
  "log",
  "ping_core",
  "programs",
@@ -2206,6 +2207,7 @@ dependencies = [
  "sequencer_service_rpc",
  "serde",
  "test_fixtures",
+ "testnet_initial_state",
  "tokio",
 ]
 

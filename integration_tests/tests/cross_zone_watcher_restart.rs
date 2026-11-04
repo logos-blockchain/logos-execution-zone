@@ -26,6 +26,7 @@ use integration_tests::{
 use lee::{
     AccountId, Actor, PublicAccountEvidence, PublicTransaction, public_transaction::Message,
 };
+use lee_core::account::Nonce;
 use ping_core::{
     ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id,
     sender_config_account_id,
@@ -33,6 +34,7 @@ use ping_core::{
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::config::source_only_cross_zone;
+use testnet_initial_state::{PublicAccountPrivateInitialData, initial_pub_accounts_private_keys};
 use tokio::test;
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(480);
@@ -90,8 +92,15 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
         .context("Failed to set up zone B sequencer")?;
 
     // Deliver one ping, so the peer channel holds a dispatch worth replaying.
-    sequencer_client(seq_a.addr())?
-        .send_transaction(build_ping_tx(zone_b, receiver_id))
+    let seq_client_a = sequencer_client(seq_a.addr())?;
+    let payer = &initial_pub_accounts_private_keys()[0];
+    let payer_nonce = seq_client_a
+        .get_account(payer.account_id)
+        .await?
+        .unwrap_or_default()
+        .nonce;
+    seq_client_a
+        .send_transaction(build_ping_tx(zone_b, receiver_id, payer, payer_nonce))
         .await
         .context("Failed to submit ping on zone A")?;
     let record_id = ping_record_pda(receiver_id);
@@ -189,7 +198,12 @@ async fn wait_for_block_id(
 
 /// Builds a top-level `ping_sender` transaction that chains into the outbox to emit
 /// a message carrying a `ping_receiver::Record` message for the target zone.
-fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransaction {
+fn build_ping_tx(
+    target_zone: [u8; 32],
+    receiver_id: AccountId,
+    payer: &PublicAccountPrivateInitialData,
+    payer_nonce: Nonce,
+) -> LeeTransaction {
     let outbox_id = programs::cross_zone_outbox_account_id();
     let ordinal = 0;
 
@@ -221,13 +235,18 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransactio
             program: outbox_id,
             seed: outbox_pda_seed(sender_id, &target_zone, ordinal),
         }],
-        ..Message::try_new(config, vec![config, outbox], BTreeMap::new(), send)
-            .expect("build ping message")
+        ..Message::try_new_with_fees(
+            config,
+            vec![config, outbox],
+            BTreeMap::from([(payer.account_id, payer_nonce)]),
+            send,
+            common::test_utils::test_fee_declaration(payer.account_id),
+        )
+        .expect("build ping message")
     };
-    LeeTransaction::Public(PublicTransaction::new(
-        message,
-        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
-    ))
+    let witness_set =
+        lee::public_transaction::WitnessSet::for_message(&message, &[&payer.pub_sign_key]);
+    LeeTransaction::Public(PublicTransaction::new(message, witness_set))
 }
 
 /// Polls zone B's sequencer until the ping record PDA holds a payload.
