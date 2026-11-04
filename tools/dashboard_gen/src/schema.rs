@@ -649,10 +649,10 @@ pub struct PanelModel {
     /// Lower bound on the query step, and so on `$__interval`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interval: Option<String>,
-    /// Upper bound on the points per series, and so a lower one on the step.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<PanelLink>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Upper bound on the points per series, and so a lower one on the step.
     pub max_data_points: Option<u32>,
     pub options: Options,
     pub targets: Vec<Target>,
