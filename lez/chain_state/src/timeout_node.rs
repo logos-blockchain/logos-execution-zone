@@ -18,9 +18,9 @@ use logos_blockchain_zone_sdk::{
 
 pub const NODE_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Several block times at the 4s slots `bedrock/deployment-settings.yaml` sets;
-/// a slower chain needs more. Doubles as the reconnect period.
-pub const NODE_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+/// Deliberately generous: it only has to tell a dead subscription from a quiet
+/// chain, and tripping a healthy one costs a stand-down until it reconnects.
+pub const NODE_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Inherits the default `zone_messages_*`, dropping any backend override.
 #[derive(Clone)]
