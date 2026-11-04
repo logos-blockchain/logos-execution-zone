@@ -347,7 +347,6 @@ pub fn run(
             SlasherActor::load(
                 storage_ref.clone(),
                 channel_signing_key.clone(),
-                sequencer_slasher_actor::protocol::SequencerStakeConfig::default(),
                 *bedrock_config.channel_id.as_ref(),
             )
             .await,

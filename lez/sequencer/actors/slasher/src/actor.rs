@@ -57,23 +57,24 @@ pub struct SlasherActor<S: StorageActorTrait> {
     found: BTreeSet<Offence>,
     /// Peer approvals, for offences in `found` only.
     approvals: Approvals,
-    /// Approvals that arrived before this node followed the offence itself.
-    /// In memory only: the offences are unverified and must not reach disk.
+    /// Approvals that arrived before this node followed the offence itself, or
+    /// before it had a committee to screen them against. In memory only: the
+    /// offences are unverified and must not reach disk.
     early: Approvals,
     /// The committee approvals are screened against, refreshed every `Propose`.
-    config: SequencerStakeConfig,
+    /// `None` until [`SetCommittee`] or [`Propose`] brings the first one.
+    config: Option<SequencerStakeConfig>,
     /// Where own approvals go. `None` until gossip is up, or when it is off.
     publisher: Option<mpsc::Sender<Approval>>,
 }
 
 impl<S: StorageActorTrait> SlasherActor<S> {
-    /// Restores the persisted record, empty if none was written. `config` is the
-    /// committee approvals are screened against until [`SetCommittee`] or
-    /// [`Propose`] brings a newer one.
+    /// Restores the persisted record, empty if none was written. Approvals are
+    /// held until [`SetCommittee`] or [`Propose`] brings a committee to screen
+    /// them against.
     pub async fn load(
         storage_ref: ActorRef<S>,
         approver: Ed25519Key,
-        config: SequencerStakeConfig,
         channel_id: [u8; 32],
     ) -> Self {
         let (found, approvals) = storage_ref
@@ -96,7 +97,7 @@ impl<S: StorageActorTrait> SlasherActor<S> {
             found,
             approvals,
             early: Approvals::new(),
-            config,
+            config: None,
             publisher: None,
         }
     }
@@ -202,7 +203,7 @@ impl<S: StorageActorTrait> SlasherActor<S> {
         // collects what its peers sent.
         let moved = self.drain_early(&config);
         // Kept so the next inbound approval can be screened on arrival.
-        self.config = config;
+        self.config = Some(config);
 
         if moved && let Err(err) = self.persist().await {
             warn!("Failed to persist drained slash approvals: {err}");
@@ -285,13 +286,16 @@ impl<S: StorageActorTrait> Message<Propose> for SlasherActor<S> {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.adopt_config(config).await;
+        let Some(committee) = &self.config else {
+            return Vec::new();
+        };
 
         // Only an accredited key's approval counts.
-        if !self.config.is_accredited_committee_member(&self.own_key) {
+        if !committee.is_accredited_committee_member(&self.own_key) {
             return Vec::new();
         }
 
-        let threshold = slash_approval_threshold(self.config.accredited_committee_members_count());
+        let threshold = slash_approval_threshold(committee.accredited_committee_members_count());
         let mut proposed = Vec::new();
         // One burn takes the whole stake, so keep one offence per offender.
         let mut proposed_for = BTreeSet::new();
@@ -299,10 +303,10 @@ impl<S: StorageActorTrait> Message<Propose> for SlasherActor<S> {
             if proposed_for.contains(&offence.offender) {
                 continue;
             }
-            let Some(entry) = self.config.entries.get(&offence.offender) else {
+            let Some(entry) = committee.entries.get(&offence.offender) else {
                 continue;
             };
-            let approvals = self.approvals_for(offence, &self.config);
+            let approvals = self.approvals_for(offence, committee);
             if approvals.len() < threshold {
                 continue;
             }
@@ -339,7 +343,11 @@ impl<S: StorageActorTrait> Message<Approval> for SlasherActor<S> {
             return;
         }
         // Ahead of the signature check, so a junk key buys no verification.
-        if !self.config.is_accredited_committee_member(&msg.signer) {
+        if self
+            .config
+            .as_ref()
+            .is_some_and(|config| !config.is_accredited_committee_member(&msg.signer))
+        {
             return;
         }
         // A peer is trusted for its signature, never for the offence itself.
@@ -352,8 +360,9 @@ impl<S: StorageActorTrait> Message<Approval> for SlasherActor<S> {
             signature,
         } = msg;
 
-        // Not followed here yet, so hold it: nothing would re-send it.
-        if !self.found.contains(&offence) {
+        // Not followed here yet, or no committee to screen it against, so hold
+        // it: nothing would re-send it.
+        if self.config.is_none() || !self.found.contains(&offence) {
             self.hold_early(offence, signer, signature);
             return;
         }
@@ -514,11 +523,22 @@ mod tests {
         SequencerKey::new(approver_signing_key().public_key().to_bytes()).expect("valid key")
     }
 
-    /// Loaded with the whole committee accredited; a narrower `Propose` replaces it.
+    /// Handed the whole committee accredited; a narrower `Propose` replaces it.
     async fn slasher(approver: Ed25519Key) -> Slasher {
         let own = SequencerKey::new(approver.public_key().to_bytes()).expect("valid key");
-        let config = config_staking(&[own, offender(), peer(), second_peer()]);
-        SlasherActor::spawn(SlasherActor::load(storage(), approver, config, CHANNEL).await)
+        let slasher = slasher_without_committee(approver).await;
+        refresh(
+            &slasher,
+            config_staking(&[own, offender(), peer(), second_peer()]),
+        )
+        .await;
+
+        slasher
+    }
+
+    /// Not handed a committee yet, as while the executor bootstraps.
+    async fn slasher_without_committee(approver: Ed25519Key) -> Slasher {
+        SlasherActor::spawn(SlasherActor::load(storage(), approver, CHANNEL).await)
     }
 
     fn signed_by(key: &Ed25519Key, inscription: [u8; 32]) -> ReportedOffence {
@@ -835,6 +855,30 @@ mod tests {
         send(&slasher, peer_approval(PEER_SECRET, INSCRIPTION)).await;
 
         assert_eq!(propose(&slasher, committee()).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_approval_that_arrives_before_the_first_committee_still_counts() {
+        let slasher = slasher_without_committee(approver_signing_key()).await;
+        report(&slasher, vec![signed_by_offender(INSCRIPTION)]).await;
+        send(&slasher, peer_approval(PEER_SECRET, INSCRIPTION)).await;
+
+        assert_eq!(
+            approvals_in(&propose(&slasher, committee()).await),
+            vec![approver(), peer()]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_approval_held_for_the_first_committee_is_screened_by_it() {
+        let slasher = slasher_without_committee(approver_signing_key()).await;
+        report(&slasher, vec![signed_by_offender(INSCRIPTION)]).await;
+        send(&slasher, peer_approval(PEER_SECRET, INSCRIPTION)).await;
+
+        // The first committee does not accredit the peer, so its approval goes.
+        refresh(&slasher, config_staking(&[approver(), offender()])).await;
+
+        assert!(propose(&slasher, committee()).await.is_empty());
     }
 
     #[tokio::test]
