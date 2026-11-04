@@ -1,5 +1,5 @@
 use lee::{AccountId, privacy_preserving_transaction::circuit::ProgramCatalog, program::Program};
-use program_deployment::deploy_program;
+use program_deployment::{deploy_or_reuse, deploy_program};
 use wallet::{AccountIdentity, WalletCore};
 
 // Before running this example, compile the `simple_tail_call.rs` and `hello_world.rs` guest
@@ -14,7 +14,11 @@ use wallet::{AccountIdentity, WalletCore};
 //
 // Usage:
 //   cargo run --bin run_hello_world_through_tail_call_private \
-//     /path/to/simple_tail_call/binary /path/to/hello_world/binary <account_id> <payer_account_id>
+//     /path/to/simple_tail_call/binary /path/to/hello_world/binary <account_id> <payer_account_id> \
+//     [<hello_world_program_id>]
+//
+// Note: pass <hello_world_program_id> to call an already deployed `hello_world`, such as the one
+// `run_hello_world` printed, instead of deploying a new instance
 //
 // Example:
 //   cargo run --bin run_hello_world_through_tail_call_private \
@@ -49,8 +53,13 @@ async fn main() {
         .unwrap()
         .parse()
         .unwrap();
+    // Optional fifth argument is the ID of a deployed `hello_world` to call, so the greeting lands
+    // in that instance's actor state. Without it, a new instance is deployed.
+    let hello_world_program_id: Option<AccountId> = std::env::args_os()
+        .nth(5)
+        .map(|id| id.into_string().unwrap().parse().unwrap());
 
-    // Deploy both programs through `program_loader` so their `ProgramImageClaim`s have state to
+    // Deploy the programs through `program_loader` so their `ProgramImageClaim`s have state to
     // anchor against.
     let simple_tail_call_bytecode: Vec<u8> = std::fs::read(simple_tail_call_path).unwrap();
     let simple_tail_call = Program::new(simple_tail_call_bytecode.clone().into()).unwrap();
@@ -60,9 +69,14 @@ async fn main() {
 
     let hello_world_bytecode: Vec<u8> = std::fs::read(hello_world_path).unwrap();
     let hello_world = Program::new(hello_world_bytecode.clone().into()).unwrap();
-    let hello_world_id = deploy_program(&mut wallet_core, hello_world_bytecode, payer)
-        .await
-        .unwrap();
+    let hello_world_id = deploy_or_reuse(
+        &mut wallet_core,
+        hello_world_bytecode,
+        payer,
+        hello_world_program_id,
+    )
+    .await
+    .unwrap();
 
     let programs = ProgramCatalog::from([
         (simple_tail_call_id, simple_tail_call),

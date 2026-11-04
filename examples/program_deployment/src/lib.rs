@@ -42,6 +42,22 @@ pub async fn deploy_program<C: WalletSequencerClient>(
     Ok(program_id)
 }
 
+/// Returns the program a runner should call: `existing` if given, else `bytecode` newly deployed.
+///
+/// Each deployment is a new instance with its own actor states, so a run that continues from an
+/// earlier run's state has to name that run's program ID.
+pub async fn deploy_or_reuse<C: WalletSequencerClient>(
+    wallet_core: &mut WalletCore<C>,
+    bytecode: Vec<u8>,
+    payer: AccountId,
+    existing: Option<AccountId>,
+) -> anyhow::Result<AccountId> {
+    match existing {
+        Some(program_id) => Ok(program_id),
+        None => deploy_program(wallet_core, bytecode, payer).await,
+    }
+}
+
 /// Declares `payer` as the fee payer of a hand-built public transaction.
 ///
 /// Returns the fee declaration together with the payer's current nonce and signing key: the
