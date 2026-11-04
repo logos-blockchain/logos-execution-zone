@@ -101,42 +101,42 @@ mod tests {
         }
 
         async fn time_info(&self) -> Result<TimeInfo, Error> {
-            unimplemented!()
+            std::future::pending().await
         }
 
         async fn channel_state(&self, _: ChannelId) -> Result<Option<ChannelState>, Error> {
-            unimplemented!()
+            std::future::pending().await
         }
 
         async fn block_stream(&self) -> Result<BoxStream<ProcessedBlockEvent>, Error> {
-            unimplemented!()
+            std::future::pending().await
         }
 
         async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, Error> {
-            unimplemented!()
+            std::future::pending().await
         }
 
         async fn block(&self, _: HeaderId) -> Result<Option<ApiBlock>, Error> {
-            unimplemented!()
+            std::future::pending().await
         }
 
         async fn block_events(&self, _: HeaderId) -> Result<Option<Events>, Error> {
-            unimplemented!()
+            std::future::pending().await
         }
 
         async fn immutable_blocks(&self, _: Slot, _: Slot) -> Result<Vec<ApiBlock>, Error> {
-            unimplemented!()
+            std::future::pending().await
         }
 
         async fn post_transaction(
             &self,
             _: SignedOps<Unverified, StandardMode>,
         ) -> Result<(), Error> {
-            unimplemented!()
+            std::future::pending().await
         }
 
         async fn fund_tx(&self, _: WalletFundRequestBody) -> Result<WalletFundResponseBody, Error> {
-            unimplemented!()
+            std::future::pending().await
         }
     }
 
