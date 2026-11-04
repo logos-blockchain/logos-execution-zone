@@ -14,8 +14,8 @@ use wallet::{AccountIdentity, WalletCore};
 //
 // Usage:
 //   cargo run --bin run_hello_world_through_tail_call_private \
-//     /path/to/simple_tail_call/binary /path/to/hello_world/binary <account_id> <payer_account_id> \
-//     [<hello_world_program_id>]
+//     /path/to/simple_tail_call/binary /path/to/hello_world/binary <account_id> \
+//     <payer_account_id> [<hello_world_program_id>]
 //
 // Note: pass <hello_world_program_id> to call an already deployed `hello_world`, such as the one
 // `run_hello_world` printed, instead of deploying a new instance
