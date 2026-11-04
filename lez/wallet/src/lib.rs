@@ -2142,6 +2142,8 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .signers()
             .len()
             .saturating_add(usize::from(co_signer.is_some()));
+        // Measure if dry-run, or if either gas limit or max fee is unset;
+        // pinning both fields skips the simulation and its revert check.
         let measured = if self.dry_run || gas_limit.is_none() || max_fee.is_none() {
             Some(
                 self.measure_public(&message, signers, budget, &acc_manager)
