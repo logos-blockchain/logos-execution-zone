@@ -1,0 +1,17 @@
+[package]
+name = "hbs-bench"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+k256 = { version = "0.13", features = ["schnorr"] }
+sha2 = "0.10"
+slh-dsa = "0.2.0-rc.5"
+xmss = "0.1.0-pre.0"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
