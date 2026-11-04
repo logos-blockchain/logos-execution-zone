@@ -111,7 +111,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
                 bootstrap_to,
                 actors,
             )))
-        } else if channel_tip_slot.is_some() && local_tip.is_some() {
+        } else if channel_tip_slot.is_some() {
+            // Creation would configure the channel anew, which an existing one rejects.
+            if local_tip.is_none() {
+                return Err(Error::ChannelWithoutBlocks(channel_id));
+            }
             info!("Channel holds nothing to bootstrap from; resuming on the stored chain");
 
             Ok(Self::Online(
