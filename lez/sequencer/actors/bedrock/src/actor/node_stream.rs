@@ -7,8 +7,7 @@ use common::block::Block;
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 use kameo::actor::ActorRef;
 use kameo_actors::broker::Broker;
-use lee_core::BlockId;
-use log::{info, warn};
+use log::warn;
 use logos_blockchain_common_http_client::ProcessedBlockEvent;
 use logos_blockchain_core::mantle::ops::channel::withdraw::ChannelWithdrawOp;
 use logos_blockchain_zone_sdk::{
@@ -38,7 +37,6 @@ const MAX_RETRY_DELAY: Duration = Duration::from_secs(5);
 pub struct NodeStream {
     channel_id: ChannelId,
     stream: BoxStream<Result<(ZoneMessage, Slot)>>,
-    last_seen_block: Option<BlockId>,
     broker_ref: ActorRef<Broker<ChannelEvent>>,
 }
 
@@ -67,7 +65,6 @@ impl NodeStream {
         Ok(Self {
             channel_id,
             stream: Box::pin(stream),
-            last_seen_block: anchor.as_ref().map(|anchor| anchor.block_id),
             broker_ref,
         })
     }
@@ -156,20 +153,7 @@ impl NodeStream {
         match msg {
             ZoneMessage::Block(zone_block) => {
                 let block = match borsh::from_slice::<Block>(&zone_block.data) {
-                    Ok(block) => {
-                        let block_id = block.header.block_id;
-                        if let Some(last_seen_block) = self.last_seen_block
-                            && last_seen_block > block_id
-                        {
-                            info!(
-                                "Skipping block with ID {block_id} as it is older than the last seen block {last_seen_block}",
-                            );
-                            return Ok(());
-                        }
-                        self.last_seen_block = Some(block_id);
-
-                        BlockData::Block(block)
-                    }
+                    Ok(block) => BlockData::Block(block),
                     Err(_) => BlockData::Undecodable(zone_block.data.into()),
                 };
 
@@ -334,25 +318,21 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn the_anchor_block_is_published_again() {
-        let channel_id = ChannelId::from([1; 32]);
-        let block = HashableBlockData {
+    fn block(block_id: u64) -> Block {
+        HashableBlockData {
             reverted: Vec::new(),
-            block_id: 7,
+            block_id,
             prev_block_hash: HashType([0; 32]),
-            timestamp: 700,
+            timestamp: 0,
             transactions: Vec::new(),
         }
-        .into_pending_block();
-        let anchor = ZoneAnchorRecord {
-            slot: 42,
-            block_id: block.header.block_id,
-            hash: block.header.hash,
-        };
+        .into_pending_block()
+    }
 
+    /// A node stream over no node, and the ids of the finalized blocks it publishes.
+    async fn node_stream(channel_id: ChannelId) -> (NodeStream, mpsc::UnboundedReceiver<MsgId>) {
         let broker_ref = Broker::spawn(Broker::new(DeliveryStrategy::Guaranteed));
-        let (sender, mut published) = mpsc::unbounded_channel();
+        let (sender, published) = mpsc::unbounded_channel();
         broker_ref
             .tell(Subscribe {
                 topic: glob::Pattern::new(&format!("channel/{channel_id}/**"))
@@ -361,35 +341,48 @@ mod tests {
             })
             .await
             .expect("the broker is running");
-        let mut node_stream = NodeStream {
+        let node_stream = NodeStream {
             channel_id,
             stream: futures::stream::empty().boxed(),
-            last_seen_block: Some(anchor.block_id),
             broker_ref,
         };
 
-        let msg_id = MsgId::from([2; 32]);
+        (node_stream, published)
+    }
+
+    async fn read(node_stream: &mut NodeStream, msg_id: MsgId, block: &Block, slot: u64) {
         node_stream
             .on_message(
                 ZoneMessage::Block(ZoneBlock {
                     id: msg_id,
-                    data: borsh::to_vec(&block)
-                        .expect("serialize")
-                        .try_into()
-                        .unwrap(),
+                    data: borsh::to_vec(block).expect("serialize").try_into().unwrap(),
                     signer: Ed25519Key::from_bytes(&[3; 32])
                         .public_key()
                         .into_unverified(),
                 }),
-                Slot::from(anchor.slot),
+                Slot::from(slot),
             )
             .await
             .expect("the broker is running");
+    }
 
-        let republished = tokio::time::timeout(Duration::from_secs(5), published.recv())
+    async fn next_published(published: &mut mpsc::UnboundedReceiver<MsgId>) -> Option<MsgId> {
+        tokio::time::timeout(Duration::from_secs(5), published.recv())
             .await
-            .expect("the anchor block is published");
-        assert_eq!(republished, Some(msg_id));
+            .expect("a block is published")
+    }
+
+    #[tokio::test]
+    async fn a_block_numbered_below_an_earlier_one_is_published() {
+        let (mut node_stream, mut published) = node_stream(ChannelId::from([1; 32])).await;
+        read(&mut node_stream, MsgId::from([2; 32]), &block(7), 42).await;
+        next_published(&mut published).await;
+
+        // A misplaced block, which only the consumer can judge.
+        let misplaced = MsgId::from([4; 32]);
+        read(&mut node_stream, misplaced, &block(5), 43).await;
+
+        assert_eq!(next_published(&mut published).await, Some(misplaced));
     }
 
     #[tokio::test(start_paused = true)]
