@@ -126,7 +126,7 @@ async fn a_fresh_start_creates_the_channel_on_genesis() -> Result<()> {
     let (config, _home) = sequencer_config();
     let accounts = initial_public_user_accounts();
     let store = SharedStore::default();
-    let executor = start(&config, &store, &CannedChannel::empty().share()).await?;
+    let executor = start(&config, &store, &CannedChannel::absent().share()).await?;
 
     assert_eq!(executor.ask(GetLastBlockId).await?, 1);
     assert_eq!(
@@ -157,7 +157,7 @@ async fn creating_a_channel_needs_a_genesis_config() {
         ..config
     };
     let channel_id = config.bedrock_config.channel_id;
-    let channel = CannedChannel::empty().share();
+    let channel = CannedChannel::absent().share();
 
     let executor = ExecutorActor::spawn(
         Box::pin(executor_args(
@@ -179,6 +179,44 @@ async fn creating_a_channel_needs_a_genesis_config() {
     assert!(
         missing_genesis,
         "a node without a genesis config created the channel"
+    );
+}
+
+#[test]
+async fn an_empty_store_does_not_create_a_channel_that_is_only_configured() {
+    let (config, _home) = sequencer_config();
+    let channel_id = config.bedrock_config.channel_id;
+
+    let executor = ExecutorActor::spawn(
+        Box::pin(executor_args(
+            config,
+            MockStorageActor::spawn(SharedStore::default().mock()),
+            spawn_bedrock_pool(|_channel_id| {
+                // Any creation attempt is an unexpected call, failing the start with a panic.
+                let mut bedrock = MockBedrockActor::default();
+                bedrock
+                    .expect_handle_get_channel_tip_slot()
+                    .returning(|_msg, _ctx| Ok(Some(Slot::from(5))));
+                bedrock
+                    .expect_handle_get_channel_tip_message_id()
+                    .returning(|_msg, _ctx| Ok(Some(MsgId::root())));
+                bedrock
+            }),
+        ))
+        .await,
+    );
+
+    let without_blocks = executor
+        .wait_for_startup_with_result(|res| {
+            matches!(
+                res,
+                Err(HookError::Error(Error::ChannelWithoutBlocks(id))) if id == &channel_id
+            )
+        })
+        .await;
+    assert!(
+        without_blocks,
+        "a node with an empty store tried to create a channel that is already configured"
     );
 }
 
@@ -299,7 +337,7 @@ async fn a_restart_restores_the_state_from_storage() -> Result<()> {
     let (config, _home) = sequencer_config();
     let accounts = initial_public_user_accounts();
     let store = SharedStore::default();
-    let channel = CannedChannel::empty().share();
+    let channel = CannedChannel::absent().share();
     let balance_to_move = 13;
 
     // A block moving `balance_to_move` from account 0 to account 1 is stored before the restart.
@@ -352,7 +390,7 @@ async fn a_restart_restores_the_state_from_storage() -> Result<()> {
 async fn a_block_produced_after_a_restart_chains_on_the_stored_tip() -> Result<()> {
     let (config, _home) = sequencer_config();
     let store = SharedStore::default();
-    let channel = CannedChannel::empty().share();
+    let channel = CannedChannel::absent().share();
 
     {
         let executor = start(&config, &store, &channel).await?;
@@ -460,7 +498,7 @@ async fn a_buffered_startup_checkpoint_cannot_rewind_the_pin() -> Result<()> {
 async fn a_restart_restores_the_head_tier_and_recovers_from_an_orphan() -> Result<()> {
     let (config, _home) = sequencer_config();
     let store = SharedStore::default();
-    let channel = CannedChannel::empty().share();
+    let channel = CannedChannel::absent().share();
     let tx = transfer(0, 10);
 
     // Produce block 2 (a user transfer), then stop before it finalizes.
@@ -547,7 +585,7 @@ async fn a_restart_restores_the_head_tier_and_recovers_from_an_orphan() -> Resul
 async fn a_restart_reanchors_on_the_persisted_final_snapshot() -> Result<()> {
     let (config, _home) = sequencer_config();
     let store = SharedStore::default();
-    let channel = CannedChannel::empty().share();
+    let channel = CannedChannel::absent().share();
 
     // Produce block 2 and follow its finalization, which persists the final
     // snapshot; then stop.
