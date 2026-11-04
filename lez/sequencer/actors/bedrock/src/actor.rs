@@ -1050,6 +1050,9 @@ fn block_inscription(block: &Block) -> Result<Inscription> {
 
 /// Funds `ops` from the node's wallet, which appends a fee transfer (paid from
 /// `funding_key`, change back to it) and returns its proof.
+///
+/// A timed-out call can leave the node's wallet holding its funding-note
+/// reservation until `pending_note_expiry_blocks` releases it.
 async fn fund_ops(
     node: &TimeoutNode<NodeHttpClient>,
     config: &Config,
