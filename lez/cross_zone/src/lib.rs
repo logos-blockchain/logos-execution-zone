@@ -40,6 +40,20 @@ pub struct Emission {
     pub payload: Vec<u8>,
 }
 
+impl Emission {
+    /// The ordinal only shapes the source-side outbox slot, so it is dropped.
+    #[must_use]
+    pub fn declared(source: AccountId, wire: cross_zone_emission_core::CrossZoneEmission) -> Self {
+        Self {
+            source,
+            target_zone: wire.target_zone,
+            target_account_id: wire.target_account_id,
+            target_accounts: wire.target_accounts,
+            payload: wire.payload,
+        }
+    }
+}
+
 /// Where a delivery came from on the peer chain.
 ///
 /// One struct so the watcher and the verifier fill the same field list: their
@@ -76,41 +90,16 @@ pub fn extract_emission(tx: &lee::PublicTransaction) -> Option<Emission> {
     if to.program_account_id == programs::ping_sender_account_id() {
         // Not every transaction to an emitter emits: `InitConfig` is one of its
         // messages, so a non-`Send` decode is an ordinary non-emitting tx.
-        let Ok(ping_core::SenderMessage::Send {
-            target_zone,
-            target_account_id,
-            target_accounts,
-            payload,
-            ..
-        }) = borsh::from_slice(message)
-        else {
+        let Ok(ping_core::SenderMessage::Send { emission, .. }) = borsh::from_slice(message) else {
             return None;
         };
-        Some(Emission {
-            source: to.program_account_id,
-            target_zone,
-            target_account_id,
-            target_accounts,
-            payload,
-        })
+        Some(Emission::declared(to.program_account_id, emission))
     } else if to.program_account_id == programs::bridge_lock_account_id() {
-        let Ok(bridge_lock_core::Message::Lock {
-            target_zone,
-            target_account_id,
-            target_accounts,
-            payload,
-            ..
-        }) = borsh::from_slice(message)
+        let Ok(bridge_lock_core::Message::Lock { emission, .. }) = borsh::from_slice(message)
         else {
             return None;
         };
-        Some(Emission {
-            source: to.program_account_id,
-            target_zone,
-            target_account_id,
-            target_accounts,
-            payload,
-        })
+        Some(Emission::declared(to.program_account_id, emission))
     } else {
         None
     }

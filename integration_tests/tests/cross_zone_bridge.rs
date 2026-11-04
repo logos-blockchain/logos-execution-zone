@@ -216,11 +216,13 @@ fn build_lock_tx(
     let lock = bridge_lock_core::Message::Lock {
         outbox,
         amount: LOCK_AMOUNT,
-        target_zone,
-        target_account_id: wrapped_token_id,
-        target_accounts,
-        payload,
-        ordinal,
+        emission: bridge_lock_core::CrossZoneEmission {
+            target_zone,
+            target_account_id: wrapped_token_id,
+            target_accounts,
+            payload,
+            ordinal,
+        },
     };
 
     // The lock is received at the holder's own actor, which its signature authorizes; it

@@ -1294,6 +1294,7 @@ name = "bridge_lock_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "cross_zone_emission_core",
  "lee_core",
  "risc0-zkvm",
 ]
@@ -2177,6 +2178,7 @@ dependencies = [
  "borsh",
  "bridge_lock_core",
  "common",
+ "cross_zone_emission_core",
  "cross_zone_inbox_core",
  "cross_zone_outbox_core",
  "hex",
@@ -2207,6 +2209,14 @@ dependencies = [
  "serde",
  "test_fixtures",
  "tokio",
+]
+
+[[package]]
+name = "cross_zone_emission_core"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "lee_core",
 ]
 
 [[package]]
@@ -9346,6 +9356,7 @@ name = "ping_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "cross_zone_emission_core",
  "lee_core",
  "risc0-zkvm",
 ]

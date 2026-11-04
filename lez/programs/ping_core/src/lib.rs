@@ -1,4 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+pub use cross_zone_emission_core::CrossZoneEmission;
 use lee_core::{
     account::{AccountId, Actor},
     program::PdaSeed,
@@ -105,14 +106,10 @@ impl ReceiverConfig {
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum SenderMessage {
     /// Emit a cross-zone message through `outbox`, which must run the pinned
-    /// outbox program.
+    /// outbox program. The trailing fields are the emission wire contract.
     Send {
         outbox: Actor,
-        target_zone: [u8; 32],
-        target_account_id: AccountId,
-        target_accounts: Vec<Actor>,
-        payload: Vec<u8>,
-        ordinal: u32,
+        emission: CrossZoneEmission,
     },
     /// Pins the outbox program, written once into an empty config actor state at
     /// genesis. A re-run naming a different outbox is refused; an identical one
@@ -190,16 +187,27 @@ mod tests {
     /// existing encoding.
     #[test]
     fn send_is_the_first_variant() {
-        let send = SenderMessage::Send {
-            outbox: Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32])),
+        let outbox = Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32]));
+        let emission = CrossZoneEmission {
             target_zone: [7; 32],
             target_account_id: AccountId::new([1; 32]),
             target_accounts: vec![],
             payload: vec![],
             ordinal: 0,
         };
+        let send = SenderMessage::Send {
+            outbox,
+            emission: emission.clone(),
+        };
         let bytes = borsh::to_vec(&send).expect("Send serializes");
-        assert_eq!(bytes[0], 0);
+
+        let mut expected = vec![0];
+        expected.extend(borsh::to_vec(&outbox).expect("outbox serializes"));
+        expected.extend(borsh::to_vec(&emission).expect("emission serializes"));
+        assert_eq!(
+            bytes, expected,
+            "Send is the tag, the outbox actor, then the emission wire fields"
+        );
     }
 
     /// `Record` is serialized by the source zone into the emission payload and

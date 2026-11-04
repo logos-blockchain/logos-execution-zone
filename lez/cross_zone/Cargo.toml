@@ -18,6 +18,7 @@ lee_core.workspace = true
 programs.workspace = true
 common.workspace = true
 cross_zone_inbox_core.workspace = true
+cross_zone_emission_core.workspace = true
 cross_zone_outbox_core.workspace = true
 bridge_lock_core.workspace = true
 ping_core.workspace = true
