@@ -1,8 +1,8 @@
 //! Clock Program.
 //!
 //! A system program that records the current block ID and timestamp into a single clock account.
-//! A message asserting either value, or reading the block ID, names its granularity: the clock
-//! rounds the value down to a multiple of it.
+//! A message asserting or reading either value names its granularity: the clock rounds the value
+//! down to a multiple of it.
 //!
 //! Only the sequencer may tick this program, as the last transaction in every block.
 //! The clock account uses this program's actor state.
@@ -60,18 +60,22 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
             );
             Response::keep_state()
         }
-        Message::ReadState { granularity } => {
-            let sender = input
-                .from
-                .expect("The clock replies to its sender, so a root call cannot read it");
-            Response::keep_state().send_sync(
-                sender,
-                &Reply::State {
-                    block_id: round_down(clock.block_id, granularity),
-                },
-            )
-        }
+        Message::ReadBlockId { granularity } => send_back(
+            input,
+            Reply::BlockId(round_down(clock.block_id, granularity)),
+        ),
+        Message::ReadTimestamp { granularity } => send_back(
+            input,
+            Reply::Timestamp(round_down(clock.timestamp, granularity)),
+        ),
     }
+}
+
+fn send_back(input: &ReceiveInput, reply: Reply) -> Response {
+    let sender = input
+        .from
+        .expect("The clock replies to its sender, so a root call cannot read it");
+    Response::keep_state().send_sync(sender, &reply)
 }
 
 fn round_down(value: u64, granularity: u64) -> u64 {
@@ -235,26 +239,29 @@ mod tests {
     }
 
     #[test]
-    fn a_read_sends_the_rounded_block_id_back_to_its_sender() {
+    fn a_read_sends_the_rounded_value_back_to_its_sender() {
         let sender = Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32]));
-        let transition = run_on(
-            CLOCK_PROGRAM_ACCOUNT_ID,
-            Some(sender),
-            data(57),
-            Message::ReadState { granularity: 10 },
-        );
+        for (message, reply) in [
+            (Message::ReadBlockId { granularity: 10 }, Reply::BlockId(50)),
+            (
+                Message::ReadTimestamp { granularity: 1_000 },
+                Reply::Timestamp(1_700_000_000),
+            ),
+        ] {
+            let transition = run_on(CLOCK_PROGRAM_ACCOUNT_ID, Some(sender), data(57), message);
 
-        assert_eq!(transition.response.post_state, None);
-        assert_eq!(
-            transition.response.sync_messages,
-            vec![SyncMessage::new(sender, &Reply::State { block_id: 50 })]
-        );
-        assert!(transition.response.async_messages.is_empty());
+            assert_eq!(transition.response.post_state, None);
+            assert_eq!(
+                transition.response.sync_messages,
+                vec![SyncMessage::new(sender, &reply)]
+            );
+            assert!(transition.response.async_messages.is_empty());
+        }
     }
 
     #[test]
     #[should_panic(expected = "The clock replies to its sender, so a root call cannot read it")]
     fn a_read_from_a_root_call_is_refused() {
-        let _transition = run(data(57), Message::ReadState { granularity: 1 });
+        let _transition = run(data(57), Message::ReadTimestamp { granularity: 1 });
     }
 }

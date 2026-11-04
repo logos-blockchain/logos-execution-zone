@@ -2400,6 +2400,67 @@ fn a_coarse_block_id_assert_from_a_guest_checks_the_rounded_block_id() {
     );
 }
 
+/// Sends `message` to the clock from the `clock_reader` guest and returns the reply it stored.
+fn clock_reply_to_guest(
+    clock: clock_core::ClockAccountData,
+    message: clock_core::Message,
+) -> clock_core::Reply {
+    let clock_reader = test_programs::clock_reader();
+    let clock_reader_id = AccountId::from_builtin_program(clock_reader.id());
+    let mut state = V03State::new().with_named_programs([
+        (programs::clock_account_id(), programs::clock()),
+        (clock_reader_id, clock_reader),
+    ]);
+    state.force_insert_account(
+        system_accounts::clock_account_id(),
+        Account::default().with_actor_state(programs::clock_account_id(), clock.to_bytes().into()),
+    );
+    let reader = Actor::new(AccountId::new([7; 32]), clock_reader_id);
+    state.force_insert_account(reader.account_id, Account::default());
+    let tx_message = lee::public_transaction::Message::try_new(
+        reader,
+        vec![reader, system_accounts::clock_actor()],
+        BTreeMap::new(),
+        message,
+    )
+    .unwrap();
+    let tx = PublicTransaction::new(
+        tx_message,
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+    );
+    state
+        .transition_from_public_transaction(&tx, 100, clock.timestamp)
+        .unwrap();
+    borsh::from_slice(
+        state
+            .get_account_by_id(reader.account_id)
+            .data
+            .actor_state(clock_reader_id)
+            .as_ref(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_guest_reading_the_clock_receives_the_rounded_value() {
+    let clock = clock_core::ClockAccountData {
+        block_id: 57,
+        timestamp: 125_400,
+    };
+
+    assert_eq!(
+        clock_reply_to_guest(clock, clock_core::Message::ReadBlockId { granularity: 50 }),
+        clock_core::Reply::BlockId(50)
+    );
+    assert_eq!(
+        clock_reply_to_guest(
+            clock,
+            clock_core::Message::ReadTimestamp { granularity: 1_000 }
+        ),
+        clock_core::Reply::Timestamp(125_000)
+    );
+}
+
 fn cooldown_data(cooldown_ms: u64, last_run_timestamp: u64) -> Vec<u8> {
     let mut buf = Vec::with_capacity(16);
     buf.extend_from_slice(&cooldown_ms.to_le_bytes());
