@@ -10,7 +10,7 @@ services:
       - ./scripts:/etc/logos-blockchain/scripts
       - ./kzgrs_test_params:/kzgrs_test_params:z
       - ./node-config.yaml:/etc/logos-blockchain/node-config.yaml:z
-      - ./deployment-settings.yaml:/etc/logos-blockchain/deployment-settings.yaml:z
+      - ${LEZ_COMPOSE_BEDROCK_DEPLOYMENT_SETTINGS:-./deployment-settings.yaml}:/etc/logos-blockchain/deployment-settings.yaml:z
       # The node's default `./state`, from `/`. Keeps the chain across restarts; `down -v` resets it.
       - bedrock_state:/state
     entrypoint: /etc/logos-blockchain/scripts/run_logos_blockchain_node.sh

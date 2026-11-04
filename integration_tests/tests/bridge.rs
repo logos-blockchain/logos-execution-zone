@@ -36,7 +36,13 @@ use logos_blockchain_http_api_common::{
 };
 use logos_blockchain_zone_sdk::{CommonHttpClient, node_types::ApiBlock};
 use sequencer_service_rpc::RpcClient as _;
-use test_fixtures::config::{UrlProtocol, addr_to_url, bedrock_channel_id, bedrock_funding_key};
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder,
+    config::{
+        MultiNodeTestContextConfig, UrlProtocol, addr_to_url, bedrock_channel_id,
+        bedrock_funding_key,
+    },
+};
 use tokio::test;
 
 const TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK: Duration = Duration::from_mins(2);
@@ -280,7 +286,7 @@ async fn submit_bedrock_deposit(
         )
         .await
         .context("Failed to split off a note of the deposit amount")?;
-        for _ in 0..20 {
+        for _ in 0..240 {
             tokio::time::sleep(Duration::from_millis(500)).await;
             note_id = exact_note().await?;
             if note_id.is_some() {
@@ -336,12 +342,20 @@ fn pins_note(block: &ApiBlock, note: NoteId) -> bool {
     })
 }
 
-/// A deposit is minted in a block published together with a transfer that
-/// spends the deposit's channel note, and its finalization does not mint it
-/// again.
+/// A deposit the sequencer sees before its finality is minted in a block
+/// published together with a transfer that spends the deposit's channel note,
+/// and its finalization does not mint it again. Finality is slowed so the
+/// deposit cannot finalize before the first turn and mint unpinned instead.
 #[test]
-async fn a_bedrock_deposit_is_minted_in_a_block_pinned_on_it_and_only_once() -> anyhow::Result<()> {
-    let ctx = TestContext::new().await?;
+async fn a_bedrock_deposit_seen_before_finality_is_minted_in_a_block_pinned_on_it_and_only_once()
+-> anyhow::Result<()> {
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(ZoneTestContextBuilder::new(
+            MultiNodeTestContextConfig::default(),
+        ))
+        .with_bedrock_settings("deployment-settings-slow-finality.yaml")
+        .build()
+        .await?;
     let recipient = PublicKey::new_from_private_key(&PrivateKey::new_os_random());
     let recipient_id = AccountId::from(&recipient);
     let amount = 1_u64;
@@ -390,6 +404,61 @@ async fn a_bedrock_deposit_is_minted_in_a_block_pinned_on_it_and_only_once() -> 
     ensure!(
         account_balance(&ctx, recipient_id).await? == u128::from(amount),
         "The finalized deposit credited the recipient again"
+    );
+
+    Ok(())
+}
+
+/// A deposit credits its recipient exactly once, whether it is minted pinned
+/// before its finality or from its store record after.
+#[test]
+async fn a_bedrock_deposit_is_minted_exactly_once() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let recipient = PublicKey::new_from_private_key(&PrivateKey::new_os_random());
+    let recipient_id = AccountId::from(&recipient);
+    let amount = 1_u64;
+
+    submit_bedrock_deposit(&ctx, recipient, amount).await?;
+
+    tokio::time::timeout(TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK, async {
+        while account_balance(&ctx, recipient_id).await? < u128::from(amount) {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        anyhow::Ok(())
+    })
+    .await
+    .context("The deposit never credited the recipient")??;
+    ensure!(
+        account_balance(&ctx, recipient_id).await? == u128::from(amount),
+        "The deposit credited the recipient more than once"
+    );
+
+    let client = CommonHttpClient::new(None);
+    let bedrock_url = addr_to_url(UrlProtocol::Http, ctx.bedrock_addr())?;
+    let credited_slot = u64::from(
+        client
+            .consensus_info(bedrock_url.clone())
+            .await
+            .context("Failed to read consensus info")?
+            .cryptarchia_info
+            .slot,
+    );
+    tokio::time::timeout(TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK, async {
+        loop {
+            let info = client.consensus_info(bedrock_url.clone()).await?;
+            if u64::from(info.cryptarchia_info.lib_slot) >= credited_slot {
+                return anyhow::Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .context("The deposit never became final")??;
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS).saturating_mul(2)).await;
+
+    ensure!(
+        account_balance(&ctx, recipient_id).await? == u128::from(amount),
+        "The deposit credited the recipient more than once"
     );
 
     Ok(())
