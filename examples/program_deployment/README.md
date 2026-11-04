@@ -77,7 +77,7 @@ export EXAMPLE_PROGRAMS_BUILD_DIR=$(pwd)/target/riscv32im-risc0-zkvm-elf/docker
 
 > [!IMPORTANT]
 > **All remaining commands must be run from the `examples/program_deployment` directory.**
-> Run them in a terminal that has both `PAYER` and `EXAMPLE_PROGRAMS_BUILD_DIR` exported.
+> Run them in a terminal that has both `PAYER` and `EXAMPLE_PROGRAMS_BUILD_DIR` exported, and stay in it: later sections export more IDs there.
 
 # 3. Hello world example
 
@@ -99,7 +99,7 @@ PROG_CLI {"program_id":"2SY3RTDvAST1Zkt92QZaDSDYtJUoLztxmTeYbdeyB9Wh"}
 ```
 
 > [!IMPORTANT]
-> Every run deploys a **new instance** of the program, with a new program account ID, even from the same `.bin`. An actor state belongs to one instance, so a run can't see what an earlier run wrote, and repeating a run adds a new actor state instead of appending to the old one.
+> By default every run deploys a **new instance** of the program, with a new program account ID, even from the same `.bin`. An actor state belongs to one instance, so such a run can't see what an earlier run wrote. To carry on from an earlier run, pass its program account ID to a runner that accepts one, as sections 11 and 12 do.
 
 > [!NOTE]
 > A deployment sends one transaction per bytecode segment plus one for the header, and waits for each to be included. Expect each deployed program to take a couple of minutes.
@@ -168,6 +168,11 @@ The `actor_states` map contains hex-encoded data, keyed by program account ID. D
 echo 486f6c61206d756e646f21 | xxd -r -p
 ```
 You should see `Hola mundo!`.
+
+Section 12 calls this same instance again, so export the program account ID the runner printed:
+```bash
+export HELLO_WORLD_ID=<hello_world program account ID>
+```
 
 Without `--raw`, the wallet prints the balance and nonce, then each program's actor state in hex.
 
@@ -396,62 +401,87 @@ The runner's subcommands use these messages on public and private accounts.
 > See `methods/guest/src/bin/hello_world_with_move_function.rs`. The program just reads the instruction bytes and updates the accounts state.
 > All privacy handling happens on the runner side. When constructing the transaction, the runner decides which accounts are public or private and prepares the appropriate proofs. The program itself can't differentiate between privacy modes.
 
-We'll reuse the accounts from the earlier sections: public account `BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9` and private account `7EDHyxejuynBpmbLuiEym9HMUyCYxZDuF8X3B89ADeMr`.
-
-> [!NOTE]
-> `write-public` must target an account that already exists on chain. This runner provides no admission evidence, so on a new account the call reverts with `UnadmittedPublicActor` and the account stays Uninitialized. `BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9` exists because of the Hello World write in section 4.
-
-Let's execute the write function on the public account
-
+Let's start by creating a new public account
 ```bash
-cargo run --bin run_hello_world_with_move_function \
-    $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world_with_move_function.bin \
-    $PAYER \
-    write-public BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9 mundo!
+wallet account new public
 ```
 
-And on the private account
+Output:
+```
+Generated new account with account_id Public/95iNQMbmxMRY6jULiHYkCzCkYKPEuysvBh5kEHayDxLs at path /0/0
+```
+
+Let's execute the write function. This first run deploys the program:
 
 ```bash
 cargo run --bin run_hello_world_with_move_function \
     $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world_with_move_function.bin \
     $PAYER \
-    write-private 7EDHyxejuynBpmbLuiEym9HMUyCYxZDuF8X3B89ADeMr Hola
+    write-public 95iNQMbmxMRY6jULiHYkCzCkYKPEuysvBh5kEHayDxLs mundo!
+```
+
+The next runs must use this same instance, so export the program account ID it printed:
+```bash
+export MOVE_PROGRAM_ID=<hello_world_with_move_function program account ID>
+```
+
+Let's crate a new private account.
+
+```bash
+wallet account new private
+```
+
+Output:
+```
+Generated new account with account_id Private/8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU at path /1
+```
+
+Let's execute the write function. The new account doesn't need any funds: the wallet pays the fee from the private account you funded in section 7.
+
+```bash
+cargo run --bin run_hello_world_with_move_function \
+    $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world_with_move_function.bin \
+    $PAYER \
+    --program-id $MOVE_PROGRAM_ID \
+    write-private 8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU Hola
 ```
 
 To check the values of the accounts are as expected run:
 ```bash
-wallet account get --raw --scope all --account-id Public/BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9
+wallet account get --raw --scope all --account-id Public/95iNQMbmxMRY6jULiHYkCzCkYKPEuysvBh5kEHayDxLs
 ```
 and
 
 ```bash
 wallet account sync-private
-wallet account get --raw --scope all --account-id Private/7EDHyxejuynBpmbLuiEym9HMUyCYxZDuF8X3B89ADeMr
+wallet account get --raw --scope all --account-id Private/8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU
 ```
 
-and check that each account has a new actor state, which decodes to `mundo!` and `Hola` respectively. They sit under two different program account IDs, because each run deployed its own instance.
+and check that the actor state data decodes to `mundo!` and `Hola` respectively. The sync also matters for the next step, which builds on the private account's local state.
 
-The runner can also build a move from the public account to the private account, in a single transaction that touches both.
+Now move the program's actor state data from the public account to the private account.
 
 ```bash
 cargo run --bin run_hello_world_with_move_function \
     $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world_with_move_function.bin \
     $PAYER \
-    move-data-public-to-private BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9 7EDHyxejuynBpmbLuiEym9HMUyCYxZDuF8X3B89ADeMr
+    --program-id $MOVE_PROGRAM_ID \
+    move-data-public-to-private 95iNQMbmxMRY6jULiHYkCzCkYKPEuysvBh5kEHayDxLs 8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU
 ```
 
-> [!WARNING]
-> This run succeeds but moves no data. It deploys yet another instance, and the source account holds nothing under that instance, so `mundo!` stays where it is and the private account gets no new data. The public account's nonce goes up by one, because it signs as the source of the move.
+After succeeding, repeat the get and sync commands. The program's actor state should be empty on the public account and contain `Holamundo!` on the private account.
 
 # 12. Program composition: tail calls
 Programs can chain calls to other programs when they return. This is the tail call or chained call mechanism. It is used by programs that depend on other programs.
 
-The examples include a `guest/src/bin/simple_tail_call.rs` program that shows how to trigger this mechanism. It keeps its own actor state unchanged and calls a Hello World program with a fixed greeting: `Hello from tail call`.
+The examples include a `guest/src/bin/simple_tail_call.rs` program that shows how to trigger this mechanism. It keeps its own actor state unchanged and internally calls the first Hello World program with a fixed greeting: `Hello from tail call`.
 
-The callee is named in the message rather than in the program, because a deployed program's address isn't known until deploy time. The runner deploys both programs, `simple_tail_call` first, and passes the callee actor as the message.
+The callee is named in the message rather than in the program, because a deployed program's address isn't known until deploy time. The runner deploys `simple_tail_call` and passes the callee actor as the message.
 
-We'll reuse public account `BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9`, which must already exist on chain for the same reason as `write-public` above.
+> [!NOTE]
+> The last argument is the Hello World instance to call, `$HELLO_WORLD_ID` from section 4. Without it the runner deploys a new `hello_world` from the `.bin`, and the greeting lands in that instance's actor state instead.
+
+We'll reuse public account `BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9`; its Hello World actor state contains `Hola mundo!`. It must already exist on chain, because this runner provides no admission evidence for it.
 
 Let's run the tail call program
 
@@ -460,7 +490,8 @@ cargo run --bin run_hello_world_through_tail_call \
     $EXAMPLE_PROGRAMS_BUILD_DIR/simple_tail_call.bin \
     $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world.bin \
     BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9 \
-    $PAYER
+    $PAYER \
+    $HELLO_WORLD_ID
 ```
 
 Once the transaction is processed, query the account values with:
@@ -469,43 +500,40 @@ Once the transaction is processed, query the account values with:
 wallet account get --raw --scope all --account-id Public/BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9
 ```
 
-You should se an output similar to the following, with the entries sorted by program account ID
+You should se an output similar to
 
 ```json
 {
   "actor_states": {
-    "<hello_world program account ID from section 4>": "486f6c61206d756e646f21",
-    "<hello_world_with_move_function program account ID>": "6d756e646f21",
-    "<hello_world program account ID from this run>": "48656c6c6f2066726f6d207461696c2063616c6c"
+    "<hello_world program account ID>": "486f6c61206d756e646f2148656c6c6f2066726f6d207461696c2063616c6c"
   },
-  "nonce": 1
+  "nonce": 0
 }
 ```
 
-The greeting lands in a new actor state because this run deployed its own `hello_world` instance. The second program account ID printed by the runner identifies it.
-
 Decoding the data
 ```bash
-echo 48656c6c6f2066726f6d207461696c2063616c6c | xxd -r -p
+echo 486f6c61206d756e646f2148656c6c6f2066726f6d207461696c2063616c6c | xxd -r -p
 ```
 
 Output:
 ```
-Hello from tail call
+Hola mundo!Hello from tail call
 ```
 ## Private tail-calls
 There's support for tail calls in privacy preserving executions too. The `run_hello_world_through_tail_call_private.rs` runner walks you through the process of invoking such an execution.
 It takes the same arguments, and the local execution uses both programs: the `simple_tail_call` and its dependency `hello_world`.
 
-Use the private account `7EDHyxejuynBpmbLuiEym9HMUyCYxZDuF8X3B89ADeMr` funded in section 7. This call writes its `hello_world` actor state.
+Use the private account `8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU` created in the previous example. This call writes its `hello_world` actor state.
 
 You can test the privacy tail calls with
 ```bash
 cargo run --bin run_hello_world_through_tail_call_private \
     $EXAMPLE_PROGRAMS_BUILD_DIR/simple_tail_call.bin \
     $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world.bin \
-    7EDHyxejuynBpmbLuiEym9HMUyCYxZDuF8X3B89ADeMr \
-    $PAYER
+    8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU \
+    $PAYER \
+    $HELLO_WORLD_ID
 ```
 
 >[!NOTE]
@@ -514,8 +542,10 @@ cargo run --bin run_hello_world_through_tail_call_private \
 Once finished run the following to see the changes
 ```bash
 wallet account sync-private
-wallet account get --raw --scope all --account-id Private/7EDHyxejuynBpmbLuiEym9HMUyCYxZDuF8X3B89ADeMr
+wallet account get --raw --scope all --account-id Private/8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU
 ```
+
+The `hello_world` actor state should decode to `Hello from tail call`.
 
 # 13. Program derived accounts: authorizing accounts through tail calls
 
