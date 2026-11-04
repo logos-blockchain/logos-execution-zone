@@ -238,7 +238,6 @@ async fn start_sequencer_bare_on(
         SlasherActor::load(
             storage_ref.clone(),
             channel_signing_key.clone(),
-            sequencer_stake_core::SequencerStakeConfig::default(),
             *config.bedrock_config.channel_id.as_ref(),
         )
         .await,
