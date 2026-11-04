@@ -262,6 +262,8 @@ impl SharedChannel {
                 block.header.block_id
             )));
         }
+        // The first publish creates the channel.
+        channel.tip_slot.get_or_insert_with(|| Slot::from(0));
         let this_msg = mock_msg_of(block);
         let tip = channel.tip.replace(this_msg);
         let parent = parent.or(tip).unwrap_or_else(MsgId::root);

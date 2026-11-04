@@ -23,6 +23,12 @@ pub enum Error {
     #[error("Channel {0} does not exist, and creating it needs a `genesis` config")]
     MissingGenesisConfig(crate::protocol::ChannelId),
 
+    #[error(
+        "Channel {0} is configured but holds no blocks, so there is nothing to join and it \
+         cannot be created anew"
+    )]
+    ChannelWithoutBlocks(crate::protocol::ChannelId),
+
     #[error("This node cannot run on this channel")]
     UnsupportedChannelParams(#[source] anyhow::Error),
 
