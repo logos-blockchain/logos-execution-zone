@@ -665,10 +665,10 @@ mod tests {
         let default = std::fs::read_to_string(bedrock.join("deployment-settings.yaml")).unwrap();
         let slow = std::fs::read_to_string(bedrock.join("deployment-settings-slow-finality.yaml"))
             .unwrap();
-        let patched = default.replacen("security_param: 5", "security_param: 20", 1);
+        let patched = default.replacen("security_param: 3", "security_param: 10", 1);
         assert_ne!(
             patched, default,
-            "the default settings no longer carry `security_param: 5`; regenerate the slow-finality file"
+            "the default settings no longer carry `security_param: 3`; regenerate the slow-finality file"
         );
         assert_eq!(
             slow, patched,
