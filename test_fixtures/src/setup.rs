@@ -624,7 +624,7 @@ pub async fn fund_private_accounts(
                 to_pk: None,
                 amount: private_account
                     .balance
-                    .checked_add(config::min_private_fee())
+                    .checked_add(config::shield_fee())
                     .expect("private funding overflow"),
             }),
         )
@@ -636,6 +636,22 @@ pub async fn fund_private_accounts(
                 private_account.account_id()
             )
         })?;
+        // With no headroom the reserve is the fee, priced off the bytes the wallet measured.
+        let Some(wallet::DeclaredFee::Private(fee)) = wallet.take_declared_fee() else {
+            bail!("The funding shield declared no private fee");
+        };
+        if fee.reserve != config::shield_fee() {
+            let bytes = fee
+                .reserve
+                .saturating_sub(config::private_fee(0))
+                .checked_div(u128::from(fee_core::market::BASE_FEE_STOR_MIN));
+            bail!(
+                "The funding shield paid {}, not the {} its pinned size prices; re-pin \
+                 `config::SHIELD_BYTES` to {bytes:?}",
+                fee.reserve,
+                config::shield_fee()
+            );
+        }
 
         wallet
             .sync_to_latest_block()

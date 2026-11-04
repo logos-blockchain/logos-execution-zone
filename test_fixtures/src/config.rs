@@ -32,10 +32,17 @@ pub const TEST_EXIT_DELAY: u64 = 3;
 
 // Balances are LGO-scale (`testnet_initial_state` precedent): a charged public
 // transaction reserves `gas_limit x base_fee` up front (~16M at wallet defaults)
-// and a privacy-preserving one pays at least [`min_private_fee`] (~5M), so
+// and a privacy-preserving one pays at least [`shield_fee`] (~5M), so
 // pre-fee-scale balances cannot afford a single transfer.
 pub const INITIAL_PUBLIC_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000_000, 20_000_000_000_000];
 pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000, 20_000_000_000];
+
+/// The charged bytes of the shield that funds a private account at setup, which genesis must
+/// price before any transaction exists; setup checks it against what the wallet measures.
+///
+/// It is the fixed `PROOF_BYTES` (223,047) plus the rest of the serialized transaction (13,992),
+/// mostly its padded private slots.
+pub const SHIELD_BYTES: u64 = 237_039;
 
 /// The public account for funding the private accounts' balances at genesis.
 pub(crate) const PRIVATE_FUNDER_INDEX: usize = 0;
@@ -242,15 +249,24 @@ pub fn private_total(private_accounts: &[InitialPrivateAccountForWallet]) -> u12
     private_accounts.iter().map(|account| account.balance).sum()
 }
 
-/// The fee a privacy-preserving transaction without guest-evaluated effects pays while the base
-/// fees sit at their floor. Test chains run far below the gas targets, so they never leave it.
+/// The fee a privacy-preserving transaction of `bytes` charged bytes pays at the floor base fees.
+///
+/// Without guest-evaluated effects; test chains run far below the gas targets, so they never
+/// leave the floor.
 #[must_use]
-pub fn min_private_fee() -> u128 {
+pub fn private_fee(bytes: u64) -> u128 {
     fee_core::assess::private_fee_required(
         0,
+        bytes,
         fee_core::market::BASE_FEE_EXEC_MIN,
         fee_core::market::BASE_FEE_STOR_MIN,
     )
+}
+
+/// The fee of the shield that funds a private account at setup.
+#[must_use]
+pub fn shield_fee() -> u128 {
+    private_fee(SHIELD_BYTES)
 }
 
 /// What funding the private accounts costs the funder: every balance plus the fee of each
@@ -259,7 +275,7 @@ pub fn min_private_fee() -> u128 {
 pub fn private_funding_cost(private_accounts: &[InitialPrivateAccountForWallet]) -> u128 {
     let fees = u128::try_from(private_accounts.len())
         .expect("account count fits u128")
-        .checked_mul(min_private_fee())
+        .checked_mul(shield_fee())
         .expect("private funding fees overflow");
     private_total(private_accounts)
         .checked_add(fees)

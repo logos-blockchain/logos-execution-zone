@@ -3,11 +3,11 @@ use std::{collections::BTreeSet, time::Duration};
 use anyhow::{Context as _, Result};
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
-    config::{INITIAL_PRIVATE_BALANCES_FOR_WALLET, min_private_fee},
+    config::{INITIAL_PRIVATE_BALANCES_FOR_WALLET, private_fee},
     fetch_privacy_preserving_tx, no_seal, private_mention, public_mention,
     utils::{
-        account_balance, assert_private_commitment_in_state, new_account, receive_pending, send,
-        sync_private,
+        account_balance, assert_private_commitment_in_state, charged_bytes, new_account,
+        receive_pending, send, sync_private,
     },
     verify_commitment_is_in_state,
 };
@@ -117,7 +117,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
     );
     let to_before = account_balance(&ctx, to).await?;
 
-    send(&mut ctx, private_mention(from), public_mention(to), 100).await?;
+    let sent = send(&mut ctx, private_mention(from), public_mention(to), 100).await?;
 
     log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
@@ -133,7 +133,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
     // The private sender pays the amount and the in-proof fee; the recipient gains the amount.
     assert_eq!(
         from_acc.data.native_balance().unwrap(),
-        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0] - 100 - min_private_fee()
+        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0] - 100 - private_fee(charged_bytes(&ctx, sent).await)
     );
     assert_eq!(acc_2_balance, to_before + 100);
 
@@ -171,14 +171,14 @@ async fn concurrent_deshielded_transfers_settle_against_live_state() -> Result<(
     // Submitted with no wait between them — both prove against the receiver's pre-transfer
     // balance, exactly the concurrent scenario this branch's effect model exists to settle
     // correctly.
-    send(
+    let sent_1 = send(
         &mut ctx,
         private_mention(sender_1),
         public_mention(receiver),
         30,
     )
     .await?;
-    send(
+    let sent_2 = send(
         &mut ctx,
         private_mention(sender_2),
         public_mention(receiver),
@@ -211,12 +211,12 @@ async fn concurrent_deshielded_transfers_settle_against_live_state() -> Result<(
     // Each private sender pays its amount and its in-proof fee; the receiver gains the amounts.
     assert_eq!(
         sender_1_after,
-        sender_1_before - 30 - min_private_fee(),
+        sender_1_before - 30 - private_fee(charged_bytes(&ctx, sent_1).await),
         "sender_1 must reflect its own debit and fee"
     );
     assert_eq!(
         sender_2_after,
-        sender_2_before - 20 - min_private_fee(),
+        sender_2_before - 20 - private_fee(charged_bytes(&ctx, sent_2).await),
         "sender_2 must reflect its own debit and fee"
     );
     assert_eq!(

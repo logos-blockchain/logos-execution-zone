@@ -61,6 +61,9 @@ pub enum DryRunReport {
         quote: FeeStateQuote,
         /// Cycles of the public part.
         cycles: u64,
+        /// The transaction's wire size, measured on an unproven run, priced at the storage base
+        /// fee.
+        wire_bytes: u64,
         fee_at_head: u128,
         /// Blocks of steepest base fee climb the reserve covers, and the base fees after them.
         headroom_blocks: u64,
@@ -136,6 +139,7 @@ impl std::fmt::Display for DryRunReport {
             Self::Private {
                 fee,
                 cycles,
+                wire_bytes,
                 fee_at_head,
                 headroom_blocks,
                 exec_ceiling,
@@ -147,6 +151,7 @@ impl std::fmt::Display for DryRunReport {
             } => {
                 writeln!(f, "Dry run: nothing proven or sent")?;
                 writeln!(f, "  public cycles:  {cycles}")?;
+                writeln!(f, "  wire bytes:     {wire_bytes}")?;
                 writeln!(
                     f,
                     "  base fees:      exec {base_fee_exec} / stor {base_fee_stor} (height \
