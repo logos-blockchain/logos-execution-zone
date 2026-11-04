@@ -322,11 +322,9 @@ impl PeerBlocks {
         );
         let continues_the_run = matches!(link, Link::Next(_));
         match link {
-            // Error rather than debug: this peer verifies nothing until the
-            // operator fixes the pin or the real genesis arrives, and every
-            // dispatch naming it stalls.
             Link::OffChain(off @ OffChain::WrongGenesis { .. }) => {
                 chain.pin_refused = true;
+                // Error, not debug: this peer verifies nothing until it is fixed.
                 error!(
                     "Peer reader for {} refused to anchor: {off}",
                     hex::encode(zone)
@@ -478,8 +476,7 @@ impl PeerBlocks {
             .map(|tip| tip.block_id)
     }
 
-    /// Whether the peer's genesis pin refused the only anchor offered so far.
-    /// Clears itself once a genesis matching the pin anchors the run.
+    /// False again once a genesis matching the pin anchors the run.
     async fn pin_refused(&self, zone: ZoneId) -> bool {
         self.chains
             .read()
@@ -513,16 +510,14 @@ struct PassReport {
     pin_refused: bool,
 }
 
-/// Why a reader's last pass extended no trust, when it did not. Always one
-/// pass fresh: exactly one report call happens per pass.
+/// Why a reader's last pass extended no trust. Always one pass fresh: exactly
+/// one report call happens per pass.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum ReaderHold {
     #[default]
     None,
-    /// The pass was skipped on the committee floor.
+    /// Skipped on the committee floor.
     Suspended,
-    /// The genesis pin refused the only anchor offered so far, so nothing
-    /// from this peer can verify until the pin or the channel is fixed.
     PinRefused,
 }
 
