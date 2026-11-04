@@ -215,6 +215,42 @@ async fn transfer_beyond_balance_is_refused_client_side() -> Result<()> {
     Ok(())
 }
 
+/// A transfer of the sender's whole balance passes the client-side balance check, but settlement
+/// holds the sender's fee before the transfer runs, so the transfer would revert and still pay.
+/// The wallet simulates it with the fee held and refuses it: nothing is submitted.
+#[test]
+async fn a_transfer_the_held_fee_leaves_unfunded_is_refused() -> Result<()> {
+    let ctx = TestContext::new().await?;
+
+    let sender = ctx.existing_public_accounts()[0];
+    let receiver = ctx.existing_public_accounts()[1];
+    let sender_before = account_balance(&ctx, sender).await?;
+    let sender_nonce_before = get_account(&ctx, sender).await?.nonce.0;
+
+    let refused = NativeTokenTransfer(ctx.wallet())
+        .transfer(
+            AccountIdentity::Public(sender),
+            AccountIdentity::Public(receiver),
+            sender_before,
+            CreditDelivery::Automatic,
+        )
+        .await
+        .map(|(tx_hash, _)| tx_hash);
+    assert!(
+        matches!(refused, Err(ExecutionFailureKind::SimulatedRevert(_))),
+        "a transfer the held fee leaves unfunded must be refused, got: {refused:?}",
+    );
+
+    assert_eq!(account_balance(&ctx, sender).await?, sender_before);
+    assert_eq!(
+        get_account(&ctx, sender).await?.nonce.0,
+        sender_nonce_before,
+        "a refused transfer must not consume the replay nonce",
+    );
+
+    Ok(())
+}
+
 #[test]
 async fn two_consecutive_successful_transfers() -> Result<()> {
     let mut ctx = TestContext::new().await?;
