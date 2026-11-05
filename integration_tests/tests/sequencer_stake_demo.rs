@@ -8,6 +8,7 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
+use common::HashType;
 use integration_tests::{account_balance, get_account, new_account};
 use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey, program::Program};
 use log::info;
@@ -87,7 +88,6 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
 
     let config_id = system_accounts::sequencer_stake_config_account_id();
     let stake_id = programs::sequencer_stake_account_id();
-    let ownership = AccountIdentity::Public(ownership_id).select_program_actor_state(stake_id);
 
     info!(
         "Submitting Stake transaction for sequencer key {}",
@@ -226,34 +226,63 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     let destination_id = funding_id;
     let destination_balance = account_balance(&ctx, destination_id).await?;
 
-    let requested_at = ctx
-        .sequencer_client()
-        .get_last_block_id()
-        .await?
-        .saturating_add(sequencer_stake_core::UNSTAKE_REQUEST_WINDOW);
-    let unstake_request_message =
-        Program::serialize_message(sequencer_stake_core::Message::UnstakeRequest {
-            sequencer_key: demo_stake_key,
-            amount: u128::from(funding_balance),
-            destination: destination_id,
-            requested_at,
-        })
-        .context("Failed to serialize UnstakeRequest message")?;
-    ctx.wallet()
-        .send_pub_tx(
-            vec![
-                ownership,
-                AccountIdentity::PublicNoSign(config_id).select_program_actor_state(stake_id),
-            ],
-            0,
-            unstake_request_message,
-        )
-        .await
-        .map_err(|err| anyhow::anyhow!("Failed to submit UnstakeRequest transaction: {err:?}"))?;
-    info!("Submitted full UnstakeRequest for the demo sequencer key");
+    let submit_unstake_request = async |requested_at: u64| -> Result<HashType> {
+        let unstake_request_message =
+            Program::serialize_message(sequencer_stake_core::Message::UnstakeRequest {
+                sequencer_key: demo_stake_key,
+                amount: u128::from(funding_balance),
+                destination: destination_id,
+                requested_at,
+            })
+            .context("Failed to serialize UnstakeRequest message")?;
+        let tx_hash = ctx
+            .wallet()
+            .send_pub_tx(
+                vec![
+                    AccountIdentity::Public(ownership_id).select_program_actor_state(stake_id),
+                    AccountIdentity::PublicNoSign(config_id).select_program_actor_state(stake_id),
+                ],
+                0,
+                unstake_request_message,
+            )
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!("Failed to submit UnstakeRequest transaction: {err:?}")
+            })?;
+        info!(
+            "Submitted full UnstakeRequest for the demo sequencer key, valid up to block {requested_at}"
+        );
+        Ok(tx_hash)
+    };
 
+    // The request expires `UNSTAKE_REQUEST_WINDOW` blocks on, and without gossip
+    // only the sequencer it was sent to includes it, so a request sent while the
+    // joiner holds the turn can expire unseen: send a fresh one once it has.
+    let mut request: Option<(HashType, u64)> = None;
+    let mut included = false;
     let mut removed = false;
     for _ in 0..60 {
+        if !included {
+            let last_block_id = ctx.sequencer_client().get_last_block_id().await?;
+            match request {
+                Some((tx_hash, _))
+                    if ctx
+                        .sequencer_client()
+                        .get_transaction(tx_hash)
+                        .await?
+                        .is_some() =>
+                {
+                    included = true;
+                }
+                Some((_, requested_at)) if last_block_id <= requested_at => {}
+                _ => {
+                    let requested_at =
+                        last_block_id.saturating_add(sequencer_stake_core::UNSTAKE_REQUEST_WINDOW);
+                    request = Some((submit_unstake_request(requested_at).await?, requested_at));
+                }
+            }
+        }
+
         let accredited = observer
             .ask(GetAccreditedKeys { channel_id })
             .await
