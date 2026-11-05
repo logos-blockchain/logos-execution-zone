@@ -285,11 +285,9 @@ pub fn is_system_injection(tx: &LeeTransaction) -> bool {
 
 /// Whether `tx` is a cross-zone outbound lock (`bridge_lock::Lock`).
 ///
-/// Fee-exempt like the rest of the cross-zone traffic: the lock debits the
-/// holder's holding PDA and escrows it against a mint on the target zone, so
-/// there is no spendable account to charge without stranding the bridged
-/// balance. Signed (the holder authorizes the debit), so it is not caught by
-/// [`is_system_injection`]'s empty-witness shape.
+/// Fee-exempt though signed: the lock debits a holding PDA into escrow, so
+/// nothing spendable is left to charge. The empty-witness shape in
+/// [`is_system_injection`] misses it.
 #[must_use]
 pub fn is_cross_zone_lock(tx: &LeeTransaction) -> bool {
     let Some((to, message)) = tx.public_call() else {
