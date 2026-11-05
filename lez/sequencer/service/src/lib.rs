@@ -326,6 +326,7 @@ pub fn run(
         );
 
         let stake_config_pubsub_ref = PubSub::spawn(PubSub::new(DeliveryStrategy::Guaranteed));
+        actor_handle::record_mailbox_capacity(&stake_config_pubsub_ref);
         let gossip_actor_prepared_opt = if gossip_config.is_some() {
             let gossip_actor_prepared = GossipActor::prepare_with_mailbox(kameo::mailbox::bounded(
                 sequencer_gossip_actor::MAILBOX_CAPACITY,
@@ -361,6 +362,7 @@ pub fn run(
             ),
             kameo::mailbox::bounded(sequencer_channel_signing_actor::MAILBOX_CAPACITY),
         );
+        actor_handle::record_mailbox_capacity(&channel_signer_ref);
         info!("Channel Signing Actor spawned");
 
         let supervisor = ActorHandle::new(SequencerSupervisor::spawn(SequencerSupervisor));
@@ -584,6 +586,7 @@ async fn setup_executor(
         .restart_limit(EXECUTOR_RESTART_LIMIT, EXECUTOR_RESTART_WINDOW)
         .spawn_with_mailbox(kameo::mailbox::unbounded())
         .await;
+    actor_handle::record_mailbox_capacity(&executor_ref);
     executor_ref
         .wait_for_startup_with_result(|res| {
             res.map_err(|err| match err {

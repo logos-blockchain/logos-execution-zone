@@ -350,29 +350,11 @@ fn parse_gossip_peer(peer: &str) -> Result<Multiaddr> {
 /// labelled with the channel signing public key, so sequencers stay apart
 /// wherever they are scraped.
 fn install_prometheus_recorder(config: &SequencerConfig) -> Result<PrometheusHandle> {
-    /// Ladder for `*_seconds` histograms, densest across the 1-100 ms band where
-    /// block production and transaction application actually land.
-    const LATENCY_BUCKETS: &[f64] = &[
-        0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
-    ];
-
-    /// Fallback ladder for histograms that count things rather than measure time.
-    const COUNT_BUCKETS: &[f64] = &[1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0];
-
     let channel_signing_key =
         sequencer_core::load_or_create_signing_key(&config.channel_signing_key_path())?;
     let public_key = hex::encode(channel_signing_key.public_key().to_bytes());
 
-    let handle = PrometheusBuilder::new()
-        .with_recommended_naming(true)
-        .add_global_label(
-            sequencer_service_metrics::names::SEQUENCER_LABEL,
-            public_key,
-        )
-        .set_buckets(COUNT_BUCKETS)
-        .context("Failed to set default histogram buckets")?
-        .set_buckets_for_metric(Matcher::Suffix("_seconds".to_owned()), LATENCY_BUCKETS)
-        .context("Failed to set latency histogram buckets")?
+    let handle = prometheus_builder(public_key)?
         .install_recorder()
         .context("Failed to install Prometheus recorder")?;
     // Without the exporter's own listener, draining histograms is ours to schedule.
@@ -385,6 +367,29 @@ fn install_prometheus_recorder(config: &SequencerConfig) -> Result<PrometheusHan
         }
     });
     Ok(handle)
+}
+
+/// The exporter's naming, buckets and `public_key` label.
+fn prometheus_builder(public_key: String) -> Result<PrometheusBuilder> {
+    /// Ladder for `*_seconds` histograms, densest across the 1-100 ms band where
+    /// block production and transaction application actually land.
+    const LATENCY_BUCKETS: &[f64] = &[
+        0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+    ];
+
+    /// Fallback ladder for histograms that count things rather than measure time.
+    const COUNT_BUCKETS: &[f64] = &[1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0];
+
+    PrometheusBuilder::new()
+        .with_recommended_naming(true)
+        .add_global_label(
+            sequencer_service_metrics::names::SEQUENCER_LABEL,
+            public_key,
+        )
+        .set_buckets(COUNT_BUCKETS)
+        .context("Failed to set default histogram buckets")?
+        .set_buckets_for_metric(Matcher::Suffix("_seconds".to_owned()), LATENCY_BUCKETS)
+        .context("Failed to set latency histogram buckets")
 }
 
 /// Cancelled on Ctrl-C or `SIGTERM`.
@@ -470,6 +475,56 @@ mod tests {
             include_str!("../networks/testnet.json"),
         ] {
             SequencerConfig::from_json(config).unwrap();
+        }
+    }
+
+    /// Kameo, not us, names these series: a rename in a kameo upgrade must fail
+    /// here rather than blank the actors dashboard.
+    #[tokio::test]
+    async fn kameo_renders_the_actor_series_the_dashboard_reads() {
+        use kameo::{
+            actor::Spawn as _,
+            message::{Context, Message},
+        };
+        use sequencer_service_metrics::names::{
+            ACTOR_NAME_LABEL, KAMEO_LIFECYCLE_RECEIVED_TOTAL, KAMEO_LINK_DIED_RECEIVED_TOTAL,
+            KAMEO_MESSAGES_RECEIVED_TOTAL, KAMEO_MESSAGES_SENT_TOTAL,
+        };
+
+        #[derive(kameo::Actor)]
+        struct Echo;
+
+        struct Ping;
+
+        impl Message<Ping> for Echo {
+            type Reply = ();
+
+            async fn handle(&mut self, _: Ping, _: &mut Context<Self, Self::Reply>) {}
+        }
+
+        let recorder = prometheus_builder("test".to_owned())
+            .unwrap()
+            .build_recorder();
+        // Kameo binds its counters to the recorder when the mailbox is created.
+        let mailbox = metrics::with_local_recorder(&recorder, || kameo::mailbox::bounded(8));
+        let echo = Echo::spawn_with_mailbox(Echo, mailbox);
+        echo.ask(Ping).await.unwrap();
+
+        let rendered = recorder.handle().render();
+        let actor_name = format!(r#"{ACTOR_NAME_LABEL}="{}""#, <Echo as kameo::Actor>::name());
+        for (metric, value) in [
+            (KAMEO_MESSAGES_SENT_TOTAL, 1),
+            (KAMEO_MESSAGES_RECEIVED_TOTAL, 1),
+            // Startup finished.
+            (KAMEO_LIFECYCLE_RECEIVED_TOTAL, 1),
+            (KAMEO_LINK_DIED_RECEIVED_TOTAL, 0),
+        ] {
+            let found = rendered.lines().any(|line| {
+                line.starts_with(&format!("{metric}{{"))
+                    && line.contains(&actor_name)
+                    && line.ends_with(&format!(" {value}"))
+            });
+            assert!(found, "no `{metric}` = {value} for Echo in:\n{rendered}");
         }
     }
 }

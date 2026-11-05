@@ -73,7 +73,8 @@ const TIMELINE_ROW_HEIGHT: f64 = 0.9;
 #[derive(Clone)]
 pub struct Selector {
     metric: String,
-    matchers: Vec<(String, String)>,
+    /// Rendered matchers, e.g. `label="value"`.
+    matchers: Vec<String>,
 }
 
 impl Selector {
@@ -87,20 +88,25 @@ impl Selector {
     /// Keep only series whose `label` equals `value`. `value` may reference a
     /// dashboard variable, e.g. `$sequencer`.
     #[must_use]
-    pub fn label_eq(mut self, label: impl Into<String>, value: impl Into<String>) -> Self {
-        self.matchers.push((label.into(), value.into()));
+    pub fn label_eq(mut self, label: impl AsRef<str>, value: impl AsRef<str>) -> Self {
+        self.matchers
+            .push(format!("{}=\"{}\"", label.as_ref(), value.as_ref()));
+        self
+    }
+
+    /// Keep only series whose whole `label` matches `regex`. `regex` may
+    /// reference a dashboard variable.
+    #[must_use]
+    pub fn label_matches(mut self, label: impl AsRef<str>, regex: impl AsRef<str>) -> Self {
+        self.matchers
+            .push(format!("{}=~\"{}\"", label.as_ref(), regex.as_ref()));
         self
     }
 
     /// The selector for one of the series a histogram expands into, e.g.
     /// `_bucket`.
     fn suffixed(&self, suffix: &str) -> String {
-        let matchers = self
-            .matchers
-            .iter()
-            .map(|(label, value)| format!("{label}=\"{value}\""))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let matchers = self.matchers.join(", ");
         if matchers.is_empty() {
             format!("{}{suffix}", self.metric)
         } else {
@@ -807,6 +813,24 @@ impl Dashboard {
     }
 }
 
+impl Variable {
+    /// Cut each fetched choice down to the first capture group of `regex`, a
+    /// JavaScript regex with its slashes, e.g. `/^(\w+)/`. The cut is both what
+    /// the dropdown shows and what `$name` holds.
+    ///
+    /// Panics on a variable whose choices are not fetched.
+    #[must_use]
+    pub fn regex(mut self, regex: impl Into<String>) -> Self {
+        match &mut self {
+            Self::Query(variable) => variable.regex = Some(regex.into()),
+            Self::Custom(_) => {
+                panic!("a custom variable spells out its choices: no regex to cut them with")
+            }
+        }
+        self
+    }
+}
+
 /// The dropdown driving every [`selected_percentile`] query, offering
 /// `percentiles` (e.g. `[50, 90, 95, 99]`) with `default` pre-selected.
 ///
@@ -865,6 +889,7 @@ pub fn label_values_variable(name: &str, title: &str, metric: &str, label: &str)
         name: name.to_owned(),
         query,
         refresh: VariableRefresh::OnTimeRangeChange,
+        regex: None,
         sort: VariableSort::NaturalAsc,
     })
 }

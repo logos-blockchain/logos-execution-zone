@@ -1,0 +1,484 @@
+{
+  "annotations": { "list": [ ] },
+  "editable": true,
+  "graphTooltip": 1,
+  "links": [
+    {
+      "asDropdown": false,
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [ "sequencer" ],
+      "title": "Dashboards",
+      "type": "dashboards"
+    }
+  ],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "blue" },
+          "unit": "short",
+          "decimals": 0,
+          "min": 0.0,
+          "links": [
+            {
+              "title": "Show this actor",
+              "url": "/d/sequencer-actors?var-sequencer=${sequencer}&var-actor=${__field.labels.actor}&${__url_time_range}"
+            }
+          ]
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "displayMode": "basic",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
+        "showUnfilled": true,
+        "valueMode": "text"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sort_desc(label_replace(sum by (actor_name) (increase(kameo_messages_received_total{sequencer=\"$sequencer\"}[$__range])), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"))",
+          "instant": true,
+          "legendFormat": "{{actor}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "All actors · messages handled over the time range",
+      "type": "bargauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Backlog as a share of the mailbox capacity: at 100%, senders wait. An unbounded mailbox never fills, so it has no fill.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 0,
+          "min": 0.0,
+          "max": 100.0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 50.0 },
+              { "color": "red", "value": 90.0 }
+            ]
+          },
+          "links": [
+            {
+              "title": "Show this actor",
+              "url": "/d/sequencer-actors?var-sequencer=${sequencer}&var-actor=${__field.labels.actor}&${__url_time_range}"
+            }
+          ]
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "options": {
+        "displayMode": "basic",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
+        "showUnfilled": true,
+        "valueMode": "text"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sort_desc(max_over_time((100 * (label_replace(sum by (actor_name) (kameo_messages_sent_total{sequencer=\"$sequencer\"}), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\") - label_replace(sum by (actor_name) (kameo_messages_received_total{sequencer=\"$sequencer\"}), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\")) / (label_replace(sum by (actor_name) (actor_mailbox_capacity{sequencer=\"$sequencer\"}), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\") < +Inf))[$__range:]))",
+          "instant": true,
+          "legendFormat": "{{actor}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "All actors · fullest mailbox over the time range",
+      "type": "bargauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "short",
+          "min": 0.0,
+          "links": [
+            {
+              "title": "Show this actor",
+              "url": "/d/sequencer-actors?var-sequencer=${sequencer}&var-actor=${__field.labels.actor}&${__url_time_range}"
+            }
+          ]
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 8 },
+      "id": 3,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "label_replace(sum by (actor_name) (rate(kameo_messages_received_total{sequencer=\"$sequencer\"}[$__rate_interval])), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\")",
+          "legendFormat": "{{actor}}",
+          "refId": "A"
+        }
+      ],
+      "title": "All actors · messages handled per second",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Messages sent to the actor and not yet taken off its mailbox.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "short",
+          "min": 0.0,
+          "links": [
+            {
+              "title": "Show this actor",
+              "url": "/d/sequencer-actors?var-sequencer=${sequencer}&var-actor=${__field.labels.actor}&${__url_time_range}"
+            }
+          ]
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 8 },
+      "id": 4,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "label_replace(sum by (actor_name) (kameo_messages_sent_total{sequencer=\"$sequencer\"}), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\") - label_replace(sum by (actor_name) (kameo_messages_received_total{sequencer=\"$sequencer\"}), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\")",
+          "legendFormat": "{{actor}}",
+          "refId": "A"
+        }
+      ],
+      "title": "All actors · mailbox backlog",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" }, "unit": "short", "decimals": 0 },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 17 },
+      "id": 5,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(kameo_messages_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"})",
+          "legendFormat": "handled",
+          "refId": "A"
+        }
+      ],
+      "title": "${actor} · messages handled since startup",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "fixed", "fixedColor": "green" }, "unit": "short", "decimals": 2 },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 17 },
+      "id": 6,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(kameo_messages_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}[$__rate_interval]))",
+          "legendFormat": "handled/s",
+          "refId": "A"
+        }
+      ],
+      "title": "${actor} · messages handled per second",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Messages sent to the actor and not yet taken off its mailbox.",
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" }, "unit": "short", "decimals": 0 },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 17 },
+      "id": 7,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(kameo_messages_sent_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}) - sum(kameo_messages_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"})",
+          "legendFormat": "queued",
+          "refId": "A"
+        }
+      ],
+      "title": "${actor} · backlog",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Messages the mailbox holds before senders wait, as read off the mailbox at startup.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "text" },
+          "unit": "short",
+          "decimals": 0,
+          "mappings": [
+            { "type": "value", "options": { "Infinity": { "color": "text", "index": 0, "text": "unbounded" } } }
+          ]
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 17 },
+      "id": 8,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(actor_mailbox_capacity{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"})",
+          "legendFormat": "capacity",
+          "refId": "A"
+        }
+      ],
+      "title": "${actor} · mailbox capacity",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Backlog as a share of the mailbox capacity: at 100%, senders wait. An unbounded mailbox never fills, so it has no fill.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 0,
+          "min": 0.0,
+          "max": 100.0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 50.0 },
+              { "color": "red", "value": 90.0 }
+            ]
+          }
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 22 },
+      "id": 9,
+      "options": {
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "100 * (sum(kameo_messages_sent_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}) - sum(kameo_messages_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"})) / (sum(actor_mailbox_capacity{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}) < +Inf)",
+          "legendFormat": "fill",
+          "refId": "A"
+        }
+      ],
+      "title": "${actor} · mailbox fill",
+      "type": "gauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Messages sent to the actor and not yet taken off its mailbox.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "short",
+          "min": 0.0
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "queued" },
+            "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "capacity" },
+            "properties": [
+              { "id": "custom.lineStyle", "value": { "dash": [ 8, 4 ], "fill": "dash" } },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 22 },
+      "id": 10,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(kameo_messages_sent_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}) - sum(kameo_messages_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"})",
+          "legendFormat": "queued",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(actor_mailbox_capacity{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}) < +Inf",
+          "legendFormat": "capacity",
+          "refId": "B"
+        }
+      ],
+      "title": "${actor} · mailbox backlog vs capacity",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Sent: queued into the mailbox. Handled: taken off it. Sent staying above handled grows the backlog.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "short",
+          "min": 0.0
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "sent" },
+            "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "handled" },
+            "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } } ]
+          }
+        ]
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 30 },
+      "id": 11,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(kameo_messages_sent_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}[$__rate_interval]))",
+          "legendFormat": "sent",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(kameo_messages_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}[$__rate_interval]))",
+          "legendFormat": "handled",
+          "refId": "B"
+        }
+      ],
+      "title": "${actor} · messages per second",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Signals the actor handled, as running totals. One start reads 1; more means the actor was stopped and started again. Linked actor deaths stay 0 unless the actor is linked to others.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "short",
+          "min": 0.0
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "starts and stops" },
+            "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "linked actor deaths" },
+            "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ]
+          }
+        ]
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 30 },
+      "id": 12,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(kameo_lifecycle_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"})",
+          "legendFormat": "starts and stops",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(kameo_link_died_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"})",
+          "legendFormat": "linked actor deaths",
+          "refId": "B"
+        }
+      ],
+      "title": "${actor} · lifecycle and link signals since startup",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": [ "sequencer" ],
+  "templating": {
+    "list": [
+      {
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(kameo_messages_received_total, sequencer)",
+        "includeAll": false,
+        "label": "Sequencer",
+        "multi": false,
+        "name": "sequencer",
+        "query": "label_values(kameo_messages_received_total, sequencer)",
+        "refresh": 2,
+        "sort": 7
+      },
+      {
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(kameo_messages_received_total{sequencer=\"$sequencer\"}, actor_name)",
+        "includeAll": false,
+        "label": "Actor",
+        "multi": false,
+        "name": "actor",
+        "query": "label_values(kameo_messages_received_total{sequencer=\"$sequencer\"}, actor_name)",
+        "refresh": 2,
+        "regex": "/^(?:[a-z0-9_]+::)*([A-Za-z0-9_]+)/",
+        "sort": 7
+      }
+    ]
+  },
+  "time": { "from": "now-15m", "to": "now" },
+  "timezone": "",
+  "title": "Actors",
+  "uid": "sequencer-actors"
+}

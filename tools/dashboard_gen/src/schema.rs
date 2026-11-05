@@ -559,6 +559,10 @@ pub struct QueryVariable {
     pub name: String,
     pub query: String,
     pub refresh: VariableRefresh,
+    /// JavaScript regex, slashes included, whose first capture group becomes
+    /// each choice's text and value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regex: Option<String>,
     pub sort: VariableSort,
 }
 
