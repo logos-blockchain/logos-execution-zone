@@ -282,6 +282,7 @@ impl BedrockActor {
                         topic: format!("channel/{}/turn", self.config.channel_id),
                         message: ChannelEvent::Turn {
                             our_turn_to_write: notification.our_turn_to_write,
+                            starting_slot: notification.starting_slot.map(Slot::from),
                         },
                     })
                     .await

@@ -74,6 +74,9 @@ pub enum ChannelEvent {
 
     Turn {
         our_turn_to_write: bool,
+        /// Slot the current turn started at, if known. A new one is a new turn,
+        /// even when it is ours again.
+        starting_slot: Option<Slot>,
     },
 
     Config(LiveChannelConfig),
