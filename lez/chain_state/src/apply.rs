@@ -1089,27 +1089,23 @@ mod tests {
         let payer_key = accounts[0].pub_sign_key.clone();
         let payer_nonce = state.get_account_by_id(payer).nonce;
         let clock = system_accounts::clock_actor();
-        let user_tx = |clock_message: clock_core::Message| {
-            let message = public_transaction::Message::try_new_with_fees(
-                clock,
-                vec![clock],
-                BTreeMap::from([(payer, payer_nonce)]),
-                clock_message,
-                test_fee_declaration(payer),
-            )
-            .expect("clock message builds");
-            let witness = public_transaction::WitnessSet::for_message(&message, &[&payer_key]);
-            LeeTransaction::Public(PublicTransaction::new(message, witness))
-        };
-
         // A tick for block 2 passes the clock's own check, so only the restricted-account guard
         // can reject the block.
-        let tick = user_tx(clock_core::Message::Tick {
-            timestamp: 200,
-            block_id: 2,
-        });
+        let message = public_transaction::Message::try_new_with_fees(
+            clock,
+            vec![clock],
+            BTreeMap::from([(payer, payer_nonce)]),
+            clock_core::Message::Tick {
+                timestamp: 200,
+                block_id: 2,
+            },
+            test_fee_declaration(payer),
+        )
+        .expect("clock message builds");
+        let witness = public_transaction::WitnessSet::for_message(&message, &[&payer_key]);
+        let tick = LeeTransaction::Public(PublicTransaction::new(message, witness));
         let tick_block = produce_dummy_block(2, Some(tip.hash), vec![tick]);
-        let err = apply_block(Some(&tip), &tick_block, &mut state.clone())
+        let err = apply_block(Some(&tip), &tick_block, &mut state)
             .expect_err("a block writing the clock from a user transaction must be rejected");
         let clock_id = system_accounts::clock_account_id().to_string();
         assert!(
@@ -1120,15 +1116,6 @@ mod tests {
             ),
             "expected RestrictedAccountModification on the clock, got {err:?}",
         );
-
-        // The same transaction with a read-only message applies, so the setup is sound.
-        let assert = user_tx(clock_core::Message::AssertBlockId {
-            granularity: 1,
-            at_least: 1,
-            at_most: 1,
-        });
-        let assert_block = settled_block(2, tip.hash, vec![assert], &state);
-        apply_block(Some(&tip), &assert_block, &mut state).expect("a read-only clock call applies");
     }
 
     #[test]

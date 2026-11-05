@@ -4,20 +4,17 @@
 
 use std::collections::BTreeSet;
 
-use clock_core::{CLOCK_PROGRAM_ACCOUNT_ID, Reply};
-use lee_core::{
-    account::Actor,
-    program::{ReceiveInput, Response, SyncMessage},
-};
+use lee_core::program::{ReceiveInput, Response, SyncMessage};
 
 lee_core::actor_entrypoint!(raw handle_message);
 
 fn handle_message(input: &ReceiveInput) -> Response {
-    if Reply::from_input(input).is_some() {
+    let clock = clock_core::clock_actor();
+    if input.from == Some(clock) {
         return Response::set_state(input.message.clone());
     }
     Response::keep_state().send(SyncMessage {
-        to: Actor::new(CLOCK_PROGRAM_ACCOUNT_ID, clock_core::clock_account_id()),
+        to: clock,
         message: input.message.clone(),
         pda_seeds: BTreeSet::new(),
     })

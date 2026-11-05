@@ -517,7 +517,7 @@ fn clock_account(block_id: BlockId) -> Fixture {
 fn tick_case(label: &'static str, block_id: BlockId) -> Result<Case> {
     Case::new(
         label,
-        Actor::new(CLOCK_PROGRAM_ACCOUNT_ID, programs::clock_account_id()),
+        clock_core::clock_actor(),
         vec![clock_account(block_id - 1)],
         &clock_core::Message::Tick {
             timestamp: Timestamp::from(1_700_000_000_u64),

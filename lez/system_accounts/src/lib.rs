@@ -85,7 +85,7 @@ pub const fn clock_account_id() -> AccountId {
 
 #[must_use]
 pub fn clock_actor() -> Actor {
-    Actor::new(clock_account_id(), programs::clock_account_id())
+    clock_core::clock_actor()
 }
 
 #[must_use]

@@ -1,15 +1,15 @@
 //! Clock-gated cooldown program.
 //!
-//! Refuses to run until a configurable cooldown has elapsed since its last successful run, then
-//! records the current timestamp. The actor is the state account under this program.
+//! Reads the clock's timestamp, refuses to run until a configurable cooldown has elapsed since its
+//! last successful run, then records the timestamp. The actor is the state account under this
+//! program.
 //!
 //! State account data layout (16 bytes):
 //!   [`cooldown_ms`: u64 LE | `last_run_timestamp`: u64 LE].
 
-use clock_core::CLOCK_PROGRAM_ACCOUNT_ID;
+use clock_core::Reply;
 use lee_core::{
     Timestamp,
-    account::Actor,
     program::{ReceiveInput, Response},
 };
 
@@ -37,11 +37,21 @@ impl CooldownState {
     }
 }
 
-lee_core::actor_entrypoint!(handle_message);
+lee_core::actor_entrypoint!(raw handle_message);
 
-fn handle_message(input: &ReceiveInput, proposed: Timestamp) -> Response {
+fn handle_message(input: &ReceiveInput) -> Response {
+    let clock = clock_core::clock_actor();
+    if input.from != Some(clock) {
+        return Response::keep_state().send_sync(
+            clock,
+            &clock_core::Message::ReadTimestamp { granularity: 1 },
+        );
+    }
+    let Reply::Timestamp(now) = Reply::from_message(&input.message) else {
+        panic!("Cooldown reads only the clock's timestamp");
+    };
     let state = CooldownState::from_bytes(&input.pre_state);
-    let elapsed = proposed.saturating_sub(state.last_run_timestamp);
+    let elapsed = now.saturating_sub(state.last_run_timestamp);
     assert!(
         elapsed >= state.cooldown_ms,
         "Cooldown not elapsed: {elapsed}ms since last run, need {}ms",
@@ -50,17 +60,9 @@ fn handle_message(input: &ReceiveInput, proposed: Timestamp) -> Response {
 
     Response::set_state(
         CooldownState {
-            last_run_timestamp: proposed,
+            last_run_timestamp: now,
             ..state
         }
         .to_bytes(),
-    )
-    .send_sync(
-        Actor::new(CLOCK_PROGRAM_ACCOUNT_ID, clock_core::clock_account_id()),
-        &clock_core::Message::AssertTimestamp {
-            granularity: 1,
-            at_least: proposed,
-            at_most: proposed,
-        },
     )
 }
