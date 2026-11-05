@@ -16,7 +16,7 @@ eras:
         verification_rate_per_second: 156
         edge_node_send_deadline_in_rounds: 1
         core_handshake_deadline_in_rounds: 2
-        cover_messages_per_observation_window: 90
+        expected_deliveries_per_observation_window: 60
         activity_threshold_sensitivity: 1
     cryptarchia:
       epoch_config:
@@ -28,7 +28,7 @@ eras:
         numerator: 1
         denominator: 2
       learning_rate: 0.5
-      uncle_reference_window_in_block: 12
+      uncle_reference_window_in_block: 1
       max_uncles: 4
       pow_config:
         blend:
@@ -50,8 +50,7 @@ eras:
           slot_window: 100
       sdp_config:
         service_params:
-          BN:
-            inactivity_period: 2
+          - inactivity_period: 2
             epoch: 0
         min_stake:
           threshold: 1
@@ -62,7 +61,7 @@ genesis_block:
   header:
     slot: 0
     parent_block: '0000000000000000000000000000000000000000000000000000000000000000'
-    body_root: '205e7119c70e218abfa035d684908bdac63fc5c41749a4890a1c91c099866ef8'
+    body_root: '4f745b070df8b8ac5876e4cbd4caadd6e6e73b0c57546ce2e8870e9f89e36b63'
     proof_of_leadership:
       proof: '0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
       entropy_contribution: '0000000000000000000000000000000000000000000000000000000000000000'
@@ -72,6 +71,7 @@ genesis_block:
   uncle_headers: []
   transactions:
   - mantle_tx:
+      fork_digest: '0000000000000000000000000000000000000000000000000000000000000000'
       ops:
       - opcode: 0
         payload:

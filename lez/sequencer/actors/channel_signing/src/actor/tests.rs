@@ -3,6 +3,7 @@ use std::num::NonZero;
 use kameo::actor::Spawn as _;
 use logos_blockchain_core::{
     crypto::ZkHash,
+    era::ForkDigest,
     events::DepositNote,
     mantle::{
         channel::{SlotTimeframe, SlotTimeout},
@@ -101,7 +102,7 @@ fn draft_tx(target: &ConfigTarget) -> Ops {
         target.transfer_threshold,
     )
     .expect("the target's threshold is reachable with its keys");
-    Ops::from([Op::ChannelConfig(op)])
+    Ops::new(ForkDigest::new([0; 32]), [Op::ChannelConfig(op)])
 }
 
 fn actor(secret: [u8; 32]) -> ActorRef<ChannelSigningActor> {
@@ -774,10 +775,13 @@ fn pin_tx_of(signer: &Ed25519Key, inscription: Vec<u8>, inputs: Inputs, outputs:
         inputs,
         outputs,
     };
-    Ops::from([
-        Op::ChannelInscribe(inscription),
-        Op::ChannelTransfer(transfer),
-    ])
+    Ops::new(
+        ForkDigest::new([0; 32]),
+        [
+            Op::ChannelInscribe(inscription),
+            Op::ChannelTransfer(transfer),
+        ],
+    )
 }
 
 fn deposit_input() -> Inputs {
