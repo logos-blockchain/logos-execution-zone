@@ -20,6 +20,12 @@ use sequencer_service_protocol::{
     PageLimit, ProgramId, Publication,
 };
 
+/// The most account ids a single `getAccountsNonces` call may carry.
+const MAX_NONCE_ACCOUNTS: usize = 256;
+
+/// The most commitments plus message positions a single `getProofsAndRoot` call may carry.
+const MAX_PROOF_LEAVES: usize = 256;
+
 pub struct Service<E: ExecutorActorTrait> {
     executor_ref: ActorRef<E>,
     max_block_size_rx: MaxBlockSizeReceiver,
@@ -192,6 +198,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         &self,
         account_ids: Vec<AccountId>,
     ) -> Result<Vec<Nonce>, ErrorObjectOwned> {
+        check_len("account ids", account_ids.len(), MAX_NONCE_ACCOUNTS)?;
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetAccountNonces { account_ids })
             .await
@@ -257,6 +264,11 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         ),
         ErrorObjectOwned,
     > {
+        check_len(
+            "commitments and message positions",
+            commitments.len().saturating_add(message_positions.len()),
+            MAX_PROOF_LEAVES,
+        )?;
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetProofsAndRoot {
                 commitments,
@@ -412,6 +424,17 @@ fn map_infallible_error<M>(err: SendError<M, Infallible>) -> ErrorObjectOwned {
     internal_error(err)
 }
 
+fn check_len(what: &str, len: usize, max: usize) -> Result<(), ErrorObjectOwned> {
+    if len > max {
+        return Err(ErrorObjectOwned::owned(
+            ErrorCode::InvalidParams.code(),
+            format!("Too many {what}: got {len}, max {max}"),
+            None::<()>,
+        ));
+    }
+    Ok(())
+}
+
 fn internal_error(err: impl std::fmt::Display) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)
 }
@@ -419,6 +442,16 @@ fn internal_error(err: impl std::fmt::Display) -> ErrorObjectOwned {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_request_over_the_cap_is_invalid_params() {
+        let err = check_len("account ids", MAX_NONCE_ACCOUNTS + 1, MAX_NONCE_ACCOUNTS)
+            .expect_err("one over the cap must be rejected");
+        assert_eq!(err.code(), ErrorCode::InvalidParams.code());
+        assert!(err.message().contains("Too many account ids"));
+        check_len("account ids", MAX_NONCE_ACCOUNTS, MAX_NONCE_ACCOUNTS)
+            .expect("exactly the cap is fine");
+    }
 
     #[test]
     fn a_reserve_below_the_head_fee_gets_the_reprice_code() {
