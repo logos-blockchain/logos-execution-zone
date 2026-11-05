@@ -1,8 +1,7 @@
 //! Clock Program.
 //!
 //! A system program that records the current block ID and timestamp into a single clock account.
-//! A message asserting or reading either value names its granularity: the clock rounds the value
-//! down to a multiple of it.
+//! A read names its granularity: the clock rounds the value down to a multiple of it.
 //!
 //! Only the sequencer may tick this program, as the last transaction in every block.
 //! The clock account uses this program's actor state.
@@ -36,30 +35,6 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
                 .to_bytes(),
             )
         }
-        Message::AssertTimestamp {
-            granularity,
-            at_least,
-            at_most,
-        } => {
-            let rounded = round_down(clock.timestamp, granularity);
-            assert!(
-                at_least <= rounded && rounded <= at_most,
-                "Rounded clock timestamp {rounded} is outside [{at_least}, {at_most}]"
-            );
-            Response::keep_state()
-        }
-        Message::AssertBlockId {
-            granularity,
-            at_least,
-            at_most,
-        } => {
-            let rounded = round_down(clock.block_id, granularity);
-            assert!(
-                at_least <= rounded && rounded <= at_most,
-                "Rounded clock block id {rounded} is outside [{at_least}, {at_most}]"
-            );
-            Response::keep_state()
-        }
         Message::ReadBlockId { granularity } => send_back(
             input,
             Reply::BlockId(round_down(clock.block_id, granularity)),
@@ -86,7 +61,6 @@ fn round_down(value: u64, granularity: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use lee_core::{
-        Timestamp,
         account::{AccountId, Actor, ActorState},
         program::{SyncMessage, Transition},
     };
@@ -106,18 +80,6 @@ mod tests {
         Message::Tick {
             timestamp: 1_700_000_057,
             block_id,
-        }
-    }
-
-    fn assert_timestamp(
-        granularity: Timestamp,
-        at_least: Timestamp,
-        at_most: Timestamp,
-    ) -> Message {
-        Message::AssertTimestamp {
-            granularity,
-            at_least,
-            at_most,
         }
     }
 
@@ -175,74 +137,16 @@ mod tests {
     }
 
     #[test]
-    fn a_timestamp_rounded_to_the_granularity_within_bounds_is_kept() {
-        for (granularity, rounded) in [
-            (1, 1_700_000_057),
-            (10, 1_700_000_050),
-            (1_000, 1_700_000_000),
-        ] {
-            let transition = run(data(7), assert_timestamp(granularity, rounded, rounded));
-
-            assert_eq!(transition.response.post_state, None);
-            assert!(
-                transition.response.sync_messages.is_empty()
-                    && transition.response.async_messages.is_empty()
-            );
-        }
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "Rounded clock timestamp 1700000050 is outside [1700000057, 1700000057]"
-    )]
-    fn a_timestamp_rounded_to_the_granularity_outside_bounds_is_refused() {
-        let _transition = run(data(7), assert_timestamp(10, 1_700_000_057, 1_700_000_057));
-    }
-
-    #[test]
-    #[should_panic(expected = "Clock granularity must be positive")]
-    fn a_zero_granularity_is_refused() {
-        let _transition = run(data(7), assert_timestamp(0, 0, Timestamp::MAX));
-    }
-
-    #[test]
-    fn a_block_id_rounded_to_the_granularity_within_bounds_is_kept() {
-        for (granularity, rounded) in [(1, 57), (10, 50), (50, 50), (100, 0)] {
-            let transition = run(
-                data(57),
-                Message::AssertBlockId {
-                    granularity,
-                    at_least: rounded,
-                    at_most: rounded,
-                },
-            );
-
-            assert_eq!(transition.response.post_state, None);
-            assert!(
-                transition.response.sync_messages.is_empty()
-                    && transition.response.async_messages.is_empty()
-            );
-        }
-    }
-
-    #[test]
-    #[should_panic(expected = "Rounded clock block id 50 is outside [57, 57]")]
-    fn a_block_id_rounded_to_the_granularity_outside_bounds_is_refused() {
-        let _transition = run(
-            data(57),
-            Message::AssertBlockId {
-                granularity: 50,
-                at_least: 57,
-                at_most: 57,
-            },
-        );
-    }
-
-    #[test]
     fn a_read_sends_the_rounded_value_back_to_its_sender() {
         let sender = Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32]));
         for (message, reply) in [
+            (Message::ReadBlockId { granularity: 1 }, Reply::BlockId(57)),
             (Message::ReadBlockId { granularity: 10 }, Reply::BlockId(50)),
+            (Message::ReadBlockId { granularity: 100 }, Reply::BlockId(0)),
+            (
+                Message::ReadTimestamp { granularity: 1 },
+                Reply::Timestamp(1_700_000_057),
+            ),
             (
                 Message::ReadTimestamp { granularity: 1_000 },
                 Reply::Timestamp(1_700_000_000),
@@ -263,5 +167,17 @@ mod tests {
     #[should_panic(expected = "The clock replies to its sender, so a root call cannot read it")]
     fn a_read_from_a_root_call_is_refused() {
         let _transition = run(data(57), Message::ReadTimestamp { granularity: 1 });
+    }
+
+    #[test]
+    #[should_panic(expected = "Clock granularity must be positive")]
+    fn a_zero_granularity_is_refused() {
+        let sender = Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32]));
+        let _transition = run_on(
+            CLOCK_PROGRAM_ACCOUNT_ID,
+            Some(sender),
+            data(57),
+            Message::ReadTimestamp { granularity: 0 },
+        );
     }
 }

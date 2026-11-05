@@ -62,7 +62,6 @@ use sequencer_storage_actor::{
     },
 };
 use tempfile::tempdir;
-use test_guest_core::Script;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 use tokio::sync::Mutex;
 
@@ -2028,18 +2027,19 @@ async fn produce_block_with_correct_prev_meta_after_restart() {
 async fn user_tx_that_chain_calls_clock_is_dropped() {
     let (mut sequencer, mempool_handle) = common_setup().await;
 
-    let scripted = test_programs::scripted();
+    let clock_reader = test_programs::clock_reader();
 
-    // Deploy `scripted` at the header account `scripted_id`, which signs for its own header.
+    // Deploy `clock_reader` at the header account `clock_reader_id`, which signs for its own
+    // header.
     // A funded genesis account signs and pays both deployment fees.
     let payer = &initial_pub_accounts_private_keys()[0];
     let segment_key = lee::PrivateKey::try_new([210; 32]).unwrap();
     let segment_id = AccountId::from(&lee::PublicKey::new_from_private_key(&segment_key));
     let header_key = lee::PrivateKey::try_new([211; 32]).unwrap();
-    let scripted_id = AccountId::from(&lee::PublicKey::new_from_private_key(&header_key));
+    let clock_reader_id = AccountId::from(&lee::PublicKey::new_from_private_key(&header_key));
 
     // Segments only ever hold `user_elf`.
-    let user_elf = scripted.user_elf().expect("valid ProgramBinary");
+    let user_elf = clock_reader.user_elf().expect("valid ProgramBinary");
     let segment = Actor::new(segment_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID);
     let segment_message = lee::public_transaction::Message::try_new_with_fees(
         segment,
@@ -2069,7 +2069,10 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
 
-    let header = Actor::new(scripted_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID);
+    let header = Actor::new(
+        clock_reader_id,
+        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+    );
     let header_message = lee::public_transaction::Message::try_new_with_fees(
         header,
         vec![header],
@@ -2098,18 +2101,18 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
 
-    // A funded payer calls `scripted`, which sends `clock_message` to the clock.
+    // A funded payer calls `clock_reader`, which forwards `clock_message` to the clock.
     let clock = system_accounts::clock_actor();
-    let caller = Actor::new(payer.account_id, scripted_id);
+    let caller = Actor::new(payer.account_id, clock_reader_id);
     let user_tx = |clock_message: &clock_core::Message| {
         let message = lee::public_transaction::Message::try_new_with_fees(
             caller,
             vec![caller, clock],
             signer_nonces(&[&payer.pub_sign_key], vec![lee_core::account::Nonce(2)]),
-            Script::default().send_sync(clock, clock_message),
+            clock_message,
             common::test_utils::test_fee_declaration(payer.account_id),
         )
-        .expect("Script message should always be serializable");
+        .expect("Clock message should always be serializable");
         let witness_set =
             lee::public_transaction::WitnessSet::for_message(&message, &[&payer.pub_sign_key]);
         LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
@@ -2133,20 +2136,16 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     assert_block_tail(&block, &[]);
 
     // The same transaction with a read-only message is included, so the setup is sound.
-    let assert = user_tx(&clock_core::Message::AssertBlockId {
-        granularity: 1,
-        at_least: 0,
-        at_most: u64::MAX,
-    });
+    let read = user_tx(&clock_core::Message::ReadBlockId { granularity: 1 });
     mempool_handle
-        .push((TransactionOrigin::User, assert.clone()))
+        .push((TransactionOrigin::User, read.clone()))
         .await
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
     let block = block_at(&sequencer, tick_block_id + 1)
         .await
         .expect("The turn should produce a block");
-    assert_block_tail(&block, &[assert]);
+    assert_block_tail(&block, &[read]);
 }
 
 #[tokio::test]
@@ -2221,7 +2220,6 @@ fn time_locked_transfer_transaction(
         payer,
         vec![
             payer,
-            system_accounts::clock_actor(),
             Actor::native_balance(from),
             Actor::native_balance(to),
         ],
@@ -2246,7 +2244,7 @@ fn time_locked_transfer_succeeds_when_deadline_has_passed() {
     state.force_insert_account(recipient_id, Account::default());
 
     let amount = 100;
-    // Deadline is in the past relative to the clock, so the transfer is unlocked.
+    // Deadline is in the past relative to the block, so the transfer is unlocked.
     let deadline = 0;
 
     let tx = time_locked_transfer_transaction(sender_id, &key1, 0, recipient_id, amount, deadline);
@@ -2284,9 +2282,10 @@ fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
     let key1 = PrivateKey::try_new([1; 32]).unwrap();
     let sender_id = AccountId::from(&PublicKey::new_from_private_key(&key1));
     state.force_insert_account(sender_id, Account::funded(100));
+    state.force_insert_account(recipient_id, Account::default());
 
     let amount = 100;
-    // Far-future deadline: the program panics because the clock has not reached it.
+    // Far-future deadline: the block's timestamp is outside the program's validity window.
     let deadline = u64::MAX;
 
     let tx = time_locked_transfer_transaction(sender_id, &key1, 0, recipient_id, amount, deadline);
@@ -2294,8 +2293,8 @@ fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
     let result = state.transition_from_public_transaction(&tx, 2, clock_timestamp);
 
     assert!(
-        result.is_err(),
-        "Transfer should fail when deadline is in the future"
+        matches!(result, Err(lee::error::LeeError::OutOfValidityWindow)),
+        "Transfer should fail when deadline is in the future, got {result:?}"
     );
     // Balances unchanged.
     assert_eq!(
@@ -2313,90 +2312,6 @@ fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
             .native_balance()
             .unwrap(),
         0
-    );
-}
-
-/// Runs `message` from the `scripted` guest against a clock holding `clock`.
-fn clock_assert_from_guest(
-    clock: clock_core::ClockAccountData,
-    message: &clock_core::Message,
-) -> Result<(), lee::error::LeeError> {
-    let scripted = test_programs::scripted();
-    let scripted_id = AccountId::from_builtin_program(scripted.id());
-    let mut state = V03State::new().with_named_programs([
-        (programs::clock_account_id(), programs::clock()),
-        (scripted_id, scripted),
-    ]);
-    state.force_insert_account(
-        system_accounts::clock_account_id(),
-        Account::default().with_actor_state(programs::clock_account_id(), clock.to_bytes().into()),
-    );
-    let caller = Actor::new(AccountId::new([7; 32]), scripted_id);
-    state.force_insert_account(caller.account_id, Account::default());
-    let clock_actor = system_accounts::clock_actor();
-    let tx_message = lee::public_transaction::Message::try_new(
-        caller,
-        vec![caller, clock_actor],
-        BTreeMap::new(),
-        Script::default().send_sync(clock_actor, message),
-    )
-    .unwrap();
-    let tx = PublicTransaction::new(
-        tx_message,
-        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
-    );
-    state
-        .transition_from_public_transaction(&tx, 100, clock.timestamp)
-        .map(|_events| ())
-}
-
-/// Asserts the clock failed the transaction with a panic message containing `reason`.
-fn assert_clock_refused(result: &Result<(), lee::error::LeeError>, reason: &str) {
-    assert!(
-        matches!(result, Err(lee::error::LeeError::ProgramExecutionFailed(message)) if message.contains(reason)),
-        "expected the clock to refuse with {reason:?}, got {result:?}"
-    );
-}
-
-#[test]
-fn a_coarse_timestamp_assert_from_a_guest_checks_the_rounded_timestamp() {
-    let clock = clock_core::ClockAccountData {
-        block_id: 7,
-        timestamp: 125_400,
-    };
-    let assert = |at_least, at_most| clock_core::Message::AssertTimestamp {
-        granularity: 1_000,
-        at_least,
-        at_most,
-    };
-
-    clock_assert_from_guest(clock, &assert(125_000, 125_000)).unwrap();
-    // The clock is 400 ms past `at_most`, its rounded timestamp is not.
-    clock_assert_from_guest(clock, &assert(0, 125_000)).unwrap();
-    assert_clock_refused(
-        &clock_assert_from_guest(clock, &assert(125_400, u64::MAX)),
-        "Rounded clock timestamp 125000 is outside [125400,",
-    );
-}
-
-#[test]
-fn a_coarse_block_id_assert_from_a_guest_checks_the_rounded_block_id() {
-    let clock = clock_core::ClockAccountData {
-        block_id: 57,
-        timestamp: 0,
-    };
-    let assert = |at_least, at_most| clock_core::Message::AssertBlockId {
-        granularity: 50,
-        at_least,
-        at_most,
-    };
-
-    clock_assert_from_guest(clock, &assert(50, 50)).unwrap();
-    // The clock is 7 blocks past `at_most`, its rounded block id is not.
-    clock_assert_from_guest(clock, &assert(0, 50)).unwrap();
-    assert_clock_refused(
-        &clock_assert_from_guest(clock, &assert(55, u64::MAX)),
-        "Rounded clock block id 50 is outside [55,",
     );
 }
 
@@ -2468,14 +2383,14 @@ fn cooldown_data(cooldown_ms: u64, last_run_timestamp: u64) -> Vec<u8> {
     buf
 }
 
-fn cooldown_transaction(state_id: AccountId, timestamp: u64) -> PublicTransaction {
+fn cooldown_transaction(state_id: AccountId) -> PublicTransaction {
     let program_id = AccountId::from_builtin_program(test_programs::cooldown().id());
     let state = Actor::new(state_id, program_id);
     let message = lee::public_transaction::Message::try_new(
         state,
         vec![state, system_accounts::clock_actor()],
         BTreeMap::new(),
-        timestamp,
+        (),
     )
     .unwrap();
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
@@ -2503,7 +2418,7 @@ fn cooldown_opens_after_the_cooldown_elapses() {
         ),
     );
 
-    let tx = cooldown_transaction(state_id, block_timestamp);
+    let tx = cooldown_transaction(state_id);
 
     state
         .transition_from_public_transaction(&tx, 2, block_timestamp)
@@ -2541,7 +2456,7 @@ fn cooldown_rejects_before_the_cooldown_elapses() {
         ),
     );
 
-    let tx = cooldown_transaction(state_id, block_timestamp);
+    let tx = cooldown_transaction(state_id);
 
     let result = state.transition_from_public_transaction(&tx, 2, block_timestamp);
 
