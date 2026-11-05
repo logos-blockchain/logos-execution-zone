@@ -32,7 +32,7 @@ use ping_core::{
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
-use test_fixtures::config::source_only_cross_zone;
+use test_fixtures::{config::source_only_cross_zone, init_logger};
 use tokio::test;
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(480);
@@ -45,12 +45,18 @@ const PING_PAYLOAD: &[u8] = b"hello-cross-zone";
 
 #[test]
 async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Result<()> {
+    init_logger();
+
     // Declared first so it outlives both zones (drops run in reverse order).
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
         .context("Failed to set up shared Bedrock node")?;
 
-    let partial = SequencerPartialConfig::default();
+    let partial = SequencerPartialConfig {
+        // Covers the storage price doubling at the devnet's first epoch rotations.
+        priority_fee_percent: 150,
+        ..SequencerPartialConfig::default()
+    };
     let channel_a = config::bedrock_channel_id();
     let channel_b = config::bedrock_channel_id_b();
     let zone_a: [u8; 32] = *channel_a.as_ref();

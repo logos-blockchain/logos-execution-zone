@@ -14,15 +14,17 @@ chain_state.workspace = true
 common.workspace = true
 sequencer_core_metrics = { workspace = true, features = ["record"] }
 sequencer_channel_signing_actor.workspace = true
+sequencer_bridge.workspace = true
+sequencer_genesis.workspace = true
 sequencer_slasher_actor.workspace = true
 sequencer_storage_actor.workspace = true
 sequencer_bedrock_actor.workspace = true
+sharding_pool_actor = { workspace = true, features = ["actor"] }
 mempool.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 testnet_initial_state.workspace = true
 fee_core.workspace = true
 bridge_core = { workspace = true, features = ["host"] }
-bridge_lock_core.workspace = true
 programs.workspace = true
 clock_core.workspace = true
 system_accounts.workspace = true
@@ -34,6 +36,7 @@ logos-blockchain-key-management-system-service.workspace = true
 logos-blockchain-core.workspace = true
 logos-blockchain-binary-codec.workspace = true
 kameo.workspace = true
+kameo_actors.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -42,7 +45,6 @@ tempfile.workspace = true
 chrono.workspace = true
 log.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
-tokio-retry.workspace = true
 rand.workspace = true
 borsh.workspace = true
 hex.workspace = true

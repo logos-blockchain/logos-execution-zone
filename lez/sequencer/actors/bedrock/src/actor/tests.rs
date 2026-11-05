@@ -1,29 +1,34 @@
+use std::num::NonZero;
+
 use common::{
     HashType,
     block::{Block, HashableBlockData},
 };
-use logos_blockchain_core::mantle::{
-    SignedOps,
-    channel::Channels,
-    ledger::{VerifiableOperation as _, verification_mode::StandardMode},
-    ops::{
-        Op, OpProof, SignedOperation,
-        channel::{
-            ChannelId, MsgId, VerifiedChannelKeys,
-            config::ChannelConfigValidationContext,
-            inscribe::{Inscription, InscriptionOp},
+use logos_blockchain_core::{
+    era::ForkDigest,
+    mantle::{
+        SignedOps,
+        channel::Channels,
+        ledger::{VerifiableOperation as _, verification_mode::StandardMode},
+        ops::{
+            Op, OpProof, SignedOperation,
+            channel::{
+                ChannelId, MsgId, VerifiedChannelKeys,
+                config::ChannelConfigValidationContext,
+                inscribe::{Inscription, InscriptionOp},
+            },
         },
-    },
-    transactions::{
-        MantleTxBuilder, OpProofs,
-        hash::{TxHash, TxHashView},
-        states::Unverified,
+        transactions::{
+            MantleTxBuilder, OpProofs,
+            hash::{TxHash, TxHashView},
+            states::Unverified,
+        },
     },
 };
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use logos_blockchain_zone_sdk::sequencer::ChannelUpdateTx;
 
-use super::channel_entries;
+use super::publisher::{channel_entries, genesis_config_op, genesis_config_proof};
 use crate::protocol::ChannelParams;
 
 /// A tx wrapping `block` in one inscribe op on `channel`.
@@ -39,7 +44,7 @@ fn inscribing_tx(channel: ChannelId, block: &Block) -> SignedOps<Unverified, Sta
     let raw = MantleTxBuilder::new()
         .extend_ops([op])
         .expect("ops fit")
-        .build()
+        .build(ForkDigest::new([0; 32]))
         .expect("tx builds");
     // Extraction never checks the proof, only that there is one per op.
     let proof = OpProof::Ed25519Sig(signer.sign_payload(&[0; 32]));
@@ -73,7 +78,9 @@ fn a_custom_tx_yields_its_block() {
 #[test]
 fn a_config_tx_yields_nothing() {
     let channel = ChannelId::from([1; 32]);
-    let raw = MantleTxBuilder::new().build().expect("tx builds");
+    let raw = MantleTxBuilder::new()
+        .build(ForkDigest::new([0; 32]))
+        .expect("tx builds");
     let config = ChannelUpdateTx::Config(
         SignedOps::from_parts(raw, OpProofs::empty()).expect("no ops, no proofs"),
     );
@@ -86,7 +93,7 @@ fn a_config_tx_yields_nothing() {
 #[test]
 fn the_genesis_config_op_and_its_proof_pass_bedrock_verification() {
     let keys = VerifiedChannelKeys::from(Ed25519Key::generate(&mut rand::rngs::OsRng).public_key());
-    let op = super::genesis_config_op(
+    let op = genesis_config_op(
         ChannelId::from([1; 32]),
         keys,
         &ChannelParams {
@@ -96,15 +103,15 @@ fn the_genesis_config_op_and_its_proof_pass_bedrock_verification() {
             exit_delay: 10,
             max_block_size: 1 << 20,
         },
-        1,
-        1,
-    );
+        NonZero::<u16>::MIN,
+        NonZero::<u16>::MIN,
+    )
+    .expect("one key reaches a threshold of one");
     let tx_hash_view = TxHashView::new(TxHash::from([7; 32]));
 
-    let signed =
-        SignedOperation::<_, Unverified, StandardMode>::new(op, super::genesis_config_proof())
-            .into_preverified(&())
-            .expect("the config is well formed");
+    let signed = SignedOperation::<_, Unverified, StandardMode>::new(op, genesis_config_proof())
+        .into_preverified(&())
+        .expect("the config is well formed");
 
     signed
         .verify(&ChannelConfigValidationContext {

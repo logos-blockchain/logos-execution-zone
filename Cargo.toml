@@ -19,6 +19,8 @@ members = [
   "lez/chain_state",
   "lez/sequencer/core",
   "lez/sequencer/core/metrics",
+  "lez/sequencer/bridge",
+  "lez/sequencer/genesis",
   "lez/sequencer/service",
   "lez/sequencer/service/metrics",
   "lez/sequencer/service/protocol",
@@ -33,6 +35,7 @@ members = [
   "lez/sequencer/actors/slasher",
   "lez/sequencer/actors/storage",
   "lez/sequencer/actors/bedrock",
+  "lez/sequencer/actors/sharding_pool",
   "lez/ffi_types",
   "lez/indexer/core",
   "lez/indexer/service",
@@ -93,6 +96,8 @@ key_protocol = { path = "lee/key_protocol" }
 sequencer_core = { path = "lez/sequencer/core" }
 sequencer_core_metrics = { path = "lez/sequencer/core/metrics" }
 sequencer_service_metrics = { path = "lez/sequencer/service/metrics" }
+sequencer_bridge = { path = "lez/sequencer/bridge" }
+sequencer_genesis = { path = "lez/sequencer/genesis" }
 sequencer_service_protocol = { path = "lez/sequencer/service/protocol" }
 sequencer_service_rpc = { path = "lez/sequencer/service/rpc" }
 sequencer_channel_signing_actor = { path = "lez/sequencer/actors/channel_signing" }
@@ -105,6 +110,7 @@ sequencer_rpc_server_actor_metrics = { path = "lez/sequencer/actors/rpc_server/m
 sequencer_slasher_actor = { path = "lez/sequencer/actors/slasher" }
 sequencer_storage_actor = { path = "lez/sequencer/actors/storage" }
 sequencer_bedrock_actor = { path = "lez/sequencer/actors/bedrock" }
+sharding_pool_actor = { path = "lez/sequencer/actors/sharding_pool" }
 sequencer_service = { path = "lez/sequencer/service" }
 ffi_types = { path = "lez/ffi_types" }
 indexer_core = { path = "lez/indexer/core" }
@@ -216,7 +222,7 @@ chrono = "0.4.41"
 time = "0.3"
 borsh = "1.5.7"
 rpds = "1.2.1"
-zstd = "0.13"
+zstd = "0.14"
 base58 = "0.2.0"
 itertools = "0.14.0"
 num-bigint = "0.4.6"
@@ -227,15 +233,15 @@ async-stream = "0.3.6"
 strum = { version = "0.28.0", features = ["derive"] }
 mockall = "0.15.0"
 
-logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
-logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
-logos-blockchain-binary-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
-logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
-logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
-logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
-logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
-logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
-logos-blockchain-testing-framework = { package = "blockchain-test-logos", git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
+logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "4eddb9bc6213345d7c5461dc8974057fec0e400e" }
+logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "4eddb9bc6213345d7c5461dc8974057fec0e400e" }
+logos-blockchain-binary-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "4eddb9bc6213345d7c5461dc8974057fec0e400e" }
+logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "4eddb9bc6213345d7c5461dc8974057fec0e400e" }
+logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "4eddb9bc6213345d7c5461dc8974057fec0e400e" }
+logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "4eddb9bc6213345d7c5461dc8974057fec0e400e" }
+logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "4eddb9bc6213345d7c5461dc8974057fec0e400e" }
+logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "4eddb9bc6213345d7c5461dc8974057fec0e400e" }
+logos-blockchain-testing-framework = { package = "blockchain-test-logos", git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "4eddb9bc6213345d7c5461dc8974057fec0e400e" }
 testing-framework-app = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
 testing-framework-core = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
 

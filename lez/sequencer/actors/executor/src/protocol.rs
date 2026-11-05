@@ -4,14 +4,15 @@ use common::{HashType, PageLimit, transaction::LeeTransaction};
 use kameo::Reply;
 use lee_core::{
     BlockId, Commitment, CommitmentPosition, CommitmentSetDigest, MembershipProof,
-    account::{Account, AccountId, Actor},
+    account::{AccountId, Actor},
 };
+pub use sequencer_bedrock_actor::protocol::{ChannelId, MsgId};
+// TODO: Move to this module once sequencer_core will be in internal implementation detail of
+// executor.
 pub use sequencer_storage_actor::protocol::{CrossZoneMessageKey, DeadLetterRequeue};
 
 /// The widest range a [`GetBlockRange`] may span.
 pub const MAX_BLOCK_RANGE_LEN: usize = 1024;
-
-pub type ChannelId = [u8; 32];
 
 #[derive(Copy, Clone)]
 pub struct ProduceBlock;
@@ -113,12 +114,16 @@ pub struct GetProofsAndRoot {
     pub message_positions: Vec<CommitmentPosition>,
 }
 
-/// The membership paths of the requested commitments and messages, and the root they reach.
-pub type ProofsAndRoot = (
-    Vec<Option<MembershipProof>>,
-    Vec<Option<MembershipProof>>,
-    CommitmentSetDigest,
-);
+#[derive(Reply)]
+pub struct GetProofsAndRootReply {
+    /// Proof for each of [`GetProofsAndRoot::commitments`] in the same order, [`None`] for an
+    /// unknown commitment.
+    pub proofs: Vec<Option<MembershipProof>>,
+    /// Proof for each of [`GetProofsAndRoot::message_positions`] in the same order, [`None`] for
+    /// an unknown position.
+    pub message_paths: Vec<Option<MembershipProof>>,
+    pub root: CommitmentSetDigest,
+}
 
 pub struct GetAccount {
     pub account_id: AccountId,
@@ -126,11 +131,6 @@ pub struct GetAccount {
 
 pub struct GetAccountView {
     pub actor_state_selector: Actor,
-}
-
-#[derive(Reply)]
-pub struct GetAccountReply {
-    pub account: Option<Account>,
 }
 
 pub struct GetPublications {
@@ -147,6 +147,24 @@ pub struct GetRecoveryBinding {
 }
 
 pub struct GetChannelId;
+
+pub struct GetStatus;
+
+/// What the executor is doing.
+#[derive(Debug, Clone, Reply)]
+pub enum ExecutorStatus {
+    /// Replaying the channel's finalized history up to the tip it had at startup.
+    Bootstrapping {
+        /// The channel entry bootstrapping completes at.
+        target: MsgId,
+        /// The last channel entry replayed, [`None`] before the first.
+        replayed_to: Option<MsgId>,
+        /// Height of the chain replayed so far, [`None`] while it is empty.
+        height: Option<BlockId>,
+    },
+    /// Following the channel and producing blocks on its turns.
+    Online { height: BlockId, is_our_turn: bool },
+}
 
 pub struct GetCrossZoneDeadLetters;
 

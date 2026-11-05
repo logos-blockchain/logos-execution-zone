@@ -16,17 +16,17 @@ use lee::V03State;
 use lee_core::BlockId;
 pub use sequencer_actors_common::mock::{Checkpoint, Replace, ReplaceReply};
 
+pub use self::canned_store::{CannedStore, SharedStore};
 use crate::{
     Result, StorageActorTrait,
-    actor::event_filter::EventFilter,
     error::Error,
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, GetAccountTransactions, GetAllBlocks, GetBlock,
-        GetBlockByHash, GetChannelViewBytes, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
-        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetEventFilter, GetFinalSnapshot,
-        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
+        DropSettledCrossZoneDispatches, DumpDb, EventFilter, GetAccountTransactions, GetAllBlocks,
+        GetBlock, GetBlockByHash, GetChannelViewBytes, GetCrossZonePeerFloorBytes,
+        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetEventFilter,
+        GetFinalSnapshot, GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
         GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,
         GetTransactionByHash, GetZoneAnchor, GetZoneCheckpoint, PendingCrossZoneDispatchRecord,
         PendingDepositEventRecord, PutSlashRecordBytes, RecordDispatchFailure,
@@ -34,6 +34,8 @@ use crate::{
         StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
+
+mod canned_store;
 
 mockall::mock! {
     pub StorageActor {
