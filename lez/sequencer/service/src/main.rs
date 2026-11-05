@@ -175,7 +175,7 @@ async fn start(args: StartArgs) -> Result<()> {
     let ops_server = match config.metrics_listen_address {
         Some(address) => Some(tokio::spawn(ops::serve(
             ops::bind(address).await?,
-            install_prometheus_recorder()?,
+            install_prometheus_recorder(&config)?,
             Arc::clone(&sequencer_cell),
             ops_shutdown.clone(),
         ))),
@@ -346,8 +346,10 @@ fn parse_gossip_peer(peer: &str) -> Result<Multiaddr> {
         .with(Protocol::QuicV1))
 }
 
-/// Installs the recorder, whose metrics the ops server renders.
-fn install_prometheus_recorder() -> Result<PrometheusHandle> {
+/// Installs the recorder, whose metrics the ops server renders. Every series is
+/// labelled with the channel signing public key, so sequencers stay apart
+/// wherever they are scraped.
+fn install_prometheus_recorder(config: &SequencerConfig) -> Result<PrometheusHandle> {
     /// Ladder for `*_seconds` histograms, densest across the 1-100 ms band where
     /// block production and transaction application actually land.
     const LATENCY_BUCKETS: &[f64] = &[
@@ -357,8 +359,16 @@ fn install_prometheus_recorder() -> Result<PrometheusHandle> {
     /// Fallback ladder for histograms that count things rather than measure time.
     const COUNT_BUCKETS: &[f64] = &[1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0];
 
+    let channel_signing_key =
+        sequencer_core::load_or_create_signing_key(&config.channel_signing_key_path())?;
+    let public_key = hex::encode(channel_signing_key.public_key().to_bytes());
+
     let handle = PrometheusBuilder::new()
         .with_recommended_naming(true)
+        .add_global_label(
+            sequencer_service_metrics::names::SEQUENCER_LABEL,
+            public_key,
+        )
         .set_buckets(COUNT_BUCKETS)
         .context("Failed to set default histogram buckets")?
         .set_buckets_for_metric(Matcher::Suffix("_seconds".to_owned()), LATENCY_BUCKETS)
