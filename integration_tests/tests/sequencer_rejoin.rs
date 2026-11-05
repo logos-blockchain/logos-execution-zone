@@ -80,11 +80,6 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
 
     // B leaves.
     let settlement_before = account_balance(&ctx, settlement).await?;
-    let requested_at = ctx
-        .sequencer_client()
-        .get_last_block_id()
-        .await?
-        .saturating_add(sequencer_stake_core::UNSTAKE_REQUEST_WINDOW);
     send_stake_tx(
         &ctx,
         ownership_b,
@@ -93,7 +88,6 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
             sequencer_key: stake_key_b,
             amount: STAKE,
             destination: settlement,
-            requested_at,
         },
     )
     .await

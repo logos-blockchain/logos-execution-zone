@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 pub use chain_state::ChannelEntry;
 use common::block::Block;
@@ -15,7 +15,7 @@ pub use logos_blockchain_zone_sdk::{
     },
 };
 pub use sequencer_channel_signing_actor::protocol::ConfigTarget;
-pub use sequencer_stake_core::ChannelParams;
+pub use sequencer_stake_core::{ChannelParams, SequencerKey};
 
 /// A boxed, pinned, Send stream.
 pub type BoxStream<T> = std::pin::Pin<Box<dyn futures::Stream<Item = T> + Send>>;
@@ -321,6 +321,29 @@ pub struct GetChannelTipSlot;
 
 /// Get live channel tip message id.
 pub struct GetChannelTipMessageId;
+
+/// Where on L1 a block to judge sits, as far as the asker knows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum L1Position {
+    /// Not on L1 yet.
+    Unknown,
+    /// In the L1 block holding the inscription with this id, final or not.
+    Msg(MsgId),
+    /// In the final L1 block at this slot.
+    FinalSlot(u64),
+    /// In the final L1 block holding the inscription `msg`, at or under the final block at
+    /// `descendant_slot`.
+    FinalAncestor { msg: MsgId, descendant_slot: u64 },
+}
+
+/// The keys of `keys` the L1 block at `at` may release in full: those absent from the config in
+/// effect `depth` L1 blocks under it and from every config since.
+#[derive(Debug, Clone)]
+pub struct FilterFinallyAbsent {
+    pub at: L1Position,
+    pub keys: BTreeSet<SequencerKey>,
+    pub depth: u64,
+}
 
 /// Finalized channel messages from `after` (exclusive) up to LIB, capped at
 /// zone-sdk's LIB when it became ready.
