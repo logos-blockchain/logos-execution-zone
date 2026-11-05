@@ -297,6 +297,7 @@ pub fn run(
             .context("Failed to set up Executor Actor")?;
         let slasher_ref = executor.slasher_ref();
         let channel_signer_ref = executor.channel_signer_ref();
+        actor_handle::record_mailbox_capacity(&channel_signer_ref);
         // The core has already read a committee by the time this returns.
         let accredited_keys_rx = executor.accredited_keys_watch();
         let staked_keys_rx = executor.staked_keys_watch();

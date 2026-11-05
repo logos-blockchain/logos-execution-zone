@@ -5438,6 +5438,7 @@ dependencies = [
  "dyn-clone",
  "futures",
  "kameo_macros",
+ "metrics",
  "serde",
  "tokio",
  "tracing",
@@ -11463,6 +11464,7 @@ dependencies = [
  "lee",
  "libp2p",
  "log",
+ "metrics",
  "metrics-exporter-prometheus",
  "programs",
  "sequencer_bedrock_actor",
@@ -11486,6 +11488,9 @@ dependencies = [
 [[package]]
 name = "sequencer_service_metrics"
 version = "0.1.0"
+dependencies = [
+ "metrics",
+]
 
 [[package]]
 name = "sequencer_service_protocol"

@@ -8,7 +8,7 @@
       "includeVars": false,
       "keepTime": true,
       "tags": [ "sequencer" ],
-      "title": "Sequencer dashboards",
+      "title": "Dashboards",
       "type": "dashboards"
     }
   ],
@@ -709,6 +709,6 @@
   },
   "time": { "from": "now-15m", "to": "now" },
   "timezone": "",
-  "title": "Sequencer network",
+  "title": "Network",
   "uid": "sequencer-network"
 }
