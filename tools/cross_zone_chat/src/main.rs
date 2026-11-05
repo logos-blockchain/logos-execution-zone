@@ -145,10 +145,10 @@ struct ZoneRuntime {
     /// with whatever the chain already holds. Seeded from a free slot found by
     /// [`next_free_ordinal`], then incremented per send.
     ordinal: AtomicU32,
-    /// Next payer nonce, seeded from the chain at startup and tracked locally:
-    /// two sends inside one block interval would otherwise both read the head
-    /// nonce and the second would be dropped at settlement.
-    payer_nonce: AtomicU64,
+    /// Next payer nonce, seeded from the chain at startup and advanced only on
+    /// a successful submit. Held across the submit, so two sends in one block
+    /// interval cannot take the same nonce.
+    payer_nonce: tokio::sync::Mutex<u64>,
 }
 
 struct AppState {
@@ -342,13 +342,13 @@ async fn main() -> Result<()> {
             other_zone: zone_b,
             client: client_a,
             ordinal: AtomicU32::new(ordinal_a),
-            payer_nonce: AtomicU64::new(payer_nonce_a),
+            payer_nonce: tokio::sync::Mutex::new(payer_nonce_a),
         },
         zone_b: ZoneRuntime {
             other_zone: zone_a,
             client: client_b,
             ordinal: AtomicU32::new(ordinal_b),
-            payer_nonce: AtomicU64::new(payer_nonce_b),
+            payer_nonce: tokio::sync::Mutex::new(payer_nonce_b),
         },
         next_id: AtomicU64::new(1),
         messages: Mutex::new(Vec::new()),
@@ -641,15 +641,22 @@ async fn send_handler(
     };
     let zone = state.zone(source_label).expect("zone runtime exists");
 
+    let mut next_nonce = zone.payer_nonce.lock().await;
     let ordinal = zone.ordinal.fetch_add(1, Ordering::SeqCst);
     let payer = &initial_pub_accounts_private_keys()[0];
-    let nonce = Nonce(u128::from(zone.payer_nonce.fetch_add(1, Ordering::SeqCst)));
-    let tx = build_send_tx(zone.other_zone, ordinal, text, payer, nonce);
-    let id = state.record_outbound(source_label, dest_label, ordinal, text.to_owned());
+    let tx = build_send_tx(
+        zone.other_zone,
+        ordinal,
+        text,
+        payer,
+        Nonce(u128::from(*next_nonce)),
+    );
     zone.client
         .send_transaction(tx)
         .await
         .map_err(|err| (StatusCode::BAD_GATEWAY, format!("submit failed: {err:#}")))?;
+    *next_nonce += 1;
+    let id = state.record_outbound(source_label, dest_label, ordinal, text.to_owned());
     Ok(Json(SendResponse { id }))
 }
 
