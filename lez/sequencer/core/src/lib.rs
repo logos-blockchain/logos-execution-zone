@@ -340,8 +340,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             ))
             .await
             .expect("Failed to seed the database with the genesis block");
-
-        sequencer_core_metrics::increment_blocks_produced_total();
     }
 
     /// # Errors
@@ -954,6 +952,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .map(withdrawal_reconciliation_key)
             .collect();
 
+        let own_key = self.channel_signing_key.public_key();
+
         // The lock is held across the persist below so disk writes land in apply
         // order — the produce path persists under this same lock.
         let (resubmit_txs, outcome, head_height) = {
@@ -978,6 +978,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 match &outcome {
                     AcceptOutcome::Applied(entry_events) => {
                         events.extend(entry_events.clone());
+                        // Counted once final: until then a conflict can orphan it.
+                        if finalized_signers.contains(&(entry.msg, own_key)) {
+                            sequencer_core_metrics::increment_blocks_produced_total();
+                        }
                     }
                     // A re-delivery of the final tip: it is irreversible all the
                     // same, so it still settles its deposits.
@@ -1699,7 +1703,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     .await?;
 
                 if record == PublishRecord::Extended {
-                    sequencer_core_metrics::increment_blocks_produced_total();
                     sequencer_core_metrics::record_chain_height(block_id);
                 }
             }
