@@ -297,8 +297,9 @@ impl From<lee::public_transaction::Message> for PublicMessage {
     fn from(value: lee::public_transaction::Message) -> Self {
         let lee::TransactionMessage {
             public_context,
-            execution: lee::public_transaction::PublicExecution { root, fee },
+            execution: lee::public_transaction::PublicExecution { root },
             nonces,
+            fee,
             admission_evidence,
         } = value;
         Self {
@@ -324,11 +325,9 @@ impl TryFrom<PublicMessage> for lee::public_transaction::Message {
         } = value;
         Ok(Self {
             public_context: public_context.into(),
-            execution: lee::public_transaction::PublicExecution {
-                root: root.into(),
-                fee: fee.map(Into::into),
-            },
+            execution: lee::public_transaction::PublicExecution { root: root.into() },
             nonces: nonce_map(nonces)?,
+            fee: fee.map(Into::into),
             admission_evidence: admission_evidence
                 .into_iter()
                 .map(TryInto::try_into)
@@ -585,6 +584,7 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
                     fee,
                 },
             nonces,
+            fee: declared_fee,
             admission_evidence,
         } = value;
         Self {
@@ -599,6 +599,7 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
             timestamp_validity_window: validity.timestamps.into(),
             admission_evidence: admission_evidence.into_iter().map(Into::into).collect(),
             fee: fee.map(Into::into),
+            declared_fee: declared_fee.map(Into::into),
         }
     }
 }
@@ -662,6 +663,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             timestamp_validity_window,
             admission_evidence,
             fee,
+            declared_fee,
         } = value;
 
         let private_actions = private_actions.into_iter().map(Into::into).collect();
@@ -689,6 +691,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
                 fee: fee.map(Into::into),
             },
             nonces: nonce_map(nonces)?,
+            fee: declared_fee.map(Into::into),
             admission_evidence: admission_evidence
                 .into_iter()
                 .map(TryInto::try_into)
@@ -1323,13 +1326,13 @@ mod tests {
         let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&signer]);
         let tx = lee::PublicTransaction::new(message, witness_set);
         let original_hash = tx.hash();
-        assert_eq!(tx.message().execution.fee, Some(fee));
+        assert_eq!(tx.message().fee, Some(fee));
 
         let protocol_tx: PublicTransaction = tx.into();
         let restored: lee::PublicTransaction = protocol_tx.try_into().expect("converts back");
 
         assert_eq!(
-            restored.message().execution.fee,
+            restored.message().fee,
             Some(fee),
             "the fee declaration must survive the round trip",
         );
@@ -1361,7 +1364,7 @@ mod tests {
         let protocol_tx: PublicTransaction = tx.into();
         let restored: lee::PublicTransaction = protocol_tx.try_into().expect("converts back");
 
-        assert_eq!(restored.message().execution.fee, None);
+        assert_eq!(restored.message().fee, None);
         assert_eq!(restored.hash(), original_hash);
     }
 
@@ -1519,6 +1522,12 @@ mod tests {
                 program_image_claims: vec![],
             },
             nonces: BTreeMap::new(),
+            fee: Some(lee::FeeDeclaration::new(
+                account_id(71),
+                500_000,
+                3,
+                9_000_000,
+            )),
             admission_evidence: admission_evidence(),
         };
 

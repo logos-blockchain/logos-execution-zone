@@ -100,8 +100,9 @@ impl TryFrom<Box<FfiPublicTransactionBody>> for PublicTransaction {
         Ok(Self {
             message: lee::public_transaction::Message {
                 public_context,
-                execution: lee::public_transaction::PublicExecution { root, fee },
+                execution: lee::public_transaction::PublicExecution { root },
                 nonces: nonces_from_ffi(nonces).map_err(cast_error)?,
+                fee,
                 admission_evidence: public_account_evidence(admission_evidence)?,
             },
             witness_set: lee::public_transaction::WitnessSet::from_raw_parts(signatures(
@@ -125,8 +126,9 @@ impl From<lee::public_transaction::Message> for FfiPublicMessage {
     fn from(value: lee::public_transaction::Message) -> Self {
         let lee::TransactionMessage {
             public_context,
-            execution: lee::public_transaction::PublicExecution { root, fee },
+            execution: lee::public_transaction::PublicExecution { root },
             nonces,
+            fee,
             admission_evidence,
         } = value;
 
@@ -265,6 +267,7 @@ struct OwnedPrivateBody {
     timestamp_validity_window: [u64; 2],
     program_image_claims: Vec<Result<ProgramImageClaim, PrimitiveOperationStatus>>,
     fee: Option<ProvenFee>,
+    declared_fee: Option<FeeDeclaration>,
     nonces: Vec<FfiNonceEntry>,
     admission_evidence: Vec<FfiPublicAccountEvidence>,
     witness_set: Vec<FfiSignaturePubKeyEntry>,
@@ -294,6 +297,9 @@ impl From<Box<FfiPrivateTransactionBody>> for OwnedPrivateBody {
                 .map(ProgramImageClaim::try_from)
                 .collect(),
             fee: proven_fee_from_ffi(message.has_fee, message.fee),
+            declared_fee: message
+                .has_declared_fee
+                .then(|| message.declared_fee.into()),
             nonces: message.nonces.into(),
             admission_evidence: message.admission_evidence.into(),
             witness_set: witness_set.into(),
@@ -318,6 +324,7 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
             timestamp_validity_window,
             program_image_claims,
             fee,
+            declared_fee,
             nonces,
             admission_evidence,
             witness_set,
@@ -342,6 +349,7 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                     fee,
                 },
                 nonces: nonces_from_ffi(nonces).map_err(cast_error)?,
+                fee: declared_fee,
                 admission_evidence: public_account_evidence(admission_evidence)?,
             },
             witness_set: lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(
@@ -368,6 +376,9 @@ pub struct FfiPrivacyPreservingMessage {
     pub admission_evidence: FfiPublicAccountEvidenceList,
     pub has_fee: bool,
     pub fee: FfiProvenFee,
+    /// The fee a public signer declares in place of the proof's.
+    pub has_declared_fee: bool,
+    pub declared_fee: FfiFeeDeclaration,
 }
 
 /// What a proof commits about its in-proof fee. The `has_*` flags mark which parts are present;
@@ -419,12 +430,15 @@ impl From<lee::privacy_preserving_transaction::Message> for FfiPrivacyPreserving
                     fee,
                 },
             nonces,
+            fee: declared_fee,
             admission_evidence,
         } = value;
 
         Self {
             has_fee: fee.is_some(),
             fee: fee.into(),
+            has_declared_fee: declared_fee.is_some(),
+            declared_fee: declared_fee.map(Into::into).unwrap_or_default(),
             public_context: public_context.into(),
             boundary: boundary
                 .into_iter()
@@ -898,6 +912,7 @@ mod tests {
                     fee: None,
                 },
                 nonces: BTreeMap::from([(account_id(28), Nonce(29))]),
+                fee: Some(FeeDeclaration::new(account_id(30), 500_000, 3, 9_000_000)),
                 admission_evidence: admission_evidence(),
             },
             witness_set: lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(

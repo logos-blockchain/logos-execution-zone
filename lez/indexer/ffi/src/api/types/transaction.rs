@@ -221,6 +221,10 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                         .collect()
                 },
                 fee: proven_fee_from_ffi(value.message.has_fee, value.message.fee).map(Into::into),
+                declared_fee: value
+                    .message
+                    .has_declared_fee
+                    .then(|| lee::FeeDeclaration::from(value.message.declared_fee).into()),
             },
             witness_set: WitnessSet {
                 signatures_and_public_keys: {
@@ -256,6 +260,9 @@ pub struct FfiPrivacyPreservingMessage {
     pub admission_evidence: FfiPublicAccountEvidenceList,
     pub has_fee: bool,
     pub fee: FfiProvenFee,
+    /// The fee a public signer declares in place of the proof's.
+    pub has_declared_fee: bool,
+    pub declared_fee: FfiFeeDeclaration,
 }
 
 impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
@@ -272,11 +279,16 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
             timestamp_validity_window,
             admission_evidence,
             fee,
+            declared_fee,
         } = value;
 
         Self {
             has_fee: fee.is_some(),
             fee: fee.map(lee_core::ProvenFee::from).into(),
+            has_declared_fee: declared_fee.is_some(),
+            declared_fee: declared_fee
+                .map(|declared| lee::FeeDeclaration::from(declared).into())
+                .unwrap_or_default(),
             public_context: lee::PublicExecutionContext::from(public_context).into(),
             boundary: boundary
                 .into_iter()
@@ -673,6 +685,12 @@ mod tests {
                             BoundaryStep::EndPublicSubtree,
                         ],
                     }),
+                }),
+                declared_fee: Some(FeeDeclaration {
+                    payer: account_id(76),
+                    gas_limit: 500_000,
+                    tip: 3,
+                    max_fee: 9_000_000,
                 }),
             },
             witness_set: WitnessSet {

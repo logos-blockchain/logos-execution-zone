@@ -2350,7 +2350,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             }
         }
         let fee = lee::FeeDeclaration::new(payer, gas_limit, tip, max_fee);
-        message.execution.fee = Some(fee);
+        message.fee = Some(fee);
 
         let message_hash = message.hash();
         let mut signatures_public_keys = acc_manager
