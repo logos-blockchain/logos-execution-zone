@@ -9,7 +9,7 @@ use lee_core::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::{PublicKey, error::LeeError};
+use crate::{PublicKey, error::LeeError, fees::FeeDeclaration};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(rename_all = "snake_case")]
@@ -37,6 +37,9 @@ pub struct TransactionMessage<P> {
     pub execution: P,
     /// Nonces of public accounts used.
     pub nonces: BTreeMap<AccountId, Nonce>,
+    /// The fee declaration, paid by a signer; `None` for a fee-exempt transaction or a
+    /// privacy-preserving one paying inside its proof.
+    pub fee: Option<FeeDeclaration>,
     /// Evidence to show that claimed public accounts are indeed public.
     pub admission_evidence: Vec<PublicAccountEvidence>,
 }
@@ -83,6 +86,12 @@ impl<P> TransactionMessage<P> {
             return Err(InvalidTransaction::AuthorizedAccounts);
         }
         Ok(())
+    }
+
+    /// The designated fee payer, if the message declares a fee.
+    #[must_use]
+    pub fn payer(&self) -> Option<AccountId> {
+        self.fee.map(|fee| fee.payer)
     }
 }
 

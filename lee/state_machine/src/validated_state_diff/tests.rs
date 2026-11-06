@@ -100,6 +100,7 @@ fn privacy_garbage_proof_is_rejected() {
             fee: None,
         },
         nonces: BTreeMap::new(),
+        fee: None,
         admission_evidence: vec![],
     };
 

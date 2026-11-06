@@ -18,8 +18,6 @@ const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Public/\x00\x00\x00\x00\x00\x00\x0
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PublicExecution {
     pub root: RootCall,
-    /// The fee declaration, or `None` for a fee-exempt (system) transaction.
-    pub fee: Option<FeeDeclaration>,
 }
 
 pub type Message = TransactionMessage<PublicExecution>;
@@ -38,9 +36,9 @@ impl Message {
             public_context: PublicExecutionContext::new(public_actors, nonces.keys().copied()),
             execution: PublicExecution {
                 root: RootCall { to, message },
-                fee,
             },
             nonces,
+            fee,
             admission_evidence,
         }
     }
@@ -102,7 +100,7 @@ impl crate::fees::SignedMessage for Message {
     }
 
     fn payer(&self) -> Option<AccountId> {
-        self.execution.fee.map(|fee| fee.payer)
+        Self::payer(self)
     }
 }
 
@@ -137,10 +135,10 @@ mod tests {
             &[0; 32],      // execution.root.to.program_account_id: the native token program
             &[1, 0, 0, 0], // execution.root.message
             &[0],
-            &[0],          // execution.fee: None
             &[1, 0, 0, 0], // nonces: one account's nonce, a little-endian u128
             &[42; 32],
             &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            &[0],          // fee: None
             &[0, 0, 0, 0], // admission_evidence: none
         ]
         .concat();

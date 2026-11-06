@@ -6,9 +6,8 @@ use crate::{AccountId, Balance, Fee, Gas, public_transaction::WitnessSet};
 
 /// The signed fee fields of a charged transaction.
 ///
-/// Carried as `Option<FeeDeclaration>` on each message kind (`None` =
-/// fee-exempt) and covered by the message hash, so every witness signature
-/// authorizes them.
+/// Carried on [`crate::TransactionMessage::fee`] and covered by the message
+/// hash, so every witness signature authorizes them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct FeeDeclaration {
     /// The account debited for this transaction's fee. Designated explicitly
@@ -141,7 +140,7 @@ mod tests {
     fn an_exempt_message_is_always_authorized() {
         let (signer_key, _) = keys();
         let message = exempt_message();
-        assert_eq!(message.execution.fee, None);
+        assert_eq!(message.fee, None);
         let witness_set = WitnessSet::for_message(&message, &[&signer_key]);
         assert!(is_fee_authorized(&message, &witness_set));
     }
@@ -156,7 +155,6 @@ mod tests {
 
         let mut tampered = message;
         tampered
-            .execution
             .fee
             .as_mut()
             .expect("charged message has a fee")
