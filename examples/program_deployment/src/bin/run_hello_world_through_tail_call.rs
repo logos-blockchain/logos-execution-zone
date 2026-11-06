@@ -5,7 +5,7 @@ use lee::{
     AccountId, Actor, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
-use program_deployment::deploy_program;
+use program_deployment::{deploy_or_reuse, deploy_program, fee_paid_by};
 use sequencer_service_rpc::RpcClient as _;
 use wallet::WalletCore;
 
@@ -21,7 +21,11 @@ use wallet::WalletCore;
 //
 // Usage:
 //   cargo run --bin run_hello_world_through_tail_call \
-//     /path/to/simple_tail_call/binary /path/to/hello_world/binary <account_id> <payer_account_id>
+//     /path/to/simple_tail_call/binary /path/to/hello_world/binary <account_id> \
+//     <payer_account_id> [<hello_world_program_id>]
+//
+// Note: pass <hello_world_program_id> to call an already deployed `hello_world`, such as the one
+// `run_hello_world` printed, instead of deploying a new instance
 //
 // Example:
 //   cargo run --bin run_hello_world_through_tail_call \
@@ -56,25 +60,38 @@ async fn main() {
         .unwrap()
         .parse()
         .unwrap();
+    // Optional fifth argument is the ID of a deployed `hello_world` to call, so the greeting lands
+    // in that instance's actor state. Without it, a new instance is deployed.
+    let hello_world_program_id: Option<AccountId> = std::env::args_os()
+        .nth(5)
+        .map(|id| id.into_string().unwrap().parse().unwrap());
 
-    // Deploy both programs through `program_loader`; `simple_tail_call` reads the callee actor
-    // from its own message.
+    // Deploy the programs through `program_loader`; `simple_tail_call` reads the callee actor from
+    // its own message.
     let caller_bytecode: Vec<u8> = std::fs::read(caller_path).unwrap();
     let caller_account_id = deploy_program(&mut wallet_core, caller_bytecode, payer)
         .await
         .unwrap();
     let callee_bytecode: Vec<u8> = std::fs::read(callee_path).unwrap();
-    let callee_account_id = deploy_program(&mut wallet_core, callee_bytecode, payer)
-        .await
-        .unwrap();
+    let callee_account_id = deploy_or_reuse(
+        &mut wallet_core,
+        callee_bytecode,
+        payer,
+        hello_world_program_id,
+    )
+    .await
+    .unwrap();
 
-    let nonces = BTreeMap::new();
-    let signing_keys = [];
+    // The fee is charged to `payer`, so the payer's nonce is listed and its key signs the message.
+    let (fee, payer_nonce, payer_key) = fee_paid_by(&wallet_core, payer).await.unwrap();
+    let nonces = BTreeMap::from([(payer, payer_nonce)]);
+    let signing_keys = [&payer_key];
     // The caller's actor receives the message and sends the greeting to the callee's actor on the
     // same account, so both are declared.
     let caller = Actor::new(account_id, caller_account_id);
     let callee = Actor::new(account_id, callee_account_id);
-    let message = Message::try_new(caller, vec![caller, callee], nonces, callee).unwrap();
+    let message =
+        Message::try_new_with_fees(caller, vec![caller, callee], nonces, callee, fee).unwrap();
     let witness_set = WitnessSet::for_message(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 

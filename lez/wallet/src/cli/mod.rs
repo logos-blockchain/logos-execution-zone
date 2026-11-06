@@ -25,7 +25,7 @@ use crate::{
         pending::PendingSubcommand,
         programs::{
             bridge::BridgeSubcommand, native_token_transfer::AuthTransferSubcommand,
-            program_loader::ProgramLoaderSubcommand,
+            program::ProgramSubcommand, program_loader::ProgramLoaderSubcommand,
         },
     },
     config::SequencerConnectionData,
@@ -67,6 +67,9 @@ pub enum Command {
     /// `program_loader` program interaction subcommand (deploy/update a program).
     #[command(subcommand)]
     ProgramLoader(ProgramLoaderSubcommand),
+    /// Call any program with a message you encoded yourself.
+    #[command(subcommand)]
+    Program(ProgramSubcommand),
     /// Group key management (create, invite, join, derive keys).
     #[command(subcommand)]
     Group(GroupSubcommand),
@@ -300,6 +303,9 @@ pub async fn execute_subcommand<C: WalletSequencerClient>(
             program_loader_subcommand
                 .handle_subcommand(wallet_core)
                 .await?
+        }
+        Command::Program(program_subcommand) => {
+            program_subcommand.handle_subcommand(wallet_core).await?
         }
         Command::Group(group_subcommand) => group_subcommand.handle_subcommand(wallet_core).await?,
         Command::Pending(pending_subcommand) => {
