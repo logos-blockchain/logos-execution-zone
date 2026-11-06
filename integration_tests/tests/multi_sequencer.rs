@@ -26,7 +26,7 @@ use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_us
 use tokio::test;
 
 const TRANSFER_AMOUNT: u128 = 10;
-/// ≈4 turn windows, at the `system_accounts` posting timeframe and 5 s blocks.
+/// Several turn windows, at the test posting timeframe and 5 s blocks.
 const ROTATION_BLOCKS: u64 = 8;
 
 #[test]
