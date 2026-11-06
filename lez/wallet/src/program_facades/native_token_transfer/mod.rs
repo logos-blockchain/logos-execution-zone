@@ -46,7 +46,7 @@ impl<C: WalletSequencerClient> NativeTokenTransfer<'_, C> {
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let async_delivery = AsyncDelivery {
             clear_messages: vec![ClearMessage {
-                from_program: NATIVE_TOKEN_PROGRAM_ID,
+                sender: Actor::native_balance(sender.account_id()),
                 to: Actor::native_balance(to),
                 message: Program::serialize_message(Message::Credit(amount))
                     .expect("Message should serialize"),
