@@ -25,7 +25,7 @@ use crate::{
     PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID, PublicTransaction,
     error::{InvalidProgramBehaviorError, LeeError},
     program::{DEFAULT_PUBLIC_CYCLE_BUDGET, Program, check_exit_code, transition_journal},
-    validated_state_diff::{catch_program_loader_panic, charged_cycles},
+    validated_state_diff::{charged_cycles, run_program_loader},
 };
 
 /// Proof of the privacy preserving execution circuit.
@@ -221,19 +221,22 @@ impl ExecutionEnvironment for Simulator<'_> {
         input: &ReceiveInput,
         view: &TransitionView<'_>,
     ) -> Result<Transition, LeeError> {
-        // The loader runs as Rust, as in settlement, and only in a transaction without private
-        // accounts; it reads the declared accounts' loader states.
+        // The loader runs as Rust and is charged as in settlement, and only in a transaction
+        // without private accounts; it reads the declared accounts' loader states.
         if input.receiver.program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
             const ABSENT: &ActorState = &ActorState::empty();
             let states = self.public_actor_states;
-            let (transition, _) = catch_program_loader_panic(|| {
-                program_loader_core::handle_message(input, |account_id| {
+            let (transition, _) = run_program_loader(
+                input,
+                |account_id| {
                     let actor = Actor::new(account_id, PROGRAM_LOADER_ACCOUNT_ID);
                     view.staged_state(actor)
                         .or_else(|| states.get(&actor))
                         .unwrap_or(ABSENT)
-                })
-            })?;
+                },
+                self.cycle_budget,
+                &mut self.cycles_used,
+            )?;
             return Ok(transition);
         }
         // A private transition is bounded only by what its prover can prove, as when it is proven.

@@ -496,19 +496,55 @@ fn loader_is_charged_for_the_actor_state_bytes_it_reads() {
 
     assert_eq!(
         charge.cycles,
-        next_state_len * super::public_backend::LOADER_CYCLES_PER_BYTE
+        next_state_len * super::LOADER_CYCLES_PER_BYTE
     );
 }
 
 #[test]
 fn loader_reads_beyond_the_budget_are_out_of_gas() {
     let (state, tx, next_state_len) = loader_write_fixture(10_000);
-    let budget = next_state_len * super::public_backend::LOADER_CYCLES_PER_BYTE - 1;
+    let budget = next_state_len * super::LOADER_CYCLES_PER_BYTE - 1;
 
     let result =
         ValidatedStateDiff::from_public_transaction_with_cycle_budget(&tx, &state, 1, 0, budget);
 
     assert!(matches!(result, Err(LeeError::OutOfGas { budget: b }) if b == budget));
+}
+
+#[test]
+fn a_simulated_loader_read_is_charged_as_settled() {
+    use lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
+
+    use crate::privacy_preserving_transaction::circuit::{
+        ProgramCatalog, Simulation, simulate_public_transaction,
+    };
+
+    let (state, tx, next_state_len) = loader_write_fixture(10_000);
+    let budget = crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET;
+    let (settled, settled_result) =
+        ValidatedStateDiff::from_public_transaction_metered(&tx, &state, 1, 0, budget);
+    let next = Actor::new(AccountId::new([9; 32]), PROGRAM_LOADER_ACCOUNT_ID);
+    let simulation = Simulation {
+        public_actor_states: [(
+            next,
+            state
+                .get_account_by_id(next.account_id)
+                .data
+                .actor_state(PROGRAM_LOADER_ACCOUNT_ID)
+                .clone(),
+        )]
+        .into(),
+        admitted_accounts: None,
+    };
+    let (simulated, simulated_result) =
+        simulate_public_transaction(&tx, &simulation, &ProgramCatalog::default(), budget);
+
+    assert!(settled_result.is_ok() && simulated_result.is_ok());
+    assert_eq!(
+        settled.cycles,
+        next_state_len * super::LOADER_CYCLES_PER_BYTE
+    );
+    assert_eq!(simulated, settled.cycles);
 }
 
 /// Charges `tx` both as settlement does and as a wallet simulates it, over the same state, and
