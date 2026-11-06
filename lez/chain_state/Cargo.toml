@@ -17,6 +17,7 @@ logos-blockchain-core.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 
 anyhow.workspace = true
+async-trait.workspace = true
 borsh.workspace = true
 futures.workspace = true
 log.workspace = true
