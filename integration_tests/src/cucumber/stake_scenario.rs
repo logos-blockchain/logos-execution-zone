@@ -14,12 +14,18 @@
 //! therefore assert non-inclusion plus unchanged accounts instead of the
 //! in-program rejection message.
 
-use std::{str::FromStr, time::Duration};
+use std::{collections::BTreeMap, str::FromStr, time::Duration};
 
+use borsh::BorshSerialize;
 use common::HashType;
 use lee::{Account, AccountId, program::Program};
-use lee_core::{native_token, program::MessageData};
+use lee_core::{
+    account::Actor,
+    native_token,
+    program::{MessageData, ProgramId},
+};
 use sequencer_stake_core::SequencerKey;
+use test_guest_core::Script;
 
 use crate::cucumber::error::StepError;
 
@@ -116,6 +122,10 @@ pub struct StakeScenario {
     ownership_id: Option<AccountId>,
     second_ownership_id: Option<AccountId>,
     off_curve_bytes: Option<[u8; 32]>,
+    /// Test programs deployed at runtime, keyed by image id: the header
+    /// account each deployment claimed, which is how a deployed program is
+    /// addressed.
+    deployed_programs: BTreeMap<ProgramId, AccountId>,
     snapshot: Option<AccountsSnapshot>,
     last_submission: Option<SubmissionRecord>,
 }
@@ -134,6 +144,7 @@ impl StakeScenario {
             ownership_id: None,
             second_ownership_id: None,
             off_curve_bytes: None,
+            deployed_programs: BTreeMap::new(),
             snapshot: None,
             last_submission: None,
         }
@@ -242,6 +253,22 @@ impl StakeScenario {
         })
     }
 
+    /// Records the account a runtime deployment of `program` claimed.
+    pub fn set_deployed_program(&mut self, program: &Program, account_id: AccountId) {
+        self.deployed_programs.insert(program.id(), account_id);
+    }
+
+    /// Returns the account `program` was deployed at, or a typed error if the
+    /// scenario has not deployed it.
+    pub fn deployed_program(&self, program: &Program) -> Result<AccountId, StepError> {
+        self.deployed_programs
+            .get(&program.id())
+            .copied()
+            .ok_or(StepError::MissingObservation {
+                field: "deployed test program",
+            })
+    }
+
     /// Stores the pre-submission account snapshot.
     pub fn set_snapshot(&mut self, snapshot: AccountsSnapshot) {
         self.snapshot = Some(snapshot);
@@ -319,22 +346,48 @@ pub fn transfer_message(to: AccountId, amount: u128) -> Result<MessageData, Step
     })
 }
 
-/// Serialized `sequencer_stake::Stake` for `sequencer_key`, paid from `funding`;
+/// `sequencer_stake::Stake` for `sequencer_key`, paid from `funding`;
 /// `has_record` says whether the ownership account already holds a stake record.
+#[must_use]
+pub const fn stake(
+    sequencer_key: SequencerKey,
+    amount: u128,
+    has_record: bool,
+    funding: AccountId,
+) -> sequencer_stake_core::Message {
+    sequencer_stake_core::Message::Stake {
+        sequencer_key,
+        amount,
+        has_record,
+        funding,
+    }
+}
+
+/// Serialized [`stake`] message.
 pub fn stake_message(
     sequencer_key: SequencerKey,
     amount: u128,
     has_record: bool,
     funding: AccountId,
 ) -> Result<MessageData, StepError> {
-    Program::serialize_message(sequencer_stake_core::Message::Stake {
-        sequencer_key,
-        amount,
-        has_record,
-        funding,
+    Program::serialize_message(stake(sequencer_key, amount, has_record, funding)).map_err(|error| {
+        StepError::LogicalError {
+            message: format!("failed to serialize the Stake message: {error}"),
+        }
     })
-    .map_err(|error| StepError::LogicalError {
-        message: format!("failed to serialize the Stake message: {error}"),
+}
+
+/// Serialized `Script` for the `scripted` test program: relay `message` to the
+/// actor `to` as a synchronous send, so `to` sees the scripted actor, not the
+/// transaction, as its sender.
+pub fn relayed_message<M: BorshSerialize>(
+    to: Actor,
+    message: &M,
+) -> Result<MessageData, StepError> {
+    Program::serialize_message(Script::default().send_sync(to, message)).map_err(|error| {
+        StepError::LogicalError {
+            message: format!("failed to serialize the relaying script: {error}"),
+        }
     })
 }
 
