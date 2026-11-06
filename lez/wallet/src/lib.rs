@@ -2724,10 +2724,11 @@ mod tests {
     };
     use lee_core::{
         Commitment, CommitmentPosition, EncryptedNote, EphemeralSecretKey, MembershipProof,
-        Nullifier, PrivateAccountKind, ProgramImageClaim, Recipient, RecipientEncryption,
-        RecoveryBinding,
+        Nullifier, NullifierPublicKey, PrivateAccountKind, ProgramImageClaim, PublicationMode,
+        Recipient, RecipientEncryption, RecoveryBinding,
         account::{Account, Actor, ActorState},
         compute_digest_for_path,
+        encryption::ViewingPublicKey,
         native_token::{self, TransferError},
         program::{
             MessageBody, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramHeader, ProgramSegment,
@@ -2740,8 +2741,8 @@ mod tests {
     use test_guest_core::Script;
 
     use super::{
-        AccountIdentity, AccountMention, AsyncDelivery, ExecutionFailureKind,
-        NATIVE_TOKEN_PROGRAM_ID, PendingMessage, WalletCore,
+        AccountIdentity, AccountMention, AsyncDelivery, ClearMessage, ExecutionFailureKind,
+        NATIVE_TOKEN_PROGRAM_ID, PendingMessage, WalletCore, choose_publication_with,
     };
     use crate::{
         account::{AccountIdWithPrivacy, Label},
@@ -3123,6 +3124,57 @@ mod tests {
         let (_, bound) = wallet.async_destination(blinded).unwrap();
         assert_eq!(bound.recoveries.len(), 1);
         assert_eq!(bound.recoveries[0].recipient, addressed);
+    }
+
+    #[test]
+    fn only_a_requested_async_message_is_published_clear_and_each_request_once() {
+        let recipient = Recipient {
+            npk: NullifierPublicKey([1; 32]),
+            vpk: ViewingPublicKey::from_seed(&[2; 32], &[3; 32]),
+            kind: PrivateAccountKind::Regular,
+            opening: None,
+        };
+        let alias = Actor::native_balance(AccountId::new([4; 32]));
+        let sealable = Actor::native_balance(recipient.address());
+        let credit = |from_program, to, amount| MessageBody {
+            from: Actor::new(AccountId::new([5; 32]), from_program),
+            to,
+            message: borsh::to_vec(&native_token::Message::Credit(amount)).unwrap(),
+        };
+        let requested = credit(NATIVE_TOKEN_PROGRAM_ID, alias, 20);
+        let mut choose = choose_publication_with(
+            vec![recipient],
+            vec![ClearMessage {
+                from_program: NATIVE_TOKEN_PROGRAM_ID,
+                to: alias,
+                message: requested.message.clone(),
+            }],
+        );
+        let unsealed = |body: &MessageBody| {
+            format!(
+                "No recipient material seals an async message to {}",
+                body.to.account_id
+            )
+        };
+
+        for body in [
+            credit(AccountId::new([6; 32]), alias, 20),
+            credit(NATIVE_TOKEN_PROGRAM_ID, alias, 21),
+        ] {
+            assert!(matches!(
+                choose(&body),
+                Err(LeeError::InvalidInput(reason)) if reason == unsealed(&body)
+            ));
+        }
+        assert!(matches!(
+            choose(&credit(NATIVE_TOKEN_PROGRAM_ID, sealable, 20)),
+            Ok(PublicationMode::Sealed(_))
+        ));
+        assert!(matches!(choose(&requested), Ok(PublicationMode::Clear)));
+        assert!(matches!(
+            choose(&requested),
+            Err(LeeError::InvalidInput(reason)) if reason == unsealed(&requested)
+        ));
     }
 
     #[tokio::test]
