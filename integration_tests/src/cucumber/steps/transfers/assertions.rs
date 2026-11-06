@@ -211,7 +211,7 @@ async fn assert_new_account_balance(
     Ok(())
 }
 
-#[then(expr = "the sender private balance for transfer {string} decreases by {int}")]
+#[then(expr = "the sender private balance for transfer {string} decreases by {int} plus the fee")]
 async fn assert_sender_private_balance_decreased(
     world: &mut CucumberWorld,
     step: &Step,
@@ -222,13 +222,20 @@ async fn assert_sender_private_balance_decreased(
     let artifact = transfer_artifact(world, &transfer_name)?;
     let account = artifact.sender;
     let initial_balance = artifact.sender_balance_before;
-    let amount = artifact.amount;
+    // The private sender also pays the in-proof fee.
+    let fee = crate::config::min_private_fee();
+    let amount = artifact
+        .amount
+        .checked_add(fee)
+        .expect("private debit overflow");
     let observed_balance = assert_private_balance_delta(
         world,
         account,
         initial_balance,
         amount,
-        expected_amount,
+        expected_amount
+            .checked_add(fee)
+            .expect("expected private debit overflow"),
         false,
         "private sender",
     )

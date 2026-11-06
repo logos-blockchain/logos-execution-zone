@@ -3,7 +3,7 @@ use clap::Subcommand;
 use lee::PublicKey;
 
 use crate::{
-    AccountIdentity, WalletCore,
+    AccountIdentity, WalletCore, WalletSequencerClient,
     account::AccountIdWithPrivacy,
     cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand, destination},
     program_facades::{CreditDelivery, native_token_transfer::NativeTokenTransfer},
@@ -45,9 +45,9 @@ pub enum AuthTransferSubcommand {
 }
 
 impl WalletSubcommand for AuthTransferSubcommand {
-    async fn handle_subcommand(
+    async fn handle_subcommand<C: WalletSequencerClient>(
         self,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::Send {

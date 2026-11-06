@@ -43,8 +43,9 @@ pub struct SequencerSetup {
     channel_id: ChannelId,
     genesis_transactions: Option<Vec<GenesisAction>>,
     cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
-    bedrock_signing_key: Option<UnsecuredEd25519Key>,
+    channel_signing_key: Option<UnsecuredEd25519Key>,
     gossip: Option<sequencer_core::config::GossipConfig>,
+    joining: bool,
 }
 
 impl SequencerSetup {
@@ -56,8 +57,9 @@ impl SequencerSetup {
             channel_id: config::bedrock_channel_id(),
             genesis_transactions: None,
             cross_zone: None,
-            bedrock_signing_key: None,
+            channel_signing_key: None,
             gossip: None,
+            joining: false,
         }
     }
 
@@ -87,18 +89,21 @@ impl SequencerSetup {
 
     /// Build a sequencer that joins a channel another node already created,
     /// replaying its genesis from the channel instead of the prebuilt dump.
+    /// Its config has no `genesis`, like one `sequencer_service setup` writes without
+    /// `--create-channel`.
     #[must_use]
     pub fn joining_existing_channel(mut self) -> Self {
         self.genesis_transactions = Some(Vec::new());
+        self.joining = true;
         self
     }
 
-    /// Pre-write a bedrock (Ed25519, 32-byte seed) signing key into the home
+    /// Pre-write a channel signing key (Ed25519, 32-byte seed) into the home
     /// before boot, so tests know the sequencer's public key in advance (e.g.
     /// to accredit a committee member that has not started yet).
     #[must_use]
-    pub fn with_bedrock_signing_key(mut self, key: UnsecuredEd25519Key) -> Self {
-        self.bedrock_signing_key = Some(key);
+    pub fn with_channel_signing_key(mut self, key: UnsecuredEd25519Key) -> Self {
+        self.channel_signing_key = Some(key);
         self
     }
 
@@ -150,29 +155,38 @@ impl SequencerSetup {
             channel_id,
             genesis_transactions,
             cross_zone,
-            bedrock_signing_key,
+            channel_signing_key,
             gossip,
+            joining,
         } = self;
 
         debug!("Using sequencer home at {}", home.display());
 
-        let bedrock_signing_key = bedrock_signing_key.or_else(|| {
+        let channel_signing_key = channel_signing_key.or_else(|| {
             genesis_transactions
                 .is_none()
                 .then_some(UnsecuredEd25519Key::from_bytes(
-                    &config::BEDROCK_SIGNING_KEY,
+                    &config::CHANNEL_SIGNING_KEY,
                 ))
         });
-        if let Some(key) = &bedrock_signing_key {
-            std::fs::write(home.join("bedrock_signing_key"), key.as_bytes())
-                .context("Failed to write pre-generated bedrock signing key")?;
+        if let Some(key) = &channel_signing_key {
+            std::fs::write(
+                home.join(sequencer_core::CHANNEL_SIGNING_KEY_FILE),
+                key.as_bytes(),
+            )
+            .context("Failed to write pre-generated channel signing key")?;
         }
-        // Pinned like the bedrock key: the prebuilt dump stakes this account.
+        // Pinned like the channel signing key: the prebuilt dump stakes this account.
         std::fs::write(
             home.join("sequencer_stake_signing_key"),
             config::SEQUENCER_STAKE_KEY,
         )
         .context("Failed to write pre-generated stake signing key")?;
+        std::fs::write(
+            home.join(sequencer_core::BEDROCK_FUNDING_PUBLIC_KEY_FILE),
+            config::bedrock_funding_key_id(),
+        )
+        .context("Failed to write the bedrock funding public key")?;
 
         let genesis_transactions = if let Some(genesis) = genesis_transactions {
             genesis
@@ -190,17 +204,19 @@ impl SequencerSetup {
             Vec::new()
         };
 
-        let config = config::sequencer_config(
+        let mut config = config::sequencer_config(
             partial,
             home,
             bedrock_addr,
             channel_id,
-            config::bedrock_funding_key(),
             genesis_transactions,
             cross_zone,
             gossip,
         )
         .context("Failed to create Sequencer config")?;
+        if joining {
+            config.genesis = None;
+        }
 
         Ok(config)
     }
@@ -363,6 +379,12 @@ fn validate_resolved_bedrock_node(resolved_directory: &Path) -> Result<()> {
 }
 
 pub async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {
+    setup_bedrock_node_with_settings(None).await
+}
+
+pub async fn setup_bedrock_node_with_settings(
+    settings_file: Option<&str>,
+) -> Result<(DockerCompose, SocketAddr)> {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let bedrock_compose_path = PathBuf::from(manifest_dir).join("../bedrock/docker-compose.yml");
     let resolved_binary =
@@ -385,7 +407,22 @@ pub async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {
         .with_build(true)
         // Setting port to 0 to avoid conflicts between parallel tests, actual port will be
         // retrieved after container is up
-        .with_env("PORT", "0");
+        .with_env("LEZ_COMPOSE_BEDROCK_PORT", "0");
+    if let Some(settings_file) = settings_file {
+        let settings_path = PathBuf::from(manifest_dir)
+            .join("../bedrock")
+            .join(settings_file);
+        if !settings_path.is_file() {
+            bail!(
+                "Bedrock settings override is missing at {}",
+                settings_path.display()
+            );
+        }
+        compose = compose.with_env(
+            "LEZ_COMPOSE_BEDROCK_DEPLOYMENT_SETTINGS",
+            format!("./{settings_file}"),
+        );
+    }
 
     #[expect(
         clippy::items_after_statements,
@@ -495,7 +532,7 @@ pub fn setup_wallet(
     initial_public_accounts: &[(PrivateKey, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     config_overrides: WalletConfigOverrides,
-) -> Result<(WalletCore, TempDir, String)> {
+) -> Result<(WalletCore<SequencerClient>, TempDir, String)> {
     let temp_wallet_dir =
         tempfile::tempdir().context("Failed to create temp dir for wallet home")?;
     let (wallet, _state_dir, password) = setup_wallet_at(
@@ -516,7 +553,7 @@ pub fn setup_wallet_at(
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     config_overrides: WalletConfigOverrides,
     home: &Path,
-) -> Result<(WalletCore, PathBuf, String)> {
+) -> Result<(WalletCore<SequencerClient>, PathBuf, String)> {
     let config = config::wallet_config(sequencer_addr).context("Failed to create Wallet config")?;
     let config_serialized =
         serde_json::to_string_pretty(&config).context("Failed to serialize Wallet config")?;
@@ -564,7 +601,7 @@ pub fn setup_wallet_at(
 
 /// Funds each of the wallet's private accounts from one of its public accounts.
 pub async fn fund_private_accounts(
-    wallet: &mut WalletCore,
+    wallet: &mut WalletCore<SequencerClient>,
     initial_public_accounts: &[(PrivateKey, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
 ) -> Result<()> {
@@ -573,7 +610,10 @@ pub async fn fund_private_accounts(
     ));
 
     for private_account in initial_private_accounts {
-        wallet::cli::execute_subcommand(
+        // The recipient pays the shielding's in-proof fee out of what it receives, so it is
+        // shielded the fee on top of its balance.
+        wallet.set_private_fee_payer(Some(private_account.account_id()));
+        let funded = wallet::cli::execute_subcommand(
             wallet,
             Command::AuthTransfer(AuthTransferSubcommand::Send {
                 from: public_mention(funder_id),
@@ -582,11 +622,15 @@ pub async fn fund_private_accounts(
                 to_vpk: None,
                 to_keys: None,
                 to_pk: None,
-                amount: private_account.balance,
+                amount: private_account
+                    .balance
+                    .checked_add(config::min_private_fee())
+                    .expect("private funding overflow"),
             }),
         )
-        .await
-        .with_context(|| {
+        .await;
+        wallet.set_private_fee_payer(None);
+        funded.with_context(|| {
             format!(
                 "Failed to fund private account {}",
                 private_account.account_id()
@@ -602,7 +646,7 @@ pub async fn fund_private_accounts(
     Ok(())
 }
 
-pub async fn sync_wallet_from_prebuilt(wallet: &mut WalletCore) -> Result<()> {
+pub async fn sync_wallet_from_prebuilt(wallet: &mut WalletCore<SequencerClient>) -> Result<()> {
     wallet
         .sync_to_latest_block()
         .await
@@ -614,6 +658,23 @@ pub async fn sync_wallet_from_prebuilt(wallet: &mut WalletCore) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{bedrock_platform_for_docker_arch, ensure_node_runs_on_docker_daemon};
+
+    #[test]
+    fn slow_finality_settings_differ_from_the_default_only_in_security_param() {
+        let bedrock = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../bedrock");
+        let default = std::fs::read_to_string(bedrock.join("deployment-settings.yaml")).unwrap();
+        let slow = std::fs::read_to_string(bedrock.join("deployment-settings-slow-finality.yaml"))
+            .unwrap();
+        let patched = default.replacen("security_param: 3", "security_param: 10", 1);
+        assert_ne!(
+            patched, default,
+            "the default settings no longer carry `security_param: 3`; regenerate the slow-finality file"
+        );
+        assert_eq!(
+            slow, patched,
+            "deployment-settings-slow-finality.yaml drifted from deployment-settings.yaml"
+        );
+    }
 
     #[test]
     fn maps_docker_architectures_to_resolved_platforms() {

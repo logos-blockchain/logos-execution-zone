@@ -154,20 +154,28 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     // The indexer carries no holdings config: agreeing with the sequencer
     // requires replaying genesis. `wait_for_balance` returns only on the exact
     // value, so reaching it is the assertion.
+    // Both read the same delivered transaction, so they share one timeout.
     let ind_client_a = ctx.indexer_client_zone(channel_a).unwrap();
-    wait_for_balance(
-        ind_client_a,
-        bridge_lock_core::holding_account_id(
-            programs::bridge_lock_account_id(),
-            &holder_id.into_value(),
-        ),
-        u128::from(INITIAL_BALANCE) - LOCK_AMOUNT,
-    )
-    .await
-    .context("zone A's indexer must reconstruct the holding from the genesis block")?;
-    wait_for_balance(ind_client_a, escrow_id, LOCK_AMOUNT)
-        .await
-        .context("zone A's indexer must track the escrow too")?;
+    let holding_id_a = bridge_lock_core::holding_account_id(
+        programs::bridge_lock_account_id(),
+        &holder_id.into_value(),
+    );
+    tokio::try_join!(
+        async {
+            wait_for_balance(
+                ind_client_a,
+                holding_id_a,
+                u128::from(INITIAL_BALANCE) - LOCK_AMOUNT,
+            )
+            .await
+            .context("zone A's indexer must reconstruct the holding from the genesis block")
+        },
+        async {
+            wait_for_balance(ind_client_a, escrow_id, LOCK_AMOUNT)
+                .await
+                .context("zone A's indexer must track the escrow too")
+        },
+    )?;
     Ok(())
 }
 

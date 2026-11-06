@@ -1,0 +1,36 @@
+# Advisories at full severity. `ci.yml` only reports them, since the database
+# is third-party input and a disclosure would otherwise stop every merge.
+name: Advisories
+
+on:
+  schedule:
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  ci-image:
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/ci-image.yml
+
+  advisories:
+    needs: ci-image
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.ci-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check licenses, bans, sources and advisories
+        run: >-
+          cargo deny --locked check
+          -D advisory-not-detected -D yanked-not-detected

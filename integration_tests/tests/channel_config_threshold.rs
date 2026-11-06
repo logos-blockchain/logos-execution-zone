@@ -36,7 +36,7 @@ use wallet::{AccountIdentity, program_facades::sequencer_stake::SequencerStake};
 /// Comfortably above `system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE`.
 const FUNDING_BALANCE: u128 = 2 * system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
 
-/// Bedrock signing key of the sequencer that stakes its way in.
+/// Channel signing key of the sequencer that stakes its way in.
 const JOINER_SIGNING_KEY: [u8; 32] = [0x42; 32];
 
 /// The committee update is its own transaction and needs peer signatures, so
@@ -85,7 +85,7 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
 
     let joiner_key = Ed25519Key::from_bytes(&JOINER_SIGNING_KEY).public_key();
     let joiner_stake_key = sequencer_stake_core::SequencerKey::new(joiner_key.to_bytes())
-        .expect("a Bedrock key is a valid Ed25519 public key");
+        .expect("a channel signing public key is a valid Ed25519 public key");
 
     let funding_private_key = PrivateKey::new_os_random();
     let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_private_key));

@@ -29,9 +29,8 @@ indexer_service_rpc = { workspace = true, features = ["client"] }
 indexer_service.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 sequencer_service = { workspace = true, features = ["rpc"] }
-wallet-ffi.workspace = true
 indexer_ffi.workspace = true
-sequencer_ffi.workspace = true
+core_ffi.workspace = true
 indexer_service_protocol.workspace = true
 system_accounts.workspace = true
 sequencer_stake_core.workspace = true
@@ -43,6 +42,7 @@ testnet_initial_state.workspace = true
 program_loader_core.workspace = true
 
 logos-blockchain-core.workspace = true
+logos-blockchain-http-api-common.workspace = true
 logos-blockchain-key-management-system-service.workspace = true
 logos-blockchain-testing-framework.workspace = true
 logos-blockchain-zone-sdk.workspace = true
@@ -53,7 +53,6 @@ testing-framework-core.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 kameo.workspace = true
-bytesize.workspace = true
 cucumber = { features = [
   "macros",
   "output-junit",

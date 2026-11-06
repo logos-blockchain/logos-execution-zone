@@ -8,11 +8,13 @@ use sequencer_stake_core::{
     Message, SequencerKey, StakeRecord, UNSTAKE_REQUEST_WINDOW, stake_funds_seed,
 };
 
-use crate::{AccountIdentity, AsyncDelivery, ExecutionFailureKind, WalletCore};
+use crate::{
+    AccountIdentity, AsyncDelivery, ExecutionFailureKind, WalletCore, WalletSequencerClient,
+};
 
-pub struct SequencerStake<'wallet>(pub &'wallet WalletCore);
+pub struct SequencerStake<'wallet, C: WalletSequencerClient>(pub &'wallet WalletCore<C>);
 
-impl SequencerStake<'_> {
+impl<C: WalletSequencerClient> SequencerStake<'_, C> {
     // The signing ownership account's stake actor is the root, and `funding`'s native balance pays,
     // publicly or privately: the ownership transition requests exactly that transfer into the
     // funds.

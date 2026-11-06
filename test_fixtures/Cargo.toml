@@ -25,10 +25,10 @@ sequencer_storage_actor = { workspace = true, features = [
 ] }
 wallet.workspace = true
 programs.workspace = true
+fee_core.workspace = true
 
 anyhow.workspace = true
 bip39.workspace = true
-bytesize.workspace = true
 env_logger.workspace = true
 futures.workspace = true
 hex.workspace = true

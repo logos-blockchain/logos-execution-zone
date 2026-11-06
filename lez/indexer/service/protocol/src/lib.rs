@@ -207,9 +207,17 @@ impl FromStr for Signature {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct BlockBody {
     pub transactions: Vec<Transaction>,
+    /// Indices into `transactions` of the charged transactions whose action reverted.
+    #[serde(default)]
+    pub reverted: Vec<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "both variants are whole transactions whose bulk is on the heap; the inline \
+              difference is a few hundred bytes, and boxing one would touch every match"
+)]
 pub enum Transaction {
     Public(PublicTransaction),
     PrivacyPreserving(PrivacyPreservingTransaction),
@@ -323,6 +331,20 @@ pub struct PrivateAction {
     pub encrypted_post_state: EncryptedNote,
 }
 
+/// What a proof commits about its in-proof fee: the public refund target, and the payer's
+/// transition after the fee transfer alone, applied when the public part fails.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct ProvenFee {
+    pub refund_to: Option<AccountId>,
+    pub fallback: Option<FeeFallback>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct FeeFallback {
+    pub action: PrivateAction,
+    pub boundary: Boundary,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PrivacyPreservingMessage {
     pub public_context: PublicExecutionContext,
@@ -335,6 +357,7 @@ pub struct PrivacyPreservingMessage {
     pub block_validity_window: ValidityWindow,
     pub timestamp_validity_window: ValidityWindow,
     pub admission_evidence: Vec<PublicAccountEvidence>,
+    pub fee: Option<ProvenFee>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -576,6 +599,10 @@ pub enum BlockIngestError {
         reason: String,
     },
     NonPublicGenesisTransaction,
+    RevertMismatch {
+        listed: Vec<u64>,
+        settled: Vec<u64>,
+    },
     StateTransition {
         /// Index of the failing transaction within the block body.
         tx_index: u64,

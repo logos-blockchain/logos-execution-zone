@@ -20,9 +20,10 @@ members = [
   "lez/sequencer/core",
   "lez/sequencer/core/metrics",
   "lez/sequencer/service",
+  "lez/sequencer/service/metrics",
   "lez/sequencer/service/protocol",
   "lez/sequencer/service/rpc",
-  "lez/sequencer/actors/channel_config",
+  "lez/sequencer/actors/channel_signing",
   "lez/sequencer/actors/common",
   "lez/sequencer/actors/executor",
   "lez/sequencer/actors/executor/metrics",
@@ -32,7 +33,6 @@ members = [
   "lez/sequencer/actors/slasher",
   "lez/sequencer/actors/storage",
   "lez/sequencer/actors/bedrock",
-  "lez/sequencer/ffi",
   "lez/ffi_types",
   "lez/indexer/core",
   "lez/indexer/service",
@@ -44,7 +44,6 @@ members = [
   "lez/keycard_wallet",
   "lez/mempool",
   "lez/wallet",
-  "lez/wallet-ffi",
   "lez/common",
   "lez/programs",
   "lez/programs/bridge",
@@ -61,6 +60,7 @@ members = [
   "lez/programs/sequencer_stake",
   "lez/programs/program_loader/core",
   "lez/cross_zone",
+  "lez/core_ffi",
 
   "test_guest_core",
   "test_programs",
@@ -92,9 +92,10 @@ storage = { path = "lez/storage" }
 key_protocol = { path = "lee/key_protocol" }
 sequencer_core = { path = "lez/sequencer/core" }
 sequencer_core_metrics = { path = "lez/sequencer/core/metrics" }
+sequencer_service_metrics = { path = "lez/sequencer/service/metrics" }
 sequencer_service_protocol = { path = "lez/sequencer/service/protocol" }
 sequencer_service_rpc = { path = "lez/sequencer/service/rpc" }
-sequencer_channel_config_actor = { path = "lez/sequencer/actors/channel_config" }
+sequencer_channel_signing_actor = { path = "lez/sequencer/actors/channel_signing" }
 sequencer_actors_common = { path = "lez/sequencer/actors/common" }
 sequencer_executor_actor = { path = "lez/sequencer/actors/executor" }
 sequencer_executor_actor_metrics = { path = "lez/sequencer/actors/executor/metrics" }
@@ -105,15 +106,14 @@ sequencer_slasher_actor = { path = "lez/sequencer/actors/slasher" }
 sequencer_storage_actor = { path = "lez/sequencer/actors/storage" }
 sequencer_bedrock_actor = { path = "lez/sequencer/actors/bedrock" }
 sequencer_service = { path = "lez/sequencer/service" }
-sequencer_ffi = { path = "lez/sequencer/ffi" }
 ffi_types = { path = "lez/ffi_types" }
 indexer_core = { path = "lez/indexer/core" }
 indexer_service = { path = "lez/indexer/service" }
 indexer_service_protocol = { path = "lez/indexer/service/protocol" }
 indexer_service_rpc = { path = "lez/indexer/service/rpc" }
 wallet = { path = "lez/wallet" }
-wallet-ffi = { path = "lez/wallet-ffi", default-features = false }
 indexer_ffi = { path = "lez/indexer/ffi" }
+core_ffi = { path = "lez/core_ffi", default-features = false }
 lez = { path = "lez" }
 programs = { path = "lez/programs", default-features = false, features = [
   "artifacts",
@@ -187,6 +187,7 @@ humantime-serde = "1.1"
 arc-swap = "1.7"
 humantime = "2.1"
 libp2p = { version = "0.56", features = [
+  "dns",
   "ed25519",
   "gossipsub",
   "identify",
@@ -196,7 +197,11 @@ libp2p = { version = "0.56", features = [
   "quic",
   "tokio",
 ] }
-aes-gcm = "0.10.3"
+aes-gcm = { version = "0.10.3", features = ["zeroize"] }
+argon2 = { version = "0.5.3", default-features = false, features = [
+  "alloc",
+  "zeroize",
+] }
 toml = "0.9.8"
 bincode = "1.3.3"
 tempfile = "3.14.0"
@@ -222,15 +227,15 @@ async-stream = "0.3.6"
 strum = { version = "0.28.0", features = ["derive"] }
 mockall = "0.15.0"
 
-logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-binary-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-testing-framework = { package = "testing-framework", git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
+logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
+logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
+logos-blockchain-binary-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
+logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
+logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
+logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
+logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
+logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
+logos-blockchain-testing-framework = { package = "blockchain-test-logos", git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
 testing-framework-app = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
 testing-framework-core = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
 
@@ -280,6 +285,13 @@ keccak = { git = "https://github.com/logos-blockchain/sponges", rev = "3a56e9977
 # linking large integration-test binaries on resource-constrained CI runners.
 [profile.dev]
 debug = "line-tables-only"
+
+# Unoptimized, the wallet's storage key derivation takes seconds instead of a tenth of one.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
 
 [profile.test]
 debug = "line-tables-only"

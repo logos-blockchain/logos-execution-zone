@@ -1,7 +1,7 @@
 use kameo::error::Infallible;
 use sequencer_actors_common::{EraseMessage as _, ErasedMessage};
 
-use crate::protocol::ChannelSeq;
+use crate::protocol::{ChannelSeq, Slot};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -28,6 +28,14 @@ pub enum Error {
 
     #[error("Node request failed")]
     NodeRequestFailed(#[source] anyhow::Error),
+
+    #[error("Failed to fetch zone messages from blocks {from:?}..={to:?}")]
+    ChannelReadFailed {
+        from: Slot,
+        to: Slot,
+        #[source]
+        cause: anyhow::Error,
+    },
 
     #[error("Transaction assemble failed")]
     TransactionAssembleFailed(
@@ -64,6 +72,12 @@ pub enum Error {
     // TODO: Not a technical limitation, but rather a complexity of dealing with zone sdk
     #[error("Cannot publish block on parent with withdrawals")]
     CannotPublishBlockOnParentWithWithdrawals,
+
+    #[error("Deposited note {0:?} is not a channel note on the current branch")]
+    DepositNoteNotOnBranch(logos_blockchain_core::mantle::NoteId),
+
+    #[error("Failed to assemble the deposit pin transfer")]
+    DepositPinAssemblyFailed(#[source] anyhow::Error),
 
     #[error(
         "Tried to publish block which was built on channel sequence {provided} but the channel is at {current}"
