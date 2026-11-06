@@ -1,57 +1,54 @@
 {
     "home": "/var/lib/sequencer_service",
     "max_num_tx_in_block": 20,
-    "max_block_size": "1 MiB",
     "mempool_max_size": 10000,
     "block_create_timeout": "10s",
     "retry_pending_blocks_timeout": "7s",
     "bedrock_config": {
-        "backoff": {
-            "start_delay": "100ms",
-            "max_retries": 5
-        },
         "channel_id": "0101010101010101010101010101010101010101010101010101010101010101",
-        "node_url": "http://logos-blockchain-node-0:18080",
-        "funding_key": "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26",
+        "node_url": "http://logos-blockchain-node-0:18080"
+    },
+    "genesis": {
         "channel_params": {
             "minimum_sequencer_stake": 149,
             "posting_timeframe": 300,
             "posting_timeout": 25,
-            "exit_delay": 100
-        }
-    },
-    "genesis": [
-        {
-            "supply_account": {
-                "recipient": {
-                    "identified": {
-                        "key": "b6eb0e598cb1fbcb8ffbb13bd9deef0e4ad4c6bb39382873f7b509e05f3214fa"
-                    }
-                },
-                "balance": 10000
-            }
+            "exit_delay": 100,
+            "max_block_size": 1048576
         },
-        {
-            "supply_account": {
-                "recipient": {
-                    "identified": {
-                        "key": "97f49d1c817434bdefbeef2fa856d1602de6ca4ed6f72c6f3853be7e6fe97f47"
-                    }
-                },
-                "balance": 20000
+        "actions": [
+            {
+                "supply_account": {
+                    "recipient": {
+                        "identified": {
+                            "key": "b6eb0e598cb1fbcb8ffbb13bd9deef0e4ad4c6bb39382873f7b509e05f3214fa"
+                        }
+                    },
+                    "balance": 10000
+                }
+            },
+            {
+                "supply_account": {
+                    "recipient": {
+                        "identified": {
+                            "key": "97f49d1c817434bdefbeef2fa856d1602de6ca4ed6f72c6f3853be7e6fe97f47"
+                        }
+                    },
+                    "balance": 20000
+                }
+            },
+            {
+                "supply_private_account": {
+                    "address": "44KVvzvh2ephQU9aR5snboGUXKgS1FnPYh1W4KZKwmhm",
+                    "balance": 10000000000000
+                }
+            },
+            {
+                "supply_private_account": {
+                    "address": "478hD6LXFTYu5gRRkWkCyXPRsWgCwAfRredoCUfxr5b9",
+                    "balance": 20000000000000
+                }
             }
-        },
-        {
-            "supply_private_account": {
-                "address": "44KVvzvh2ephQU9aR5snboGUXKgS1FnPYh1W4KZKwmhm",
-                "balance": 10000000000000
-            }
-        },
-        {
-            "supply_private_account": {
-                "address": "478hD6LXFTYu5gRRkWkCyXPRsWgCwAfRredoCUfxr5b9",
-                "balance": 20000000000000
-            }
-        }
-    ]
+        ]
+    }
 }

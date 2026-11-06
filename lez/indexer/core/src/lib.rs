@@ -2,7 +2,7 @@ use std::{path::Path, sync::Arc};
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
-pub use chain_state::{AcceptOutcome, BlockIngestError, StallReason};
+pub use chain_state::{AcceptOutcome, BlockIngestError, StallReason, timeout_node::TimeoutNode};
 use chain_state::{Anchor, ChainConsistency, zone_indexer::ZoneIndexer};
 use common::block::Block;
 // TODO: Remove after testnet
@@ -40,9 +40,9 @@ struct SlotProgress(Option<Slot>);
 
 #[derive(Clone)]
 pub struct IndexerCore {
-    pub zone_indexer: Arc<ZoneIndexer<NodeHttpClient>>,
+    pub zone_indexer: Arc<ZoneIndexer<TimeoutNode<NodeHttpClient>>>,
     /// Direct node handle for queries outside `ZoneIndexer`'s streaming API.
-    pub node: NodeHttpClient,
+    pub node: TimeoutNode<NodeHttpClient>,
     pub config: IndexerConfig,
     pub store: IndexerStore,
     /// Live ingestion status; updated by the ingest stream, read by `status`.
@@ -110,10 +110,10 @@ impl IndexerCore {
         let home = storage_dir.join(format!("rocksdb-{}", config.channel_id));
 
         let basic_auth = config.bedrock_config.auth.clone().map(Into::into);
-        let node = NodeHttpClient::new(
+        let node = TimeoutNode::new(NodeHttpClient::new(
             CommonHttpClient::new(basic_auth),
             config.bedrock_config.addr.clone(),
-        );
+        ));
         let zone_indexer = ZoneIndexer::new(config.channel_id, node.clone());
 
         // Option B verifier: re-derives each cross-zone dispatch from the peer's
@@ -392,7 +392,6 @@ impl IndexerCore {
                 };
                 let mut stream = std::pin::pin!(stream);
 
-                let mut announced_syncing = false;
                 let mut had_cycle_error = false;
                 // The slot being consumed: every message of it seen so far is
                 // handled, but another may follow, so the cursor may not move
@@ -402,15 +401,22 @@ impl IndexerCore {
                 // for ever if this pass ends early.
                 let mut in_progress = SlotProgress::default();
 
-                while let Some((msg, slot)) = stream.next().await {
+                while let Some(item) = stream.next().await {
+                    let (msg, slot) = match item {
+                        Ok(message) => message,
+                        Err(err) => {
+                            error!("Channel read failed, holding the cursor: {err}");
+                            self.set_status(IndexerSyncStatus::error(format!(
+                                "cannot read channel: {err}"
+                            )));
+                            had_cycle_error = true;
+                            break;
+                        }
+                    };
+
                     // A message from a later slot means the previous one is complete.
                     if let Some(done) = in_progress.enter(slot) {
                         self.advance_cursor(&mut cursor, done);
-                    }
-
-                    if !announced_syncing {
-                        self.set_status(IndexerSyncStatus::syncing());
-                        announced_syncing = true;
                     }
 
                     let zone_block = match msg {
@@ -663,6 +669,7 @@ mod tests {
             prev_block_hash: HashType([0; 32]),
             timestamp,
             transactions: vec![],
+            reverted: Vec::new(),
         }
         .into_pending_block()
     }

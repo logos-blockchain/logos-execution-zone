@@ -24,12 +24,21 @@ use lee::{
 };
 use lee_core::{GENESIS_BLOCK_ID, account::Nonce};
 use logos_blockchain_core::{
-    events::DepositRecreatedNotes,
+    events::{DepositNote, DepositRecreatedNotes},
     header::HeaderId,
     mantle::{
-        TxHash,
-        ledger::Inputs,
-        ops::channel::{ChannelId, MsgId, deposit::Metadata},
+        Note, TxHash,
+        ledger::{Inputs, NoteId, Outputs, Utxo},
+        ops::{
+            Op,
+            channel::{
+                ChannelId, MsgId,
+                channel_transfer::ChannelTransferOp,
+                deposit::Metadata,
+                inscribe::{Inscription, InscriptionOp},
+            },
+        },
+        transactions::Ops,
     },
 };
 use logos_blockchain_key_management_system_service::keys::{
@@ -112,18 +121,19 @@ fn mock_checkpoint() -> Checkpoint {
 /// rather than a fixed constant, so it always matches what's actually on
 /// disk.
 fn test_bootstrap_sequencer_key(config: &SequencerConfig) -> sequencer_stake_core::SequencerKey {
-    let bytes = crate::load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
-        .expect("Failed to load or create bedrock signing key")
-        .public_key()
-        .to_bytes();
+    let bytes =
+        crate::load_or_create_signing_key(&config.home.join(crate::CHANNEL_SIGNING_KEY_FILE))
+            .expect("Failed to load or create channel signing key")
+            .public_key()
+            .to_bytes();
     sequencer_stake_core::SequencerKey::new(bytes)
-        .expect("a Bedrock public key is a valid Ed25519 public key")
+        .expect("a channel signing public key is a valid Ed25519 public key")
 }
 
 fn test_sequencer_key(seed: u8) -> sequencer_stake_core::SequencerKey {
     let bytes = Ed25519Key::from_bytes(&[seed; 32]).public_key().to_bytes();
     sequencer_stake_core::SequencerKey::new(bytes)
-        .expect("a Bedrock public key is a valid Ed25519 public key")
+        .expect("a channel signing public key is a valid Ed25519 public key")
 }
 
 async fn start_sequencer(
@@ -156,6 +166,17 @@ async fn start_sequencer_on(
             }))
             .await;
     }
+    // A committee of this node alone, so a pin needs only its own signature.
+    sequencer
+        .channel_signer
+        .tell(sequencer_channel_signing_actor::ChannelView {
+            live_keys: vec![sequencer.channel_signing_key.public_key()],
+            required_signatures: 1,
+            transfer_signatures: 1,
+            target: None,
+        })
+        .await
+        .expect("the channel-signing actor should accept a view");
     (sequencer, mempool_handle)
 }
 
@@ -294,22 +315,26 @@ fn setup_sequencer_config() -> SequencerConfig {
     SequencerConfig {
         home,
         max_num_tx_in_block: 10,
-        max_block_size: bytesize::ByteSize::mib(1),
         mempool_max_size: 10000,
         block_create_timeout: Duration::from_secs(1),
         bedrock_config: BedrockConfig {
             channel_id: ChannelId::from([0; 32]),
             node_url: "http://not-used-in-unit-tests".parse().unwrap(),
             auth: None,
-            funding_key: ZkPublicKey::zero(),
             priority_fee_percent: config::default_priority_fee_percent(),
-            channel_params: crate::config::default_channel_params(),
+            stale_refund_slots: 0,
         },
         retry_pending_blocks_timeout: Duration::from_mins(4),
-        genesis: vec![],
+        genesis: Some(config::GenesisConfig {
+            channel_params: config::default_channel_params(),
+            actions: vec![],
+        }),
         cross_zone: None,
-        metrics_address: None,
+        metrics_listen_address: None,
         gossip: None,
+        channel_signing_key_file: None,
+        funding_public_key: None,
+        wait_for_channel: false,
     }
 }
 
@@ -364,8 +389,9 @@ fn settled_peer_block(
     producer: lee::AccountId,
 ) -> common::block::Block {
     let timestamp = id.saturating_mul(100);
-    let (summary, payout) = chain_state::apply::derive_block_summary(state, &txs, id, timestamp)
-        .expect("test transactions settle");
+    let (summary, payout, reverted) =
+        chain_state::apply::derive_block_summary(state, &txs, id, timestamp)
+            .expect("test transactions settle");
     let mut transactions = txs;
     transactions.push(LeeTransaction::Public(fee_invocation(
         summary,
@@ -378,6 +404,7 @@ fn settled_peer_block(
         prev_block_hash: prev_hash,
         timestamp,
         transactions,
+        reverted,
     }
     .into_pending_block()
 }
@@ -762,6 +789,7 @@ async fn start_from_config_opens_existing_db_if_it_exists() {
     let (genesis_state, genesis_txs, _) =
         build_genesis_state(&config, Some(bootstrap_sequencer_key));
     let genesis_hashable_data = HashableBlockData {
+        reverted: Vec::new(),
         block_id: 1,
         transactions: genesis_txs,
         prev_block_hash: HashType([0; 32]),
@@ -802,223 +830,6 @@ async fn start_from_config_panics_when_db_open_returns_non_not_found_error() {
 
     let _ = start_sequencer(config).await;
 }
-
-// TODO: Reimplement these tests
-// #[tokio::test]
-// async fn unfulfilled_deposit_events_are_drained_from_the_store_on_production() {
-//     let config = setup_sequencer_config();
-//     let deposit_op_id = [13_u8; 32];
-//     let expected_amount = 1_u64;
-//     let recipient_id = initial_public_user_accounts()[0].account_id;
-
-//     let storage_weak = {
-//         let (mut sequencer, _mempool_handle) = start_sequencer(config.clone()).await;
-//         sequencer.storage_ref.downgrade()
-//     };
-//     storage_weak.wait_for_shutdown_with_result(|_| ()).await;
-
-//     let pending_event = PendingDepositEventRecord {
-//         deposit_op_id: HashType(deposit_op_id),
-//         source_tx_hash: HashType([7_u8; 32]),
-//         amount: expected_amount,
-//         metadata: borsh::to_vec(&DepositMetadata { recipient_id }).unwrap(),
-//     };
-
-//     {
-//         let storage_ref = StorageActor::spawn(StorageActor::new(&config.db_path()).unwrap());
-//         let inserted = storage_ref
-//             .ask(AddPendingDepositEvent {
-//                 event: pending_event,
-//             })
-//             .await
-//             .unwrap();
-//         assert!(inserted);
-//         storage_ref.stop_gracefully().await.unwrap();
-//         storage_ref.wait_for_shutdown().await;
-//     }
-
-//     // The mint never goes through the mempool: the record is the queue, and
-//     // production drains it. That is what makes a restart — or a follow event
-//     // arriving while a full mempool would have dropped the push — lossless.
-//     let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
-//     assert!(
-//         sequencer.mempool.pop().is_none(),
-//         "deposit mints are drained from the store, never queued in the mempool"
-//     );
-
-//     let block_id = sequencer.run_production_turn().await.unwrap();
-//     let block = sequencer
-//         .storage_ref
-//         .ask(GetBlock { block_id })
-//         .await
-//         .unwrap()
-//         .expect("produced block is stored");
-//     assert!(
-//         block
-//             .body
-//             .transactions
-//             .iter()
-//             .any(|tx| tx_is_bridge_deposit(tx, deposit_op_id, expected_amount)),
-//         "the drained deposit mint should be included in the produced block"
-//     );
-
-//     // The record stays until its deposit finalizes; exactly-once is enforced by
-//     // the receipt PDA now in head state, not by any marker on the record.
-//     assert!(
-//         sequencer
-//             .storage_ref
-//             .ask(GetPendingDepositEvents)
-//             .await
-//             .unwrap()
-//             .iter()
-//             .any(|event| event.deposit_op_id == HashType(deposit_op_id)),
-//         "the record remains until the deposit finalizes"
-//     );
-//     assert!(
-//         sequencer
-//             .with_state(|state| deposit_already_minted(state, HashType(deposit_op_id)))
-//             .await,
-//         "the deposit's receipt PDA marks it minted in head state"
-//     );
-// }
-
-// #[tokio::test]
-// async fn a_drained_deposit_is_not_minted_twice_across_turns() {
-//     let config = setup_sequencer_config();
-//     let deposit_op_id = [17_u8; 32];
-//     let recipient_id = initial_public_user_accounts()[0].account_id;
-
-//     let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
-//     sequencer
-//         .storage_ref
-//         .ask(AddPendingDepositEvent {
-//             event: PendingDepositEventRecord {
-//                 deposit_op_id: HashType(deposit_op_id),
-//                 source_tx_hash: HashType([7_u8; 32]),
-//                 amount: 1,
-//                 metadata: borsh::to_vec(&DepositMetadata { recipient_id }).unwrap(),
-//             },
-//         })
-//         .await
-//         .unwrap();
-
-//     let first = sequencer.run_production_turn().await.unwrap();
-//     let second = sequencer.run_production_turn().await.unwrap();
-
-//     let minted_in = async |block_id: u64| {
-//         sequencer
-//             .storage_ref
-//             .ask(GetBlock { block_id })
-//             .await
-//             .unwrap()
-//             .expect("produced block is stored")
-//             .body
-//             .transactions
-//             .iter()
-//             .filter(|tx| tx_is_bridge_deposit(tx, deposit_op_id, 1))
-//             .count()
-//     };
-
-//     assert_eq!(minted_in(first).await, 1);
-//     assert_eq!(
-//         minted_in(second).await,
-//         0,
-//         "the receipt PDA from the first mint must keep the drain from re-minting"
-//     );
-// }
-
-// #[tokio::test]
-// async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
-//     // Manifestation 2 from #639: a deposit-carrying block is orphaned. Recovery
-//     // rests entirely on the receipt PDA reverting with the block — no requeue,
-//     // no bookkeeping of our own — so the still-pending record is drained again
-//     // on the next turn and the recipient is credited exactly once across the reorg.
-//     let config = setup_sequencer_config();
-//     let recipient_id = initial_public_user_accounts()[0].account_id;
-//     let deposit_op_id = [0x2c_u8; 32];
-//     let amount = 500_u64;
-
-//     let (mut sequencer, mempool_handle) = start_sequencer(config).await;
-//     let recipient_balance_before = sequencer
-//         .with_state(|s| s.get_account_by_id(recipient_id).balance)
-//         .await;
-//     sequencer
-//         .storage_ref
-//         .ask(AddPendingDepositEvent {
-//             event: PendingDepositEventRecord {
-//                 deposit_op_id: HashType(deposit_op_id),
-//                 source_tx_hash: HashType([7_u8; 32]),
-//                 amount,
-//                 metadata: borsh::to_vec(&DepositMetadata { recipient_id }).unwrap(),
-//             },
-//         })
-//         .await
-//         .unwrap();
-
-//     // Produce the block that mints the deposit; its receipt marks it minted.
-//     sequencer.run_production_turn().await.unwrap();
-//     let minted_block = sequencer.storage_ref.ask(GetBlock { block_id: 2
-// }).await.unwrap().unwrap();     assert!(
-//         sequencer
-//             .with_state(|s| deposit_already_minted(s, HashType(deposit_op_id)))
-//             .await,
-//         "the first mint claims the receipt in head state"
-//     );
-
-//     // Orphan that block. The receipt reverts with it — nothing else tracks the
-//     // mint — so the deposit reads as unminted again.
-//     apply_follow_update(
-//         sequencer.storage_ref,
-//         &sequencer.chain(),
-//         &mempool_handle,
-//         ChannelUpdate {
-//             adopted: vec![],
-//             orphaned: vec![minted_block],
-//             ..empty_channel_update()
-//         },
-//     )
-//     .await;
-//     assert_eq!(
-//         sequencer.chain_height().await,
-//         1,
-//         "the minting block is orphaned"
-//     );
-//     assert!(
-//         !sequencer
-//             .with_state(|s| deposit_already_minted(s, HashType(deposit_op_id)))
-//             .await,
-//         "the receipt reverts with the orphaned block"
-//     );
-
-//     // Orphaning it takes the channel tip back with it.
-//     sequencer.block_publisher().set_channel_tip(None);
-
-//     // Next turn: the still-pending record is drained and re-minted on the new
-//     // head, exactly once.
-//     let replacement = sequencer.run_production_turn().await.unwrap();
-//     let mints = sequencer
-//         .storage_ref
-//         .ask(GetBlock { block_id: replacement })
-//         .await
-//         .unwrap()
-//         .expect("replacement block is stored")
-//         .body
-//         .transactions
-//         .iter()
-//         .filter(|tx| tx_is_bridge_deposit(tx, deposit_op_id, amount))
-//         .count();
-//     assert_eq!(
-//         mints, 1,
-//         "the deposit is re-minted exactly once after the orphan"
-//     );
-//     assert_eq!(
-//         sequencer
-//             .with_state(|s| s.get_account_by_id(recipient_id).balance)
-//             .await,
-//         recipient_balance_before + u128::from(amount),
-//         "the recipient is credited exactly once across the reorg"
-//     );
-// }
 
 #[tokio::test]
 async fn recorded_dispatches_are_drained_from_the_store_on_production() {
@@ -1420,6 +1231,81 @@ fn a_settled_delivery_that_is_not_the_one_we_recorded_is_reported() {
 }
 
 #[tokio::test]
+async fn creating_a_channel_needs_a_genesis_config() {
+    let config = SequencerConfig {
+        genesis: None,
+        ..setup_sequencer_config()
+    };
+    let storage_ref =
+        StorageActor::spawn(StorageActor::new(&config.db_path()).expect("Failed to open database"));
+    let bedrock_ref = MockBedrockActor::spawn(CannedChannel::absent().into_mock());
+
+    let Err(err) = SequencerCore::start_from_config(config, storage_ref, bedrock_ref).await else {
+        panic!("a node without a genesis config created the channel");
+    };
+    assert!(
+        format!("{err:#}").contains("needs a `genesis` config"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[tokio::test]
+async fn a_mempool_transaction_too_large_for_any_block_is_dropped() {
+    // Pushed straight into the mempool, past the admission check that would refuse it.
+    let mut config = setup_sequencer_config();
+    config
+        .genesis
+        .as_mut()
+        .unwrap()
+        .channel_params
+        .max_block_size = 4 * 1024;
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    let segment_key = lee::PrivateKey::try_new([212; 32]).unwrap();
+    let segment = Actor::new(
+        AccountId::from(&lee::PublicKey::new_from_private_key(&segment_key)),
+        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+    );
+    let message = lee::public_transaction::Message::try_new(
+        segment,
+        vec![segment],
+        BTreeMap::new(),
+        program_loader_core::Message::WriteSegment {
+            bytecode: vec![0; 8192],
+            next_segment: None,
+        },
+    )
+    .unwrap();
+    let oversized = LeeTransaction::Public(lee::PublicTransaction::new(
+        message,
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+    ));
+    let user_tx = common::test_utils::create_transaction_native_token_transfer(
+        initial_public_user_accounts()[0].account_id,
+        0,
+        initial_public_user_accounts()[1].account_id,
+        10,
+        &create_signing_key_for_account1(),
+    );
+    for tx in [oversized.clone(), user_tx.clone()] {
+        mempool_handle
+            .push((TransactionOrigin::User, tx))
+            .await
+            .unwrap();
+    }
+
+    let block_id = sequencer.run_production_turn().await.unwrap();
+    let block = sequencer
+        .storage_ref
+        .ask(GetBlock { block_id })
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(block.body.transactions.contains(&user_tx));
+    assert!(!block.body.transactions.contains(&oversized));
+}
+
+#[tokio::test]
 async fn a_delivery_too_large_for_any_block_does_not_stall_production() {
     // A store-drained transaction is at the head of the queue every turn, so one
     // that cannot fit in any block would defer itself for ever and, because the
@@ -1428,7 +1314,12 @@ async fn a_delivery_too_large_for_any_block_does_not_stall_production() {
     let record = dispatch_record(41, ping_payload(&[7_u8; 8192]));
 
     let mut config = cross_zone_test_config();
-    config.max_block_size = bytesize::ByteSize::kib(4);
+    config
+        .genesis
+        .as_mut()
+        .unwrap()
+        .channel_params
+        .max_block_size = 4 * 1024;
     let (mut sequencer, mempool_handle) = start_sequencer(config).await;
     sequencer
         .storage_ref
@@ -1840,6 +1731,7 @@ fn live_channel(keys: Vec<Ed25519PublicKey>) -> LiveChannelConfig {
         keys,
         config_tip: MsgId::root(),
         required_signatures: 1,
+        transfer_threshold: 1,
     }
 }
 
@@ -2680,6 +2572,7 @@ fn resubmittable_txs_keeps_an_approved_system_change_and_drops_apply() {
 fn resubmittable_txs_of_blocks_without_user_txs_is_empty() {
     // No transactions at all (not even the mandatory clock tx).
     let empty = HashableBlockData {
+        reverted: Vec::new(),
         block_id: 1,
         prev_block_hash: HashType([0; 32]),
         timestamp: 0,
@@ -3011,6 +2904,804 @@ async fn follow_update_records_deposits_for_the_production_drain() {
         .unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].deposit_op_id, HashType([21; 32]));
+}
+
+/// A deposit of `amount` to the first test account, its value re-created as
+/// the channel notes `notes`.
+fn deposit_info(op_id: [u8; 32], amount: u64, notes: &[NoteId]) -> DepositInfo {
+    let recipient = DepositRecipient::Identified(lee::PublicAccountEvidence::Key(
+        PublicKey::new_from_private_key(&initial_pub_accounts_private_keys()[0].pub_sign_key),
+    ));
+    let metadata = borsh::to_vec(&DepositMetadata { recipient }).unwrap();
+    let notes: Vec<DepositNote> = notes
+        .iter()
+        .map(|&note_id| DepositNote {
+            note_id,
+            value: amount,
+            pk: ZkPublicKey::from(num_bigint::BigUint::from(1_u8)),
+        })
+        .collect();
+    DepositInfo {
+        op_id,
+        tx_hash: TxHash::from([9; 32]),
+        channel_id: ChannelId::from([0; 32]),
+        inputs: Inputs::empty(),
+        amount,
+        metadata: Metadata::try_from(metadata).expect("deposit metadata fits"),
+        notes: DepositRecreatedNotes::try_from(notes).expect("deposit notes fit"),
+    }
+}
+
+/// A distinct channel note id per `seed`.
+fn channel_note(seed: u8) -> NoteId {
+    Utxo::new(
+        [seed; 32],
+        0,
+        Note::new(1, ZkPublicKey::from(num_bigint::BigUint::from(1_u8))),
+    )
+    .id()
+}
+
+/// How many times the block mints `op_id`'s deposit of `amount`.
+fn mint_count(block: &Block, op_id: [u8; 32], amount: u64) -> usize {
+    block
+        .body
+        .transactions
+        .iter()
+        .filter(|tx| tx_is_bridge_deposit(tx, op_id, amount))
+        .count()
+}
+
+#[tokio::test]
+async fn an_observed_deposit_mints_in_a_block_pinned_on_its_notes() {
+    let note = channel_note(1);
+    let channel = CannedChannel {
+        channel_notes: HashSet::from([note]),
+        ..CannedChannel::empty()
+    };
+    let pins = Arc::clone(&channel.pins);
+    let (mut sequencer, _mempool_handle) =
+        start_sequencer_on(setup_sequencer_config(), channel).await;
+
+    let op_id = [0x5d; 32];
+    sequencer
+        .on_observed_deposits(vec![deposit_info(op_id, 5, &[note])])
+        .await;
+    let block_id = sequencer.run_production_turn().await.unwrap();
+
+    let block = block_at(&sequencer, block_id)
+        .await
+        .expect("produced block is stored");
+    assert_eq!(
+        mint_count(&block, op_id, 5),
+        1,
+        "the observed deposit is minted"
+    );
+    assert_eq!(
+        pins.lock().unwrap().last(),
+        Some(&vec![note]),
+        "the block is published pinned on the deposit's note"
+    );
+}
+
+/// A node that observed a deposit and minted it in the block it produced, with
+/// that deposit and block.
+async fn sequencer_minting_an_observed_deposit() -> (
+    SequencerCore<StorageActor, MockBedrockActor>,
+    MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
+    DepositInfo,
+    Block,
+) {
+    let note = channel_note(1);
+    let channel = CannedChannel {
+        channel_notes: HashSet::from([note]),
+        ..CannedChannel::empty()
+    };
+    let (mut sequencer, mempool_handle) =
+        start_sequencer_on(setup_sequencer_config(), channel).await;
+    let deposit = deposit_info([0x5d; 32], 5, &[note]);
+    sequencer.on_observed_deposits(vec![deposit.clone()]).await;
+    let block_id = sequencer.run_production_turn().await.unwrap();
+    let block = block_at(&sequencer, block_id)
+        .await
+        .expect("produced block is stored");
+
+    (sequencer, mempool_handle, deposit, block)
+}
+
+/// Whether this node signs a peer's pin of `block` on `deposit`'s notes.
+async fn signs_peer_pin(
+    sequencer: &SequencerCore<StorageActor, MockBedrockActor>,
+    block: &Block,
+    deposit: &DepositInfo,
+) -> bool {
+    let peer = Ed25519Key::from_bytes(&[8; 32]);
+    let signer = &sequencer.channel_signer;
+    signer
+        .tell(sequencer_channel_signing_actor::ChannelView {
+            live_keys: vec![
+                sequencer.channel_signing_key.public_key(),
+                peer.public_key(),
+            ],
+            required_signatures: 1,
+            transfer_signatures: 2,
+            target: None,
+        })
+        .await
+        .expect("the channel-signing actor should accept a view");
+    let (publisher, mut outbound) = tokio::sync::mpsc::channel(8);
+    signer
+        .tell(sequencer_channel_signing_actor::SetPublisher(publisher))
+        .await
+        .expect("the channel-signing actor should accept a publisher");
+
+    let channel_id = sequencer.sequencer_config.bedrock_config.channel_id;
+    let pin = Ops::from([
+        Op::ChannelInscribe(InscriptionOp {
+            channel_id,
+            inscription: Inscription::try_from(borsh::to_vec(block).unwrap())
+                .expect("the block fits an inscription"),
+            parent: MsgId::root(),
+            signer: peer.public_key().into_unverified(),
+        }),
+        Op::ChannelTransfer(ChannelTransferOp {
+            channel_id,
+            inputs: Inputs::try_new(
+                deposit
+                    .notes
+                    .iter()
+                    .map(|note| note.note_id)
+                    .collect::<Vec<_>>(),
+            )
+            .expect("the deposit's notes fit"),
+            outputs: Outputs::try_new(
+                deposit
+                    .notes
+                    .iter()
+                    .map(|note| Note::new(note.value, note.pk))
+                    .collect::<Vec<_>>(),
+            )
+            .expect("the deposit's notes fit"),
+        }),
+    ]);
+    signer
+        .ask(sequencer_channel_signing_actor::Wire::Draft(
+            sequencer_channel_signing_actor::Draft { tx: Box::new(pin) },
+        ))
+        .await
+        .expect("the channel-signing actor should accept a draft");
+
+    matches!(
+        outbound.try_recv(),
+        Ok(sequencer_channel_signing_actor::Wire::Signature(_))
+    )
+}
+
+#[tokio::test]
+async fn a_peer_pin_of_an_observed_deposit_is_signed() {
+    let (sequencer, _mempool_handle, deposit, block) =
+        sequencer_minting_an_observed_deposit().await;
+
+    assert!(signs_peer_pin(&sequencer, &block, &deposit).await);
+}
+
+/// A proposer whose L1 finality lags may still pin a deposit this node saw
+/// finalize.
+#[tokio::test]
+async fn a_peer_pin_of_a_deposit_final_on_l1_is_still_signed() {
+    let (mut sequencer, _mempool_handle, deposit, block) =
+        sequencer_minting_an_observed_deposit().await;
+    sequencer
+        .on_channel_update(Arc::new(ChannelUpdate {
+            checkpoint: checkpoint_at(mock_msg_of(&block)),
+            deposits: vec![deposit.clone()],
+            ..empty_channel_update()
+        }))
+        .await;
+
+    assert!(signs_peer_pin(&sequencer, &block, &deposit).await);
+}
+
+#[tokio::test]
+async fn a_peer_pin_of_a_deposit_minted_in_a_final_block_is_not_signed() {
+    let (mut sequencer, _mempool_handle, deposit, block) =
+        sequencer_minting_an_observed_deposit().await;
+    sequencer
+        .on_channel_update(Arc::new(ChannelUpdate {
+            checkpoint: checkpoint_at(mock_msg_of(&block)),
+            finalized: vec![finalized_as_held(&sequencer.chain(), &block).await],
+            ..empty_channel_update()
+        }))
+        .await;
+
+    assert!(!signs_peer_pin(&sequencer, &block, &deposit).await);
+}
+
+/// A committee key that never signs leaves the pin short, so the block goes
+/// out unpinned without the mint and the deposit mints once final.
+#[tokio::test]
+async fn a_pin_short_of_signatures_leaves_its_deposit_to_finality() {
+    let note = channel_note(1);
+    let channel = CannedChannel {
+        channel_notes: HashSet::from([note]),
+        ..CannedChannel::empty()
+    };
+    let pins = Arc::clone(&channel.pins);
+    let (mut sequencer, mempool_handle) =
+        start_sequencer_on(setup_sequencer_config(), channel).await;
+    let silent_peer = Ed25519Key::from_bytes(&[8; 32]).public_key();
+    sequencer
+        .channel_signer
+        .tell(sequencer_channel_signing_actor::ChannelView {
+            live_keys: vec![sequencer.channel_signing_key.public_key(), silent_peer],
+            required_signatures: 1,
+            transfer_signatures: 2,
+            target: None,
+        })
+        .await
+        .expect("the channel-signing actor should accept a view");
+    let user_tx = common::test_utils::create_transaction_native_token_transfer(
+        initial_public_user_accounts()[0].account_id,
+        0,
+        initial_public_user_accounts()[1].account_id,
+        10,
+        &create_signing_key_for_account1(),
+    );
+    mempool_handle
+        .push((TransactionOrigin::User, user_tx.clone()))
+        .await
+        .unwrap();
+
+    let op_id = [0x6a; 32];
+    let deposit = deposit_info(op_id, 5, &[note]);
+    sequencer.on_observed_deposits(vec![deposit.clone()]).await;
+    let block_id = sequencer.run_production_turn().await.unwrap();
+
+    let block = block_at(&sequencer, block_id)
+        .await
+        .expect("produced block is stored");
+    assert_eq!(
+        mint_count(&block, op_id, 5),
+        0,
+        "an unpinned block must not mint an observed deposit"
+    );
+    assert!(
+        block.body.transactions.contains(&user_tx),
+        "the rest of the block still goes out"
+    );
+    assert_eq!(pins.lock().unwrap().last(), Some(&Vec::new()));
+    assert!(
+        sequencer.observed_deposits.is_empty(),
+        "a deposit whose pin went unsigned is not pinned again"
+    );
+
+    sequencer
+        .on_channel_update(Arc::new(ChannelUpdate {
+            checkpoint: checkpoint_at(mock_msg_of(&block)),
+            deposits: vec![deposit],
+            ..empty_channel_update()
+        }))
+        .await;
+    let final_block_id = sequencer.run_production_turn().await.unwrap();
+    let final_block = block_at(&sequencer, final_block_id)
+        .await
+        .expect("produced block is stored");
+    assert_eq!(
+        mint_count(&final_block, op_id, 5),
+        1,
+        "the deposit mints once final"
+    );
+}
+
+#[tokio::test]
+async fn deposits_past_the_pin_input_limit_mint_in_the_next_block() {
+    let notes: Vec<NoteId> = (0..=u8::MAX).map(channel_note).collect();
+    let (first_notes, second_notes) = notes.split_at(usize::from(u8::MAX));
+    let channel = CannedChannel {
+        channel_notes: notes.iter().copied().collect(),
+        ..CannedChannel::empty()
+    };
+    let pins = Arc::clone(&channel.pins);
+    let (mut sequencer, _mempool_handle) =
+        start_sequencer_on(setup_sequencer_config(), channel).await;
+
+    let (first, second) = ([0x6b; 32], [0x6c; 32]);
+    sequencer
+        .on_observed_deposits(vec![
+            deposit_info(first, 5, first_notes),
+            deposit_info(second, 5, second_notes),
+        ])
+        .await;
+    let block_id = sequencer.run_production_turn().await.unwrap();
+
+    let block = block_at(&sequencer, block_id)
+        .await
+        .expect("produced block is stored");
+    assert_eq!(mint_count(&block, first, 5), 1);
+    assert_eq!(
+        mint_count(&block, second, 5),
+        0,
+        "both deposits' notes do not fit one pin"
+    );
+    assert_eq!(pins.lock().unwrap().last(), Some(&first_notes.to_vec()));
+
+    let next_block_id = sequencer.run_production_turn().await.unwrap();
+    let next_block = block_at(&sequencer, next_block_id)
+        .await
+        .expect("produced block is stored");
+    assert_eq!(mint_count(&next_block, second, 5), 1);
+    assert_eq!(pins.lock().unwrap().last(), Some(&second_notes.to_vec()));
+}
+
+/// Runs a turn pinning one observed deposit on `channel`, whose pin fails, and
+/// checks the block still goes out with the deposit left to finality.
+async fn assert_failed_pin_leaves_its_deposit_to_finality(channel: CannedChannel) {
+    let note = channel_note(1);
+    let channel = CannedChannel {
+        channel_notes: HashSet::from([note]),
+        ..channel
+    };
+    let pins = Arc::clone(&channel.pins);
+    let (mut sequencer, _mempool_handle) =
+        start_sequencer_on(setup_sequencer_config(), channel).await;
+
+    let op_id = [0x6d; 32];
+    sequencer
+        .on_observed_deposits(vec![deposit_info(op_id, 5, &[note])])
+        .await;
+    let block_id = sequencer
+        .run_production_turn()
+        .await
+        .expect("a failed pin does not cost the turn");
+
+    let block = block_at(&sequencer, block_id)
+        .await
+        .expect("produced block is stored");
+    assert_eq!(mint_count(&block, op_id, 5), 0);
+    assert_eq!(pins.lock().unwrap().last(), Some(&Vec::new()));
+    assert!(
+        sequencer.observed_deposits.is_empty(),
+        "a deposit whose pin failed is not pinned again"
+    );
+}
+
+#[tokio::test]
+async fn a_pin_that_fails_to_prepare_leaves_its_deposit_to_finality() {
+    assert_failed_pin_leaves_its_deposit_to_finality(CannedChannel {
+        prepare_pin_fails: true,
+        ..CannedChannel::empty()
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_pin_that_fails_to_publish_leaves_its_deposit_to_finality() {
+    assert_failed_pin_leaves_its_deposit_to_finality(CannedChannel {
+        publish_pin_fails: true,
+        ..CannedChannel::empty()
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_observed_deposit_off_the_branch_is_not_minted() {
+    let channel = CannedChannel::empty();
+    let pins = Arc::clone(&channel.pins);
+    let (mut sequencer, _mempool_handle) =
+        start_sequencer_on(setup_sequencer_config(), channel).await;
+
+    let op_id = [0x5e; 32];
+    sequencer
+        .on_observed_deposits(vec![deposit_info(op_id, 5, &[channel_note(1)])])
+        .await;
+    let block_id = sequencer.run_production_turn().await.unwrap();
+
+    let block = block_at(&sequencer, block_id)
+        .await
+        .expect("produced block is stored");
+    assert_eq!(
+        mint_count(&block, op_id, 5),
+        0,
+        "a deposit whose note is not a channel note on this branch is not minted"
+    );
+    assert_eq!(pins.lock().unwrap().last(), Some(&Vec::new()));
+}
+
+#[tokio::test]
+async fn a_pinned_deposit_is_not_minted_again_once_final() {
+    let note = channel_note(1);
+    let channel = CannedChannel {
+        channel_notes: HashSet::from([note]),
+        ..CannedChannel::empty()
+    };
+    let pins = Arc::clone(&channel.pins);
+    let (mut sequencer, _mempool_handle) =
+        start_sequencer_on(setup_sequencer_config(), channel).await;
+
+    let op_id = [0x5f; 32];
+    let deposit = deposit_info(op_id, 5, &[note]);
+    sequencer.on_observed_deposits(vec![deposit.clone()]).await;
+    let pinned_block_id = sequencer.run_production_turn().await.unwrap();
+    let pinned_block = block_at(&sequencer, pinned_block_id)
+        .await
+        .expect("produced block is stored");
+    assert_eq!(mint_count(&pinned_block, op_id, 5), 1);
+
+    // The deposit finalizes before the block minting it does.
+    sequencer
+        .on_channel_update(Arc::new(ChannelUpdate {
+            checkpoint: checkpoint_at(mock_msg_of(&pinned_block)),
+            deposits: vec![deposit],
+            ..empty_channel_update()
+        }))
+        .await;
+    let block_id = sequencer.run_production_turn().await.unwrap();
+
+    let block = block_at(&sequencer, block_id)
+        .await
+        .expect("produced block is stored");
+    assert_eq!(
+        mint_count(&block, op_id, 5),
+        0,
+        "the head already holds the mint, so the final record is skipped"
+    );
+    assert_eq!(pins.lock().unwrap().last(), Some(&Vec::new()));
+    let records = sequencer
+        .storage_ref
+        .ask(GetPendingDepositEvents)
+        .await
+        .unwrap();
+    assert!(
+        records
+            .iter()
+            .any(|record| record.deposit_op_id == HashType(op_id)),
+        "the record stays until the mint is final"
+    );
+}
+
+/// The first test account, which [`deposit_info`] credits.
+fn deposit_recipient() -> AccountId {
+    initial_public_user_accounts()[0].account_id
+}
+
+/// The native balance `account_id` holds in head state.
+async fn native_balance(
+    sequencer: &SequencerCore<StorageActor, MockBedrockActor>,
+    account_id: AccountId,
+) -> u128 {
+    sequencer
+        .with_state(|state| {
+            state
+                .get_account_by_id(account_id)
+                .data
+                .native_balance()
+                .unwrap()
+        })
+        .await
+}
+
+/// Reorgs the channel back to genesis: the view keeps only genesis, and
+/// `channel` is served with its tip there.
+async fn reorg_to_genesis(
+    sequencer: &mut SequencerCore<StorageActor, MockBedrockActor>,
+    channel: CannedChannel,
+) {
+    let canonical = sequencer.chain().lock().await.view()[..1].to_vec();
+    let genesis = canonical[0].msg;
+    sequencer
+        .on_channel_update(Arc::new(ChannelUpdate {
+            view: ViewChange::Conflict {
+                canonical,
+                orphaned: Vec::new(),
+            },
+            ..empty_channel_update()
+        }))
+        .await;
+    serve_channel(
+        sequencer,
+        CannedChannel {
+            tip: Some(genesis),
+            ..channel
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_final_deposit_mints_in_the_next_block_and_not_again() {
+    let (mut sequencer, _mempool_handle) = start_sequencer(setup_sequencer_config()).await;
+
+    let op_id = [0x61; 32];
+    sequencer
+        .on_channel_update(Arc::new(ChannelUpdate {
+            deposits: vec![deposit_info(op_id, 5, &[])],
+            ..empty_channel_update()
+        }))
+        .await;
+    let first = sequencer.run_production_turn().await.unwrap();
+    assert!(
+        sequencer
+            .with_state(|state| deposit_already_minted(state, HashType(op_id)))
+            .await,
+        "the receipt marks the deposit minted in head state"
+    );
+    let second = sequencer.run_production_turn().await.unwrap();
+
+    let first = block_at(&sequencer, first)
+        .await
+        .expect("produced block is stored");
+    let second = block_at(&sequencer, second)
+        .await
+        .expect("produced block is stored");
+    assert_eq!(mint_count(&first, op_id, 5), 1);
+    assert_eq!(
+        mint_count(&second, op_id, 5),
+        0,
+        "the receipt from the first mint keeps the record from minting again"
+    );
+}
+
+#[tokio::test]
+async fn an_observed_deposit_is_not_minted_again_next_turn() {
+    let note = channel_note(1);
+    let channel = CannedChannel {
+        channel_notes: HashSet::from([note]),
+        ..CannedChannel::empty()
+    };
+    let pins = Arc::clone(&channel.pins);
+    let (mut sequencer, _mempool_handle) =
+        start_sequencer_on(setup_sequencer_config(), channel).await;
+
+    let op_id = [0x62; 32];
+    sequencer
+        .on_observed_deposits(vec![deposit_info(op_id, 5, &[note])])
+        .await;
+    let first = sequencer.run_production_turn().await.unwrap();
+    let second = sequencer.run_production_turn().await.unwrap();
+
+    let first = block_at(&sequencer, first)
+        .await
+        .expect("produced block is stored");
+    let second = block_at(&sequencer, second)
+        .await
+        .expect("produced block is stored");
+    assert_eq!(mint_count(&first, op_id, 5), 1);
+    assert_eq!(
+        mint_count(&second, op_id, 5),
+        0,
+        "the receipt from the first mint keeps the observation from minting again"
+    );
+    assert_eq!(pins.lock().unwrap().last(), Some(&Vec::new()));
+}
+
+#[tokio::test]
+async fn an_observed_deposit_with_a_note_off_the_branch_is_not_minted() {
+    let on_branch = channel_note(1);
+    let channel = CannedChannel {
+        channel_notes: HashSet::from([on_branch]),
+        ..CannedChannel::empty()
+    };
+    let pins = Arc::clone(&channel.pins);
+    let (mut sequencer, _mempool_handle) =
+        start_sequencer_on(setup_sequencer_config(), channel).await;
+
+    let op_id = [0x66; 32];
+    sequencer
+        .on_observed_deposits(vec![deposit_info(op_id, 5, &[on_branch, channel_note(2)])])
+        .await;
+    let block_id = sequencer.run_production_turn().await.unwrap();
+
+    let block = block_at(&sequencer, block_id)
+        .await
+        .expect("produced block is stored");
+    assert_eq!(
+        mint_count(&block, op_id, 5),
+        0,
+        "a deposit is minted only once every one of its notes is a channel note"
+    );
+    assert_eq!(pins.lock().unwrap().last(), Some(&Vec::new()));
+    assert!(
+        sequencer.observed_deposits.is_empty(),
+        "a deposit with a note off the branch is forgotten"
+    );
+}
+
+#[tokio::test]
+async fn an_observed_deposit_without_notes_is_minted_only_once_final() {
+    let channel = CannedChannel::empty();
+    let pins = Arc::clone(&channel.pins);
+    let (mut sequencer, _mempool_handle) =
+        start_sequencer_on(setup_sequencer_config(), channel).await;
+
+    let op_id = [0x67; 32];
+    let deposit = deposit_info(op_id, 5, &[]);
+    sequencer.on_observed_deposits(vec![deposit.clone()]).await;
+    let observed = sequencer.run_production_turn().await.unwrap();
+    sequencer
+        .on_channel_update(Arc::new(ChannelUpdate {
+            deposits: vec![deposit],
+            ..empty_channel_update()
+        }))
+        .await;
+    let finalized = sequencer.run_production_turn().await.unwrap();
+
+    let observed = block_at(&sequencer, observed)
+        .await
+        .expect("produced block is stored");
+    let finalized = block_at(&sequencer, finalized)
+        .await
+        .expect("produced block is stored");
+    assert_eq!(
+        mint_count(&observed, op_id, 5),
+        0,
+        "a deposit without notes has nothing to pin the block on"
+    );
+    assert_eq!(mint_count(&finalized, op_id, 5), 1);
+    assert_eq!(pins.lock().unwrap().last(), Some(&Vec::new()));
+}
+
+#[tokio::test]
+async fn an_orphaned_final_deposit_mint_is_minted_again_once() {
+    let (mut sequencer, _mempool_handle) = start_sequencer(setup_sequencer_config()).await;
+    let balance_before = native_balance(&sequencer, deposit_recipient()).await;
+
+    let op_id = [0x63; 32];
+    sequencer
+        .on_channel_update(Arc::new(ChannelUpdate {
+            deposits: vec![deposit_info(op_id, 5, &[])],
+            ..empty_channel_update()
+        }))
+        .await;
+    sequencer.run_production_turn().await.unwrap();
+
+    reorg_to_genesis(&mut sequencer, CannedChannel::empty()).await;
+    assert_eq!(sequencer.chain_height().await, 1);
+    assert!(
+        !sequencer
+            .with_state(|state| deposit_already_minted(state, HashType(op_id)))
+            .await,
+        "the receipt reverts with the orphaned block"
+    );
+    let replacement = sequencer.run_production_turn().await.unwrap();
+
+    let replacement = block_at(&sequencer, replacement)
+        .await
+        .expect("produced block is stored");
+    assert_eq!(mint_count(&replacement, op_id, 5), 1);
+    assert_eq!(
+        native_balance(&sequencer, deposit_recipient()).await,
+        balance_before + 5,
+        "the recipient is credited once across the reorg"
+    );
+}
+
+#[tokio::test]
+async fn an_orphaned_pinned_deposit_is_minted_again_pinned_on_its_notes() {
+    let note = channel_note(1);
+    let channel = CannedChannel {
+        channel_notes: HashSet::from([note]),
+        ..CannedChannel::empty()
+    };
+    let pins = Arc::clone(&channel.pins);
+    let (mut sequencer, _mempool_handle) =
+        start_sequencer_on(setup_sequencer_config(), channel.clone()).await;
+    let balance_before = native_balance(&sequencer, deposit_recipient()).await;
+
+    let op_id = [0x64; 32];
+    sequencer
+        .on_observed_deposits(vec![deposit_info(op_id, 5, &[note])])
+        .await;
+    sequencer.run_production_turn().await.unwrap();
+
+    // The deposit survived the reorg, so its note is still a channel note.
+    reorg_to_genesis(&mut sequencer, channel).await;
+    assert!(
+        !sequencer
+            .with_state(|state| deposit_already_minted(state, HashType(op_id)))
+            .await,
+        "the receipt reverts with the orphaned block"
+    );
+    let replacement = sequencer.run_production_turn().await.unwrap();
+
+    let replacement = block_at(&sequencer, replacement)
+        .await
+        .expect("produced block is stored");
+    assert_eq!(mint_count(&replacement, op_id, 5), 1);
+    assert_eq!(pins.lock().unwrap().last(), Some(&vec![note]));
+    assert_eq!(
+        native_balance(&sequencer, deposit_recipient()).await,
+        balance_before + 5,
+        "the recipient is credited once across the reorg"
+    );
+}
+
+#[tokio::test]
+async fn an_orphaned_pinned_deposit_whose_notes_left_the_branch_is_not_minted_again() {
+    let note = channel_note(1);
+    let channel = CannedChannel {
+        channel_notes: HashSet::from([note]),
+        ..CannedChannel::empty()
+    };
+    let pins = Arc::clone(&channel.pins);
+    let (mut sequencer, _mempool_handle) =
+        start_sequencer_on(setup_sequencer_config(), channel).await;
+    let balance_before = native_balance(&sequencer, deposit_recipient()).await;
+
+    let op_id = [0x65; 32];
+    sequencer
+        .on_observed_deposits(vec![deposit_info(op_id, 5, &[note])])
+        .await;
+    sequencer.run_production_turn().await.unwrap();
+
+    // The reorg that orphaned the block took the deposit with it.
+    reorg_to_genesis(
+        &mut sequencer,
+        CannedChannel {
+            pins: Arc::clone(&pins),
+            ..CannedChannel::empty()
+        },
+    )
+    .await;
+    let replacement = sequencer.run_production_turn().await.unwrap();
+
+    let replacement = block_at(&sequencer, replacement)
+        .await
+        .expect("produced block is stored");
+    assert_eq!(mint_count(&replacement, op_id, 5), 0);
+    assert_eq!(pins.lock().unwrap().last(), Some(&Vec::new()));
+    assert_eq!(
+        native_balance(&sequencer, deposit_recipient()).await,
+        balance_before,
+        "a deposit no longer on L1 is not credited"
+    );
+    assert!(
+        sequencer.observed_deposits.is_empty(),
+        "a deposit no longer on L1 is forgotten"
+    );
+}
+
+#[tokio::test]
+async fn a_minted_deposit_whose_notes_its_pin_spent_stays_observed() {
+    let note = channel_note(1);
+    let channel = CannedChannel {
+        channel_notes: HashSet::from([note]),
+        ..CannedChannel::empty()
+    };
+    let pins = Arc::clone(&channel.pins);
+    let (mut sequencer, _mempool_handle) =
+        start_sequencer_on(setup_sequencer_config(), channel.clone()).await;
+
+    let op_id = [0x6e; 32];
+    sequencer
+        .on_observed_deposits(vec![deposit_info(op_id, 5, &[note])])
+        .await;
+    sequencer.run_production_turn().await.unwrap();
+
+    // The pin spent the deposit's note.
+    serve_channel(
+        &sequencer,
+        CannedChannel {
+            pins: Arc::clone(&pins),
+            ..CannedChannel::empty()
+        },
+    )
+    .await;
+    sequencer.run_production_turn().await.unwrap();
+    assert_eq!(
+        sequencer.observed_deposits.len(),
+        1,
+        "a deposit minted on the head is kept"
+    );
+
+    // The block minting it is orphaned and the deposit's note is back.
+    reorg_to_genesis(&mut sequencer, channel).await;
+    let replacement = sequencer.run_production_turn().await.unwrap();
+
+    let replacement = block_at(&sequencer, replacement)
+        .await
+        .expect("produced block is stored");
+    assert_eq!(mint_count(&replacement, op_id, 5), 1);
+    assert_eq!(pins.lock().unwrap().last(), Some(&vec![note]));
 }
 
 #[tokio::test]
@@ -4712,7 +5403,7 @@ fn slashable_state(
     (state, sequencer_key, ownership_id, ownership_key)
 }
 
-/// An approval signed by `seed`'s Bedrock key.
+/// An approval signed by `seed`'s channel signing key.
 fn test_approval(
     seed: u8,
     sequencer_key: sequencer_stake_core::SequencerKey,
@@ -4731,7 +5422,7 @@ fn test_approval_on(
         sequencer_stake_core::slash_approval_message(channel_id, sequencer_key, TEST_INSCRIPTION);
     sequencer_stake_core::SlashApproval {
         signer: sequencer_stake_core::SequencerKey::new(key.public_key().to_bytes())
-            .expect("a Bedrock public key is a valid Ed25519 public key"),
+            .expect("a channel signing public key is a valid Ed25519 public key"),
         signature: key.sign_payload(&message).to_bytes().to_vec(),
     }
 }
@@ -5279,6 +5970,7 @@ fn prove_and_settle(
         .collect();
     let (output, proof) = lee::execute_and_prove(
         lee::ProvingInput {
+            claims: Vec::new(),
             root,
             public_context: lee::PublicExecutionContext::new(public_actors, []),
             private_witnesses,
@@ -5286,6 +5978,7 @@ fn prove_and_settle(
             ciphertext_padding: None,
             recoveries,
             private_promotions: BTreeSet::new(),
+            fee: None,
         },
         &lee::Simulation {
             public_actor_states,
@@ -5662,7 +6355,7 @@ fn a_private_genesis_allocation_is_a_pending_credit_its_owner_receives_once() {
     let temp_dir = tempdir().unwrap();
     let mut config = setup_sequencer_config();
     config.home = temp_dir.path().to_path_buf();
-    config.genesis.push(
+    config.genesis.as_mut().unwrap().actions.push(
         serde_json::from_value(serde_json::json!({
             "supply_private_account": { "address": address.to_string(), "balance": 700 }
         }))
@@ -5733,7 +6426,12 @@ fn a_private_genesis_allocation_is_a_pending_credit_its_owner_receives_once() {
 async fn a_slash_lands_over_a_pending_partial_unstake() {
     // The release falls due in the block the slash is proposed for; it must not pre-empt it.
     let mut sequencer_config = setup_sequencer_config();
-    sequencer_config.bedrock_config.channel_params.exit_delay = 1;
+    sequencer_config
+        .genesis
+        .as_mut()
+        .unwrap()
+        .channel_params
+        .exit_delay = 1;
     let (mut sequencer, _mempool_handle) = common_setup_with_config(sequencer_config).await;
     let amount = 2 * system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let offender = test_sequencer_key(0x44);

@@ -1,4 +1,7 @@
-use std::{io::Write as _, str::FromStr};
+use std::{
+    io::{IsTerminal as _, Write as _},
+    str::FromStr,
+};
 
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
@@ -8,9 +11,9 @@ use derive_more::Display;
 use lee::PublicKey;
 use lee_core::{BlockId, NullifierPublicKey, PrivateAccountKind, encryption::ViewingPublicKey};
 
-pub use crate::helperfunctions::{read_mnemonic, read_pin};
+pub use crate::utils::{read_mnemonic, read_pin};
 use crate::{
-    AccountIdentity, WalletCore,
+    AccountIdentity, WalletCore, WalletSequencerClient,
     account::{AccountIdWithPrivacy, Label},
     cli::{
         account::AccountSubcommand,
@@ -39,8 +42,10 @@ pub mod pending;
 pub mod programs;
 
 pub(crate) trait WalletSubcommand {
-    async fn handle_subcommand(self, wallet_core: &mut WalletCore)
-    -> Result<SubcommandReturnValue>;
+    async fn handle_subcommand<C: WalletSequencerClient>(
+        self,
+        wallet_core: &mut WalletCore<C>,
+    ) -> Result<SubcommandReturnValue>;
 }
 
 /// Represents CLI command for a wallet.
@@ -79,13 +84,19 @@ pub enum Command {
         /// `testnet`, `local`, or a custom sequencer URL.
         network: NetworkAlias,
     },
-    /// Restoring keys from given password at given `depth`.
+    /// Set the password the wallet storage is encrypted under; an empty one leaves it
+    /// unencrypted.
+    SetPassword,
+    /// Restoring keys from a mnemonic phrase at given `depth`.
     ///
     /// !!!WARNING!!! will rewrite current storage.
     RestoreKeys {
         #[arg(short, long)]
         /// Indicates, how deep in tree accounts may be. Affects command complexity.
         depth: u32,
+        /// Skip the confirmation prompt.
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Keycard hardware wallet management.
     #[command(subcommand)]
@@ -104,6 +115,23 @@ pub struct Args {
     /// Continious run flag.
     #[arg(short, long)]
     pub continuous_run: bool,
+    /// Simulate the transaction a command would send and report its cost instead of sending it.
+    #[arg(long, global = true)]
+    pub dry_run: bool,
+    /// Reserve a privacy-preserving transaction's fee at the base fees this many blocks of the
+    /// steepest climb past the quote for this command, instead of the configured headroom.
+    #[arg(long, global = true, value_name = "BLOCKS")]
+    pub fee_headroom: Option<u64>,
+    /// Pay a privacy-preserving transaction's fee from this owned private account for this
+    /// command, whether or not the transaction mentions it.
+    #[arg(long, global = true, value_name = "ACCOUNT_ID")]
+    pub fee_payer: Option<lee::AccountId>,
+    /// Refund a privacy-preserving transaction's fee surplus to this public account for this
+    /// command, instead of the payer's blinded alias. Meant for a transaction that already
+    /// credits that account publicly, such as a deshield; any other target links the transaction
+    /// to it.
+    #[arg(long, global = true, value_name = "ACCOUNT_ID")]
+    pub refund_to: Option<lee::AccountId>,
     /// Wallet command.
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -234,8 +262,8 @@ impl Default for CliAccountMention {
     }
 }
 
-pub async fn execute_subcommand(
-    wallet_core: &mut WalletCore,
+pub async fn execute_subcommand<C: WalletSequencerClient>(
+    wallet_core: &mut WalletCore<C>,
     command: Command,
 ) -> Result<SubcommandReturnValue> {
     let subcommand_ret = match command {
@@ -297,11 +325,14 @@ pub async fn execute_subcommand(
 
             SubcommandReturnValue::Empty
         }
-        Command::RestoreKeys { depth } => {
-            let mnemonic = read_mnemonic_from_stdin()?;
-            let password = read_password_from_stdin()?;
-            wallet_core.restore_storage(&mnemonic, &password)?;
-            wallet_core.restore_keys(depth).await?;
+        Command::SetPassword => {
+            let password = crate::utils::prompt_new_password()?;
+            wallet_core.set_password(&password)?;
+
+            SubcommandReturnValue::Empty
+        }
+        Command::RestoreKeys { depth, yes } => {
+            execute_restore_keys(wallet_core, depth, yes).await?;
 
             SubcommandReturnValue::Empty
         }
@@ -310,21 +341,49 @@ pub async fn execute_subcommand(
     Ok(subcommand_ret)
 }
 
-pub async fn execute_continuous_run(wallet_core: &mut WalletCore) -> Result<()> {
+pub async fn execute_continuous_run<C: WalletSequencerClient>(
+    wallet_core: &mut WalletCore<C>,
+) -> Result<()> {
     loop {
         wallet_core.sync_to_latest_block().await?;
         tokio::time::sleep(wallet_core.config().seq_poll_timeout).await;
     }
 }
 
-pub fn read_password_from_stdin() -> Result<String> {
-    let mut password = String::new();
+async fn execute_restore_keys<C: WalletSequencerClient>(
+    wallet_core: &mut WalletCore<C>,
+    depth: u32,
+    yes: bool,
+) -> Result<()> {
+    if !yes {
+        let blocks = wallet_core.get_last_block_id().await?;
+        let question = format!(
+            "Restoring overwrites this wallet and scans {blocks} blocks, which may take a while. \
+             Continue?"
+        );
+        if !confirm(&question)? {
+            anyhow::bail!("Restore cancelled");
+        }
+    }
 
-    print!("Input password: ");
-    std::io::stdout().flush()?;
-    std::io::stdin().read_line(&mut password)?;
+    let mnemonic = read_mnemonic_from_stdin()?;
+    wallet_core.restore_storage(&mnemonic);
+    wallet_core.restore_keys(depth).await
+}
 
-    Ok(password.trim().to_owned())
+/// Asks on stderr; true without a terminal, so scripts never block.
+pub(crate) fn confirm(question: &str) -> Result<bool> {
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        return Ok(true);
+    }
+
+    eprint!("{question} [y/N]: ");
+    std::io::stderr().flush()?;
+
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+
+    Ok(matches!(answer.trim().to_lowercase().as_str(), "y" | "yes"))
 }
 
 /// Parse a keys file exported by `wallet account show-keys`.
@@ -494,7 +553,7 @@ mod tests {
 
     #[test]
     fn a_destination_is_one_account_one_set_of_keys_or_one_public_key() {
-        let (storage, _) = Storage::new("password").unwrap();
+        let (storage, _) = Storage::new();
         let npk = NullifierPublicKey([1; 32]);
         let vpk = ViewingPublicKey::from_seed(&[2; 32], &[3; 32]);
         let (npk_hex, vpk_hex) = (hex::encode(npk.0), hex::encode(vpk.to_bytes()));

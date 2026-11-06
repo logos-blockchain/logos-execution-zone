@@ -246,6 +246,10 @@ fn init_channel_params(
         "minimum_sequencer_stake must be non-zero"
     );
     assert!(params.exit_delay > 0, "exit_delay must be non-zero");
+    assert!(
+        params.max_block_size >= sequencer_stake_core::MIN_MAX_BLOCK_SIZE,
+        "max_block_size must be at least MIN_MAX_BLOCK_SIZE"
+    );
 
     let mut config = decode_config(&input.pre_state);
     assert!(
@@ -528,6 +532,7 @@ mod tests {
                 posting_timeframe: 300,
                 posting_timeout: 25,
                 exit_delay: EXIT_DELAY,
+                max_block_size: 1 << 20,
             }),
             channel_id: Some(CHANNEL_ID),
             entries: entries.iter().copied().collect::<BTreeMap<_, _>>(),
@@ -1006,6 +1011,7 @@ mod tests {
                     posting_timeframe: 1,
                     posting_timeout: 1,
                     exit_delay: 1,
+                    max_block_size: 1 << 20,
                 },
                 channel_id: CHANNEL_ID,
             },

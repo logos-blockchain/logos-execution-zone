@@ -55,14 +55,14 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     let initial_private_accounts = config::default_private_accounts_for_wallet();
     let genesis = config::genesis_from_accounts(
         &initial_public_accounts,
-        config::private_total(&initial_private_accounts),
+        config::private_funding_cost(&initial_private_accounts),
     );
 
     let (sequencer_handle, temp_sequencer_dir) =
         SequencerSetup::new(config::SequencerPartialConfig::default(), bedrock_addr)
             .with_genesis(genesis)
-            .with_bedrock_signing_key(UnsecuredEd25519Key::from_bytes(
-                &config::BEDROCK_SIGNING_KEY,
+            .with_channel_signing_key(UnsecuredEd25519Key::from_bytes(
+                &config::CHANNEL_SIGNING_KEY,
             ))
             .setup()
             .await

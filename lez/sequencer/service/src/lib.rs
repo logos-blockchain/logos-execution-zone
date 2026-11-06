@@ -10,11 +10,14 @@ use kameo_actors::{
     scheduler::{Scheduler, SetInterval},
 };
 use log::info;
-use sequencer_channel_config_actor::{
-    ChannelConfigActor, SetPublisher, SetSubmitter, SubmitConfig,
+use sequencer_channel_signing_actor::{
+    ChannelSigningActor, SetPublisher, SetSubmitter, SubmitConfig,
 };
 pub use sequencer_core::config::*;
-use sequencer_core::{gossip::AccreditedKeysReceiver, load_or_create_signing_key};
+use sequencer_core::{
+    gossip::{AccreditedKeysReceiver, MaxBlockSizeReceiver},
+    load_or_create_signing_key,
+};
 use sequencer_gossip_actor::{
     GossipActor,
     protocol::{PublishConfig, PublishTransaction},
@@ -240,6 +243,12 @@ impl SequencerHandle {
         self.executor.actor_ref()
     }
 
+    /// The gossip actor, for cases where there is need for gossip-only fucntionality.
+    #[must_use]
+    pub fn gossip_ref(&self) -> Option<&ActorRef<GossipActor>> {
+        self.gossip.as_ref().map(|gossip| gossip.actor.actor_ref())
+    }
+
     /// The storage, for embedders that talk to the sequencer in-process
     /// instead of over the RPC.
     #[must_use]
@@ -271,11 +280,10 @@ pub fn run(
 ) -> impl Future<Output = Result<SequencerHandle>> + Send + 'static {
     async move {
         let block_timeout = config.block_create_timeout;
-        let max_block_size = config.max_block_size;
 
         let gossip_config = config.gossip.clone();
         let bedrock_config = config.bedrock_config.clone();
-        let sequencer_home = config.home.clone();
+        let channel_signing_key_path = config.channel_signing_key_path();
 
         let storage =
             StorageActor::new(&config.db_path()).context("Failed to set up Storage Actor")?;
@@ -306,10 +314,11 @@ pub fn run(
             .await
             .context("Failed to set up Executor Actor")?;
         let slasher_ref = executor.slasher_ref();
-        let config_manager_ref = executor.config_manager_ref();
+        let channel_signer_ref = executor.channel_signer_ref();
         // The core has already read a committee by the time this returns.
         let accredited_keys_rx = executor.accredited_keys_watch();
         let staked_keys_rx = executor.staked_keys_watch();
+        let max_block_size_rx = executor.max_block_size_watch();
         let executor_ref = executor_prepared.actor_ref().clone();
         executor_prepared.spawn(executor);
         info!("Executor Actor spawned");
@@ -317,7 +326,7 @@ pub fn run(
         // A config needs no turn, so the actor tells the executor to submit it
         // the moment the signatures are in. Weak, because the executor owns
         // the actor that holds this.
-        config_manager_ref
+        channel_signer_ref
             .tell(SetSubmitter(
                 executor_ref.clone().recipient::<SubmitConfig>().downgrade(),
             ))
@@ -331,13 +340,13 @@ pub fn run(
                 setup_gossip(
                     gossip_config,
                     *bedrock_config.channel_id.as_ref(),
-                    &sequencer_home,
-                    max_block_size.as_u64(),
+                    &channel_signing_key_path,
+                    max_block_size_rx.clone(),
                     accredited_keys_rx,
                     staked_keys_rx,
                     &executor_ref,
                     &slasher_ref,
-                    &config_manager_ref,
+                    &channel_signer_ref,
                     &scheduler_ref,
                 )
                 .await?,
@@ -348,7 +357,7 @@ pub fn run(
         #[cfg(feature = "rpc")]
         let rpc_server = setup_rpc_server(
             listen_addr,
-            max_block_size,
+            max_block_size_rx,
             executor_ref.clone(),
             gossip_publisher,
         )
@@ -397,18 +406,18 @@ pub fn run(
 pub async fn setup_gossip(
     gossip_config: GossipConfig,
     channel_id: [u8; 32],
-    sequencer_home: &Path,
-    max_block_size: u64,
+    channel_signing_key_path: &Path,
+    max_block_size_rx: MaxBlockSizeReceiver,
     accredited_keys_rx: AccreditedKeysReceiver,
     staked_keys_rx: AccreditedKeysReceiver,
     executor_ref: &ActorRef<ExecutorActor>,
     slasher_ref: &ActorRef<SlasherActor>,
-    config_manager_ref: &ActorRef<ChannelConfigActor>,
+    channel_signer_ref: &ActorRef<ChannelSigningActor>,
     scheduler_ref: &ActorRef<Scheduler>,
 ) -> Result<(Gossip, Recipient<PublishTransaction>)> {
-    // The node's L1 bedrock signing key is deliberately reused as the
+    // The node's L1 channel signing key is deliberately reused as the
     // libp2p identity; `GossipActor::new` derives the keypair.
-    let signing_key = load_or_create_signing_key(&sequencer_home.join("bedrock_signing_key"))?;
+    let signing_key = load_or_create_signing_key(channel_signing_key_path)?;
     // Gossiped transactions enter through the executor's admission door
     // (fee screen + mempool push), same as RPC submissions — gossip never
     // touches the mempool directly.
@@ -435,12 +444,12 @@ pub async fn setup_gossip(
         signing_key,
         // Verified inbound approvals go straight to the slasher.
         slasher_ref.clone().recipient(),
-        max_block_size,
+        max_block_size_rx,
         submit,
         accredited_keys_rx,
         staked_keys_rx,
         // Screened inbound channel-config messages go straight to the actor.
-        config_manager_ref.clone().recipient(),
+        channel_signer_ref.clone().recipient(),
     ))
     .await
     .context("Failed to start sequencer gossip network")?;
@@ -472,7 +481,7 @@ pub async fn setup_gossip(
     // is above one can never collect the signatures it needs.
     let (outbound_config_tx, mut outbound_config_rx) =
         tokio::sync::mpsc::channel(OUTBOUND_CONFIG_CHANNEL_CAPACITY);
-    config_manager_ref
+    channel_signer_ref
         .tell(SetPublisher(outbound_config_tx))
         .await?;
     let config_gossip_ref = gossip_ref.clone();
@@ -516,14 +525,18 @@ pub async fn setup_gossip(
 #[cfg(feature = "rpc")]
 async fn setup_rpc_server(
     listen_addr: SocketAddr,
-    max_block_size: bytesize::ByteSize,
+    max_block_size_rx: MaxBlockSizeReceiver,
     executor_ref: ActorRef<ExecutorActor>,
     gossip_publisher: Option<Recipient<PublishTransaction>>,
 ) -> Result<RpcServer> {
-    let rpc_server =
-        RpcServerActor::new(listen_addr, max_block_size, executor_ref, gossip_publisher)
-            .await
-            .context("Failed to initialize RPC Server Actor")?;
+    let rpc_server = RpcServerActor::new(
+        listen_addr,
+        max_block_size_rx,
+        executor_ref,
+        gossip_publisher,
+    )
+    .await
+    .context("Failed to initialize RPC Server Actor")?;
     let addr = rpc_server.addr();
     let rpc_server_ref = RpcServerActor::spawn(rpc_server);
     info!("RPC Server Actor spawned");
@@ -539,25 +552,25 @@ async fn setup_bedrock_actor(
     config: &SequencerConfig,
     storage_ref: ActorRef<StorageActor>,
     bedrock_broker_ref: ActorRef<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
-) -> sequencer_bedrock_actor::Result<BedrockActor> {
-    let bedrock_signing_key = load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
-        .expect("Failed to load or create bedrock signing key");
+) -> Result<BedrockActor> {
+    let channel_signing_key = load_or_create_signing_key(&config.channel_signing_key_path())?;
     log::info!(
-        "Bedrock signing public key: {}",
-        hex::encode(bedrock_signing_key.public_key().to_bytes())
+        "Channel signing public key: {}",
+        hex::encode(channel_signing_key.public_key().to_bytes())
     );
 
     let bedrock_actor_config = sequencer_bedrock_actor::config::Config {
         node_url: config.bedrock_config.node_url.clone(),
         basic_auth: config.bedrock_config.auth.clone().map(Into::into),
         channel_id: config.bedrock_config.channel_id,
-        bedrock_signing_key,
-        funding_pk: config.bedrock_config.funding_key,
+        channel_signing_key,
+        funding_pk: config.load_funding_public_key()?,
         priority_fee_percent: config.bedrock_config.priority_fee_percent,
         resubmit_interval: config.retry_pending_blocks_timeout,
+        stale_refund_slots: config.bedrock_config.stale_refund_slots,
     };
 
-    BedrockActor::new(bedrock_actor_config, storage_ref, bedrock_broker_ref).await
+    Ok(BedrockActor::new(bedrock_actor_config, storage_ref, bedrock_broker_ref).await?)
 }
 
 #[cfg(feature = "standalone")]

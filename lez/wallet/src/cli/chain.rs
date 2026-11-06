@@ -3,7 +3,7 @@ use clap::Subcommand;
 use common::HashType;
 
 use crate::{
-    WalletCore,
+    WalletCore, WalletSequencerClient,
     cli::{SubcommandReturnValue, WalletSubcommand},
 };
 
@@ -26,9 +26,9 @@ pub enum ChainSubcommand {
 }
 
 impl WalletSubcommand for ChainSubcommand {
-    async fn handle_subcommand(
+    async fn handle_subcommand<C: WalletSequencerClient>(
         self,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::CurrentBlockId => {

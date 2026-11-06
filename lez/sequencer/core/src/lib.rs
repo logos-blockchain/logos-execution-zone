@@ -1,13 +1,13 @@
 #![allow(dead_code, reason = "TODO")]
 
 use std::{
-    collections::{BTreeMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     path::Path,
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result, anyhow, ensure};
 use borsh::BorshDeserialize as _;
 use bridge_core::{BridgeAmount, DepositMetadata, DepositRecipient};
 use chain_state::{
@@ -30,8 +30,8 @@ use lee_core::GENESIS_BLOCK_ID;
 use log::{debug, error, info, warn};
 use logos_blockchain_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 pub use logos_blockchain_core::mantle::{NoteId, ops::channel::MsgId};
-use logos_blockchain_key_management_system_service::keys::ED25519_SECRET_KEY_SIZE;
 pub use logos_blockchain_key_management_system_service::keys::Ed25519PublicKey;
+use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, ZkPublicKey};
 use logos_blockchain_zone_sdk::{
     Slot, ZoneMessage,
     sequencer::{DepositInfo, SequencerCheckpoint, WithdrawArg},
@@ -40,10 +40,13 @@ use mempool::{MemPool, MemPoolHandle};
 use num_bigint::BigUint;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
-    protocol::{Ed25519Key, LiveChannelConfig, ViewChange},
+    protocol::{
+        Ed25519Key, GetChannelNotes, IndexedSignature, LiveChannelConfig, PreparedPin,
+        PublishOutcome, ViewChange,
+    },
 };
-use sequencer_channel_config_actor as channel_config;
-pub use sequencer_channel_config_actor::{ChannelConfigActor, SubmitConfig};
+use sequencer_channel_signing_actor as channel_signing;
+pub use sequencer_channel_signing_actor::{ChannelSigningActor, SubmitConfig};
 use sequencer_slasher_actor::{Propose, Report, ReportedOffence, SetCommittee, SlasherActor};
 use sequencer_storage_actor::{
     StorageActorTrait,
@@ -62,7 +65,8 @@ use tokio_retry::{Retry, strategy::FixedInterval};
 
 use crate::{
     gossip::{
-        AccreditedKeys, AccreditedKeysReceiver, AccreditedKeysSender, accredited_keys_channel,
+        AccreditedKeys, AccreditedKeysReceiver, AccreditedKeysSender, MaxBlockSizeReceiver,
+        MaxBlockSizeSender, accredited_keys_channel,
     },
     logging::{log_rewind, log_update},
     task_group::TaskGroup,
@@ -92,6 +96,13 @@ const RETIRE_DISPATCH_AFTER_FAILURES: u32 = 3;
 /// since store-drained work is taken before the mempool. The rest wait one
 /// block; nothing is dropped.
 const MAX_DISPATCHES_PER_BLOCK: usize = 16;
+
+/// File in a sequencer home holding the Ed25519 key the node signs its channel inscriptions with,
+/// which is the key its stake accredits.
+pub const CHANNEL_SIGNING_KEY_FILE: &str = "channel_signing_key";
+/// File in a sequencer home holding the public key of the Bedrock wallet key that pays its
+/// inscriptions, in hex.
+pub const BEDROCK_FUNDING_PUBLIC_KEY_FILE: &str = "bedrock_funding_public_key";
 
 /// Fixed, public key behind a genesis-only funding account: the bridge can
 /// only be called top-level, not from `Stake`, so this account is a
@@ -217,16 +228,20 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     /// Keys with stake on record, which the mesh admits channel-config
     /// messages from.
     staked_keys_tx: AccreditedKeysSender,
+    max_block_size_tx: MaxBlockSizeSender,
     /// Signs this node's approval of a slash.
-    bedrock_signing_key: Ed25519Key,
-    /// Collects the accredited signatures a channel config update needs.
-    config_manager: ActorRef<ChannelConfigActor>,
+    channel_signing_key: Ed25519Key,
+    /// Collects the accredited signatures a channel config update or a pin needs.
+    channel_signer: ActorRef<ChannelSigningActor>,
     /// The config draft zone-sdk last funded for us, submitted once its
     /// signatures are in.
     config_draft: Option<ConfigDraft>,
     finalized_config: MsgId,
     /// Channel sequence of the last thing `BedrockActor` handed us.
     applied_seq: Option<sequencer_bedrock_actor::protocol::ChannelSeq>,
+    /// Deposits seen on L1 but not yet final, minted in a block pinned on
+    /// their notes. In memory only: after a restart they mint once final.
+    observed_deposits: Vec<DepositInfo>,
 }
 
 /// A funded channel config, from the moment zone-sdk funds it to the moment it
@@ -325,8 +340,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             ))
             .await
             .expect("Failed to seed the database with the genesis block");
-
-        sequencer_core_metrics::increment_blocks_produced_total();
     }
 
     /// # Errors
@@ -337,50 +350,69 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         reason = "Slop has won the battle, but our war is not over"
     )]
     pub async fn start_from_config(
-        config: SequencerConfig,
+        mut config: SequencerConfig,
         storage_ref: ActorRef<S>,
         bedrock_ref: ActorRef<B>,
     ) -> Result<(Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>)> {
         sequencer_core_metrics::init();
 
-        // A block over Bedrock's inscription cap is unpublishable; fail at
-        // startup rather than stalling at the first oversized block.
-        assert!(
-            config.max_block_size.as_u64() <= config::MAX_PUBLISHABLE_BLOCK_SIZE,
-            "max_block_size {} exceeds Bedrock's inscription limit of {} bytes",
-            config.max_block_size,
-            config::MAX_PUBLISHABLE_BLOCK_SIZE,
-        );
+        if let Some(genesis) = &config.genesis {
+            check_startup_channel_params(&genesis.channel_params, &config)?;
+        }
 
-        let bedrock_signing_key =
-            load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
-                .expect("Failed to load or create bedrock signing key");
+        let channel_signing_key = load_or_create_signing_key(&config.channel_signing_key_path())
+            .expect("Failed to load or create channel signing key");
         log::info!(
-            "Bedrock signing public key: {}",
-            hex::encode(bedrock_signing_key.public_key().to_bytes())
+            "Channel signing public key: {}",
+            hex::encode(channel_signing_key.public_key().to_bytes())
         );
 
         let own_sequencer_key =
-            sequencer_stake_core::SequencerKey::new(bedrock_signing_key.public_key().to_bytes())
-                .expect("our own Bedrock public key is a valid Ed25519 public key");
+            sequencer_stake_core::SequencerKey::new(channel_signing_key.public_key().to_bytes())
+                .expect("our own channel signing public key is a valid Ed25519 public key");
 
         // Only seed our own key into genesis as the bootstrap sequencer if the
         // channel doesn't exist yet. Otherwise it's someone else's channel and
         // we join later, the normal self-join way.
-        let channel_probe_retry_strategy =
-            FixedInterval::new(Self::CHANNEL_PROBE_RETRY_DELAY).take(Self::CHANNEL_PROBE_RETRIES);
-        let channel_already_exists = Retry::start(channel_probe_retry_strategy, || async {
-            bedrock_ref
-                .ask(sequencer_bedrock_actor::protocol::CheckChannelExists)
-                .await
-                .map_err(|err| anyhow!(err))
-                .inspect_err(|err| warn!("Failed to probe Bedrock channel: {err:#}"))
-        })
-        .await
-        .expect("Failed to probe Bedrock channel");
+        let probe_channel = || {
+            Retry::start(
+                FixedInterval::new(Self::CHANNEL_PROBE_RETRY_DELAY)
+                    .take(Self::CHANNEL_PROBE_RETRIES),
+                || async {
+                    bedrock_ref
+                        .ask(sequencer_bedrock_actor::protocol::CheckChannelExists)
+                        .await
+                        .map_err(|err| anyhow!(err))
+                        .inspect_err(|err| warn!("Failed to probe Bedrock channel: {err:#}"))
+                },
+            )
+        };
+        let mut channel_already_exists = probe_channel()
+            .await
+            .expect("Failed to probe Bedrock channel");
+        if !channel_already_exists && config.genesis.is_none() && config.wait_for_channel {
+            info!(
+                "Channel {} does not exist yet; waiting for its creator",
+                config.bedrock_config.channel_id
+            );
+            while !channel_already_exists {
+                tokio::time::sleep(Self::CHANNEL_PROBE_RETRY_DELAY).await;
+                channel_already_exists = probe_channel()
+                    .await
+                    .expect("Failed to probe Bedrock channel");
+            }
+        }
         if channel_already_exists {
             info!("Channel already exists; joining as a non channel creator");
+            // The channel's own genesis is replayed instead, so a creator restarting (or a second
+            // one) cannot diverge from it.
+            config.genesis = None;
         } else {
+            ensure!(
+                config.genesis.is_some(),
+                "Channel {} does not exist, and creating it needs a `genesis` config",
+                config.bedrock_config.channel_id
+            );
             info!("Channel does not exist yet; starting it as channel creator");
         }
         let bootstrap_sequencer_key = (!channel_already_exists).then_some(own_sequencer_key);
@@ -422,20 +454,26 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let slasher = SlasherActor::spawn(
             SlasherActor::load(
                 storage_ref.clone(),
-                bedrock_signing_key.clone(),
+                channel_signing_key.clone(),
                 stake_config,
                 *config.bedrock_config.channel_id.as_ref(),
             )
             .await,
         );
 
-        let config_manager = ChannelConfigActor::spawn_with_mailbox(
-            ChannelConfigActor::new(bedrock_signing_key.clone()),
-            kameo::mailbox::bounded(channel_config::MAILBOX_CAPACITY),
+        let channel_signer = ChannelSigningActor::spawn_with_mailbox(
+            ChannelSigningActor::new(
+                channel_signing_key.clone(),
+                config.bedrock_config.channel_id,
+                inscribed_block_deposits,
+            ),
+            kameo::mailbox::bounded(channel_signing::MAILBOX_CAPACITY),
         );
 
         let (accredited_keys_tx, _) = accredited_keys_channel();
         let (staked_keys_tx, _) = accredited_keys_channel();
+        let (max_block_size_tx, _) =
+            tokio::sync::watch::channel(config::MAX_PUBLISHABLE_BLOCK_SIZE);
 
         // Cross-zone messaging: start a watcher per configured peer. The inbox
         // config account is seeded into genesis state in `build_genesis_state`.
@@ -457,6 +495,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             Self::verify_and_reconstruct(&bedrock_ref, &storage_ref, &chain, is_fresh_start)
                 .await
                 .context("Failed to verify/reconstruct sequencer state from Bedrock")?;
+        // A joining node's config carries no channel params, so check the finalized chain's.
+        let final_params = committee_discovery::channel_params(chain.lock().await.final_state());
+        if let Some(params) = final_params {
+            check_startup_channel_params(&params, &config)
+                .context("This node cannot run on this channel")?;
+        }
 
         // Publish our blocks only when we are bootstrapping a channel that does
         // not exist yet (no channel tip). If the channel already exists (another
@@ -499,6 +543,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                             keys: keys.clone(),
                             channel_params,
                             configuration_threshold: committee_discovery::channel_config_threshold(
+                                keys.len(),
+                            ),
+                            transfer_threshold: committee_discovery::channel_config_threshold(
                                 keys.len(),
                             ),
                         })
@@ -553,7 +600,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
         // The committee the slasher loaded with predates catch-up and the
         // bootstrap publishes.
-        refresh_committee(&slasher, &chain, &accredited_keys_tx, &staked_keys_tx).await;
+        refresh_committee(
+            &slasher,
+            &chain,
+            &accredited_keys_tx,
+            &staked_keys_tx,
+            &max_block_size_tx,
+        )
+        .await;
 
         let finalized_config = zone_checkpoint(&storage_ref)
             .await
@@ -571,11 +625,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             slasher,
             accredited_keys_tx,
             staked_keys_tx,
-            config_manager,
-            bedrock_signing_key,
+            max_block_size_tx,
+            channel_signer,
+            channel_signing_key,
             config_draft: None,
             finalized_config,
             applied_seq: None,
+            observed_deposits: Vec::new(),
         };
 
         sequencer_core_metrics::record_chain_height(sequencer_core.chain_height().await);
@@ -679,7 +735,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let stored_final = chain.lock().await.final_msg();
         let mut on_lineage = stored_final == MsgId::root();
         let mut read_any = false;
-        while let Some((message, slot)) = messages.next().await {
+        while let Some(message) = messages.next().await {
+            let (message, slot) = message.context(
+                "Channel history read failed part way, so reconstruction would be incomplete",
+            )?;
             if let Some(check) = &mut consistency_check
                 && let Some(ChainConsistency::Inconsistent(mismatch)) =
                     check.observe(&message, slot)
@@ -877,6 +936,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // not re-appended, and a finalization only ever moves the tier forward.
         let deposit_records: Vec<PendingDepositEventRecord> =
             deposits.iter().map(pending_deposit_event_record).collect();
+        // A final deposit is minted from its store record from here on.
+        self.observed_deposits.retain(|observed_deposit| {
+            deposits
+                .iter()
+                .all(|deposit| deposit.op_id != observed_deposit.op_id)
+        });
 
         // A set, because a released note identifies its withdrawal outright: the
         // chain releases a note once, so a repeat here is a re-delivery, not a
@@ -886,6 +951,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .flat_map(|withdraw| withdraw.op.inputs.iter())
             .map(withdrawal_reconciliation_key)
             .collect();
+
+        let own_key = self.channel_signing_key.public_key();
 
         // The lock is held across the persist below so disk writes land in apply
         // order — the produce path persists under this same lock.
@@ -911,6 +978,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 match &outcome {
                     AcceptOutcome::Applied(entry_events) => {
                         events.extend(entry_events.clone());
+                        // Counted once final: until then a conflict can orphan it.
+                        if finalized_signers.contains(&(entry.msg, own_key)) {
+                            sequencer_core_metrics::increment_blocks_produced_total();
+                        }
                     }
                     // A re-delivery of the final tip: it is irreversible all the
                     // same, so it still settles its deposits.
@@ -998,6 +1069,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 .flat_map(|block| block.body.transactions.iter())
                 .filter_map(extract_bridge_deposit_id)
                 .collect();
+            self.tell_final_mints(&finalized_deposit_ids).await;
 
             // The same for cross-zone deliveries, keyed by message key: a record
             // goes once its own delivery is irreversible, never because another
@@ -1071,12 +1143,109 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 &self.chain,
                 &self.accredited_keys_tx,
                 &self.staked_keys_tx,
+                &self.max_block_size_tx,
             )
             .await;
         }
     }
 
-    /// Hands the channel-config actor the live channel and the config it should
+    /// Holds deposits seen before finality, for production to mint pinned and
+    /// for peers' pins to be checked against.
+    pub async fn on_observed_deposits(&mut self, deposits: Vec<DepositInfo>) {
+        let observed = channel_signing::ObservedDeposits(
+            deposits
+                .iter()
+                .map(|deposit| channel_signing::ObservedDeposit {
+                    op_id: deposit.op_id,
+                    notes: deposit.notes.to_vec(),
+                })
+                .collect(),
+        );
+        if let Err(err) = self.channel_signer.tell(observed).await {
+            warn!(
+                "Failed to tell the channel-signing actor of observed deposits: {:#}",
+                anyhow!(err)
+            );
+        }
+        for deposit in deposits {
+            if self
+                .observed_deposits
+                .iter()
+                .all(|observed_deposit| observed_deposit.op_id != deposit.op_id)
+            {
+                self.observed_deposits.push(deposit);
+            }
+        }
+    }
+
+    /// Tells the channel-signing actor which deposits final blocks mint, so it
+    /// stops holding their notes.
+    async fn tell_final_mints(&self, op_ids: &HashSet<HashType>) {
+        if op_ids.is_empty() {
+            return;
+        }
+        let final_mints = channel_signing::FinalMints(op_ids.iter().map(|op_id| op_id.0).collect());
+        if let Err(err) = self.channel_signer.tell(final_mints).await {
+            warn!(
+                "Failed to tell the channel-signing actor of final mints: {:#}",
+                anyhow!(err)
+            );
+        }
+    }
+
+    /// Mints for the observed deposits that are unminted on `state`, not yet
+    /// recorded as final, and have every note on the current L1 branch, each
+    /// with the notes its block must pin. Forgets the unminted ones with a note
+    /// off the branch, which can no longer be pinned.
+    async fn pinnable_deposits(
+        &mut self,
+        state: &lee::V03State,
+        recorded_op_ids: &HashSet<HashType>,
+    ) -> Vec<(LeeTransaction, Vec<NoteId>)> {
+        if self.observed_deposits.is_empty() {
+            return Vec::new();
+        }
+        let channel_notes = match self.bedrock_ref.ask(GetChannelNotes).await {
+            Ok(notes) => notes,
+            Err(err) => {
+                warn!("Pinning no deposits this turn: {:#}", anyhow!(err));
+                return Vec::new();
+            }
+        };
+        self.observed_deposits.retain(|deposit| {
+            deposit_already_minted(state, HashType(deposit.op_id))
+                || deposit
+                    .notes
+                    .iter()
+                    .all(|note| channel_notes.contains(&note.note_id))
+        });
+
+        self.observed_deposits
+            .iter()
+            .filter(|deposit| {
+                let op_id = HashType(deposit.op_id);
+                !recorded_op_ids.contains(&op_id) && !deposit_already_minted(state, op_id)
+            })
+            .filter_map(|deposit| {
+                let notes: Vec<NoteId> = deposit.notes.iter().map(|note| note.note_id).collect();
+                if notes.is_empty() || !notes.iter().all(|note| channel_notes.contains(note)) {
+                    return None;
+                }
+                build_bridge_deposit_tx_from_event(&pending_deposit_event_record(deposit))
+                    .map_err(|err| {
+                        warn!(
+                            "Skipping observed deposit {} due to tx build failure: {:#}",
+                            hex::encode(deposit.op_id),
+                            anyhow!(err)
+                        );
+                    })
+                    .ok()
+                    .map(|tx| (tx, notes))
+            })
+            .collect()
+    }
+
+    /// Hands the channel-signing actor the live channel and the config it should
     /// have. Sent from the follow path, turn or not: a peer only signs a draft
     /// matching the config it derived for itself.
     pub async fn on_channel_config_update(&mut self, live: LiveChannelConfig) {
@@ -1085,14 +1254,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             &live,
             self.finalized_config,
         );
-        let view = channel_config::ChannelView {
+        let view = channel_signing::ChannelView {
             live_keys: live.keys,
             required_signatures: live.required_signatures,
+            transfer_signatures: live.transfer_threshold,
             target,
         };
-        if let Err(err) = self.config_manager.tell(view).await {
+        if let Err(err) = self.channel_signer.tell(view).await {
             warn!(
-                "Failed to refresh the channel-config actor: {:#}",
+                "Failed to refresh the channel-signing actor: {:#}",
                 anyhow!(err)
             );
         }
@@ -1113,29 +1283,54 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             self.discard_config_draft().await;
         }
 
-        let BlockWithMeta {
-            block,
-            withdrawals,
-            parent,
-            mempool_transactions,
-        } = self
+        let mut built = self
             .build_block_from_mempool()
             .await
             .context("Failed to build block from mempool transactions")?;
 
-        // Height and pin together: both come from the view, read under one lock.
-        // Bundled withdrawals take the unpinned path, where the sdk picks the parent.
-        info!("Publishing block {} on pin {parent}", block.header.block_id);
-
-        let publish_res = self
-            .bedrock_ref
-            .ask(sequencer_bedrock_actor::protocol::PublishBlock {
-                block: block.clone(),
-                withdrawals: withdrawals.clone(),
-                parent: withdrawals.is_empty().then_some(parent),
-                expected_seq: self.applied_seq,
-            })
-            .await;
+        let publish_res = if built.pinned_deposit_notes.is_empty() {
+            self.publish_block(&built).await
+        } else {
+            let pinned = match self.sign_pin(&built).await {
+                Ok(Some((prepared, signatures))) => self
+                    .bedrock_ref
+                    .ask(sequencer_bedrock_actor::protocol::PublishPin {
+                        prepared,
+                        signatures,
+                        expected_seq: self.applied_seq,
+                    })
+                    .await
+                    .map(Some)
+                    .map_err(|err| err.map_msg(|_| ())),
+                Ok(None) => Ok(None),
+                Err(err) => Err(err),
+            };
+            match pinned {
+                Ok(Some(outcome)) => Ok(outcome),
+                Err(
+                    err @ kameo::error::SendError::HandlerError(
+                        sequencer_bedrock_actor::error::Error::ChannelMoved { .. },
+                    ),
+                ) => Err(err),
+                // Any other failed pin goes out unpinned, its deposits left to finality.
+                pinned => {
+                    if let Err(err) = pinned {
+                        warn!(
+                            "Failed to pin block {}: {:#}",
+                            built.block.header.block_id,
+                            anyhow!(err)
+                        );
+                    }
+                    built = self.build_block_without_pins(built).await?;
+                    self.publish_block(&built).await
+                }
+            }
+        };
+        let BlockWithMeta {
+            block,
+            mempool_transactions,
+            ..
+        } = built;
 
         if publish_res.is_err() {
             // Nothing was inscribed, so the block's transactions go back in front.
@@ -1165,6 +1360,117 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         Ok(block_id)
     }
 
+    /// Publishes `built` chained on its pin, unless it carries withdrawals.
+    async fn publish_block(&self, built: &BlockWithMeta) -> Result<PublishOutcome, PublishError> {
+        // Height and pin together: both come from the view, read under one lock.
+        // Bundled withdrawals take the unpinned path, where the sdk picks the parent.
+        info!(
+            "Publishing block {} on pin {}",
+            built.block.header.block_id, built.parent
+        );
+
+        self.bedrock_ref
+            .ask(sequencer_bedrock_actor::protocol::PublishBlock {
+                block: built.block.clone(),
+                withdrawals: built.withdrawals.clone(),
+                parent: built.withdrawals.is_empty().then_some(built.parent),
+                expected_seq: self.applied_seq,
+            })
+            .await
+            .map_err(|err| err.map_msg(|_| ()))
+    }
+
+    /// Funds the pin of `built` and collects the signatures its transfer needs,
+    /// or `None` when it cannot be pinned or they are not all in within half a
+    /// block interval.
+    async fn sign_pin(
+        &self,
+        built: &BlockWithMeta,
+    ) -> Result<Option<(PreparedPin, Vec<IndexedSignature>)>, PublishError> {
+        let block_id = built.block.header.block_id;
+        // A pin publishes on an explicit parent, which cannot carry withdrawals.
+        if !built.withdrawals.is_empty() {
+            error!("Block {block_id} pins deposits but carries withdrawals; not pinning it");
+            return Ok(None);
+        }
+        info!(
+            "Pinning block {block_id} on {} deposit note(s) at pin {}",
+            built.pinned_deposit_notes.len(),
+            built.parent
+        );
+        let prepared = self
+            .bedrock_ref
+            .ask(sequencer_bedrock_actor::protocol::PreparePin {
+                block: built.block.clone(),
+                parent: built.parent,
+                notes: built.pinned_deposit_notes.clone(),
+                expected_seq: self.applied_seq,
+            })
+            .await
+            .map_err(|err| err.map_msg(|_| ()))?;
+
+        // Half an interval, so a pin that misses delays its block by half an interval, not a
+        // whole one.
+        let wait = self
+            .sequencer_config
+            .block_create_timeout
+            .checked_div(2)
+            .expect("the divisor is not zero");
+        match self
+            .channel_signer
+            .ask(channel_signing::SignPin(Box::new(prepared.tx().clone())))
+            .reply_timeout(wait)
+            .await
+        {
+            Ok(signatures) => Ok(signatures.map(|signatures| (prepared, signatures))),
+            Err(kameo::error::SendError::Timeout(_)) => {
+                warn!(
+                    "Pin signatures for block {block_id} took longer than {wait:?}; rebuilding it \
+                     without its pinned deposits, which mint once final"
+                );
+                Ok(None)
+            }
+            Err(err) => {
+                warn!(
+                    "Failed to collect the pin signatures of block {block_id}: {:#}",
+                    anyhow!(err)
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    /// Leaves the deposits `built` pinned to finality and builds the block
+    /// again with no observed deposit in it, so nothing in it needs a pin.
+    async fn build_block_without_pins(&mut self, built: BlockWithMeta) -> Result<BlockWithMeta> {
+        let BlockWithMeta {
+            block,
+            mempool_transactions,
+            pinned_deposit_notes,
+            ..
+        } = built;
+        warn!(
+            "Block {} goes out without its pin; its deposits mint once final",
+            block.header.block_id
+        );
+        self.observed_deposits.retain(|deposit| {
+            deposit
+                .notes
+                .iter()
+                .all(|note| !pinned_deposit_notes.contains(&note.note_id))
+        });
+        // Nothing was inscribed, so the block's transactions go back in front.
+        for (origin, tx) in mempool_transactions.into_iter().rev() {
+            self.mempool.push_front((origin, tx));
+        }
+
+        let observed_deposits = std::mem::take(&mut self.observed_deposits);
+        let rebuilt = self.build_block_from_mempool().await;
+        self.observed_deposits = observed_deposits;
+
+        rebuilt.context("Failed to build block from mempool transactions")
+    }
+
     /// Whether the channel has advanced far enough past `submitted_at` to call
     /// a submitted config lost. A missing tip or submission slot counts as no
     /// advance.
@@ -1180,26 +1486,26 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
     /// One step of the config handshake, run on our turn only.
     async fn advance_channel_config(&mut self) {
-        let action = match self.config_manager.ask(channel_config::Propose).await {
+        let action = match self.channel_signer.ask(channel_signing::Propose).await {
             Ok(action) => action,
             Err(err) => {
                 warn!(
-                    "Failed to ask the channel-config actor what to do: {:#}",
+                    "Failed to ask the channel-signing actor what to do: {:#}",
                     anyhow!(err)
                 );
                 return;
             }
         };
         let target = match action {
-            channel_config::Action::Idle => return,
-            channel_config::Action::Submit(submission) => {
+            channel_signing::Action::Idle => return,
+            channel_signing::Action::Submit(submission) => {
                 info!(
                     "Channel-config draft {} was found complete on our turn",
                     hex::encode(submission.tx_hash)
                 );
                 return self.submit_config(*submission).await;
             }
-            channel_config::Action::Build(target) => target,
+            channel_signing::Action::Build(target) => target,
         };
 
         // Funding is a node round trip, which is why the actor asks for it
@@ -1228,7 +1534,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     return;
                 }
             };
-        let message = channel_config::FundedTx {
+        let message = channel_signing::FundedTx {
             target,
             tx: Box::new(prepared.tx().clone()),
             accredited_keys,
@@ -1241,8 +1547,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         });
         // Answers as `Propose` would, so a single-signer channel is already
         // over its threshold on our own signature and lands this turn.
-        match self.config_manager.ask(message).await {
-            Ok(channel_config::Action::Submit(submission)) => {
+        match self.channel_signer.ask(message).await {
+            Ok(channel_signing::Action::Submit(submission)) => {
                 info!(
                     "Channel-config draft {} needs only our own signature",
                     hex::encode(submission.tx_hash)
@@ -1251,7 +1557,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             }
             Ok(_) => {}
             Err(err) => warn!(
-                "The channel-config actor is gone; dropping the draft: {:#}",
+                "The channel-signing actor is gone; dropping the draft: {:#}",
                 anyhow!(err)
             ),
         }
@@ -1260,7 +1566,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// Submits the draft the signatures were collected over, once; zone-sdk
     /// re-posts it from there. A later call only asks whether it has landed,
     /// and discards it past the deadline.
-    async fn submit_config(&mut self, submission: channel_config::Submission) {
+    async fn submit_config(&mut self, submission: channel_signing::Submission) {
         let Some(draft) = self.config_draft.as_ref().filter(|draft| {
             logos_blockchain_core::mantle::traits::Hashable::hash(draft.prepared.tx()).0
                 == submission.tx_hash
@@ -1331,9 +1637,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// cover.
     async fn discard_config_draft(&mut self) {
         self.config_draft = None;
-        if let Err(err) = self.config_manager.tell(channel_config::Reset).await {
+        if let Err(err) = self.channel_signer.tell(channel_signing::Reset).await {
             warn!(
-                "Failed to reset the channel-config actor: {:#}",
+                "Failed to reset the channel-signing actor: {:#}",
                 anyhow!(err)
             );
         }
@@ -1341,7 +1647,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
     /// Submits a draft the actor reports signed, turn or not: a config carries
     /// no inscription, so the channel does not gate it.
-    pub async fn submit_signed_config(&mut self, submission: channel_config::Submission) {
+    pub async fn submit_signed_config(&mut self, submission: channel_signing::Submission) {
         info!(
             "Channel-config draft {} was completed by a peer; it needs no turn",
             hex::encode(submission.tx_hash)
@@ -1397,7 +1703,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     .await?;
 
                 if record == PublishRecord::Extended {
-                    sequencer_core_metrics::increment_blocks_produced_total();
                     sequencer_core_metrics::record_chain_height(block_id);
                 }
             }
@@ -1417,8 +1722,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     }
 
     /// Validates and applies a single mempool transaction to the current state.
-    /// Returns `Ok(true)` if the transaction was valid and applied, `Ok(false)` if
-    /// it was skipped due to validation failure.
+    /// Returns `Some(reverted)` if the transaction was valid and applied, with
+    /// whether its action reverted, or `None` if it was skipped due to validation
+    /// failure.
     #[expect(
         clippy::too_many_arguments,
         reason = "the settlement threads exactly the block-transition context the spec names"
@@ -1433,8 +1739,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         opening: &fee_core::state::FeeState,
         tx_index: u64,
         summary: &mut fee_core::BlockFeeSummary,
-    ) -> bool {
+    ) -> Option<bool> {
         let tx_hash = tx.hash();
+        let mut reverted = false;
         match origin {
             // Gossiped transactions arrive from untrusted peers, same as
             // user-submitted ones, so they get the same full state validation.
@@ -1446,7 +1753,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     } else {
                         log::warn!("Dropping user-submitted bridge deposit {tx_hash}");
                     }
-                    return false;
+                    return None;
                 }
 
                 // The cheap admission screen first: an unfundable or fee-invalid
@@ -1457,7 +1764,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                         "Dropping candidate {tx_hash:?} at the fee screen: {:#}",
                         anyhow!(rejection)
                     );
-                    return false;
+                    return None;
                 }
 
                 // Settle on a scratch clone: settlement is the single validation
@@ -1475,30 +1782,32 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     tx_index,
                     &mut scratch_summary,
                 ) {
-                    Ok(_events) => {
+                    Ok((_events, tx_reverted)) => {
                         if let Some(withdraw_data) = extract_bridge_withdraw_data(tx) {
                             withdrawals.push(withdraw_data);
                         }
                         *state = scratch;
                         *summary = scratch_summary;
+                        reverted = tx_reverted;
                     }
                     Err(err) => {
-                        // A gossiped tx the leader already included is expected to
-                        // fail here (e.g. on nonce) for every other node on its
-                        // turn; that is steady-state noise, not an error.
-                        // User-submitted failures still warrant `error!`.
                         if matches!(origin, TransactionOrigin::Gossip) {
+                            // A gossiped tx the leader already included is expected to
+                            // fail here (e.g. on nonce) for every other node on its
+                            // turn; that is steady-state noise, not an error.
                             debug!(
                                 "Transaction with hash {tx_hash} failed settlement: {:#}, skipping it",
                                 anyhow!(err)
                             );
                         } else {
-                            error!(
+                            // A user-submitted failure is the user's, not the node's,
+                            // so it is only a warning.
+                            warn!(
                                 "Transaction with hash {tx_hash} failed settlement: {:#}, skipping it",
                                 anyhow!(err)
                             );
                         }
-                        return false;
+                        return None;
                     }
                 }
             }
@@ -1525,13 +1834,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                         "Sequencer-generated transaction {tx_hash} failed execution: {:#}, skipping it",
                         anyhow!(err)
                     );
-                    return false;
+                    return None;
                 }
             }
         }
 
-        log::info!("Validated transaction with hash {tx_hash}, including it in block");
-        true
+        debug!("Validated transaction with hash {tx_hash}, including it in block");
+        Some(reverted)
     }
 
     #[expect(
@@ -1666,6 +1975,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
 
         let mut valid_transactions = Vec::new();
+        let mut reverted = Vec::new();
         let mut withdrawals = Vec::new();
 
         // Bridge deposit mints are drained from the store, not the mempool: the
@@ -1675,11 +1985,16 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         //
         // Skip deposits whose receipt has a nonempty bridge actor state.
         // Reverting a block also reverts its receipts, allowing those deposits to be retried.
-        let pending_deposits: VecDeque<LeeTransaction> = self
+        let deposit_records = self
             .storage_ref
             .ask(GetPendingDepositEvents)
             .await
-            .context("Failed to load pending deposit events")?
+            .context("Failed to load pending deposit events")?;
+        let recorded_op_ids: HashSet<HashType> = deposit_records
+            .iter()
+            .map(|record| record.deposit_op_id)
+            .collect();
+        let mut pending_deposits: VecDeque<LeeTransaction> = deposit_records
             .into_iter()
             .filter(|record| !deposit_already_minted(&working_state, record.deposit_op_id))
             .filter_map(|record| {
@@ -1695,17 +2010,33 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             })
             .collect();
 
-        let max_block_size = usize::try_from(self.sequencer_config.max_block_size.as_u64())
-            .expect("`max_block_size` should fit into usize");
+        // A deposit not yet final mints only in a block pinned on its notes.
+        let mut pins: HashMap<HashType, Vec<NoteId>> = HashMap::new();
+        for (tx, notes) in self
+            .pinnable_deposits(&working_state, &recorded_op_ids)
+            .await
+        {
+            pins.insert(tx.hash(), notes);
+            pending_deposits.push_back(tx);
+        }
+        let mut pinned_deposit_notes = Vec::new();
+        let mut deferred_withdrawals = Vec::new();
+
+        let max_block_size = usize::try_from(
+            committee_discovery::channel_params(&working_state)
+                .context("The chain holds no channel params")?
+                .max_block_size,
+        )
+        .expect("`max_block_size` should fit into usize");
 
         let new_block_timestamp = u64::try_from(chrono::Utc::now().timestamp_millis())
             .expect("Timestamp must be positive");
 
         // Look up this sequencer's stake ownership account as the reward target.
         let own_sequencer_key = sequencer_stake_core::SequencerKey::new(
-            self.bedrock_signing_key.public_key().to_bytes(),
+            self.channel_signing_key.public_key().to_bytes(),
         )
-        .expect("our own Bedrock public key is a valid Ed25519 public key");
+        .expect("our own channel signing public key is a valid Ed25519 public key");
         let payee = reward_payee(&working_state, own_sequencer_key)?;
 
         let opening = chain_state::apply::opening_fee_state(&working_state);
@@ -1753,6 +2084,22 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 continue;
             }
 
+            // A deposit whose notes would take the pin past Bedrock's input limit waits for the
+            // next block.
+            if pins.get(&tx_hash).is_some_and(|notes| {
+                pinned_deposit_notes.len().saturating_add(notes.len())
+                    > logos_blockchain_core::mantle::ledger::MAX_TRANSACTION_INPUTS
+            }) {
+                continue;
+            }
+
+            // A block pinning deposits publishes on an explicit parent, which
+            // cannot carry withdrawals.
+            if !pinned_deposit_notes.is_empty() && extract_bridge_withdraw_data(&tx).is_some() {
+                deferred_withdrawals.push((origin, tx));
+                continue;
+            }
+
             let temp_valid_transactions = [
                 valid_transactions.as_slice(),
                 std::slice::from_ref(&tx),
@@ -1764,6 +2111,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 transactions: temp_valid_transactions,
                 prev_block_hash,
                 timestamp: new_block_timestamp,
+                // Whether this transaction reverts is known only once it is settled below; if
+                // it does, its index joins the list and the block grows by one `u64`. Size the
+                // worst case now, with a placeholder index, so a revert doesn't push the block
+                // over the limit.
+                reverted: reverted.iter().copied().chain([0]).collect(),
             };
 
             let block_size = borsh::to_vec(&temp_hashable_data)
@@ -1773,28 +2125,29 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             if block_size > max_block_size {
                 // Would a block carrying nothing but this still be too big? Then
                 // it does not fit in any block and deferring it defers it for
-                // ever. A store-drained transaction is at the head of the queue
-                // every turn, so breaking here would stop production reaching
-                // anything behind it, including the whole mempool, permanently.
-                // Count it against the delivery instead so it is given up on.
+                // ever. A deferred transaction is at the head of the queue every
+                // turn, so breaking here would stop production reaching anything
+                // behind it, including the whole mempool, permanently. Give up on
+                // it instead.
                 //
                 // Measured on its own rather than from `block_size`, which also
                 // counts whatever this block already holds: a transaction that
                 // merely does not fit *today* is the ordinary deferral below.
-                if from_store
-                    && !self.fits_in_an_empty_block(
-                        &tx,
-                        &trailing,
-                        new_block_height,
-                        prev_block_hash,
-                        new_block_timestamp,
-                    )?
-                {
-                    error!(
-                        "Sequencer-drained transaction {tx_hash} cannot fit in any block under the \
+                if !Self::fits_in_an_empty_block(
+                    &tx,
+                    &trailing,
+                    max_block_size,
+                    new_block_height,
+                    prev_block_hash,
+                    new_block_timestamp,
+                )? {
+                    warn!(
+                        "Transaction {tx_hash} cannot fit in any block under the \
                          {max_block_size} byte limit; giving up on it rather than stalling production",
                     );
-                    self.count_dispatch_failure(&tx).await;
+                    if from_store {
+                        self.count_dispatch_failure(&tx).await;
+                    }
                     continue;
                 }
 
@@ -1831,7 +2184,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // builder behind it for ever. The RPC door screens these out,
                 // but gossip ingest does not, so drop it here instead.
                 if !DeclaredGasBudget::fits_empty(view) {
-                    error!(
+                    warn!(
                         "Transaction with hash {tx_hash} declares gas beyond the block caps \
                          (limit {}, bytes {}); dropping it rather than stalling production",
                         view.gas_limit(),
@@ -1866,7 +2219,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 valid_transactions.len().try_into().expect("fits u64"),
                 &mut summary,
             );
-            if applied {
+            if let Some(tx_reverted) = applied {
+                if tx_reverted {
+                    reverted.push(u64::try_from(valid_transactions.len()).expect("fits u64"));
+                }
                 // track the charged gas
                 gas_budget.sync(&summary);
                 sequencer_core_metrics::record_mempool_transaction_application_time(
@@ -1877,6 +2233,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 );
                 if !from_store {
                     mempool_transactions.push((origin, tx.clone()));
+                }
+                if let Some(notes) = pins.remove(&tx_hash) {
+                    pinned_deposit_notes.extend(notes);
                 }
                 valid_transactions.push(tx);
             } else {
@@ -1896,6 +2255,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             if valid_transactions.len() >= self.sequencer_config.max_num_tx_in_block {
                 break;
             }
+        }
+        for (origin, tx) in deferred_withdrawals.into_iter().rev() {
+            self.mempool.push_front((origin, tx));
         }
 
         // At most one `system_upgrader` transaction, directly before the fee: the due `Apply`
@@ -1920,6 +2282,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 .concat(),
                 prev_block_hash,
                 timestamp: new_block_timestamp,
+                reverted: reverted.clone(),
             })
             .context("Failed to serialize block for size check")?
             .len();
@@ -1933,7 +2296,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 }
                 continue;
             }
-            if Self::apply_mempool_transaction(
+            if let Some(tx_reverted) = Self::apply_mempool_transaction(
                 &mut working_state,
                 origin,
                 &tx,
@@ -1944,6 +2307,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 valid_transactions.len().try_into().expect("fits u64"),
                 &mut summary,
             ) {
+                if tx_reverted {
+                    reverted.push(u64::try_from(valid_transactions.len()).expect("fits u64"));
+                }
                 if !matches!(origin, TransactionOrigin::Sequencer) {
                     mempool_transactions.push((origin, tx.clone()));
                 }
@@ -1987,6 +2353,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             transactions: valid_transactions,
             prev_block_hash,
             timestamp: new_block_timestamp,
+            reverted,
         };
 
         let block = hashable_data.clone().into_pending_block();
@@ -2004,6 +2371,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             withdrawals,
             parent,
             mempool_transactions,
+            pinned_deposit_notes,
         })
     }
 
@@ -2048,17 +2416,22 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         self.staked_keys_tx.subscribe()
     }
 
-    /// Handle to the channel-config actor, for the service to feed gossip into.
     #[must_use]
-    pub const fn config_manager_ref(&self) -> &ActorRef<ChannelConfigActor> {
-        &self.config_manager
+    pub fn max_block_size_watch(&self) -> MaxBlockSizeReceiver {
+        self.max_block_size_tx.subscribe()
     }
 
-    /// This node's Bedrock public key, hex — the identity the channel's
+    /// Handle to the channel-signing actor, for the service to feed gossip into.
+    #[must_use]
+    pub const fn channel_signer_ref(&self) -> &ActorRef<ChannelSigningActor> {
+        &self.channel_signer
+    }
+
+    /// This node's channel signing public key, hex — the identity the channel's
     /// accredited keys and round-robin are keyed by.
     #[must_use]
-    pub fn bedrock_public_key_hex(&self) -> String {
-        hex::encode(self.bedrock_signing_key.public_key().to_bytes())
+    pub fn channel_signing_public_key_hex(&self) -> String {
+        hex::encode(self.channel_signing_key.public_key().to_bytes())
     }
 
     /// Returns the list of stored pending blocks.
@@ -2080,14 +2453,16 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// the store re-feeds every turn, is a permanent stall unless it is given up
     /// on.
     fn fits_in_an_empty_block(
-        &self,
         tx: &LeeTransaction,
         system_txs: &[LeeTransaction],
+        max_block_size: usize,
         block_id: u64,
         prev_block_hash: HashType,
         timestamp: u64,
     ) -> Result<bool> {
         let alone = HashableBlockData {
+            // A placeholder index: the size if the transaction reverts.
+            reverted: vec![0],
             block_id,
             transactions: [std::slice::from_ref(tx), system_txs].concat(),
             prev_block_hash,
@@ -2096,9 +2471,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let size = borsh::to_vec(&alone)
             .context("Failed to serialize block for size check")?
             .len();
-        let max = usize::try_from(self.sequencer_config.max_block_size.as_u64())
-            .expect("`max_block_size` should fit into usize");
-        Ok(size <= max)
+        Ok(size <= max_block_size)
     }
 
     /// Counts one failed production attempt against `tx` if it is a cross-zone
@@ -2239,7 +2612,12 @@ struct BlockWithMeta {
     /// The transactions this block took from the mempool, in the order it took
     /// them.
     mempool_transactions: Vec<(TransactionOrigin, LeeTransaction)>,
+    /// Notes of the not-yet-final deposits this block mints, to pin on publish.
+    pinned_deposit_notes: Vec<NoteId>,
 }
+
+/// Why a publish, pinned or not, did not go out.
+type PublishError = kameo::error::SendError<(), sequencer_bedrock_actor::error::Error>;
 
 /// A turn given up because the channel moved under the block while it was
 /// being built.
@@ -2347,7 +2725,7 @@ fn config_target(
     final_state: &lee::V03State,
     live: &LiveChannelConfig,
     finalized_config: MsgId,
-) -> Option<channel_config::ConfigTarget> {
+) -> Option<channel_signing::ConfigTarget> {
     if finalized_config != live.config_tip {
         debug!("A channel config is still in flight; not targeting another");
         return None;
@@ -2357,8 +2735,12 @@ fn config_target(
         .iter()
         .filter_map(|key| sequencer_stake_core::SequencerKey::new(key.to_bytes()))
         .collect();
-    let new_keys =
-        committee_discovery::committee_update(final_state, &live_keys, live.required_signatures)?;
+    let new_keys = committee_discovery::committee_update(
+        final_state,
+        &live_keys,
+        live.required_signatures,
+        live.transfer_threshold,
+    )?;
     let Some(channel_params) = committee_discovery::channel_params(final_state) else {
         warn!("sequencer_stake config carries no channel posting params; no committee update");
         return None;
@@ -2371,16 +2753,31 @@ fn config_target(
         })
         .collect();
 
-    Some(channel_config::ConfigTarget {
+    Some(channel_signing::ConfigTarget {
         // The op carries the threshold the *next* config must clear, so it is
         // measured against the committee this op installs.
         configuration_threshold: committee_discovery::channel_config_threshold(keys.len()),
-        transfer_threshold: system_accounts::DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD,
+        transfer_threshold: committee_discovery::channel_config_threshold(keys.len()),
         keys,
         parent: live.config_tip,
         posting_timeframe: channel_params.posting_timeframe,
         posting_timeout: channel_params.posting_timeout,
     })
+}
+
+/// Refuses a `max_block_size` no block can use, and warns when this node's blocks are too slow
+/// to hold a turn.
+fn check_startup_channel_params(
+    params: &config::ChannelParams,
+    config: &SequencerConfig,
+) -> Result<()> {
+    if !config::keeps_turn(params, config.block_create_timeout) {
+        warn!(
+            "block_create_timeout ({:?}) is not under posting_timeout ({}s): this node loses its turn between its own blocks",
+            config.block_create_timeout, params.posting_timeout
+        );
+    }
+    config::check_max_block_size(params)
 }
 
 /// Hands the slasher and the gossip mesh the committee the head now holds. The
@@ -2390,11 +2787,19 @@ async fn refresh_committee<S: StorageActorTrait>(
     chain: &Mutex<ChainState>,
     accredited_keys_tx: &AccreditedKeysSender,
     staked_keys_tx: &AccreditedKeysSender,
+    max_block_size_tx: &MaxBlockSizeSender,
 ) {
     let config = committee_discovery::read_config(chain.lock().await.head_state());
     let Some(config) = config else {
         return;
     };
+    if let Some(params) = config.channel_params {
+        max_block_size_tx.send_if_modified(|current| {
+            let changed = *current != params.max_block_size;
+            *current = params.max_block_size;
+            changed
+        });
+    }
     // The mesh screens against the same committee the slasher gates on.
     let keys: AccreditedKeys = config
         .accredited_committee_members()
@@ -2470,6 +2875,7 @@ fn genesis_block_and_state(
     let (genesis_state, genesis_txs, genesis_events) =
         build_genesis_state(config, bootstrap_sequencer_key);
     let genesis_block = HashableBlockData {
+        reverted: Vec::new(),
         block_id: GENESIS_BLOCK_ID,
         transactions: genesis_txs,
         prev_block_hash: HashType([0; 32]),
@@ -2515,6 +2921,14 @@ fn build_genesis_state(
     // The self-stake is appended here, so every index below is an index into
     // this list, not into `config.genesis`.
     let genesis_actions = effective_genesis_actions(config, bootstrap_sequencer_key);
+    // A node joining an existing channel builds a placeholder genesis, which the channel's
+    // replaces.
+    let channel_params = config
+        .genesis
+        .as_ref()
+        .map_or_else(config::default_channel_params, |genesis| {
+            genesis.channel_params
+        });
 
     let cross_zone_declared = config.cross_zone.as_ref();
     assert!(
@@ -2573,10 +2987,8 @@ fn build_genesis_state(
         });
 
     let staked = founding_stakes(&genesis_actions);
-    let bootstrap_stake_txs = build_stake_genesis_transactions(
-        &staked,
-        config.bedrock_config.channel_params.minimum_sequencer_stake,
-    );
+    let bootstrap_stake_txs =
+        build_stake_genesis_transactions(&staked, channel_params.minimum_sequencer_stake);
 
     // The genesis fee transaction credits the first staked sequencer's ownership account.
     //
@@ -2594,7 +3006,7 @@ fn build_genesis_state(
     let genesis_summary = fee_core::BlockFeeSummary::default();
     let genesis_payout = chain_state::apply::block_payout(&genesis_opening, &genesis_summary);
     let genesis_txs: Vec<_> = std::iter::once(build_init_channel_params_transaction(
-        config.bedrock_config.channel_params,
+        channel_params,
         *config.bedrock_config.channel_id.as_ref(),
     ))
     .chain(cross_zone_config_txs)
@@ -2661,7 +3073,10 @@ fn effective_genesis_actions(
     config: &SequencerConfig,
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
 ) -> Vec<GenesisAction> {
-    let mut actions = config.genesis.clone();
+    let Some(genesis) = &config.genesis else {
+        return Vec::new();
+    };
+    let mut actions = genesis.actions.clone();
     if actions
         .iter()
         .any(|action| matches!(action, GenesisAction::StakeSequencer { .. }))
@@ -2681,7 +3096,7 @@ fn effective_genesis_actions(
                 0,
                 key,
                 &owner,
-                config.bedrock_config.channel_params.minimum_sequencer_stake,
+                genesis.channel_params.minimum_sequencer_stake,
             ),
         }
     }));
@@ -2695,7 +3110,7 @@ fn founding_committee(
     config: &SequencerConfig,
     own_key: sequencer_stake_core::SequencerKey,
 ) -> Option<Vec<Ed25519PublicKey>> {
-    let mut keys: Vec<_> = founding_stakes(&config.genesis)
+    let mut keys: Vec<_> = founding_stakes(&effective_genesis_actions(config, None))
         .into_iter()
         .map(|stake| stake.key)
         .collect();
@@ -3232,6 +3647,21 @@ async fn settle_reconstructed_deliveries<S: StorageActorTrait>(
     }
 }
 
+/// The deposits a block inscription mints, or `None` when it is not a block.
+fn inscribed_block_deposits(inscription: &[u8]) -> Option<Vec<[u8; 32]>> {
+    let block = borsh::from_slice::<Block>(inscription).ok()?;
+
+    Some(
+        block
+            .body
+            .transactions
+            .iter()
+            .filter_map(extract_bridge_deposit_id)
+            .map(|op_id| op_id.0)
+            .collect(),
+    )
+}
+
 #[must_use]
 fn extract_bridge_deposit_id(tx: &LeeTransaction) -> Option<HashType> {
     let (to, message) = tx.public_call()?;
@@ -3262,9 +3692,7 @@ fn extract_bridge_withdraw_data(tx: &LeeTransaction) -> Option<WithdrawArg> {
         return None;
     };
 
-    let recipient_pk = logos_blockchain_key_management_system_service::keys::ZkPublicKey::from(
-        BigUint::from_bytes_le(&bedrock_account_pk),
-    );
+    let recipient_pk = ZkPublicKey::from(BigUint::from_bytes_le(&bedrock_account_pk));
 
     Some(WithdrawArg {
         outputs: logos_blockchain_core::mantle::ledger::Outputs::new(
@@ -3290,8 +3718,24 @@ fn withdrawal_reconciliation_key(note_id: &NoteId) -> WithdrawalReconciliationKe
     WithdrawalReconciliationKey { released_note_id }
 }
 
+/// Parses a Bedrock wallet public key from hex.
+pub fn parse_funding_public_key(hex_key: &str) -> Result<ZkPublicKey> {
+    serde_json::from_value(serde_json::Value::String(hex_key.trim().to_owned()))
+        .context("not a Bedrock public key in hex")
+}
+
+/// Loads the home's [`BEDROCK_FUNDING_PUBLIC_KEY_FILE`].
+pub fn load_funding_public_key(home: &Path) -> Result<ZkPublicKey> {
+    let path = home.join(BEDROCK_FUNDING_PUBLIC_KEY_FILE);
+    let hex_key = std::fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+    parse_funding_public_key(&hex_key).with_context(|| format!("Invalid key in {}", path.display()))
+}
+
 /// Load key bytes from file or generate a new set if it doesn't exist.
 fn load_or_create_key_bytes(path: &Path) -> Result<[u8; ED25519_SECRET_KEY_SIZE]> {
+    use std::{io::Write as _, os::unix::fs::OpenOptionsExt as _};
+
     if path.exists() {
         let key_bytes = std::fs::read(path)?;
 
@@ -3305,7 +3749,13 @@ fn load_or_create_key_bytes(path: &Path) -> Result<[u8; ED25519_SECRET_KEY_SIZE]
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(path, key_bytes)?;
+        // Readable by the owner only.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)?
+            .write_all(&key_bytes)?;
         Ok(key_bytes)
     }
 }

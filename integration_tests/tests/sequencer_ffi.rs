@@ -13,20 +13,21 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use integration_tests::get_account;
+use core_ffi::primitives::types::{
+    FfiOption,
+    actor::FfiActor,
+    transaction::{FfiTransaction, FfiTransactionKind},
+};
+use integration_tests::{
+    ffi_helpers::{primitives as primitives_ffi_helpers, sequencer as sequencer_ffi_helpers},
+    get_account,
+};
 use lee::{AccountId, Actor};
 use log::info;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use logos_blockchain_zone_sdk::adapter::Node as _;
-use sequencer_ffi::api::types::{
-    FfiOption,
-    transaction::{FfiActor, FfiTransaction, FfiTransactionKind},
-};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::config::bedrock_channel_id;
-
-#[path = "sequencer_ffi_helpers/mod.rs"]
-mod sequencer_ffi_helpers;
 
 #[test]
 fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
@@ -36,7 +37,9 @@ fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
         ownership_id,
         sequencer_ffi: sequencer_ffi_res,
         sequencer_home: _sequencer_home,
-    } = sequencer_ffi_helpers::joining_setup()?;
+    } = sequencer_ffi_helpers::joining_setup(true)?;
+
+    let ownership_id = ownership_id.expect("Must be Some on staked join");
 
     let sequencer_ffi =
     // SAFETY: sequencer_ffi_helpers::joining_setup guarantees validity.
@@ -123,7 +126,9 @@ fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
 
                 // SAFETY: FFI ensures validity of value.
                 unsafe {
-                    sequencer_ffi_helpers::sequencer_ffi_free_ffi_block_opt(joiner_block_res.value);
+                    primitives_ffi_helpers::primitives_ffi_free_ffi_block_opt(
+                        joiner_block_res.value,
+                    );
                 };
 
                 ffi_hash
@@ -174,7 +179,9 @@ fn sequencer_ffi_acc_id_to_tx_map() -> Result<()> {
         ownership_id: owner_id,
         sequencer_ffi: sequencer_ffi_res,
         sequencer_home: _sequencer_home,
-    } = sequencer_ffi_helpers::joining_setup()?;
+    } = sequencer_ffi_helpers::joining_setup(true)?;
+
+    let owner_id = owner_id.expect("Must be Some on staked join");
 
     let sequencer_ffi =
     // SAFETY: sequencer_ffi_helpers::joining_setup guarantees validity.
@@ -285,7 +292,7 @@ fn sequencer_ffi_acc_id_to_tx_map() -> Result<()> {
 
         // SAFETY: FFI ensures validity of value.
         unsafe {
-            sequencer_ffi_helpers::sequencer_ffi_free_ffi_block_opt(
+            primitives_ffi_helpers::primitives_ffi_free_ffi_block_opt(
                 ffi_block_got_by_hash_res.value,
             );
         }
@@ -404,12 +411,12 @@ fn sequencer_ffi_acc_id_to_tx_map() -> Result<()> {
 
     // SAFETY: FFI ensures validity of value.
     unsafe {
-        sequencer_ffi_helpers::sequencer_ffi_free_ffi_block_vec(joiner_block_vec_res.value);
+        primitives_ffi_helpers::primitives_ffi_free_ffi_block_vec(joiner_block_vec_res.value);
     }
 
     // SAFETY: FFI ensures validity of value.
     unsafe {
-        sequencer_ffi_helpers::sequencer_ffi_free_ffi_transaction_vec(
+        primitives_ffi_helpers::primitives_ffi_free_ffi_transaction_vec(
             owner_id_transactions_res.value,
         );
     }
@@ -430,7 +437,7 @@ fn sequencer_ffi_starting_events_produced_correctly() -> Result<()> {
         ownership_id: _,
         sequencer_ffi: sequencer_ffi_res,
         sequencer_home: _sequencer_home,
-    } = sequencer_ffi_helpers::joining_setup()?;
+    } = sequencer_ffi_helpers::joining_setup(true)?;
 
     let sequencer_ffi =
     // SAFETY: sequencer_ffi_helpers::joining_setup guarantees validity.
@@ -531,7 +538,7 @@ fn sequencer_ffi_starting_events_produced_correctly() -> Result<()> {
 
     // SAFETY: events_res created by FFI, it is valid.
     unsafe {
-        sequencer_ffi_helpers::sequencer_ffi_free_ffi_event_record_vec(events_res.value);
+        primitives_ffi_helpers::primitives_ffi_free_ffi_event_record_vec(events_res.value);
     }
 
     // SAFETY: sequencer_ffi created by FFI, it is valid.

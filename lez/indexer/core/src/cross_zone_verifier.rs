@@ -10,7 +10,10 @@ use std::{
 };
 
 use anyhow::anyhow;
-use chain_state::zone_indexer::ZoneIndexer;
+use chain_state::{
+    timeout_node::TimeoutNode,
+    zone_indexer::{ZoneIndexer, stop_at_read_error},
+};
 use common::{
     HashType,
     block::{Block, PeerChainTip},
@@ -662,7 +665,7 @@ pub struct CrossZoneVerifier {
     peers: PeerBlocks,
     /// One channel client per peer, used only for the one-shot refetch of an
     /// evicted body. Built exactly like the reader's own client.
-    refetch_clients: HashMap<ZoneId, Arc<ZoneIndexer<NodeHttpClient>>>,
+    refetch_clients: HashMap<ZoneId, Arc<ZoneIndexer<TimeoutNode<NodeHttpClient>>>>,
     /// One-shot refetches attempted, successful or not. The retry cadence
     /// line in [`Self::wait_for_peer_block`] reports the running total.
     refetch_attempts: Arc<AtomicU64>,
@@ -681,10 +684,10 @@ impl CrossZoneVerifier {
         let mut refetch_clients = HashMap::new();
 
         for peer in &cross_zone.peers {
-            let node = NodeHttpClient::new(
+            let node = TimeoutNode::new(NodeHttpClient::new(
                 CommonHttpClient::new(config.bedrock_config.auth.clone().map(Into::into)),
                 config.bedrock_config.addr.clone(),
-            );
+            ));
             // The reader moves `node` into its `ZoneIndexer`; this clone is its
             // own handle for the channel-tip reads behind the evidence run.
             let tip_node = node.clone();
@@ -1026,6 +1029,15 @@ impl CrossZoneVerifier {
             .next_messages(cursor)
             .await
             .map_err(|err| anyhow!("channel read failed: {err}"))?;
+        // Truncation would read as "no longer served"; safe only because the evicted
+        // path never escalates to Forged.
+        let stream = stop_at_read_error(
+            stream,
+            format!(
+                "Refetch of peer zone {} block {block_id}",
+                hex::encode(zone)
+            ),
+        );
         refetched_block(stream, read_at, block_id, block_hash).await
     }
 }
@@ -1058,7 +1070,7 @@ fn absence_verdict(zone: ZoneId, block_id: u64, evidence: &AbsenceEvidence) -> S
 /// failure, an absent channel, or a cursor behind the tip, all of which break
 /// the caught-up evidence run rather than count toward it.
 async fn channel_tip_reached(
-    node: &NodeHttpClient,
+    node: &TimeoutNode<NodeHttpClient>,
     peer_zone: ZoneId,
     cursor: Option<Slot>,
 ) -> Option<u64> {
@@ -1077,7 +1089,10 @@ async fn channel_tip_reached(
 /// widening of it: that read runs after a drained pass, and its freshness is
 /// what makes [`PeerWatch::confirmed_absence`] sound, so the pre-pass floor
 /// read must not stand in for it.
-async fn peer_committee(node: &NodeHttpClient, peer_zone: ZoneId) -> Option<(usize, u64)> {
+async fn peer_committee(
+    node: &TimeoutNode<NodeHttpClient>,
+    peer_zone: ZoneId,
+) -> Option<(usize, u64)> {
     let state = node
         .channel_state(ChannelId::from(peer_zone))
         .await
@@ -1098,7 +1113,7 @@ fn describe_committee(last_read: Option<(usize, u64)>) -> String {
 /// The endpoint's LIB slot, or `None` on a read failure. Read on at-tip
 /// passes as freshness evidence for the escalation guard in
 /// [`PeerWatch::confirmed_absence`].
-async fn observed_lib_slot(node: &NodeHttpClient) -> Option<u64> {
+async fn observed_lib_slot(node: &TimeoutNode<NodeHttpClient>) -> Option<u64> {
     let info = node.consensus_info().await.ok()?;
     Some(info.cryptarchia_info.lib_slot.into_inner())
 }
@@ -1146,8 +1161,8 @@ fn accept_peer_block(block: &Block, peer_zone: ZoneId) -> bool {
     reason = "the peer reader runs for the lifetime of the indexer process"
 )]
 async fn read_peer(
-    zone_indexer: ZoneIndexer<NodeHttpClient>,
-    tip_node: NodeHttpClient,
+    zone_indexer: ZoneIndexer<TimeoutNode<NodeHttpClient>>,
+    tip_node: TimeoutNode<NodeHttpClient>,
     peer_zone: ZoneId,
     min_committee_size: u32,
     peers: PeerBlocks,
@@ -1195,6 +1210,10 @@ async fn read_peer(
         }
         match zone_indexer.next_messages(cursor).await {
             Ok(stream) => {
+                let stream = stop_at_read_error(
+                    stream,
+                    format!("Peer reader for {}", hex::encode(peer_zone)),
+                );
                 let pass = consume_peer_stream(stream, peer_zone, &peers, cursor).await;
                 cursor = pass.cursor;
                 if let Some((slot, attempts)) = stall.after_pass(pass.stalled_at, pass.cursor)
@@ -1370,7 +1389,7 @@ mod tests {
     use futures::stream;
     use lee::Actor;
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
-    use logos_blockchain_zone_sdk::ZoneBlock;
+    use logos_blockchain_zone_sdk::{UnverifiedEd25519PublicKey, ZoneBlock};
     use ping_core::{ping_record_pda, receiver_config_account_id};
 
     use super::*;
@@ -1428,6 +1447,7 @@ mod tests {
             ZoneMessage::Block(ZoneBlock {
                 id: MsgId::from([0; 32]),
                 data: Inscription::try_from(data).expect("test inscription is within bounds"),
+                signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
             }),
             Slot::from(slot),
         )

@@ -55,7 +55,7 @@ async fn committee_approvals(
     let message = system_upgrader_core::approval_message(channel_id, proposal, valid_until);
 
     [
-        config::BEDROCK_SIGNING_KEY,
+        config::CHANNEL_SIGNING_KEY,
         *config::sequencer_signing_key_from_seed(1).to_bytes(),
     ]
     .iter()
