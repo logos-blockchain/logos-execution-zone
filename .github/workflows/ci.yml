@@ -10,6 +10,10 @@ on:
   # No path filter: `ci-ok` must report on docs-only PRs too.
   pull_request:
 
+  # The queue reports `ci-ok` on the speculative merge result; checkout falls
+  # back to the event sha here exactly as it does on pushes.
+  merge_group:
+
 # Supersede in-progress runs for a pull request; never cancel a push, so each
 # merge to main/dev keeps its own run.
 concurrency:

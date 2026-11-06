@@ -4,6 +4,7 @@ use std::{
 };
 
 use anyhow::{Context as _, anyhow};
+use chain_state::timeout_node::TimeoutNode;
 use common::block::Block;
 use futures::{StreamExt as _, future::Either};
 use kameo::{
@@ -73,8 +74,8 @@ mod tests;
 /// - `channel/<channel_id>/deposits`: for [`ChannelEvent::Deposits`]
 pub struct BedrockActor {
     config: Config,
-    node: NodeHttpClient,
-    sequencer: ZoneSequencer<NodeHttpClient>,
+    node: TimeoutNode<NodeHttpClient>,
+    sequencer: ZoneSequencer<TimeoutNode<NodeHttpClient>>,
     channel_view_rx: watch::Receiver<SequencerChannelView>,
     broker_ref: ActorRef<Broker<ChannelEvent>>,
     /// Version of the channel view this actor holds, bumped by every broadcast
@@ -111,7 +112,10 @@ impl BedrockActor {
             stale_refund_slots,
         } = &config;
 
-        let node = NodeHttpClient::new(CommonHttpClient::new(basic_auth.clone()), node_url.clone());
+        let node = TimeoutNode::new(NodeHttpClient::new(
+            CommonHttpClient::new(basic_auth.clone()),
+            node_url.clone(),
+        ));
 
         if let Some(checkpoint) = &initial_checkpoint
             && has_channel_activity(checkpoint)
@@ -1047,8 +1051,11 @@ fn block_inscription(block: &Block) -> Result<Inscription> {
 
 /// Funds `ops` from the node's wallet, which appends a fee transfer (paid from
 /// `funding_key`, change back to it) and returns its proof.
+///
+/// A timed-out call can leave the node's wallet holding its funding-note
+/// reservation until `pending_note_expiry_blocks` releases it.
 async fn fund_ops(
-    node: &NodeHttpClient,
+    node: &TimeoutNode<NodeHttpClient>,
     config: &Config,
     ops: impl IntoIterator<Item = Op>,
 ) -> Result<WalletFundResponseBody> {
