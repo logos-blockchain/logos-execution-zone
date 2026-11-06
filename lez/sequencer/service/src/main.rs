@@ -17,6 +17,8 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 use wallet::cli::CliAccountMention;
 
+mod actor_metrics;
+mod log_forwarder;
 mod operator;
 mod ops;
 
@@ -130,6 +132,7 @@ struct StartArgs {
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
+    actor_metrics::install()?;
     let args = Args::parse();
 
     match args.command {

@@ -78,7 +78,7 @@ Ladders are matched by name suffix, so a new timing metric is covered automatica
 
 ## Actor metrics
 
-Every actor's mailbox traffic comes from kameo itself: `sequencer_service` enables kameo's `metrics` feature, and kameo then counts on each mailbox, through the same recorder as everything else. Kameo names these series, not us, so their consts in `sequencer_service_metrics::names` are pinned by a test in `sequencer_service`'s `main.rs` that spawns an actor and checks what the recorder renders — a kameo upgrade that renames them fails there instead of blanking the dashboard.
+Every actor's mailbox traffic comes from kameo itself: `sequencer_service` enables kameo's `metrics` feature, and kameo then counts on each mailbox, through the same recorder as everything else. Kameo names these series, not us, so their consts in `sequencer_service_metrics::names` are pinned by a test in `sequencer_service`'s `main.rs` that spawns an actor and checks what the recorder renders — a kameo upgrade that renames them fails there instead of blanking the dashboard. Handling time and lifecycle come from kameo's tracing instead ([below](#handling-time-and-lifecycle)).
 
 | Metric | Type | Counts |
 |---|---|---|
@@ -87,8 +87,13 @@ Every actor's mailbox traffic comes from kameo itself: `sequencer_service` enabl
 | `kameo_lifecycle_received_total` | counter | startup, stop, restart and callback signals taken off it |
 | `kameo_link_died_received_total` | counter | deaths of linked actors taken off it |
 | `actor_mailbox_capacity` | gauge | messages the mailbox holds before senders wait; **`+Inf` for an unbounded one** |
+| `actor_message_handling_time_seconds` | histogram | time from taking a message off the mailbox to its handler returning |
+| `actor_state` | gauge | `0` stopped, `1` running, `2` restarting, `3` failed — `names::ActorState` |
+| `actor_start_time_seconds` | gauge | Unix time the actor last started; it changes on every restart |
 
 Every series is labelled `actor_name`: kameo's `Actor::name()`, which for a hand-written `impl Actor` is the full type name (`sequencer_executor_actor::actor::ExecutorActor<…StorageActor, …BedrockActor>`), and for `#[derive(Actor)]` just the ident (`Broker`). Each actor type has one series per sequencer, so two instances of one type would share it.
+
+`actor_message_handling_time_seconds` is also labelled `message_name`: kameo's `Message::name()`, by default the message's full type name, as kameo puts it on its `actor.handle_message` span.
 
 Sent minus received is the **backlog**: messages queued and not yet taken. The one being handled is already taken, so it does not count.
 
@@ -99,6 +104,18 @@ Kameo also exports `kameo_lifecycle_sent_total` and `kameo_link_died_sent_total`
 An unbounded mailbox exports infinity, which the exporter writes as Rust prints it, `inf`; Prometheus reads that as `+Inf`. In PromQL a backlog over `+Inf` is `0`, and `actor_mailbox_capacity < +Inf` keeps the bounded mailboxes only — what the dashboard's fill and capacity-line queries use, as Grafana cannot draw infinity.
 
 Kameo only sees the mailbox: work an actor does inside its own `next()`, like the Bedrock actor's zone SDK events or the gossip actor's swarm events, is not in these counters.
+
+### Handling time and lifecycle
+
+Kameo traces every actor through `tracing`: each message's handler runs in an `actor.handle_message` span, and each run of an actor emits an `actor started` event and, at its end, `actor stopped` with the stop `reason`. A supervised restart is a new run of the same actor, so it shows up the same way. `actor_metrics.rs` in `sequencer_service` installs a tracing subscriber whose `ActorMetrics` layer turns these into the last three metrics above, for every actor, kameo_actors' included, with nothing to add at spawn sites:
+
+- **Handling time** is the span's life: wall time, awaits included, during which the actor takes no other message. `rate()` of its `_sum` is the share of time the actor is busy. A handler that replies from a background task (`DelegatedReply`, as the executor's `GetBlockRange` does) counts only until it hands the work off.
+- **State** follows the events: `running` on start; on stop `stopped` for `Normal` or `Killed`, `restarting` for `SupervisorRestart`, `failed` for `Panicked` (a panic, or an error from a handler or `on_start`) or `LinkDied`.
+- **Start time** is set on every start. `changes()` over it counts restarts — by a supervisor or of the whole sequencer — even one quicker than a scrape, which would leave no gap in `actor_state`.
+
+A state shorter than a scrape (5 s) may not show at all: a sequencer whose actor fails exits soon after, often before Prometheus sees `failed`. The logs say why it stopped; kameo logs a panic as an error.
+
+Installing a subscriber has one side effect to undo: `tracing` hands its events (libp2p, the zone SDK, kameo, …) to the `log` logger only while **no** subscriber is installed. The subscriber's second layer, `LogForwarder` (`log_forwarder.rs`), keeps handing them over, filtered and formatted as `tracing` did, so the logs stay as they were; a test fails if it stops. `tracing`'s `log-always` feature would do the same, but features unify across every crate built alongside the sequencer, and it would double the logs of the integration tests, which feed `log` back into `tracing`.
 
 ## `dashboard_gen`
 
@@ -118,7 +135,7 @@ Panel::timeseries("Block production rate")
     .target(rate_per_min(&seq(sequencer_core_metrics::names::BLOCKS_PRODUCED_TOTAL), "blocks/min"))
 ```
 
-Query helpers: `rate_per_min` for counters, `avg` for histograms, and `selected_percentile` for percentile lines — the latter reads a `percentile` dashboard dropdown created by `percentile_variable`, so one panel serves p50/p90/p95/p99 instead of drawing all four. Rate windows use `$__rate_interval`, which tracks the panel's zoom.
+Query helpers: `rate_per_min` for counters, `avg` for histograms, and `selected_percentile` for percentile lines — the latter reads a `percentile` dashboard dropdown created by `percentile_variable`, so one panel serves p50/p90/p95/p99 instead of drawing all four; `selected_percentile_expr` is the same query over another window, e.g. `$__range` for one value per series over the whole time range. Rate windows use `$__rate_interval`, which tracks the panel's zoom.
 
 Helpers take a `Selector` (metric name plus label matchers: `label_eq` for `=`, `label_matches` for `=~`) rather than a bare name, so a scoped dashboard scopes every series, histogram `_bucket`/`_sum`/`_count` included.
 
@@ -158,10 +175,16 @@ The **Actors** dashboard (`dashboards/actors.rs`) reads the [actor metrics](#act
 | Question | Panel |
 |---|---|
 | Which actors do the most work? | **All actors · messages handled over the time range**, **… per second** |
+| Which are slow, or saturated? | **All actors · handling time over the time range** at the **Percentile** dropdown's percentile, **All actors · busy** — near 100%, an actor cannot keep up |
 | Is any mailbox filling up? | **All actors · fullest mailbox over the time range** — the highest backlog as a share of capacity; unbounded mailboxes have no fill and are left out |
 | Is a backlog building? | **All actors · mailbox backlog**, and for the picked actor **mailbox backlog vs capacity**, its capacity drawn as a dashed line |
-| How does the picked actor keep up? | **messages per second** (sent vs handled), **backlog**, **mailbox capacity** (`unbounded` for `+Inf`), **mailbox fill** (green, orange from 50%, red from 90%) |
-| Was it restarted? | **lifecycle and link signals since startup** — starts and stops read 1 after one start, more after a restart |
+| Which actors ran, and when? | **All actors · lifecycle** — a timeline of running, stopped, restarting and failed, empty while an actor does not exist |
+| Was anything restarted? | **All actors · restarts over the time range**, and the picked actor's **restarts** |
+| How does the picked actor keep up? | **messages handled per second**, **busy**, **backlog**, **mailbox capacity** (`unbounded` for `+Inf`), **mailbox fill** (green, orange from 50%, red from 90%) |
+| Which messages does the picked actor spend its time on? | **time spent per message over the time range**, **messages handled over the time range**, and over time **busy per message** and **messages handled per second** — stacked, so the messages add up to the actor's total |
+| Which of its messages are slow? | **p95 handling time per message over the time range** (at the **Percentile** dropdown's percentile), **average handling time per message over the time range**, and over time **handling time per message** — solid at the percentile, dashed on average. Messages not handled in the window are left out |
+| What did the picked actor go through? | **lifecycle**, and **lifecycle and link signals since startup** — kameo's own count of start and stop signals, and of deaths of actors linked to it |
+| What did the picked actor log? | **warnings and errors**, linking to all its logs in Explore — the lines logged from the actor's crate, which a hidden `actor_crate` variable cuts out of `actor_name` |
 
 Actors appear by type name alone (`ExecutorActor`, `StorageActor`, `Broker`): the queries cut the module path and generic arguments off `actor_name` with `label_replace`, and the **Actor** dropdown does the same with a variable regex (`Variable::regex`). Its value is that short name, so queries pick the actor back with `actor_name=~"(?:[a-z0-9_]+::)*$actor(?:<.*)?"` — anchored, so picking `StorageActor` does not also pick `ExecutorActor<…StorageActor…>`.
 
