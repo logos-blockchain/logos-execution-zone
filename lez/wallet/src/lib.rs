@@ -11,6 +11,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::PathBuf,
+    sync::{Arc, Mutex},
 };
 
 pub use account_manager::{
@@ -25,7 +26,7 @@ use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
     Account, AccountId, EncryptedNote, PredictedCrossMessages, PrivacyPreservingTransaction,
     ProgramId, ProvingInput, PublicExecutionContext, PublicationMode, Recipient,
-    RecipientEncryption, Simulation,
+    RecipientEncryption, SenderPresentation, Simulation,
     privacy_preserving_transaction::{
         circuit::{Dependency, ProgramCatalog, ProgramKind},
         message::Message,
@@ -121,11 +122,11 @@ pub struct Promotions {
     pub listed_only: bool,
 }
 
-// A durable async message of private execution to publish clear instead of sealed: one sent from
-// `from_program` to `to` with exactly `message`.
+// A durable async message of private execution to publish clear instead of sealed: one `sender`,
+// the actor as this wallet holds it rather than as presented, sends to `to` with exactly `message`.
 #[derive(Clone)]
 pub struct ClearMessage {
-    pub from_program: AccountId,
+    pub sender: Actor,
     pub to: Actor,
     pub message: MessageData,
 }
@@ -1748,10 +1749,31 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 amount: reserve,
                 refund_to,
             });
-            let present = acc_manager.presenter(Some((payer, opening)));
+            // Each sender as presented, derived as the interpreter derives it, maps back to its
+            // actor.
+            let senders = Arc::new(Mutex::new(HashMap::new()));
+            let mut presenter = acc_manager.presenter(Some((payer, opening)));
+            let present = {
+                let senders = Arc::clone(&senders);
+                move |sender: Actor| {
+                    let presentation = presenter(sender);
+                    let presented = match presentation {
+                        SenderPresentation::Canonical => sender,
+                        SenderPresentation::Blinded(factor) => Actor::new(
+                            sender.account_id.blinded(&factor),
+                            sender.program_account_id,
+                        ),
+                    };
+                    senders
+                        .lock()
+                        .expect("the sender map's lock is never poisoned")
+                        .insert(presented, sender);
+                    presentation
+                }
+            };
             let (select, choose_publication) = (
                 select.clone(),
-                choose_publication_with(seals.clone(), clear_messages.clone()),
+                choose_publication_with(seals.clone(), clear_messages.clone(), senders),
             );
             let (programs, simulation) = (programs.clone(), simulation.clone());
             let (output, proof) = match cross_messages.clone() {
@@ -2654,17 +2676,22 @@ fn decrypt_note(
 }
 
 // The root is one of the transaction's accounts, so it runs with the placement declared for it.
-// How private execution publishes each durable async message: clear when it matches one of
-// `clear_messages`, each matching once, else sealed to the recipient in `seals` it addresses.
+// How private execution publishes each durable async message: clear when one of `clear_messages`
+// matches it, with `senders` mapping its presented sender back, each matching once; else sealed to
+// the recipient in `seals` it addresses.
 fn choose_publication_with(
     seals: Vec<Recipient>,
     mut clear_messages: Vec<ClearMessage>,
+    senders: Arc<Mutex<HashMap<Actor, Actor>>>,
 ) -> impl FnMut(&MessageBody) -> Result<PublicationMode, lee::error::LeeError> {
     move |body: &MessageBody| {
+        let sender = senders
+            .lock()
+            .expect("the sender map's lock is never poisoned")
+            .get(&body.from)
+            .copied();
         if let Some(index) = clear_messages.iter().position(|clear| {
-            clear.from_program == body.from.program_account_id
-                && clear.to == body.to
-                && clear.message == body.message
+            Some(clear.sender) == sender && clear.to == body.to && clear.message == body.message
         }) {
             clear_messages.swap_remove(index);
             return Ok(PublicationMode::Clear);
