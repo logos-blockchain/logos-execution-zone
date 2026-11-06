@@ -1,5 +1,6 @@
 use lee_core::{
-    EphemeralSecretKey, MessageWitness, PrivateAccountKind, Recipient, RecipientEncryption,
+    EphemeralSecretKey, FeeTransfer, MessageWitness, PrivateAccountKind, PublicationMode,
+    Recipient, RecipientEncryption,
     program::{MessageBody, Publication},
 };
 
@@ -7,6 +8,10 @@ use super::*;
 use crate::ValidatedStateDiff;
 
 const OPENING: [u8; 32] = [9; 32];
+const INBOX: AccountId = AccountId::new([4; 32]);
+const FUNDS: Balance = 100;
+const FEE: Balance = 10;
+const PAID: Balance = 30;
 
 fn sender() -> Actor {
     Actor::new(test_public_account_keys_1().account_id(), scripted_id())
@@ -47,6 +52,52 @@ fn bound_state() -> V03State {
 
 fn publications(state: &V03State) -> Vec<(u64, Publication)> {
     state.publications_from(0).collect()
+}
+
+fn alice() -> AccountId {
+    let keys = test_private_account_keys_2();
+    AccountId::for_regular_private_account(&keys.npk(), &keys.vpk())
+}
+
+fn funded_state() -> V03State {
+    V03State::new()
+        .with_private_account(&test_private_account_keys_2(), &Account::funded(FUNDS))
+        .with_empty_public_accounts([INBOX])
+}
+
+// Alice's private transfer of `PAID` to Bob's alias, its credit published clear and its fee paid to
+// `INBOX`, proven against the funded note `state` holds for her.
+fn clear_credit(state: &V03State) -> PrivacyPreservingTransaction {
+    let funded = Account::funded(FUNDS);
+    let proven = execute_and_prove(
+        ProvingInput {
+            public_context: PublicExecutionContext::new(vec![Actor::native_balance(INBOX)], []),
+            private_witnesses: vec![update_witness(
+                &test_private_account_keys_2(),
+                funded.clone(),
+                state
+                    .get_proof_for_commitment(&Commitment::new(&alice(), &funded))
+                    .expect("Alice's note must be in state"),
+            )],
+            fee: Some(FeeTransfer {
+                payer: alice(),
+                recipient: INBOX,
+                amount: FEE,
+                refund_to: None,
+            }),
+            ..proving_input(root(
+                Actor::native_balance(alice()),
+                &transfer(bob().address(), PAID),
+            ))
+        },
+        &Simulation::default(),
+        &ProgramCatalog::default(),
+        |_| SenderPresentation::Canonical,
+        |_, _| false,
+        |_| Ok(PublicationMode::Clear),
+    )
+    .unwrap();
+    private_tx(proven, vec![], &[])
 }
 
 #[test]
@@ -252,4 +303,142 @@ fn a_diff_carrying_a_recovery_note_its_target_state_does_not_bind_is_refused_at_
         ));
         assert_eq!(target, before);
     }
+}
+
+#[test]
+fn a_private_sender_pays_a_bound_alias_in_clear_and_the_alias_holder_receives_it_privately() {
+    let keys = test_private_account_keys_1();
+    let mut state = funded_state().with_recovery_bindings([recovery(5).bind_recovery()]);
+    let tx = clear_credit(&state);
+
+    let (diff, charge) = ValidatedStateDiff::from_privacy_preserving_transaction_metered(
+        &tx,
+        &state,
+        1,
+        0,
+        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+    )
+    .unwrap();
+    assert_eq!(charge.revert, None);
+    state.apply_state_diff(diff).unwrap();
+
+    let note = state
+        .recovery_binding(bob().address())
+        .cloned()
+        .expect("the state binds Bob's alias");
+    let [
+        (
+            position,
+            Publication::Clear {
+                body,
+                recovery: published,
+            },
+        ),
+    ] = <[_; 1]>::try_from(publications(&state)).unwrap()
+    else {
+        panic!("a private sender's credit selected clear is published clear");
+    };
+    assert_eq!(
+        body,
+        MessageBody {
+            from: Actor::native_balance(alice()),
+            to: Actor::native_balance(bob().address()),
+            message: borsh::to_vec(&NativeMessage::Credit(PAID)).unwrap(),
+        }
+    );
+    assert_eq!(published, note);
+    assert_eq!(
+        state.get_account_by_id(INBOX).data.native_balance(),
+        Ok(FEE)
+    );
+
+    let recovered = Recipient::recover(body.to.account_id, &published, &keys.d, &keys.z).unwrap();
+    assert_eq!(recovered, bob());
+    let membership_proof = state.get_proof_for_position(position).unwrap();
+    let proven = execute_and_prove(
+        ProvingInput {
+            private_witnesses: vec![PrivateWitness {
+                address_openings: recovered.opening.into_iter().collect(),
+                ..init_witness(&keys)
+            }],
+            ..proving_input(TransactionEntry::Async(MessageWitness {
+                body,
+                rho: None,
+                membership_proof,
+                filler: DummyOutput::default(),
+            }))
+        },
+        &Simulation::default(),
+        &ProgramCatalog::default(),
+        |_| SenderPresentation::Canonical,
+        |_, _| false,
+        no_seal,
+    )
+    .unwrap();
+    state
+        .transition_from_privacy_preserving_transaction(&private_tx(proven, vec![], &[]), 2, 0)
+        .unwrap();
+
+    assert!(
+        state
+            .get_proof_for_commitment(&Commitment::new(
+                &recovered.account_id(),
+                &Account {
+                    nonce: Nonce::default().private_account_nonce_increment(&keys.nsk()),
+                    ..Account::funded(PAID)
+                },
+            ))
+            .is_some()
+    );
+}
+
+#[test]
+fn a_clear_credit_to_an_unbound_alias_reverts_its_transaction_to_the_fee_fallback() {
+    let keys = test_private_account_keys_2();
+    let mut state = funded_state();
+    let tx = clear_credit(&state);
+
+    let (diff, charge) = ValidatedStateDiff::from_privacy_preserving_transaction_metered(
+        &tx,
+        &state,
+        1,
+        0,
+        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+    )
+    .unwrap();
+    assert_eq!(
+        charge.revert,
+        Some(
+            LeeError::UnboundAsyncDestination {
+                actor: Actor::native_balance(bob().address()),
+            }
+            .to_string()
+        )
+    );
+    state.apply_state_diff(diff).unwrap();
+
+    let alice_after = |balance| {
+        Commitment::new(
+            &alice(),
+            &Account {
+                nonce: Nonce::default().private_account_nonce_increment(&keys.nsk()),
+                ..Account::funded(balance)
+            },
+        )
+    };
+    assert!(publications(&state).is_empty());
+    assert!(
+        state
+            .get_proof_for_commitment(&alice_after(FUNDS - FEE))
+            .is_some()
+    );
+    assert!(
+        state
+            .get_proof_for_commitment(&alice_after(FUNDS - FEE - PAID))
+            .is_none()
+    );
+    assert_eq!(
+        state.get_account_by_id(INBOX).data.native_balance(),
+        Ok(FEE)
+    );
 }

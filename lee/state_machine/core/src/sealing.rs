@@ -359,4 +359,43 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn each_async_message_is_published_as_its_mode_selects() {
+        let [recipient, ..] = recipients();
+        let anywhere = body(AccountId::new([12; 32]));
+        let to_recipient = body(recipient.address());
+        let seal = RecipientEncryption {
+            recipient,
+            esk: ESK,
+        };
+
+        let [
+            StoredPublication::Clear(clear),
+            StoredPublication::Sealed(sealed),
+        ] = <[_; 2]>::try_from(
+            publish_messages(
+                vec![anywhere.clone(), to_recipient.clone()],
+                vec![PublicationMode::Clear, PublicationMode::Sealed(seal)],
+                None,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        else {
+            panic!("each publication follows its mode, in order");
+        };
+        assert_eq!(clear, anywhere);
+        assert_eq!(
+            sealed.open(NPK, &D, &Z).map(|(body, ..)| body),
+            Some(to_recipient)
+        );
+
+        assert_eq!(
+            publish_messages(Vec::new(), vec![PublicationMode::Clear], None)
+                .unwrap_err()
+                .to_string(),
+            InvalidMessageSeal::Unpaired.to_string()
+        );
+    }
 }
