@@ -1562,4 +1562,38 @@ mod tests {
 
         assert_eq!(lee_core::SealedMessage::from(restored), sealed);
     }
+
+    #[test]
+    fn a_stored_publication_of_either_kind_round_trips_through_the_mirror() {
+        let actor = |tag| {
+            lee_core::account::Actor::new(
+                lee_core::account::AccountId::new([tag; 32]),
+                lee_core::account::AccountId::new([tag.wrapping_add(1); 32]),
+            )
+        };
+        let clear =
+            lee_core::program::StoredPublication::Clear(lee_core::program::MessageEnvelope {
+                from: actor(0),
+                to: actor(2),
+                message: vec![4],
+            });
+        let sealed = lee_core::program::StoredPublication::Sealed(lee_core::SealedMessage {
+            commitment: lee_core::Commitment::from_byte_array([5; 32]),
+            note: lee_core::EncryptedNote {
+                epk: lee_core::EphemeralPublicKey(vec![6; 2]),
+                ciphertext: lee_core::encryption::Ciphertext::from_inner(vec![7; 3]),
+            },
+        });
+
+        for publication in [clear, sealed] {
+            let mirrored = StoredPublication::from(publication.clone());
+            let json = serde_json::to_string(&mirrored).unwrap();
+            let restored: StoredPublication = serde_json::from_str(&json).unwrap();
+
+            assert_eq!(
+                lee_core::program::StoredPublication::from(restored),
+                publication
+            );
+        }
+    }
 }

@@ -969,6 +969,26 @@ mod tests {
     }
 
     #[test]
+    fn a_stored_publication_of_either_kind_roundtrips_over_the_ffi() {
+        let clear = StoredPublication::Clear(MessageEnvelope {
+            from: actor(1, 2),
+            to: actor(3, 4),
+            message: vec![5],
+        });
+        let sealed = StoredPublication::Sealed(SealedMessage {
+            commitment: Commitment::from_byte_array([6; 32]),
+            note: note(7, 8),
+        });
+
+        for publication in [clear, sealed] {
+            assert_eq!(
+                roundtrip::<FfiStoredPublication, _>(publication.clone()),
+                publication
+            );
+        }
+    }
+
+    #[test]
     fn each_shared_component_roundtrips_over_the_ffi() {
         let public_context = PublicExecutionContext {
             actors: BTreeSet::from([actor(1, 2), actor(3, 4)]),
