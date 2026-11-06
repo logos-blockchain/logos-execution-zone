@@ -1,3 +1,8 @@
+#![expect(
+    clippy::arithmetic_side_effects,
+    reason = "We don't care about these in tests"
+)]
+
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
@@ -57,15 +62,15 @@ async fn successful_transfer_to_existing_account() -> Result<()> {
         anyhow::bail!("Expected TransactionExecuted return value");
     };
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    log::info!("Checking correct balance move");
+    tracing::info!("Checking correct balance move");
     let acc_1_balance = account_balance(&ctx, sender).await?;
     let acc_2_balance = account_balance(&ctx, receiver).await?;
 
-    log::info!("Balance of sender: {acc_1_balance:#?}");
-    log::info!("Balance of receiver: {acc_2_balance:#?}");
+    tracing::info!(?acc_1_balance, "Balance of sender");
+    tracing::info!(?acc_2_balance, "Balance of receiver");
 
     assert_eq!(acc_2_balance, receiver_before + 100);
     assert_sender_paid_fee(sender_before, acc_1_balance, 100);
@@ -117,12 +122,12 @@ pub async fn successful_transfer_to_new_account() -> Result<()> {
     )
     .await?;
 
-    log::info!("Checking correct balance move");
+    tracing::info!("Checking correct balance move");
     let acc_1_balance = account_balance(&ctx, sender).await?;
     let acc_2_balance = account_balance(&ctx, new_persistent_account_id).await?;
 
-    log::info!("Balance of sender: {acc_1_balance:#?}");
-    log::info!("Balance of receiver: {acc_2_balance:#?}");
+    tracing::info!(?acc_1_balance, "Balance of sender");
+    tracing::info!(?acc_2_balance, "Balance of receiver");
 
     assert_eq!(acc_2_balance, 100);
     assert_sender_paid_fee(sender_before, acc_1_balance, 100);
@@ -197,7 +202,7 @@ async fn transfer_beyond_balance_is_refused_client_side() -> Result<()> {
         "an over-balance transfer must be refused client-side, got: {refused:?}",
     );
 
-    log::info!("Checking nothing was submitted: no move, no charge, no nonce burn");
+    tracing::info!("Checking nothing was submitted: no move, no charge, no nonce burn");
     let sender_after = account_balance(&ctx, sender).await?;
     let receiver_after = account_balance(&ctx, receiver).await?;
     let sender_nonce_after = get_account(&ctx, sender).await?.nonce.0;
@@ -233,21 +238,21 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
     )
     .await?;
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    log::info!("Checking correct balance move after first transfer");
+    tracing::info!("Checking correct balance move after first transfer");
     let acc_1_balance = account_balance(&ctx, sender).await?;
     let acc_2_balance = account_balance(&ctx, receiver).await?;
 
-    log::info!("Balance of sender: {acc_1_balance:#?}");
-    log::info!("Balance of receiver: {acc_2_balance:#?}");
+    tracing::info!(?acc_1_balance, "Balance of sender");
+    tracing::info!(?acc_2_balance, "Balance of receiver");
 
     assert_eq!(acc_2_balance, receiver_before + 100);
     assert_sender_paid_fee(sender_before, acc_1_balance, 100);
     let sender_after_first = acc_1_balance;
 
-    log::info!("First TX Success!");
+    tracing::info!("First TX Success!");
 
     // Second transfer
     send(
@@ -258,20 +263,20 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
     )
     .await?;
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    log::info!("Checking correct balance move after second transfer");
+    tracing::info!("Checking correct balance move after second transfer");
     let acc_1_balance = account_balance(&ctx, sender).await?;
     let acc_2_balance = account_balance(&ctx, receiver).await?;
 
-    log::info!("Balance of sender: {acc_1_balance:#?}");
-    log::info!("Balance of receiver: {acc_2_balance:#?}");
+    tracing::info!(?acc_1_balance, "Balance of sender");
+    tracing::info!(?acc_2_balance, "Balance of receiver");
 
     assert_eq!(acc_2_balance, receiver_before + 200);
     assert_sender_paid_fee(sender_after_first, acc_1_balance, 100);
 
-    log::info!("Second TX Success!");
+    tracing::info!("Second TX Success!");
 
     Ok(())
 }
@@ -306,7 +311,7 @@ async fn fresh_account_cannot_pay_for_its_own_transaction() -> Result<()> {
         "expected a PayerCannotFund rejection, got: {err}",
     );
 
-    log::info!("Checking the account was never touched");
+    tracing::info!("Checking the account was never touched");
     assert!(
         ctx.sequencer_client()
             .get_account(account_id)
@@ -342,17 +347,17 @@ async fn successful_transfer_using_from_label() -> Result<()> {
     )
     .await?;
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    log::info!("Checking correct balance move");
+    tracing::info!("Checking correct balance move");
     let acc_1_balance = account_balance(&ctx, sender).await?;
     let acc_2_balance = account_balance(&ctx, receiver).await?;
 
     assert_eq!(acc_2_balance, receiver_before + 100);
     assert_sender_paid_fee(sender_before, acc_1_balance, 100);
 
-    log::info!("Successfully transferred using from_label");
+    tracing::info!("Successfully transferred using from_label");
 
     Ok(())
 }
@@ -382,17 +387,17 @@ async fn successful_transfer_using_to_label() -> Result<()> {
     )
     .await?;
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    log::info!("Checking correct balance move");
+    tracing::info!("Checking correct balance move");
     let acc_1_balance = account_balance(&ctx, sender).await?;
     let acc_2_balance = account_balance(&ctx, receiver).await?;
 
     assert_eq!(acc_2_balance, receiver_before + 100);
     assert_sender_paid_fee(sender_before, acc_1_balance, 100);
 
-    log::info!("Successfully transferred using to_label");
+    tracing::info!("Successfully transferred using to_label");
 
     Ok(())
 }

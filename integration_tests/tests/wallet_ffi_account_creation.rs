@@ -30,7 +30,7 @@ fn wallet_ffi_create_public_accounts() -> Result<()> {
         sequencer_home,
     } = sequencer_ffi_helpers::joining_setup(false)?;
 
-    log::info!("Joining sequencer home: {sequencer_home:?}");
+    tracing::info!(?sequencer_home, "Joining sequencer home");
 
     let n_accounts = 10;
 
@@ -89,7 +89,7 @@ fn wallet_ffi_create_private_accounts() -> Result<()> {
         sequencer_home,
     } = sequencer_ffi_helpers::joining_setup(false)?;
 
-    log::info!("Joining sequencer home: {sequencer_home:?}");
+    tracing::info!(?sequencer_home, "Joining sequencer home");
 
     let n_accounts = 10;
     // Create `n_accounts` receiving keys with wallet FFI
@@ -138,7 +138,7 @@ fn test_wallet_ffi_list_accounts() -> Result<()> {
         sequencer_home,
     } = sequencer_ffi_helpers::joining_setup(false)?;
 
-    log::info!("Joining sequencer home: {sequencer_home:?}");
+    tracing::info!(?sequencer_home, "Joining sequencer home");
 
     // Create the wallet FFI and track which account IDs were created as public/private
     let (wallet_ffi_handle, created_public_ids) = unsafe {

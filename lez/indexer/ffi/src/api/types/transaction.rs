@@ -408,7 +408,7 @@ pub unsafe extern "C" fn free_ffi_transaction(val: FfiTransaction) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_ffi_transaction_opt(val: *mut FfiOption<FfiTransaction>) {
     if val.is_null() {
-        log::error!("Trying to free a null pointer. Exiting");
+        tracing::error!("Trying to free a null pointer. Exiting");
         return;
     }
     // Reclaim the outer box, then the inner transaction box (if any).
@@ -458,7 +458,7 @@ pub(crate) fn free_transaction_vec_value(val: FfiVec<FfiTransaction>) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_ffi_transaction_vec(val: *mut FfiVec<FfiTransaction>) {
     if val.is_null() {
-        log::error!("Trying to free a null pointer. Exiting");
+        tracing::error!("Trying to free a null pointer. Exiting");
         return;
     }
     // Reclaim the outer box, then the backing buffer and each transaction.

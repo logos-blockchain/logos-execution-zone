@@ -30,12 +30,11 @@ sequencer_service_metrics = { workspace = true, features = ["record"] }
 clap = { workspace = true, features = ["derive", "env"] }
 anyhow.workspace = true
 axum.workspace = true
-env_logger.workspace = true
 kameo = { workspace = true, features = ["metrics"] }
 kameo_actors.workspace = true
 hex.workspace = true
 libp2p.workspace = true
-log.workspace = true
+logging.workspace = true
 metrics-exporter-prometheus.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

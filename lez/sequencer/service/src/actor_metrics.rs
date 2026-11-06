@@ -4,21 +4,13 @@
 
 use std::{fmt, time::Instant};
 
-use anyhow::{Context as _, Result};
 use sequencer_service_metrics::names::ActorState;
 use tracing::{
     Event, Level, Subscriber,
     field::{Field, Visit},
     span,
 };
-use tracing_subscriber::{
-    Layer,
-    filter::Targets,
-    layer::{Context, SubscriberExt as _},
-    registry::LookupSpan,
-};
-
-use crate::log_forwarder::LogForwarder;
+use tracing_subscriber::{Layer, filter::Targets, layer::Context, registry::LookupSpan};
 
 /// Kameo's span around one message's handler.
 const HANDLE_MESSAGE_SPAN: &str = "actor.handle_message";
@@ -133,20 +125,9 @@ impl Visit for Fields {
     }
 }
 
-/// Installs [`ActorMetrics`] as the global tracing subscriber, next to a
-/// [`LogForwarder`] that keeps tracing events in the logs.
-///
-/// Call it once the `log` logger is set: the forwarder asks it which events to
-/// take.
-pub fn install() -> Result<()> {
-    tracing::subscriber::set_global_default(subscriber())
-        .context("Failed to install the actor metrics tracing subscriber")
-}
-
-fn subscriber() -> impl Subscriber + Send + Sync {
-    tracing_subscriber::registry()
-        .with(ActorMetrics.with_filter(Targets::new().with_target("kameo", Level::TRACE)))
-        .with(LogForwarder::filtered())
+/// [`ActorMetrics`], taking every kameo span and event whatever the log level.
+pub fn layer<S: Subscriber + for<'lookup> LookupSpan<'lookup>>() -> impl Layer<S> {
+    ActorMetrics.with_filter(Targets::new().with_target("kameo", Level::TRACE))
 }
 
 /// The state an actor stopped for `reason`, kameo's `ActorStopReason` in its
@@ -165,7 +146,7 @@ fn state_after(reason: &str) -> ActorState {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Mutex, time::Duration};
+    use std::time::Duration;
 
     use kameo::{
         actor::Spawn as _,
@@ -176,6 +157,7 @@ mod tests {
         ACTOR_MESSAGE_HANDLING_TIME, ACTOR_NAME_LABEL, ACTOR_START_TIME, ACTOR_STATE,
         MESSAGE_NAME_LABEL,
     };
+    use tracing_subscriber::layer::SubscriberExt as _;
 
     use super::*;
 
@@ -205,6 +187,10 @@ mod tests {
 
     #[derive(kameo::Actor)]
     struct Supervisor;
+
+    fn subscriber() -> impl Subscriber + Send + Sync {
+        tracing_subscriber::registry().with(layer())
+    }
 
     fn recorder() -> PrometheusRecorder {
         crate::prometheus_builder("test".to_owned())
@@ -320,41 +306,5 @@ mod tests {
         ] {
             assert_eq!(state_after(reason), state, "{reason}");
         }
-    }
-
-    /// The installed subscriber must not swallow the log lines `tracing`
-    /// hands the `log` logger while none is installed, nor change them.
-    #[test]
-    fn tracing_events_still_reach_the_log_logger() {
-        static LOGGED: Mutex<Vec<String>> = Mutex::new(Vec::new());
-
-        struct Capture;
-
-        impl log::Log for Capture {
-            fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
-                metadata.level() <= log::Level::Info
-            }
-
-            fn log(&self, record: &log::Record<'_>) {
-                LOGGED
-                    .lock()
-                    .unwrap()
-                    .push(format!("{} {}", record.target(), record.args()));
-            }
-
-            fn flush(&self) {}
-        }
-
-        log::set_logger(&Capture).unwrap();
-        log::set_max_level(log::LevelFilter::Trace);
-        tracing::subscriber::with_default(subscriber(), || {
-            tracing::info!(target: "libp2p_swarm", peer = 3, addr = "/ip4/10.0.0.1", "dialing");
-            tracing::debug!(target: "libp2p_swarm", "below the logger's level");
-        });
-
-        assert_eq!(
-            *LOGGED.lock().unwrap(),
-            [r#"libp2p_swarm dialing peer=3 addr="/ip4/10.0.0.1""#]
-        );
     }
 }

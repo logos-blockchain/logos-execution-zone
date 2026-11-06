@@ -126,7 +126,7 @@ async fn wait_until_tip(bedrock_ref: &ActorRef<BedrockActor>, msg: MsgId) -> Res
     reason = "the inscription ids on stdout are this binary's output"
 )]
 async fn main() -> Result<()> {
-    env_logger::init();
+    logging::init();
     let Args {
         home,
         payload,

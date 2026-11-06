@@ -21,7 +21,7 @@ async fn main() {
         indexer_rpc_url: url::Url,
     }
 
-    env_logger::init();
+    logging::init();
 
     let args = Args::parse();
 

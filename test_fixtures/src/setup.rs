@@ -10,13 +10,13 @@ use std::{
 use anyhow::{Context as _, Result, bail};
 use indexer_service::{ChannelId, IndexerHandle};
 use lee::{AccountId, PrivateKey, PublicKey};
-use log::{debug, warn};
 use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
 use sequencer_service::{GenesisAction, SequencerConfig, SequencerHandle};
 use sequencer_service_rpc::{SequencerClient, SequencerClientBuilder};
 use sequencer_storage_actor::{StorageActor, protocol::DbDump};
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
+use tracing::{debug, warn};
 use wallet::{
     WalletCore,
     cli::{Command, programs::native_token_transfer::AuthTransferSubcommand},
@@ -160,7 +160,7 @@ impl SequencerSetup {
             joining,
         } = self;
 
-        debug!("Using sequencer home at {}", home.display());
+        debug!(home = %home.display(), "Using sequencer home");
 
         let channel_signing_key = channel_signing_key.or_else(|| {
             genesis_transactions
@@ -471,7 +471,10 @@ pub async fn setup_bedrock_node_with_settings(
             }
             Err(err) => {
                 warn!(
-                    "Failed to bring up Bedrock services: {err:?}, attempt {attempt}/{max_attempts}"
+                    error = ?err,
+                    attempt,
+                    max_attempts,
+                    "Failed to bring up Bedrock services"
                 );
             }
         }
@@ -512,7 +515,7 @@ pub async fn setup_indexer_at(
 ) -> Result<IndexerHandle> {
     std::fs::create_dir_all(home).context("Failed to create indexer home")?;
 
-    debug!("Using indexer home at {}", home.display());
+    debug!(home = %home.display(), "Using indexer home");
 
     let indexer_config = config::indexer_config(bedrock_addr, channel_id, cross_zone)
         .context("Failed to create Indexer config")?;

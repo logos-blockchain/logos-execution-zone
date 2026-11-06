@@ -7,9 +7,9 @@ use chain_state::{Anchor, ChainConsistency, zone_indexer::ZoneIndexer};
 use common::block::Block;
 // TODO: Remove after testnet
 use futures::StreamExt as _;
-use log::{error, warn};
 use logos_blockchain_zone_sdk::{CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient};
 use retry::ApplyRetryGate;
+use tracing::{error, info, warn};
 
 use crate::{
     block_store::IndexerStore,
@@ -86,9 +86,9 @@ impl IndexerCore {
             ChainConsistency::Consistent | ChainConsistency::Inconclusive => Ok(core),
             ChainConsistency::Inconsistent(mismatch) if config.allow_chain_reset => {
                 warn!(
-                    "Chain reset detected ({mismatch}). Wiping indexer store at {} and \
-                     re-indexing.",
-                    home.display()
+                    %mismatch,
+                    home = %home.display(),
+                    "Chain reset detected. Wiping indexer store and re-indexing."
                 );
                 drop(core); // sole owner before the ingest task is spawned → closes the DB
                 storage::indexer::RocksDBIO::destroy(&home)?;
@@ -133,7 +133,10 @@ impl IndexerCore {
             Ok(Some(halt)) => IndexerSyncStatus::halted(halt.to_string()),
             Ok(None) => IndexerSyncStatus::starting(),
             Err(err) => {
-                warn!("Failed to read cross-zone halt record at startup: {err:#}");
+                warn!(
+                    error = format_args!("{err:#}"),
+                    "Failed to read cross-zone halt record at startup"
+                );
                 IndexerSyncStatus::starting()
             }
         };
@@ -207,21 +210,30 @@ impl IndexerCore {
         let indexed_block_id = match self.store.get_last_block_id() {
             Ok(id) => id,
             Err(err) => {
-                warn!("Failed to read last indexed block id for status: {err:#}");
+                warn!(
+                    error = format_args!("{err:#}"),
+                    "Failed to read last indexed block id for status"
+                );
                 None
             }
         };
         let stall_reason = match self.store.get_stall_reason() {
             Ok(reason) => reason,
             Err(err) => {
-                warn!("Failed to read stall reason for status: {err:#}");
+                warn!(
+                    error = format_args!("{err:#}"),
+                    "Failed to read stall reason for status"
+                );
                 None
             }
         };
         let cross_zone_halt = match self.store.get_cross_zone_halt() {
             Ok(halt) => halt,
             Err(err) => {
-                warn!("Failed to read cross-zone halt record for status: {err:#}");
+                warn!(
+                    error = format_args!("{err:#}"),
+                    "Failed to read cross-zone halt record for status"
+                );
                 None
             }
         };
@@ -249,7 +261,10 @@ impl IndexerCore {
     fn advance_cursor(&self, cursor: &mut Option<Slot>, slot: Slot) {
         *cursor = Some(slot);
         if let Err(err) = self.store.set_zone_cursor(&slot) {
-            warn!("Failed to persist indexer cursor: {err:#}");
+            warn!(
+                error = format_args!("{err:#}"),
+                "Failed to persist indexer cursor"
+            );
         }
     }
 
@@ -267,12 +282,17 @@ impl IndexerCore {
         }
         if halt.block_hash != block.header.hash {
             warn!(
-                "Cross-zone halt record is stale: block {} applied with hash {}, not the recorded {}. Clearing it.",
-                block.header.block_id, block.header.hash, halt.block_hash
+                block_id = block.header.block_id,
+                block_hash = %block.header.hash,
+                recorded_hash = %halt.block_hash,
+                "Cross-zone halt record is stale: the block applied with another hash. Clearing it."
             );
         }
         if let Err(err) = self.store.set_cross_zone_halt(&None) {
-            warn!("Failed to clear cross-zone halt record: {err:#}");
+            warn!(
+                error = format_args!("{err:#}"),
+                "Failed to clear cross-zone halt record"
+            );
             return;
         }
         *pending_halt = None;
@@ -291,8 +311,10 @@ impl IndexerCore {
             return None;
         }
         error!(
-            "Accepting block {} without cross-zone verification: hash {} is listed in cross_zone_accept_unverified.",
-            block.header.block_id, block.header.hash
+            block_id = block.header.block_id,
+            block_hash = %block.header.hash,
+            "Accepting block without cross-zone verification: its hash is listed in \
+             cross_zone_accept_unverified"
         );
         Some(self.verifier.as_ref().map_or_else(
             || CrossZoneVerifier::unverified_dispatch_keys(block),
@@ -309,8 +331,9 @@ impl IndexerCore {
         pending_halt: &mut Option<CrossZoneHalt>,
     ) {
         error!(
-            "Cross-zone verification failed for block {}: {forged}. Halting indexer ingestion.",
-            block.header.block_id
+            block_id = block.header.block_id,
+            reason = %forged,
+            "Cross-zone verification failed. Halting indexer ingestion."
         );
         let halt = CrossZoneHalt {
             block_id: block.header.block_id,
@@ -321,7 +344,10 @@ impl IndexerCore {
             verdict: forged.verdict.clone(),
         };
         if let Err(err) = self.store.set_cross_zone_halt(&Some(halt.clone())) {
-            error!("Failed to persist cross-zone halt record: {err:#}");
+            error!(
+                error = format_args!("{err:#}"),
+                "Failed to persist cross-zone halt record"
+            );
         }
         self.set_status(IndexerSyncStatus::halted(halt.to_string()));
         *pending_halt = Some(halt);
@@ -337,12 +363,15 @@ impl IndexerCore {
 
         // use `:#` to get the entire error chain
         let reason = format!("{error:#}");
-        error!("Failed to deserialize L2 block from zone-sdk: {reason}");
+        error!(%reason, "Failed to deserialize L2 block from zone-sdk");
         if let Err(err) =
             self.store
                 .record_stall(None, slot, BlockIngestError::Deserialize(reason.clone()))
         {
-            error!("Failed to record stall reason: {err:#}");
+            error!(
+                error = format_args!("{err:#}"),
+                "Failed to record stall reason"
+            );
             self.set_status(IndexerSyncStatus::error(format!("store error: {err:#}")));
             return false;
         }
@@ -367,22 +396,22 @@ impl IndexerCore {
             let mut pending_halt = match self.store.get_cross_zone_halt() {
                 Ok(halt) => halt,
                 Err(err) => {
-                    warn!("Failed to read cross-zone halt record: {err:#}");
+                    warn!(error = format_args!("{err:#}"), "Failed to read cross-zone halt record");
                     None
                 }
             };
 
             if let Some(slot) = &cursor {
-                log::info!("Resuming indexer from cursor {slot:?}");
+                info!(slot = slot.into_inner(), "Resuming indexer from cursor");
             } else {
-                log::info!("Starting indexer from beginning of channel");
+                info!("Starting indexer from beginning of channel");
             }
 
             loop {
                 let stream = match self.zone_indexer.next_messages(cursor).await {
                     Ok(s) => s,
                     Err(err) => {
-                        error!("Failed to start zone-sdk next_messages stream: {err}");
+                        error!(error = %err, "Failed to start zone-sdk next_messages stream");
                         self.set_status(IndexerSyncStatus::error(format!(
                             "cannot reach L1 / read channel: {err}"
                         )));
@@ -405,7 +434,7 @@ impl IndexerCore {
                     let (msg, slot) = match item {
                         Ok(message) => message,
                         Err(err) => {
-                            error!("Channel read failed, holding the cursor: {err}");
+                            error!(error = %err, "Channel read failed, holding the cursor");
                             self.set_status(IndexerSyncStatus::error(format!(
                                 "cannot read channel: {err}"
                             )));
@@ -460,8 +489,10 @@ impl IndexerCore {
                                 // Not judged either way yet, so retry rather than halt.
                                 Err(err @ CrossZoneVerifyError::PeerUnavailable { .. }) => {
                                     error!(
-                                        "Cross-zone verification of block {} stalled: {err}. Holding the cursor and retrying.",
-                                        block.header.block_id
+                                        block_id = block.header.block_id,
+                                        error = %err,
+                                        "Cross-zone verification stalled. Holding the cursor and \
+                                         retrying."
                                     );
                                     self.set_status(IndexerSyncStatus::error(format!(
                                         "cross-zone peer unavailable: {err}"
@@ -485,20 +516,25 @@ impl IndexerCore {
                             // never reaches the chain state.
                             self.clear_halt_for_block(&block, &mut pending_halt);
                             retry_gate.reset();
-                            log::info!("Indexed L2 block {} at channel {}", block.header.block_id, self.config.channel_id);
+                            info!(
+                                block_id = block.header.block_id,
+                                channel_id = %self.config.channel_id,
+                                "Indexed L2 block"
+                            );
                             self.set_status(IndexerSyncStatus::syncing());
                             yield Ok(block);
                         }
                         Ok(AcceptOutcome::AlreadyApplied) => {
-                            log::info!(
-                                "Skipping already-applied block {}",
-                                block.header.block_id
+                            info!(
+                                block_id = block.header.block_id,
+                                "Skipping already-applied block"
                             );
                         }
                         Ok(AcceptOutcome::Parked(ingest_err)) => {
                             error!(
-                                "Parked at block {}: {ingest_err}",
-                                block.header.block_id
+                                block_id = block.header.block_id,
+                                error = %ingest_err,
+                                "Parked at block"
                             );
                             self.set_status(IndexerSyncStatus::stalled(ingest_err.to_string()));
                             // L1 proceeds regardless
@@ -507,8 +543,10 @@ impl IndexerCore {
                             let attempts = retry_gate.register_failure(block.header.block_id);
                             if attempts >= APPLY_RETRY_LIMIT {
                                 error!(
-                                    "Parked at block {} after {attempts} failed apply attempts: {ingest_err}",
-                                    block.header.block_id
+                                    block_id = block.header.block_id,
+                                    attempts,
+                                    error = %ingest_err,
+                                    "Parked at block after failed apply attempts"
                                 );
                                 // The stall must be durable before the cursor moves.
                                 if let Err(err) = self.store.record_stall(
@@ -517,8 +555,9 @@ impl IndexerCore {
                                     ingest_err.clone(),
                                 ) {
                                     error!(
-                                        "Failed to record stall reason for block {}: {err:#}",
-                                        block.header.block_id
+                                        block_id = block.header.block_id,
+                                        error = format_args!("{err:#}"),
+                                        "Failed to record stall reason"
                                     );
                                     self.set_status(IndexerSyncStatus::error(format!(
                                         "store error: {err:#}"
@@ -530,8 +569,11 @@ impl IndexerCore {
                                 retry_gate.reset();
                             } else {
                                 error!(
-                                    "Failed to apply block {} (attempt {attempts}/{APPLY_RETRY_LIMIT}), will retry: {ingest_err}",
-                                    block.header.block_id
+                                    block_id = block.header.block_id,
+                                    attempt = attempts,
+                                    max_attempts = APPLY_RETRY_LIMIT,
+                                    error = %ingest_err,
+                                    "Failed to apply block, will retry"
                                 );
                                 self.set_status(IndexerSyncStatus::error(format!(
                                     "apply failed, retrying: {ingest_err}"
@@ -544,8 +586,9 @@ impl IndexerCore {
                             // Infrastructure error (DB read/write), not a bad block.
                             // will re-poll from the same cursor next cycle.
                             error!(
-                                "Store error applying block {}: {err:#}",
-                                block.header.block_id
+                                block_id = block.header.block_id,
+                                error = format_args!("{err:#}"),
+                                "Store error applying block"
                             );
                             self.set_status(IndexerSyncStatus::error(format!(
                                 "store error: {err:#}"
@@ -575,7 +618,10 @@ impl IndexerCore {
                     Ok(None) => self.set_status(IndexerSyncStatus::caught_up()),
                     Ok(Some(_)) => {}
                     Err(err) => {
-                        warn!("Failed to read stall reason after draining stream; not marking caught up: {err:#}");
+                        warn!(
+                error = format_args!("{err:#}"),
+                "Failed to read stall reason after draining stream, not marking caught up"
+            );
                     }
                 }
                 tokio::time::sleep(poll_interval).await;

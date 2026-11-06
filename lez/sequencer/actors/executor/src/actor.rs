@@ -17,7 +17,6 @@ use lee_core::{
     account::{Actor, Balance, Nonce},
     program::Publication,
 };
-use log::{debug, warn};
 use mempool::MemPoolHandle;
 use sequencer_actors_common::EraseMessage as _;
 use sequencer_bedrock_actor::BedrockActorTrait;
@@ -29,6 +28,7 @@ use sequencer_core::{
 };
 use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActorTrait;
+use tracing::{debug, warn};
 
 use crate::{
     ExecutorActorTrait, Result,
@@ -207,14 +207,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
                 if std::mem::take(&mut self.failed_attempts) != 0 {
                     sequencer_executor_actor_metrics::record_production_failed_attempts(0);
                 }
-                log::info!(
-                    "Block with id {id} created by {}",
-                    self.sequencer.channel_signing_public_key_hex()
+                tracing::info!(
+                    block_id = id,
+                    producer = %self.sequencer.channel_signing_public_key_hex(),
+                    "Block created"
                 );
             }
             Err(err) if err.is::<sequencer_core::ChannelMovedWhileBuilding>() => {
                 // Skipping turn until next time hoping to catch up all missed updates
-                warn!("Skipping turn: {err}");
+                warn!(error = %err, "Skipping turn");
             }
             Err(err) => {
                 self.failed_attempts = self.failed_attempts.saturating_add(1);
@@ -222,8 +223,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
                     self.failed_attempts,
                 );
                 warn!(
-                    "Skipping turn: block production failed ({} in a row): {err:#}",
-                    self.failed_attempts
+                    failed_attempts = self.failed_attempts,
+                    error = format_args!("{err:#}"),
+                    "Skipping turn: block production failed"
                 );
             }
         }

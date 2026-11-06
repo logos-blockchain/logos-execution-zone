@@ -5,9 +5,9 @@ use anyhow::Result;
 use common::{HashType, block::Block};
 use futures::StreamExt as _;
 use lee_core::BlockId;
-use log::warn;
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{Slot, ZoneMessage, adapter};
+use tracing::warn;
 
 use crate::zone_indexer::ZoneIndexer;
 
@@ -262,7 +262,10 @@ where
     let mut check = AnchorConsistencyCheck::new(anchor.clone());
     match node.channel_state(channel_id).await {
         Ok(state) => check.check_frontier(state.map(|s| s.tip_slot)),
-        Err(err) => warn!("Failed to read channel state for the consistency check: {err:#}"),
+        Err(err) => warn!(
+            error = format_args!("{err:#}"),
+            "Failed to read channel state for the consistency check"
+        ),
     }
     if check.verdict().is_some() {
         return Ok(check.finish());
@@ -292,11 +295,14 @@ where
     match tokio::time::timeout(CHANNEL_READ_TIMEOUT, scan).await {
         Ok(Ok(())) => Ok(check.finish()),
         Ok(Err(err)) => {
-            warn!("Failed to read the anchor slot for the consistency check; proceeding: {err:#}");
+            warn!(
+                error = format_args!("{err:#}"),
+                "Failed to read the anchor slot for the consistency check, proceeding"
+            );
             Ok(ChainConsistency::Inconclusive)
         }
         Err(_elapsed) => {
-            warn!("Timed out reading the anchor slot for the consistency check; proceeding");
+            warn!("Timed out reading the anchor slot for the consistency check, proceeding");
             Ok(ChainConsistency::Inconclusive)
         }
     }

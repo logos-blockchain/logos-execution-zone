@@ -3,10 +3,10 @@
 //! Kept apart from the logic so the callers stay one line each.
 
 use chain_state::ChannelEntry;
-use log::{info, warn};
 use sequencer_bedrock_actor::protocol::{MsgId, ViewChange};
+use tracing::{info, warn};
 
-/// `lo..=hi (n)` for a log line, flagged when the ids do not fill that range.
+/// `lo..=hi (n)` for a log field, flagged when the ids do not fill that range.
 pub(crate) fn id_span(ids: &[u64]) -> String {
     match (ids.iter().min(), ids.iter().max()) {
         (Some(lo), Some(hi)) => {
@@ -35,16 +35,20 @@ pub(crate) fn log_update(view: &ViewChange, finalized: &[ChannelEntry], head: Op
     let finalized = entry_ids(&mut finalized.iter());
     match view {
         ViewChange::Extension(adopted) => info!(
-            "Channel update: adopted {}, finalized {finalized}, head {head:?}",
-            entry_ids(&mut adopted.iter()),
+            adopted = %entry_ids(&mut adopted.iter()),
+            %finalized,
+            head,
+            "Channel update"
         ),
         ViewChange::Conflict {
             canonical,
             orphaned,
         } => info!(
-            "Channel conflict: orphaned {}, view now {}, finalized {finalized}, head {head:?}",
-            entry_ids(&mut orphaned.iter()),
-            entry_ids(&mut canonical.iter()),
+            orphaned = %entry_ids(&mut orphaned.iter()),
+            view = %entry_ids(&mut canonical.iter()),
+            %finalized,
+            head,
+            "Channel conflict"
         ),
     }
 }
@@ -53,6 +57,6 @@ pub(crate) fn log_rewind(before: Option<u64>, after: Option<u64>, pin: MsgId) {
     if let (Some(before), Some(after)) = (before, after)
         && after < before
     {
-        warn!("Head rewound from {before} to {after}, pin now {pin}");
+        warn!(before, after, %pin, "Head rewound");
     }
 }

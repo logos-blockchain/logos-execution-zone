@@ -36,7 +36,7 @@ fn test_wallet_ffi_get_balance_public() -> Result<()> {
         sequencer_home,
     } = sequencer_ffi_helpers::joining_setup(false)?;
 
-    log::info!("Joining sequencer home: {sequencer_home:?}");
+    tracing::info!(?sequencer_home, "Joining sequencer home");
 
     let account_id: AccountId = ctx.ctx().existing_public_accounts()[0];
     let home = tempfile::tempdir()?;
@@ -59,7 +59,7 @@ fn test_wallet_ffi_get_balance_public() -> Result<()> {
     };
     assert_eq!(balance, INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]);
 
-    log::info!("Successfully retrieved account balance");
+    tracing::info!("Successfully retrieved account balance");
 
     unsafe {
         wallet_ffi_destroy(wallet_ffi_handle);
@@ -83,7 +83,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
         sequencer_home,
     } = sequencer_ffi_helpers::joining_setup(false)?;
 
-    log::info!("Joining sequencer home: {sequencer_home:?}");
+    tracing::info!(?sequencer_home, "Joining sequencer home");
 
     let account_id: AccountId = ctx.ctx().existing_public_accounts()[0];
     let home = tempfile::tempdir()?;
@@ -215,7 +215,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 
-    log::info!("Successfully retrieved account with correct details");
+    tracing::info!("Successfully retrieved account with correct details");
 
     // SAFETY: sequencer_ffi created by FFI, it is valid.
     unsafe {
@@ -235,7 +235,7 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
         sequencer_home,
     } = sequencer_ffi_helpers::joining_setup(false)?;
 
-    log::info!("Joining sequencer home: {sequencer_home:?}");
+    tracing::info!(?sequencer_home, "Joining sequencer home");
 
     let account_id: AccountId = ctx.ctx().existing_private_accounts()[0];
     let home = tempfile::tempdir()?;
@@ -266,7 +266,7 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 
-    log::info!("Successfully retrieved account with correct details");
+    tracing::info!("Successfully retrieved account with correct details");
 
     // SAFETY: sequencer_ffi created by FFI, it is valid.
     unsafe {
@@ -286,7 +286,7 @@ fn test_wallet_ffi_get_public_account_keys() -> Result<()> {
         sequencer_home,
     } = sequencer_ffi_helpers::joining_setup(false)?;
 
-    log::info!("Joining sequencer home: {sequencer_home:?}");
+    tracing::info!(?sequencer_home, "Joining sequencer home");
 
     let account_id: AccountId = ctx.ctx().existing_public_accounts()[0];
     let home = tempfile::tempdir()?;
@@ -318,7 +318,7 @@ fn test_wallet_ffi_get_public_account_keys() -> Result<()> {
 
     assert_eq!(key, expected_key);
 
-    log::info!("Successfully retrieved account key");
+    tracing::info!("Successfully retrieved account key");
 
     unsafe {
         wallet_ffi_destroy(wallet_ffi_handle);
@@ -342,7 +342,7 @@ fn test_wallet_ffi_get_private_account_keys() -> Result<()> {
         sequencer_home,
     } = sequencer_ffi_helpers::joining_setup(false)?;
 
-    log::info!("Joining sequencer home: {sequencer_home:?}");
+    tracing::info!(?sequencer_home, "Joining sequencer home");
 
     let account_id: AccountId = ctx.ctx().existing_private_accounts()[0];
     let home = tempfile::tempdir()?;
@@ -382,7 +382,7 @@ fn test_wallet_ffi_get_private_account_keys() -> Result<()> {
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 
-    log::info!("Successfully retrieved account keys");
+    tracing::info!("Successfully retrieved account keys");
 
     // SAFETY: sequencer_ffi created by FFI, it is valid.
     unsafe {

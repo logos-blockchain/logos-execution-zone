@@ -21,7 +21,7 @@ use common::{
 };
 use cross_zone::{
     CommitteeFloorState, EmissionSource, FloorVerdict, Link, OffChain, StallState, alerts_at,
-    build_dispatch_from_emission, equivocation_report, extract_emission, link_to_tip,
+    build_dispatch_from_emission, extract_emission, link_to_tip, log_equivocation,
     screen_peer_block,
 };
 use cross_zone_inbox_core::{
@@ -29,13 +29,13 @@ use cross_zone_inbox_core::{
 };
 use futures::{Stream, StreamExt as _};
 use lee::GENESIS_BLOCK_ID;
-use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, Slot, ZoneMessage,
     adapter::{Node as _, NodeHttpClient},
 };
 use tokio::{sync::RwLock, time::Instant};
+use tracing::{Instrument as _, debug, error, info, warn};
 
 use crate::{
     config::IndexerConfig,
@@ -303,10 +303,11 @@ impl PeerBlocks {
             // Ahead of the run, or a first read that is not the peer's genesis.
             Link::OffChain(OffChain::NotTheGenesis { .. } | OffChain::SkipsAhead { .. }) => {
                 debug!(
-                    "Peer reader for {} not caching block {}: only block {} continues the run verified from that peer's genesis.",
-                    hex::encode(zone),
-                    block.header.block_id,
-                    chain.next_expected()
+                    peer_zone = %hex::encode(zone),
+                    block_id = block.header.block_id,
+                    next_expected = chain.next_expected(),
+                    "Peer reader not caching block: only the next expected one continues the run \
+                     verified from that peer's genesis"
                 );
                 false
             }
@@ -328,22 +329,15 @@ impl PeerBlocks {
                 match held_hash {
                     Some(held) if held == block.header.hash => false,
                     Some(held) => {
-                        error!(
-                            "{}",
-                            equivocation_report(
-                                &zone,
-                                block.header.block_id,
-                                held,
-                                block.header.hash
-                            )
-                        );
+                        log_equivocation(&zone, block.header.block_id, held, block.header.hash);
                         false
                     }
                     None => {
                         debug!(
-                            "Peer reader for {} not caching block {}: below the peer's genesis, on no chain the run can walk.",
-                            hex::encode(zone),
-                            block.header.block_id
+                            peer_zone = %hex::encode(zone),
+                            block_id = block.header.block_id,
+                            "Peer reader not caching block: below the peer's genesis, on no chain \
+                             the run can walk"
                         );
                         false
                     }
@@ -358,23 +352,21 @@ impl PeerBlocks {
                         return false;
                     }
                     if !continues_the_run {
-                        error!(
-                            "{}",
-                            equivocation_report(
-                                &zone,
-                                block.header.block_id,
-                                held.header.hash,
-                                block.header.hash
-                            )
+                        log_equivocation(
+                            &zone,
+                            block.header.block_id,
+                            held.header.hash,
+                            block.header.hash,
                         );
                         return false;
                     }
-                    log::info!(
-                        "Peer zone {} block {}: replacing held block {} with {}, which continues the verified run where the held one never could.",
-                        hex::encode(zone),
-                        block.header.block_id,
-                        held.header.hash,
-                        block.header.hash
+                    info!(
+                        peer_zone = %hex::encode(zone),
+                        block_id = block.header.block_id,
+                        held_hash = %held.header.hash,
+                        replacement_hash = %block.header.hash,
+                        "Replacing held peer block with one that continues the verified run where \
+                         the held one never could"
                     );
                 }
                 chain.blocks.insert(block.header.block_id, (block, read_at));
@@ -699,15 +691,22 @@ impl CrossZoneVerifier {
                 )),
             );
             watch.register(peer.channel_id);
-            tokio::spawn(read_peer(
-                ZoneIndexer::new(ChannelId::from(peer.channel_id), node),
-                tip_node,
-                peer.channel_id,
-                peer.min_committee_size,
-                peers.clone(),
-                watch.clone(),
-                config.consensus_info_polling_interval,
-            ));
+            let span = tracing::error_span!(
+                "cross_zone_peer_reader",
+                peer_zone = %hex::encode(peer.channel_id)
+            );
+            tokio::spawn(
+                read_peer(
+                    ZoneIndexer::new(ChannelId::from(peer.channel_id), node),
+                    tip_node,
+                    peer.channel_id,
+                    peer.min_committee_size,
+                    peers.clone(),
+                    watch.clone(),
+                    config.consensus_info_polling_interval,
+                )
+                .instrument(span),
+            );
         }
 
         Some(Self {
@@ -786,10 +785,10 @@ impl CrossZoneVerifier {
             let key = seen_key(&msg);
             if self.seen.read().await.contains(&key) {
                 debug!(
-                    "Skipping already-seen cross-zone dispatch from zone {} block {} tx {} (a replay the inbox refuses)",
-                    hex::encode(msg.src_zone),
-                    msg.src_block_id,
-                    msg.src_tx_index
+                    peer_zone = %hex::encode(msg.src_zone),
+                    peer_block_id = msg.src_block_id,
+                    peer_tx_index = msg.src_tx_index,
+                    "Skipping already-seen cross-zone dispatch, a replay the inbox refuses"
                 );
                 continue;
             }
@@ -799,11 +798,11 @@ impl CrossZoneVerifier {
                 return Err(forged(&msg, "re-derivation mismatch".to_owned()));
             }
 
-            log::info!(
-                "Verified cross-zone dispatch from zone {} block {} tx {}",
-                hex::encode(msg.src_zone),
-                msg.src_block_id,
-                msg.src_tx_index
+            info!(
+                peer_zone = %hex::encode(msg.src_zone),
+                peer_block_id = msg.src_block_id,
+                peer_tx_index = msg.src_tx_index,
+                "Verified cross-zone dispatch"
             );
             verified.push(key);
         }
@@ -955,9 +954,12 @@ impl CrossZoneVerifier {
                             refetch_failures = refetch_failures.saturating_add(1);
                             if alerts_at(refetch_failures) {
                                 error!(
-                                    "Refetch of evicted peer zone {} block {block_id} has failed {refetch_failures} consecutive attempts ({} refetches this process), latest: {err:#}. Retrying.",
-                                    hex::encode(zone),
-                                    self.refetch_attempts.load(Ordering::Relaxed)
+                                    peer_zone = %hex::encode(zone),
+                                    block_id,
+                                    consecutive_failures = refetch_failures,
+                                    total_refetches = self.refetch_attempts.load(Ordering::Relaxed),
+                                    error = format_args!("{err:#}"),
+                                    "Refetch of evicted peer block keeps failing, retrying"
                                 );
                             }
                         }
@@ -990,16 +992,16 @@ impl CrossZoneVerifier {
                 && !waited.is_zero()
                 && waited.as_secs().is_multiple_of(LAG_LOG_INTERVAL.as_secs())
             {
-                log::info!(
-                    "Waiting for peer zone {} to finalize block {} ({}s); {}",
-                    hex::encode(zone),
+                info!(
+                    peer_zone = %hex::encode(zone),
                     block_id,
-                    waited.as_secs(),
-                    if self.watch.is_suspended(zone) {
+                    waited_secs = waited.as_secs(),
+                    reason = if self.watch.is_suspended(zone) {
                         "reader suspended on the committee floor"
                     } else {
                         "reader is behind"
-                    }
+                    },
+                    "Waiting for peer zone to finalize block"
                 );
             }
             tokio::time::sleep(PEER_BLOCK_POLL_INTERVAL).await;
@@ -1033,10 +1035,7 @@ impl CrossZoneVerifier {
         // path never escalates to Forged.
         let stream = stop_at_read_error(
             stream,
-            format!(
-                "Refetch of peer zone {} block {block_id}",
-                hex::encode(zone)
-            ),
+            tracing::error_span!("peer_block_refetch", peer_zone = %hex::encode(zone), block_id),
         );
         refetched_block(stream, read_at, block_id, block_hash).await
     }
@@ -1141,14 +1140,11 @@ fn seen_key(msg: &CrossZoneMessage) -> SeenKey {
 /// says why each check exists.
 ///
 /// [`ScreenRefusal`]: cross_zone::ScreenRefusal
-fn accept_peer_block(block: &Block, peer_zone: ZoneId) -> bool {
+fn accept_peer_block(block: &Block) -> bool {
     match screen_peer_block(block) {
         Ok(_) => true,
         Err(refusal) => {
-            warn!(
-                "Peer reader dropping block from {}: {refusal}",
-                hex::encode(peer_zone)
-            );
+            warn!(reason = %refusal, "Peer reader dropping block");
             false
         }
     }
@@ -1169,10 +1165,7 @@ async fn read_peer(
     watch: PeerWatch,
     poll_interval: Duration,
 ) {
-    log::info!(
-        "Cross-zone peer reader started for {}",
-        hex::encode(peer_zone)
-    );
+    info!("Cross-zone peer reader started");
 
     let mut cursor = None;
     // In memory only: it says how loud to be about a slot this reader is stuck
@@ -1191,18 +1184,21 @@ async fn read_peer(
                     watch.report_suspended(peer_zone);
                     if passes == 1 || alerts_at(passes) {
                         error!(
-                            "Peer reader for {} suspended for {passes} passes: peer committee below the floor ({}, floor {min_committee_size}). No new blocks from that peer are verified or cached until its committee recovers; dispatches naming unverified blocks wait rather than escalate.",
-                            hex::encode(peer_zone),
-                            describe_committee(last_read)
+                            passes,
+                            committee = %describe_committee(last_read),
+                            min_committee_size,
+                            "Peer reader suspended: peer committee below the floor. No new blocks \
+                             from that peer are verified or cached until its committee recovers; \
+                             dispatches naming unverified blocks wait rather than escalate."
                         );
                     }
                     tokio::time::sleep(poll_interval).await;
                     continue;
                 }
                 FloorVerdict::Active { resumed: true } => {
-                    log::info!(
-                        "Peer reader for {} resumed: peer committee back at or above the floor of {min_committee_size}.",
-                        hex::encode(peer_zone)
+                    info!(
+                        min_committee_size,
+                        "Peer reader resumed: peer committee back at or above the floor"
                     );
                 }
                 FloorVerdict::Active { resumed: false } => {}
@@ -1210,18 +1206,18 @@ async fn read_peer(
         }
         match zone_indexer.next_messages(cursor).await {
             Ok(stream) => {
-                let stream = stop_at_read_error(
-                    stream,
-                    format!("Peer reader for {}", hex::encode(peer_zone)),
-                );
+                let stream = stop_at_read_error(stream, tracing::Span::current());
                 let pass = consume_peer_stream(stream, peer_zone, &peers, cursor).await;
                 cursor = pass.cursor;
                 if let Some((slot, attempts)) = stall.after_pass(pass.stalled_at, pass.cursor)
                     && alerts_at(attempts)
                 {
                     error!(
-                        "Peer reader for {} has been stuck at slot {slot:?} for {attempts} passes. The run verified from that peer's genesis stops below it, so every dispatch naming a later block stalls until this slot can be read.",
-                        hex::encode(peer_zone)
+                        slot = slot.into_inner(),
+                        passes = attempts,
+                        "Peer reader is stuck at a slot. The run verified from that peer's genesis \
+                         stops below it, so every dispatch naming a later block stalls until this \
+                         slot can be read."
                     );
                 }
                 let drained = pass.stalled_at.is_none();
@@ -1250,10 +1246,7 @@ async fn read_peer(
                 );
             }
             Err(err) => {
-                error!(
-                    "Peer reader next_messages failed for {}: {err}",
-                    hex::encode(peer_zone)
-                );
+                error!(error = %err, "Peer reader next_messages failed");
                 watch.report_failed_pass(peer_zone);
             }
         }
@@ -1304,14 +1297,15 @@ where
             Ok(block) => {
                 // Before caching, not when a dispatch names it: an unchecked
                 // block steers the prefix, and by then the damage is a halt.
-                if accept_peer_block(&block, peer_zone) {
+                if accept_peer_block(&block) {
                     peers.insert(peer_zone, block, slot).await;
                 }
             }
             Err(err) => {
                 error!(
-                    "Peer reader failed to deserialize block from {} at slot {slot:?}: {err}. Holding the cursor and retrying.",
-                    hex::encode(peer_zone)
+                    slot = slot.into_inner(),
+                    error = %err,
+                    "Peer reader failed to deserialize block. Holding the cursor and retrying."
                 );
                 return PeerPass {
                     cursor,

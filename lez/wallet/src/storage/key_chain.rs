@@ -21,9 +21,9 @@ use lee_core::{
     PrivateAction, SealedMessage, SharedSecretKey, encryption::ViewingPublicKey,
     program::MessageBody,
 };
-use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use testnet_initial_state::{PrivateAccountPrivateInitialData, PublicAccountPrivateInitialData};
+use tracing::warn;
 
 use crate::{
     account::{AccountIdWithPrivacy, Label},
@@ -741,8 +741,10 @@ impl UserKeyChain {
                     let existing_account = per_id_occupied.get();
                     if existing_account != &account {
                         warn!(
-                            "Overwriting existing imported private account for key {key:?}. \
-                            Existing account: {existing_account:?}, new account: {account:?}",
+                            ?key,
+                            ?existing_account,
+                            new_account = ?account,
+                            "Overwriting existing imported private account"
                         );
                     }
                 }
@@ -764,7 +766,7 @@ impl UserKeyChain {
     ) -> Result<()> {
         // Try to find in shared accounts
         if let Some(entry) = self.shared_private_accounts.get_mut(&account_id) {
-            debug!("Updating shared private account {account_id}");
+            tracing::debug!(%account_id, "Updating shared private account");
             entry.account = account;
             return Ok(());
         }
@@ -777,7 +779,7 @@ impl UserKeyChain {
                 &kind,
             );
             if expected_id == account_id {
-                debug!("Updating imported private account {account_id}");
+                tracing::debug!(%account_id, "Updating imported private account");
                 data.accounts.insert(kind, account);
                 return Ok(());
             }
@@ -797,11 +799,11 @@ impl UserKeyChain {
 
             match node.value.1.entry(kind) {
                 Entry::Occupied(mut occupied) => {
-                    debug!("Updating generated private account {account_id}");
+                    tracing::debug!(%account_id, "Updating generated private account");
                     occupied.insert(account);
                 }
                 Entry::Vacant(vacant) => {
-                    debug!("Inserting new private account identity {account_id}");
+                    tracing::debug!(%account_id, "Inserting new private account identity");
                     vacant.insert(account);
                 }
             }
@@ -819,11 +821,11 @@ impl UserKeyChain {
             if expected_id == account_id {
                 match node.value.1.entry(kind) {
                     Entry::Occupied(mut occupied) => {
-                        debug!("Updating generated private account {account_id}");
+                        tracing::debug!(%account_id, "Updating generated private account");
                         occupied.insert(account);
                     }
                     Entry::Vacant(vacant) => {
-                        debug!("Inserting new private account identity {account_id}");
+                        tracing::debug!(%account_id, "Inserting new private account identity");
                         vacant.insert(account);
                     }
                 }

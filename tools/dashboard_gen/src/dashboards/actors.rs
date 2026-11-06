@@ -31,10 +31,6 @@ const DEFAULT_PERCENTILE: u32 = 95;
 /// Dashboard variable holding the type name of the actor the detail panels show.
 const ACTOR_VAR: &str = "actor";
 
-/// Hidden dashboard variable holding the crate of the selected actor, which
-/// prefixes the targets of the lines it logs.
-const ACTOR_CRATE_VAR: &str = "actor_crate";
-
 /// Label the overview queries put each actor's type name in.
 const ACTOR_LABEL: &str = "actor";
 
@@ -234,16 +230,6 @@ pub fn dashboard() -> Dashboard {
                 ACTOR_NAME_LABEL,
             )
             .regex(format!("/^{MODULE_PATH}({TYPE_NAME})/")),
-        )
-        .variable(
-            label_values_variable(
-                ACTOR_CRATE_VAR,
-                "Actor crate",
-                &actor(KAMEO_MESSAGES_RECEIVED_TOTAL).to_string(),
-                ACTOR_NAME_LABEL,
-            )
-            .regex("/^([a-z0-9_]+)::/")
-            .hidden(),
         )
         .variable(percentile_variable(PERCENTILES, DEFAULT_PERCENTILE))
         .row(
@@ -601,20 +587,18 @@ pub fn dashboard() -> Dashboard {
 /// in Explore.
 fn warnings_and_errors() -> Panel {
     let sequencer = format!(r#"{SEQUENCER_LABEL}="${SEQUENCER_VAR}""#);
-    // `[2026-10-30T22:34:52Z INFO  sequencer_storage_actor::actor] …`
-    let from_actor_crate = format!(r"|~ `^\[\S+ +[A-Z]+ +${{{ACTOR_CRATE_VAR}}}(::\S*)?\]`");
+    // The label Alloy reads off the kameo span a line was logged in.
+    let actor_matcher = format!(r#"{ACTOR_LABEL}="${ACTOR_VAR}""#);
     Panel::logs("${actor} · warnings and errors")
-        .description("Lines logged from the actor's crate: code it calls in other crates, e.g. the sequencer core, logs under those.")
+        .description("Lines logged while the actor ran, from its own crate or from code it calls, e.g. the sequencer core. Tasks it spawns log without it.")
         .width(24)
         .header_link(
             "All logs in Explore",
-            explore_logs_url(&format!(
-                "{} {from_actor_crate}",
-                super::logs(&[&sequencer])
-            )),
+            explore_logs_url(&super::logs(&[&sequencer, &actor_matcher])),
         )
-        .target(Target::logs(format!(
-            "{} {from_actor_crate}",
-            super::logs(&[&sequencer, super::WARNINGS_AND_ERRORS])
-        )))
+        .target(Target::logs(super::logs(&[
+            &sequencer,
+            &actor_matcher,
+            super::WARNINGS_AND_ERRORS,
+        ])))
 }

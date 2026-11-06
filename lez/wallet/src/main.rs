@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
         ..WalletConfigOverrides::default()
     });
 
-    env_logger::init();
+    logging::init();
 
     let config_path = fetch_config_path().context("Could not fetch config path")?;
     let storage_path =

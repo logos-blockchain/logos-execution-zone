@@ -1,6 +1,7 @@
 use std::ffi::{CStr, c_char};
 
-use log::LevelFilter;
+use logging::EnvFilter;
+use tracing::level_filters::LevelFilter;
 
 /// Initializes logging for the indexer at `level`.
 ///
@@ -15,18 +16,16 @@ use log::LevelFilter;
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn init_logger(level: *const c_char) {
     let level = if level.is_null() {
-        LevelFilter::Info
+        LevelFilter::INFO
     } else {
         unsafe { CStr::from_ptr(level) }
             .to_str()
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(LevelFilter::Info)
+            .unwrap_or(LevelFilter::INFO)
     };
 
-    let _dontcare = env_logger::Builder::new()
-        .filter_level(LevelFilter::Off)
-        .filter_module("indexer_ffi", level)
-        .filter_module("indexer_core", level)
-        .try_init();
+    let _dontcare = logging::try_init_with_filter(EnvFilter::new(format!(
+        "indexer_ffi={level},indexer_core={level}"
+    )));
 }
