@@ -3161,47 +3161,42 @@ mod tests {
             kind: PrivateAccountKind::Regular,
             opening: None,
         };
-        let alias = Actor::native_balance(AccountId::new([4; 32]));
-        let sealable = Actor::native_balance(recipient.address());
-        let credit = |from_program, to, amount| MessageBody {
-            from: Actor::new(AccountId::new([5; 32]), from_program),
+        let to = Actor::native_balance(recipient.address());
+        let (requested, other) = (
+            Actor::native_balance(AccountId::new([4; 32])),
+            Actor::native_balance(AccountId::new([5; 32])),
+        );
+        let (requested_alias, other_alias) = (
+            Actor::native_balance(AccountId::new([6; 32])),
+            Actor::native_balance(AccountId::new([7; 32])),
+        );
+        let credit = |from, amount| MessageBody {
+            from,
             to,
             message: borsh::to_vec(&native_token::Message::Credit(amount)).unwrap(),
         };
-        let requested = credit(NATIVE_TOKEN_PROGRAM_ID, alias, 20);
         let mut choose = choose_publication_with(
             vec![recipient],
             vec![ClearMessage {
-                from_program: NATIVE_TOKEN_PROGRAM_ID,
-                to: alias,
-                message: requested.message.clone(),
+                sender: requested,
+                to,
+                message: credit(requested_alias, 20).message,
             }],
+            Arc::new(Mutex::new(HashMap::from([
+                (requested_alias, requested),
+                (other_alias, other),
+            ]))),
         );
-        let unsealed = |body: &MessageBody| {
-            format!(
-                "No recipient material seals an async message to {}",
-                body.to.account_id
-            )
-        };
+        let sealed = |publication| matches!(publication, Ok(PublicationMode::Sealed(_)));
 
-        for body in [
-            credit(AccountId::new([6; 32]), alias, 20),
-            credit(NATIVE_TOKEN_PROGRAM_ID, alias, 21),
-        ] {
-            assert!(matches!(
-                choose(&body),
-                Err(LeeError::InvalidInput(reason)) if reason == unsealed(&body)
-            ));
-        }
+        // Another account's identical credit does not take the request, nor does another amount.
+        assert!(sealed(choose(&credit(other_alias, 20))));
+        assert!(sealed(choose(&credit(requested_alias, 21))));
         assert!(matches!(
-            choose(&credit(NATIVE_TOKEN_PROGRAM_ID, sealable, 20)),
-            Ok(PublicationMode::Sealed(_))
+            choose(&credit(requested_alias, 20)),
+            Ok(PublicationMode::Clear)
         ));
-        assert!(matches!(choose(&requested), Ok(PublicationMode::Clear)));
-        assert!(matches!(
-            choose(&requested),
-            Err(LeeError::InvalidInput(reason)) if reason == unsealed(&requested)
-        ));
+        assert!(sealed(choose(&credit(requested_alias, 20))));
     }
 
     #[tokio::test]
