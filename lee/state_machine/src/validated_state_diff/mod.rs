@@ -405,7 +405,18 @@ impl ValidatedStateDiff {
                 recovery_bindings: execution.recovery_bindings.clone(),
                 ..StateDiff::default()
             },
-        );
+        )
+        .and_then(|mut diff| {
+            // The proven private async messages follow the live public ones.
+            for publication in &execution.async_messages {
+                diff.published.push(publish(
+                    state,
+                    &diff.recovery_bindings,
+                    publication.clone(),
+                )?);
+            }
+            Ok(diff)
+        });
         // As for a public action.
         let cycles = charged_cycles(&result, cycles_used, cycle_budget);
         let fallback = execution
@@ -413,17 +424,7 @@ impl ValidatedStateDiff {
             .as_ref()
             .and_then(|fee| fee.fallback.as_ref());
         let (diff, revert) = match (result, fallback) {
-            (Ok(mut diff), _) => {
-                // The proven private async messages follow the live public ones.
-                diff.published.extend(
-                    execution
-                        .async_messages
-                        .iter()
-                        .cloned()
-                        .map(Publication::Sealed),
-                );
-                (diff, None)
-            }
+            (Ok(diff), _) => (diff, None),
             (Err(err), Some(fallback)) if err.is_chargeable() => {
                 state.check_commitments_are_new(&[fallback.action.commitment])?;
                 let fallback_request = PublicPart::new(

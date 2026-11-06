@@ -20,7 +20,7 @@ include = [
   "FfiPublicAccountEvidenceList",
   "FfiRecoveryBindingList",
   "FfiRootCall",
-  "FfiSealedMessageList",
+  "FfiPublicationList",
   "FfiSignaturePubKeyList",
   "FfiU128",
   "FfiVecU8",

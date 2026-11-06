@@ -5,8 +5,8 @@
 
 pub use fees::{FeeDeclaration, is_fee_authorized};
 pub use lee_core::{
-    DummyOutput, EncryptedNote, GENESIS_BLOCK_ID, MessageWitness, ProvingInput, Recipient,
-    RecipientEncryption, RecoveryBinding, RootCall, SealedMessage, SenderPresentation,
+    DummyOutput, EncryptedNote, GENESIS_BLOCK_ID, MessageWitness, ProvingInput, PublicationMode,
+    Recipient, RecipientEncryption, RecoveryBinding, RootCall, SealedMessage, SenderPresentation,
     SharedSecretKey,
     account::{Account, AccountData, AccountId, Actor, ActorState, Balance, Cycles, Fee, Gas},
     encryption::EphemeralPublicKey,

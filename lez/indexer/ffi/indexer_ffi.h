@@ -144,7 +144,7 @@ typedef struct FfiProvenFee {
 typedef struct FfiPrivacyPreservingMessage {
   FfiPublicExecutionContext public_context;
   FfiBoundaryStepList boundary;
-  FfiSealedMessageList async_messages;
+  FfiPublicationList async_messages;
   FfiRecoveryBindingList recovery_bindings;
   bool has_public_root;
   FfiRootCall public_root;

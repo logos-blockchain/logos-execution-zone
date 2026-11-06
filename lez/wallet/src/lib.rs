@@ -25,7 +25,7 @@ use futures::TryFutureExt as _;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
     Account, AccountId, EncryptedNote, PredictedCrossMessages, PrivacyPreservingTransaction,
-    ProgramId, ProvingInput, PublicExecutionContext, PublicationsPage, Recipient,
+    ProgramId, ProvingInput, PublicExecutionContext, PublicationMode, PublicationsPage, Recipient,
     RecipientEncryption, Simulation,
     privacy_preserving_transaction::{
         circuit::{Dependency, ProgramCatalog, ProgramKind},
@@ -1760,20 +1760,27 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         let select =
             move |_, body: &MessageBody| !listed_only && witnessed.contains(&body.to.account_id);
         let choose_seal_with = |seals: Vec<Recipient>| {
-            move |body: &MessageBody| {
-                let to = body.to.account_id;
-                seals
+            move |bodies: &[MessageBody]| {
+                bodies
                     .iter()
-                    .find(|recipient| recipient.address() == to)
-                    .map(|recipient| RecipientEncryption {
-                        recipient: recipient.clone(),
-                        esk: EphemeralSecretKey(account_manager::random_bytes()),
+                    .map(|body| {
+                        let to = body.to.account_id;
+                        seals
+                            .iter()
+                            .find(|recipient| recipient.address() == to)
+                            .map(|recipient| {
+                                PublicationMode::Sealed(RecipientEncryption {
+                                    recipient: recipient.clone(),
+                                    esk: EphemeralSecretKey(account_manager::random_bytes()),
+                                })
+                            })
+                            .ok_or_else(|| {
+                                lee::error::LeeError::InvalidInput(format!(
+                                    "No recipient material seals an async message to {to}"
+                                ))
+                            })
                     })
-                    .ok_or_else(|| {
-                        lee::error::LeeError::InvalidInput(format!(
-                            "No recipient material seals an async message to {to}"
-                        ))
-                    })
+                    .collect()
             }
         };
 

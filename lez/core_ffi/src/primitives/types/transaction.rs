@@ -6,9 +6,8 @@ use lee::{
 };
 use lee_core::{
     FeeFallback, PrivateAction, ProgramImageClaim, ProvenExecution, ProvenFee, RecoveryBinding,
-    SealedMessage,
     account::AccountId,
-    program::{ValidityWindow, ValidityWindows},
+    program::{Publication, ValidityWindow, ValidityWindows},
 };
 use sequencer_executor_actor::protocol::Transaction;
 
@@ -22,7 +21,7 @@ use crate::primitives::{
         },
         vectors::{
             FfiBoundaryStepList, FfiNonceList, FfiPrivateActionList, FfiProof,
-            FfiPublicAccountEvidenceList, FfiRecoveryBindingList, FfiSealedMessageList,
+            FfiPublicAccountEvidenceList, FfiPublicationList, FfiRecoveryBindingList,
             FfiSignaturePubKeyList,
         },
     },
@@ -259,7 +258,7 @@ impl From<PrivacyPreservingTransaction> for FfiPrivateTransactionBody {
 struct OwnedPrivateBody {
     public_context: PublicExecutionContext,
     boundary: Vec<BoundaryStep>,
-    async_messages: Vec<SealedMessage>,
+    async_messages: Vec<Publication>,
     recovery_bindings: Vec<RecoveryBinding>,
     public_root: Option<RootCall>,
     private_actions: Vec<PrivateAction>,
@@ -362,7 +361,7 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
 pub struct FfiPrivacyPreservingMessage {
     pub public_context: FfiPublicExecutionContext,
     pub boundary: FfiBoundaryStepList,
-    pub async_messages: FfiSealedMessageList,
+    pub async_messages: FfiPublicationList,
     pub recovery_bindings: FfiRecoveryBindingList,
     pub has_public_root: bool,
     pub public_root: FfiRootCall,
@@ -884,13 +883,13 @@ mod tests {
                         BoundaryStep::EndPublicSubtree,
                     ],
                     async_messages: vec![
-                        SealedMessage {
+                        Publication::Sealed(SealedMessage {
                             commitment: Commitment::from_byte_array([22; 32]),
                             note: EncryptedNote {
                                 epk: EphemeralPublicKey(vec![23; 2]),
                                 ciphertext: Ciphertext::from_inner(vec![24; 3]),
                             },
-                        };
+                        });
                         2
                     ],
                     recovery_bindings: Vec::new(),

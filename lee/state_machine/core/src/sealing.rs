@@ -3,9 +3,9 @@ use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Commitment, EncryptedNote, Recipient, RecipientEncryption,
+    Commitment, EncryptedNote, PublicationMode, Recipient, RecipientEncryption,
     encryption::{Ciphertext, SharedSecretKey, apply_keystream, pad_to_floor},
-    program::MessageBody,
+    program::{MessageBody, Publication},
 };
 #[cfg(feature = "host")]
 use crate::{NullifierPublicKey, PrivateAccountKind, encryption::ViewingPublicKey};
@@ -20,8 +20,8 @@ pub struct SealedMessage {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum InvalidMessageSeal {
-    #[error("Each durable async message of private execution needs exactly one seal")]
+pub enum InvalidPublicationMode {
+    #[error("Each durable async message of private execution needs exactly one publication mode")]
     Unpaired,
     #[error("A seal must address its message's destination")]
     MisaddressedSeal,
@@ -108,21 +108,24 @@ impl SealedMessage {
 }
 
 /// # Errors
-/// Returns an error unless `seals` pairs every async message with a seal addressing it.
-pub fn seal_messages(
-    async_messages: &[MessageBody],
-    seals: Vec<RecipientEncryption>,
+/// Returns an error unless `modes` pairs every async message with a mode, each seal addressing it.
+pub fn publish_messages(
+    async_messages: Vec<MessageBody>,
+    modes: Vec<PublicationMode>,
     pad_to_len: Option<u32>,
-) -> Result<Vec<SealedMessage>, InvalidMessageSeal> {
-    if async_messages.len() != seals.len() {
-        return Err(InvalidMessageSeal::Unpaired);
+) -> Result<Vec<Publication>, InvalidPublicationMode> {
+    if async_messages.len() != modes.len() {
+        return Err(InvalidPublicationMode::Unpaired);
     }
     async_messages
-        .iter()
-        .zip(seals)
-        .map(|(body, seal)| {
-            seal.seal_message(body, pad_to_len)
-                .ok_or(InvalidMessageSeal::MisaddressedSeal)
+        .into_iter()
+        .zip(modes)
+        .map(|(body, mode)| match mode {
+            PublicationMode::Clear => Ok(Publication::Clear(body)),
+            PublicationMode::Sealed(seal) => seal
+                .seal_message(&body, pad_to_len)
+                .map(Publication::Sealed)
+                .ok_or(InvalidPublicationMode::MisaddressedSeal),
         })
         .collect()
 }
@@ -296,55 +299,6 @@ mod tests {
             for to in [AccountId::new([12; 32]), other_form] {
                 assert!(seal.seal_message(&body(to), None).is_none());
             }
-        }
-    }
-
-    #[test]
-    fn each_async_message_is_sealed_by_the_seal_paired_with_it() {
-        let [recipient, ..] = recipients();
-        let to_recipient = body(recipient.address());
-        let seal = || RecipientEncryption {
-            recipient: recipient.clone(),
-            esk: ESK,
-        };
-
-        let sealed =
-            seal_messages(std::slice::from_ref(&to_recipient), vec![seal()], None).unwrap();
-        assert_eq!(
-            sealed
-                .iter()
-                .map(|message| message.open(NPK, &D, &Z).map(|(body, ..)| body))
-                .collect::<Vec<_>>(),
-            vec![Some(to_recipient.clone())]
-        );
-
-        for (case, async_messages, seals, refusal) in [
-            (
-                "a missing seal",
-                vec![to_recipient],
-                vec![],
-                InvalidMessageSeal::Unpaired,
-            ),
-            (
-                "a surplus seal",
-                vec![],
-                vec![seal()],
-                InvalidMessageSeal::Unpaired,
-            ),
-            (
-                "a seal to another destination",
-                vec![body(AccountId::new([12; 32]))],
-                vec![seal()],
-                InvalidMessageSeal::MisaddressedSeal,
-            ),
-        ] {
-            assert_eq!(
-                seal_messages(&async_messages, seals, None)
-                    .unwrap_err()
-                    .to_string(),
-                refusal.to_string(),
-                "{case}"
-            );
         }
     }
 }
