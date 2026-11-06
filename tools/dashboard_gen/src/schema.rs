@@ -30,6 +30,7 @@ pub enum DrawStyle {
 #[serde(rename_all = "camelCase")]
 pub enum MatcherKind {
     ByName,
+    ByRegexp,
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -447,10 +448,33 @@ pub enum BarGaugeValueMode {
 #[serde(rename_all = "camelCase")]
 pub struct BarGaugeOptions {
     pub display_mode: BarGaugeDisplay,
+    pub max_viz_height: u32,
+    pub min_viz_height: u32,
+    pub min_viz_width: u32,
+    pub name_placement: NamePlacement,
     pub orientation: Orientation,
     pub reduce_options: ReduceOptions,
     pub show_unfilled: bool,
+    pub sizing: BarGaugeSizing,
     pub value_mode: BarGaugeValueMode,
+}
+
+/// How a bar gauge sizes its bars.
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BarGaugeSizing {
+    /// Within `minVizHeight..=maxVizHeight`, scrolling the panel once the
+    /// bars no longer fit.
+    Manual,
+}
+
+/// Where a bar gauge puts each bar's name.
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NamePlacement {
+    /// Above the bar, even when it is the only one: Grafana's `auto` hides a
+    /// lone bar's name.
+    Top,
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -553,6 +577,8 @@ pub struct QueryVariable {
     pub datasource: Datasource,
     /// What the variable editor displays; Grafana keeps it equal to `query`.
     pub definition: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hide: Option<VariableHide>,
     pub include_all: bool,
     pub label: String,
     pub multi: bool,
@@ -577,6 +603,22 @@ impl Serialize for VariableRefresh {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let id = match self {
             Self::OnTimeRangeChange => 2,
+        };
+        serializer.serialize_u8(id)
+    }
+}
+
+/// What of a [`QueryVariable`] the top bar leaves out.
+#[derive(Clone, Copy)]
+pub enum VariableHide {
+    /// The whole dropdown: the dashboard derives the value, no one picks it.
+    Variable,
+}
+
+impl Serialize for VariableHide {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let id = match self {
+            Self::Variable => 2,
         };
         serializer.serialize_u8(id)
     }
