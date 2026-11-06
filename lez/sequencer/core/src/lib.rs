@@ -1918,12 +1918,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             // slot it has consumed. Already in the head state but not the final
             // one means the delivery is on this chain but could still orphan, so
             // the record is skipped and kept. Otherwise it is eligible, queued
-            // per source zone: the store reads records in key-hash order,
-            // under which one busy peer starves every other.
-            let mut eligible: BTreeMap<Option<[u8; 32]>, VecDeque<LeeTransaction>> =
+            // per source zone in emission order: the store reads records in
+            // key-hash order, under which one busy peer starves every other and
+            // a peer's own messages arrive shuffled.
+            let mut eligible: BTreeMap<Option<[u8; 32]>, Vec<((u64, u32), LeeTransaction)>> =
                 BTreeMap::new();
             for (key, message, tx) in recorded_dispatches {
-                let zone = match message {
+                let (zone, emitted_at) = match message {
                     Some(message) if dispatch_already_delivered(chain.final_state(), &message) => {
                         settled.push(key);
                         continue;
@@ -1931,12 +1932,22 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     Some(message) if dispatch_already_delivered(chain.head_state(), &message) => {
                         continue;
                     }
-                    Some(message) => Some(message.src_zone),
-                    None => None,
+                    Some(message) => (
+                        Some(message.src_zone),
+                        (message.src_block_id, message.src_tx_index),
+                    ),
+                    None => (None, (0, 0)),
                 };
-                eligible.entry(zone).or_default().push_back(tx);
+                eligible.entry(zone).or_default().push((emitted_at, tx));
             }
-            let pending = round_robin(eligible, MAX_DISPATCHES_PER_BLOCK);
+            let queues = eligible
+                .into_iter()
+                .map(|(zone, mut records)| {
+                    records.sort_by_key(|&(emitted_at, _)| emitted_at);
+                    (zone, records.into_iter().map(|(_, tx)| tx).collect())
+                })
+                .collect();
+            let pending = round_robin(queues, MAX_DISPATCHES_PER_BLOCK);
 
             (
                 prev,

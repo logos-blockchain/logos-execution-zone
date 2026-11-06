@@ -724,6 +724,16 @@ fn dispatch_record(src_block_id: u64, payload: Vec<u8>) -> PendingCrossZoneDispa
     )
 }
 
+fn delivered_source_blocks(block: &Block) -> Vec<u64> {
+    block
+        .body
+        .transactions
+        .iter()
+        .filter_map(extract_cross_zone_dispatch)
+        .map(|message| message.src_block_id)
+        .collect()
+}
+
 /// The message keys of the deliveries a block carries.
 fn dispatches_in(block: &Block) -> Vec<CrossZoneMessageKey> {
     block
@@ -1396,10 +1406,13 @@ async fn a_delivery_backlog_is_spread_across_blocks() {
         .await
         .unwrap()
         .unwrap();
+    let cap: u64 = MAX_DISPATCHES_PER_BLOCK
+        .try_into()
+        .expect("cap fits in u64");
     assert_eq!(
-        dispatches_in(&block).len(),
-        MAX_DISPATCHES_PER_BLOCK,
-        "one block must not carry an unbounded number of deliveries"
+        delivered_source_blocks(&block),
+        (100..100 + cap).collect::<Vec<_>>(),
+        "one block carries at most the cap, oldest emission first"
     );
 
     // Deferred, not dropped: the rest go in the next block.
@@ -1410,7 +1423,10 @@ async fn a_delivery_backlog_is_spread_across_blocks() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(dispatches_in(&block).len(), 3);
+    assert_eq!(
+        delivered_source_blocks(&block),
+        (100 + cap..=118).collect::<Vec<_>>()
+    );
 }
 
 #[tokio::test]
@@ -7200,3 +7216,4 @@ fn dispatch_slots_are_shared_round_robin_across_peers() {
         "the cap still binds a single queue"
     );
 }
+
