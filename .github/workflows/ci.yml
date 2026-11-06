@@ -256,7 +256,8 @@ jobs:
         with:
           shared-key: ci-container-tests
           # Only writer of this cache.
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
+          # Only dev, the default branch, whose caches main can restore too.
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
 
       - name: Run tests
         env:
@@ -353,7 +354,8 @@ jobs:
           # container's environment, so a change without a rename never saves.
           shared-key: ci-host-prebuild-nodebug
           # Only writer of this cache.
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
+          # Only dev, the default branch, whose caches main can restore too.
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
 
       - name: Build integration test archive
         uses: ./.github/actions/run-in-ci-image
