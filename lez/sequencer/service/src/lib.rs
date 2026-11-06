@@ -314,7 +314,8 @@ pub fn run(
                 limit: 0,
                 within: Duration::ZERO,
             },
-        );
+        )
+        .with_on_worker_spawned(actor_handle::record_mailbox_capacity);
         let bedrock_pool_ref = ShardingPoolActor::spawn(bedrock_pool);
         info!("Bedrock Sharding Pool Actor spawned");
 
