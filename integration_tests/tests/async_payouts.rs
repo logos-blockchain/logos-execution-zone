@@ -400,8 +400,8 @@ async fn a_private_payment_reaches_a_certified_address_its_payer_knows_only_by_i
     wait_for_inclusion(&ctx, certified).await?;
     let [payout] = <[_; 1]>::try_from(ctx.wallet_mut().owned_pending_messages().await?)
         .map_err(|pending| anyhow::anyhow!("expected one payout, found {}", pending.len()))?;
-    let (received, _) = ctx.wallet_mut().receive_pending_message(payout).await?;
-    wait_for_inclusion(&ctx, received).await?;
+    let (claimed, _) = ctx.wallet_mut().receive_pending_message(payout).await?;
+    wait_for_inclusion(&ctx, claimed).await?;
     sync_private(&mut ctx).await?;
 
     let (paid, _) = NativeTokenTransfer(ctx.wallet())
