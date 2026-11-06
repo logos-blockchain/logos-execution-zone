@@ -54,9 +54,8 @@ use axum::{
     routing::{get, post},
 };
 use common::{block::BedrockStatus, transaction::LeeTransaction};
-use cross_zone_inbox_core::{
-    CrossZoneConfig, CrossZonePeer, CrossZoneRoute, Message as InboxMessage, ZoneId,
-};
+use cross_zone::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
+use cross_zone_inbox_core::{Message as InboxMessage, ZoneId};
 use cross_zone_outbox_core::{outbox_pda, outbox_pda_seed};
 use lee::{
     AccountId, Actor, PublicAccountEvidence, PublicTransaction,

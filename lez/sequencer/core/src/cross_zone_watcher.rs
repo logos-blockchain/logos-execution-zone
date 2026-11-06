@@ -250,7 +250,7 @@ pub fn spawn_watchers<S: StorageActorTrait>(
                 peer_zone: peer.channel_id,
                 self_zone,
                 min_committee_size: peer.min_committee_size,
-                genesis_hash: peer.genesis_hash.map(HashType),
+                genesis_hash: peer.genesis_hash,
                 node: floor_node,
             },
             poll_interval,

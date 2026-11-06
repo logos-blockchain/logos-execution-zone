@@ -7217,3 +7217,19 @@ fn dispatch_slots_are_shared_round_robin_across_peers() {
     );
 }
 
+#[test]
+fn a_peer_genesis_hash_round_trips_as_hex() {
+    let peer: CrossZonePeer = serde_json::from_str(
+        r#"{"channel_id":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],
+            "allowed_routes":[],
+            "genesis_hash":"0202020202020202020202020202020202020202020202020202020202020202"}"#,
+    )
+    .expect("hex genesis hash parses");
+
+    assert_eq!(peer.genesis_hash, Some(HashType([2; 32])));
+    assert!(
+        serde_json::to_string(&peer)
+            .expect("peer serializes")
+            .contains("\"0202020202020202020202020202020202020202020202020202020202020202\"")
+    );
+}

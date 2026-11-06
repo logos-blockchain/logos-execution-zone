@@ -755,10 +755,7 @@ impl CrossZoneVerifier {
         let genesis_pins = cross_zone
             .peers
             .iter()
-            .filter_map(|peer| {
-                peer.genesis_hash
-                    .map(|pinned| (peer.channel_id, HashType(pinned)))
-            })
+            .filter_map(|peer| peer.genesis_hash.map(|pinned| (peer.channel_id, pinned)))
             .collect();
         let peers = PeerBlocks::new(config.peer_block_cache_window).with_genesis_pins(genesis_pins);
         let watch = PeerWatch::default();
