@@ -25,13 +25,13 @@ system_accounts.workspace = true
 wallet.workspace = true
 sequencer_stake_core.workspace = true
 sequencer_service_rpc.workspace = true
-sequencer_service_metrics.workspace = true
+sequencer_service_metrics = { workspace = true, features = ["record"] }
 
 clap = { workspace = true, features = ["derive", "env"] }
 anyhow.workspace = true
 axum.workspace = true
 env_logger.workspace = true
-kameo.workspace = true
+kameo = { workspace = true, features = ["metrics"] }
 kameo_actors.workspace = true
 hex.workspace = true
 libp2p.workspace = true
@@ -39,9 +39,14 @@ log.workspace = true
 metrics-exporter-prometheus.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 futures.workspace = true
 glob.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+metrics.workspace = true
 
 [[bin]]
 name = "sequencer_service"
