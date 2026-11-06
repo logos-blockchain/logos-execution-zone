@@ -24,7 +24,8 @@ use futures::TryFutureExt as _;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
     Account, AccountId, EncryptedNote, PredictedCrossMessages, PrivacyPreservingTransaction,
-    ProgramId, ProvingInput, PublicExecutionContext, Recipient, RecipientEncryption, Simulation,
+    ProgramId, ProvingInput, PublicExecutionContext, PublicationMode, Recipient,
+    RecipientEncryption, Simulation,
     privacy_preserving_transaction::{
         circuit::{Dependency, ProgramCatalog, ProgramKind},
         message::Message,
@@ -1608,9 +1609,11 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 seals
                     .iter()
                     .find(|recipient| recipient.address() == to)
-                    .map(|recipient| RecipientEncryption {
-                        recipient: recipient.clone(),
-                        esk: EphemeralSecretKey(account_manager::random_bytes()),
+                    .map(|recipient| {
+                        PublicationMode::Sealed(RecipientEncryption {
+                            recipient: recipient.clone(),
+                            esk: EphemeralSecretKey(account_manager::random_bytes()),
+                        })
                     })
                     .ok_or_else(|| {
                         lee::error::LeeError::InvalidInput(format!(

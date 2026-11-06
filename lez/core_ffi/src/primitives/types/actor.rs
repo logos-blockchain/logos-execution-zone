@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use lee::{
-    AccountId, Actor, BoundaryStep, Delivery, EncryptedNote, EphemeralPublicKey, MessageEnvelope,
-    PublicAccountEvidence, PublicExecutionContext, PublicKey, RecoveryBinding, RootCall,
-    SealedMessage, Signature, error::LeeError,
+    AccountId, Actor, BoundaryStep, Delivery, EncryptedNote, EphemeralPublicKey, MessageBody,
+    MessageEnvelope, PublicAccountEvidence, PublicExecutionContext, PublicKey, RecoveryBinding,
+    RootCall, SealedMessage, Signature, StoredPublication, error::LeeError,
 };
 use lee_core::{
     Commitment, Nullifier, PrivateAction, account::Nonce, encryption::Ciphertext, program::PdaSeed,
@@ -239,7 +239,6 @@ impl From<FfiBoundaryStep> for BoundaryStep {
     }
 }
 
-/// One async message a proof publishes.
 #[repr(C)]
 pub struct FfiSealedMessage {
     pub commitment: FfiBytes32,
@@ -270,6 +269,80 @@ impl From<FfiSealedMessage> for SealedMessage {
                 epk: EphemeralPublicKey(value.epk.into()),
                 ciphertext: Ciphertext::from_inner(value.ciphertext.into()),
             },
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub enum FfiStoredPublicationKind {
+    Clear = 0,
+    Sealed,
+}
+
+#[repr(C)]
+pub struct FfiMessageBody {
+    pub from: FfiActor,
+    pub to: FfiActor,
+    pub message: FfiMessageDataList,
+}
+
+impl From<MessageBody> for FfiMessageBody {
+    fn from(value: MessageBody) -> Self {
+        let MessageEnvelope { from, to, message } = value;
+
+        Self {
+            from: from.into(),
+            to: to.into(),
+            message: message.into(),
+        }
+    }
+}
+
+impl From<FfiMessageBody> for MessageBody {
+    fn from(value: FfiMessageBody) -> Self {
+        Self {
+            from: value.from.into(),
+            to: value.to.into(),
+            message: value.message.into(),
+        }
+    }
+}
+
+/// One async message a proof publishes. Both `body` and `sealed` are read and freed for every
+/// kind, so the part `kind` does not select must be empty, not uninitialized.
+#[repr(C)]
+pub struct FfiStoredPublication {
+    pub kind: FfiStoredPublicationKind,
+    pub body: FfiMessageBody,
+    pub sealed: FfiSealedMessage,
+}
+
+impl From<StoredPublication> for FfiStoredPublication {
+    fn from(value: StoredPublication) -> Self {
+        let (kind, body, sealed) = match value {
+            StoredPublication::Clear(body) => (
+                FfiStoredPublicationKind::Clear,
+                body.into(),
+                empty_sealed_message(),
+            ),
+            StoredPublication::Sealed(sealed) => (
+                FfiStoredPublicationKind::Sealed,
+                empty_message_body(),
+                sealed.into(),
+            ),
+        };
+        Self { kind, body, sealed }
+    }
+}
+
+impl From<FfiStoredPublication> for StoredPublication {
+    fn from(value: FfiStoredPublication) -> Self {
+        let body = MessageBody::from(value.body);
+        let sealed = SealedMessage::from(value.sealed);
+        match value.kind {
+            FfiStoredPublicationKind::Clear => Self::Clear(body),
+            FfiStoredPublicationKind::Sealed => Self::Sealed(sealed),
         }
     }
 }
@@ -438,6 +511,22 @@ fn empty_delivery() -> FfiDelivery {
         inherited_authorizations: Vec::new().into(),
         inherits_entry_authorizations: false,
         pda_seeds: Vec::new().into(),
+    }
+}
+
+fn empty_message_body() -> FfiMessageBody {
+    FfiMessageBody {
+        from: FfiActor::default(),
+        to: FfiActor::default(),
+        message: Vec::new().into(),
+    }
+}
+
+fn empty_sealed_message() -> FfiSealedMessage {
+    FfiSealedMessage {
+        commitment: FfiBytes32::default(),
+        epk: Vec::new().into(),
+        ciphertext: Vec::new().into(),
     }
 }
 

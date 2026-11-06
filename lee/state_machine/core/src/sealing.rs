@@ -3,9 +3,9 @@ use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Commitment, EncryptedNote, Recipient, RecipientEncryption,
+    Commitment, EncryptedNote, PublicationMode, Recipient, RecipientEncryption,
     encryption::{Ciphertext, SharedSecretKey, apply_keystream, pad_to_floor},
-    program::MessageBody,
+    program::{MessageBody, StoredPublication},
 };
 #[cfg(feature = "host")]
 use crate::{NullifierPublicKey, PrivateAccountKind, encryption::ViewingPublicKey};
@@ -21,7 +21,7 @@ pub struct SealedMessage {
 
 #[derive(Debug, thiserror::Error)]
 pub enum InvalidMessageSeal {
-    #[error("Each durable async message of private execution needs exactly one seal")]
+    #[error("Each durable async message of private execution needs exactly one publication mode")]
     Unpaired,
     #[error("A seal must address its message's destination")]
     MisaddressedSeal,
@@ -108,21 +108,24 @@ impl SealedMessage {
 }
 
 /// # Errors
-/// Returns an error unless `seals` pairs every async message with a seal addressing it.
-pub fn seal_messages(
-    async_messages: &[MessageBody],
-    seals: Vec<RecipientEncryption>,
+/// Returns an error unless `modes` pairs every async message with a mode, each seal addressing it.
+pub fn publish_messages(
+    async_messages: Vec<MessageBody>,
+    modes: Vec<PublicationMode>,
     pad_to_len: Option<u32>,
-) -> Result<Vec<SealedMessage>, InvalidMessageSeal> {
-    if async_messages.len() != seals.len() {
+) -> Result<Vec<StoredPublication>, InvalidMessageSeal> {
+    if async_messages.len() != modes.len() {
         return Err(InvalidMessageSeal::Unpaired);
     }
     async_messages
-        .iter()
-        .zip(seals)
-        .map(|(body, seal)| {
-            seal.seal_message(body, pad_to_len)
-                .ok_or(InvalidMessageSeal::MisaddressedSeal)
+        .into_iter()
+        .zip(modes)
+        .map(|(body, mode)| match mode {
+            PublicationMode::Clear => Ok(StoredPublication::Clear(body)),
+            PublicationMode::Sealed(seal) => seal
+                .seal_message(&body, pad_to_len)
+                .map(StoredPublication::Sealed)
+                .ok_or(InvalidMessageSeal::MisaddressedSeal),
         })
         .collect()
 }
@@ -308,17 +311,26 @@ mod tests {
             esk: ESK,
         };
 
-        let sealed =
-            seal_messages(std::slice::from_ref(&to_recipient), vec![seal()], None).unwrap();
+        let published = publish_messages(
+            vec![to_recipient.clone()],
+            vec![PublicationMode::Sealed(seal())],
+            None,
+        )
+        .unwrap();
         assert_eq!(
-            sealed
+            published
                 .iter()
-                .map(|message| message.open(NPK, &D, &Z).map(|(body, ..)| body))
+                .map(|publication| match publication {
+                    StoredPublication::Sealed(sealed) => {
+                        sealed.open(NPK, &D, &Z).map(|(body, ..)| body)
+                    }
+                    StoredPublication::Clear(_) => None,
+                })
                 .collect::<Vec<_>>(),
             vec![Some(to_recipient.clone())]
         );
 
-        for (case, async_messages, seals, refusal) in [
+        for (case, async_messages, modes, refusal) in [
             (
                 "a missing seal",
                 vec![to_recipient],
@@ -328,18 +340,18 @@ mod tests {
             (
                 "a surplus seal",
                 vec![],
-                vec![seal()],
+                vec![PublicationMode::Sealed(seal())],
                 InvalidMessageSeal::Unpaired,
             ),
             (
                 "a seal to another destination",
                 vec![body(AccountId::new([12; 32]))],
-                vec![seal()],
+                vec![PublicationMode::Sealed(seal())],
                 InvalidMessageSeal::MisaddressedSeal,
             ),
         ] {
             assert_eq!(
-                seal_messages(&async_messages, seals, None)
+                publish_messages(async_messages, modes, None)
                     .unwrap_err()
                     .to_string(),
                 refusal.to_string(),

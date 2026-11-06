@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     MembershipProof, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
-    ProgramImageWitness, ProvenExecution, ProvingInput, RecipientEncryption, SenderPresentation,
+    ProgramImageWitness, ProvenExecution, ProvingInput, PublicationMode, SenderPresentation,
     ShadowProgramWitness,
     account::{AccountId, Actor, ActorState, Cycles},
     execution_state::{
@@ -373,7 +373,7 @@ pub fn execute_and_prove(
     programs: &ProgramCatalog,
     mut present_sender: impl FnMut(Actor) -> SenderPresentation,
     mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
-    mut choose_seal: impl FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
+    mut choose_publication: impl FnMut(&MessageBody) -> Result<PublicationMode, LeeError>,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     let Simulated {
         predicted_cross_messages,
@@ -399,7 +399,7 @@ pub fn execute_and_prove(
         programs,
         &mut |_| presented.next(),
         &mut |index, _| recorded.contains(&index),
-        &mut choose_seal,
+        &mut choose_publication,
     )
 }
 
@@ -539,7 +539,7 @@ pub fn execute_and_prove_with_cross_messages(
     programs: &ProgramCatalog,
     mut present_sender: impl FnMut(Actor) -> SenderPresentation,
     mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
-    mut choose_seal: impl FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
+    mut choose_publication: impl FnMut(&MessageBody) -> Result<PublicationMode, LeeError>,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     // The fee's credit reaches a native actor, which calls nothing back.
     if input.fee.is_some() {
@@ -552,7 +552,7 @@ pub fn execute_and_prove_with_cross_messages(
         programs,
         &mut |sender| Some(present_sender(sender)),
         &mut |index, body| requested.contains(&index) || select_promotion(Placement::Private, body),
-        &mut choose_seal,
+        &mut choose_publication,
     )
 }
 
@@ -562,7 +562,7 @@ fn prove(
     programs: &ProgramCatalog,
     choose: &mut dyn FnMut(Actor) -> Option<SenderPresentation>,
     select: &mut dyn FnMut(u64, &MessageBody) -> bool,
-    choose_seal: &mut dyn FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
+    choose_publication: &mut dyn FnMut(&MessageBody) -> Result<PublicationMode, LeeError>,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     let ProgramCatalog { programs } = programs;
 
@@ -594,10 +594,10 @@ fn prove(
     {
         return Err(ExecutionError::UnreachedPromotion { index }.into());
     }
-    let message_seals = outcome
+    let publication_modes = outcome
         .async_messages
         .iter()
-        .map(choose_seal)
+        .map(choose_publication)
         .collect::<Result<_, _>>()?;
     let Prover {
         mut env_builder,
@@ -644,7 +644,7 @@ fn prove(
         shadow_program_witnesses,
         responses,
         sender_presentations: recorder.recorded,
-        message_seals,
+        publication_modes,
         predicted_cross_messages,
     };
 

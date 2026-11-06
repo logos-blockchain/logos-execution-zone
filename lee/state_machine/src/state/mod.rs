@@ -3,11 +3,11 @@ use std::collections::BTreeSet;
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     BlockId, Commitment, CommitmentPosition, CommitmentSetDigest, DUMMY_COMMITMENT, EncryptedNote,
-    MembershipProof, Nullifier, RecoveryBinding, SealedMessage, Timestamp,
+    MembershipProof, Nullifier, RecoveryBinding, Timestamp,
     account::{Account, AccountId, ActorState},
     program::{
-        MessageBody, PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramId, ProgramSegment,
-        Publication, TransactionEvent, get_program_via, immutable_mirror_commitment,
+        PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramId, ProgramSegment, Publication,
+        StoredPublication, TransactionEvent, get_program_via, immutable_mirror_commitment,
     },
 };
 use rpds::{HashTrieMapSync, HashTrieSetSync, RedBlackTreeMapSync, RedBlackTreeSetSync};
@@ -172,13 +172,6 @@ pub struct V03State {
         deserialize_with = "crate::encoding::persistent::deserialize_ordered_map"
     )]
     recovery_bindings: RedBlackTreeMapSync<AccountId, EncryptedNote>,
-}
-
-#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(test, derive(Debug))]
-enum StoredPublication {
-    Clear(MessageBody),
-    Sealed(SealedMessage),
 }
 
 impl Default for V03State {

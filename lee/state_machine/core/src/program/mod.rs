@@ -297,6 +297,13 @@ impl Publication {
     }
 }
 
+#[derive(BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
+pub enum StoredPublication {
+    Clear(MessageBody),
+    Sealed(SealedMessage),
+}
+
 /// A synchronous message processed in the same transaction it was emitted in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct SyncMessage {

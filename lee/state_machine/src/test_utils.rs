@@ -12,8 +12,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use lee_core::{
     AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, MembershipProof, NullifierPublicKey,
-    NullifierSecretKey, NullifierWitness, PrivateWitness, RecipientEncryption, RegularKey,
-    WitnessKind, account::Nonce, encryption::ViewingPublicKey, program::MessageBody,
+    NullifierSecretKey, NullifierWitness, PrivateWitness, PublicationMode, RegularKey, WitnessKind,
+    account::Nonce, encryption::ViewingPublicKey, program::MessageBody,
 };
 
 #[cfg(feature = "test-utils")]
@@ -107,7 +107,7 @@ pub fn update_witness(
     }
 }
 
-pub fn no_seal(body: &MessageBody) -> Result<RecipientEncryption, LeeError> {
+pub fn no_seal(body: &MessageBody) -> Result<PublicationMode, LeeError> {
     Err(LeeError::InvalidInput(format!(
         "No seal for the durable async message to {:?}",
         body.to

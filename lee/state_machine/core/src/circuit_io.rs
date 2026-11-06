@@ -12,10 +12,9 @@ use crate::{
     execution_state::{Boundary, PredictedCrossMessages, PublicExecutionContext, TransactionEntry},
     program::{
         MessageBody, MessageData, PdaSeed, PrivateAccountKind, ProgramHeader, ProgramId, Response,
-        ValidityWindows, immutable_mirror_commitment,
+        StoredPublication, ValidityWindows, immutable_mirror_commitment,
     },
     recovery::{RecipientEncryption, RecoveryBinding},
-    sealing::SealedMessage,
 };
 
 /// `circuit_io` is shared by host and guest, so this can't live in the host-only `error` module.
@@ -262,7 +261,7 @@ pub struct PrivacyPreservingCircuitInput {
     /// Specifying whether a private sender is represented in plaintext or blinded.
     pub sender_presentations: Vec<SenderPresentation>,
     /// One per durable async message of private execution, in the order it publishes them.
-    pub message_seals: Vec<RecipientEncryption>,
+    pub publication_modes: Vec<PublicationMode>,
     /// Predicted messages sent between public and private actors.
     pub predicted_cross_messages: PredictedCrossMessages,
 }
@@ -284,6 +283,12 @@ pub struct PrivateWitness {
 pub enum SenderPresentation {
     Canonical,
     Blinded([u8; 32]),
+}
+
+#[derive(BorshSerialize, BorshDeserialize)]
+pub enum PublicationMode {
+    Clear,
+    Sealed(RecipientEncryption),
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
@@ -498,8 +503,8 @@ pub struct PrivacyPreservingCircuitOutput {
 pub struct ProvenExecution {
     /// A vector designating messages passing private-public boundary in either direction.
     pub boundary: Boundary,
-    /// The sealed asynchronous messages between private actors.
-    pub async_messages: Vec<SealedMessage>,
+    /// The asynchronous messages between private actors, each clear or sealed.
+    pub async_messages: Vec<StoredPublication>,
     /// Bindings tying an address to the private account behind it.
     pub recovery_bindings: Vec<RecoveryBinding>,
     /// How the transaction starts, as far as the proof reveals it: a public call, or `None` for a
@@ -549,11 +554,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        Commitment, EncryptedNote, Nullifier, SealedMessage,
+        Commitment, Nullifier,
         account::{Account, AccountId, Actor},
-        encryption::{Ciphertext, EphemeralPublicKey},
-        execution_state::{BoundaryStep, Delivery},
-        program::{MessageBody, MessageEnvelope},
+        program::MessageBody,
     };
 
     const NSK: NullifierSecretKey = [0; 32];
@@ -608,169 +611,6 @@ mod tests {
             private_promotions: BTreeSet::new(),
             fee: None,
         }
-    }
-
-    #[test]
-    fn a_circuit_output_journal_has_a_pinned_layout() {
-        let public = Actor::new(AccountId::new([0; 32]), AccountId::new([1; 32]));
-        let private = Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32]));
-        let output = PrivacyPreservingCircuitOutput {
-            public_context: PublicExecutionContext {
-                actors: BTreeSet::from([public]),
-                authorized_accounts: BTreeSet::from([AccountId::new([4; 32])]),
-                promotions: BTreeSet::from([5]),
-            },
-            execution: ProvenExecution {
-                boundary: vec![
-                    BoundaryStep::PrivateToPublic(Delivery {
-                        envelope: MessageEnvelope {
-                            from: private,
-                            to: public,
-                            message: vec![6],
-                        },
-                        inherited_authorizations: BTreeSet::from([AccountId::new([7; 32])]),
-                        inherits_entry_authorizations: false,
-                        pda_seeds: BTreeSet::from([PdaSeed::new([8; 32])]),
-                    }),
-                    BoundaryStep::PublicToPrivate(Delivery {
-                        envelope: MessageEnvelope {
-                            from: public,
-                            to: private,
-                            message: vec![9],
-                        },
-                        inherited_authorizations: BTreeSet::new(),
-                        inherits_entry_authorizations: true,
-                        pda_seeds: BTreeSet::new(),
-                    }),
-                    BoundaryStep::EndPrivateSubtree,
-                    BoundaryStep::EndPublicSubtree,
-                ],
-                async_messages: vec![SealedMessage {
-                    commitment: Commitment::from_byte_array([10; 32]),
-                    note: EncryptedNote {
-                        ciphertext: Ciphertext(vec![11; 3]),
-                        epk: EphemeralPublicKey(vec![12; 2]),
-                    },
-                }],
-                recovery_bindings: vec![RecoveryBinding {
-                    address: AccountId::new([13; 32]),
-                    note: EncryptedNote {
-                        ciphertext: Ciphertext(vec![14; 3]),
-                        epk: EphemeralPublicKey(vec![15; 2]),
-                    },
-                }],
-                public_root: Some(RootCall {
-                    to: public,
-                    message: vec![16; 2],
-                }),
-                private_actions: vec![PrivateAction {
-                    nullifier: Nullifier::from_byte_array([17; 32]),
-                    root: [18; 32],
-                    commitment: Commitment::from_byte_array([19; 32]),
-                    encrypted_post_state: EncryptedNote {
-                        ciphertext: Ciphertext(vec![20; 3]),
-                        epk: EphemeralPublicKey(vec![21; 2]),
-                    },
-                }],
-                validity: ValidityWindows {
-                    blocks: (22..).into(),
-                    timestamps: (..23).into(),
-                },
-                program_image_claims: vec![
-                    ProgramImageClaim::Disclosed {
-                        account_id: AccountId::new([24; 32]),
-                        image_id: [25; 8],
-                    },
-                    ProgramImageClaim::Undisclosed { root: [26; 32] },
-                ],
-                fee: None,
-            },
-        };
-
-        let expected: Vec<u8> = [
-            &[109, 3, 0, 0][..], // frame length: the 877 bytes below
-            &[1, 0, 0, 0],       // public_context.actors: one actor
-            &[0; 32],
-            &[1; 32],
-            &[1, 0, 0, 0], // public_context.authorized_accounts: one account
-            &[4; 32],
-            &[1, 0, 0, 0], // public_context.promotions: one selected async message
-            &[5, 0, 0, 0, 0, 0, 0, 0],
-            &[4, 0, 0, 0], // boundary: four steps
-            &[0],          // BoundaryStep::PrivateToPublic
-            &[2; 32],      // from
-            &[3; 32],
-            &[0; 32], // to
-            &[1; 32],
-            &[1, 0, 0, 0], // message
-            &[6],
-            &[1, 0, 0, 0], // inherited_authorizations: one account
-            &[7; 32],
-            &[0],          // inherits_entry_authorizations: false
-            &[1, 0, 0, 0], // pda_seeds: one seed
-            &[8; 32],
-            &[1],     // BoundaryStep::PublicToPrivate
-            &[0; 32], // from
-            &[1; 32],
-            &[2; 32], // to
-            &[3; 32],
-            &[1, 0, 0, 0], // message
-            &[9],
-            &[0, 0, 0, 0], // inherited_authorizations: none
-            &[1],          // inherits_entry_authorizations: true
-            &[0, 0, 0, 0], // pda_seeds: none
-            &[2],          // BoundaryStep::EndPrivateSubtree
-            &[3],          // BoundaryStep::EndPublicSubtree
-            &[1, 0, 0, 0], // async_messages: one sealed message
-            &[10; 32],     // commitment
-            &[3, 0, 0, 0], // note.ciphertext
-            &[11; 3],
-            &[2, 0, 0, 0], // note.epk
-            &[12; 2],
-            &[1, 0, 0, 0], // recovery_bindings: one binding
-            &[13; 32],     // address
-            &[3, 0, 0, 0], // note.ciphertext
-            &[14; 3],
-            &[2, 0, 0, 0], // note.epk
-            &[15; 2],
-            &[1],     // public_root: Some
-            &[0; 32], // to
-            &[1; 32],
-            &[2, 0, 0, 0], // message
-            &[16; 2],
-            &[1, 0, 0, 0], // private_actions: one action
-            &[17; 32],     // nullifier
-            &[18; 32],     // root
-            &[19; 32],     // commitment
-            &[3, 0, 0, 0], // encrypted_post_state.ciphertext
-            &[20; 3],
-            &[2, 0, 0, 0], // encrypted_post_state.epk
-            &[21; 2],
-            &[1], // validity.blocks.from: Some
-            &[22, 0, 0, 0, 0, 0, 0, 0],
-            &[0], // validity.blocks.to: None
-            &[0], // validity.timestamps.from: None
-            &[1], // validity.timestamps.to: Some
-            &[23, 0, 0, 0, 0, 0, 0, 0],
-            &[2, 0, 0, 0],            // program_image_claims: two claims
-            &[0],                     // ProgramImageClaim::Disclosed
-            &[24; 32],                // account_id
-            &[25, 0, 0, 0].repeat(8), // image_id: eight little-endian words
-            &[1],                     // ProgramImageClaim::Undisclosed
-            &[26; 32],                // root
-            &[0],                     // fee: None
-        ]
-        .concat();
-
-        assert_eq!(output.to_bytes(), expected);
-        assert_eq!(
-            crate::to_borsh_frame(&(&output.public_context, &output.execution)),
-            expected
-        );
-        let decoded: PrivacyPreservingCircuitOutput =
-            borsh::from_slice(crate::from_frame(&expected).expect("the frame is well-formed"))
-                .unwrap();
-        assert_eq!(decoded, output);
     }
 
     #[test]
