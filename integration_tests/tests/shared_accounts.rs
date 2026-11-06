@@ -85,7 +85,7 @@ async fn group_create_and_shared_account_registration() -> Result<()> {
         SharedAccountDerivation::Regular { .. }
     ));
 
-    log::info!("Shared account registered: {shared_account_id}");
+    tracing::info!(%shared_account_id, "Shared account registered");
     Ok(())
 }
 
@@ -160,7 +160,7 @@ async fn group_invite_join_key_agreement() -> Result<()> {
         "Key agreement: same GMS produces same keys"
     );
 
-    log::info!("Key agreement verified via invite/join");
+    tracing::info!("Key agreement verified via invite/join");
     Ok(())
 }
 
@@ -220,9 +220,9 @@ async fn fund_shared_account_from_public() -> Result<()> {
         .shared_private_account(shared_id)
         .context("Shared account not found after sync")?;
 
-    log::info!(
-        "Shared account balance after funding: {}",
-        entry.account.data.native_balance().unwrap()
+    tracing::info!(
+        balance = entry.account.data.native_balance().unwrap(),
+        "Shared account funded"
     );
     assert_eq!(
         entry.account.data.native_balance().unwrap(),

@@ -15,7 +15,6 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, ensure};
 use integration_tests::{account_balance, get_account, init_logger, new_account};
 use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey};
-use log::info;
 use logos_blockchain_core::mantle::channel::ChannelState;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
 use logos_blockchain_zone_sdk::{
@@ -31,6 +30,7 @@ use test_fixtures::{
     },
 };
 use tokio::test;
+use tracing::info;
 use wallet::{AccountIdentity, program_facades::sequencer_stake::SequencerStake};
 
 /// Comfortably above `system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE`.
@@ -125,9 +125,9 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
         genesis_state.configuration_threshold
     );
     info!(
-        "Channel created accrediting {} keys at a configuration threshold of {}",
-        genesis_state.accredited_keys.len(),
-        genesis_state.configuration_threshold
+        accredited_keys = genesis_state.accredited_keys.len(),
+        configuration_threshold = genesis_state.configuration_threshold,
+        "Channel created"
     );
 
     ctx.wallet_mut()
@@ -148,8 +148,8 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
     let stake_id = programs::sequencer_stake_account_id();
 
     info!(
-        "Staking sequencer key {}",
-        hex::encode(joiner_key.to_bytes())
+        sequencer_key = %hex::encode(joiner_key.to_bytes()),
+        "Staking sequencer key"
     );
     SequencerStake(ctx.wallet())
         .send_stake(
@@ -194,9 +194,9 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
         updated.configuration_threshold
     );
     info!(
-        "Committee update landed: {} keys at a configuration threshold of {}",
-        updated.accredited_keys.len(),
-        updated.configuration_threshold
+        accredited_keys = updated.accredited_keys.len(),
+        configuration_threshold = updated.configuration_threshold,
+        "Committee update landed"
     );
 
     Ok(())

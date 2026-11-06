@@ -244,7 +244,7 @@ async fn a_private_pda_receives_and_spends() -> Result<()> {
 
     // ── Receive ──────────────────────────────────────────────────────────────────────────────────
 
-    log::info!("Sending to alice_pda");
+    tracing::info!("Sending to alice_pda");
     fund_private_pda(
         ctx.wallet_mut(),
         sender,
@@ -256,7 +256,7 @@ async fn a_private_pda_receives_and_spends() -> Result<()> {
     )
     .await?;
 
-    log::info!("Waiting for block");
+    tracing::info!("Waiting for block");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Sync so alice's wallet stores the PDA's first state.
@@ -286,7 +286,7 @@ async fn a_private_pda_receives_and_spends() -> Result<()> {
     let recipient_vpk = ViewingPublicKey::from_seed(&[0_u8; 32], &[1_u8; 32]);
     let amount_spend: u128 = 13;
 
-    log::info!("Alice spending from alice_pda");
+    tracing::info!("Alice spending from alice_pda");
     spend_private_pda(
         ctx.wallet_mut(),
         alice_pda_id,
@@ -298,7 +298,7 @@ async fn a_private_pda_receives_and_spends() -> Result<()> {
     )
     .await?;
 
-    log::info!("Waiting for block");
+    tracing::info!("Waiting for block");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     sync_private(&mut ctx).await?;
@@ -323,6 +323,6 @@ async fn a_private_pda_receives_and_spends() -> Result<()> {
         "alice_pda post-spend commitment not in state"
     );
 
-    log::info!("Private PDA receive-and-spend test passed");
+    tracing::info!("Private PDA receive-and-spend test passed");
     Ok(())
 }

@@ -89,9 +89,9 @@ pub fn build_initial_state(cross_zone: bool) -> lee::V03State {
 
     // Stamped on fresh genesis and restore-replay: compare against the
     // indexer's on divergence.
-    log::info!(
-        "Genesis fingerprint: {}",
-        hex::encode(base.genesis_fingerprint())
+    tracing::info!(
+        fingerprint = %hex::encode(base.genesis_fingerprint()),
+        "Genesis fingerprint"
     );
     base
 }

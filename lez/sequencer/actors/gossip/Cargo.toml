@@ -24,7 +24,7 @@ actor = [
   "dep:hex",
   "dep:lee",
   "dep:libp2p",
-  "dep:log",
+  "dep:tracing",
 ]
 # Enable mDNS-based local peer discovery for gossip.
 # All mDNS code lives in the actor, so this implies `actor`.
@@ -43,7 +43,7 @@ logos-blockchain-key-management-system-service = { workspace = true, optional = 
 anyhow = { workspace = true, optional = true }
 borsh = { workspace = true, optional = true }
 kameo = { workspace = true, optional = true }
-log = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
 tokio = { workspace = true, features = [
   "macros",
   "rt-multi-thread",

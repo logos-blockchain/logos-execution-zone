@@ -14,7 +14,6 @@ use kameo::{
     message::{Context, Message},
 };
 use kameo_actors::broker::Broker;
-use log::warn;
 use logos_blockchain_common_http_client::BasicAuthCredentials;
 use logos_blockchain_core::mantle::NoteId;
 use logos_blockchain_zone_sdk::{
@@ -24,6 +23,7 @@ use logos_blockchain_zone_sdk::{
 };
 use sequencer_storage_actor::{StorageActorTrait, protocol::GetZoneCheckpoint};
 use tokio::select;
+use tracing::warn;
 
 #[cfg(feature = "test-utils")]
 use crate::protocol::PublishRawInscription;
@@ -584,7 +584,7 @@ impl TryFrom<&logos_blockchain_zone_sdk::node_types::ChannelState> for LiveChann
 fn block_from_inscription(inscription: &InscriptionInfo) -> Option<Block> {
     borsh::from_slice::<Block>(&inscription.payload)
         .inspect_err(|err| {
-            warn!("Failed to deserialize block from inscription: {err:?}");
+            warn!(error = ?err, "Failed to deserialize block from inscription");
         })
         .ok()
 }

@@ -246,7 +246,7 @@ impl GossipActor {
 
         // Fail fast on bind errors: wait for the first listen address.
         let listen_addrs = wait_for_listen_addr(&mut swarm).await?;
-        log::info!("Gossip listening on {listen_addrs:?} as {local_peer_id}");
+        tracing::info!(?listen_addrs, peer_id = %local_peer_id, "Gossip listening");
 
         // Seed Kademlia with bootstrap peers that carry an embedded peer id;
         // dial the rest directly, since Kademlia can't route to an address
@@ -264,11 +264,11 @@ impl GossipActor {
                 continue;
             }
             if let Err(err) = swarm.dial(addr.clone()) {
-                log::warn!("Failed to dial gossip bootstrap peer {addr}: {err}");
+                tracing::warn!(%addr, error = %err, "Failed to dial gossip bootstrap peer");
             }
         }
         if let Err(err) = swarm.behaviour_mut().kademlia.bootstrap() {
-            log::debug!("Kademlia bootstrap skipped (no known peers yet): {err}");
+            tracing::debug!(error = %err, "Kademlia bootstrap skipped: no known peers yet");
         }
 
         Ok(Self {
@@ -437,7 +437,7 @@ impl GossipActor {
             GossipBehaviourEvent::Mdns(mdns::Event::Discovered(peers)) => {
                 for (peer_id, addr) in peers {
                     if let Err(err) = self.swarm_mut().dial(addr) {
-                        log::debug!("Failed to dial mdns-discovered peer {peer_id}: {err}");
+                        tracing::debug!(%peer_id, error = %err, "Failed to dial mdns-discovered peer");
                     }
                 }
             }
@@ -457,7 +457,7 @@ impl GossipActor {
 
         let acceptance = match evaluate_transaction(data, self.max_block_size) {
             TxEvaluation::Reject(reason) => {
-                log::debug!("Rejecting gossiped tx from {source}: {reason}");
+                tracing::debug!(%source, %reason, "Rejecting gossiped tx");
                 gossipsub::MessageAcceptance::Reject
             }
             TxEvaluation::Accept(tx) => {
@@ -474,7 +474,7 @@ impl GossipActor {
                             self.seen.insert(hash);
                         }
                         Err(reason) => {
-                            log::debug!("Not admitting gossiped tx {hash:?}: {reason}");
+                            tracing::debug!(tx_hash = %hash, %reason, "Not admitting gossiped tx");
                         }
                     }
 
@@ -503,16 +503,16 @@ impl GossipActor {
             { evaluate_approval(data, self.channel_id, self.accredited_keys.as_ref()) };
         let acceptance = match evaluation {
             ApprovalEvaluation::Reject(reason) => {
-                log::debug!("Rejecting gossiped slash approval from {source}: {reason}");
+                tracing::debug!(%source, %reason, "Rejecting gossiped slash approval");
                 gossipsub::MessageAcceptance::Reject
             }
             ApprovalEvaluation::Ignore(reason) => {
-                log::debug!("Ignoring gossiped slash approval from {source}: {reason}");
+                tracing::debug!(%source, %reason, "Ignoring gossiped slash approval");
                 gossipsub::MessageAcceptance::Ignore
             }
             ApprovalEvaluation::Accept(approval) => {
                 if let Err(err) = self.approval_sink.tell(approval).try_send() {
-                    log::debug!("Dropping inbound slash approval: {err}");
+                    tracing::debug!(error = %err, "Dropping inbound slash approval");
                 }
                 gossipsub::MessageAcceptance::Accept
             }
@@ -537,7 +537,7 @@ impl GossipActor {
         {
             Ok(_) | Err(gossipsub::PublishError::Duplicate) => {}
             Err(err) => {
-                log::debug!("Queueing slash approval publish for retry: {err}");
+                tracing::debug!(error = %err, "Queueing slash approval publish for retry");
                 _ = self.pending_approvals.push_back(approval);
             }
         }
@@ -570,16 +570,16 @@ impl GossipActor {
         };
         let acceptance = match evaluation {
             ConfigEvaluation::Reject(reason) => {
-                log::debug!("Rejecting a channel-config message from {source}: {reason}");
+                tracing::debug!(%source, %reason, "Rejecting a channel-config message");
                 gossipsub::MessageAcceptance::Reject
             }
             ConfigEvaluation::Ignore(reason) => {
-                log::debug!("Ignoring a channel-config message from {source}: {reason}");
+                tracing::debug!(%source, %reason, "Ignoring a channel-config message");
                 gossipsub::MessageAcceptance::Ignore
             }
             ConfigEvaluation::Accept(message) => {
                 if let Err(err) = self.config_sink.tell(message).try_send() {
-                    log::debug!("Dropping an inbound channel-config message: {err}");
+                    tracing::debug!(error = %err, "Dropping an inbound channel-config message");
                 }
                 gossipsub::MessageAcceptance::Accept
             }
@@ -605,7 +605,7 @@ impl GossipActor {
         {
             Ok(_) | Err(gossipsub::PublishError::Duplicate) => {}
             Err(err) => {
-                log::debug!("Queueing a channel-config publish for retry: {err}");
+                tracing::debug!(error = %err, "Queueing a channel-config publish for retry");
                 _ = self.pending_config.push_back(message);
             }
         }
@@ -636,11 +636,11 @@ impl GossipActor {
                 self.seen.insert(hash);
             }
             Err(err) => {
-                log::debug!("Queueing local tx publish {hash:?} for retry: {err}");
+                tracing::debug!(tx_hash = %hash, error = %err, "Queueing local tx publish for retry");
                 if let Some(dropped) = self.pending_publish.push_back(tx) {
-                    log::debug!(
-                        "Pending publish queue full; dropping oldest tx {:?}",
-                        dropped.hash()
+                    tracing::debug!(
+                        tx_hash = %dropped.hash(),
+                        "Pending publish queue full, dropping the oldest tx"
                     );
                 }
             }
@@ -662,13 +662,13 @@ impl GossipActor {
         if !self.connected.is_empty() || self.bootstrap.is_empty() {
             return;
         }
-        log::debug!(
-            "No connected gossip peers; retrying {} bootstrap peer(s)",
-            self.bootstrap.len()
+        tracing::debug!(
+            bootstrap_peers = self.bootstrap.len(),
+            "No connected gossip peers, retrying bootstrap peers"
         );
         for addr in self.bootstrap.clone() {
             if let Err(err) = self.swarm_mut().dial(addr.clone()) {
-                log::debug!("Failed to dial gossip bootstrap peer {addr}: {err}");
+                tracing::debug!(%addr, error = %err, "Failed to dial gossip bootstrap peer");
             }
         }
         _ = self.swarm_mut().behaviour_mut().kademlia.bootstrap();
@@ -877,7 +877,7 @@ pub fn spawn_gossip_outage_watchdog(actor_ref: ActorRef<GossipActor>) -> Watchdo
             return;
         }
         loop {
-            log::error!(
+            tracing::error!(
                 "Sequencer gossip network is down; continuing L1-only. \
                  Restart the node to restore p2p."
             );

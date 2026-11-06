@@ -10,7 +10,6 @@ use chain_state::timeout_node::TimeoutNode;
 use common::block::Block;
 use kameo::actor::ActorRef;
 use kameo_actors::broker::Broker;
-use log::info;
 use logos_blockchain_core::{
     mantle::{
         Note, Op, OpProof, SignedOps,
@@ -36,6 +35,7 @@ use logos_blockchain_zone_sdk::{
 };
 use sequencer_actors_common::SendErrorExt as _;
 use sequencer_storage_actor::protocol::ZoneCheckpointRecord;
+use tracing::info;
 
 use crate::{
     Result,
@@ -181,10 +181,10 @@ impl Publisher {
             }
             Event::TurnNotification { notification } => {
                 info!(
-                    "Turn update: our_turn={}, starting_slot={:?}, ends_at_slot={:?}",
-                    notification.our_turn_to_write,
-                    notification.starting_slot,
-                    notification.ends_at_slot
+                    our_turn = notification.our_turn_to_write,
+                    starting_slot = notification.starting_slot,
+                    ends_at_slot = notification.ends_at_slot,
+                    "Turn update"
                 );
 
                 self.publish(
@@ -383,7 +383,10 @@ impl Publisher {
                 .map_err(|err| Error::TooManyOperationProofs(err.into()))?;
         }
 
-        info!("Creating the channel with {key_count} accredited key(s), genesis block bundled");
+        info!(
+            accredited_keys = key_count,
+            "Creating the channel, genesis block bundled"
+        );
 
         let tx = SignedOps::from_parts(mantle_tx, op_proofs)?;
         self.submit_tx(tx, msg_id, MsgId::root())
@@ -435,8 +438,9 @@ impl Publisher {
         };
         if published.is_ok() {
             info!(
-                "Published block {} with the size of {data_byte_size} bytes",
-                block.header.block_id
+                block_id = block.header.block_id,
+                size_bytes = data_byte_size,
+                "Published block"
             );
         }
         published
@@ -498,7 +502,7 @@ impl Publisher {
             std::iter::once(transfer_proof).chain(fee_proof),
         );
         if published.is_ok() {
-            info!("Published block {block_id} with the size of {block_size} bytes");
+            info!(block_id, size_bytes = block_size, "Published block");
         }
         published
     }

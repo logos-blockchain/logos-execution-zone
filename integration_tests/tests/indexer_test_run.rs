@@ -29,8 +29,8 @@ async fn indexer_test_run() -> Result<()> {
     let last_block_seq =
         sequencer_service_rpc::RpcClient::get_last_block_id(ctx.sequencer_client()).await?;
 
-    log::info!("Last block on seq now is {last_block_seq}");
-    log::info!("Last block on ind now is {last_block_indexer}");
+    tracing::info!(last_block_seq, "Sequencer last block");
+    tracing::info!(last_block_indexer, "Indexer last block");
 
     assert!(last_block_indexer > 0);
 

@@ -947,7 +947,7 @@
     },
     {
       "datasource": { "type": "loki", "uid": "loki" },
-      "description": "Lines logged from the actor's crate: code it calls in other crates, e.g. the sequencer core, logs under those.",
+      "description": "Lines logged while the actor ran, from its own crate or from code it calls, e.g. the sequencer core. Tasks it spawns log without it.",
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [ ] },
       "gridPos": { "h": 12, "w": 24, "x": 0, "y": 62 },
       "id": 26,
@@ -955,14 +955,14 @@
         {
           "targetBlank": false,
           "title": "All logs in Explore",
-          "url": "/explore?schemaVersion=1&panes={\"logs\":{\"datasource\":\"loki\",\"queries\":[{\"datasource\":{\"type\":\"loki\",\"uid\":\"loki\"},\"expr\":\"{sequencer=\\\"$sequencer\\\"}%20|~%20`^\\\\[\\\\S%2B%20%2B[A-Z]%2B%20%2B${actor_crate}(::\\\\S*)?\\\\]`\",\"refId\":\"A\"}],\"range\":{\"from\":\"${__from}\",\"to\":\"${__to}\"}}}"
+          "url": "/explore?schemaVersion=1&panes={\"logs\":{\"datasource\":\"loki\",\"queries\":[{\"datasource\":{\"type\":\"loki\",\"uid\":\"loki\"},\"expr\":\"{sequencer=\\\"$sequencer\\\",%20actor=\\\"$actor\\\"}\",\"refId\":\"A\"}],\"range\":{\"from\":\"${__from}\",\"to\":\"${__to}\"}}}"
         }
       ],
       "options": { "enableLogDetails": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true },
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "loki" },
-          "expr": "{sequencer=\"$sequencer\", level=~\"WARN|ERROR\"} |~ `^\\[\\S+ +[A-Z]+ +${actor_crate}(::\\S*)?\\]`",
+          "expr": "{sequencer=\"$sequencer\", actor=\"$actor\", level=~\"WARN|ERROR\"}",
           "legendFormat": "",
           "refId": "A"
         }
@@ -999,20 +999,6 @@
         "query": "label_values(kameo_messages_received_total{sequencer=\"$sequencer\"}, actor_name)",
         "refresh": 2,
         "regex": "/^(?:[a-z0-9_]+::)*([A-Za-z0-9_]+)/",
-        "sort": 7
-      },
-      {
-        "type": "query",
-        "datasource": { "type": "prometheus", "uid": "prometheus" },
-        "definition": "label_values(kameo_messages_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}, actor_name)",
-        "hide": 2,
-        "includeAll": false,
-        "label": "Actor crate",
-        "multi": false,
-        "name": "actor_crate",
-        "query": "label_values(kameo_messages_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}, actor_name)",
-        "refresh": 2,
-        "regex": "/^([a-z0-9_]+)::/",
         "sort": 7
       },
       {

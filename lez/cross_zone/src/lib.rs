@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 
 pub use acceptance::{
     CommitteeFloorState, FloorVerdict, Link, OffChain, ScreenRefusal, StallState, alerts_at,
-    equivocation_report, link_to_tip, screen_peer_block,
+    link_to_tip, log_equivocation, screen_peer_block,
 };
 use borsh::{BorshDeserialize, BorshSerialize};
 use common::HashType;

@@ -79,7 +79,7 @@ struct BenchRunReport {
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
-    // test_fixtures initializes env_logger via a LazyLock, so we leave logger
+    // test_fixtures initializes logging via a LazyLock, so we leave logger
     // setup to it. Set RUST_LOG=info before running to see logs.
 
     let cli = Cli::parse();

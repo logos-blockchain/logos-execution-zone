@@ -23,7 +23,6 @@ use lee_core::{
     account::{Actor, Balance, Nonce},
     program::Publication,
 };
-use log::{debug, warn};
 use sequencer_actors_common::{Reply, SendErrorExt};
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
@@ -37,6 +36,7 @@ use sharding_pool_actor::{
     ShardingPoolActor,
     protocol::{Link, Reset, Unlink},
 };
+use tracing::{debug, warn};
 
 use crate::{
     ExecutorActorTrait, Result,
@@ -206,8 +206,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> kameo::Actor for ExecutorActor<
     ) -> Result<ControlFlow<ActorStopReason>> {
         // The only link is the Bedrock actor of the channel, whose publisher this start set up.
         warn!(
-            "Bedrock actor of channel {} stopped ({reason}), so the executor restarts with a fresh one",
-            self.channel_id
+            channel_id = %self.channel_id,
+            %reason,
+            "Bedrock actor of the channel stopped, so the executor restarts with a fresh one"
         );
         Ok(ControlFlow::Break(ActorStopReason::LinkDied {
             id,
@@ -278,14 +279,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
                 if std::mem::take(&mut self.failed_attempts) != 0 {
                     sequencer_executor_actor_metrics::record_production_failed_attempts(0);
                 }
-                log::info!(
-                    "Block with id {id} created by {}",
-                    online.sequencer().channel_signing_public_key_hex()
+                tracing::info!(
+                    block_id = id,
+                    producer = %online.sequencer().channel_signing_public_key_hex(),
+                    "Block created"
                 );
             }
             Err(err) if err.is::<sequencer_core::ChannelMovedWhileBuilding>() => {
                 // Skipping turn until next time hoping to catch up all missed updates
-                warn!("Skipping turn: {err}");
+                warn!(error = %err, "Skipping turn");
             }
             Err(err) => {
                 self.failed_attempts = self.failed_attempts.saturating_add(1);
@@ -293,8 +295,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
                     self.failed_attempts,
                 );
                 warn!(
-                    "Skipping turn: block production failed ({} in a row): {err:#}",
-                    self.failed_attempts
+                    failed_attempts = self.failed_attempts,
+                    error = format_args!("{err:#}"),
+                    "Skipping turn: block production failed"
                 );
             }
         }
@@ -786,8 +789,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
 
         if msg.channel_id != self.channel_id {
             warn!(
-                "Received a channel event for a different channel: {}",
-                msg.channel_id
+                channel_id = %msg.channel_id,
+                "Received a channel event for a different channel"
             );
         }
 

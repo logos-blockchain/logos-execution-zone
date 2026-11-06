@@ -6,8 +6,8 @@ use lee_core::{
     BlockId, Timestamp, account::Balance, native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::TransactionEvent,
 };
-use log::warn;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::HashType;
 
@@ -161,7 +161,7 @@ impl LeeTransaction {
     ) -> Result<Self, lee::error::LeeError> {
         let diff = self
             .validate_on_state(state, block_id, timestamp)
-            .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
+            .inspect_err(|err| warn!(error = ?err, "Error at transition"))?;
         state.apply_state_diff(diff)?;
         Ok(self)
     }
@@ -181,7 +181,7 @@ impl LeeTransaction {
     ) -> Result<Vec<TransactionEvent>, lee::error::LeeError> {
         let diff = self
             .compute_state_diff(state, block_id, timestamp)
-            .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
+            .inspect_err(|err| warn!(error = ?err, "Error at transition"))?;
         state.apply_state_diff(diff)
     }
 }

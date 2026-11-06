@@ -16,7 +16,7 @@ use kameo::{
     reply::DelegatedReply,
     supervision::RestartPolicy,
 };
-use log::{info, warn};
+use tracing::{info, warn};
 
 use crate::{
     ShardingKey,
@@ -242,33 +242,35 @@ where
         reason: ActorStopReason,
     ) -> Result<ControlFlow<ActorStopReason>, Self::Error> {
         if matches!(reason, ActorStopReason::SupervisorRestart) {
-            warn!("Sharded actor with id {id} is being restarted");
+            warn!(%id, "Sharded actor is being restarted");
             return Ok(ControlFlow::Continue(()));
         }
 
         let (key, restarted) = self.give_up_worker(id);
         match &reason {
             ActorStopReason::Normal => {
-                info!("Sharded actor with key {key} and id {id} stopped normally");
+                info!(%key, %id, "Sharded actor stopped normally");
             }
             ActorStopReason::SupervisorRestart => unreachable!("Handled above"),
             ActorStopReason::Killed => {
-                warn!("Sharded actor with key {key} and id {id} was killed");
+                warn!(%key, %id, "Sharded actor was killed");
             }
             ActorStopReason::Panicked(err) => {
                 let panic_reason = err.reason();
                 let downcasted = err
                     .with_downcast_ref(|err: &A::Error| {
                         warn!(
-                            "Sharded actor with key {key} and id {id} panicked with reason \"{panic_reason}\" and error \"{err:#}\""
+                            %key,
+                            %id,
+                            reason = %panic_reason,
+                            error = format_args!("{err:#}"),
+                            "Sharded actor panicked"
                         );
                     })
                     .is_some();
 
                 if !downcasted {
-                    warn!(
-                        "Sharded actor with key {key} and id {id} panicked with reason \"{panic_reason}\""
-                    );
+                    warn!(%key, %id, reason = %panic_reason, "Sharded actor panicked");
                 }
             }
             ActorStopReason::LinkDied {
@@ -276,7 +278,11 @@ where
                 reason,
             } => {
                 warn!(
-                    "Sharded actor with key {key} and id {id} died because its link with id {died_link_id} died with reason \"{reason}\""
+                    %key,
+                    %id,
+                    link_id = %died_link_id,
+                    %reason,
+                    "Sharded actor died because its link died"
                 );
             }
         }

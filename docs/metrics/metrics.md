@@ -115,7 +115,7 @@ Kameo traces every actor through `tracing`: each message's handler runs in an `a
 
 A state shorter than a scrape (5 s) may not show at all: a sequencer whose actor fails exits soon after, often before Prometheus sees `failed`. The logs say why it stopped; kameo logs a panic as an error.
 
-Installing a subscriber has one side effect to undo: `tracing` hands its events (libp2p, the zone SDK, kameo, …) to the `log` logger only while **no** subscriber is installed. The subscriber's second layer, `LogForwarder` (`log_forwarder.rs`), keeps handing them over, filtered and formatted as `tracing` did, so the logs stay as they were; a test fails if it stops. `tracing`'s `log-always` feature would do the same, but features unify across every crate built alongside the sequencer, and it would double the logs of the integration tests, which feed `log` back into `tracing`.
+The same subscriber writes the logs: its other layer is the `logging` crate's, filtered by `RUST_LOG`, while `ActorMetrics` takes kameo's spans and events at every level whatever `RUST_LOG` says.
 
 ## `dashboard_gen`
 
@@ -184,7 +184,7 @@ The **Actors** dashboard (`dashboards/actors.rs`) reads the [actor metrics](#act
 | Which messages does the picked actor spend its time on? | **time spent per message over the time range**, **messages handled over the time range**, and over time **busy per message** and **messages handled per second** — stacked, so the messages add up to the actor's total |
 | Which of its messages are slow? | **p95 handling time per message over the time range** (at the **Percentile** dropdown's percentile), **average handling time per message over the time range**, and over time **handling time per message** — solid at the percentile, dashed on average. Messages not handled in the window are left out |
 | What did the picked actor go through? | **lifecycle**, and **lifecycle and link signals since startup** — kameo's own count of start and stop signals, and of deaths of actors linked to it |
-| What did the picked actor log? | **warnings and errors**, linking to all its logs in Explore — the lines logged from the actor's crate, which a hidden `actor_crate` variable cuts out of `actor_name` |
+| What did the picked actor log? | **warnings and errors**, linking to all its logs in Explore — the lines with its `actor` label, whichever crate logged them |
 
 Actors appear by type name alone (`ExecutorActor`, `StorageActor`, `Broker`): the queries cut the module path and generic arguments off `actor_name` with `label_replace`, and the **Actor** dropdown does the same with a variable regex (`Variable::regex`). Its value is that short name, so queries pick the actor back with `actor_name=~"(?:[a-z0-9_]+::)*$actor(?:<.*)?"` — anchored, so picking `StorageActor` does not also pick `ExecutorActor<…StorageActor…>`.
 
@@ -203,6 +203,10 @@ The builder deliberately models only the subset of Grafana's schema we use.
 `--profile monitoring` also runs **Loki** and **Alloy**: Alloy reads this compose project's container output through the Docker socket and ships it to Loki, which Grafana has as its `loki` datasource; its API is also on the host at `:3100`, for `logcli` or `curl`. Config: `monitoring/alloy/config.alloy`, `monitoring/loki/loki.yml`.
 
 Every stream is labelled `service_name` (the compose service), every line `level` (`INFO`, `WARN`, …), and a sequencer's stream also `sequencer` — `sequencer_0`…`sequencer_3`, the same names Prometheus gives them, so one Sequencer dropdown filters metrics and logs alike.
+
+Our services log through `tracing`, and their images set `LOG_FORMAT=json`: each line is one JSON object holding a constant `message`, the event's fields (`block_id`, `tx_hash`, `error`, …) and the `span` it ran in, e.g. a kameo `actor.handle_message` span or the cross-zone watcher's `peer_zone`. Alloy takes the line's `timestamp` as the entry's and makes labels of its `level` and, on a sequencer's line, the `actor` it was logged in — the type name, e.g. `ExecutorActor`, as the actors dashboard names it. Alloy then cuts these from the line, as Grafana shows them beside it anyway; `docker logs` still has them. The emitting module's `target` stays in the line rather than becoming a label: with a hundred or so values it would multiply Loki's streams. So a line reads `{"message":"Channel pin moved","pin":"91d4…","target":"sequencer_core"}`, `{sequencer="sequencer_0", actor="ExecutorActor"}` picks one actor's lines, and `| json | target="sequencer_core"` or `| json | block_id > 100` filters on any field.
+
+The actor comes from kameo's `actor.lifecycle` and `actor.handle_message` spans, which the sequencer keeps in its JSON logs whatever `RUST_LOG` says of kameo (plain text leaves them out, as they would start every line with the actor's full type name). A line logged in neither — at startup, or in a task an actor spawned — has no `actor`. Grafana shows the fields of a JSON line under its details.
 
 Read logs in **Explore** or **Drilldown → Logs**; the dashboards only point at them:
 

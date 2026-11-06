@@ -16,8 +16,8 @@ clap = { workspace = true, features = ["derive"] }
 anyhow.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 tokio-util.workspace = true
-env_logger.workspace = true
-log.workspace = true
+logging.workspace = true
+tracing.workspace = true
 jsonrpsee.workspace = true
 serde_json.workspace = true
 futures.workspace = true

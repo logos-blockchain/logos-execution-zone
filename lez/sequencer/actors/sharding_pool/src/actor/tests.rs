@@ -1,3 +1,8 @@
+#![expect(
+    clippy::arithmetic_side_effects,
+    reason = "We don't care about these in tests"
+)]
+
 use std::{
     fmt::Display,
     sync::{Arc, Mutex},
@@ -11,8 +16,8 @@ use kameo::{
     message::{Context, Message},
     supervision::RestartPolicy,
 };
-use log::info;
 use sequencer_actors_common::SendErrorExt;
+use tracing::info;
 
 use crate::{
     RestartConfig, ShardingKey, ShardingPoolActor,
@@ -81,7 +86,7 @@ impl Actor for TickingBomb {
 
     async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
         let ticks = args;
-        info!("Starting TickingBombActor with ticks: {ticks:?}");
+        info!(?ticks, "Starting TickingBombActor");
 
         if ticks == 0 {
             return Err("Ticks must be greater than zero".to_owned());
@@ -247,7 +252,7 @@ async fn the_spawn_hook_sees_a_worker_per_key() {
 
 #[tokio::test]
 async fn the_spawn_hook_skips_a_restarted_worker() {
-    let _err = env_logger::try_init();
+    let _err = logging::try_init();
 
     let spawned = Arc::new(Mutex::new(0_u32));
     let spawned_clone = Arc::clone(&spawned);
@@ -272,7 +277,7 @@ async fn the_spawn_hook_skips_a_restarted_worker() {
 
 #[tokio::test]
 async fn sending_message_to_actor_which_failed_to_start_results_in_error() {
-    let _err = env_logger::try_init();
+    let _err = logging::try_init();
 
     let pool = ShardingPoolActor::<TickingBomb, TickShardingKey>::new(
         RestartConfig {
@@ -292,7 +297,7 @@ async fn sending_message_to_actor_which_failed_to_start_results_in_error() {
 
 #[tokio::test]
 async fn actor_panicked_when_handling_message_is_restarted() {
-    let _err = env_logger::try_init();
+    let _err = logging::try_init();
 
     let pool = ShardingPoolActor::<TickingBomb, TickShardingKey>::new(
         RestartConfig {
@@ -318,7 +323,7 @@ async fn actor_panicked_when_handling_message_is_restarted() {
 
 #[tokio::test]
 async fn a_given_up_actor_stays_stopped_until_reset() {
-    let _err = env_logger::try_init();
+    let _err = logging::try_init();
 
     let pool = ShardingPoolActor::<TickingBomb, TickShardingKey>::new(
         RestartConfig {
@@ -361,7 +366,7 @@ async fn a_given_up_actor_stays_stopped_until_reset() {
 
 #[tokio::test]
 async fn spending_the_restart_budget_stops_the_pool() {
-    let _err = env_logger::try_init();
+    let _err = logging::try_init();
 
     let pool = ShardingPoolActor::<TickingBomb, TickShardingKey>::new(
         RestartConfig {
@@ -399,7 +404,7 @@ async fn a_key_is_restarted_by_its_own_restart_config() {
     const RESTARTED_KEY: u32 = 0;
     const NEVER_RESTARTED_KEY: u32 = 1;
 
-    let _err = env_logger::try_init();
+    let _err = logging::try_init();
 
     let pool = ShardingPoolActor::<TickingBomb, u32>::new(
         RestartConfig {
@@ -489,7 +494,7 @@ async fn an_unlinked_actor_outlives_its_worker() {
 
 #[tokio::test]
 async fn linking_a_worker_that_failed_to_start_replies_so() {
-    let _err = env_logger::try_init();
+    let _err = logging::try_init();
 
     let pool = ShardingPoolActor::spawn(ShardingPoolActor::<TickingBomb, TickShardingKey>::new(
         RestartConfig {
@@ -530,7 +535,7 @@ async fn pool_with_full_mailbox_will_still_restart_failed_actor() {
     const STEP_DURATION: Duration = Duration::from_millis(100);
     const BLOCK_DURATION: Duration = Duration::from_millis(500);
 
-    let _err = env_logger::try_init();
+    let _err = logging::try_init();
 
     let pool = ShardingPoolActor::<TickingBomb, u32>::new(
         RestartConfig {
@@ -540,7 +545,7 @@ async fn pool_with_full_mailbox_will_still_restart_failed_actor() {
         },
         |key| {
             if key == SLOW_KEY {
-                info!("Blocking the pool for {BLOCK_DURATION:?}");
+                info!(duration = ?BLOCK_DURATION, "Blocking the pool");
                 // Constructor is called by the pool itself, so this blocks the pool.
                 std::thread::sleep(BLOCK_DURATION);
             }

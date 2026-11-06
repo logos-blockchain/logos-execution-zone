@@ -13,7 +13,6 @@ use kameo_actors::{
     pubsub::PubSub,
     scheduler::{Scheduler, SetInterval},
 };
-use log::info;
 #[cfg(feature = "rpc")]
 use sequencer_bedrock_actor::{BasicAuthCredentials, Url, protocol::ChannelId};
 use sequencer_channel_signing_actor::{
@@ -31,6 +30,7 @@ use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActor;
 use sharding_pool_actor::ShardingPoolActor;
 use tokio::select;
+use tracing::info;
 
 use crate::{actor_handle::ActorHandle, supervisor::SequencerSupervisor};
 
@@ -338,9 +338,9 @@ pub fn run(
 
         let channel_signing_key = load_or_create_signing_key(&channel_signing_key_path)
             .context("Failed to load or create the channel signing key")?;
-        log::info!(
-            "Channel signing public key: {}",
-            hex::encode(channel_signing_key.public_key().to_bytes())
+        info!(
+            public_key = %hex::encode(channel_signing_key.public_key().to_bytes()),
+            "Channel signing key loaded"
         );
 
         let stake_config_pubsub_ref = PubSub::spawn(PubSub::new(DeliveryStrategy::Guaranteed));
@@ -519,7 +519,7 @@ pub async fn setup_gossip(
     ))
     .await
     .context("Failed to start sequencer gossip network")?;
-    info!("Gossip network started as {}", gossip_actor.local_peer_id());
+    info!(peer_id = %gossip_actor.local_peer_id(), "Gossip network started");
     let bootstrap_addrs = gossip_actor.bootstrap_addrs();
 
     let gossip_ref = gossip_actor_prepared.actor_ref().clone();

@@ -24,4 +24,4 @@ sequencer_stake_core.workspace = true
 
 serde.workspace = true
 hex.workspace = true
-log.workspace = true
+tracing.workspace = true
