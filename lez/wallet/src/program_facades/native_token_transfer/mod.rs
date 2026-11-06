@@ -1,12 +1,13 @@
 use common::HashType;
-use lee::{privacy_preserving_transaction::circuit::ProgramCatalog, program::Program};
+use lee::{AccountId, privacy_preserving_transaction::circuit::ProgramCatalog, program::Program};
 use lee_core::{
     SharedSecretKey,
     native_token::{Message, NATIVE_TOKEN_PROGRAM_ID, decode_balance},
 };
 
 use crate::{
-    AccountIdentity, ExecutionFailureKind, SelectedActorState, WalletCore, WalletSequencerClient,
+    AccountIdentity, AccountMention, AsyncDelivery, ExecutionFailureKind, SelectedActorState,
+    WalletCore, WalletSequencerClient,
     program_facades::{CreditDelivery, credit_destination},
 };
 
@@ -30,6 +31,18 @@ impl<C: WalletSequencerClient> NativeTokenTransfer<'_, C> {
             NATIVE_TOKEN_PROGRAM_ID,
             delivery,
         )?;
+        self.send_transfer(sender, declared, to, amount, async_delivery)
+            .await
+    }
+
+    async fn send_transfer(
+        &self,
+        sender: AccountIdentity,
+        declared: Option<AccountMention>,
+        to: AccountId,
+        amount: u128,
+        async_delivery: AsyncDelivery,
+    ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let mut accounts = vec![sender.balance()];
         accounts.extend(declared);
         // TODO: handle large Err-variant properly
