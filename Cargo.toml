@@ -45,6 +45,7 @@ members = [
   "lez/mempool",
   "lez/wallet",
   "lez/common",
+  "lez/logging",
   "lez/programs",
   "lez/programs/bridge",
   "lez/programs/clock",
@@ -88,6 +89,7 @@ lee_core = { path = "lee/state_machine/core" }
 common = { path = "lez/common" }
 chain_state = { path = "lez/chain_state" }
 mempool = { path = "lez/mempool" }
+logging = { path = "lez/logging" }
 storage = { path = "lez/storage" }
 key_protocol = { path = "lee/key_protocol" }
 sequencer_core = { path = "lez/sequencer/core" }
@@ -170,7 +172,6 @@ jsonrpsee = "0.26.0"
 futures = "0.3"
 actix-rt = "*"
 lazy_static = "1.5.0"
-env_logger = "0.11"
 log = "0.4.28"
 metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
@@ -418,6 +419,9 @@ clippy.nursery = { level = "deny", priority = -1 }
 clippy.future-not-send = "allow"
 # Reason: this is actually a good lint, but currently it gives a lot of false-positives.
 clippy.significant-drop-tightening = "allow"
+# Reason: it counts the branches `tracing`'s macros expand to, so any function that logs a few
+# structured events goes over the threshold.
+clippy.cognitive-complexity = "allow"
 
 # Correctness
 clippy.correctness = { level = "deny", priority = -1 }

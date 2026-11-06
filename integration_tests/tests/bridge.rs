@@ -674,7 +674,7 @@ async fn a_bedrock_deposit_is_minted_exactly_once() -> anyhow::Result<()> {
 //             let mut stream = std::pin::pin!(stream);
 
 //             while let Some(message) = stream.next().await {
-//                 log::info!("Observed zone message {message:?}");
+//                 tracing::info!(?message, "Observed zone message");
 
 //                 if let ZoneMessage::Withdraw(withdraw) = message {
 //                     released_notes.extend(withdraw.inputs.iter().copied());

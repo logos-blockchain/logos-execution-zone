@@ -10,7 +10,6 @@ use lee::{
     AccountId, Actor, PublicAccountEvidence, PublicTransaction,
     public_transaction::Message as LeeMessage,
 };
-use log::{debug, error, warn};
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use sequencer_stake_core::{
     SequencerKey, SequencerStakeConfig, SlashApproval, slash_approval_threshold,
@@ -20,6 +19,7 @@ use sequencer_storage_actor::{
     protocol::{GetSlashRecordBytes, PutSlashRecordBytes},
 };
 use tokio::sync::mpsc;
+use tracing::{debug, error, warn};
 
 use crate::{
     Result,
@@ -204,7 +204,7 @@ impl<S: StorageActorTrait> SlasherActor<S> {
         self.config = config;
 
         if moved && let Err(err) = self.persist().await {
-            warn!("Failed to persist drained slash approvals: {err}");
+            warn!(error = %err, "Failed to persist drained slash approvals");
         }
     }
 
@@ -244,15 +244,17 @@ impl<S: StorageActorTrait> Message<Report> for SlasherActor<S> {
         {
             let Some(offender) = SequencerKey::new(signer) else {
                 warn!(
-                    "Offending inscription {} ({fault:?}) signed by an invalid key",
-                    hex::encode(inscription)
+                    inscription = %hex::encode(inscription),
+                    ?fault,
+                    "Offending inscription signed by an invalid key"
                 );
                 continue;
             };
             error!(
-                "Offending inscription {} ({fault:?}) written by {}",
-                hex::encode(inscription),
-                hex::encode(offender)
+                inscription = %hex::encode(inscription),
+                ?fault,
+                offender = %hex::encode(offender),
+                "Offending inscription"
             );
             let offence = Offence {
                 offender,
@@ -310,7 +312,10 @@ impl<S: StorageActorTrait> Message<Propose> for SlasherActor<S> {
                     proposed.push(tx);
                     proposed_for.insert(offence.offender);
                 }
-                Err(err) => warn!("Failed to build a Slash tx: {err:#}"),
+                Err(err) => warn!(
+                    error = format_args!("{err:#}"),
+                    "Failed to build a Slash tx"
+                ),
             }
         }
 
@@ -366,7 +371,7 @@ impl<S: StorageActorTrait> Message<Approval> for SlasherActor<S> {
         }
 
         if let Err(err) = self.persist().await {
-            warn!("Failed to persist a peer's slash approval: {err}");
+            warn!(error = %err, "Failed to persist a peer's slash approval");
         }
         // The peer may have dropped our earlier approval, so send a fresh one.
         self.publish(self.own_approval(offence));

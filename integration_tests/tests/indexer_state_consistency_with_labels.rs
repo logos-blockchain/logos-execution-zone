@@ -1,6 +1,7 @@
 #![expect(
     clippy::shadow_unrelated,
     clippy::tests_outside_test_module,
+    clippy::arithmetic_side_effects,
     reason = "We don't care about these in tests"
 )]
 
@@ -48,7 +49,7 @@ async fn indexer_state_consistency_with_labels() -> Result<()> {
     )
     .await?;
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let acc_1_balance = account_balance(&ctx, ctx.existing_public_accounts()[0]).await?;
@@ -65,7 +66,7 @@ async fn indexer_state_consistency_with_labels() -> Result<()> {
         "the sender must pay a positive fee within the protocol ceiling, got {fee}",
     );
 
-    log::info!("Waiting for indexer to parse blocks");
+    tracing::info!("Waiting for indexer to parse blocks");
     wait_for_indexer_to_catch_up(&ctx).await?;
 
     let acc1_ind_state = ctx
@@ -77,7 +78,7 @@ async fn indexer_state_consistency_with_labels() -> Result<()> {
 
     assert_eq!(acc1_ind_state, Some(acc1_seq_state.into()));
 
-    log::info!("Indexer state is consistent after label-based transfer");
+    tracing::info!("Indexer state is consistent after label-based transfer");
 
     Ok(())
 }

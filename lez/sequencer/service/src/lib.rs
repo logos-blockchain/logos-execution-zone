@@ -9,7 +9,6 @@ use kameo_actors::{
     broker::Broker,
     scheduler::{Scheduler, SetInterval},
 };
-use log::info;
 use sequencer_channel_signing_actor::{
     ChannelSigningActor, SetPublisher, SetSubmitter, SubmitConfig,
 };
@@ -27,6 +26,7 @@ use sequencer_rpc_server_actor::RpcServerActor;
 use sequencer_slasher_actor::{SetApprovalPublisher, SlasherActor};
 use sequencer_storage_actor::StorageActor;
 use tokio::select;
+use tracing::info;
 
 use crate::actor_handle::ActorHandle;
 
@@ -436,7 +436,7 @@ pub async fn setup_gossip(
     ))
     .await
     .context("Failed to start sequencer gossip network")?;
-    info!("Gossip network started as {}", gossip_actor.local_peer_id());
+    info!(peer_id = %gossip_actor.local_peer_id(), "Gossip network started");
     let bootstrap_addrs = gossip_actor.bootstrap_addrs();
 
     let gossip_ref = GossipActor::spawn_with_mailbox(
@@ -537,9 +537,9 @@ async fn setup_bedrock_actor(
     bedrock_broker_ref: ActorRef<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
 ) -> Result<BedrockActor> {
     let channel_signing_key = load_or_create_signing_key(&config.channel_signing_key_path())?;
-    log::info!(
-        "Channel signing public key: {}",
-        hex::encode(channel_signing_key.public_key().to_bytes())
+    info!(
+        public_key = %hex::encode(channel_signing_key.public_key().to_bytes()),
+        "Channel signing key loaded"
     );
 
     let bedrock_actor_config = sequencer_bedrock_actor::config::Config {

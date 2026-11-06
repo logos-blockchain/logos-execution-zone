@@ -4,6 +4,13 @@
 // `sequencer` (`sequencer_service_0` → `sequencer_0`), matching Prometheus' label so a
 // dashboard's Sequencer dropdown filters metrics and logs alike. Every line gets the
 // `level` it was logged at.
+//
+// Our services log one JSON object per line (`LOG_FORMAT=json`): the message, the event's
+// fields, the emitting module's `target` and the span it ran in. Its `timestamp` becomes the
+// entry's; its `level` and, for a sequencer's line, the `actor` it ran in become labels. The
+// actor is its type name, `ExecutorActor`, as the actors dashboard names it. Those are then cut
+// from the line, which Grafana shows next to them anyway; `| json` reaches the rest. `target`
+// stays in the line: with a hundred or so values it would multiply the streams as a label.
 
 discovery.docker "containers" {
 	host = "unix:///var/run/docker.sock"
@@ -41,17 +48,46 @@ loki.source.docker "containers" {
 }
 
 loki.process "levels" {
+	// Ours: `{"timestamp":…,"level":"INFO","message":…,"target":"sequencer_core",
+	// "span":{"actor.name":"sequencer_executor_actor::actor::ExecutorActor<…>",…}}`.
+	stage.json {
+		expressions = {timestamp = "", level = "", actor = "span.\"actor.name\""}
+	}
+
+	stage.regex {
+		source     = "actor"
+		expression = "^(?:[a-z0-9_]+::)*(?P<actor>[A-Za-z0-9_]+)"
+	}
+
+	// Plain-text lines have none, and keep the time Docker read them at.
+	stage.timestamp {
+		source            = "timestamp"
+		format            = "RFC3339Nano"
+		action_on_failure = "skip"
+	}
+
 	// The Bedrock node colors its output for a terminal.
 	stage.decolorize { }
 
-	// `[2026-10-30T22:34:52Z INFO  module] …` (ours) and `2026-10-30T22:34:53Z ERROR module: …`
-	// (the Bedrock node's).
+	// Plain-text lines, `2026-10-30T22:34:53Z ERROR module: …` (the Bedrock node's, or ours
+	// with `LOG_FORMAT=text`). JSON lines start with `{`, so it leaves them alone.
 	stage.regex {
-		expression = "^\\[?\\S+\\s+(?P<level>TRACE|DEBUG|INFO|WARN|ERROR)\\b"
+		expression = "^\\d\\S*\\s+(?P<level>TRACE|DEBUG|INFO|WARN|ERROR)\\b"
 	}
 
 	stage.labels {
-		values = {level = ""}
+		values = {level = "", actor = ""}
+	}
+
+	// Values are JSON-escaped, so a quoted key can only be one of the line's own.
+	stage.replace {
+		expression = "(\"(?:timestamp|level)\":\"[^\"]*\",)"
+		replace    = ""
+	}
+
+	stage.replace {
+		expression = "(\"actor\\.name\":\"[^\"]*\",)"
+		replace    = ""
 	}
 
 	forward_to = [loki.write.local.receiver]

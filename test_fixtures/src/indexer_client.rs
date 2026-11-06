@@ -15,7 +15,7 @@ pub struct IndexerClient(WsClient);
 
 impl IndexerClient {
     pub async fn new(indexer_url: &Url) -> Result<Self> {
-        log::info!("Connecting to Indexer at {indexer_url}");
+        tracing::info!(%indexer_url, "Connecting to Indexer");
         let client = WsClientBuilder::default()
             .build(indexer_url)
             .await

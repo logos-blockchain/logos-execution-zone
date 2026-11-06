@@ -18,7 +18,7 @@ use kameo::{
 };
 use lee::{AccountId, V03State};
 use lee_core::BlockId;
-use log::debug;
+use tracing::debug;
 
 #[cfg(feature = "test-utils")]
 use crate::protocol::ResetAllBlocksToPending;
@@ -119,8 +119,8 @@ impl StorageActor {
             })?;
 
         debug!(
-            "Transaction index built, holding {} transactions",
-            index.transaction_count()
+            transaction_count = index.transaction_count(),
+            "Transaction index built"
         );
 
         Ok(index)
@@ -454,10 +454,10 @@ impl StorageActor {
         if let Some(stored) = stored
             && stored.seq >= checkpoint.seq
         {
-            log::debug!(
-                "Dropping a zone checkpoint at sequence {} for the stored one at {}",
-                checkpoint.seq,
-                stored.seq,
+            tracing::debug!(
+                seq = checkpoint.seq,
+                stored_seq = stored.seq,
+                "Dropping a zone checkpoint older than the stored one"
             );
             return Ok(());
         }

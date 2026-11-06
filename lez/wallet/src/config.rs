@@ -3,7 +3,6 @@ use std::{io::Write as _, path::Path, time::Duration};
 use anyhow::{Context as _, Result};
 use common::config::BasicAuth;
 use humantime_serde;
-use log::warn;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -133,31 +132,31 @@ impl WalletConfig {
         } = overrides;
 
         if let Some(v) = o_sequencer {
-            warn!("Overriding wallet config 'sequencer' to {v:?}");
+            tracing::warn!(value = ?v, "Overriding wallet config 'sequencer'");
             *sequencer = v;
         }
         if let Some(v) = o_seq_poll_timeout {
-            warn!("Overriding wallet config 'seq_poll_timeout' to {v:?}");
+            tracing::warn!(value = ?v, "Overriding wallet config 'seq_poll_timeout'");
             *seq_poll_timeout = v;
         }
         if let Some(v) = o_seq_tx_poll_max_blocks {
-            warn!("Overriding wallet config 'seq_tx_poll_max_blocks' to {v}");
+            tracing::warn!(value = %v, "Overriding wallet config 'seq_tx_poll_max_blocks'");
             *seq_tx_poll_max_blocks = v;
         }
         if let Some(v) = o_seq_poll_max_retries {
-            warn!("Overriding wallet config 'seq_poll_max_retries' to {v}");
+            tracing::warn!(value = %v, "Overriding wallet config 'seq_poll_max_retries'");
             *seq_poll_max_retries = v;
         }
         if let Some(v) = o_seq_block_poll_max_amount {
-            warn!("Overriding wallet config 'seq_block_poll_max_amount' to {v}");
+            tracing::warn!(value = %v, "Overriding wallet config 'seq_block_poll_max_amount'");
             *seq_block_poll_max_amount = v;
         }
         if let Some(v) = o_private_fee_headroom_blocks {
-            warn!("Overriding wallet config 'private_fee_headroom_blocks' to {v}");
+            tracing::warn!(value = %v, "Overriding wallet config 'private_fee_headroom_blocks'");
             *private_fee_headroom_blocks = v;
         }
         if let Some(v) = o_gas_limit {
-            warn!("Overriding wallet config 'gas_limit' to {v}");
+            tracing::warn!(value = %v, "Overriding wallet config 'gas_limit'");
             *gas_limit = v;
         }
     }

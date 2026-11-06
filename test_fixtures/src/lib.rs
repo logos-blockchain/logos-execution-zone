@@ -10,7 +10,6 @@ use indexer_service::{ChannelId, IndexerHandle};
 use kameo::actor::{ActorRef, Spawn as _};
 use lee::{AccountId, PrivacyPreservingTransaction, PrivateKey};
 use lee_core::Commitment;
-use log::{debug, error};
 use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
 use sequencer_core::config::GenesisAction;
 use sequencer_service::{CrossZoneConfig, GossipConfig, SequencerHandle};
@@ -18,6 +17,7 @@ use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use serde::Serialize;
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
+use tracing::{debug, error, info};
 use wallet::{
     WalletCore, account::AccountIdWithPrivacy, cli::CliAccountMention,
     config::WalletConfigOverrides,
@@ -42,7 +42,9 @@ pub const TIME_TO_WAIT_FOR_BLOCK_SECONDS: u64 = 12;
 pub(crate) const BEDROCK_SERVICE_WITH_OPEN_PORT: &str = "logos-blockchain-node-0";
 pub(crate) const BEDROCK_SERVICE_PORT: u16 = 18080;
 
-static LOGGER: LazyLock<()> = LazyLock::new(env_logger::init);
+static LOGGER: LazyLock<()> = LazyLock::new(|| {
+    let _res = logging::try_init();
+});
 
 struct IndexerComponents {
     indexer_handle: IndexerHandle,
@@ -462,7 +464,8 @@ impl Drop for TestContext {
                         .now_or_never()
                         .expect("Sequencer handle should not be running");
                     error!(
-                        "Sequencer handle has unexpectedly stopped before TestContext drop with error: {err:#}"
+                        error = format_args!("{err:#}"),
+                        "Sequencer handle has unexpectedly stopped before TestContext drop"
                     );
                 }
             }
@@ -481,8 +484,9 @@ impl Drop for TestContext {
             .expect("Failed to parse docker inspect output as String");
         if stdout.trim() != "true" {
             error!(
-                "Bedrock container `{}` is not running during TestContext drop, docker inspect output: {stdout}",
-                container.id()
+                container = container.id(),
+                docker_inspect = %stdout,
+                "Bedrock container is not running during TestContext drop"
             );
         }
     }
@@ -740,7 +744,7 @@ impl ZoneTestContextBuilder {
             .await
             .context("Encountered an error while waiting for the channel to land on Bedrock")?;
 
-        log::info!("Passed wait untill genesis");
+        info!("Passed wait until genesis");
 
         sequencer_components.push(leader_components);
 
@@ -843,7 +847,7 @@ impl MultiZoneTestContextBuilder {
             for (channel_id, zone_builder) in self.zone_builders {
                 let zone_ctx = zone_builder.build(bedrock_addr).await?;
 
-                log::info!("Built context for {channel_id}");
+                info!(%channel_id, "Built zone context");
 
                 zones.insert(channel_id, zone_ctx);
             }
@@ -1089,7 +1093,7 @@ fn dir_size_bytes(path: &Path) -> u64 {
 }
 
 async fn wait_until_genesis(client: &SequencerClient) -> Result<()> {
-    log::info!("Waiting for leader to send genesis");
+    info!("Waiting for leader to send genesis");
 
     let wait = async {
         loop {
@@ -1148,7 +1152,7 @@ pub async fn spawn_channel_observer(
 }
 
 async fn wait_until_channel_exists(bedrock_addr: SocketAddr, channel_id: ChannelId) -> Result<()> {
-    log::info!("Waiting for the channel to land on Bedrock");
+    info!("Waiting for the channel to land on Bedrock");
 
     let bedrock_ref = spawn_channel_observer(bedrock_addr, channel_id).await?;
 

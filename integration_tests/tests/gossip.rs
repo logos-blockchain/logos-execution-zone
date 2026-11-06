@@ -92,7 +92,7 @@ async fn gossiped_transaction_reaches_producing_sequencer() -> Result<()> {
 
 /// Polls the sequencer until its chain height reaches `target`.
 async fn wait_for_height(client: &SequencerClient, target: u64, what: &str) -> Result<()> {
-    log::info!("Waiting for {what:?}, target is {target}");
+    tracing::info!(what, target_height = target, "Waiting for chain height");
 
     let wait = async {
         loop {
@@ -113,7 +113,7 @@ async fn wait_for_balance(
     account: lee::AccountId,
     expected: u128,
 ) -> Result<()> {
-    log::info!("Waiting for {account} to have {expected} tokens");
+    tracing::info!(%account, expected, "Waiting for account balance");
 
     let wait = async {
         loop {

@@ -8,12 +8,12 @@ use kameo::{
     error::ActorStopReason,
     mailbox::{MailboxReceiver, Signal},
 };
-use log::info;
 use sequencer_core::gossip::MaxBlockSizeReceiver;
 use sequencer_executor_actor::ExecutorActorTrait;
 use sequencer_gossip_actor::protocol::PublishTransaction;
 use sequencer_service_rpc::RpcServer as _;
 use tokio::select;
+use tracing::info;
 
 use crate::{Result, error::Error};
 
@@ -49,7 +49,7 @@ impl RpcServerActor {
             .local_addr()
             .map_err(Error::LocalAddrRetrievingFailed)?;
 
-        info!("Starting RPC Server on {addr}");
+        info!(%addr, "Starting RPC server");
 
         let service = service::Service::new(executor_ref, max_block_size_rx, gossip);
         let server_handle = server.start(service.into_rpc());

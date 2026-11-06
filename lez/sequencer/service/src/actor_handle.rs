@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use futures::never::Never;
 use kameo::actor::ActorRef;
-use log::{error, info};
+use tracing::{error, info};
 
 /// A handle to an actor encapsulating some common operations like graceful shutdown and health
 /// check. Creating one exports the actor's mailbox capacity.
@@ -29,14 +29,14 @@ impl<T: kameo::Actor> ActorHandle<T> {
 
     pub async fn shutdown(self) {
         let full_name = self.full_name();
-        info!("Stopping {full_name} actor...");
+        info!(actor = full_name, "Stopping actor");
 
         if let Err(err) = self.actor_ref.stop_gracefully().await {
-            error!("Failed to gracefully stop actor {full_name}: {err}");
+            error!(actor = full_name, error = %err, "Failed to gracefully stop actor");
         }
         self.actor_ref.wait_for_shutdown_with_result(|_| ()).await;
 
-        info!("{full_name} actor stopped");
+        info!(actor = full_name, "Actor stopped");
     }
 
     pub async fn failed(&self) -> Result<Never>
@@ -79,7 +79,7 @@ impl<T: kameo::Actor> ActorHandle<T> {
 
 impl<T: kameo::Actor> Drop for ActorHandle<T> {
     fn drop(&mut self) {
-        info!("Killing {} actor", self.full_name());
+        info!(actor = self.full_name(), "Killing actor");
         self.actor_ref.kill();
     }
 }

@@ -13,8 +13,8 @@ use std::collections::BTreeMap;
 
 pub use acceptance::{
     CommitteeFloorState, FloorVerdict, KEPT_FLOOR_READ_FAILURES, Link, OffChain,
-    STUCK_SLOT_ALERT_PASSES, ScreenRefusal, StallState, alerts_at, equivocation_report,
-    link_to_tip, screen_peer_block,
+    STUCK_SLOT_ALERT_PASSES, ScreenRefusal, StallState, alerts_at, link_to_tip, log_equivocation,
+    screen_peer_block,
 };
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer};
 use cross_zone_inbox_core::{

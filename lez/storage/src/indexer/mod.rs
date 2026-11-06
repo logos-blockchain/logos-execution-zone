@@ -2,10 +2,10 @@ use std::{path::Path, sync::Arc};
 
 use common::block::Block;
 use lee::V03State;
-use log::warn;
 use rocksdb::{
     BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options,
 };
+use tracing::warn;
 
 use crate::{BREAKPOINT_INTERVAL, CF_BLOCK_NAME, CF_META_NAME, DBIO, DbResult, error::DbError};
 
@@ -197,7 +197,10 @@ impl RocksDBIO {
         };
         if br_id < target {
             warn!(
-                "Breakpoint {target} missing; replaying from breakpoint {br_id} for block {block_id}"
+                missing_breakpoint = target,
+                replay_breakpoint = br_id,
+                block_id,
+                "Breakpoint missing, replaying from an earlier one"
             );
         }
 

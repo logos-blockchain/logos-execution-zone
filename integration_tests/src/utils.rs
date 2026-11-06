@@ -9,11 +9,11 @@ use lee_core::{
     account::{AccountId, Actor},
     program::MessageBody,
 };
-use log::info;
 use sequencer_bedrock_actor::{BedrockActor, protocol::GetAccreditedKeys};
 use sequencer_core::Ed25519PublicKey;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{TestContext, private_mention, public_mention, verify_commitment_is_in_state};
+use tracing::info;
 use wallet::{
     cli::{
         CliAccountMention, Command, SubcommandReturnValue,
@@ -311,7 +311,9 @@ pub async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> anyhow::Result<u
                     sequencer_service_rpc::RpcClient::get_last_block_id(ctx.sequencer_client())
                         .await?;
                 info!(
-                    "Indexer caught up. Indexer last block id: {ind}. Current sequencer last block id: {last_seq}"
+                    indexer_last_block_id = ind,
+                    sequencer_last_block_id = last_seq,
+                    "Indexer caught up"
                 );
                 return anyhow::Ok(ind);
             }

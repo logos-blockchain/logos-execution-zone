@@ -1,6 +1,7 @@
 #![expect(
     clippy::tests_outside_test_module,
-    reason = "top-level test functions are conventional for integration tests"
+    clippy::arithmetic_side_effects,
+    reason = "We don't care about these in tests"
 )]
 
 //! B unstakes in full, leaves the committee, gets its stake back, then rejoins.
@@ -12,7 +13,6 @@ use integration_tests::{
     account_balance, assert_same_chain, committee, get_account, init_logger, wait_until,
 };
 use lee::{AccountId, PublicKey, program::Program};
-use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, TestContext, ZoneTestContextBuilder,
@@ -20,6 +20,7 @@ use test_fixtures::{
     spawn_channel_observer,
 };
 use tokio::test;
+use tracing::info;
 use wallet::{AccountIdentity, AccountMention, program_facades::sequencer_stake::SequencerStake};
 
 /// What genesis stakes each founding sequencer.

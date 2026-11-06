@@ -271,7 +271,7 @@ fn prepare_mock_storage_with_stake(
 /// failure either.
 #[test]
 async fn a_publish_refused_as_stale_returns_its_transactions_to_the_mempool() -> Result<()> {
-    let _res = env_logger::try_init();
+    let _res = logging::try_init();
 
     let (config, _home, sequencer_key) = staked_sequencer_config();
     let mut mock_storage = prepare_mock_storage_with_stake(stake_entries(sequencer_key));
@@ -383,7 +383,7 @@ async fn a_publish_refused_as_stale_returns_its_transactions_to_the_mempool() ->
 /// would end block production permanently.
 #[test]
 async fn a_failed_production_turn_does_not_stop_the_actor() -> Result<()> {
-    let _res = env_logger::try_init();
+    let _res = logging::try_init();
 
     let (config, _home) = sequencer_config();
     let mut mock_storage = prepare_mock_storage_with_empty_genesis();
@@ -425,7 +425,7 @@ async fn a_failed_production_turn_does_not_stop_the_actor() -> Result<()> {
 
 #[test]
 async fn handle_transaction_fails_on_full_mempool() -> Result<()> {
-    let _res = env_logger::try_init();
+    let _res = logging::try_init();
 
     let (config, _home) = sequencer_config();
     let mempool_max_size = config.mempool_max_size;
@@ -479,7 +479,7 @@ async fn get_block_range_keeps_executor_responsive() -> Result<()> {
     const STALLED_FIRST: u64 = 100;
     const STALLED_LAST: u64 = 105;
 
-    let _res = env_logger::try_init();
+    let _res = logging::try_init();
 
     let (config, _home) = sequencer_config();
 
@@ -552,7 +552,7 @@ async fn get_block_range_keeps_executor_responsive() -> Result<()> {
 
 #[test]
 async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
-    let _res = env_logger::try_init();
+    let _res = logging::try_init();
 
     let (config, _home) = sequencer_config();
     let mock_storage = prepare_mock_storage_with_empty_genesis();

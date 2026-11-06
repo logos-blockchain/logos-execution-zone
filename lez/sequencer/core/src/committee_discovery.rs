@@ -1,7 +1,7 @@
 //! Discovery process for the `sequencer_stake` committee.
 
-use log::warn;
 use sequencer_stake_core::{SequencerKey, SequencerStakeConfig};
+use tracing::warn;
 
 /// Signatures a `ChannelConfigOp` must carry: two thirds of the accredited
 /// keys, capped at `committee_size - 1`, floored at one.

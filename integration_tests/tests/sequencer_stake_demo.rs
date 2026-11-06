@@ -2,6 +2,7 @@
 
 #![expect(
     clippy::tests_outside_test_module,
+    clippy::arithmetic_side_effects,
     reason = "Integration tests live at crate root and don't care about these lints"
 )]
 
@@ -10,7 +11,6 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use integration_tests::{account_balance, get_account, new_account};
 use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey, program::Program};
-use log::info;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, UnsecuredEd25519Key};
 use sequencer_bedrock_actor::protocol::GetAccreditedKeys;
 use sequencer_core::config::{DepositRecipient, GenesisAction};
@@ -22,6 +22,7 @@ use test_fixtures::{
     spawn_channel_observer,
 };
 use tokio::test;
+use tracing::info;
 use wallet::{AccountIdentity, program_facades::sequencer_stake::SequencerStake};
 
 /// Channel signing key of the sequencer that stakes its way in.
@@ -76,12 +77,12 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         Ok(account_balance(&ctx, funding_id).await? == u128::from(funding_balance))
     })
     .await?;
-    info!("Funded demo account {funding_id} with {funding_balance} native balance");
+    info!(%funding_id, funding_balance, "Funded demo account");
 
     let ownership_id = new_account(&mut ctx, false, None)
         .await
         .context("Failed to create a fresh stake ownership account")?;
-    info!("Fresh stake ownership account: {ownership_id}");
+    tracing::info!(%ownership_id, "Fresh stake ownership account");
 
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
 
@@ -90,8 +91,8 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     let ownership = AccountIdentity::Public(ownership_id).select_program_actor_state(stake_id);
 
     info!(
-        "Submitting Stake transaction for sequencer key {}",
-        hex::encode(demo_sequencer_key.to_bytes())
+        sequencer_key = %hex::encode(demo_sequencer_key.to_bytes()),
+        "Submitting Stake transaction"
     );
     SequencerStake(ctx.wallet())
         .send_stake(
@@ -132,8 +133,9 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     .context("ownership account data did not decode as a StakeRecord")?;
     assert_eq!(record.sequencer_key, demo_stake_key);
     info!(
-        "Ownership account confirmed: {staked_balance} staked for sequencer key {}",
-        hex::encode(record.sequencer_key)
+        staked_balance,
+        sequencer_key = %hex::encode(record.sequencer_key),
+        "Ownership account confirmed"
     );
 
     let observer = spawn_channel_observer(ctx.bedrock_addr(), bedrock_channel_id()).await?;
@@ -157,8 +159,8 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         "demo sequencer key should have been discovered and accredited after the Stake transaction",
     )?;
     info!(
-        "Bedrock channel now accredits {} key(s), including the demo sequencer key — self-join complete",
-        committee.keys.len()
+        accredited_keys = committee.keys.len(),
+        "Bedrock channel now accredits the demo sequencer key, self-join complete"
     );
 
     // Only now start a node behind the key, against a channel that already has a chain.
@@ -177,7 +179,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         move || async move { Ok(joiner_client.get_last_block_id().await? >= joined_at) }
     })
     .await?;
-    info!("Joining sequencer synced to block {joined_at}");
+    tracing::info!(joined_at, "Joining sequencer synced to block");
 
     // A tip past `joined_at` under the demo key is a block this node built.
     poll_until("the joining sequencer to build a block on its turn", 180, {
@@ -216,7 +218,10 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
             joiner_block.header.hash
         );
     }
-    info!("Leader and joining sequencer agree on all {common} shared blocks");
+    info!(
+        shared_blocks = common,
+        "Leader and joining sequencer agree on all shared blocks"
+    );
 
     // Exit flow: full UnstakeRequest, wait for the committee removal to land on
     // Bedrock, then check the sequencer's own FinalizeUnstake releases the stake.
@@ -310,7 +315,10 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         "the config entry should be gone once the stake is fully released"
     );
     info!(
-        "FinalizeUnstake auto-included: {funding_balance} sent to and received by {destination_id}, nothing left at stake"
+        funding_balance,
+        %destination_id,
+        "FinalizeUnstake auto-included: balance sent to and received by the destination, nothing \
+         left at stake"
     );
 
     Ok(())

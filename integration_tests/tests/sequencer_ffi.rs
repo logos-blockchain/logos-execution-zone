@@ -7,6 +7,7 @@
 #![expect(
     clippy::cast_possible_truncation,
     clippy::as_conversions,
+    clippy::arithmetic_side_effects,
     reason = "We don't care about it in tests"
 )]
 
@@ -23,11 +24,11 @@ use integration_tests::{
     get_account,
 };
 use lee::{AccountId, Actor};
-use log::info;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use logos_blockchain_zone_sdk::adapter::Node as _;
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::config::bedrock_channel_id;
+use tracing::info;
 
 #[test]
 fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
@@ -50,7 +51,7 @@ fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
 
     let joined_at = ctx.block_on(|ctx| ctx.sequencer_client().get_last_block_id())?;
     sequencer_ffi_helpers::wait_for_sequencer_ffi_block(sequencer_ffi, joined_at)?;
-    info!("Joining sequencer synced to block {joined_at}");
+    tracing::info!(joined_at, "Joining sequencer synced to block");
 
     // A tip past `joined_at` under the joining key is a block this node built.
     let mut poll_flag = false;
@@ -143,7 +144,10 @@ fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
             joiner_block_hash.data
         );
     }
-    info!("Leader and joining sequencer agree on all {common} shared blocks");
+    info!(
+        shared_blocks = common,
+        "Leader and joining sequencer agree on all shared blocks"
+    );
 
     let ownership_account = ctx.block_on(|ctx| async {
         get_account(ctx, ownership_id)
@@ -161,7 +165,7 @@ fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
         "an account the chain never touched is absent, not empty"
     );
 
-    info!("Leader and joining sequencer agree on {ownership_id} account");
+    info!(%ownership_id, "Leader and joining sequencer agree on the account");
 
     // SAFETY: sequencer_ffi created by FFI, it is valid.
     unsafe {
@@ -192,7 +196,7 @@ fn sequencer_ffi_acc_id_to_tx_map() -> Result<()> {
 
     let joined_at = ctx.block_on(|ctx| ctx.sequencer_client().get_last_block_id())?;
     sequencer_ffi_helpers::wait_for_sequencer_ffi_block(sequencer_ffi, joined_at)?;
-    info!("Joining sequencer synced to block {joined_at}");
+    tracing::info!(joined_at, "Joining sequencer synced to block");
 
     // A tip past `joined_at` under the joining key is a block this node built.
     let mut poll_flag = false;
@@ -312,7 +316,10 @@ fn sequencer_ffi_acc_id_to_tx_map() -> Result<()> {
             ffi_block_hash.data
         );
     }
-    info!("Leader and joining sequencer agree on all {common} shared blocks");
+    info!(
+        shared_blocks = common,
+        "Leader and joining sequencer agree on all shared blocks"
+    );
 
     // Every block the joining sequencer produces distributes fees to its payout
     // account, which is this ownership account, so the number of transactions
@@ -407,7 +414,10 @@ fn sequencer_ffi_acc_id_to_tx_map() -> Result<()> {
         reward_txs >= 1,
         "expected at least one block reward against {owner_id}, got none"
     );
-    info!("Joining sequencer's ownership account indexes 1 Stake and {reward_txs} block reward(s)");
+    info!(
+        reward_txs,
+        "Joining sequencer's ownership account indexes 1 Stake and the block rewards"
+    );
 
     // SAFETY: FFI ensures validity of value.
     unsafe {
@@ -448,7 +458,7 @@ fn sequencer_ffi_starting_events_produced_correctly() -> Result<()> {
 
     let joined_at = ctx.block_on(|ctx| ctx.sequencer_client().get_last_block_id())?;
     sequencer_ffi_helpers::wait_for_sequencer_ffi_block(sequencer_ffi, joined_at)?;
-    info!("Joining sequencer synced to block {joined_at}");
+    tracing::info!(joined_at, "Joining sequencer synced to block");
 
     // A tip past `joined_at` under the joining key is a block this node built.
     let mut poll_flag = false;
