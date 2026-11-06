@@ -358,6 +358,8 @@ pub struct PrivacyPreservingMessage {
     pub timestamp_validity_window: ValidityWindow,
     pub admission_evidence: Vec<PublicAccountEvidence>,
     pub fee: Option<ProvenFee>,
+    /// The fee a public signer declares in place of the proof's.
+    pub declared_fee: Option<FeeDeclaration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

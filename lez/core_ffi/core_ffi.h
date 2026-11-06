@@ -541,6 +541,11 @@ typedef struct FfiPrivacyPreservingMessage {
   FfiPublicAccountEvidenceList admission_evidence;
   bool has_fee;
   struct FfiProvenFee fee;
+  /**
+   * The fee a public signer declares in place of the proof's.
+   */
+  bool has_declared_fee;
+  struct FfiFeeDeclaration declared_fee;
 } FfiPrivacyPreservingMessage;
 
 typedef FfiVecU8 FfiProof;

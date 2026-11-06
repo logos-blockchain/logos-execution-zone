@@ -107,6 +107,8 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
         admission_evidence: _,
         // TODO: show the fee's refund target, and whether a fallback was committed.
         fee: _,
+        // TODO: show the fee a public signer declared.
+        declared_fee: _,
     } = message;
     let PublicExecutionContext {
         actors: public_actors,

@@ -23,6 +23,7 @@ impl Message {
             public_context,
             execution,
             nonces,
+            fee: None,
             admission_evidence: Vec::new(),
         }
     }
@@ -104,6 +105,7 @@ pub mod tests {
                 fee: None,
             },
             nonces,
+            fee: None,
             admission_evidence: vec![],
         }
     }
@@ -135,6 +137,7 @@ pub mod tests {
             &[1, 0, 0, 0],     // nonces: one account's nonce, a little-endian u128
             &[2; 32],
             &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            &[0],          // fee: None
             &[1, 0, 0, 0], // admission_evidence: one entry
             &[1],          // PublicAccountEvidence::Pda
             &[0; 32],      // program

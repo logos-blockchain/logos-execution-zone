@@ -123,6 +123,7 @@ pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, Class
     }
     let public_tx = match tx {
         LeeTransaction::PrivacyPreserving(private_tx) => {
+            // FIXME: a private transaction's `message().fee` is ignored; charge its signer for it.
             let execution = &private_tx.message().execution;
             let Some((payer, reserve, crossing)) = private_fee_reserve(private_tx.message()) else {
                 return Err(ClassifyError::MissingPrivateFee);
@@ -178,7 +179,7 @@ pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, Class
     }
 
     // a non-exempt user public transaction must declare a fee
-    let Some(fee) = public_tx.message().execution.fee else {
+    let Some(fee) = public_tx.message().fee else {
         return Err(ClassifyError::MissingFeeDeclaration);
     };
 
