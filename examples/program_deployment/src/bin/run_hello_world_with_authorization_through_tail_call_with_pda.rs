@@ -4,10 +4,7 @@
 )]
 
 use common::transaction::LeeTransaction;
-use lee::{
-    AccountId, ProgramShardSelector, PublicTransaction,
-    public_transaction::{Message, WitnessSet},
-};
+use lee::{AccountId, ProgramShardSelector};
 use lee_core::program::PdaSeed;
 use program_deployment::deploy_program;
 use sequencer_service_rpc::RpcClient as _;
@@ -74,10 +71,17 @@ async fn main() {
     let instruction_data = callee_account_id;
     let nonces = vec![];
     let signing_keys = [];
-    let message =
-        Message::try_new(caller_account_id, shard_selectors, nonces, instruction_data).unwrap();
-    let witness_set = WitnessSet::for_message(&message, &signing_keys);
-    let tx = PublicTransaction::new(message, witness_set);
+    let tx = program_deployment::public_tx_paid_by(
+        &wallet_core,
+        caller_account_id,
+        shard_selectors,
+        nonces,
+        &signing_keys,
+        instruction_data,
+        payer,
+    )
+    .await
+    .unwrap();
 
     // Submit the transaction
     let _response = wallet_core

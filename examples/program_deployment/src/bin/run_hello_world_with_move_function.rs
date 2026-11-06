@@ -3,9 +3,8 @@ use std::collections::HashMap;
 use clap::{Parser, Subcommand};
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, ProgramShardSelector, PublicTransaction,
+    AccountId, ProgramShardSelector,
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
-    public_transaction,
 };
 use program_deployment::deploy_program;
 use sequencer_service_rpc::RpcClient as _;
@@ -109,15 +108,17 @@ async fn main() {
             let instruction: Instruction = (WRITE_FUNCTION_ID, greeting.into_bytes());
             let account_id = account_id.parse().unwrap();
             let nonces = vec![];
-            let message = public_transaction::Message::try_new(
+            let tx = program_deployment::public_tx_paid_by(
+                &wallet_core,
                 program_account_id,
                 vec![ProgramShardSelector::new(account_id, program_account_id)],
                 nonces,
+                &[],
                 instruction,
+                cli.payer,
             )
+            .await
             .unwrap();
-            let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-            let tx = PublicTransaction::new(message, witness_set);
 
             // Submit the transaction
             let _response = wallet_core
@@ -151,18 +152,20 @@ async fn main() {
             let moved = shard_bytes(&wallet_core, from, program_account_id).await;
             let instruction: Instruction = (MOVE_DATA_FUNCTION_ID, moved);
             let nonces = vec![];
-            let message = public_transaction::Message::try_new(
+            let tx = program_deployment::public_tx_paid_by(
+                &wallet_core,
                 program_account_id,
                 vec![
                     ProgramShardSelector::new(from, program_account_id),
                     ProgramShardSelector::new(to, program_account_id),
                 ],
                 nonces,
+                &[],
                 instruction,
+                cli.payer,
             )
+            .await
             .unwrap();
-            let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-            let tx = PublicTransaction::new(message, witness_set);
 
             // Submit the transaction
             let _response = wallet_core

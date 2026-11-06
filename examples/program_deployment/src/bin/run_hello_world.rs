@@ -1,8 +1,5 @@
 use common::transaction::LeeTransaction;
-use lee::{
-    AccountId, ProgramShardSelector, PublicTransaction,
-    public_transaction::{Message, WitnessSet},
-};
+use lee::{AccountId, ProgramShardSelector};
 use program_deployment::deploy_program;
 use sequencer_service_rpc::RpcClient as _;
 use wallet::WalletCore;
@@ -60,19 +57,22 @@ async fn main() {
     let greeting: Vec<u8> = vec![72, 111, 108, 97, 32, 109, 117, 110, 100, 111, 33];
 
     // Construct the public transaction
-    // No nonces nor signing keys are needed for this example. Check out the
+    // No nonces nor signing keys are needed for the input account in this
+    // example; only the payer signs, to cover the fee. Check out the
     // `run_hello_world_with_authorization` on how to use them.
     let nonces = vec![];
     let signing_keys = [];
-    let message = Message::try_new(
+    let tx = program_deployment::public_tx_paid_by(
+        &wallet_core,
         program_account_id,
         vec![ProgramShardSelector::new(account_id, program_account_id)],
         nonces,
+        &signing_keys,
         greeting,
+        payer,
     )
+    .await
     .unwrap();
-    let witness_set = WitnessSet::for_message(&message, &signing_keys);
-    let tx = PublicTransaction::new(message, witness_set);
 
     // Submit the transaction
     let _response = wallet_core

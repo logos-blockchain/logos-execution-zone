@@ -1,8 +1,5 @@
 use common::transaction::LeeTransaction;
-use lee::{
-    AccountId, ProgramShardSelector, PublicTransaction,
-    public_transaction::{Message, WitnessSet},
-};
+use lee::{AccountId, ProgramShardSelector};
 use program_deployment::deploy_program;
 use sequencer_service_rpc::RpcClient as _;
 use wallet::WalletCore;
@@ -70,15 +67,17 @@ async fn main() {
     let nonces = vec![];
     let signing_keys = [];
     // The caller only needs the account ID; the callee selects its shard.
-    let message = Message::try_new(
+    let tx = program_deployment::public_tx_paid_by(
+        &wallet_core,
         caller_account_id,
         vec![ProgramShardSelector::native_balance(account_id)],
         nonces,
+        &signing_keys,
         instruction_data,
+        payer,
     )
+    .await
     .unwrap();
-    let witness_set = WitnessSet::for_message(&message, &signing_keys);
-    let tx = PublicTransaction::new(message, witness_set);
 
     // Submit the transaction
     let _response = wallet_core

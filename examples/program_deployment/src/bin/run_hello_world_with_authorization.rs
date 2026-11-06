@@ -1,8 +1,5 @@
 use common::transaction::LeeTransaction;
-use lee::{
-    AccountId, ProgramShardSelector, PublicTransaction,
-    public_transaction::{Message, WitnessSet},
-};
+use lee::{AccountId, ProgramShardSelector};
 use program_deployment::deploy_program;
 use sequencer_service_rpc::RpcClient as _;
 use wallet::WalletCore;
@@ -76,17 +73,20 @@ async fn main() {
         .await
         .expect("Node should be reachable to query account data");
     let signing_keys = [&signing_key];
-    let message = Message::try_new(
+    // Pass the signing key to sign the message. This will be used by the node
+    // to flag the pre_state as `is_authorized` when executing the program.
+    // The payer co-signs to cover the fee without being an input account.
+    let tx = program_deployment::public_tx_paid_by(
+        &wallet_core,
         program_account_id,
         vec![ProgramShardSelector::new(account_id, program_account_id)],
         nonces,
+        &signing_keys,
         greeting,
+        payer,
     )
+    .await
     .unwrap();
-    // Pass the signing key to sign the message. This will be used by the node
-    // to flag the pre_state as `is_authorized` when executing the program
-    let witness_set = WitnessSet::for_message(&message, &signing_keys);
-    let tx = PublicTransaction::new(message, witness_set);
 
     // Submit the transaction
     let _response = wallet_core
