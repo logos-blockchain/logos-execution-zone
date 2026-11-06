@@ -98,6 +98,7 @@ impl From<PrimitiveOperationStatus> for FfiOperationError {
         match value {
             PrimitiveOperationStatus::Ok => Self::Success,
             PrimitiveOperationStatus::CastError => Self::InvalidTypeConversion,
+            PrimitiveOperationStatus::NullPointer => Self::NullPointer,
         }
     }
 }
