@@ -1,7 +1,7 @@
 use lee_core::{
-    EphemeralSecretKey, InvalidMessageSeal, MessageWitness, PrivateAccountKind, Recipient,
-    RecipientEncryption,
-    program::{MessageBody, Publication},
+    EphemeralSecretKey, InvalidMessageSeal, MessageWitness, PrivateAccountKind, PublicationMode,
+    Recipient, RecipientEncryption,
+    program::{MessageBody, Publication, StoredPublication},
 };
 
 use super::*;
@@ -31,19 +31,19 @@ fn destination() -> Actor {
 
 fn sealed_to(
     recipient: Recipient,
-) -> impl FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError> {
+) -> impl FnMut(&MessageBody) -> Result<PublicationMode, LeeError> {
     move |_| {
-        Ok(RecipientEncryption {
+        Ok(PublicationMode::Sealed(RecipientEncryption {
             recipient: recipient.clone(),
             esk: EphemeralSecretKey([0; 32]),
-        })
+        }))
     }
 }
 
-// The sender's proof of sending a write asynchronously to the destination, sealed as `choose_seal`
-// chooses.
+// The sender's proof of sending a write asynchronously to the destination, published as
+// `choose_publication` chooses.
 fn proven_async_message(
-    choose_seal: impl FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
+    choose_publication: impl FnMut(&MessageBody) -> Result<PublicationMode, LeeError>,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     execute_and_prove(
         ProvingInput {
@@ -57,7 +57,7 @@ fn proven_async_message(
         &scripted_programs(),
         |_| SenderPresentation::Canonical,
         |_, _| false,
-        choose_seal,
+        choose_publication,
     )
 }
 
@@ -165,7 +165,10 @@ fn a_tampered_sealed_message_is_rejected() {
         "the unmodified statement must verify"
     );
 
-    tx.message.execution.async_messages[0].note.epk.0[0] ^= 0xFF;
+    let StoredPublication::Sealed(sealed) = &mut tx.message.execution.async_messages[0] else {
+        panic!("the async message to a private account is sealed");
+    };
+    sealed.note.epk.0[0] ^= 0xFF;
 
     assert!(matches!(
         ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0),

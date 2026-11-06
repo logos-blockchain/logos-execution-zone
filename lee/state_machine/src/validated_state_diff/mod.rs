@@ -12,7 +12,9 @@ use lee_core::{
         BoundaryStep, PublicExecutionContext, PublicOutcome, PublicPart, TransactionEntry,
         TransitionView, WholeExecution,
     },
-    program::{MessageBody, PROGRAM_LOADER_ACCOUNT_ID, Publication, TransactionEvent},
+    program::{
+        MessageBody, PROGRAM_LOADER_ACCOUNT_ID, Publication, StoredPublication, TransactionEvent,
+    },
 };
 use public_backend::PublicBackend;
 
@@ -400,22 +402,25 @@ impl ValidatedStateDiff {
                 recovery_bindings: execution.recovery_bindings.clone(),
                 ..StateDiff::default()
             },
-        );
+        )
+        .and_then(|mut diff| {
+            // The proven private async messages follow the live public ones.
+            for publication in &execution.async_messages {
+                let published = match publication {
+                    StoredPublication::Clear(body) => {
+                        publish(state, &diff.recovery_bindings, body.clone())?
+                    }
+                    StoredPublication::Sealed(sealed) => Publication::Sealed(sealed.clone()),
+                };
+                diff.published.push(published);
+            }
+            Ok(diff)
+        });
         // As for a public action.
         let cycles = charged_cycles(&result, cycles_used, cycle_budget);
         let fallback = execution.fee.as_ref().and_then(|fee| fee.fallback.as_ref());
         let (diff, revert) = match (result, fallback) {
-            (Ok(mut diff), _) => {
-                // The proven private async messages follow the live public ones.
-                diff.published.extend(
-                    execution
-                        .async_messages
-                        .iter()
-                        .cloned()
-                        .map(Publication::Sealed),
-                );
-                (diff, None)
-            }
+            (Ok(diff), _) => (diff, None),
             (Err(err), Some(fallback)) if err.is_chargeable() => {
                 state.check_commitments_are_new(&[fallback.action.commitment])?;
                 let fallback_request = PublicPart::new(

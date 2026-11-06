@@ -11,6 +11,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::PathBuf,
+    sync::{Arc, Mutex},
 };
 
 pub use account_manager::{
@@ -24,7 +25,8 @@ use futures::TryFutureExt as _;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
     Account, AccountId, EncryptedNote, PredictedCrossMessages, PrivacyPreservingTransaction,
-    ProgramId, ProvingInput, PublicExecutionContext, Recipient, RecipientEncryption, Simulation,
+    ProgramId, ProvingInput, PublicExecutionContext, PublicationMode, Recipient,
+    RecipientEncryption, SenderPresentation, Simulation,
     privacy_preserving_transaction::{
         circuit::{Dependency, ProgramCatalog, ProgramKind},
         message::Message,
@@ -107,6 +109,7 @@ pub struct SharedAccountInfo {
 pub struct AsyncDelivery {
     pub recoveries: Vec<RecipientEncryption>,
     pub seals: Vec<Recipient>,
+    pub clear_messages: Vec<ClearMessage>,
     pub promotions: Promotions,
 }
 
@@ -117,6 +120,15 @@ pub struct Promotions {
     pub public: BTreeSet<u64>,
     pub private: BTreeSet<u64>,
     pub listed_only: bool,
+}
+
+// A durable async message of private execution to publish clear instead of sealed: one `sender`,
+// the actor as this wallet holds it rather than as presented, sends to `to` with exactly `message`.
+#[derive(Clone)]
+pub struct ClearMessage {
+    pub sender: Actor,
+    pub to: Actor,
+    pub message: MessageData,
 }
 
 // A pending message's body as this wallet reads it, and the recipient its recovery note or seal
@@ -1295,10 +1307,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         tx_pre_check: impl FnOnce(&[SelectedActorState]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let to = root_actor(&accounts, root)?;
-        let async_delivery = AsyncDelivery {
-            recoveries: self.unbound(async_delivery.recoveries).await?,
-            ..async_delivery
-        };
+        let async_delivery = self.unbound(async_delivery).await?;
         if async_delivery.recoveries.is_empty()
             && async_delivery.seals.is_empty()
             && async_delivery.promotions.public.is_empty()
@@ -1322,13 +1331,14 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         }
     }
 
-    // A binding already on chain is reused: settlement attaches it to every publication.
+    // A binding already on chain is reused: settlement attaches it to every publication. A clear
+    // message's destination must be bound, on chain or by a recovery this delivery introduces.
     async fn unbound(
         &self,
-        recoveries: Vec<RecipientEncryption>,
-    ) -> Result<Vec<RecipientEncryption>, ExecutionFailureKind> {
+        async_delivery: AsyncDelivery,
+    ) -> Result<AsyncDelivery, ExecutionFailureKind> {
         let mut unbound: Vec<RecipientEncryption> = Vec::new();
-        for recovery in recoveries {
+        for recovery in async_delivery.recoveries {
             let address = recovery.recipient.address();
             let bound = self
                 .get_recovery_binding(address)
@@ -1342,7 +1352,24 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 unbound.push(recovery);
             }
         }
-        Ok(unbound)
+        for clear in &async_delivery.clear_messages {
+            let to = clear.to.account_id;
+            if !unbound.iter().any(|kept| kept.recipient.address() == to)
+                && self
+                    .get_recovery_binding(to)
+                    .await
+                    .map_err(ExecutionFailureKind::SequencerError)?
+                    .is_none()
+            {
+                return Err(ExecutionFailureKind::TransactionBuildError(
+                    lee::error::LeeError::UnboundAsyncDestination { actor: clear.to },
+                ));
+            }
+        }
+        Ok(AsyncDelivery {
+            recoveries: unbound,
+            ..async_delivery
+        })
     }
 
     // What settlement needs for an async message to `destination`: a public account to execute it,
@@ -1494,6 +1521,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         let AsyncDelivery {
             recoveries,
             seals,
+            clear_messages,
             promotions:
                 Promotions {
                     public,
@@ -1602,24 +1630,6 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .collect();
         let select =
             move |_, body: &MessageBody| !listed_only && witnessed.contains(&body.to.account_id);
-        let choose_seal_with = |seals: Vec<Recipient>| {
-            move |body: &MessageBody| {
-                let to = body.to.account_id;
-                seals
-                    .iter()
-                    .find(|recipient| recipient.address() == to)
-                    .map(|recipient| RecipientEncryption {
-                        recipient: recipient.clone(),
-                        esk: EphemeralSecretKey(account_manager::random_bytes()),
-                    })
-                    .ok_or_else(|| {
-                        lee::error::LeeError::InvalidInput(format!(
-                            "No recipient material seals an async message to {to}"
-                        ))
-                    })
-            }
-        };
-
         let programs = programs.clone();
 
         // The in-proof fee: the inbox is a declared public actor so the reserve crosses to it,
@@ -1739,8 +1749,32 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 amount: reserve,
                 refund_to,
             });
-            let present = acc_manager.presenter(Some((payer, opening)));
-            let (select, choose_seal) = (select.clone(), choose_seal_with(seals.clone()));
+            // Each sender as presented, derived as the interpreter derives it, maps back to its
+            // actor.
+            let senders = Arc::new(Mutex::new(HashMap::new()));
+            let mut presenter = acc_manager.presenter(Some((payer, opening)));
+            let present = {
+                let senders = Arc::clone(&senders);
+                move |sender: Actor| {
+                    let presentation = presenter(sender);
+                    let presented = match presentation {
+                        SenderPresentation::Canonical => sender,
+                        SenderPresentation::Blinded(factor) => Actor::new(
+                            sender.account_id.blinded(&factor),
+                            sender.program_account_id,
+                        ),
+                    };
+                    senders
+                        .lock()
+                        .expect("the sender map's lock is never poisoned")
+                        .insert(presented, sender);
+                    presentation
+                }
+            };
+            let (select, choose_publication) = (
+                select.clone(),
+                choose_publication_with(seals.clone(), clear_messages.clone(), senders),
+            );
             let (programs, simulation) = (programs.clone(), simulation.clone());
             let (output, proof) = match cross_messages.clone() {
                 None => tokio::task::spawn_blocking(move || {
@@ -1750,7 +1784,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                         &programs,
                         present,
                         select,
-                        choose_seal,
+                        choose_publication,
                     )
                 })
                 .await?
@@ -1773,7 +1807,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                             &programs,
                             present,
                             select,
-                            choose_seal,
+                            choose_publication,
                         )
                     })
                     .await??
@@ -2287,10 +2321,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             }
         }
 
-        let async_delivery = AsyncDelivery {
-            recoveries: self.unbound(async_delivery.recoveries).await?,
-            ..async_delivery
-        };
+        let async_delivery = self.unbound(async_delivery).await?;
         let receipt = Receipt {
             body,
             position,
@@ -2645,6 +2676,44 @@ fn decrypt_note(
 }
 
 // The root is one of the transaction's accounts, so it runs with the placement declared for it.
+// How private execution publishes each durable async message: clear when one of `clear_messages`
+// matches it, with `senders` mapping its presented sender back, each matching once; else sealed to
+// the recipient in `seals` it addresses.
+fn choose_publication_with(
+    seals: Vec<Recipient>,
+    mut clear_messages: Vec<ClearMessage>,
+    senders: Arc<Mutex<HashMap<Actor, Actor>>>,
+) -> impl FnMut(&MessageBody) -> Result<PublicationMode, lee::error::LeeError> {
+    move |body: &MessageBody| {
+        let sender = senders
+            .lock()
+            .expect("the sender map's lock is never poisoned")
+            .get(&body.from)
+            .copied();
+        if let Some(index) = clear_messages.iter().position(|clear| {
+            Some(clear.sender) == sender && clear.to == body.to && clear.message == body.message
+        }) {
+            clear_messages.swap_remove(index);
+            return Ok(PublicationMode::Clear);
+        }
+        let to = body.to.account_id;
+        seals
+            .iter()
+            .find(|recipient| recipient.address() == to)
+            .map(|recipient| {
+                PublicationMode::Sealed(RecipientEncryption {
+                    recipient: recipient.clone(),
+                    esk: EphemeralSecretKey(account_manager::random_bytes()),
+                })
+            })
+            .ok_or_else(|| {
+                lee::error::LeeError::InvalidInput(format!(
+                    "No recipient material seals an async message to {to}"
+                ))
+            })
+    }
+}
+
 fn root_actor(accounts: &[AccountMention], root: usize) -> Result<Actor, ExecutionFailureKind> {
     accounts
         .get(root)
@@ -2682,10 +2751,11 @@ mod tests {
     };
     use lee_core::{
         Commitment, CommitmentPosition, EncryptedNote, EphemeralSecretKey, MembershipProof,
-        Nullifier, PrivateAccountKind, ProgramImageClaim, Recipient, RecipientEncryption,
-        RecoveryBinding,
+        Nullifier, NullifierPublicKey, PrivateAccountKind, ProgramImageClaim, PublicationMode,
+        Recipient, RecipientEncryption, RecoveryBinding,
         account::{Account, Actor, ActorState},
         compute_digest_for_path,
+        encryption::ViewingPublicKey,
         native_token::{self, TransferError},
         program::{
             MessageBody, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramHeader, ProgramSegment,
@@ -2698,8 +2768,8 @@ mod tests {
     use test_guest_core::Script;
 
     use super::{
-        AccountIdentity, AccountMention, AsyncDelivery, ExecutionFailureKind,
-        NATIVE_TOKEN_PROGRAM_ID, PendingMessage, WalletCore,
+        AccountIdentity, AccountMention, AsyncDelivery, ClearMessage, ExecutionFailureKind,
+        NATIVE_TOKEN_PROGRAM_ID, PendingMessage, WalletCore, choose_publication_with,
     };
     use crate::{
         account::{AccountIdWithPrivacy, Label},
@@ -3081,6 +3151,52 @@ mod tests {
         let (_, bound) = wallet.async_destination(blinded).unwrap();
         assert_eq!(bound.recoveries.len(), 1);
         assert_eq!(bound.recoveries[0].recipient, addressed);
+    }
+
+    #[test]
+    fn only_a_requested_async_message_is_published_clear_and_each_request_once() {
+        let recipient = Recipient {
+            npk: NullifierPublicKey([1; 32]),
+            vpk: ViewingPublicKey::from_seed(&[2; 32], &[3; 32]),
+            kind: PrivateAccountKind::Regular,
+            opening: None,
+        };
+        let to = Actor::native_balance(recipient.address());
+        let (requested, other) = (
+            Actor::native_balance(AccountId::new([4; 32])),
+            Actor::native_balance(AccountId::new([5; 32])),
+        );
+        let (requested_alias, other_alias) = (
+            Actor::native_balance(AccountId::new([6; 32])),
+            Actor::native_balance(AccountId::new([7; 32])),
+        );
+        let credit = |from, amount| MessageBody {
+            from,
+            to,
+            message: borsh::to_vec(&native_token::Message::Credit(amount)).unwrap(),
+        };
+        let mut choose = choose_publication_with(
+            vec![recipient],
+            vec![ClearMessage {
+                sender: requested,
+                to,
+                message: credit(requested_alias, 20).message,
+            }],
+            Arc::new(Mutex::new(HashMap::from([
+                (requested_alias, requested),
+                (other_alias, other),
+            ]))),
+        );
+        let sealed = |publication| matches!(publication, Ok(PublicationMode::Sealed(_)));
+
+        // Another account's identical credit does not take the request, nor does another amount.
+        assert!(sealed(choose(&credit(other_alias, 20))));
+        assert!(sealed(choose(&credit(requested_alias, 21))));
+        assert!(matches!(
+            choose(&credit(requested_alias, 20)),
+            Ok(PublicationMode::Clear)
+        ));
+        assert!(sealed(choose(&credit(requested_alias, 20))));
     }
 
     #[tokio::test]

@@ -2,7 +2,7 @@ use lee_core::{
     Commitment, CommitmentSetDigest, DummyInput, DummyOutput, EncryptedNote, EncryptionScheme,
     EphemeralSecretKey, FeeFallback, FeeTransfer, ML_KEM_768_CIPHERTEXT_LEN, Nullifier,
     PrivacyPreservingCircuitOutput, PrivateAction, PrivateWitness, ProgramImageClaim,
-    ProvenExecution, ProvenFee, RecipientEncryption, RootCall, SharedSecretKey,
+    ProvenExecution, ProvenFee, PublicationMode, RecipientEncryption, RootCall, SharedSecretKey,
     account::{Account, AccountData, Actor, Nonce},
     execution_state::{Boundary, BoundaryStep, PrivatePartOutcome, PublicExecutionContext},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
@@ -30,7 +30,7 @@ pub fn compute_circuit_output(
     ciphertext_padding: Option<u32>,
     program_image_claims: Vec<ProgramImageClaim>,
     recoveries: &[RecipientEncryption],
-    message_seals: Vec<RecipientEncryption>,
+    publication_modes: Vec<PublicationMode>,
     fee: Option<FeeTransfer>,
 ) -> PrivacyPreservingCircuitOutput {
     let PrivatePartOutcome {
@@ -40,7 +40,7 @@ pub fn compute_circuit_output(
         async_messages,
     } = outcome;
     let async_messages =
-        lee_core::seal_messages(&async_messages, message_seals, ciphertext_padding)
+        lee_core::publish_messages(async_messages, publication_modes, ciphertext_padding)
             .unwrap_or_else(|e| panic!("{e}"));
     let fee = fee.map(|fee| ProvenFee {
         refund_to: fee.refund_to,

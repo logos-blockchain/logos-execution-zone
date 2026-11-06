@@ -12,7 +12,8 @@ use crate::{
     Nullifier, PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, Proof, ProvenFee, PublicAccountEvidence,
     PublicExecutionContext, PublicKey, PublicMessage, PublicTransaction, RecoveryBinding, RootCall,
-    SealedMessage, Selector, Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
+    SealedMessage, Selector, Signature, StallReason, StoredPublication, Transaction,
+    ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -562,6 +563,24 @@ impl From<SealedMessage> for lee_core::SealedMessage {
         Self {
             commitment: commitment.into(),
             note: note.into(),
+        }
+    }
+}
+
+impl From<lee_core::program::StoredPublication> for StoredPublication {
+    fn from(value: lee_core::program::StoredPublication) -> Self {
+        match value {
+            lee_core::program::StoredPublication::Clear(body) => Self::Clear(body.into()),
+            lee_core::program::StoredPublication::Sealed(sealed) => Self::Sealed(sealed.into()),
+        }
+    }
+}
+
+impl From<StoredPublication> for lee_core::program::StoredPublication {
+    fn from(value: StoredPublication) -> Self {
+        match value {
+            StoredPublication::Clear(body) => Self::Clear(body.into()),
+            StoredPublication::Sealed(sealed) => Self::Sealed(sealed.into()),
         }
     }
 }
@@ -1487,13 +1506,18 @@ mod tests {
                     lee_core::execution_state::BoundaryStep::EndPublicSubtree,
                 ],
                 async_messages: vec![
-                    lee_core::SealedMessage {
-                        commitment: lee_core::Commitment::from_byte_array([22; 32]),
-                        note: lee_core::EncryptedNote {
-                            epk: lee_core::EphemeralPublicKey(vec![23; 2]),
-                            ciphertext: lee_core::encryption::Ciphertext::from_inner(vec![24; 3]),
-                        },
-                    };
+                    lee_core::program::StoredPublication::Sealed(
+                        lee_core::SealedMessage {
+                            commitment: lee_core::Commitment::from_byte_array([22; 32]),
+                            note: lee_core::EncryptedNote {
+                                epk: lee_core::EphemeralPublicKey(vec![23; 2]),
+                                ciphertext: lee_core::encryption::Ciphertext::from_inner(vec![
+                                    24;
+                                    3
+                                ]),
+                            },
+                        }
+                    );
                     2
                 ],
                 recovery_bindings: vec![],
@@ -1537,5 +1561,39 @@ mod tests {
         let restored: SealedMessage = serde_json::from_str(&json).unwrap();
 
         assert_eq!(lee_core::SealedMessage::from(restored), sealed);
+    }
+
+    #[test]
+    fn a_stored_publication_of_either_kind_round_trips_through_the_mirror() {
+        let actor = |tag| {
+            lee_core::account::Actor::new(
+                lee_core::account::AccountId::new([tag; 32]),
+                lee_core::account::AccountId::new([tag.wrapping_add(1); 32]),
+            )
+        };
+        let clear =
+            lee_core::program::StoredPublication::Clear(lee_core::program::MessageEnvelope {
+                from: actor(0),
+                to: actor(2),
+                message: vec![4],
+            });
+        let sealed = lee_core::program::StoredPublication::Sealed(lee_core::SealedMessage {
+            commitment: lee_core::Commitment::from_byte_array([5; 32]),
+            note: lee_core::EncryptedNote {
+                epk: lee_core::EphemeralPublicKey(vec![6; 2]),
+                ciphertext: lee_core::encryption::Ciphertext::from_inner(vec![7; 3]),
+            },
+        });
+
+        for publication in [clear, sealed] {
+            let mirrored = StoredPublication::from(publication.clone());
+            let json = serde_json::to_string(&mirrored).unwrap();
+            let restored: StoredPublication = serde_json::from_str(&json).unwrap();
+
+            assert_eq!(
+                lee_core::program::StoredPublication::from(restored),
+                publication
+            );
+        }
     }
 }

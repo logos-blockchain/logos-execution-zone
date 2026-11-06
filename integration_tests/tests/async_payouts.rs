@@ -366,3 +366,70 @@ async fn a_public_payout_reaches_a_private_pda_its_recipient_discovers_by_key() 
     );
     Ok(())
 }
+
+// A private payer reaches a private address it knows only by its id. A public payout certifies the
+// address first; the private payment then publishes its credit clear without recipient material,
+// and the recipient finds and receives it by key like the payout.
+#[test]
+async fn a_private_payment_reaches_a_certified_address_its_payer_knows_only_by_id() -> Result<()> {
+    let mut ctx = TestContext::new().await?;
+    let certifier = ctx.existing_public_accounts()[0];
+    let payer = ctx.existing_private_accounts()[0];
+    let (recorded, _) = ctx.wallet_mut().create_new_account_private(None);
+    let keys = restored_private_account(&ctx, recorded, "recipient keys")
+        .key_chain
+        .clone();
+    let recipient = AccountIdentity::PrivateForeign {
+        npk: keys.nullifier_public_key,
+        vpk: keys.viewing_public_key,
+        kind: PrivateAccountKind::Pda {
+            account_id: AccountId::new([5; 32]),
+            seed: PdaSeed::new([9; 32]),
+        },
+    };
+    let address = recipient.account_id();
+
+    let (certified, _) = NativeTokenTransfer(ctx.wallet())
+        .transfer(
+            AccountIdentity::Public(certifier),
+            recipient,
+            1,
+            CreditDelivery::Automatic,
+        )
+        .await?;
+    wait_for_inclusion(&ctx, certified).await?;
+    let [payout] = <[_; 1]>::try_from(ctx.wallet_mut().owned_pending_messages().await?)
+        .map_err(|pending| anyhow::anyhow!("expected one payout, found {}", pending.len()))?;
+    let (claimed, _) = ctx.wallet_mut().receive_pending_message(payout).await?;
+    wait_for_inclusion(&ctx, claimed).await?;
+    sync_private(&mut ctx).await?;
+
+    let (paid, _) = NativeTokenTransfer(ctx.wallet())
+        .transfer_clear(AccountIdentity::PrivateOwned(payer), address, 40)
+        .await?;
+    wait_for_inclusion(&ctx, paid).await?;
+    let [payment] = <[_; 1]>::try_from(ctx.wallet_mut().owned_pending_messages().await?)
+        .map_err(|pending| anyhow::anyhow!("expected one payment, found {}", pending.len()))?;
+    let Publication::Clear { body, .. } = &payment.publication else {
+        anyhow::bail!("the requested credit is published clear");
+    };
+    assert_eq!(
+        body.from.program_account_id,
+        native_token::NATIVE_TOKEN_PROGRAM_ID
+    );
+    assert_ne!(
+        body.from.account_id, payer,
+        "the payer sends under an alias"
+    );
+    assert_eq!(body.to, Actor::native_balance(address));
+    assert_eq!(
+        borsh::from_slice::<native_token::Message>(&body.message)?,
+        native_token::Message::Credit(40)
+    );
+
+    let (received, _) = ctx.wallet_mut().receive_pending_message(payment).await?;
+    wait_for_inclusion(&ctx, received).await?;
+    sync_private(&mut ctx).await?;
+    assert_eq!(private_balance(&ctx, address)?, 41);
+    Ok(())
+}

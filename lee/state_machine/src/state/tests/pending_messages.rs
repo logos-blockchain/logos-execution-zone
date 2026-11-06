@@ -1,6 +1,6 @@
 use lee_core::{
-    EphemeralSecretKey, MessageWitness, PrivateAccountKind, Recipient, RecipientEncryption,
-    compute_digest_for_path,
+    EphemeralSecretKey, MessageWitness, PrivateAccountKind, PublicationMode, Recipient,
+    RecipientEncryption, compute_digest_for_path,
     execution_state::Placement,
     program::{MessageBody, Publication},
 };
@@ -317,10 +317,10 @@ fn proven_publishing(
         |_| SenderPresentation::Canonical,
         |_, _| false,
         |_| {
-            Ok(RecipientEncryption {
+            Ok(PublicationMode::Sealed(RecipientEncryption {
                 recipient: own.clone(),
                 esk: EphemeralSecretKey([0; 32]),
-            })
+            }))
         },
     )
     .unwrap();

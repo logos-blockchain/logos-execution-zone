@@ -2,7 +2,7 @@ use crate::primitives::types::{
     FfiAccountId, FfiBytes32, FfiVec,
     actor::{
         FfiActor, FfiBoundaryStep, FfiNonceEntry, FfiPrivateAction, FfiPublicAccountEvidence,
-        FfiRecoveryBinding, FfiSealedMessage, FfiSignaturePubKeyEntry,
+        FfiRecoveryBinding, FfiSignaturePubKeyEntry, FfiStoredPublication,
     },
     transaction::FfiTransaction,
 };
@@ -27,7 +27,7 @@ pub type FfiSignaturePubKeyList = FfiVec<FfiSignaturePubKeyEntry>;
 
 pub type FfiBoundaryStepList = FfiVec<FfiBoundaryStep>;
 
-pub type FfiSealedMessageList = FfiVec<FfiSealedMessage>;
+pub type FfiStoredPublicationList = FfiVec<FfiStoredPublication>;
 
 pub type FfiPublicAccountEvidenceList = FfiVec<FfiPublicAccountEvidence>;
 

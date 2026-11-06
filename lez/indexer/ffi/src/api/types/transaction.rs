@@ -2,7 +2,7 @@ pub use ffi_types::{
     FfiActor, FfiBoundaryStep, FfiBoundaryStepKind, FfiDelivery, FfiEncryptedAccountData,
     FfiFeeDeclaration, FfiPrivateAction, FfiProvenFee, FfiPublicAccountEvidence,
     FfiPublicAccountEvidenceKind, FfiPublicExecutionContext, FfiRecoveryBinding, FfiRootCall,
-    FfiSealedMessage, FfiSignaturePubKeyEntry,
+    FfiSignaturePubKeyEntry, FfiStoredPublication,
 };
 use ffi_types::{empty_root_call, proven_fee_from_ffi};
 use indexer_service_protocol::{
@@ -15,8 +15,8 @@ use crate::api::types::{
     FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiPublicKey, FfiVec,
     vectors::{
         FfiBoundaryStepList, FfiNonceList, FfiPrivateActionList, FfiProof,
-        FfiPublicAccountEvidenceList, FfiRecoveryBindingList, FfiSealedMessageList,
-        FfiSignaturePubKeyList,
+        FfiPublicAccountEvidenceList, FfiRecoveryBindingList, FfiSignaturePubKeyList,
+        FfiStoredPublicationList,
     },
 };
 
@@ -182,10 +182,10 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                         .collect()
                 },
                 async_messages: {
-                    let std_vec: Vec<FfiSealedMessage> = value.message.async_messages.into();
+                    let std_vec: Vec<FfiStoredPublication> = value.message.async_messages.into();
                     std_vec
                         .into_iter()
-                        .map(|sealed| lee::SealedMessage::from(sealed).into())
+                        .map(|publication| lee::StoredPublication::from(publication).into())
                         .collect()
                 },
                 recovery_bindings: {
@@ -245,7 +245,7 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
 pub struct FfiPrivacyPreservingMessage {
     pub public_context: FfiPublicExecutionContext,
     pub boundary: FfiBoundaryStepList,
-    pub async_messages: FfiSealedMessageList,
+    pub async_messages: FfiStoredPublicationList,
     pub recovery_bindings: FfiRecoveryBindingList,
     pub has_public_root: bool,
     pub public_root: FfiRootCall,
@@ -285,7 +285,9 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
                 .into(),
             async_messages: async_messages
                 .into_iter()
-                .map(|sealed| FfiSealedMessage::from(lee::SealedMessage::from(sealed)))
+                .map(|publication| {
+                    FfiStoredPublication::from(lee::StoredPublication::from(publication))
+                })
                 .collect::<Vec<_>>()
                 .into(),
             recovery_bindings: recovery_bindings
@@ -531,6 +533,7 @@ mod tests {
         AccountId, Actor, BoundaryStep, Ciphertext, Commitment, CommitmentSetDigest, Delivery,
         EncryptedNote, EphemeralPublicKey, FeeDeclaration, FeeFallback, MessageEnvelope, Nullifier,
         PrivateAction, ProvenFee, PublicExecutionContext, RootCall, SealedMessage,
+        StoredPublication,
     };
 
     use super::*;
@@ -637,13 +640,13 @@ mod tests {
                     BoundaryStep::EndPublicSubtree,
                 ],
                 async_messages: vec![
-                    SealedMessage {
+                    StoredPublication::Sealed(SealedMessage {
                         commitment: Commitment([23; 32]),
                         note: EncryptedNote {
                             epk: EphemeralPublicKey(vec![24; 2]),
                             ciphertext: Ciphertext(vec![25; 3]),
                         },
-                    };
+                    });
                     2
                 ],
                 recovery_bindings: vec![],

@@ -5,8 +5,8 @@
 
 pub use fees::{FeeDeclaration, SignedMessage, is_fee_authorized};
 pub use lee_core::{
-    DummyOutput, EncryptedNote, GENESIS_BLOCK_ID, MessageWitness, ProvingInput, Recipient,
-    RecipientEncryption, RecoveryBinding, RootCall, SealedMessage, SenderPresentation,
+    DummyOutput, EncryptedNote, GENESIS_BLOCK_ID, MessageWitness, ProvingInput, PublicationMode,
+    Recipient, RecipientEncryption, RecoveryBinding, RootCall, SealedMessage, SenderPresentation,
     SharedSecretKey,
     account::{Account, AccountData, AccountId, Actor, ActorState, Balance, Cycles, Fee, Gas},
     encryption::EphemeralPublicKey,
@@ -17,7 +17,7 @@ pub use lee_core::{
     native_token,
     program::{
         AsyncMessage, MessageBody, MessageData, MessageEnvelope, ProgramId, Publication,
-        SyncMessage,
+        StoredPublication, SyncMessage,
     },
 };
 pub use privacy_preserving_circuit::{
