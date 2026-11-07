@@ -3,7 +3,11 @@ use core::slice;
 use common::HashType;
 use lee::{AccountId, FeeDeclaration, ProgramId, PublicKey, SharedSecretKey, Signature};
 use lee_core::{
-    NullifierPublicKey, account::Nonce, encryption::MlKem768EncapsulationKey, program::PdaSeed,
+    NullifierPublicKey,
+    account::Nonce,
+    encryption::MlKem768EncapsulationKey,
+    program::PdaSeed,
+    signing_key::{KeyType, SigningKeyState},
 };
 use sequencer_storage_actor::actor::event_filter::Selector;
 
@@ -411,6 +415,51 @@ impl From<FfiFeeDeclaration> for FeeDeclaration {
             gas_limit: value.gas_limit,
             tip: value.tip,
             max_fee: value.max_fee.into(),
+        }
+    }
+}
+
+/// A signing key's type.
+#[repr(C)]
+pub enum FfiKeyType {
+    Schnorr = 1,
+}
+
+/// A signing key's type and 32-byte commitment.
+#[repr(C)]
+pub struct FfiSigningKeyState {
+    pub key_type: FfiKeyType,
+    pub key_commitment: FfiBytes32,
+}
+
+impl From<SigningKeyState> for FfiSigningKeyState {
+    fn from(value: SigningKeyState) -> Self {
+        let SigningKeyState {
+            key_type,
+            key_commitment,
+        } = value;
+
+        Self {
+            key_type: match key_type {
+                KeyType::Schnorr => FfiKeyType::Schnorr,
+            },
+            key_commitment: key_commitment.into(),
+        }
+    }
+}
+
+impl From<FfiSigningKeyState> for SigningKeyState {
+    fn from(value: FfiSigningKeyState) -> Self {
+        let FfiSigningKeyState {
+            key_type,
+            key_commitment,
+        } = value;
+
+        Self {
+            key_type: match key_type {
+                FfiKeyType::Schnorr => KeyType::Schnorr,
+            },
+            key_commitment: key_commitment.into(),
         }
     }
 }

@@ -275,7 +275,7 @@ fn planted_signature_program() -> V03State {
         .with_named_programs([(SIGNATURE_PROGRAM_ID, crate::test_methods::scripted())])
 }
 
-fn assert_charged_as_an_unknown_callee(tx: &PublicTransaction, signer: AccountId) {
+fn assert_charged_as_an_unknown_callee(tx: &PublicTransaction, signer: &TestSigner) {
     let mut state = planted_signature_program();
     let error = ValidatedStateDiff::from_public_transaction(tx, &state, 1, 0)
         .err()
@@ -297,11 +297,12 @@ fn assert_charged_as_an_unknown_callee(tx: &PublicTransaction, signer: AccountId
     let diff = result.expect("a charged failure still yields an applicable diff");
     state.apply_state_diff(diff).unwrap();
     assert_eq!(
-        state.get_account_by_id(signer),
+        state.get_account_by_id(signer.account_id()),
         Account {
             nonce: Nonce(1),
             ..Account::default()
         }
+        .with_actor_state(SIGNATURE_PROGRAM_ID, signer.key_state(Nonce(1)).into())
     );
 }
 
@@ -347,7 +348,7 @@ fn a_chained_call_to_the_signature_program_is_charged_and_reverted() {
         &[&key],
     );
 
-    assert_charged_as_an_unknown_callee(&tx, key.account_id());
+    assert_charged_as_an_unknown_callee(&tx, &key);
 }
 
 #[test]
@@ -363,5 +364,5 @@ fn an_async_message_to_the_signature_program_is_charged_and_reverted() {
         &[&key],
     );
 
-    assert_charged_as_an_unknown_callee(&tx, key.account_id());
+    assert_charged_as_an_unknown_callee(&tx, &key);
 }

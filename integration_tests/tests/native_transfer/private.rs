@@ -262,7 +262,7 @@ async fn deshielded_transfer_does_not_sign_with_recipient_key() -> Result<()> {
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
 
     assert!(
-        tx.witness_set().signatures_and_public_keys().is_empty(),
+        tx.witness_set().entries().is_empty(),
         "deshielded transfer must not carry any signature, in particular not the recipient's"
     );
 

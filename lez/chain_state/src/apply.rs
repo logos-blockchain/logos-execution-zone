@@ -588,7 +588,7 @@ fn settle_charged_transaction(
     let payer = *payer;
 
     validate_static_tx(view, opening).map_err(|err| fee_validity(err.to_string()))?;
-    if !lee::is_fee_authorized(public_tx.message(), public_tx.witness_set()) {
+    if !lee::is_fee_authorized(public_tx.message()) {
         return Err(fee_validity(
             "designated payer's authorization is missing".into(),
         ));

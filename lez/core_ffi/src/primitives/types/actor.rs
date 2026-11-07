@@ -3,14 +3,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use lee::{
     AccountId, Actor, BoundaryStep, Delivery, EncryptedNote, EphemeralPublicKey, MessageEnvelope,
     PublicAccountEvidence, PublicExecutionContext, PublicKey, RecoveryBinding, RootCall,
-    SealedMessage, Signature, error::LeeError,
+    SealedMessage, error::LeeError, public_transaction::WitnessEntry,
 };
 use lee_core::{
     Commitment, Nullifier, PrivateAction, account::Nonce, encryption::Ciphertext, program::PdaSeed,
 };
 
 use crate::primitives::types::{
-    FfiAccountId, FfiBytes32, FfiNonce, FfiPublicKey, FfiSignature,
+    FfiAccountId, FfiBytes32, FfiNonce, FfiPublicKey, FfiSigningKeyState,
     vectors::{
         FfiAccountIdList, FfiActorList, FfiMessageDataList, FfiPdaSeedList, FfiPromotionList,
         FfiVecU8,
@@ -407,17 +407,31 @@ impl From<EncryptedNote> for FfiEncryptedAccountData {
     }
 }
 
+/// One signer's authentication data, and the key it rotates to.
 #[repr(C)]
-pub struct FfiSignaturePubKeyEntry {
-    pub signature: FfiSignature,
-    pub public_key: FfiPublicKey,
+pub struct FfiWitnessEntry {
+    pub auth_data: FfiVecU8,
+    pub next: FfiSigningKeyState,
 }
 
-impl From<(Signature, PublicKey)> for FfiSignaturePubKeyEntry {
-    fn from(value: (Signature, PublicKey)) -> Self {
+impl From<WitnessEntry> for FfiWitnessEntry {
+    fn from(value: WitnessEntry) -> Self {
+        let WitnessEntry { auth_data, next } = value;
+
         Self {
-            signature: value.0.into(),
-            public_key: value.1.into(),
+            auth_data: auth_data.into(),
+            next: next.into(),
+        }
+    }
+}
+
+impl From<FfiWitnessEntry> for WitnessEntry {
+    fn from(value: FfiWitnessEntry) -> Self {
+        let FfiWitnessEntry { auth_data, next } = value;
+
+        Self {
+            auth_data: auth_data.into(),
+            next: next.into(),
         }
     }
 }

@@ -14,57 +14,67 @@ use lee_core::{
     AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, MembershipProof, NullifierPublicKey,
     NullifierSecretKey, NullifierWitness, PrivateWitness, RecipientEncryption, RegularKey,
     WitnessKind, account::Nonce, encryption::ViewingPublicKey, program::MessageBody,
+    signing_key::SigningKeyState,
 };
 
 #[cfg(feature = "test-utils")]
 use crate::validated_state_diff::{StateDiff, ValidatedStateDiff};
 use crate::{
-    Account, AccountId, PrivateKey, PublicAccountEvidence, PublicKey, Signature,
+    Account, AccountId, PrivateKey, PublicAccountEvidence,
     error::LeeError,
     privacy_preserving_transaction::{self, circuit::Proof},
-    public_transaction,
-    signature::{PublicAccountSecret, Schnorr, signing_key},
+    public_transaction::{self, WitnessEntry},
+    signature::{KeyScheme as _, PublicAccountSecret, Schnorr, SignatureScheme as _, signing_key},
 };
 
 /// A public account's signing key material, as tests sign with it.
 #[derive(Debug, Clone)]
 pub struct TestSigner {
-    key: PrivateKey,
+    secret: PublicAccountSecret,
 }
 
 impl TestSigner {
     #[must_use]
-    pub fn new(seed: u8) -> Self {
+    pub const fn new(seed: u8) -> Self {
         Self {
-            key: PrivateKey::try_new([seed; 32]).expect("seed gives a valid key"),
+            secret: PublicAccountSecret::new([seed; 32]),
         }
     }
 
     #[must_use]
     pub fn account_id(&self) -> AccountId {
-        AccountId::from(&self.public_key())
+        AccountId::from(&signing_key::<Schnorr>(&self.secret, Nonce(0)).1)
     }
 
     #[must_use]
     pub fn evidence(&self) -> PublicAccountEvidence {
-        PublicAccountEvidence::Key(self.public_key())
+        PublicAccountEvidence::Key(signing_key::<Schnorr>(&self.secret, Nonce(0)).1)
     }
 
-    fn public_key(&self) -> PublicKey {
-        PublicKey::new_from_private_key(&self.key)
+    /// The key state of the account's key at `nonce`.
+    #[must_use]
+    pub fn key_state(&self, nonce: Nonce) -> SigningKeyState {
+        Schnorr::key_state(&signing_key::<Schnorr>(&self.secret, nonce).1)
     }
-}
 
-impl From<&PrivateKey> for TestSigner {
-    fn from(key: &PrivateKey) -> Self {
-        Self { key: key.clone() }
+    /// One witness entry signing `message_with_keys` with the key at `nonce` and rotating to the
+    /// key at the next nonce, whatever the message names: for witnesses that deliberately
+    /// disagree with their message.
+    #[must_use]
+    pub fn entry(&self, nonce: Nonce, message_with_keys: &[u8; 32]) -> WitnessEntry {
+        let (key, public_key) = signing_key::<Schnorr>(&self.secret, nonce);
+        WitnessEntry {
+            auth_data: Schnorr::auth_data(&public_key, &Schnorr::sign(&key, message_with_keys))
+                .to_vec(),
+            next: self.key_state(next_nonce(nonce)),
+        }
     }
 }
 
 impl From<&PublicAccountSecret> for TestSigner {
     fn from(secret: &PublicAccountSecret) -> Self {
         Self {
-            key: signing_key::<Schnorr>(secret, Nonce(0)).0,
+            secret: secret.clone(),
         }
     }
 }
@@ -108,70 +118,51 @@ pub fn signer_nonces(signers: &[&TestSigner], nonces: Vec<Nonce>) -> BTreeMap<Ac
         .collect()
 }
 
-/// The witness of `signers` for `message`; each signer must be named in `message.nonces`.
+/// The witness of `signers` for `message`, each signing with its key at its nonce in
+/// `message.nonces` and rotating to the next; each signer must be named in `message.nonces`.
 #[must_use]
 pub fn witness_for(
     message: &public_transaction::Message,
     signers: &[&TestSigner],
 ) -> public_transaction::WitnessSet {
-    public_transaction::WitnessSet::for_message(message, &signing_keys(&message.nonces, signers))
+    public_transaction::WitnessSet::sign(message, &signing_keys(&message.nonces, signers))
 }
 
-/// The witness of `signers` for `message`; each signer must be named in `message.nonces`.
+/// The witness of `signers` for `message`, each signing with its key at its nonce in
+/// `message.nonces` and rotating to the next; each signer must be named in `message.nonces`.
 #[must_use]
 pub fn privacy_witness_for(
     message: &privacy_preserving_transaction::Message,
     proof: Proof,
     signers: &[&TestSigner],
 ) -> privacy_preserving_transaction::WitnessSet {
-    privacy_preserving_transaction::WitnessSet::for_message(
+    privacy_preserving_transaction::WitnessSet::sign(
         message,
         proof,
         &signing_keys(&message.nonces, signers),
     )
 }
 
-/// One signer's witness entry for `message`, whether or not `message.nonces` names it: for
-/// witnesses that deliberately disagree with their message.
-#[must_use]
-pub fn signed_entry(
-    signer: &TestSigner,
-    message: &public_transaction::Message,
-) -> (Signature, PublicKey) {
-    (
-        Signature::new(&signer.key, &message.hash()),
-        signer.public_key(),
-    )
-}
-
-/// One signer's witness entry for `message`, whether or not `message.nonces` names it: for
-/// witnesses that deliberately disagree with their message.
-#[must_use]
-pub fn privacy_signed_entry(
-    signer: &TestSigner,
-    message: &privacy_preserving_transaction::Message,
-) -> (Signature, PublicKey) {
-    (
-        Signature::new(&signer.key, &message.hash()),
-        signer.public_key(),
-    )
-}
-
-fn signing_keys<'signer>(
+fn signing_keys(
     nonces: &BTreeMap<AccountId, Nonce>,
-    signers: &[&'signer TestSigner],
-) -> Vec<&'signer PrivateKey> {
+    signers: &[&TestSigner],
+) -> Vec<(AccountId, PrivateKey, SigningKeyState)> {
     signers
         .iter()
         .map(|signer| {
-            assert!(
-                nonces.contains_key(&signer.account_id()),
-                "signer {} is not in the message's nonces",
-                signer.account_id()
-            );
-            &signer.key
+            let account_id = signer.account_id();
+            let nonce = *nonces
+                .get(&account_id)
+                .unwrap_or_else(|| panic!("signer {account_id} is not in the message's nonces"));
+            let (key, _) = signing_key::<Schnorr>(&signer.secret, nonce);
+            (account_id, key, signer.key_state(next_nonce(nonce)))
         })
         .collect()
+}
+
+const fn next_nonce(mut nonce: Nonce) -> Nonce {
+    nonce.public_account_nonce_increment();
+    nonce
 }
 
 /// Builds a [`ValidatedStateDiff`] carrying only the given public-account changes.
@@ -182,6 +173,7 @@ pub const fn validated_state_diff_from_public_diff(
 ) -> ValidatedStateDiff {
     ValidatedStateDiff::new_unchecked(StateDiff {
         signer_account_ids: Vec::new(),
+        key_rotations: Vec::new(),
         public_diff,
         new_commitments: Vec::new(),
         new_nullifiers: Vec::new(),

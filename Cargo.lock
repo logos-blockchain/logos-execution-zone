@@ -3195,6 +3195,7 @@ dependencies = [
  "console_error_panic_hook",
  "console_log",
  "env_logger",
+ "hex",
  "indexer_service_protocol",
  "indexer_service_rpc",
  "jsonrpsee",

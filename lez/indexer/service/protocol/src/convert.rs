@@ -8,11 +8,12 @@ use crate::{
     Account, AccountData, AccountId, Actor, ActorState, BedrockStatus, Block, BlockBody,
     BlockHeader, BlockId, BlockIngestError, BoundaryStep, Ciphertext, Commitment,
     CommitmentSetDigest, CrossZoneHalt, Delivery, EncryptedNote, EphemeralPublicKey, EventRecord,
-    FeeDeclaration, FeeFallback, HashType, IndexerStatus, IndexerSyncState, MessageEnvelope,
-    Nullifier, PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage,
+    FeeDeclaration, FeeFallback, HashType, IndexerStatus, IndexerSyncState, KeyType,
+    MessageEnvelope, Nullifier, PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, Proof, ProvenFee, PublicAccountEvidence,
     PublicExecutionContext, PublicKey, PublicMessage, PublicTransaction, RecoveryBinding, RootCall,
-    SealedMessage, Selector, Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
+    SealedMessage, Selector, Signature, SigningKeyState, StallReason, Transaction, ValidityWindow,
+    WitnessEntry, WitnessSet,
 };
 
 // ============================================================================
@@ -701,14 +702,72 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
 // WitnessSet conversions
 // ============================================================================
 
+impl From<lee_core::signing_key::KeyType> for KeyType {
+    fn from(value: lee_core::signing_key::KeyType) -> Self {
+        match value {
+            lee_core::signing_key::KeyType::Schnorr => Self::Schnorr,
+        }
+    }
+}
+
+impl From<KeyType> for lee_core::signing_key::KeyType {
+    fn from(value: KeyType) -> Self {
+        match value {
+            KeyType::Schnorr => Self::Schnorr,
+        }
+    }
+}
+
+impl From<lee_core::signing_key::SigningKeyState> for SigningKeyState {
+    fn from(value: lee_core::signing_key::SigningKeyState) -> Self {
+        let lee_core::signing_key::SigningKeyState {
+            key_type,
+            key_commitment,
+        } = value;
+        Self {
+            key_type: key_type.into(),
+            key_commitment,
+        }
+    }
+}
+
+impl From<SigningKeyState> for lee_core::signing_key::SigningKeyState {
+    fn from(value: SigningKeyState) -> Self {
+        let SigningKeyState {
+            key_type,
+            key_commitment,
+        } = value;
+        Self {
+            key_type: key_type.into(),
+            key_commitment,
+        }
+    }
+}
+
+impl From<lee::public_transaction::WitnessEntry> for WitnessEntry {
+    fn from(value: lee::public_transaction::WitnessEntry) -> Self {
+        let lee::public_transaction::WitnessEntry { auth_data, next } = value;
+        Self {
+            auth_data,
+            next: next.into(),
+        }
+    }
+}
+
+impl From<WitnessEntry> for lee::public_transaction::WitnessEntry {
+    fn from(value: WitnessEntry) -> Self {
+        let WitnessEntry { auth_data, next } = value;
+        Self {
+            auth_data,
+            next: next.into(),
+        }
+    }
+}
+
 impl From<lee::public_transaction::WitnessSet> for WitnessSet {
     fn from(value: lee::public_transaction::WitnessSet) -> Self {
         Self {
-            signatures_and_public_keys: value
-                .signatures_and_public_keys()
-                .iter()
-                .map(|(sig, pk)| (sig.clone().into(), pk.clone().into()))
-                .collect(),
+            entries: value.into_raw_parts().into_iter().map(Into::into).collect(),
             proof: None,
         }
     }
@@ -716,12 +775,9 @@ impl From<lee::public_transaction::WitnessSet> for WitnessSet {
 
 impl From<lee::privacy_preserving_transaction::witness_set::WitnessSet> for WitnessSet {
     fn from(value: lee::privacy_preserving_transaction::witness_set::WitnessSet) -> Self {
-        let (sigs_and_pks, proof) = value.into_raw_parts();
+        let (entries, proof) = value.into_raw_parts();
         Self {
-            signatures_and_public_keys: sigs_and_pks
-                .into_iter()
-                .map(|(sig, pk)| (sig.into(), pk.into()))
-                .collect(),
+            entries: entries.into_iter().map(Into::into).collect(),
             proof: Some(proof.into()),
         }
     }
@@ -731,17 +787,10 @@ impl TryFrom<WitnessSet> for lee::privacy_preserving_transaction::witness_set::W
     type Error = lee::error::LeeError;
 
     fn try_from(value: WitnessSet) -> Result<Self, Self::Error> {
-        let WitnessSet {
-            signatures_and_public_keys,
-            proof,
-        } = value;
-        let signatures_and_public_keys = signatures_and_public_keys
-            .into_iter()
-            .map(|(sig, pk)| Ok((sig.into(), pk.try_into()?)))
-            .collect::<Result<Vec<_>, Self::Error>>()?;
+        let WitnessSet { entries, proof } = value;
 
         Ok(Self::from_raw_parts(
-            signatures_and_public_keys,
+            entries.into_iter().map(Into::into).collect(),
             proof
                 .map(Into::into)
                 .ok_or_else(|| lee::error::LeeError::InvalidInput("Missing proof".to_owned()))?,
@@ -778,18 +827,12 @@ impl TryFrom<PublicTransaction> for lee::PublicTransaction {
             message,
             witness_set,
         } = value;
-        let WitnessSet {
-            signatures_and_public_keys,
-            proof: _,
-        } = witness_set;
+        let WitnessSet { entries, proof: _ } = witness_set;
 
         Ok(Self::new(
             message.try_into()?,
             lee::public_transaction::WitnessSet::from_raw_parts(
-                signatures_and_public_keys
-                    .into_iter()
-                    .map(|(sig, pk)| Ok((sig.into(), pk.try_into()?)))
-                    .collect::<Result<Vec<_>, Self::Error>>()?,
+                entries.into_iter().map(Into::into).collect(),
             ),
         ))
     }

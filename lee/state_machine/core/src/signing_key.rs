@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 
-use crate::account::AccountId;
+use crate::account::{AccountId, ActorState};
 
 /// The fixed address of `signature_program`: a native pseudo-program with no bytecode, whose
 /// actor state holds each account's signing key. Never dispatched, deployed or upgraded.
@@ -20,6 +20,20 @@ pub type KeyCommitment = [u8; 32];
 pub struct SigningKeyState {
     pub key_type: KeyType,
     pub key_commitment: KeyCommitment,
+}
+
+impl From<SigningKeyState> for ActorState {
+    fn from(key: SigningKeyState) -> Self {
+        Self::from(borsh::to_vec(&key).expect("a signing key state encodes to 33 bytes"))
+    }
+}
+
+impl TryFrom<&ActorState> for SigningKeyState {
+    type Error = borsh::io::Error;
+
+    fn try_from(state: &ActorState) -> Result<Self, Self::Error> {
+        borsh::from_slice(state)
+    }
 }
 
 #[cfg(test)]
@@ -75,5 +89,36 @@ mod tests {
                 .to_string(),
             "Not all bytes read"
         );
+    }
+
+    #[test]
+    fn a_signing_key_state_round_trips_through_an_actor_state() {
+        let state = SigningKeyState {
+            key_type: KeyType::Schnorr,
+            key_commitment: [7; 32],
+        };
+        let actor_state = ActorState::from(state);
+        assert_eq!(actor_state.as_ref(), [&[1][..], &[7; 32][..]].concat());
+        assert_eq!(SigningKeyState::try_from(&actor_state).unwrap(), state);
+    }
+
+    #[test]
+    fn an_actor_state_of_another_shape_is_not_a_signing_key_state() {
+        for (bytes, error) in [
+            (Vec::new(), "Unexpected length of input"),
+            (vec![1; 32], "Unexpected length of input"),
+            (vec![1; 34], "Not all bytes read"),
+            (
+                [&[2][..], &[7; 32][..]].concat(),
+                "Unexpected variant tag: 2",
+            ),
+        ] {
+            assert_eq!(
+                SigningKeyState::try_from(&ActorState::from(bytes))
+                    .unwrap_err()
+                    .to_string(),
+                error
+            );
+        }
     }
 }

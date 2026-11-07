@@ -189,22 +189,14 @@ fn valid_transaction() -> LeeTransaction {
     common::test_utils::create_transaction_native_token_transfer(acc1, 0, acc2, 10, &signer1)
 }
 
-/// Structurally well-formed but with a signature/public-key pair that does
-/// not match, so it decodes but fails the stateless witness check; used to
-/// exercise rejection through the real gossip pipeline rather than
-/// `evaluate_transaction` directly.
+/// Structurally well-formed but with no witness entry for its signer, so it decodes but fails
+/// the stateless witness check; used to exercise rejection through the real gossip pipeline
+/// rather than `evaluate_transaction` directly.
 fn invalidly_signed_transaction() -> LeeTransaction {
     let LeeTransaction::Public(mut tx) = valid_transaction() else {
         unreachable!("valid_transaction always builds a Public transaction");
     };
-    let (signature, _correct_public_key) = tx.witness_set.signatures_and_public_keys()[0].clone();
-    let wrong_public_key = lee::signature::signing_key::<lee::signature::Schnorr>(
-        &initial_pub_accounts_private_keys()[1].secret,
-        0.into(),
-    )
-    .1;
-    tx.witness_set =
-        lee::public_transaction::WitnessSet::from_raw_parts(vec![(signature, wrong_public_key)]);
+    tx.witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![]);
     LeeTransaction::Public(tx)
 }
 
