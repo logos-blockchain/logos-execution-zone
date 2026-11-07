@@ -60,6 +60,45 @@ impl From<&PrivateKey> for TestSigner {
     }
 }
 
+pub struct TestPrivateKeys {
+    pub ask: AuthorizationSecretKey,
+    pub d: [u8; 32],
+    pub z: [u8; 32],
+}
+
+impl TestPrivateKeys {
+    #[must_use]
+    pub fn nsk(&self) -> NullifierSecretKey {
+        (&self.ask).into()
+    }
+
+    #[must_use]
+    pub fn npk(&self) -> NullifierPublicKey {
+        NullifierPublicKey::from(&self.nsk())
+    }
+
+    #[must_use]
+    pub fn vpk(&self) -> ViewingPublicKey {
+        ViewingPublicKey::from_seed(&self.d, &self.z)
+    }
+
+    #[must_use]
+    pub fn account_id(&self) -> AccountId {
+        AccountId::for_regular_private_account(&self.npk(), &self.vpk())
+    }
+}
+
+/// Each signer's nonce, given in signing order.
+#[must_use]
+pub fn signer_nonces(signers: &[&TestSigner], nonces: Vec<Nonce>) -> BTreeMap<AccountId, Nonce> {
+    assert_eq!(signers.len(), nonces.len(), "one nonce per signer");
+    signers
+        .iter()
+        .map(|signer| signer.account_id())
+        .zip(nonces)
+        .collect()
+}
+
 /// The witness of `signers` for `message`; each signer must be named in `message.nonces`.
 #[must_use]
 pub fn witness_for(
@@ -123,45 +162,6 @@ fn signing_keys<'signer>(
             );
             &signer.key
         })
-        .collect()
-}
-
-pub struct TestPrivateKeys {
-    pub ask: AuthorizationSecretKey,
-    pub d: [u8; 32],
-    pub z: [u8; 32],
-}
-
-impl TestPrivateKeys {
-    #[must_use]
-    pub fn nsk(&self) -> NullifierSecretKey {
-        (&self.ask).into()
-    }
-
-    #[must_use]
-    pub fn npk(&self) -> NullifierPublicKey {
-        NullifierPublicKey::from(&self.nsk())
-    }
-
-    #[must_use]
-    pub fn vpk(&self) -> ViewingPublicKey {
-        ViewingPublicKey::from_seed(&self.d, &self.z)
-    }
-
-    #[must_use]
-    pub fn account_id(&self) -> AccountId {
-        AccountId::for_regular_private_account(&self.npk(), &self.vpk())
-    }
-}
-
-/// Each signer's nonce, given in signing order.
-#[must_use]
-pub fn signer_nonces(signers: &[&TestSigner], nonces: Vec<Nonce>) -> BTreeMap<AccountId, Nonce> {
-    assert_eq!(signers.len(), nonces.len(), "one nonce per signer");
-    signers
-        .iter()
-        .map(|signer| signer.account_id())
-        .zip(nonces)
         .collect()
 }
 
