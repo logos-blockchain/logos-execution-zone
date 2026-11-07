@@ -1,5 +1,11 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 
+use crate::account::AccountId;
+
+/// The fixed address of `signature_program`: a native pseudo-program with no bytecode, whose
+/// actor state holds each account's signing key. Never dispatched, deployed or upgraded.
+pub const SIGNATURE_PROGRAM_ID: AccountId = AccountId::new([0xFC; 32]);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
