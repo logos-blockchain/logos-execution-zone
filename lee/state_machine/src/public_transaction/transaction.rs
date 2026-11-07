@@ -35,11 +35,7 @@ impl PublicTransaction {
     }
 
     pub(crate) fn signer_account_ids(&self) -> Vec<AccountId> {
-        self.witness_set
-            .signatures_and_public_keys()
-            .iter()
-            .map(|(_, public_key)| AccountId::from(public_key))
-            .collect()
+        self.message.nonces.keys().copied().collect()
     }
 
     #[must_use]
@@ -65,7 +61,18 @@ impl PublicTransaction {
             return Err(InvalidTransaction::PublicPromotions);
         }
         let signers = self.signer_account_ids();
-        self.message.check_signers(&signers)?;
+        let witness = self.witness_set.signatures_and_public_keys();
+        if witness.len() != signers.len() {
+            return Err(InvalidTransaction::Nonces);
+        }
+        if witness
+            .iter()
+            .zip(&signers)
+            .any(|((_, public_key), signer)| AccountId::from(public_key) != *signer)
+        {
+            return Err(InvalidTransaction::SignerOrder);
+        }
+        self.message.check_signers()?;
         if !self.witness_set.is_valid_for(&self.message) {
             return Err(InvalidTransaction::Signature);
         }
@@ -166,12 +173,12 @@ pub mod tests {
         let tx = transaction_for_tests();
         let expected_signer_account_ids = vec![
             AccountId::new([
-                148, 179, 206, 253, 199, 51, 82, 86, 232, 2, 152, 122, 80, 243, 54, 207, 237, 112,
-                83, 153, 44, 59, 204, 49, 128, 84, 160, 227, 216, 149, 97, 102,
-            ]),
-            AccountId::new([
                 30, 145, 107, 3, 207, 73, 192, 230, 160, 63, 238, 207, 18, 69, 54, 216, 103, 244,
                 92, 94, 124, 248, 42, 16, 141, 19, 119, 18, 14, 226, 140, 204,
+            ]),
+            AccountId::new([
+                148, 179, 206, 253, 199, 51, 82, 86, 232, 2, 152, 122, 80, 243, 54, 207, 237, 112,
+                83, 153, 44, 59, 204, 49, 128, 84, 160, 227, 216, 149, 97, 102,
             ]),
         ];
         let signer_account_ids = tx.signer_account_ids();
@@ -212,7 +219,7 @@ pub mod tests {
         let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
         assert!(matches!(
             result,
-            Err(LeeError::InvalidInput(msg)) if msg.contains("Duplicate signers")
+            Err(LeeError::InvalidInput(msg)) if msg == InvalidTransaction::Nonces.to_string()
         ));
     }
 
@@ -348,5 +355,26 @@ pub mod tests {
             result,
             Err(LeeError::UnknownProgram { at_root: true })
         ));
+    }
+
+    #[test]
+    fn witness_entries_must_follow_the_nonces_order() {
+        let (key1, key2, ..) = keys_for_tests();
+        let message = transaction_for_tests().message;
+
+        let witness_set = WitnessSet::from_raw_parts(vec![
+            signed_entry(&key1, &message),
+            signed_entry(&key2, &message),
+        ]);
+        let tx = PublicTransaction::new(message, witness_set);
+        assert_eq!(tx.check_stateless(), Err(InvalidTransaction::SignerOrder));
+    }
+
+    #[test]
+    fn a_witness_entry_of_an_unlisted_account_is_rejected() {
+        let mut tx = transaction_for_tests();
+        tx.witness_set.signatures_and_public_keys[0] =
+            signed_entry(&TestSigner::new(3), &tx.message);
+        assert_eq!(tx.check_stateless(), Err(InvalidTransaction::SignerOrder));
     }
 }

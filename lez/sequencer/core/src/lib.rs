@@ -3217,13 +3217,16 @@ fn build_stake_genesis_transactions(
     for (index, stake) in staked.iter().enumerate() {
         let ownership_id = AccountId::from(&stake.owner);
         let stake_message = genesis_stake_message(index, stake.key, ownership_id, minimum_stake);
-        let stake_witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![
+        let mut stake_entries = vec![
             (
                 lee::Signature::new(&funding_key, &stake_message.hash()),
                 funding_public_key.clone(),
             ),
             (stake.signature.clone(), stake.owner.clone()),
-        ]);
+        ];
+        // Witness entries follow `nonces` order.
+        stake_entries.sort_by_key(|(_, public_key)| AccountId::from(public_key));
+        let stake_witness_set = lee::public_transaction::WitnessSet::from_raw_parts(stake_entries);
 
         // Redundant with the signature check every tx gets, but names the entry.
         assert!(
