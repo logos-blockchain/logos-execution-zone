@@ -22,7 +22,7 @@ use lee::{
 };
 use lee_core::account::Nonce;
 use ping_core::{
-    ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id,
+    CrossZoneEmission, ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id,
     sender_config_account_id,
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
@@ -147,14 +147,16 @@ fn build_ping_tx(
     );
     let send = SenderMessage::Send {
         outbox,
-        target_zone,
-        target_account_id: receiver_id,
-        target_accounts: vec![
-            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
-            Actor::new(ping_record_pda(receiver_id), receiver_id),
-        ],
-        payload,
-        ordinal,
+        emission: CrossZoneEmission {
+            target_zone,
+            target_account_id: receiver_id,
+            target_accounts: vec![
+                Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+                Actor::new(ping_record_pda(receiver_id), receiver_id),
+            ],
+            payload,
+            ordinal,
+        },
     };
 
     let message = Message {

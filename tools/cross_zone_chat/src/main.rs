@@ -64,7 +64,7 @@ use lee::{
 use lee_core::account::Nonce;
 use log::{info, warn};
 use ping_core::{
-    ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id,
+    CrossZoneEmission, ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id,
     sender_config_account_id,
 };
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
@@ -553,11 +553,11 @@ fn decode_inbox_text(message: &[u8]) -> Option<String> {
 
 /// Recovers the outbox ordinal from a `ping_sender::Send` tx's message.
 fn decode_send_ordinal(message: &[u8]) -> Option<u32> {
-    let SenderMessage::Send { ordinal, .. } = borsh::from_slice::<SenderMessage>(message).ok()?
+    let SenderMessage::Send { emission, .. } = borsh::from_slice::<SenderMessage>(message).ok()?
     else {
         return None;
     };
-    Some(ordinal)
+    Some(emission.ordinal)
 }
 
 /// Decodes a `ping_receiver::Record` payload (borsh bytes) to text.
@@ -596,14 +596,16 @@ fn build_send_tx(
     let outbox = Actor::new(slot.account_id(), outbox_id);
     let send = SenderMessage::Send {
         outbox,
-        target_zone: other_zone,
-        target_account_id: receiver_id,
-        target_accounts: vec![
-            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
-            Actor::new(ping_record_pda(receiver_id), receiver_id),
-        ],
-        payload,
-        ordinal,
+        emission: CrossZoneEmission {
+            target_zone: other_zone,
+            target_account_id: receiver_id,
+            target_accounts: vec![
+                Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+                Actor::new(ping_record_pda(receiver_id), receiver_id),
+            ],
+            payload,
+            ordinal,
+        },
     };
 
     let message = Message {

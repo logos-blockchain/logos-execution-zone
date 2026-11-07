@@ -960,11 +960,13 @@ mod tests {
         );
         let send = ping_core::SenderMessage::Send {
             outbox,
-            target_zone: [2; 32],
-            target_account_id: AccountId::new([9; 32]),
-            target_accounts: vec![],
-            payload: vec![1],
-            ordinal: 0,
+            emission: ping_core::CrossZoneEmission {
+                target_zone: [2; 32],
+                target_account_id: AccountId::new([9; 32]),
+                target_accounts: vec![],
+                payload: vec![1],
+                ordinal: 0,
+            },
         };
         let message = lee::public_transaction::Message::try_new(
             config,
