@@ -14,7 +14,7 @@ pub struct PrivateKey([u8; 32]);
 
 impl std::fmt::Debug for PrivateKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(self, f)
+        f.write_str("PrivateKey(<redacted>)")
     }
 }
 

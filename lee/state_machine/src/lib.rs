@@ -45,7 +45,7 @@ mod merkle_tree;
 pub mod privacy_preserving_transaction;
 pub mod program;
 pub mod public_transaction;
-mod signature;
+pub mod signature;
 mod state;
 #[cfg(any(test, feature = "test-signer"))]
 pub mod test_utils;
