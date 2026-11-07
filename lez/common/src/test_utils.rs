@@ -9,7 +9,11 @@ use std::collections::HashMap;
 use lee::test_utils::{TestSigner, signer_nonces, witness_for};
 #[cfg(test)]
 use lee::{Account, V03State, ValidatedStateDiff};
-use lee::{AccountId, Actor};
+use lee::{
+    AccountId, Actor,
+    signature::{KeyScheme as _, PublicAccountSecret, Schnorr, signing_key},
+};
+use lee_core::account::Nonce;
 
 use crate::{
     HashType,
@@ -107,15 +111,19 @@ pub fn produce_dummy_block(
 #[must_use]
 pub fn produce_dummy_empty_transaction() -> LeeTransaction {
     let nowhere = Actor::native_balance(AccountId::default());
-    let private_key = lee::PrivateKey::try_new([1; 32]).unwrap();
+    let secret = PublicAccountSecret::new([1; 32]);
+    let (private_key, public_key) = signing_key::<Schnorr>(&secret, Nonce(0));
+    let account_id = AccountId::from(&public_key);
     let message = lee::public_transaction::Message::try_new(
         nowhere,
         Vec::new(),
-        signer_nonce(&private_key, 0),
+        BTreeMap::from([(account_id, Nonce(0))]),
         native_transfer(nowhere.account_id, 0),
     )
     .unwrap();
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&private_key]);
+    let next = Schnorr::key_state(&signing_key::<Schnorr>(&secret, Nonce(1)).1);
+    let witness_set =
+        lee::public_transaction::WitnessSet::sign(&message, &[(account_id, private_key, next)]);
 
     let lee_tx = lee::PublicTransaction::new(message, witness_set);
 
@@ -197,16 +205,6 @@ pub fn create_transaction_native_token_transfer_without_fee(
     let witness_set = witness_for(&message, &[signer]);
 
     LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
-}
-
-fn signer_nonce(
-    signing_key: &lee::PrivateKey,
-    nonce: u128,
-) -> BTreeMap<AccountId, lee_core::account::Nonce> {
-    BTreeMap::from([(
-        AccountId::from(&lee::PublicKey::new_from_private_key(signing_key)),
-        lee_core::account::Nonce(nonce),
-    )])
 }
 
 const fn native_transfer(to: AccountId, amount: u128) -> lee_core::native_token::Message {

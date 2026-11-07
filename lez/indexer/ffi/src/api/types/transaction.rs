@@ -1,13 +1,13 @@
 pub use ffi_types::{
     FfiActor, FfiBoundaryStep, FfiBoundaryStepKind, FfiDelivery, FfiEncryptedAccountData,
-    FfiFeeDeclaration, FfiPrivateAction, FfiProvenFee, FfiPublicAccountEvidence,
+    FfiFeeDeclaration, FfiKeyType, FfiPrivateAction, FfiProvenFee, FfiPublicAccountEvidence,
     FfiPublicAccountEvidenceKind, FfiPublicExecutionContext, FfiRecoveryBinding, FfiRootCall,
-    FfiSealedMessage, FfiSignaturePubKeyEntry,
+    FfiSealedMessage, FfiSigningKeyState, FfiWitnessEntry,
 };
 use ffi_types::{empty_root_call, proven_fee_from_ffi};
 use indexer_service_protocol::{
     HashType, PdaSeed, PrivacyPreservingMessage, PrivacyPreservingTransaction, Proof,
-    PublicAccountEvidence, PublicKey, PublicMessage, PublicTransaction, Signature, Transaction,
+    PublicAccountEvidence, PublicKey, PublicMessage, PublicTransaction, Transaction,
     ValidityWindow, WitnessSet,
 };
 
@@ -16,7 +16,7 @@ use crate::api::types::{
     vectors::{
         FfiBoundaryStepList, FfiNonceList, FfiPrivateActionList, FfiProof,
         FfiPublicAccountEvidenceList, FfiRecoveryBindingList, FfiSealedMessageList,
-        FfiSignaturePubKeyList,
+        FfiWitnessEntryList,
     },
 };
 
@@ -24,7 +24,7 @@ use crate::api::types::{
 pub struct FfiPublicTransactionBody {
     pub hash: FfiHashType,
     pub message: FfiPublicMessage,
-    pub witness_set: FfiSignaturePubKeyList,
+    pub witness_set: FfiWitnessEntryList,
 }
 
 impl From<PublicTransaction> for FfiPublicTransactionBody {
@@ -39,9 +39,9 @@ impl From<PublicTransaction> for FfiPublicTransactionBody {
             hash: hash.into(),
             message: message.into(),
             witness_set: witness_set
-                .signatures_and_public_keys
+                .entries
                 .into_iter()
-                .map(signature_entry)
+                .map(Into::into)
                 .collect::<Vec<_>>()
                 .into(),
         }
@@ -73,17 +73,9 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
                 },
             },
             witness_set: WitnessSet {
-                signatures_and_public_keys: {
-                    let std_vec: Vec<_> = value.witness_set.into();
-                    std_vec
-                        .into_iter()
-                        .map(|ffi_val| {
-                            (
-                                Signature(ffi_val.signature.data),
-                                PublicKey(ffi_val.public_key.data),
-                            )
-                        })
-                        .collect()
+                entries: {
+                    let std_vec: Vec<FfiWitnessEntry> = value.witness_set.into();
+                    std_vec.into_iter().map(Into::into).collect()
                 },
                 proof: None,
             },
@@ -136,7 +128,7 @@ impl From<PublicMessage> for FfiPublicMessage {
 pub struct FfiPrivateTransactionBody {
     pub hash: FfiHashType,
     pub message: FfiPrivacyPreservingMessage,
-    pub witness_set: FfiSignaturePubKeyList,
+    pub witness_set: FfiWitnessEntryList,
     pub proof: FfiProof,
 }
 
@@ -152,9 +144,9 @@ impl From<PrivacyPreservingTransaction> for FfiPrivateTransactionBody {
             hash: hash.into(),
             message: message.into(),
             witness_set: witness_set
-                .signatures_and_public_keys
+                .entries
                 .into_iter()
-                .map(signature_entry)
+                .map(Into::into)
                 .collect::<Vec<_>>()
                 .into(),
             proof: witness_set
@@ -223,17 +215,9 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                 fee: proven_fee_from_ffi(value.message.has_fee, value.message.fee).map(Into::into),
             },
             witness_set: WitnessSet {
-                signatures_and_public_keys: {
-                    let std_vec: Vec<_> = value.witness_set.into();
-                    std_vec
-                        .into_iter()
-                        .map(|ffi_val| {
-                            (
-                                Signature(ffi_val.signature.data),
-                                PublicKey(ffi_val.public_key.data),
-                            )
-                        })
-                        .collect()
+                entries: {
+                    let std_vec: Vec<FfiWitnessEntry> = value.witness_set.into();
+                    std_vec.into_iter().map(Into::into).collect()
                 },
                 proof: Some(Proof(value.proof.into())),
             },
@@ -495,13 +479,6 @@ fn public_account_evidence_from_ffi(evidence: &FfiPublicAccountEvidence) -> Publ
     }
 }
 
-fn signature_entry((signature, public_key): (Signature, PublicKey)) -> FfiSignaturePubKeyEntry {
-    FfiSignaturePubKeyEntry {
-        signature: signature.into(),
-        public_key: public_key.into(),
-    }
-}
-
 fn cast_validity_window(window: ValidityWindow) -> [u64; 2] {
     [
         window.0.0.unwrap_or_default(),
@@ -597,7 +574,7 @@ mod tests {
                     admission_evidence: admission_evidence(),
                 },
                 witness_set: WitnessSet {
-                    signatures_and_public_keys: vec![],
+                    entries: vec![],
                     proof: None,
                 },
             };
@@ -676,7 +653,7 @@ mod tests {
                 }),
             },
             witness_set: WitnessSet {
-                signatures_and_public_keys: vec![],
+                entries: vec![],
                 proof: Some(Proof(vec![])),
             },
         }

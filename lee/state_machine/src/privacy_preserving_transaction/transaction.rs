@@ -42,21 +42,10 @@ impl PrivacyPreservingTransaction {
 
     pub fn check_stateless(&self) -> Result<Vec<AccountId>, InvalidTransaction> {
         let signers = self.signer_account_ids();
-        let witness = self.witness_set.signatures_and_public_keys();
-        if witness.len() != signers.len() {
+        if self.witness_set.entries().len() != signers.len() {
             return Err(InvalidTransaction::Nonces);
         }
-        if witness
-            .iter()
-            .zip(&signers)
-            .any(|((_, public_key), signer)| AccountId::from(public_key) != *signer)
-        {
-            return Err(InvalidTransaction::SignerOrder);
-        }
         self.message.check_signers()?;
-        if !self.witness_set.signatures_are_valid_for(&self.message) {
-            return Err(InvalidTransaction::Signature);
-        }
         Ok(signers)
     }
 
@@ -78,12 +67,14 @@ impl PrivacyPreservingTransaction {
 
 #[cfg(test)]
 mod tests {
+    use lee_core::account::Nonce;
+
     use crate::{
         PrivacyPreservingTransaction,
         privacy_preserving_transaction::{
             circuit::Proof, message::tests::message_for_tests, witness_set::WitnessSet,
         },
-        test_utils::{TestSigner, privacy_signed_entry},
+        test_utils::TestSigner,
     };
 
     fn proof_for_tests() -> Proof {
@@ -95,7 +86,7 @@ mod tests {
 
         let entries = [TestSigner::new(1), TestSigner::new(2)]
             .iter()
-            .map(|signer| privacy_signed_entry(signer, &message))
+            .map(|signer| signer.entry(Nonce(0), &message.hash()))
             .collect();
         let witness_set = WitnessSet::from_raw_parts(entries, proof_for_tests());
         PrivacyPreservingTransaction::new(message, witness_set)

@@ -208,7 +208,7 @@ pub type FfiNonceList = FfiVec<FfiNonceEntry>;
 
 pub type FfiMessageDataList = FfiVec<u8>;
 
-pub type FfiSignaturePubKeyList = FfiVec<FfiSignaturePubKeyEntry>;
+pub type FfiWitnessEntryList = FfiVec<FfiWitnessEntry>;
 
 pub type FfiBoundaryStepList = FfiVec<FfiBoundaryStep>;
 
@@ -703,17 +703,68 @@ impl From<EncryptedNote> for FfiEncryptedAccountData {
     }
 }
 
+/// A signing key's type.
 #[repr(C)]
-pub struct FfiSignaturePubKeyEntry {
-    pub signature: FfiSignature,
-    pub public_key: FfiPublicKey,
+pub enum FfiKeyType {
+    Schnorr = 1,
 }
 
-impl From<(Signature, PublicKey)> for FfiSignaturePubKeyEntry {
-    fn from(value: (Signature, PublicKey)) -> Self {
+/// A signing key's type and 32-byte commitment.
+#[repr(C)]
+pub struct FfiSigningKeyState {
+    pub key_type: FfiKeyType,
+    pub key_commitment: FfiBytes32,
+}
+
+/// One signer's authentication data, and the key it rotates to.
+#[repr(C)]
+pub struct FfiWitnessEntry {
+    pub auth_data: FfiVecU8,
+    pub next: FfiSigningKeyState,
+}
+
+impl From<protocol::WitnessEntry> for FfiWitnessEntry {
+    fn from(value: protocol::WitnessEntry) -> Self {
+        let protocol::WitnessEntry {
+            auth_data,
+            next:
+                protocol::SigningKeyState {
+                    key_type,
+                    key_commitment,
+                },
+        } = value;
+
         Self {
-            signature: value.0.into(),
-            public_key: value.1.into(),
+            auth_data: auth_data.into(),
+            next: FfiSigningKeyState {
+                key_type: match key_type {
+                    protocol::KeyType::Schnorr => FfiKeyType::Schnorr,
+                },
+                key_commitment: FfiBytes32::from_bytes(key_commitment),
+            },
+        }
+    }
+}
+
+impl From<FfiWitnessEntry> for protocol::WitnessEntry {
+    fn from(value: FfiWitnessEntry) -> Self {
+        let FfiWitnessEntry {
+            auth_data,
+            next:
+                FfiSigningKeyState {
+                    key_type,
+                    key_commitment,
+                },
+        } = value;
+
+        Self {
+            auth_data: auth_data.into(),
+            next: protocol::SigningKeyState {
+                key_type: match key_type {
+                    FfiKeyType::Schnorr => protocol::KeyType::Schnorr,
+                },
+                key_commitment: key_commitment.data,
+            },
         }
     }
 }

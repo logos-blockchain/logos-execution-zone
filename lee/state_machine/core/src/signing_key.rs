@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 
-use crate::account::AccountId;
+use crate::account::{AccountId, ActorState};
 
 /// The fixed address of `signature_program`: a native pseudo-program with no bytecode, whose
 /// actor state holds each account's signing key. Never dispatched, deployed or upgraded.
@@ -20,6 +20,20 @@ pub type KeyCommitment = [u8; 32];
 pub struct SigningKeyState {
     pub key_type: KeyType,
     pub key_commitment: KeyCommitment,
+}
+
+impl From<SigningKeyState> for ActorState {
+    fn from(key: SigningKeyState) -> Self {
+        Self::from(borsh::to_vec(&key).expect("a signing key state encodes to 33 bytes"))
+    }
+}
+
+impl TryFrom<&ActorState> for SigningKeyState {
+    type Error = borsh::io::Error;
+
+    fn try_from(state: &ActorState) -> Result<Self, Self::Error> {
+        borsh::from_slice(state)
+    }
 }
 
 #[cfg(test)]

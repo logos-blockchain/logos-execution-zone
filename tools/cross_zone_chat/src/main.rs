@@ -60,7 +60,7 @@ use cross_zone_outbox_core::{outbox_pda, outbox_pda_seed};
 use lee::{
     AccountId, Actor, PublicAccountEvidence, PublicTransaction,
     public_transaction::{Message, WitnessSet},
-    signature::{Schnorr, signing_key},
+    signature::{KeyScheme as _, Schnorr, signing_key},
 };
 use lee_core::account::Nonce;
 use log::{info, warn};
@@ -621,9 +621,15 @@ fn build_send_tx(
         .expect("build ping_sender message")
     };
 
-    let witness_set = WitnessSet::for_message(
+    let mut next_nonce = payer_nonce;
+    next_nonce.public_account_nonce_increment();
+    let witness_set = WitnessSet::sign(
         &message,
-        &[&signing_key::<Schnorr>(&payer.secret, Nonce(0)).0],
+        &[(
+            payer.account_id,
+            signing_key::<Schnorr>(&payer.secret, payer_nonce).0,
+            Schnorr::key_state(&signing_key::<Schnorr>(&payer.secret, next_nonce).1),
+        )],
     );
     LeeTransaction::Public(PublicTransaction::new(message, witness_set))
 }

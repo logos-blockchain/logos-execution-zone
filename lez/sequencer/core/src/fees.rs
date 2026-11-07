@@ -65,7 +65,7 @@ pub fn screen(tx: &LeeTransaction, state: &lee::V03State) -> Result<()> {
         (LeeTransaction::Public(public_tx), FeeTxView::Public { payer, .. }) => (public_tx, *payer),
         _ => unreachable!("classify pairs each transaction kind with its own fee view"),
     };
-    if !lee::is_fee_authorized(public_tx.message(), public_tx.witness_set()) {
+    if !lee::is_fee_authorized(public_tx.message()) {
         return Err(Error::UnauthorizedPayer { payer });
     }
 

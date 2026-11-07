@@ -1143,7 +1143,7 @@ pub(crate) mod tests {
     use lee::{
         RecipientEncryption, RecoveryBinding,
         privacy_preserving_transaction::{PrivacyPreservingTransaction, circuit::Proof},
-        test_utils::{TestSigner, privacy_witness_for},
+        test_utils::{TestSigner, privacy_witness_for, witness_for},
     };
     use lee_core::{
         EncryptionScheme, EphemeralSecretKey, PrivateAction, ProvenExecution,
@@ -2106,7 +2106,7 @@ pub(crate) mod tests {
     fn a_created_public_account_signs_a_transaction_passing_the_stateless_check() {
         let mut user_data = UserKeyChain::default();
         let (account_id, _) = user_data.generate_new_public_transaction_private_key(None);
-        let (sk, _pk) = user_data.pub_account_signing_key(account_id).unwrap();
+        let signer = TestSigner::from(user_data.pub_account_secret(account_id).unwrap());
 
         let message = lee::public_transaction::Message::try_new(
             Actor::native_balance(account_id),
@@ -2118,7 +2118,7 @@ pub(crate) mod tests {
             },
         )
         .unwrap();
-        let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&sk]);
+        let witness_set = witness_for(&message, &[&signer]);
         let tx = lee::PublicTransaction::new(message, witness_set);
 
         assert_eq!(tx.check_stateless(), Ok(vec![account_id]));

@@ -6,14 +6,16 @@ use lee_core::{
     account::{Actor, Nonce},
     execution_state::PublicExecutionContext,
     program::MessageData,
+    signing_key::SigningKeyState,
 };
 
 use crate::{
     AccountId, PublicAccountEvidence, TransactionMessage, error::LeeError, fees::FeeDeclaration,
-    program::Program,
+    program::Program, transaction_message::hash_with_keys,
 };
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Public/\x00\x00\x00\x00\x00\x00\x00";
+const KEYED_PREFIX: &[u8; 32] = b"/LEE/v0.3/KeyedMessage/Public/\x00\x00";
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PublicExecution {
@@ -91,16 +93,18 @@ impl Message {
     }
 
     #[must_use]
-    pub fn hash(&self) -> [u8; 32] {
+    pub(crate) fn hash(&self) -> [u8; 32] {
         self.hash_under(PREFIX)
+    }
+
+    /// The 32-byte value each signer signs.
+    #[must_use]
+    pub fn message_with_keys(&self, next: &[SigningKeyState]) -> [u8; 32] {
+        hash_with_keys(KEYED_PREFIX, &self.hash(), next)
     }
 }
 
 impl crate::fees::SignedMessage for Message {
-    fn signing_hash(&self) -> [u8; 32] {
-        self.hash()
-    }
-
     fn payer(&self) -> Option<AccountId> {
         self.execution.fee.map(|fee| fee.payer)
     }

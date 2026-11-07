@@ -2,7 +2,7 @@
 mod imp {
     use anyhow::Result;
     use keycard_wallet::KeycardWallet;
-    use lee::{PublicKey, Signature};
+    use lee::PublicKey;
 
     pub const fn ensure_available() -> Result<()> {
         Ok(())
@@ -13,22 +13,12 @@ mod imp {
             pin, path,
         )?)
     }
-
-    pub fn sign(pin: &str, paths: &[&str], hash: &[u8; 32]) -> Result<Vec<(Signature, PublicKey)>> {
-        let mut wallet = KeycardWallet::new()?;
-        wallet.connect(pin)?;
-        let mut signatures = Vec::with_capacity(paths.len());
-        for path in paths {
-            signatures.push(wallet.sign_message_for_path(path, hash)?);
-        }
-        Ok(signatures)
-    }
 }
 
 #[cfg(not(keycard))]
 mod imp {
     use anyhow::{Result, anyhow};
-    use lee::{PublicKey, Signature};
+    use lee::PublicKey;
 
     const UNSUPPORTED: &str = "Keycard support is not built into this wallet";
 
@@ -37,14 +27,6 @@ mod imp {
     }
 
     pub fn public_key(_pin: &str, _path: &str) -> Result<PublicKey> {
-        Err(anyhow!(UNSUPPORTED))
-    }
-
-    pub fn sign(
-        _pin: &str,
-        _paths: &[&str],
-        _hash: &[u8; 32],
-    ) -> Result<Vec<(Signature, PublicKey)>> {
         Err(anyhow!(UNSUPPORTED))
     }
 }

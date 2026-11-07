@@ -1,3 +1,5 @@
+use lee_core::signing_key::SIGNATURE_PROGRAM_ID;
+
 use super::*;
 
 fn native_send(from: AccountId, to: AccountId, amount: u128) -> SyncMessage {
@@ -177,7 +179,9 @@ fn a_credit_leaves_a_stranger_actor_state_at_the_recipient_untouched() {
         state.get_account_by_id(to),
         Account {
             nonce: Nonce(1),
-            ..Account::funded(amount).with_actor_state(stranger, stranger_data)
+            ..Account::funded(amount)
+                .with_actor_state(stranger, stranger_data)
+                .with_actor_state(SIGNATURE_PROGRAM_ID, to_key.key_state(Nonce(1)).into())
         }
     );
 }

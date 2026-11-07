@@ -4,6 +4,7 @@ use lee_core::{
     account::{AccountId, Actor, Nonce},
     execution_state::ExecutionError,
     program::SyncMessage,
+    signing_key::SIGNATURE_PROGRAM_ID,
 };
 use test_guest_core::Script;
 
@@ -333,7 +334,7 @@ fn a_sent_transitions_nonzero_exit_adds_its_cycles_to_its_senders() {
 #[test]
 fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
     let (mut state, tx) = metering_write_fixture();
-    let (_, from) = signer();
+    let (from_key, from) = signer();
     let to = TestSigner::new(2).account_id();
     let from_before = state.get_account_by_id(from);
 
@@ -346,7 +347,8 @@ fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
     );
 
     // The revert is buried as a successful return: the diff carries no effects,
-    // only the signers' nonce advances, so the charged tx cannot be replayed.
+    // only the signers' nonce advances and key rotations, so the charged tx cannot
+    // be replayed.
     let diff = result.expect("a reverted action still yields an applicable diff");
     assert!(
         diff.public_diff().is_empty(),
@@ -357,7 +359,9 @@ fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
         .expect("the validated diff applies");
     assert_eq!(
         state.get_account_by_id(from).data,
-        from_before.data,
+        from_before
+            .data
+            .with_actor_state(SIGNATURE_PROGRAM_ID, from_key.key_state(Nonce(1)).into()),
         "the write was reverted"
     );
     assert_eq!(state.get_account_by_id(from).nonce.0, 1);

@@ -5,6 +5,7 @@ use lee_core::{
     account::{AccountId, Nonce},
     execution_state::PublicExecutionContext,
     program::PdaSeed,
+    signing_key::SigningKeyState,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -43,12 +44,8 @@ pub struct TransactionMessage<P> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 pub enum InvalidTransaction {
-    #[error("Invalid signature for given message and public key")]
-    Signature,
     #[error("Nonces do not name exactly the signers")]
     Nonces,
-    #[error("Witness entry does not belong to the signer at its position")]
-    SignerOrder,
     #[error("Authorized accounts do not match the signers")]
     AuthorizedAccounts,
     #[error("A public transaction cannot select promotions")]
@@ -87,6 +84,22 @@ impl From<InvalidTransaction> for LeeError {
     fn from(error: InvalidTransaction) -> Self {
         Self::InvalidInput(error.to_string())
     }
+}
+
+/// `Sha256(domain || message_hash || next_0 || next_1 || …)`, each next key as
+/// `key_type || key_commitment` (33 B), in `nonces` order.
+pub fn hash_with_keys(
+    domain: &[u8; 32],
+    message_hash: &[u8; 32],
+    next: &[SigningKeyState],
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(domain);
+    hasher.update(message_hash);
+    for key in next {
+        hasher.update(borsh::to_vec(key).expect("a signing key state encodes to 33 bytes"));
+    }
+    hasher.finalize().into()
 }
 
 pub fn nonce_map(
