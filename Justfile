@@ -69,6 +69,7 @@ regenerate-dashboards:
     @cargo build -q -p dashboard_gen
     @cargo run -q -p dashboard_gen -- sequencer > monitoring/grafana/dashboards/sequencer.json
     @cargo run -q -p dashboard_gen -- network > monitoring/grafana/dashboards/network.json
+    @cargo run -q -p dashboard_gen -- actors > monitoring/grafana/dashboards/actors.json
 
 # Run criterion benches: fast crypto primitives, then the slow PPE verify (real proving setup).
 bench:
@@ -178,8 +179,8 @@ get-sequencer-metrics:
 # Import test accounts supplied in sequencer configuration.
 wallet-import-test-accounts:
     @echo "⚙️ Initializing accounts"
-    just run-wallet account import public --private-key 7f273098f25b71e6c005a9519f2678da8d1c7f01f6a27778e2d9948abdf901fb
-    just run-wallet account import public --private-key f434f8741720014586ae43356d2aec6257da086222f604ddb75d69733b86fc4c
+    just run-wallet account import public --private-key 10a26a9aec7d34b82364eeae45c5294dbb0a764b000b94eeb9b58511dc487c4d
+    just run-wallet account import public --private-key 717940b1cc55e5d6b2066dbf1d9a3f26f212f4db08d02388177fcfedd8a9be1b
 
     just run-wallet account list
 

@@ -8,7 +8,7 @@
       "includeVars": false,
       "keepTime": true,
       "tags": [ "sequencer" ],
-      "title": "Sequencer dashboards",
+      "title": "Dashboards",
       "type": "dashboards"
     }
   ],
@@ -294,9 +294,14 @@
       "id": 9,
       "options": {
         "displayMode": "basic",
+        "maxVizHeight": 300,
+        "minVizHeight": 36,
+        "minVizWidth": 8,
+        "namePlacement": "top",
         "orientation": "horizontal",
         "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
         "showUnfilled": true,
+        "sizing": "manual",
         "valueMode": "text"
       },
       "targets": [
@@ -335,9 +340,14 @@
       "id": 10,
       "options": {
         "displayMode": "basic",
+        "maxVizHeight": 300,
+        "minVizHeight": 36,
+        "minVizWidth": 8,
+        "namePlacement": "top",
         "orientation": "horizontal",
         "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
         "showUnfilled": true,
+        "sizing": "manual",
         "valueMode": "text"
       },
       "targets": [
@@ -375,9 +385,14 @@
       "id": 11,
       "options": {
         "displayMode": "basic",
+        "maxVizHeight": 300,
+        "minVizHeight": 36,
+        "minVizWidth": 8,
+        "namePlacement": "top",
         "orientation": "horizontal",
         "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
         "showUnfilled": true,
+        "sizing": "manual",
         "valueMode": "text"
       },
       "targets": [
@@ -709,6 +724,6 @@
   },
   "time": { "from": "now-15m", "to": "now" },
   "timezone": "",
-  "title": "Sequencer network",
+  "title": "Network",
   "uid": "sequencer-network"
 }
