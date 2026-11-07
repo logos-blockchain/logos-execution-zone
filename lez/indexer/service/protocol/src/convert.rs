@@ -1343,6 +1343,8 @@ fn nonce_map(
 mod tests {
     use std::collections::BTreeSet;
 
+    use lee::test_utils::{TestSigner, witness_for};
+
     use super::*;
 
     #[test]
@@ -1396,8 +1398,8 @@ mod tests {
     /// protocol recomputes to a different hash than the one on chain.
     #[test]
     fn public_fee_declaration_survives_roundtrip() {
-        let signer = lee::PrivateKey::try_new([1_u8; 32]).expect("valid key");
-        let signer_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&signer));
+        let signer = TestSigner::new(1);
+        let signer_id = signer.account_id();
 
         let fee = lee::FeeDeclaration::new(signer_id, 2_000_000, 0, u128::MAX >> 1);
         let to = lee::Actor::new(signer_id, lee::AccountId::new([7; 32]));
@@ -1409,7 +1411,7 @@ mod tests {
             fee,
         )
         .expect("message builds");
-        let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&signer]);
+        let witness_set = witness_for(&message, &[&signer]);
         let tx = lee::PublicTransaction::new(message, witness_set);
         let original_hash = tx.hash();
         assert_eq!(tx.message().fee, Some(fee));
@@ -1432,8 +1434,8 @@ mod tests {
     /// A fee-exempt public transaction round-trips with `fee: None`.
     #[test]
     fn public_exempt_message_survives_roundtrip() {
-        let signer = lee::PrivateKey::try_new([1_u8; 32]).expect("valid key");
-        let signer_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&signer));
+        let signer = TestSigner::new(1);
+        let signer_id = signer.account_id();
 
         let to = lee::Actor::new(signer_id, lee::AccountId::new([7; 32]));
         let message = lee::public_transaction::Message::try_new(
@@ -1443,7 +1445,7 @@ mod tests {
             0_u32,
         )
         .expect("message builds");
-        let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&signer]);
+        let witness_set = witness_for(&message, &[&signer]);
         let tx = lee::PublicTransaction::new(message, witness_set);
         let original_hash = tx.hash();
 
@@ -1463,9 +1465,8 @@ mod tests {
     }
 
     fn admission_evidence() -> Vec<lee::PublicAccountEvidence> {
-        let signer = lee::PrivateKey::try_new([1; 32]).expect("valid key");
         vec![
-            lee::PublicAccountEvidence::Key(lee::PublicKey::new_from_private_key(&signer)),
+            TestSigner::new(1).evidence(),
             lee::PublicAccountEvidence::Pda {
                 program: account_id(2),
                 seed: lee_core::program::PdaSeed::new([3; 32]),

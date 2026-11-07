@@ -22,6 +22,7 @@ hex.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
+lee = { workspace = true, features = ["test-signer"] }
 serde_json.workspace = true
 
 [features]

@@ -11,7 +11,7 @@ use integration_tests::{
     utils::{get_account, new_account},
 };
 use key_protocol::key_management::KeyChain;
-use lee::Account;
+use lee::{Account, test_utils::TestSigner};
 use tokio::test;
 use wallet::{
     account::{AccountIdWithPrivacy, HumanReadableAccount, Label},
@@ -116,7 +116,7 @@ async fn import_public_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     let private_key = lee::PrivateKey::new_os_random();
-    let account_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&private_key));
+    let account_id = TestSigner::from(&private_key).account_id();
 
     let command = Command::Account(AccountSubcommand::Import(ImportSubcommand::Public {
         private_key,

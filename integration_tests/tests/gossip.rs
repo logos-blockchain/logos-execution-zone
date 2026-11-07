@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use integration_tests::config::{self, SequencerPartialConfig};
+use lee::test_utils::TestSigner;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
@@ -67,7 +68,7 @@ async fn gossiped_transaction_reaches_producing_sequencer() -> Result<()> {
     let accounts = initial_public_user_accounts();
     let from = accounts[0].account_id;
     let to = accounts[1].account_id;
-    let sign_key = initial_pub_accounts_private_keys()[0].pub_sign_key.clone();
+    let signer = TestSigner::from(&initial_pub_accounts_private_keys()[0].pub_sign_key);
 
     let to_balance_before = seq_client_a.get_account_balance(to).await?;
     let nonce = seq_client_b.get_accounts_nonces(vec![from]).await?[0];
@@ -76,7 +77,7 @@ async fn gossiped_transaction_reaches_producing_sequencer() -> Result<()> {
         nonce.0,
         to,
         TRANSFER_AMOUNT,
-        &sign_key,
+        &signer,
     );
     seq_client_b
         .send_transaction(tx)

@@ -14,7 +14,7 @@ use common::{
     transaction::{FeePayee, LeeTransaction, fee_invocation_payee},
 };
 use integration_tests::{account_balance, get_account, new_account, wait_for_same_chain};
-use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey, program::Program};
+use lee::{AccountId, PrivateKey, program::Program, test_utils::TestSigner};
 use logos_blockchain_zone_sdk::key_management_system_service::keys::{
     Ed25519Key, UnsecuredEd25519Key,
 };
@@ -55,7 +55,8 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .expect("a channel signing public key is a valid Ed25519 public key");
 
     let funding_private_key = PrivateKey::new_os_random();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_private_key));
+    let funding_signer = TestSigner::from(&funding_private_key);
+    let funding_id = funding_signer.account_id();
 
     // Comfortably above `system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE`, and
     // `u64` because genesis funds it through the bridge's `Deposit`.
@@ -67,9 +68,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
                 .with_sequencer_partial_config(fast_blocks())
                 .with_genesis(vec![GenesisAction::SupplyAccount {
-                    recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(
-                        PublicKey::new_from_private_key(&funding_private_key),
-                    )),
+                    recipient: DepositRecipient::Identified(funding_signer.evidence()),
                     balance: funding_balance,
                 }]),
         )

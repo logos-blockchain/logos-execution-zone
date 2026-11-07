@@ -72,30 +72,25 @@ impl PrivacyPreservingTransaction {
 #[cfg(test)]
 mod tests {
     use crate::{
-        AccountId, PrivacyPreservingTransaction, PrivateKey, PublicKey,
+        PrivacyPreservingTransaction,
         privacy_preserving_transaction::{
             circuit::Proof, message::tests::message_for_tests, witness_set::WitnessSet,
         },
+        test_utils::{TestSigner, privacy_signed_entry},
     };
-
-    fn keys_for_tests() -> (PrivateKey, PrivateKey, AccountId, AccountId) {
-        let key1 = PrivateKey::try_new([1; 32]).unwrap();
-        let key2 = PrivateKey::try_new([2; 32]).unwrap();
-        let addr1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
-        let addr2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
-        (key1, key2, addr1, addr2)
-    }
 
     fn proof_for_tests() -> Proof {
         Proof(vec![1, 2, 3, 4, 5])
     }
 
     fn transaction_for_tests() -> PrivacyPreservingTransaction {
-        let (key1, key2, _, _) = keys_for_tests();
-
         let message = message_for_tests();
 
-        let witness_set = WitnessSet::for_message(&message, proof_for_tests(), &[&key1, &key2]);
+        let entries = [TestSigner::new(1), TestSigner::new(2)]
+            .iter()
+            .map(|signer| privacy_signed_entry(signer, &message))
+            .collect();
+        let witness_set = WitnessSet::from_raw_parts(entries, proof_for_tests());
         PrivacyPreservingTransaction::new(message, witness_set)
     }
 

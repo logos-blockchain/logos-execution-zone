@@ -562,7 +562,10 @@ mod tests {
     use std::collections::{BTreeMap, HashMap, HashSet};
 
     use common::test_utils::{create_transaction_native_token_transfer, produce_dummy_block};
-    use lee::Actor;
+    use lee::{
+        Actor,
+        test_utils::{TestSigner, witness_for},
+    };
     use lee_core::program::{ProgramEvent, Response};
     use storage::{DBIO as _, indexer::indexer_cells::EventFilterSegmentsCellOwned};
     use tempfile::tempdir;
@@ -578,12 +581,12 @@ mod tests {
         }
     }
 
-    fn emitter_header_key() -> lee::PrivateKey {
-        lee::PrivateKey::try_new([201; 32]).unwrap()
+    fn emitter_header_signer() -> TestSigner {
+        TestSigner::new(201)
     }
 
     fn emitter_header_account_id() -> AccountId {
-        AccountId::from(&lee::PublicKey::new_from_private_key(&emitter_header_key()))
+        emitter_header_signer().account_id()
     }
 
     // Deploys the `scripted` test guest through `program_loader`, chunked into `WriteSegment`s.
@@ -591,7 +594,8 @@ mod tests {
     // self-pay.
     fn deploy_emitter_txs() -> Vec<LeeTransaction> {
         let payer = &initial_pub_accounts_private_keys()[0];
-        let header_key = emitter_header_key();
+        let payer_signer = TestSigner::from(&payer.pub_sign_key);
+        let header_signer = emitter_header_signer();
         let header_id = emitter_header_account_id();
         let loader = lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
 
@@ -602,17 +606,12 @@ mod tests {
         let chunks: Vec<&[u8]> = user_elf
             .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
             .collect();
-        // Base 210 avoids colliding with `emitter_header_key`'s [201; 32].
-        let segment_keys: Vec<lee::PrivateKey> = (0..chunks.len())
-            .map(|i| {
-                lee::PrivateKey::try_new([u8::try_from(i).unwrap().saturating_add(210); 32])
-                    .unwrap()
-            })
+        // Base 210 avoids colliding with `emitter_header_signer`'s seed 201.
+        let segment_signers: Vec<TestSigner> = (0..chunks.len())
+            .map(|i| TestSigner::new(u8::try_from(i).unwrap().saturating_add(210)))
             .collect();
-        let segment_ids: Vec<AccountId> = segment_keys
-            .iter()
-            .map(|key| AccountId::from(&lee::PublicKey::new_from_private_key(key)))
-            .collect();
+        let segment_ids: Vec<AccountId> =
+            segment_signers.iter().map(TestSigner::account_id).collect();
 
         let mut txs = Vec::with_capacity(chunks.len().saturating_add(1));
         let mut payer_nonce = 0_u128;
@@ -632,10 +631,8 @@ mod tests {
                 common::test_utils::test_fee_declaration(payer.account_id),
             )
             .expect("WriteSegment message should always be serializable");
-            let segment_witness_set = lee::public_transaction::WitnessSet::for_message(
-                &segment_message,
-                &[&segment_keys[i], &payer.pub_sign_key],
-            );
+            let segment_witness_set =
+                witness_for(&segment_message, &[&segment_signers[i], &payer_signer]);
             txs.push(LeeTransaction::Public(lee::PublicTransaction::new(
                 segment_message,
                 segment_witness_set,
@@ -658,10 +655,7 @@ mod tests {
             common::test_utils::test_fee_declaration(payer.account_id),
         )
         .expect("CreateHeader message should always be serializable");
-        let header_witness_set = lee::public_transaction::WitnessSet::for_message(
-            &header_message,
-            &[&header_key, &payer.pub_sign_key],
-        );
+        let header_witness_set = witness_for(&header_message, &[&header_signer, &payer_signer]);
         txs.push(LeeTransaction::Public(lee::PublicTransaction::new(
             header_message,
             header_witness_set,
@@ -673,6 +667,7 @@ mod tests {
     fn invoke_emitter_tx(events: Vec<ProgramEvent>) -> LeeTransaction {
         // create message with payer so that it's not rejected due to missing fee declaration
         let payer = &initial_pub_accounts_private_keys()[0];
+        let payer_signer = TestSigner::from(&payer.pub_sign_key);
         // The payer's next nonce after `deploy_emitter_txs`'s chunked deploy.
         let user_elf = test_programs::scripted()
             .user_elf()
@@ -697,8 +692,7 @@ mod tests {
             common::test_utils::test_fee_declaration(payer.account_id),
         )
         .expect("script serializes");
-        let witness_set =
-            lee::public_transaction::WitnessSet::for_message(&message, &[&payer.pub_sign_key]);
+        let witness_set = witness_for(&message, &[&payer_signer]);
         LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
     }
 
@@ -790,7 +784,7 @@ mod tests {
         let initial_accounts = initial_pub_accounts_private_keys();
         let from = initial_accounts[0].account_id;
         let to = initial_accounts[1].account_id;
-        let sign_key = initial_accounts[0].pub_sign_key.clone();
+        let signer = TestSigner::from(&initial_accounts[0].pub_sign_key);
 
         // Genesis (block 1): fee/clock only.
         let mut build_state = claimed_build_state();
@@ -815,7 +809,7 @@ mod tests {
 
         // Blocks 2..=11: one charged native transfer of 10 each (nonces 0..=9).
         for i in 0..10_u64 {
-            let tx = create_transaction_native_token_transfer(from, i.into(), to, 10, &sign_key);
+            let tx = create_transaction_native_token_transfer(from, i.into(), to, 10, &signer);
             let block = settled_test_block(&mut build_state, i + 2, Some(prev_hash), vec![tx]);
             prev_hash = block.header.hash;
             assert!(matches!(
@@ -860,7 +854,7 @@ mod tests {
         let initial_accounts = initial_pub_accounts_private_keys();
         let from = initial_accounts[0].account_id;
         let to = initial_accounts[1].account_id;
-        let sign_key = initial_accounts[0].pub_sign_key.clone();
+        let signer = TestSigner::from(&initial_accounts[0].pub_sign_key);
 
         let mut build_state = claimed_build_state();
         let initial_from = build_state
@@ -880,7 +874,7 @@ mod tests {
         store.accept_block(&genesis, Slot::from(0)).await.unwrap();
 
         for i in 0..10_u64 {
-            let tx = create_transaction_native_token_transfer(from, i.into(), to, 10, &sign_key);
+            let tx = create_transaction_native_token_transfer(from, i.into(), to, 10, &signer);
             let block = settled_test_block(&mut build_state, i + 2, Some(prev_hash), vec![tx]);
             prev_hash = block.header.hash;
             store.accept_block(&block, Slot::from(0)).await.unwrap();
@@ -1098,12 +1092,12 @@ mod tests {
         let initial_accounts = initial_pub_accounts_private_keys();
         let from = initial_accounts[0].account_id;
         let to = initial_accounts[1].account_id;
-        let sign_key = initial_accounts[0].pub_sign_key.clone();
+        let signer = TestSigner::from(&initial_accounts[0].pub_sign_key);
 
         let genesis = produce_dummy_block(1, None, vec![]);
         store.accept_block(&genesis, Slot::from(0)).await.unwrap();
 
-        let tx = create_transaction_native_token_transfer(from, 0, to, 10, &sign_key);
+        let tx = create_transaction_native_token_transfer(from, 0, to, 10, &signer);
         let block = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
         store.accept_block(&block, Slot::from(0)).await.unwrap();
 
@@ -1378,7 +1372,7 @@ mod tests {
 #[cfg(test)]
 mod accept_tests {
     use common::{HashType, block::HashableBlockData, test_utils::produce_dummy_block};
-    use lee::Actor;
+    use lee::{Actor, test_utils::TestSigner};
 
     use super::*;
 
@@ -1573,7 +1567,7 @@ mod accept_tests {
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
-        let sign_key = accounts[0].pub_sign_key.clone();
+        let signer = TestSigner::from(&accounts[0].pub_sign_key);
 
         let mut build_state = claimed_build_state();
         let genesis = produce_dummy_block(1, None, vec![]);
@@ -1585,9 +1579,8 @@ mod accept_tests {
             .expect("accept genesis");
 
         // Block 2: a single transfer of 10.
-        let tx = common::test_utils::create_transaction_native_token_transfer(
-            from, 0, to, 10, &sign_key,
-        );
+        let tx =
+            common::test_utils::create_transaction_native_token_transfer(from, 0, to, 10, &signer);
         let block = crate::block_store::settled_test_block(
             &mut build_state,
             2,
@@ -1645,7 +1638,7 @@ mod accept_tests {
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
-        let sign_key = accounts[0].pub_sign_key.clone();
+        let signer = TestSigner::from(&accounts[0].pub_sign_key);
 
         // Build a short chain: genesis (1) -> block 2 -> block 3, so the tip is 3.
         let mut build_state = claimed_build_state();
@@ -1657,9 +1650,8 @@ mod accept_tests {
             .await
             .expect("accept genesis");
 
-        let tx2 = common::test_utils::create_transaction_native_token_transfer(
-            from, 0, to, 10, &sign_key,
-        );
+        let tx2 =
+            common::test_utils::create_transaction_native_token_transfer(from, 0, to, 10, &signer);
         let block2 = crate::block_store::settled_test_block(
             &mut build_state,
             2,
@@ -1671,9 +1663,8 @@ mod accept_tests {
             AcceptOutcome::Applied(_)
         ));
 
-        let tx3 = common::test_utils::create_transaction_native_token_transfer(
-            from, 1, to, 10, &sign_key,
-        );
+        let tx3 =
+            common::test_utils::create_transaction_native_token_transfer(from, 1, to, 10, &signer);
         let block3 = crate::block_store::settled_test_block(
             &mut build_state,
             3,
@@ -1732,7 +1723,7 @@ mod accept_tests {
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
-        let sign_key = accounts[0].pub_sign_key.clone();
+        let signer = TestSigner::from(&accounts[0].pub_sign_key);
 
         let mut build_state = claimed_build_state();
         let initial_from = build_state
@@ -1757,7 +1748,7 @@ mod accept_tests {
                 i.into(),
                 to,
                 1,
-                &sign_key,
+                &signer,
             );
             let block = crate::block_store::settled_test_block(
                 &mut build_state,

@@ -12,7 +12,7 @@ use std::{path::Path, time::Duration};
 
 use anyhow::{Context as _, Result, bail};
 use indexer_service_rpc::RpcClient as _;
-use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey};
+use lee::{AccountId, PrivateKey, test_utils::TestSigner};
 use sequencer_core::config::{DepositRecipient, GenesisAction};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{
@@ -97,9 +97,8 @@ async fn wait_for_block_id(
 /// A `SupplyAccount` genesis action for a fresh account, returning the account
 /// id the funds land in, so tests can assert genesis state is present.
 fn supplied_account(balance: u64) -> (AccountId, GenesisAction) {
-    let recipient = DepositRecipient::Identified(PublicAccountEvidence::Key(
-        PublicKey::new_from_private_key(&PrivateKey::new_os_random()),
-    ));
+    let recipient =
+        DepositRecipient::Identified(TestSigner::from(&PrivateKey::new_os_random()).evidence());
     (
         recipient.account_id(),
         GenesisAction::SupplyAccount { recipient, balance },

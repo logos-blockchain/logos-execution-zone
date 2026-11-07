@@ -130,7 +130,7 @@ mod tests {
         create_transaction_native_token_transfer_without_fee,
     };
     use fee_core::BlockFeeSummary;
-    use lee::{AccountId, FeeDeclaration, PrivateKey, PublicKey};
+    use lee::{AccountId, FeeDeclaration, test_utils::TestSigner};
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_state};
 
     use super::*;
@@ -138,18 +138,13 @@ mod tests {
     /// The gas limit test transactions declare (`test_fee_declaration`).
     const TEST_GAS_LIMIT: u64 = 2_000_000;
 
-    fn key(seed: u8) -> PrivateKey {
-        PrivateKey::try_new([seed; 32]).expect("valid key")
-    }
-
-    fn account_of(private_key: &PrivateKey) -> AccountId {
-        AccountId::from(&PublicKey::new_from_private_key(private_key))
-    }
-
     /// A funded account of the initial state, and the key that signs for it.
-    fn funded() -> (AccountId, PrivateKey) {
+    fn funded() -> (AccountId, TestSigner) {
         let accounts = initial_pub_accounts_private_keys();
-        (accounts[0].account_id, accounts[0].pub_sign_key.clone())
+        (
+            accounts[0].account_id,
+            TestSigner::from(&accounts[0].pub_sign_key),
+        )
     }
 
     fn recipient() -> AccountId {
@@ -175,8 +170,8 @@ mod tests {
     #[test]
     fn a_funded_transfer_is_admitted() {
         let state = initial_state(true);
-        let (from, sign_key) = funded();
-        let tx = create_transaction_native_token_transfer(from, 0, recipient(), 10, &sign_key);
+        let (from, signer) = funded();
+        let tx = create_transaction_native_token_transfer(from, 0, recipient(), 10, &signer);
 
         screen(&tx, &state).expect("a well-formed, funded transfer is admitted");
         settle_verdict(&tx, &state).expect("and the block transition agrees");
@@ -185,16 +180,11 @@ mod tests {
     #[test]
     fn a_transfer_without_a_fee_is_rejected() {
         let state = initial_state(true);
-        let (from, sign_key) = funded();
+        let (from, signer) = funded();
         // Omitting the fee would be executed for free if admitted; the door
         // turns it away, and the block transition agrees.
-        let tx = create_transaction_native_token_transfer_without_fee(
-            from,
-            0,
-            recipient(),
-            10,
-            &sign_key,
-        );
+        let tx =
+            create_transaction_native_token_transfer_without_fee(from, 0, recipient(), 10, &signer);
 
         assert!(matches!(
             screen(&tx, &state).expect_err("a fee-less transfer is turned away at the door"),
@@ -206,13 +196,13 @@ mod tests {
     #[test]
     fn a_gas_limit_beyond_the_block_cap_is_rejected() {
         let state = initial_state(true);
-        let (from, sign_key) = funded();
+        let (from, signer) = funded();
         let tx = create_transaction_native_token_transfer_with_fees(
             from,
             0,
             recipient(),
             10,
-            &sign_key,
+            &signer,
             FeeDeclaration::new(from, market::MAX_GAS_EXEC + 1, 0, u128::MAX >> 1),
         );
 
@@ -228,13 +218,13 @@ mod tests {
     #[test]
     fn a_max_fee_below_the_reserve_is_rejected() {
         let state = initial_state(true);
-        let (from, sign_key) = funded();
+        let (from, signer) = funded();
         let tx = create_transaction_native_token_transfer_with_fees(
             from,
             0,
             recipient(),
             10,
-            &sign_key,
+            &signer,
             FeeDeclaration::new(from, TEST_GAS_LIMIT, 7, 1),
         );
 
@@ -261,14 +251,14 @@ mod tests {
     #[test]
     fn a_payer_that_cannot_fund_the_reserve_is_rejected() {
         let state = initial_state(true);
-        let broke_key = key(9);
-        let broke = account_of(&broke_key);
+        let broke_signer = TestSigner::new(9);
+        let broke = broke_signer.account_id();
         let tx = create_transaction_native_token_transfer_with_fees(
             broke,
             0,
             recipient(),
             10,
-            &broke_key,
+            &broke_signer,
             FeeDeclaration::new(broke, TEST_GAS_LIMIT, 0, u128::MAX >> 1),
         );
 
@@ -292,14 +282,14 @@ mod tests {
     #[test]
     fn a_payer_nothing_authorizes_is_rejected() {
         let state = initial_state(true);
-        let (from, sign_key) = funded();
-        let stranger = account_of(&key(9));
+        let (from, signer) = funded();
+        let stranger = TestSigner::new(9).account_id();
         let tx = create_transaction_native_token_transfer_with_fees(
             from,
             0,
             recipient(),
             10,
-            &sign_key,
+            &signer,
             FeeDeclaration::new(stranger, TEST_GAS_LIMIT, 0, u128::MAX >> 1),
         );
 
@@ -377,10 +367,10 @@ mod tests {
         };
 
         let state = initial_state(true);
-        let funded = initial_pub_accounts_private_keys()[0].pub_sign_key.clone();
-        let unfunded = PrivateKey::try_new([7; 32]).unwrap();
-        let account_id = |key| AccountId::from(&PublicKey::new_from_private_key(key));
-        let declared = |payer, signer: &PrivateKey| {
+        let funded = TestSigner::from(&initial_pub_accounts_private_keys()[0].pub_sign_key);
+        let unfunded = TestSigner::new(7);
+        let account_id = TestSigner::account_id;
+        let declared = |payer, signer: &TestSigner| {
             let message = PrivateMessage {
                 fee: Some(FeeDeclaration::new(
                     payer,
@@ -392,7 +382,10 @@ mod tests {
             };
             LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
                 message.clone(),
-                PrivateWitnessSet::for_message(&message, Proof::from_inner(vec![]), &[signer]),
+                PrivateWitnessSet::from_raw_parts(
+                    vec![lee::test_utils::privacy_signed_entry(signer, &message)],
+                    Proof::from_inner(vec![]),
+                ),
             ))
         };
 
@@ -433,7 +426,7 @@ mod tests {
     #[test]
     fn a_reserve_computed_from_the_quote_matches_the_one_admission_uses() {
         let state = initial_state(true);
-        let (from, sign_key) = funded();
+        let (from, signer) = funded();
         let quote = fee_quote(&state);
         let build = |max_fee: u128| {
             create_transaction_native_token_transfer_with_fees(
@@ -441,7 +434,7 @@ mod tests {
                 0,
                 recipient(),
                 10,
-                &sign_key,
+                &signer,
                 FeeDeclaration::new(from, TEST_GAS_LIMIT, 3, max_fee),
             )
         };

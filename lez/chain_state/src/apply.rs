@@ -821,7 +821,7 @@ mod tests {
         privacy_preserving_transaction::circuit::{Dependency, ProgramCatalog, ProgramKind},
         program::Program,
         public_transaction,
-        test_utils::{TestPrivateKeys, no_seal, update_witness},
+        test_utils::{TestPrivateKeys, TestSigner, no_seal, update_witness, witness_for},
     };
     use lee_core::{
         EphemeralSecretKey, PrivateAccountKind, PublicationMode, Recipient, RecipientEncryption,
@@ -1217,7 +1217,7 @@ mod tests {
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
-        let sign_key = accounts[0].pub_sign_key.clone();
+        let signer = TestSigner::from(&accounts[0].pub_sign_key);
         let initial_from = state.get_account_by_id(from).data.native_balance().unwrap();
         let initial_to = state.get_account_by_id(to).data.native_balance().unwrap();
 
@@ -1228,7 +1228,7 @@ mod tests {
 
         // Blocks 2..=11: one charged native transfer of 10 each (nonces 0..=9).
         for i in 0..10_u64 {
-            let tx = create_transaction_native_token_transfer(from, i.into(), to, 10, &sign_key);
+            let tx = create_transaction_native_token_transfer(from, i.into(), to, 10, &signer);
             let block = settled_block(i + 2, tip.hash, vec![tx], &state);
             apply_block(Some(&tip), &block, &mut state).expect("transfer applies");
             tip = tip_of(&block);
@@ -1288,7 +1288,7 @@ mod tests {
 
         let accounts = initial_pub_accounts_private_keys();
         let attacker = accounts[0].account_id;
-        let attacker_key = accounts[0].pub_sign_key.clone();
+        let attacker_signer = TestSigner::from(&accounts[0].pub_sign_key);
         let recipient = accounts[1].account_id;
 
         let opening = FeeState::from_bytes(
@@ -1301,7 +1301,7 @@ mod tests {
         // Accrue real revenue in the inbox with one legitimate charged transfer.
         let mut summary = BlockFeeSummary::default();
         let transfer =
-            create_transaction_native_token_transfer(attacker, 0, recipient, 10, &attacker_key);
+            create_transaction_native_token_transfer(attacker, 0, recipient, 10, &attacker_signer);
         settle_transaction(&transfer, &mut state, &opening, 2, 200, 0, &mut summary)
             .expect("the legitimate transfer settles");
         let inbox_revenue = state
@@ -1335,7 +1335,7 @@ mod tests {
             common::test_utils::test_fee_declaration(attacker),
         )
         .expect("drain message builds");
-        let witness = lee::public_transaction::WitnessSet::for_message(&message, &[&attacker_key]);
+        let witness = witness_for(&message, &[&attacker_signer]);
         let drain = LeeTransaction::Public(lee::PublicTransaction::new(message, witness));
 
         let mut drain_acc = BlockFeeSummary::default();
@@ -1401,7 +1401,7 @@ mod tests {
 
         let accounts = initial_pub_accounts_private_keys();
         let sender = accounts[0].account_id;
-        let sender_key = accounts[0].pub_sign_key.clone();
+        let sender_signer = TestSigner::from(&accounts[0].pub_sign_key);
         let recipient = accounts[1].account_id;
 
         let opening = FeeState::from_bytes(
@@ -1426,7 +1426,7 @@ mod tests {
             0,
             recipient,
             10,
-            &sender_key,
+            &sender_signer,
         );
         let mut summary = BlockFeeSummary::default();
         let err = settle_transaction(&free, &mut state, &opening, 2, 200, 0, &mut summary)
@@ -1462,7 +1462,7 @@ mod tests {
 
         let accounts = initial_pub_accounts_private_keys();
         let payer = accounts[0].account_id;
-        let payer_key = accounts[0].pub_sign_key.clone();
+        let payer_signer = TestSigner::from(&accounts[0].pub_sign_key);
         let recipient = accounts[1].account_id;
 
         let opening = FeeState::from_bytes(
@@ -1492,7 +1492,7 @@ mod tests {
             payer_nonce_before,
             recipient,
             over_balance,
-            &payer_key,
+            &payer_signer,
         );
 
         let mut summary = BlockFeeSummary::default();
@@ -1574,6 +1574,7 @@ mod tests {
     fn a_block_crediting_an_absent_producer_it_cannot_reach_is_rejected() {
         let mut state = initial_state(true);
         let accounts = initial_pub_accounts_private_keys();
+        let signer = TestSigner::from(&accounts[0].pub_sign_key);
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
         let tip = tip_of(&genesis);
@@ -1584,7 +1585,7 @@ mod tests {
             0,
             accounts[1].account_id,
             10,
-            &accounts[0].pub_sign_key,
+            &signer,
             lee::FeeDeclaration::new(accounts[0].account_id, 2_000_000, 1, u128::MAX >> 1),
         );
 
@@ -1622,7 +1623,7 @@ mod tests {
 
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
-        let sign_key = accounts[0].pub_sign_key.clone();
+        let signer = TestSigner::from(&accounts[0].pub_sign_key);
         let emitter_id = AccountId::from_builtin_program(event_emitter().id());
 
         let emitter = Actor::new(from, emitter_id);
@@ -1637,7 +1638,7 @@ mod tests {
             test_fee_declaration(from),
         )
         .expect("test instruction must serialize");
-        let witness_set = public_transaction::WitnessSet::for_message(&message, &[&sign_key]);
+        let witness_set = witness_for(&message, &[&signer]);
         let pub_tx = PublicTransaction::new(message, witness_set).into();
 
         let block = settled_block(2, tip.hash, vec![pub_tx], &state);
@@ -2652,7 +2653,7 @@ mod tests {
             0,
             accounts[1].account_id,
             10,
-            &accounts[0].pub_sign_key,
+            &TestSigner::from(&accounts[0].pub_sign_key),
         );
         let block = settled_block(2, tip.hash, vec![tx], &state);
         let receipt = block.body.receipts[0];

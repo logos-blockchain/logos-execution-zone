@@ -2,10 +2,10 @@ use super::*;
 
 #[test]
 fn transition_from_native_transfer_invocation_credits_empty_and_funded_recipients() {
-    let from_key = PrivateKey::try_new([1; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
-    let to_key = PrivateKey::try_new([2; 32]).unwrap();
-    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let from_key = TestSigner::new(1);
+    let from = from_key.account_id();
+    let to_key = TestSigner::new(2);
+    let to = to_key.account_id();
 
     for (recipient_balance, amount) in [(0, 5), (100, 8)] {
         let mut state = V03State::new().with_public_accounts([
@@ -35,14 +35,14 @@ fn transition_from_native_transfer_invocation_credits_empty_and_funded_recipient
 
 #[test]
 fn transition_from_sequence_of_native_transfer_invocations() {
-    let key1 = PrivateKey::try_new([8; 32]).unwrap();
-    let account_id1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
-    let key2 = PrivateKey::try_new([2; 32]).unwrap();
-    let account_id2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
+    let key1 = TestSigner::new(8);
+    let account_id1 = key1.account_id();
+    let key2 = TestSigner::new(2);
+    let account_id2 = key2.account_id();
     let initial_data = [(account_id1, Account::funded(100))];
     let mut state = V03State::new().with_public_accounts(initial_data);
-    let key3 = PrivateKey::try_new([3; 32]).unwrap();
-    let account_id3 = AccountId::from(&PublicKey::new_from_private_key(&key3));
+    let key3 = TestSigner::new(3);
+    let account_id3 = key3.account_id();
     let balance_to_move = 5;
 
     let tx = transfer_transaction(
@@ -90,8 +90,8 @@ fn a_guest_writes_its_own_actor_state_and_sends_a_transfer_of_the_same_account()
     let stranger = AccountId::new([9; 32]);
     let stranger_record: ActorState = b"untouched".to_vec().into();
 
-    let sender_key = PrivateKey::try_new([11; 32]).unwrap();
-    let sender = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
+    let sender_key = TestSigner::new(11);
+    let sender = sender_key.account_id();
     let recipient = AccountId::new([12; 32]);
     let written: Vec<u8> = vec![7; 4];
     let amount: u128 = 30;
@@ -134,10 +134,10 @@ fn a_guest_writes_its_own_actor_state_and_sends_a_transfer_of_the_same_account()
 
 #[test]
 fn a_transfer_that_overflows_the_recipient_is_rejected() {
-    let from_key = PrivateKey::try_new([1; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
-    let to_key = PrivateKey::try_new([2; 32]).unwrap();
-    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let from_key = TestSigner::new(1);
+    let from = from_key.account_id();
+    let to_key = TestSigner::new(2);
+    let to = to_key.account_id();
     let mut state = V03State::new().with_public_accounts([
         (from, Account::funded(1)),
         (to, Account::funded(Balance::MAX)),
@@ -161,10 +161,10 @@ fn a_transfer_that_overflows_the_recipient_is_rejected() {
 
 #[test]
 fn a_transfer_from_a_non_canonical_balance_is_rejected() {
-    let from_key = PrivateKey::try_new([1; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
-    let to_key = PrivateKey::try_new([2; 32]).unwrap();
-    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let from_key = TestSigner::new(1);
+    let from = from_key.account_id();
+    let to_key = TestSigner::new(2);
+    let to = to_key.account_id();
     let zero_padded = ActorState::from(vec![0; 16]);
     let mut state = V03State::new().with_public_accounts([(
         from,
@@ -184,8 +184,8 @@ fn a_transfer_from_a_non_canonical_balance_is_rejected() {
 
 #[test]
 fn a_native_transfer_to_the_sender_itself_preserves_its_balance() {
-    let key = PrivateKey::try_new([1; 32]).unwrap();
-    let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let key = TestSigner::new(1);
+    let account_id = key.account_id();
     let sender = Actor::native_balance(account_id);
     let mut state = V03State::new().with_public_accounts([(account_id, Account::funded(200))]);
 

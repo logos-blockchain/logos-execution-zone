@@ -92,18 +92,18 @@ pub mod tests {
     use sha2::{Digest as _, digest::FixedOutput as _};
 
     use crate::{
-        AccountId, InvalidTransaction, PrivateKey, PublicKey, PublicTransaction, Signature,
-        V03State,
+        AccountId, InvalidTransaction, PublicTransaction, Signature, V03State,
         error::LeeError,
         public_transaction::{Message, WitnessSet},
+        test_utils::{TestSigner, signed_entry, witness_for},
         validated_state_diff::ValidatedStateDiff,
     };
 
-    fn keys_for_tests() -> (PrivateKey, PrivateKey, AccountId, AccountId) {
-        let key1 = PrivateKey::try_new([1; 32]).unwrap();
-        let key2 = PrivateKey::try_new([2; 32]).unwrap();
-        let addr1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
-        let addr2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
+    fn keys_for_tests() -> (TestSigner, TestSigner, AccountId, AccountId) {
+        let key1 = TestSigner::new(1);
+        let key2 = TestSigner::new(2);
+        let addr1 = key1.account_id();
+        let addr2 = key2.account_id();
         (key1, key2, addr1, addr2)
     }
 
@@ -120,8 +120,8 @@ pub mod tests {
         V03State::new().with_public_account_balances(initial_data)
     }
 
-    fn signed(message: Message, keys: &[&PrivateKey]) -> PublicTransaction {
-        let witness_set = WitnessSet::for_message(&message, keys);
+    fn signed(message: Message, keys: &[&TestSigner]) -> PublicTransaction {
+        let witness_set = witness_for(&message, keys);
         PublicTransaction::new(message, witness_set)
     }
 
@@ -222,7 +222,11 @@ pub mod tests {
         let mut message = transaction_for_tests().message;
         message.nonces.remove(&addr2);
 
-        let tx = signed(message, &[&key1, &key2]);
+        let witness_set = WitnessSet::from_raw_parts(vec![
+            signed_entry(&key1, &message),
+            signed_entry(&key2, &message),
+        ]);
+        let tx = PublicTransaction::new(message, witness_set);
         assert_eq!(tx.check_stateless(), Err(InvalidTransaction::Nonces));
     }
 
