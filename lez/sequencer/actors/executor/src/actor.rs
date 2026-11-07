@@ -255,23 +255,28 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
         }: Transaction,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        // Fee admission against the head state, before the mempool sees it.
-        // Advisory (base fees and balances move), but everything it turns
-        // away would have been refused by the block builder anyway.
+        // Admission against the head state, before the mempool sees it. The fee
+        // screen comes first, so an unfundable transaction costs no signature
+        // verification. Its refusals are advisory (base fees and balances move);
+        // an authentication refusal is definitive (see `Error::is_definitive`).
+        // Everything turned away would have been refused by the block builder.
         self.sequencer
-            .with_state(|state| sequencer_core::fees::screen(&transaction, state))
-            .await
-            .map_err(|err| {
-                if let sequencer_core::fees::Error::FeeCore(FeeError::PrivateFeeBelowRequired {
-                    required,
-                    reserve,
-                }) = err
-                {
-                    Error::PrivateFeeBelowHead { required, reserve }
-                } else {
-                    Error::IncorrectFee(err.into())
-                }
-            })?;
+            .with_state(|state| {
+                sequencer_core::fees::screen(&transaction, state).map_err(|err| {
+                    if let sequencer_core::fees::Error::FeeCore(
+                        FeeError::PrivateFeeBelowRequired { required, reserve },
+                    ) = err
+                    {
+                        Error::PrivateFeeBelowHead { required, reserve }
+                    } else {
+                        Error::IncorrectFee(err.into())
+                    }
+                })?;
+                transaction
+                    .authenticate_at_head(state)
+                    .map_err(Error::InvalidTransaction)
+            })
+            .await?;
 
         self.mempool_handle
             .try_push((origin.into(), transaction))

@@ -30,12 +30,26 @@ pub enum Error {
     #[error("Incorrect fee")]
     IncorrectFee(#[source] anyhow::Error),
 
+    /// The transaction can never be valid: a signer fails authentication at its account's nonce,
+    /// or its nonce is below its account's.
+    #[error("Invalid transaction")]
+    InvalidTransaction(#[source] lee::error::LeeError),
+
     /// A privacy-preserving transaction's reserve the head fee outgrew: priced again off a fresh
     /// quote, it may pass.
     #[error(
         "Privacy-preserving fee reserve {reserve} is below the {required} required at the head"
     )]
     PrivateFeeBelowHead { required: u128, reserve: u128 },
+}
+
+impl Error {
+    /// Whether the transaction can never be valid, whatever the node's head: fee and mempool
+    /// refusals depend on the head, and may pass elsewhere or later.
+    #[must_use]
+    pub const fn is_definitive(&self) -> bool {
+        matches!(self, Self::InvalidTransaction(_))
+    }
 }
 
 impl<M> From<kameo::error::SendError<M, sequencer_storage_actor::error::Error>> for Error {

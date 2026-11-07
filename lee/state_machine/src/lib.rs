@@ -36,7 +36,10 @@ pub use state::V03State;
 pub use transaction_message::{
     InvalidTransaction, PublicAccountEvidence, TransactionMessage, nonce_map,
 };
-pub use validated_state_diff::{ExecutionCharge, ValidatedStateDiff};
+pub use validated_state_diff::{
+    ExecutionCharge, ValidatedStateDiff, authenticate_privacy_transaction_at_head,
+    authenticate_public_transaction_at_head,
+};
 
 pub mod encoding;
 pub mod error;

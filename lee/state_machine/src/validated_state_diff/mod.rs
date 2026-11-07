@@ -630,9 +630,6 @@ fn authenticate_public_transaction_signers(
 /// i-th signer's current key over the message with every signer's next key, returning each
 /// signer's next key. `entries` pair with `nonces` one to one: the caller has run the
 /// transaction's stateless check.
-///
-/// The current key is the stored one; only an account at nonce 0 without one falls back to the
-/// initial-key rule.
 fn authenticate_signers(
     state: &V03State,
     nonces: &BTreeMap<AccountId, Nonce>,
@@ -646,27 +643,94 @@ fn authenticate_signers(
         .keys()
         .zip(entries)
         .map(|(&signer, entry)| {
-            let refused = |reason: String| {
-                LeeError::InvalidInput(format!("Signer {signer} fails authentication: {reason}"))
-            };
-            let account = state.get_account_by_id_ref(signer);
-            let stored = account
-                .map(|account| account.data.actor_state(SIGNATURE_PROGRAM_ID))
-                .filter(|key| !key.is_empty())
-                .map(SigningKeyState::try_from)
-                .transpose()?;
-            let nonce = account.map_or_else(Nonce::default, |account| account.nonce);
-            ensure!(
-                stored.is_some() || nonce == Nonce::default(),
-                refused(format!("no key is stored at nonce {}", nonce.0))
-            );
-            let (current, auth_data) = current_key(stored, signer, &entry.auth_data)
-                .map_err(|error| refused(error.to_string()))?;
-            authenticate(&current, &message_with_keys, auth_data, &entry.next)
-                .map(|next| (signer, next))
-                .map_err(|error| refused(error.to_string()))
+            authenticate_signer(state, signer, entry, &message_with_keys).map(|next| (signer, next))
         })
         .collect()
+}
+
+/// Authenticates `signer`'s witness entry against its current key: the stored one, or at nonce 0
+/// without one, the initial key prefixing the entry. Returns the signer's next key.
+fn authenticate_signer(
+    state: &V03State,
+    signer: AccountId,
+    entry: &WitnessEntry,
+    message_with_keys: &[u8; 32],
+) -> Result<SigningKeyState, LeeError> {
+    let refused = |reason: String| {
+        LeeError::InvalidInput(format!("Signer {signer} fails authentication: {reason}"))
+    };
+    let account = state.get_account_by_id_ref(signer);
+    let stored = account
+        .map(|account| account.data.actor_state(SIGNATURE_PROGRAM_ID))
+        .filter(|key| !key.is_empty())
+        .map(SigningKeyState::try_from)
+        .transpose()?;
+    let nonce = account.map_or_else(Nonce::default, |account| account.nonce);
+    ensure!(
+        stored.is_some() || nonce == Nonce::default(),
+        refused(format!("no key is stored at nonce {}", nonce.0))
+    );
+    let (current, auth_data) = current_key(stored, signer, &entry.auth_data)
+        .map_err(|error| refused(error.to_string()))?;
+    authenticate(&current, message_with_keys, auth_data, &entry.next)
+        .map_err(|error| refused(error.to_string()))
+}
+
+/// The head-state admission check of a transaction's signers: a signer whose nonce is below its
+/// account's is refused, one at its account's nonce is authenticated against its current key, and
+/// one above it is skipped, since its key then depends on transactions not yet applied.
+///
+/// A refusal is definitive: a nonce below the account's never becomes valid, and an account's key
+/// changes only when its nonce advances.
+fn authenticate_signers_at_head(
+    state: &V03State,
+    nonces: &BTreeMap<AccountId, Nonce>,
+    entries: &[WitnessEntry],
+    message_with_keys: impl FnOnce(&[SigningKeyState]) -> [u8; 32],
+) -> Result<(), LeeError> {
+    let next_keys: Vec<SigningKeyState> = entries.iter().map(|entry| entry.next).collect();
+    let message_with_keys = message_with_keys(&next_keys);
+    for (&signer, entry) in nonces.keys().zip(entries) {
+        let nonce = nonces[&signer];
+        let head = state
+            .get_account_by_id_ref(signer)
+            .map_or_else(Nonce::default, |account| account.nonce);
+        ensure!(
+            nonce.0 >= head.0,
+            LeeError::InvalidInput(format!(
+                "Signer {signer}'s nonce {} is below its account's nonce {}",
+                nonce.0, head.0
+            ))
+        );
+        if nonce == head {
+            authenticate_signer(state, signer, entry, &message_with_keys)?;
+        }
+    }
+    Ok(())
+}
+
+/// [`authenticate_signers_at_head`] for a public transaction.
+pub fn authenticate_public_transaction_at_head(
+    tx: &PublicTransaction,
+    state: &V03State,
+) -> Result<(), LeeError> {
+    tx.check_stateless()?;
+    let message = tx.message();
+    authenticate_signers_at_head(state, &message.nonces, tx.witness_set().entries(), |next| {
+        message.message_with_keys(next)
+    })
+}
+
+/// [`authenticate_signers_at_head`] for a privacy transaction's public signers.
+pub fn authenticate_privacy_transaction_at_head(
+    tx: &PrivacyPreservingTransaction,
+    state: &V03State,
+) -> Result<(), LeeError> {
+    tx.check_stateless()?;
+    let message = tx.message();
+    authenticate_signers_at_head(state, &message.nonces, tx.witness_set().entries(), |next| {
+        message.message_with_keys(next)
+    })
 }
 
 fn check_nonces(state: &V03State, nonces: &BTreeMap<AccountId, Nonce>) -> Result<(), LeeError> {

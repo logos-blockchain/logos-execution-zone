@@ -4,7 +4,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::Context as _;
 use common::transaction::LeeTransaction;
 use kameo::{
     Actor,
@@ -22,7 +21,7 @@ use sequencer_stake_core::SequencerKey;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 use tokio::sync::mpsc;
 
-use super::{GossipActor, IngestSubmit, MAILBOX_CAPACITY, peer_id_from_ed25519};
+use super::{GossipActor, IngestSubmit, IngestVerdict, MAILBOX_CAPACITY, peer_id_from_ed25519};
 use crate::protocol::{GetConnectedPeers, PublishConfig, PublishTransaction};
 
 const CHANNEL: [u8; 32] = [1; 32];
@@ -150,9 +149,10 @@ fn unscreened_mempool_submit(
     Arc::new(move |tx| {
         let mempool = mempool.clone();
         Box::pin(async move {
-            mempool
-                .try_push((TransactionOrigin::Gossip, tx))
-                .context("mempool is full")
+            match mempool.try_push((TransactionOrigin::Gossip, tx)) {
+                Ok(()) => IngestVerdict::Admitted,
+                Err(_) => IngestVerdict::Refused("mempool is full".to_owned()),
+            }
         })
     })
 }
@@ -588,4 +588,24 @@ async fn a_re_announced_channel_config_message_reaches_the_other_node_again() {
         "two publishes should deliver exactly twice"
     );
     drop((node_a, node_b));
+}
+
+#[test]
+fn an_invalid_verdict_is_rejected_and_never_submitted_again() {
+    assert!(matches!(
+        IngestVerdict::Invalid("bad signature".to_owned()).mesh_handling(),
+        (libp2p::gossipsub::MessageAcceptance::Reject, true)
+    ));
+}
+
+#[test]
+fn a_refused_verdict_is_forwarded_and_may_be_retried() {
+    assert!(matches!(
+        IngestVerdict::Refused("payer cannot fund".to_owned()).mesh_handling(),
+        (libp2p::gossipsub::MessageAcceptance::Accept, false)
+    ));
+    assert!(matches!(
+        IngestVerdict::Admitted.mesh_handling(),
+        (libp2p::gossipsub::MessageAcceptance::Accept, true)
+    ));
 }

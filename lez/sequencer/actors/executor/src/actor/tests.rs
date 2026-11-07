@@ -9,7 +9,7 @@ use common::{
 use kameo::{actor::Spawn as _, error::SendError};
 use lee::{
     Account, AccountId, Actor, PublicTransaction,
-    public_transaction::Message,
+    public_transaction::{Message, WitnessSet},
     signature::PublicAccountSecret,
     test_utils::{TestSigner, witness_for},
 };
@@ -95,6 +95,74 @@ fn transfer_to(recipient: AccountId) -> NativeMessage {
         to: recipient,
         amount: 1337,
     }
+}
+
+/// `tx` with the last byte of its first witness entry changed: a signature that does not verify.
+fn with_a_bad_signature(tx: LeeTransaction) -> LeeTransaction {
+    let LeeTransaction::Public(tx) = tx else {
+        unreachable!("the test transactions are public");
+    };
+    let message = tx.message().clone();
+    let mut entries = tx.witness_set().clone().into_raw_parts();
+    *entries[0]
+        .auth_data
+        .last_mut()
+        .expect("an entry carries authentication data") ^= 1;
+    PublicTransaction::new(message, WitnessSet::from_raw_parts(entries)).into()
+}
+
+/// A self-paid transfer from the first initial-state account at `nonce`.
+fn transfer_from_payer_at(nonce: u128, max_fee: u128) -> LeeTransaction {
+    let accounts = testnet_initial_state::initial_pub_accounts_private_keys();
+    let payer = accounts[0].account_id;
+    let payer_signer = TestSigner::from(&accounts[0].secret);
+    let recipient = accounts[1].account_id;
+    let message = Message::try_new_with_fees(
+        Actor::native_balance(payer),
+        vec![
+            Actor::native_balance(payer),
+            Actor::native_balance(recipient),
+        ],
+        BTreeMap::from([(payer, nonce.into())]),
+        transfer_to(recipient),
+        lee::FeeDeclaration::new(payer, 2_000_000, 0, max_fee),
+    )
+    .unwrap();
+    let witness_set = witness_for(&message, &[&payer_signer]);
+    PublicTransaction::new(message, witness_set).into()
+}
+
+async fn spawn_executor_on_empty_genesis() -> Result<(
+    kameo::actor::ActorRef<ExecutorActor<MockStorageActor, MockBedrockActor>>,
+    TempDir,
+)> {
+    let (config, home) = sequencer_config();
+    let storage_ref = MockStorageActor::spawn(prepare_mock_storage_with_empty_genesis());
+    let executor = ExecutorActor::spawn(
+        ExecutorActor::new(
+            config,
+            storage_ref.clone(),
+            MockBedrockActor::spawn(prepare_mock_bedrock_with_empty_channel()),
+        )
+        .await?,
+    );
+    storage_ref
+        .tell(sequencer_storage_actor::mock::Checkpoint)
+        .await?;
+    Ok((executor, home))
+}
+
+async fn submit(
+    executor: &kameo::actor::ActorRef<ExecutorActor<MockStorageActor, MockBedrockActor>>,
+    transaction: LeeTransaction,
+) -> std::result::Result<(), Option<crate::error::Error>> {
+    executor
+        .ask(protocol::Transaction {
+            transaction,
+            origin: TransactionOrigin::User,
+        })
+        .await
+        .map_err(SendError::err)
 }
 
 /// A Bedrock whose channel exists but holds nothing yet, with this node on turn.
@@ -601,6 +669,59 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
         res.map_err(SendError::err),
         Err(Some(crate::error::Error::IncorrectFee(_)))
     ));
+
+    Ok(())
+}
+
+#[test]
+async fn handle_transaction_refuses_a_bad_signature_definitively() -> Result<()> {
+    let _res = env_logger::try_init();
+    let (executor, _home) = spawn_executor_on_empty_genesis().await?;
+
+    let res = submit(&executor, with_a_bad_signature(test_transaction())).await;
+    let Err(Some(err)) = res else {
+        panic!("a bad signature was admitted: {res:?}");
+    };
+    assert!(matches!(err, crate::error::Error::InvalidTransaction(_)));
+    assert!(err.is_definitive());
+
+    Ok(())
+}
+
+#[test]
+async fn handle_transaction_screens_the_fee_before_verifying_signatures() -> Result<()> {
+    let _res = env_logger::try_init();
+    let (executor, _home) = spawn_executor_on_empty_genesis().await?;
+
+    // A max fee of 0 never covers the reserve, and the signature is bad too: the fee screen
+    // answers first, and its refusal is advisory.
+    let res = submit(
+        &executor,
+        with_a_bad_signature(transfer_from_payer_at(0, 0)),
+    )
+    .await;
+    let Err(Some(err)) = res else {
+        panic!("an unfundable transaction was admitted: {res:?}");
+    };
+    assert!(matches!(err, crate::error::Error::IncorrectFee(_)));
+    assert!(!err.is_definitive());
+
+    Ok(())
+}
+
+#[test]
+async fn handle_transaction_admits_nonces_n_and_n_plus_one_back_to_back() -> Result<()> {
+    let _res = env_logger::try_init();
+    let (executor, _home) = spawn_executor_on_empty_genesis().await?;
+
+    // Nonce 1 is ahead of the head: its key depends on nonce 0's transaction, so it is admitted
+    // unchecked and authenticated when the block is built.
+    submit(&executor, transfer_from_payer_at(0, u128::MAX))
+        .await
+        .map_err(|err| anyhow::anyhow!("nonce 0 refused: {err:?}"))?;
+    submit(&executor, transfer_from_payer_at(1, u128::MAX))
+        .await
+        .map_err(|err| anyhow::anyhow!("nonce 1 refused: {err:?}"))?;
 
     Ok(())
 }

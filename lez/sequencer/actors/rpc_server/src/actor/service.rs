@@ -378,7 +378,8 @@ fn map_executor_error<M>(
                     None::<()>,
                 )
             }
-            invalid @ sequencer_executor_actor::error::Error::IncorrectFee(_) => {
+            invalid @ (sequencer_executor_actor::error::Error::IncorrectFee(_)
+            | sequencer_executor_actor::error::Error::InvalidTransaction(_)) => {
                 // With its cause, which the sender is shown.
                 let message = std::error::Error::source(&invalid).map_or_else(
                     || invalid.to_string(),

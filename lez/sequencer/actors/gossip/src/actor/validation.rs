@@ -39,8 +39,9 @@ pub enum ConfigEvaluation {
 }
 
 /// Decodes and stateless-checks a gossiped transaction the same way the RPC
-/// admits a submitted one: size check, signature/witness check, then the
-/// sequencer-only-program guard.
+/// admits a submitted one: size check, witness structure check, then the
+/// sequencer-only-program guard. Signatures need the head state: the
+/// executor verifies them when the transaction is submitted.
 #[must_use]
 pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
     let tx_size = u64::try_from(data.len()).unwrap_or(u64::MAX);

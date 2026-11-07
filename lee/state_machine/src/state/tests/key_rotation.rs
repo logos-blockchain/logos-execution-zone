@@ -5,7 +5,8 @@ use lee_core::{
 
 use super::*;
 use crate::{
-    ValidatedStateDiff,
+    ValidatedStateDiff, authenticate_privacy_transaction_at_head,
+    authenticate_public_transaction_at_head,
     public_transaction::WitnessEntry,
     signature::{AuthError, authenticate, current_key},
 };
@@ -932,4 +933,61 @@ fn public_an_account_rotates_from_wots_to_schnorr_and_back() {
         assert_eq!(stored.key_type, stored_type);
         assert_eq!(stored, sender.key_state(Nonce(nonce + 1)));
     }
+}
+
+#[test]
+fn public_at_head_a_signer_at_its_accounts_nonce_is_authenticated() {
+    let sender = TestSigner::new(51);
+    let recipient = AccountId::new([52; 32]);
+    let mut state =
+        V03State::new().with_public_account_balances([(sender.account_id(), 100), (recipient, 0)]);
+    let first = native_transfer(&sender, recipient, Nonce(0), 10);
+    authenticate_public_transaction_at_head(&first, &state).unwrap();
+
+    let mut tampered = first.clone();
+    let last = tampered.witness_set.entries[0].auth_data.len() - 1;
+    tampered.witness_set.entries[0].auth_data[last] ^= 1;
+    assert_refused(
+        authenticate_public_transaction_at_head(&tampered, &state),
+        sender.account_id(),
+        "invalid signature",
+    );
+
+    // Once nonce 0 is used, a transaction at it can never be valid.
+    state
+        .transition_from_public_transaction(&first, 1, 0)
+        .unwrap();
+    assert!(matches!(
+        authenticate_public_transaction_at_head(&first, &state),
+        Err(LeeError::InvalidInput(message)) if message.contains("is below its account's nonce 1")
+    ));
+}
+
+#[test]
+fn public_at_head_a_signer_ahead_of_its_accounts_nonce_is_not_checked() {
+    let sender = TestSigner::new(51);
+    let recipient = AccountId::new([52; 32]);
+    let state = V03State::new().with_public_account_balances([(sender.account_id(), 100)]);
+
+    // Its key at nonce 1 depends on the transaction at nonce 0, not yet applied.
+    let mut ahead = native_transfer(&sender, recipient, Nonce(1), 10);
+    ahead.witness_set.entries[0].auth_data = vec![0; 3];
+    authenticate_public_transaction_at_head(&ahead, &state).unwrap();
+}
+
+#[test]
+fn privacy_at_head_a_signer_at_its_accounts_nonce_is_authenticated() {
+    let sender = TestSigner::new(51);
+    let state = V03State::new().with_public_account_balances([(sender.account_id(), 100)]);
+    let honest = privacy_shield(&state, &[&sender], &test_private_account_keys_1(), 30);
+    authenticate_privacy_transaction_at_head(&honest, &state).unwrap();
+
+    let mut tampered = honest;
+    let last = tampered.witness_set.entries[0].auth_data.len() - 1;
+    tampered.witness_set.entries[0].auth_data[last] ^= 1;
+    assert_refused(
+        authenticate_privacy_transaction_at_head(&tampered, &state),
+        sender.account_id(),
+        "invalid signature",
+    );
 }
