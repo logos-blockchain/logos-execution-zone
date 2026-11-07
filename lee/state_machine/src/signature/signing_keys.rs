@@ -76,3 +76,77 @@ pub fn signing_key<K: KeyScheme>(
     seed.zeroize();
     keys
 }
+
+#[cfg(test)]
+mod tests {
+    use hex_literal::hex;
+
+    use super::*;
+    use crate::signature::Schnorr;
+
+    #[test]
+    fn signing_key_is_deterministic() {
+        let secret = PublicAccountSecret::new([7; 32]);
+        assert_eq!(
+            signing_key::<Schnorr>(&secret, Nonce(0)),
+            signing_key::<Schnorr>(&secret, Nonce(0))
+        );
+    }
+
+    #[test]
+    fn signing_keys_differ_per_nonce() {
+        let secret = PublicAccountSecret::new([7; 32]);
+        let (sk_0, pk_0) = signing_key::<Schnorr>(&secret, Nonce(0));
+        let (sk_1, pk_1) = signing_key::<Schnorr>(&secret, Nonce(1));
+        assert_ne!(sk_0, sk_1);
+        assert_ne!(pk_0, pk_1);
+    }
+
+    #[test]
+    fn key_seed_known_answers() {
+        let secret = PublicAccountSecret::new([7; 32]);
+        assert_eq!(
+            key_seed(&secret, KeyType::Schnorr, Nonce(0)),
+            hex!("fae55c59b7c627ad9eb58de366afbf662930f73911a32ef952b3a3710a251987")
+        );
+        assert_eq!(
+            key_seed(&secret, KeyType::Schnorr, Nonce(1)),
+            hex!("2e1b5e08998e9898270f477fc5868d07b07af996ac3b224250ffc2ded738289d")
+        );
+    }
+
+    #[test]
+    fn signing_key_known_answers() {
+        let secret = PublicAccountSecret::new([7; 32]);
+        for (nonce, expected_pk) in [
+            (
+                Nonce(0),
+                hex!("5e4e66008d467f622ed19ccdecd33ac044cefc9e820da3f796cd79c6577c8139"),
+            ),
+            (
+                Nonce(1),
+                hex!("a24726717ac98b48fa5cf7cdc1878926de157bb84d3d11306436302caa78ee9a"),
+            ),
+        ] {
+            let (_sk, pk) = signing_key::<Schnorr>(&secret, nonce);
+            assert_eq!(pk.value(), &expected_pk);
+        }
+    }
+
+    #[test]
+    fn derived_key_authenticates_against_its_key_state() {
+        let (sk, pk) = signing_key::<Schnorr>(&PublicAccountSecret::new([7; 32]), Nonce(0));
+        let state = Schnorr::key_state(&pk);
+        let message = [1; 32];
+        let auth = Schnorr::auth_data(&pk, &Schnorr::sign(&sk, &message));
+        assert_eq!(state.key_type, KeyType::Schnorr);
+        assert_eq!(
+            Schnorr::precheck(&state.key_commitment, &auth).map(|(revealed, _sig)| revealed),
+            Ok(pk)
+        );
+        assert_eq!(
+            Schnorr::authenticate(&state.key_commitment, &message, &auth),
+            Ok(())
+        );
+    }
+}

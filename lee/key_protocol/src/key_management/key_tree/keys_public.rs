@@ -95,4 +95,12 @@ mod tests {
 
         assert_eq!(expected_secret, child_keys.secret);
     }
+
+    #[test]
+    fn account_id_is_that_of_the_nonce_zero_key() {
+        let keys = ChildKeysPublic::root(SEED);
+        let (_sk_0, pk_0) = signing_key::<Schnorr>(&keys.secret, Nonce(0));
+
+        assert_eq!(keys.account_id(), lee::AccountId::from(&pk_0));
+    }
 }
