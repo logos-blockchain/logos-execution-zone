@@ -93,6 +93,11 @@ pub enum Error {
     #[error("Incorrect fee")]
     IncorrectFee(#[source] anyhow::Error),
 
+    /// The transaction can never be valid: a signer fails authentication at its account's nonce,
+    /// or its nonce is below its account's.
+    #[error("Invalid transaction")]
+    InvalidTransaction(#[source] lee::error::LeeError),
+
     /// A privacy-preserving transaction's reserve the head fee outgrew: priced again off a fresh
     /// quote, it may pass.
     #[error(
@@ -111,6 +116,13 @@ pub enum BedrockRequestError {
 impl Error {
     pub fn from_infallible_bedrock_error<M>(err: SendError<M, Infallible>) -> Self {
         Self::BedrockRequestFailed(BedrockRequestError::Infallible(err.erase_message()))
+    }
+
+    /// Whether the transaction can never be valid, whatever the node's head: fee and mempool
+    /// refusals depend on the head, and may pass elsewhere or later.
+    #[must_use]
+    pub const fn is_definitive(&self) -> bool {
+        matches!(self, Self::InvalidTransaction(_))
     }
 }
 
