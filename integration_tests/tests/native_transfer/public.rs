@@ -81,11 +81,10 @@ async fn successful_transfer_to_existing_account() -> Result<()> {
     let LeeTransaction::Public(tx) = tx else {
         anyhow::bail!("Expected a public transaction");
     };
-    let sender_public_key = PublicKey::new_from_private_key(
-        ctx.wallet()
-            .get_account_public_signing_key(sender)
-            .context("sender should have a signing key")?,
-    );
+    let (_sender_private_key, sender_public_key) = ctx
+        .wallet()
+        .get_account_public_signing_key(sender)
+        .context("sender should have a signing key")?;
     let signers: Vec<_> = tx
         .witness_set()
         .signatures_and_public_keys()

@@ -430,7 +430,7 @@ async fn submit_committee_transfer(
             .ok_or_else(|| StepError::InvalidArgument {
                 message: format!("sender account index {sender_index} has no signing key"),
             })?
-            .pub_sign_key,
+            .secret,
     );
     let transaction = common::test_utils::create_transaction_native_token_transfer(
         sender, nonce.0, receiver, amount, &signer,

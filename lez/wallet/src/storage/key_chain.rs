@@ -14,11 +14,13 @@ use key_protocol::key_management::{
     secret_holders::{PrivateKeyHolder, SeedHolder, ViewingSecretKey},
 };
 use lee::{
-    Account, AccountId, EncryptedNote, Recipient, privacy_preserving_transaction::message::Message,
+    Account, AccountId, EncryptedNote, Recipient,
+    privacy_preserving_transaction::message::Message,
+    signature::{PublicAccountSecret, Schnorr, signing_key},
 };
 use lee_core::{
     BlockId, Commitment, Nullifier, NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
-    PrivateAction, SealedMessage, SharedSecretKey, encryption::ViewingPublicKey,
+    PrivateAction, SealedMessage, SharedSecretKey, account::Nonce, encryption::ViewingPublicKey,
     program::MessageBody,
 };
 use log::{debug, warn};
@@ -126,7 +128,7 @@ impl NullifierIndex {
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct UserKeyChain {
     /// Imported public accounts.
-    imported_public_accounts: BTreeMap<AccountId, lee::PrivateKey>,
+    imported_public_accounts: BTreeMap<AccountId, PublicAccountSecret>,
     /// Imported private accounts.
     imported_private_accounts: BTreeMap<ImportedPrivateAccountKey, ImportedPrivateAccountData>,
     /// Tree of public account keys.
@@ -213,12 +215,24 @@ impl UserKeyChain {
         }
     }
 
-    /// Returns the signing key for public transaction signatures.
+    /// Returns the secret a public account's signing keys are derived from.
     #[must_use]
-    pub fn pub_account_signing_key(&self, account_id: AccountId) -> Option<&lee::PrivateKey> {
-        self.imported_public_accounts
-            .get(&account_id)
-            .or_else(|| self.public_key_tree.get_node(account_id).map(Into::into))
+    pub fn pub_account_secret(&self, account_id: AccountId) -> Option<&PublicAccountSecret> {
+        self.imported_public_accounts.get(&account_id).or_else(|| {
+            self.public_key_tree
+                .get_node(account_id)
+                .map(|node| &node.secret)
+        })
+    }
+
+    /// Returns the signing key pair for public transaction signatures.
+    #[must_use]
+    pub fn pub_account_signing_key(
+        &self,
+        account_id: AccountId,
+    ) -> Option<(lee::PrivateKey, lee::PublicKey)> {
+        self.pub_account_secret(account_id)
+            .map(|secret| signing_key::<Schnorr>(secret, Nonce(0)))
     }
 
     /// Generated new private key for privacy preserving transactions.
@@ -710,11 +724,10 @@ impl UserKeyChain {
         Some(new_nullifier)
     }
 
-    pub fn add_imported_public_account(&mut self, private_key: lee::PrivateKey) {
-        let account_id = AccountId::from(&lee::PublicKey::new_from_private_key(&private_key));
+    pub fn add_imported_public_account(&mut self, secret: PublicAccountSecret) {
+        let account_id = AccountId::from(&signing_key::<Schnorr>(&secret, Nonce(0)).1);
 
-        self.imported_public_accounts
-            .insert(account_id, private_key);
+        self.imported_public_accounts.insert(account_id, secret);
     }
 
     pub fn remove_imported_public_account(&mut self, account_id: &AccountId) {
@@ -993,11 +1006,11 @@ impl UserKeyChain {
             }
         }
 
-        for (account_id, key) in imported_public_accounts {
+        for (account_id, secret) in imported_public_accounts {
             accounts.push(PersistentAccountData::ImportedPublic(
                 PublicAccountPrivateInitialData {
                     account_id: *account_id,
-                    pub_sign_key: key.clone(),
+                    secret: secret.clone(),
                 },
             ));
         }
@@ -1083,7 +1096,7 @@ impl UserKeyChain {
                     private_key_tree.insert(data.account_id, data.chain_index, data.data.into());
                 }
                 PersistentAccountData::ImportedPublic(data) => {
-                    imported_public_accounts.insert(data.account_id, data.pub_sign_key);
+                    imported_public_accounts.insert(data.account_id, data.secret);
                 }
                 PersistentAccountData::ImportedPrivate(data) => {
                     imported_private_accounts
@@ -1753,10 +1766,10 @@ pub(crate) mod tests {
     fn add_imported_public_account() {
         let mut user_data = UserKeyChain::default();
 
-        let private_key = lee::PrivateKey::new_os_random();
-        let account_id = TestSigner::from(&private_key).account_id();
+        let secret = PublicAccountSecret::new_os_random();
+        let account_id = TestSigner::from(&secret).account_id();
 
-        user_data.add_imported_public_account(private_key);
+        user_data.add_imported_public_account(secret);
 
         let is_account_added = user_data.pub_account_signing_key(account_id).is_some();
 
@@ -2060,5 +2073,54 @@ pub(crate) mod tests {
             keys_a.generate_nullifier_public_key(),
             pda_keys_a.generate_nullifier_public_key(),
         );
+    }
+
+    #[test]
+    fn an_imported_secret_gives_the_account_and_key_of_its_hd_node() {
+        let mut generator = UserKeyChain::default();
+        let (account_id, _) = generator.generate_new_public_transaction_private_key(None);
+        let secret = generator
+            .public_key_tree
+            .get_node(account_id)
+            .unwrap()
+            .secret
+            .clone();
+
+        let mut importer = UserKeyChain::default();
+        importer.add_imported_public_account(secret);
+
+        assert_eq!(
+            importer
+                .public_account_ids()
+                .filter(|(_, chain_index)| chain_index.is_none())
+                .map(|(imported, _)| imported)
+                .collect::<Vec<_>>(),
+            vec![account_id]
+        );
+        let node_key = generator.pub_account_signing_key(account_id);
+        assert!(node_key.is_some());
+        assert_eq!(importer.pub_account_signing_key(account_id), node_key);
+    }
+
+    #[test]
+    fn a_created_public_account_signs_a_transaction_passing_the_stateless_check() {
+        let mut user_data = UserKeyChain::default();
+        let (account_id, _) = user_data.generate_new_public_transaction_private_key(None);
+        let (sk, _pk) = user_data.pub_account_signing_key(account_id).unwrap();
+
+        let message = lee::public_transaction::Message::try_new(
+            Actor::native_balance(account_id),
+            vec![Actor::native_balance(account_id)],
+            BTreeMap::from([(account_id, Nonce(0))]),
+            lee_core::native_token::Message::Transfer {
+                to: account_id,
+                amount: 1,
+            },
+        )
+        .unwrap();
+        let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&sk]);
+        let tx = lee::PublicTransaction::new(message, witness_set);
+
+        assert_eq!(tx.check_stateless(), Ok(vec![account_id]));
     }
 }

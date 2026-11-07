@@ -2,7 +2,7 @@
 
 use std::{ffi::CString, ptr};
 
-use lee::{AccountId, PublicKey};
+use lee::AccountId;
 use wallet::AccountIdentity;
 
 use crate::{
@@ -55,12 +55,10 @@ pub unsafe extern "C" fn wallet_ffi_get_public_account_key(
 
     let account_id = AccountId::new(unsafe { (*account_id).data });
 
-    let Some(private_key) = wallet.get_account_public_signing_key(account_id) else {
+    let Some((_private_key, public_key)) = wallet.get_account_public_signing_key(account_id) else {
         print_error("Public account key not found in wallet");
         return FfiOperationError::KeyNotFound;
     };
-
-    let public_key = PublicKey::new_from_private_key(private_key);
 
     unsafe {
         *out_public_key = public_key.into();

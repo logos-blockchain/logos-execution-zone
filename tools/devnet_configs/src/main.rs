@@ -16,7 +16,10 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
-use lee::{PrivateKey, PublicKey};
+use lee::{
+    PrivateKey,
+    signature::{PublicAccountSecret, Schnorr},
+};
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use sequencer_core::{
     config::{ChannelParams, GenesisAction, GossipConfig, SequencerConfig},
@@ -114,10 +117,13 @@ fn genesis_sequencer_stakes(
                 .context("Sequencer signing key is not a valid Ed25519 point")?;
             // Separate from the signing key: posting and stake control are
             // distinct roles.
-            let owner = PrivateKey::new_os_random();
+            let (owner, ownership_public_key) = lee::signature::signing_key::<Schnorr>(
+                &PublicAccountSecret::new_os_random(),
+                0.into(),
+            );
             Ok(GenesisAction::StakeSequencer {
                 sequencer_key,
-                ownership_public_key: PublicKey::new_from_private_key(&owner),
+                ownership_public_key,
                 // The index is signed over too, so these must stay in the order
                 // they are written to the genesis list.
                 stake_signature: sign_genesis_stake(index, sequencer_key, &owner, minimum_stake),

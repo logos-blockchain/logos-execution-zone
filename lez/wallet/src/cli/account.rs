@@ -4,8 +4,14 @@ use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use itertools::Itertools as _;
 use key_protocol::key_management::{KeyChain, key_tree::chain_index::ChainIndex};
-use lee::{Account, AccountId, Actor, PublicKey};
-use lee_core::{account::AccountIdError, native_token::NATIVE_TOKEN_PROGRAM_ID};
+use lee::{
+    Account, AccountId, Actor,
+    signature::{PublicAccountSecret, Schnorr, signing_key},
+};
+use lee_core::{
+    account::{AccountIdError, Nonce},
+    native_token::NATIVE_TOKEN_PROGRAM_ID,
+};
 
 use crate::{
     WalletCore, WalletSequencerClient,
@@ -170,13 +176,11 @@ impl NewSubcommand {
 
         let (account_id, chain_index) = wallet_core.create_new_account_public(cci);
 
-        let private_key = wallet_core
+        let (_private_key, public_key) = wallet_core
             .storage
             .key_chain()
             .pub_account_signing_key(account_id)
             .unwrap();
-
-        let public_key = PublicKey::new_from_private_key(private_key);
 
         if let Some(label) = label {
             wallet_core
@@ -408,13 +412,11 @@ impl AccountSubcommand {
         let display_keys = |wallet_core: &WalletCore<C>| -> Result<()> {
             match resolved {
                 AccountIdWithPrivacy::Public(account_id) => {
-                    let private_key = wallet_core
+                    let (_private_key, public_key) = wallet_core
                         .storage
                         .key_chain()
                         .pub_account_signing_key(account_id)
                         .context("Public account not found in storage")?;
-
-                    let public_key = PublicKey::new_from_private_key(private_key);
                     println!("pk {}", hex::encode(public_key.value()));
                 }
                 AccountIdWithPrivacy::Private(account_id) => {
@@ -647,11 +649,11 @@ impl WalletSubcommand for AccountSubcommand {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum ImportSubcommand {
-    /// Import a public account signing key.
+    /// Import a public account secret.
     Public {
-        /// Private key in hex format.
+        /// Public account secret in hex format.
         #[arg(long)]
-        private_key: lee::PrivateKey,
+        secret: PublicAccountSecret,
     },
     /// Import a private account keychain and account state.
     Private {
@@ -673,14 +675,13 @@ impl WalletSubcommand for ImportSubcommand {
         wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            Self::Public { private_key } => {
-                let account_id =
-                    lee::AccountId::from(&lee::PublicKey::new_from_private_key(&private_key));
+            Self::Public { secret } => {
+                let account_id = lee::AccountId::from(&signing_key::<Schnorr>(&secret, Nonce(0)).1);
 
                 wallet_core
                     .storage_mut()
                     .key_chain_mut()
-                    .add_imported_public_account(private_key);
+                    .add_imported_public_account(secret);
 
                 wallet_core.store_persistent_data()?;
 

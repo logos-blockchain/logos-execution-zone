@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context as _, anyhow};
 use async_trait::async_trait;
 use common::HashType;
-use lee::{AccountId, PrivateKey, PublicKey};
+use lee::{AccountId, PublicKey, signature::PublicAccountSecret};
 use lee_core::program::MessageData;
 use sequencer_service_rpc::SequencerClient;
 use tempfile::TempDir;
@@ -181,7 +181,7 @@ impl WalletActor {
                                 let public_key = components
                                     .wallet
                                     .get_account_public_signing_key(account_id)
-                                    .map(PublicKey::new_from_private_key);
+                                    .map(|(_sk, pk)| pk);
                                 let _unused = response.send(Ok(public_key));
                             }
                             WalletRequest::FirstPublicAccount { response } => {
@@ -706,7 +706,7 @@ impl LezRuntime {
 #[derive(Clone)]
 pub struct WalletApp {
     sequencer_addr: SocketAddr,
-    public_accounts: Vec<(PrivateKey, u128)>,
+    public_accounts: Vec<(PublicAccountSecret, u128)>,
     private_accounts: Vec<InitialPrivateAccountForWallet>,
     state_dir: Option<PathBuf>,
     initialize_private_accounts: bool,

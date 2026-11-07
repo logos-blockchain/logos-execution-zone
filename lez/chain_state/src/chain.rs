@@ -619,7 +619,7 @@ mod tests {
     /// A valid block 2 on `blocks[0]` that differs from `blocks[1]`.
     fn competing_block2(blocks: &[Block]) -> Block {
         let accounts = initial_pub_accounts_private_keys();
-        let signer = TestSigner::from(&accounts[0].pub_sign_key);
+        let signer = TestSigner::from(&accounts[0].secret);
         let mut on_block1 = ChainState::new(claimed_initial_state());
         on_block1.apply_extension(vec![entry(1, MsgId::root(), Some(&blocks[0]))]);
         let tx = create_transaction_native_token_transfer(
@@ -1567,7 +1567,7 @@ mod tests {
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
-        let signer = TestSigner::from(&accounts[0].pub_sign_key);
+        let signer = TestSigner::from(&accounts[0].secret);
 
         let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);

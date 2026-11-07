@@ -5337,7 +5337,6 @@ dependencies = [
  "hex",
  "hmac-sha512",
  "itertools 0.14.0",
- "k256",
  "lee",
  "lee_core",
  "ml-kem",

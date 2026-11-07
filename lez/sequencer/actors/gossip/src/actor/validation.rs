@@ -202,7 +202,7 @@ mod tests {
     fn valid_transaction() -> LeeTransaction {
         let acc1 = initial_public_user_accounts()[0].account_id;
         let acc2 = initial_public_user_accounts()[1].account_id;
-        let signer1 = TestSigner::from(&initial_pub_accounts_private_keys()[0].pub_sign_key);
+        let signer1 = TestSigner::from(&initial_pub_accounts_private_keys()[0].secret);
         common::test_utils::create_transaction_native_token_transfer(acc1, 0, acc2, 10, &signer1)
     }
 
