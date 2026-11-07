@@ -16,7 +16,8 @@ pub use acceptance::{
     STUCK_SLOT_ALERT_PASSES, ScreenRefusal, StallState, alerts_at, equivocation_report,
     link_to_tip, screen_peer_block,
 };
-pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer};
+use borsh::{BorshDeserialize, BorshSerialize};
+use common::HashType;
 use cross_zone_inbox_core::{
     CrossZoneMessage, InboxConfig, Message, ZoneId, inbox_config_account_id,
     inbox_seen_shard_account_id, inbox_seen_shard_seed,
@@ -25,6 +26,7 @@ use lee_core::{
     account::{AccountId, Actor, Balance},
     program::PdaSeed,
 };
+use serde::{Deserialize, Serialize};
 
 pub mod acceptance;
 #[cfg(any(test, feature = "test-utils"))]
@@ -52,6 +54,90 @@ impl Emission {
             payload: wire.payload,
         }
     }
+}
+
+/// One delivery a peer is allowed to make: a program on the peer that may emit,
+/// paired with the program here it may reach.
+///
+/// The pair is the unit because the target authorizes a source, not a zone. A
+/// bridging peer needs `wrapped_token` reachable, and `ping_sender` lets its
+/// caller choose the target, so a zone-wide allowance would let it mint with no
+/// lock behind it. That rule now lives in each target, seeded from these pairs at
+/// genesis, rather than in the inbox.
+/// Unknown fields are refused so a misspelled `mint_cap` fails startup instead
+/// of silently seeding the source uncapped.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CrossZoneRoute {
+    /// The program on the peer zone that emitted the message.
+    pub src_account_id: AccountId,
+    /// The program on this zone it may be delivered to.
+    pub target_account_id: AccountId,
+    /// Lifetime mint allowance for this source at the target; `None` is
+    /// uncapped. Only meaningful on a route whose target mints against the
+    /// message (`wrapped_token`); genesis refuses it on any other target.
+    #[serde(default)]
+    pub mint_cap: Option<Balance>,
+}
+
+/// A peer zone whose outbox a zone watches for inbound cross-zone messages.
+///
+/// Unknown fields are refused so a stale or misspelled key in an operator
+/// config fails startup instead of silently pinning nothing.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CrossZonePeer {
+    /// The peer's Bedrock channel; its 32 bytes double as the peer's zone id.
+    pub channel_id: ZoneId,
+    /// Which of this peer's programs may reach which local program.
+    ///
+    /// No longer enforced in transit: the inbox delivers to whatever a message
+    /// names, and the target refuses a source it did not authorize. This is the
+    /// operator's statement of intent, fanned out at genesis into each target's
+    /// own config. A route naming a program that does not authorize cross-zone
+    /// sources is refused there, at genesis.
+    pub allowed_routes: Vec<CrossZoneRoute>,
+    /// Minimum live committee size (accredited keys on the peer's channel)
+    /// below which reading from this peer is suspended, by the sequencer's
+    /// watcher and the indexer's verifier alike. 0, the default, disables the
+    /// floor, and a production peer should set it. With a floor set, a channel
+    /// state unreadable before the first successful read counts as below it (fail-closed), while a
+    /// bounded run of later read failures keeps the last known size. Unknown fields are
+    /// refused above, so a misspelling fails startup instead of silently running floorless.
+    #[serde(default)]
+    pub min_committee_size: u32,
+    /// Recomputed hash of the peer's genesis block. Set, a first read that
+    /// hashes differently is refused; unset, the first genesis read is trusted
+    /// as-is. A production peer should set it.
+    #[serde(default)]
+    pub genesis_hash: Option<HashType>,
+}
+
+/// Cross-zone configuration shared by a zone's sequencer (watcher) and indexer
+/// (verifier): the peers it reads from Bedrock and, per peer, the deliveries the
+/// operator intends each target to accept.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CrossZoneConfig {
+    /// Read once at startup by the watchers and the verifier, so adding a peer
+    /// zone needs a config change and a restart on both sequencer and indexer.
+    /// Defaulted so a source-only zone declares `"cross_zone": {}`.
+    #[serde(default)]
+    pub peers: Vec<CrossZonePeer>,
+    /// Account allowed to change which peer sources each target program accepts,
+    /// seeded into every target's own config at genesis.
+    ///
+    /// Unset by default, which leaves those lists fixed at genesis. It can only
+    /// ever be set at genesis and there is no rotation. One value seeds every
+    /// target, including the ones that mint, and whoever holds it can authorize
+    /// a source, so its compromise is theft rather than delay.
+    #[serde(default)]
+    pub source_authority: Option<AccountId>,
+    /// Program allowed to act on the source authority's behalf by message, seeded
+    /// into every target's config at genesis. Needed only for a PDA
+    /// authority, which cannot sign; unset means the authority acts at top level.
+    #[serde(default)]
+    pub source_governance: Option<AccountId>,
 }
 
 /// Where a delivery came from on the peer chain.
@@ -378,12 +464,13 @@ mod tests {
         let cross_zone = CrossZoneConfig {
             peers: vec![CrossZonePeer {
                 channel_id: [2; 32],
-                allowed_routes: vec![cross_zone_inbox_core::CrossZoneRoute {
+                allowed_routes: vec![CrossZoneRoute {
                     src_account_id: programs::bridge_lock_account_id(),
                     target_account_id: programs::fee_account_id(),
                     mint_cap: None,
                 }],
                 min_committee_size: 0,
+                genesis_hash: None,
             }],
             source_authority: None,
             source_governance: None,
@@ -400,12 +487,13 @@ mod tests {
         let cross_zone = CrossZoneConfig {
             peers: vec![CrossZonePeer {
                 channel_id: [2; 32],
-                allowed_routes: vec![cross_zone_inbox_core::CrossZoneRoute {
+                allowed_routes: vec![CrossZoneRoute {
                     src_account_id: programs::bridge_lock_account_id(),
                     target_account_id: programs::wrapped_token_account_id(),
                     mint_cap: Some(1_000),
                 }],
                 min_committee_size: 0,
+                genesis_hash: None,
             }],
             source_authority: None,
             source_governance: None,
@@ -418,7 +506,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "same source twice")]
     fn a_duplicated_route_for_one_target_is_refused() {
-        let route = cross_zone_inbox_core::CrossZoneRoute {
+        let route = CrossZoneRoute {
             src_account_id: programs::bridge_lock_account_id(),
             target_account_id: programs::wrapped_token_account_id(),
             mint_cap: None,
@@ -428,6 +516,7 @@ mod tests {
                 channel_id: [2; 32],
                 allowed_routes: vec![route.clone(), route],
                 min_committee_size: 0,
+                genesis_hash: None,
             }],
             source_authority: None,
             source_governance: None,

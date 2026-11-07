@@ -2186,6 +2186,7 @@ dependencies = [
  "lee_core",
  "ping_core",
  "programs",
+ "serde",
  "wrapped_token_core",
 ]
 
@@ -2197,6 +2198,7 @@ dependencies = [
  "axum 0.8.9",
  "borsh",
  "common",
+ "cross_zone",
  "cross_zone_inbox_core",
  "cross_zone_outbox_core",
  "env_logger",
