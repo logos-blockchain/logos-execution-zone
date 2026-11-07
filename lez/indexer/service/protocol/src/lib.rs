@@ -362,8 +362,29 @@ pub struct PrivacyPreservingMessage {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct WitnessSet {
-    pub signatures_and_public_keys: Vec<(Signature, PublicKey)>,
+    pub entries: Vec<WitnessEntry>,
     pub proof: Option<Proof>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct WitnessEntry {
+    #[serde(with = "base64")]
+    #[schemars(with = "String", description = "base64-encoded authentication data")]
+    pub auth_data: Vec<u8>,
+    pub next: SigningKeyState,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct SigningKeyState {
+    pub key_type: KeyType,
+    #[serde(with = "base64::arr")]
+    #[schemars(with = "String", description = "base64-encoded key commitment")]
+    pub key_commitment: [u8; 32],
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum KeyType {
+    Schnorr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

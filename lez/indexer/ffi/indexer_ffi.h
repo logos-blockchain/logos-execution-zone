@@ -126,7 +126,7 @@ typedef struct FfiPublicMessage {
 typedef struct FfiPublicTransactionBody {
   FfiHashType hash;
   struct FfiPublicMessage message;
-  FfiSignaturePubKeyList witness_set;
+  FfiWitnessEntryList witness_set;
 } FfiPublicTransactionBody;
 
 /**
@@ -162,7 +162,7 @@ typedef FfiVecU8 FfiProof;
 typedef struct FfiPrivateTransactionBody {
   FfiHashType hash;
   struct FfiPrivacyPreservingMessage message;
-  FfiSignaturePubKeyList witness_set;
+  FfiWitnessEntryList witness_set;
   FfiProof proof;
 } FfiPrivateTransactionBody;
 

@@ -1,8 +1,8 @@
 use common::transaction::LeeTransaction;
 use lee::{
     BoundaryStep, FeeDeclaration, PrivacyPreservingTransaction, PublicAccountEvidence,
-    PublicExecutionContext, PublicKey, PublicTransaction, RootCall, Signature, error::LeeError,
-    privacy_preserving_transaction::circuit::Proof,
+    PublicExecutionContext, PublicTransaction, RootCall, error::LeeError,
+    privacy_preserving_transaction::circuit::Proof, public_transaction::WitnessEntry,
 };
 use lee_core::{
     FeeFallback, PrivateAction, ProgramImageClaim, ProvenExecution, ProvenFee, RecoveryBinding,
@@ -18,12 +18,12 @@ use crate::primitives::{
         FfiAccountId, FfiBytes32, FfiFeeDeclaration, FfiHashType, FfiOption, FfiVec,
         actor::{
             FfiNonceEntry, FfiPrivateAction, FfiPublicAccountEvidence, FfiPublicExecutionContext,
-            FfiRootCall, FfiSignaturePubKeyEntry, empty_root_call, nonces_from_ffi,
+            FfiRootCall, empty_root_call, nonces_from_ffi,
         },
         vectors::{
             FfiBoundaryStepList, FfiNonceList, FfiPrivateActionList, FfiProof,
             FfiPublicAccountEvidenceList, FfiRecoveryBindingList, FfiSealedMessageList,
-            FfiSignaturePubKeyList,
+            FfiWitnessEntryList,
         },
     },
 };
@@ -32,7 +32,7 @@ use crate::primitives::{
 pub struct FfiPublicTransactionBody {
     pub hash: FfiHashType,
     pub message: FfiPublicMessage,
-    pub witness_set: FfiSignaturePubKeyList,
+    pub witness_set: FfiWitnessEntryList,
 }
 
 impl From<PublicTransaction> for FfiPublicTransactionBody {
@@ -48,8 +48,7 @@ impl From<PublicTransaction> for FfiPublicTransactionBody {
             hash: FfiBytes32::from_bytes(hash),
             message: message.into(),
             witness_set: witness_set
-                .signatures_and_public_keys()
-                .to_vec()
+                .into_raw_parts()
                 .into_iter()
                 .map(Into::into)
                 .collect::<Vec<_>>()
@@ -64,7 +63,7 @@ struct OwnedPublicBody {
     fee: Option<FeeDeclaration>,
     nonces: Vec<FfiNonceEntry>,
     admission_evidence: Vec<FfiPublicAccountEvidence>,
-    witness_set: Vec<FfiSignaturePubKeyEntry>,
+    witness_set: Vec<WitnessEntry>,
 }
 
 impl From<Box<FfiPublicTransactionBody>> for OwnedPublicBody {
@@ -80,7 +79,7 @@ impl From<Box<FfiPublicTransactionBody>> for OwnedPublicBody {
             fee: message.has_fee.then(|| message.fee.into()),
             nonces: message.nonces.into(),
             admission_evidence: message.admission_evidence.into(),
-            witness_set: witness_set.into(),
+            witness_set: owned(witness_set),
         }
     }
 }
@@ -104,9 +103,7 @@ impl TryFrom<Box<FfiPublicTransactionBody>> for PublicTransaction {
                 nonces: nonces_from_ffi(nonces).map_err(cast_error)?,
                 admission_evidence: public_account_evidence(admission_evidence)?,
             },
-            witness_set: lee::public_transaction::WitnessSet::from_raw_parts(signatures(
-                witness_set,
-            )?),
+            witness_set: lee::public_transaction::WitnessSet::from_raw_parts(witness_set),
         })
     }
 }
@@ -212,7 +209,7 @@ type FfiProgramImageClaims = FfiVec<FfiProgramImageClaim>;
 pub struct FfiPrivateTransactionBody {
     pub hash: FfiHashType,
     pub message: FfiPrivacyPreservingMessage,
-    pub witness_set: FfiSignaturePubKeyList,
+    pub witness_set: FfiWitnessEntryList,
     pub proof: FfiProof,
 }
 
@@ -225,12 +222,12 @@ impl From<PrivacyPreservingTransaction> for FfiPrivateTransactionBody {
             witness_set,
         } = value;
 
-        let (signatures_and_public_keys, proof) = witness_set.into_raw_parts();
+        let (entries, proof) = witness_set.into_raw_parts();
 
         Self {
             hash: FfiBytes32::from_bytes(hash),
             message: message.into(),
-            witness_set: signatures_and_public_keys
+            witness_set: entries
                 .into_iter()
                 .map(Into::into)
                 .collect::<Vec<_>>()
@@ -253,7 +250,7 @@ struct OwnedPrivateBody {
     fee: Option<ProvenFee>,
     nonces: Vec<FfiNonceEntry>,
     admission_evidence: Vec<FfiPublicAccountEvidence>,
-    witness_set: Vec<FfiSignaturePubKeyEntry>,
+    witness_set: Vec<WitnessEntry>,
     proof: Vec<u8>,
 }
 
@@ -279,7 +276,7 @@ impl From<Box<FfiPrivateTransactionBody>> for OwnedPrivateBody {
             fee: proven_fee_from_ffi(message.has_fee, message.fee),
             nonces: message.nonces.into(),
             admission_evidence: message.admission_evidence.into(),
-            witness_set: witness_set.into(),
+            witness_set: owned(witness_set),
             proof: proof.into(),
         }
     }
@@ -325,7 +322,7 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                 admission_evidence: public_account_evidence(admission_evidence)?,
             },
             witness_set: lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(
-                signatures(witness_set)?,
+                witness_set,
                 Proof::from_inner(proof),
             ),
         })
@@ -695,22 +692,6 @@ fn public_account_evidence(
         .collect()
 }
 
-fn signatures(
-    entries: Vec<FfiSignaturePubKeyEntry>,
-) -> Result<Vec<(Signature, PublicKey)>, PrimitiveOperationStatus> {
-    entries
-        .into_iter()
-        .map(|entry| {
-            Ok((
-                Signature {
-                    value: entry.signature.data,
-                },
-                PublicKey::try_new(entry.public_key.data).map_err(cast_error)?,
-            ))
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -721,11 +702,14 @@ mod tests {
 
     use lee::{
         AccountId, Actor, BoundaryStep, Delivery, EphemeralPublicKey, FeeDeclaration,
-        MessageEnvelope, PublicExecutionContext, RootCall,
+        MessageEnvelope, PublicExecutionContext, PublicKey, RootCall,
     };
     use lee_core::{
-        Commitment, EncryptedNote, SealedMessage, account::Nonce, encryption::Ciphertext,
+        Commitment, EncryptedNote, SealedMessage,
+        account::Nonce,
+        encryption::Ciphertext,
         program::PdaSeed,
+        signing_key::{KeyType, SigningKeyState},
     };
 
     use super::*;
@@ -783,6 +767,16 @@ mod tests {
 
     fn signer() -> PublicKey {
         PublicKey::new_from_private_key(&lee::PrivateKey::try_new([1; 32]).expect("valid key"))
+    }
+
+    fn witness_entry() -> WitnessEntry {
+        WitnessEntry {
+            auth_data: vec![5; 96],
+            next: SigningKeyState {
+                key_type: KeyType::Schnorr,
+                key_commitment: [6; 32],
+            },
+        }
     }
 
     fn admission_evidence() -> Vec<PublicAccountEvidence> {
@@ -883,10 +877,7 @@ mod tests {
 
     fn signed_public_body(corrupt: fn(&mut FfiPublicTransactionBody)) -> FfiPublicTransactionBody {
         let mut body = FfiPublicTransactionBody::from(PublicTransaction {
-            witness_set: lee::public_transaction::WitnessSet::from_raw_parts(vec![(
-                Signature { value: [5; 64] },
-                signer(),
-            )]),
+            witness_set: lee::public_transaction::WitnessSet::from_raw_parts(vec![witness_entry()]),
             ..public_transaction(None)
         });
         corrupt(&mut body);
@@ -898,7 +889,7 @@ mod tests {
     ) -> FfiPrivateTransactionBody {
         let mut body = FfiPrivateTransactionBody::from(PrivacyPreservingTransaction {
             witness_set: lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(
-                vec![(Signature { value: [5; 64] }, signer())],
+                vec![witness_entry()],
                 Proof::from_inner(vec![6; 8]),
             ),
             ..private_transaction()
@@ -923,10 +914,6 @@ mod tests {
 
     fn invalidate_first_key(evidence: &mut [FfiPublicAccountEvidence]) {
         evidence[0].key.data = [0xFF; 32];
-    }
-
-    fn invalidate_first_signer(witness_set: &mut [FfiSignaturePubKeyEntry]) {
-        witness_set[0].public_key.data = [0xFF; 32];
     }
 
     fn end_of_subtree_deliveries(
@@ -1102,14 +1089,13 @@ mod tests {
     #[test]
     fn a_rejected_public_body_releases_every_buffer_whether_converted_or_freed() {
         assert!(PublicTransaction::try_from(Box::new(signed_public_body(|_| {}))).is_ok());
-        let corruptions: [fn(&mut FfiPublicTransactionBody); 3] = [
+        let corruptions: [fn(&mut FfiPublicTransactionBody); 2] = [
             |body| edit(&mut body.message.nonces, duplicate_first_nonce),
             |body| {
                 edit(&mut body.message.admission_evidence, |e| {
                     invalidate_first_key(e);
                 });
             },
-            |body| edit(&mut body.witness_set, |w| invalidate_first_signer(w)),
         ];
         for corrupt in corruptions {
             let converted = || {
@@ -1128,7 +1114,7 @@ mod tests {
         assert!(
             PrivacyPreservingTransaction::try_from(Box::new(signed_private_body(|_| {}))).is_ok()
         );
-        let corruptions: [fn(&mut FfiPrivateTransactionBody); 4] = [
+        let corruptions: [fn(&mut FfiPrivateTransactionBody); 3] = [
             |body| body.message.block_validity_window = [5, 3],
             |body| edit(&mut body.message.nonces, duplicate_first_nonce),
             |body| {
@@ -1136,7 +1122,6 @@ mod tests {
                     invalidate_first_key(e);
                 });
             },
-            |body| edit(&mut body.witness_set, |w| invalidate_first_signer(w)),
         ];
         for corrupt in corruptions {
             let converted = || {

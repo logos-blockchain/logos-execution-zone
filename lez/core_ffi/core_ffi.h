@@ -10,6 +10,13 @@ typedef enum FfiPublicAccountEvidenceKind {
   FfiPublicAccountEvidenceKind_Pda,
 } FfiPublicAccountEvidenceKind;
 
+/**
+ * A signing key's type.
+ */
+typedef enum FfiKeyType {
+  FfiKeyType_Schnorr = 1,
+} FfiKeyType;
+
 typedef enum FfiBoundaryStepKind {
   FfiBoundaryStepKind_PrivateToPublic = 0,
   FfiBoundaryStepKind_PublicToPrivate,
@@ -374,31 +381,33 @@ typedef struct FfiPublicMessage {
 } FfiPublicMessage;
 
 /**
- * 64-byte array type for signatures, etc.
+ * A signing key's type and 32-byte commitment.
  */
-typedef struct FfiBytes64 {
-  uint8_t data[64];
-} FfiBytes64;
+typedef struct FfiSigningKeyState {
+  enum FfiKeyType key_type;
+  struct FfiBytes32 key_commitment;
+} FfiSigningKeyState;
 
-typedef struct FfiBytes64 FfiSignature;
+/**
+ * One signer's authentication data, and the key it rotates to.
+ */
+typedef struct FfiWitnessEntry {
+  FfiVecU8 auth_data;
+  struct FfiSigningKeyState next;
+} FfiWitnessEntry;
 
-typedef struct FfiSignaturePubKeyEntry {
-  FfiSignature signature;
-  FfiPublicKey public_key;
-} FfiSignaturePubKeyEntry;
-
-typedef struct FfiVec_FfiSignaturePubKeyEntry {
-  struct FfiSignaturePubKeyEntry *entries;
+typedef struct FfiVec_FfiWitnessEntry {
+  struct FfiWitnessEntry *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiSignaturePubKeyEntry;
+} FfiVec_FfiWitnessEntry;
 
-typedef struct FfiVec_FfiSignaturePubKeyEntry FfiSignaturePubKeyList;
+typedef struct FfiVec_FfiWitnessEntry FfiWitnessEntryList;
 
 typedef struct FfiPublicTransactionBody {
   FfiHashType hash;
   struct FfiPublicMessage message;
-  FfiSignaturePubKeyList witness_set;
+  FfiWitnessEntryList witness_set;
 } FfiPublicTransactionBody;
 
 typedef struct FfiVec_FfiBytes32 {
@@ -535,7 +544,7 @@ typedef FfiVecU8 FfiProof;
 typedef struct FfiPrivateTransactionBody {
   FfiHashType hash;
   struct FfiPrivacyPreservingMessage message;
-  FfiSignaturePubKeyList witness_set;
+  FfiWitnessEntryList witness_set;
   FfiProof proof;
 } FfiPrivateTransactionBody;
 

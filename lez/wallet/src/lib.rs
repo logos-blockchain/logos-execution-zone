@@ -1786,18 +1786,11 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 ..Message::from_circuit_output(acc_manager.public_account_nonces(), output)
             };
 
-            let message_hash = message.hash();
-            let mut signatures_public_keys = acc_manager
-                .sign_message(message_hash)
-                .map_err(ExecutionFailureKind::SignError)?;
-            // Witness entries follow `nonces` order.
-            signatures_public_keys.sort_by_key(|(_, public_key)| lee::AccountId::from(public_key));
-
-            let witness_set =
-                lee::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
-                    signatures_public_keys,
-                    proof,
-                );
+            let witness_set = lee::privacy_preserving_transaction::witness_set::WitnessSet::sign(
+                &message,
+                proof,
+                &acc_manager.signing_keys(&message.nonces),
+            );
 
             let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
@@ -2052,16 +2045,24 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 ));
             }
             Some(payer) => {
-                let keys = self.get_account_public_signing_key(payer).ok_or_else(|| {
-                    invalid_input("Fee payer's signing key is not held by this wallet")
-                })?;
+                let secret = self
+                    .storage
+                    .key_chain()
+                    .pub_account_secret(payer)
+                    .cloned()
+                    .ok_or_else(|| {
+                        invalid_input("Fee payer's signing key is not held by this wallet")
+                    })?;
                 let account = self
                     .get_account_view(Actor::native_balance(payer))
                     .await
                     .map_err(ExecutionFailureKind::SequencerError)?
                     .unwrap_or_default();
                 nonces.insert(payer, account.nonce);
-                (payer, Some(keys))
+                (
+                    payer,
+                    Some(account_manager::signer(payer, &secret, account.nonce)),
+                )
             }
         };
 
@@ -2079,18 +2080,9 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             acc_manager.admission_evidence(),
         );
 
-        let message_hash = message.hash();
-        let mut signatures_public_keys = acc_manager
-            .sign_message(message_hash)
-            .map_err(ExecutionFailureKind::SignError)?;
-        if let Some((key, public_key)) = co_signer {
-            signatures_public_keys.push((lee::Signature::new(&key, &message_hash), public_key));
-        }
-        // Witness entries follow `nonces` order.
-        signatures_public_keys.sort_by_key(|(_, public_key)| lee::AccountId::from(public_key));
-
-        let witness_set =
-            lee::public_transaction::WitnessSet::from_raw_parts(signatures_public_keys);
+        let mut signers = acc_manager.signing_keys(&message.nonces);
+        signers.extend(co_signer);
+        let witness_set = lee::public_transaction::WitnessSet::sign(&message, &signers);
 
         let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
         if self.dry_run {

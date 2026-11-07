@@ -259,11 +259,7 @@ pub fn is_system_injection(tx: &LeeTransaction) -> bool {
     let LeeTransaction::Public(public_tx) = tx else {
         return false;
     };
-    if !public_tx
-        .witness_set()
-        .signatures_and_public_keys()
-        .is_empty()
-    {
+    if !public_tx.witness_set().entries().is_empty() {
         return false;
     }
     let lee::RootCall { to, message } = &public_tx.message().execution.root;

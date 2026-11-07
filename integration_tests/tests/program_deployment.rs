@@ -69,16 +69,18 @@ async fn deploy_and_execute_program() -> Result<()> {
         common::test_utils::test_fee_declaration(payer_id),
     )?;
     let target_signer = TestSigner::from(
-        &ctx.wallet()
-            .get_account_public_signing_key(target_id)
-            .unwrap()
-            .0,
+        ctx.wallet()
+            .storage()
+            .key_chain()
+            .pub_account_secret(target_id)
+            .unwrap(),
     );
     let payer_signer = TestSigner::from(
-        &ctx.wallet()
-            .get_account_public_signing_key(payer_id)
-            .unwrap()
-            .0,
+        ctx.wallet()
+            .storage()
+            .key_chain()
+            .pub_account_secret(payer_id)
+            .unwrap(),
     );
     let witness_set = witness_for(&message, &[&target_signer, &payer_signer]);
     let transaction = lee::PublicTransaction::new(message, witness_set);

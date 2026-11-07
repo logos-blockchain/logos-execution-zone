@@ -16,9 +16,10 @@ use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, no_seal, utils::account_balance,
 };
 use lee::{
-    Actor, PrivateKey, execute_and_prove_with_cross_messages, privacy_preserving_transaction,
+    Actor, execute_and_prove_with_cross_messages, privacy_preserving_transaction,
     program::Program,
     public_transaction,
+    signature::PublicAccountSecret,
     test_utils::{TestSigner, privacy_witness_for},
 };
 use lee_core::{RootCall, execution_state::TransactionEntry};
@@ -357,7 +358,7 @@ async fn a_bedrock_deposit_seen_before_finality_is_minted_in_a_block_pinned_on_i
         .with_bedrock_settings("deployment-settings-slow-finality.yaml")
         .build()
         .await?;
-    let recipient = TestSigner::from(&PrivateKey::new_os_random());
+    let recipient = TestSigner::from(&PublicAccountSecret::new_os_random());
     let recipient_id = recipient.account_id();
     let amount = 1_u64;
 
@@ -415,7 +416,7 @@ async fn a_bedrock_deposit_seen_before_finality_is_minted_in_a_block_pinned_on_i
 #[test]
 async fn a_bedrock_deposit_is_minted_exactly_once() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;
-    let recipient = TestSigner::from(&PrivateKey::new_os_random());
+    let recipient = TestSigner::from(&PublicAccountSecret::new_os_random());
     let recipient_id = recipient.account_id();
     let amount = 1_u64;
 

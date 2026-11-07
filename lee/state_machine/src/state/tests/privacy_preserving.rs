@@ -1,4 +1,4 @@
-use lee_core::{RootCall, execution_state::BoundaryStep};
+use lee_core::{RootCall, execution_state::BoundaryStep, signing_key::SIGNATURE_PROGRAM_ID};
 
 use super::*;
 
@@ -125,6 +125,8 @@ fn transition_from_privacy_preserving_transaction_shielded() {
         let post_balance = this.data.native_balance().unwrap() - balance_to_move;
         this.data
             .set_actor_state(NATIVE_TOKEN_PROGRAM_ID, encode_balance(post_balance));
+        this.data
+            .set_actor_state(SIGNATURE_PROGRAM_ID, sender_keys.key_state(Nonce(1)).into());
         this.nonce.public_account_nonce_increment();
         this
     };

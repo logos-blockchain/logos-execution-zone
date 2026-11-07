@@ -6088,7 +6088,7 @@ fn a_privately_owned_and_funded_stake_is_slashed_without_its_owners_witness() {
     );
     // Nothing the owner holds is read or signed.
     assert!(!slash.affected_public_account_ids().contains(&ownership_id));
-    assert!(slash.witness_set().signatures_and_public_keys().is_empty());
+    assert!(slash.witness_set().entries().is_empty());
     state
         .transition_from_public_transaction(&slash, 4, 0)
         .expect("the peers' approvals alone should slash a private stake");
@@ -7038,7 +7038,7 @@ fn a_bridge_deposit_credits_a_recipient_absent_from_public_state() {
     else {
         panic!("a bridge deposit is a public transaction");
     };
-    assert!(deposit.witness_set.signatures_and_public_keys().is_empty());
+    assert!(deposit.witness_set.entries().is_empty());
     assert!(deposit.message.nonces.is_empty());
     assert!(
         !deposit

@@ -4,6 +4,7 @@ use common::transaction::LeeTransaction;
 use lee::{
     AccountId, Actor, PublicTransaction,
     public_transaction::{Message, WitnessSet},
+    signature::{KeyScheme as _, Schnorr, signing_key},
 };
 use program_deployment::deploy_program;
 use sequencer_service_rpc::RpcClient as _;
@@ -60,31 +61,36 @@ async fn main() {
         .await
         .unwrap();
 
-    // Load signing keys to provide authorization
-    let (signing_key, _public_key) = wallet_core
+    // Load the secret the account's signing keys derive from, one key per nonce
+    let secret = wallet_core
         .storage()
         .key_chain()
-        .pub_account_signing_key(account_id)
-        .expect("Input account should be a self owned public account");
+        .pub_account_secret(account_id)
+        .expect("Input account should be a self owned public account")
+        .clone();
 
     // Define the desired greeting in ASCII
     let greeting: Vec<u8> = vec![72, 111, 108, 97, 32, 109, 117, 110, 100, 111, 33];
 
     // Construct the public transaction
     // Query the current nonce from the node
-    let nonces = BTreeMap::from([(
-        account_id,
-        wallet_core
-            .get_accounts_nonces(&[account_id])
-            .await
-            .expect("Node should be reachable to query account data")[0],
-    )]);
-    let signing_keys = [&signing_key];
+    let nonce = wallet_core
+        .get_accounts_nonces(&[account_id])
+        .await
+        .expect("Node should be reachable to query account data")[0];
+    let nonces = BTreeMap::from([(account_id, nonce)]);
+    // Sign with the key at the current nonce, committing to the key at the next nonce, which the
+    // account rotates to
+    let (key, _public_key) = signing_key::<Schnorr>(&secret, nonce);
+    let mut next_nonce = nonce;
+    next_nonce.public_account_nonce_increment();
+    let next_key = Schnorr::key_state(&signing_key::<Schnorr>(&secret, next_nonce).1);
+    let signing_keys = [(account_id, key, next_key)];
     let hello = Actor::new(account_id, program_account_id);
     let message = Message::try_new(hello, vec![hello], nonces, greeting).unwrap();
     // Pass the signing key to sign the message. This will be used by the node
     // to flag the pre_state as `is_authorized` when executing the program
-    let witness_set = WitnessSet::for_message(&message, &signing_keys);
+    let witness_set = WitnessSet::sign(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 
     // Submit the transaction

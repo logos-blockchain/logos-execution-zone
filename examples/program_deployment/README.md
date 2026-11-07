@@ -154,7 +154,7 @@ The [public runner](src/bin/run_hello_world.rs) loads the wallet and guest binar
 ```rust
 let hello = Actor::new(account_id, program_account_id);
 let message = Message::try_new(hello, vec![hello], nonces, greeting).unwrap();
-let witness_set = WitnessSet::for_message(&message, &signing_keys);
+let witness_set = WitnessSet::sign(&message, &signing_keys);
 let tx = PublicTransaction::new(message, witness_set);
 ```
 
@@ -295,9 +295,10 @@ cargo run --bin run_hello_world_with_authorization \
 
 The [authorized runner](src/bin/run_hello_world_with_authorization.rs) selects the program's actor state as before. It also:
 
-- loads the account's signing key;
+- loads the secret the account's signing keys derive from;
 - includes the account's current nonce in the message;
-- passes the key to `WitnessSet::for_message` to sign the transaction.
+- passes its key at that nonce, with the key state at the next nonce, to `WitnessSet::sign` to sign
+  the transaction and rotate the account to that next key.
 
 ## Seeing the mechanism in action
 If everything went well you won't notice any difference with the first Hello world, because the runner takes care of signing the transaction to provide authorization and the program just succeeds.

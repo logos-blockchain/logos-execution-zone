@@ -1,7 +1,7 @@
 pub use ffi_types::{
     FfiAccountIdList, FfiActorList, FfiBoundaryStepList, FfiMessageDataList, FfiNonceList,
     FfiPdaSeedList, FfiPrivateActionList, FfiPromotionList, FfiPublicAccountEvidenceList,
-    FfiRecoveryBindingList, FfiSealedMessageList, FfiSignaturePubKeyList, FfiVecU8,
+    FfiRecoveryBindingList, FfiSealedMessageList, FfiVecU8, FfiWitnessEntryList,
 };
 
 use crate::api::types::{FfiVec, transaction::FfiTransaction};

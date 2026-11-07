@@ -28,7 +28,7 @@ use integration_tests::{
         primitives as primitives_ffi_helpers, sequencer as sequencer_ffi_helpers, wallet::*,
     },
 };
-use lee::{AccountId, PrivateKey, test_utils::TestSigner};
+use lee::{AccountId, signature::PublicAccountSecret, test_utils::TestSigner};
 use test_fixtures::BlockingTestContext;
 
 #[test]
@@ -97,7 +97,7 @@ fn wallet_ffi_save_and_load_persistent_storage() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_account_id_to_base58() -> Result<()> {
-    let account_id = TestSigner::from(&PrivateKey::new_os_random()).account_id();
+    let account_id = TestSigner::from(&PublicAccountSecret::new_os_random()).account_id();
     let ffi_bytes: FfiBytes32 = account_id.into();
     let ptr = unsafe { wallet_ffi_account_id_to_base58(&raw const ffi_bytes) };
 
@@ -114,7 +114,7 @@ fn test_wallet_ffi_account_id_to_base58() -> Result<()> {
 
 #[test]
 fn wallet_ffi_base58_to_account_id() -> Result<()> {
-    let account_id = TestSigner::from(&PrivateKey::new_os_random()).account_id();
+    let account_id = TestSigner::from(&PublicAccountSecret::new_os_random()).account_id();
     let account_id_str = account_id.to_string();
     let account_id_c_str = CString::new(account_id_str.clone())?;
     let account_id: AccountId = unsafe {

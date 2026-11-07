@@ -1,12 +1,8 @@
-use anyhow::Result;
-pub use imp::*;
-use lee::{PublicKey, Signature};
-
 #[cfg(keycard)]
 mod imp {
+    use anyhow::Result;
     use keycard_wallet::KeycardWallet;
-
-    use super::{PublicKey, Result, Signature};
+    use lee::PublicKey;
 
     #[expect(
         clippy::unnecessary_wraps,
@@ -21,26 +17,12 @@ mod imp {
             pin, path,
         )?)
     }
-
-    pub fn sign(
-        pin: &str,
-        paths: &[&str],
-        message_hash: &[u8; 32],
-    ) -> Result<Vec<(Signature, PublicKey)>> {
-        let mut wallet = KeycardWallet::new()?;
-        wallet.connect(pin)?;
-        paths
-            .iter()
-            .map(|path| Ok(wallet.sign_message_for_path(path, message_hash)?))
-            .collect()
-    }
 }
 
 #[cfg(not(keycard))]
 mod imp {
-    use anyhow::anyhow;
-
-    use super::{PublicKey, Result, Signature};
+    use anyhow::{Result, anyhow};
+    use lee::PublicKey;
 
     const UNSUPPORTED: &str = "Keycard support is not built into this wallet";
 
@@ -51,12 +33,6 @@ mod imp {
     pub fn public_key(_pin: &str, _path: &str) -> Result<PublicKey> {
         Err(anyhow!(UNSUPPORTED))
     }
-
-    pub fn sign(
-        _pin: &str,
-        _paths: &[&str],
-        _message_hash: &[u8; 32],
-    ) -> Result<Vec<(Signature, PublicKey)>> {
-        Err(anyhow!(UNSUPPORTED))
-    }
 }
+
+pub use imp::*;

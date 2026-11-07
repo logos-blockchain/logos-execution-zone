@@ -6,7 +6,11 @@ use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, public_mention,
     utils::{account_balance, get_account, new_account, send},
 };
-use lee::{AccountId, PublicKey, test_utils::TestSigner};
+use lee::{
+    AccountId,
+    signature::{PublicAccountSecret, Schnorr, signing_key},
+    test_utils::TestSigner,
+};
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::{
@@ -81,20 +85,16 @@ async fn successful_transfer_to_existing_account() -> Result<()> {
     let LeeTransaction::Public(tx) = tx else {
         anyhow::bail!("Expected a public transaction");
     };
-    let (_sender_private_key, sender_public_key) = ctx
-        .wallet()
-        .get_account_public_signing_key(sender)
-        .context("sender should have a signing key")?;
-    let signers: Vec<_> = tx
-        .witness_set()
-        .signatures_and_public_keys()
-        .iter()
-        .map(|(_, public_key)| public_key)
-        .collect();
+    let signers: Vec<_> = tx.message().nonces.keys().copied().collect();
     assert_eq!(
         signers,
-        vec![&sender_public_key],
+        vec![sender],
         "only the sender should sign a transfer to an existing account"
+    );
+    assert_eq!(
+        tx.witness_set().entries().len(),
+        signers.len(),
+        "the witness set should hold exactly the sender's entry"
     );
 
     Ok(())
@@ -136,9 +136,9 @@ async fn a_foreign_recipient_named_by_its_public_key_receives_its_first_credit()
     let mut ctx = TestContext::new().await?;
 
     let sender = ctx.existing_public_accounts()[0];
-    let recipient_private_key = lee::PrivateKey::try_new([77; 32])?;
-    let recipient_key = PublicKey::new_from_private_key(&recipient_private_key);
-    let recipient = TestSigner::from(&recipient_private_key).account_id();
+    let recipient_secret = PublicAccountSecret::new([77; 32]);
+    let recipient_key = signing_key::<Schnorr>(&recipient_secret, 0.into()).1;
+    let recipient = TestSigner::from(&recipient_secret).account_id();
     assert!(
         ctx.sequencer_client()
             .get_account(recipient)

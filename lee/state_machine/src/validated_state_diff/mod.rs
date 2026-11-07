@@ -13,6 +13,7 @@ use lee_core::{
         TransitionView, WholeExecution,
     },
     program::{MessageBody, PROGRAM_LOADER_ACCOUNT_ID, Publication, TransactionEvent},
+    signing_key::{SIGNATURE_PROGRAM_ID, SigningKeyState},
 };
 use public_backend::PublicBackend;
 
@@ -20,14 +21,18 @@ use crate::{
     PublicAccountEvidence, V03State, ensure,
     error::LeeError,
     privacy_preserving_transaction::{PrivacyPreservingTransaction, circuit::Proof},
-    public_transaction::PublicTransaction,
+    public_transaction::{PublicTransaction, WitnessEntry},
+    signature::{authenticate, current_key},
 };
 
 mod public_backend;
 
+type KeyRotation = (AccountId, SigningKeyState);
+
 #[derive(Default)]
 pub struct StateDiff {
     pub signer_account_ids: Vec<AccountId>,
+    pub key_rotations: Vec<(AccountId, SigningKeyState)>,
     pub public_diff: HashMap<AccountId, Account>,
     pub new_commitments: Vec<Commitment>,
     pub new_nullifiers: Vec<(Nullifier, CommitmentSetDigest)>,
@@ -124,9 +129,10 @@ impl ValidatedStateDiff {
     /// The settlement-shaped variant: authenticate, execute under `cycle_budget`,
     /// and return a diff that is always safe to apply.
     ///
-    /// - `Ok` on success: carries the transaction's full effects plus the signers' nonce advances.
+    /// - `Ok` on success: carries the transaction's full effects plus the signers' nonce advances
+    ///   and key rotations.
     /// - `Ok` on a *reverted* action: the failure is charged w.r.t `LeeError::is_chargeable`, nonce
-    ///   advances if charged.
+    ///   advances and key rotations if charged.
     /// - `Err` covers a transaction a correct proposer would never include
     pub fn from_public_transaction_metered(
         tx: &PublicTransaction,
@@ -137,8 +143,8 @@ impl ValidatedStateDiff {
     ) -> (ExecutionCharge, Result<Self, LeeError>) {
         // Authentication failure is a malformed transaction, not a revert: bail
         // before executing so the caller can reject the block.
-        let signers = match authenticate_public_transaction_signers(tx, state) {
-            Ok(signers) => signers,
+        let (signers, key_rotations) = match authenticate_public_transaction_signers(tx, state) {
+            Ok(authenticated) => authenticated,
             Err(err) => return (ExecutionCharge::FREE, Err(err)),
         };
         let message = tx.message();
@@ -149,6 +155,7 @@ impl ValidatedStateDiff {
             message.public_context.clone(),
             evidence(&signers, &message.admission_evidence),
             signers.clone(),
+            key_rotations.clone(),
             state,
             block_id,
             timestamp,
@@ -159,11 +166,13 @@ impl ValidatedStateDiff {
         let (diff, revert) = match result {
             Ok(diff) => (diff, None),
             // A chargeable action failure keeps no effects but still advances the
-            // signers' nonces, so what `apply_state_diff` receives is the nonce
-            // bumps alone: the fee stays committed and the tx cannot be replayed.
+            // signers' nonces and rotates their keys, so what `apply_state_diff`
+            // receives is the nonce bumps and key rotations alone: the fee stays
+            // committed and the tx cannot be replayed.
             Err(err) if err.is_chargeable() => (
                 Self(StateDiff {
                     signer_account_ids: signers,
+                    key_rotations,
                     ..StateDiff::default()
                 }),
                 Some(err.to_string()),
@@ -208,6 +217,7 @@ impl ValidatedStateDiff {
             PublicExecutionContext::new(public_actors.iter().copied(), authorized.iter().copied()),
             authorized.iter().copied().collect(),
             Vec::new(), // no nonces to advance!
+            Vec::new(), // nor keys to rotate
             state,
             block_id,
             timestamp,
@@ -224,7 +234,8 @@ impl ValidatedStateDiff {
         cycle_budget: u64,
         cycles_used: &mut u64,
     ) -> Result<Self, LeeError> {
-        let signer_account_ids = authenticate_public_transaction_signers(tx, state)?;
+        let (signer_account_ids, key_rotations) =
+            authenticate_public_transaction_signers(tx, state)?;
         let message = tx.message();
         // Signers both authorize the execution and advance their replay nonces.
         Self::execute_authorized(
@@ -232,6 +243,7 @@ impl ValidatedStateDiff {
             message.public_context.clone(),
             evidence(&signer_account_ids, &message.admission_evidence),
             signer_account_ids,
+            key_rotations,
             state,
             block_id,
             timestamp,
@@ -242,7 +254,8 @@ impl ValidatedStateDiff {
 
     /// Shared execution core: validates and executes one transaction root and
     /// every transition it leads to, producing a diff. `nonce_bearers` become the
-    /// diff's `signer_account_ids` (their nonces advance on apply).
+    /// diff's `signer_account_ids` (their nonces advance on apply) and
+    /// `key_rotations` its key rotations.
     #[expect(
         clippy::too_many_arguments,
         reason = "the execution core threads the full invocation context"
@@ -252,6 +265,7 @@ impl ValidatedStateDiff {
         public_context: PublicExecutionContext,
         evidence: BTreeSet<AccountId>,
         nonce_bearers: Vec<AccountId>,
+        key_rotations: Vec<KeyRotation>,
         state: &V03State,
         block_id: BlockId,
         timestamp: Timestamp,
@@ -284,6 +298,7 @@ impl ValidatedStateDiff {
             timestamp,
             StateDiff {
                 signer_account_ids: nonce_bearers,
+                key_rotations,
                 ..StateDiff::default()
             },
         )
@@ -349,7 +364,10 @@ impl ValidatedStateDiff {
 
         // 3. Nonce checks and Valid signatures
         let signer_account_ids = tx.check_stateless()?;
-        check_nonces(state, &message.nonces)?;
+        let key_rotations =
+            authenticate_signers(state, &message.nonces, tx.witness_set.entries(), |next| {
+                message.message_with_keys(next)
+            })?;
 
         // Verify validity window
         ensure!(
@@ -395,6 +413,7 @@ impl ValidatedStateDiff {
             timestamp,
             StateDiff {
                 signer_account_ids: signer_account_ids.clone(),
+                key_rotations: key_rotations.clone(),
                 new_commitments: commitments,
                 new_nullifiers: nullifiers,
                 recovery_bindings: execution.recovery_bindings.clone(),
@@ -446,6 +465,7 @@ impl ValidatedStateDiff {
                     timestamp,
                     StateDiff {
                         signer_account_ids,
+                        key_rotations,
                         new_commitments: vec![fallback.action.commitment],
                         new_nullifiers: vec![(fallback.action.nullifier, fallback.action.root)],
                         recovery_bindings: execution
@@ -592,14 +612,61 @@ fn evidence(
 }
 
 /// Validates the witness set and replay nonces of a public transaction against
-/// `state`, returning the signer account ids.
+/// `state`, returning the signer account ids and their key rotations.
 fn authenticate_public_transaction_signers(
     tx: &PublicTransaction,
     state: &V03State,
-) -> Result<Vec<AccountId>, LeeError> {
+) -> Result<(Vec<AccountId>, Vec<KeyRotation>), LeeError> {
     let signer_account_ids = tx.check_stateless()?;
-    check_nonces(state, &tx.message().nonces)?;
-    Ok(signer_account_ids)
+    let message = tx.message();
+    let key_rotations =
+        authenticate_signers(state, &message.nonces, tx.witness_set().entries(), |next| {
+            message.message_with_keys(next)
+        })?;
+    Ok((signer_account_ids, key_rotations))
+}
+
+/// Checks the replay nonces of the signers `nonces` names, then authenticates entry i against the
+/// i-th signer's current key over the message with every signer's next key, returning each
+/// signer's next key. `entries` pair with `nonces` one to one: the caller has run the
+/// transaction's stateless check.
+///
+/// The current key is the stored one; only an account at nonce 0 without one falls back to the
+/// initial-key rule.
+fn authenticate_signers(
+    state: &V03State,
+    nonces: &BTreeMap<AccountId, Nonce>,
+    entries: &[WitnessEntry],
+    message_with_keys: impl FnOnce(&[SigningKeyState]) -> [u8; 32],
+) -> Result<Vec<KeyRotation>, LeeError> {
+    check_nonces(state, nonces)?;
+    let next_keys: Vec<SigningKeyState> = entries.iter().map(|entry| entry.next).collect();
+    let message_with_keys = message_with_keys(&next_keys);
+    nonces
+        .keys()
+        .zip(entries)
+        .map(|(&signer, entry)| {
+            let refused = |reason: String| {
+                LeeError::InvalidInput(format!("Signer {signer} fails authentication: {reason}"))
+            };
+            let account = state.get_account_by_id_ref(signer);
+            let stored = account
+                .map(|account| account.data.actor_state(SIGNATURE_PROGRAM_ID))
+                .filter(|key| !key.is_empty())
+                .map(SigningKeyState::try_from)
+                .transpose()?;
+            let nonce = account.map_or_else(Nonce::default, |account| account.nonce);
+            ensure!(
+                stored.is_some() || nonce == Nonce::default(),
+                refused(format!("no key is stored at nonce {}", nonce.0))
+            );
+            let current = current_key(stored, signer, &entry.auth_data)
+                .map_err(|error| refused(error.to_string()))?;
+            authenticate(&current, &message_with_keys, &entry.auth_data, &entry.next)
+                .map(|next| (signer, next))
+                .map_err(|error| refused(error.to_string()))
+        })
+        .collect()
 }
 
 fn check_nonces(state: &V03State, nonces: &BTreeMap<AccountId, Nonce>) -> Result<(), LeeError> {
