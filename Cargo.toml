@@ -41,7 +41,6 @@ members = [
   "lez/explorer_service",
   "lez/testnet_initial_state",
   "lez/indexer/ffi",
-  "lez/keycard_wallet",
   "lez/mempool",
   "lez/wallet",
   "lez/common",
@@ -82,6 +81,7 @@ members = [
   "tools/dashboard_gen",
   "tools/devnet_configs",
 ]
+exclude = ["lez/keycard_wallet"]
 
 [workspace.dependencies]
 lee = { path = "lee/state_machine" }
@@ -300,6 +300,7 @@ debug = "line-tables-only"
 
 [workspace.lints.rust]
 warnings = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(keycard)"] }
 
 [workspace.lints]
 clippy.all = { level = "deny", priority = -1 }

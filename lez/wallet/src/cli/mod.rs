@@ -20,7 +20,6 @@ use crate::{
         chain::ChainSubcommand,
         config::ConfigSubcommand,
         group::GroupSubcommand,
-        keycard::KeycardSubcommand,
         network::NetworkAlias,
         pending::PendingSubcommand,
         programs::{
@@ -36,6 +35,7 @@ pub mod account;
 pub mod chain;
 pub mod config;
 pub mod group;
+#[cfg(keycard)]
 pub mod keycard;
 pub mod network;
 pub mod pending;
@@ -99,8 +99,9 @@ pub enum Command {
         yes: bool,
     },
     /// Keycard hardware wallet management.
+    #[cfg(keycard)]
     #[command(subcommand)]
-    Keycard(KeycardSubcommand),
+    Keycard(keycard::KeycardSubcommand),
 }
 
 /// To execute commands, env var `LEE_WALLET_HOME_DIR` must be set into directory with config.
@@ -164,14 +165,10 @@ impl CliAccountMention {
                 .resolve_label(label)
                 .ok_or_else(|| anyhow::anyhow!("No account found for label `{label}`")),
             Self::KeyPath(path) => {
-                let pin = read_pin()?;
-                let id_str =
-                    keycard_wallet::KeycardWallet::get_public_account_id_for_path_with_connect(
-                        &pin, path,
-                    )
-                    .map_err(anyhow::Error::from)?;
-                AccountIdWithPrivacy::from_str(&id_str)
-                    .map_err(|e| anyhow::anyhow!("Invalid account id from keycard: {e}"))
+                let public_key = keycard_public_key(path)?;
+                Ok(AccountIdWithPrivacy::Public(lee::AccountId::from(
+                    &public_key,
+                )))
             }
         }
     }
@@ -305,6 +302,7 @@ pub async fn execute_subcommand<C: WalletSequencerClient>(
         Command::Pending(pending_subcommand) => {
             pending_subcommand.handle_subcommand(wallet_core).await?
         }
+        #[cfg(keycard)]
         Command::Keycard(keycard_subcommand) => {
             keycard_subcommand.handle_subcommand(wallet_core).await?
         }
@@ -442,12 +440,8 @@ pub(crate) fn destination(
 }
 
 fn keycard_public_key(key_path: &str) -> Result<PublicKey> {
-    Ok(
-        keycard_wallet::KeycardWallet::get_public_key_for_path_with_connect(
-            &read_pin()?,
-            key_path,
-        )?,
-    )
+    crate::keycard_support::ensure_available()?;
+    crate::keycard_support::public_key(&read_pin()?, key_path)
 }
 
 pub(crate) fn decode_npk_vpk(
