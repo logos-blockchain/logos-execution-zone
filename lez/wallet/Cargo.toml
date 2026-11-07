@@ -16,7 +16,6 @@ key_protocol.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 testnet_initial_state.workspace = true
 bridge_core.workspace = true
-keycard_wallet.workspace = true
 programs.workspace = true
 system_accounts.workspace = true
 sequencer_stake_core.workspace = true
