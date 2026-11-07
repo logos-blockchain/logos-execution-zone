@@ -117,6 +117,9 @@ const GENESIS_STAKE_FUNDING_KEY: [u8; 32] = [9; 32];
 /// A number of Bedrock slots, as opposed to a [`Slot`] position.
 type SlotCount = u64;
 
+/// Deliveries awaiting a block, by source zone, keyed by emission order.
+type EligibleDispatches = BTreeMap<Option<[u8; 32]>, Vec<((u64, u32), LeeTransaction)>>;
+
 /// A founding sequencer's key, plus the ownership account attesting to its stake.
 struct FoundingStake {
     /// Index of the `StakeSequencer` action configuring this stake, which names
@@ -1921,8 +1924,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             // per source zone in emission order: the store reads records in
             // key-hash order, under which one busy peer starves every other and
             // a peer's own messages arrive shuffled.
-            let mut eligible: BTreeMap<Option<[u8; 32]>, Vec<((u64, u32), LeeTransaction)>> =
-                BTreeMap::new();
+            let mut eligible = EligibleDispatches::new();
             for (key, message, tx) in recorded_dispatches {
                 let (zone, emitted_at) = match message {
                     Some(message) if dispatch_already_delivered(chain.final_state(), &message) => {
