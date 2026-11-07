@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
@@ -45,10 +45,10 @@ pub struct TransactionMessage<P> {
 pub enum InvalidTransaction {
     #[error("Invalid signature for given message and public key")]
     Signature,
-    #[error("Duplicate signers found in witness set")]
-    DuplicateSigner,
     #[error("Nonces do not name exactly the signers")]
     Nonces,
+    #[error("Witness entry does not belong to the signer at its position")]
+    SignerOrder,
     #[error("Authorized accounts do not match the signers")]
     AuthorizedAccounts,
     #[error("A public transaction cannot select promotions")]
@@ -71,15 +71,12 @@ impl<P: BorshSerialize> TransactionMessage<P> {
 }
 
 impl<P> TransactionMessage<P> {
-    pub(crate) fn check_signers(&self, signers: &[AccountId]) -> Result<(), InvalidTransaction> {
-        let unique: BTreeSet<AccountId> = signers.iter().copied().collect();
-        if unique.len() != signers.len() {
-            return Err(InvalidTransaction::DuplicateSigner);
-        }
-        if !self.nonces.keys().eq(&unique) {
-            return Err(InvalidTransaction::Nonces);
-        }
-        if unique != self.public_context.authorized_accounts {
+    pub(crate) fn check_signers(&self) -> Result<(), InvalidTransaction> {
+        if !self
+            .nonces
+            .keys()
+            .eq(&self.public_context.authorized_accounts)
+        {
             return Err(InvalidTransaction::AuthorizedAccounts);
         }
         Ok(())
