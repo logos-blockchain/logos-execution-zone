@@ -128,6 +128,9 @@ jobs:
       - name: Test CODEOWNERS and its pull request comment
         run: python3 .github/scripts/test_codeowners_comment.py -v
 
+      - name: Test cache pruning
+        run: python3 .github/scripts/test_prune_superseded_caches.py -v
+
   fmt-rs:
     needs: ci-image
     runs-on: ubuntu-latest
@@ -257,7 +260,8 @@ jobs:
         with:
           shared-key: ci-container-tests
           # Only writer of this cache.
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
+          # Only dev, the default branch, whose caches main can restore too.
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
 
       - name: Run tests
         env:
@@ -354,7 +358,8 @@ jobs:
           # container's environment, so a change without a rename never saves.
           shared-key: ci-host-prebuild-nodebug
           # Only writer of this cache.
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
+          # Only dev, the default branch, whose caches main can restore too.
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
 
       - name: Build integration test archive
         uses: ./.github/actions/run-in-ci-image
@@ -550,6 +555,32 @@ jobs:
       - name: Report disk headroom after the tests
         if: always()
         run: df -h / /tmp /mnt || true
+
+  # Two generations of the Rust caches exceed the 10 GiB cap, where GitHub
+  # evicts by LRU, so a stale one costs the live one. Outside `ci-ok`.
+  cache-prune:
+    needs: [unit-tests, integration-tests-prebuild]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Delete caches superseded by a newer generation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/${{ github.repository }}/actions/caches?per_page=100" \
+            --jq '.actions_caches[]' \
+            | python3 .github/scripts/prune_superseded_caches.py \
+            | while read -r id; do
+                gh api -X DELETE \
+                  "repos/${{ github.repository }}/actions/caches/$id" \
+                  || echo "cache $id was already gone"
+              done
+
   # `just build-artifacts` drives the host's Docker daemon via `cargo risczero
   # build`, so it goes through the image rather than `container:`.
   artifacts:
