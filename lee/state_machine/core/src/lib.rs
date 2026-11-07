@@ -36,6 +36,7 @@ mod nullifier;
 pub mod program;
 mod recovery;
 mod sealing;
+pub mod signing_key;
 
 pub const GENESIS_BLOCK_ID: BlockId = 1;
 
