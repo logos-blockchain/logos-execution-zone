@@ -417,6 +417,16 @@ mod inner {
                 .unwrap()
             }
 
+            fn header(state: &V03State, program: AccountId) -> lee_core::program::ProgramHeader {
+                lee_core::program::ProgramHeader::from_loader_actor_state(
+                    state
+                        .get_account_by_id(program)
+                        .data
+                        .actor_state(PROGRAM_LOADER_ACCOUNT_ID),
+                )
+                .unwrap()
+            }
+
             fn schedule(state: &V03State) -> Option<ScheduledUpgrade> {
                 registry(state).scheduled(&CLOCK_NAME)
             }
@@ -924,6 +934,36 @@ mod inner {
                     registry(&state).programs.get(&name),
                     Some(&None),
                     "an installed system program is registered, with nothing pending"
+                );
+            }
+
+            /// A system program installed through `system_upgrader` is the one genesis seeds under
+            /// the same name: same code, same image ID, as upgradable. Only its segment accounts
+            /// differ.
+            #[test]
+            fn an_installed_system_program_matches_a_genesis_seeded_one() {
+                let name = SystemProgramName::new(b"new_system_program");
+                let program = AccountId::from_system_program_name(&name);
+
+                let (mut installed, ids) = staged();
+                installed
+                    .transition_from_public_transaction(&install_tx(name, ids[0]), 1, 0)
+                    .expect("a new system program installs");
+                let seeded = V03State::new().with_programs_at([(program, ping_receiver(), false)]);
+
+                let reconstructed = installed.get_builtin_program(program);
+                assert!(
+                    reconstructed.is_some(),
+                    "the installed program reconstructs"
+                );
+                assert_eq!(
+                    reconstructed,
+                    seeded.get_builtin_program(program),
+                    "the same image ID and bytecode reconstruct from both"
+                );
+                assert_eq!(
+                    header(&installed, program).immutable,
+                    header(&seeded, program).immutable
                 );
             }
 

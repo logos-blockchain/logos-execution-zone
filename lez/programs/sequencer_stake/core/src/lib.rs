@@ -138,8 +138,9 @@ pub enum Message {
     /// applies, and bounds the transaction to the earliest `valid_until` among them. Each
     /// signature is over [`committee_approval_message`]. Changes nothing.
     VerifyApprovals {
-        /// Separates what one caller's approvals approve from another's. Never
-        /// [`SLASH_APPROVAL_DOMAIN`]: a slash approval would read as an approval of a payload.
+        /// Tag for what the approvals are for, signed along with the payload, so approvals
+        /// of one kind of change can't be reused for another. Must not be
+        /// [`SLASH_APPROVAL_DOMAIN`]: a slash approval would then also verify as an approval.
         domain: [u8; 32],
         payload: Vec<u8>,
         approvals: Vec<CommitteeApproval>,

@@ -122,10 +122,10 @@ impl SequencerHandle {
         storage.shutdown().await;
     }
 
-    /// Hands the executor an approved `system_upgrader` transaction, past the RPC and gossip
-    /// entry points that refuse them. The producer includes it in the slot before the fee. Until
-    /// approval tooling lands, this is how tests reach `Schedule`.
-    pub async fn submit_system_upgrader_tx(
+    /// Hands `transaction` straight to the executor, past the RPC and gossip entry points, which
+    /// refuse `system_upgrader` transactions. Until approval tooling lands, this is how tests
+    /// reach `Schedule`.
+    pub async fn submit_transaction(
         &self,
         transaction: common::transaction::LeeTransaction,
     ) -> Result<()> {
@@ -137,7 +137,7 @@ impl SequencerHandle {
                 origin: TransactionOrigin::User,
             })
             .await
-            .context("Failed to submit the system_upgrader transaction")
+            .context("Failed to submit the transaction")
     }
 
     /// Wait for any of the sequencer tasks to fail and return the error.
