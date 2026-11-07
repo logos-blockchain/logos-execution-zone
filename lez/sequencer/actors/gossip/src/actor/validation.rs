@@ -216,6 +216,30 @@ mod tests {
     }
 
     #[test]
+    fn a_system_upgrader_tx_from_a_peer_is_rejected() {
+        let registry = system_upgrader_core::registry_actor();
+        let message = lee::public_transaction::Message::try_new(
+            registry,
+            [registry],
+            std::collections::BTreeMap::new(),
+            system_upgrader_core::Message::Apply {
+                name: system_upgrader_core::SystemProgramName::new(b"clock"),
+                activation_height: 1,
+            },
+        )
+        .unwrap();
+        let tx = LeeTransaction::Public(lee::PublicTransaction::new(
+            message,
+            lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        ));
+        let bytes = borsh::to_vec(&tx).unwrap();
+        assert!(matches!(
+            evaluate_transaction(&bytes, 1 << 20),
+            TxEvaluation::Reject(reason) if reason == "sequencer-only program"
+        ));
+    }
+
+    #[test]
     fn garbage_bytes_are_rejected() {
         assert!(matches!(
             evaluate_transaction(&[0xff, 0xff, 0xff], 1 << 20),

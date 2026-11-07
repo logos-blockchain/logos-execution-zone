@@ -122,6 +122,24 @@ impl SequencerHandle {
         storage.shutdown().await;
     }
 
+    /// Hands `transaction` straight to the executor, past the RPC and gossip entry points, which
+    /// refuse `system_upgrader` transactions. Until approval tooling lands, this is how tests
+    /// reach `Schedule`.
+    pub async fn submit_transaction(
+        &self,
+        transaction: common::transaction::LeeTransaction,
+    ) -> Result<()> {
+        use sequencer_executor_actor::protocol::{Transaction, TransactionOrigin};
+        self.executor
+            .actor_ref()
+            .ask(Transaction {
+                transaction,
+                origin: TransactionOrigin::User,
+            })
+            .await
+            .context("Failed to submit the transaction")
+    }
+
     /// Wait for any of the sequencer tasks to fail and return the error.
     ///
     /// Gossip is deliberately not watched here: if it goes down the node
