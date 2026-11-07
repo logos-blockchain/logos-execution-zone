@@ -161,7 +161,7 @@ async fn assert_offender_is_slashed(payload: impl Fn(&Block) -> Vec<u8>) -> Resu
     let offender_stake_key =
         sequencer_stake_core::SequencerKey::new(offender_key.public_key().to_bytes())
             .context("The offender's channel signing public key is not a valid Ed25519 point")?;
-    let offender_owner = config::founding_stake_owner_key(OFFENDER_SEED)?;
+    let offender_owner = config::founding_stake_owner_secret(OFFENDER_SEED);
     let offender_account = TestSigner::from(&offender_owner).account_id();
     let offender_funds = system_accounts::stake_funds_account_id(&offender_account);
     let sink = sequencer_stake_core::slash_sink_account_id(programs::sequencer_stake_account_id());

@@ -946,7 +946,7 @@ mod tests {
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
-        let signer = TestSigner::from(&accounts[0].pub_sign_key);
+        let signer = TestSigner::from(&accounts[0].secret);
         let initial_from = state.get_account_by_id(from).data.native_balance().unwrap();
         let initial_to = state.get_account_by_id(to).data.native_balance().unwrap();
 
@@ -1017,7 +1017,7 @@ mod tests {
 
         let accounts = initial_pub_accounts_private_keys();
         let attacker = accounts[0].account_id;
-        let attacker_signer = TestSigner::from(&accounts[0].pub_sign_key);
+        let attacker_signer = TestSigner::from(&accounts[0].secret);
         let recipient = accounts[1].account_id;
 
         let opening = FeeState::from_bytes(
@@ -1088,7 +1088,7 @@ mod tests {
 
         let accounts = initial_pub_accounts_private_keys();
         let sender = accounts[0].account_id;
-        let sender_signer = TestSigner::from(&accounts[0].pub_sign_key);
+        let sender_signer = TestSigner::from(&accounts[0].secret);
         let recipient = accounts[1].account_id;
 
         let opening = FeeState::from_bytes(
@@ -1149,7 +1149,7 @@ mod tests {
 
         let accounts = initial_pub_accounts_private_keys();
         let payer = accounts[0].account_id;
-        let payer_signer = TestSigner::from(&accounts[0].pub_sign_key);
+        let payer_signer = TestSigner::from(&accounts[0].secret);
         let recipient = accounts[1].account_id;
 
         let opening = FeeState::from_bytes(
@@ -1246,7 +1246,7 @@ mod tests {
     fn a_block_crediting_an_absent_producer_it_cannot_reach_is_rejected() {
         let mut state = initial_state(true);
         let accounts = initial_pub_accounts_private_keys();
-        let signer = TestSigner::from(&accounts[0].pub_sign_key);
+        let signer = TestSigner::from(&accounts[0].secret);
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
         let tip = tip_of(&genesis);
@@ -1295,7 +1295,7 @@ mod tests {
 
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
-        let signer = TestSigner::from(&accounts[0].pub_sign_key);
+        let signer = TestSigner::from(&accounts[0].secret);
         let emitter_id = AccountId::from_builtin_program(event_emitter().id());
 
         let emitter = Actor::new(from, emitter_id);

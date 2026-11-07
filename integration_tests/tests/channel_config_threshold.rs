@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result, ensure};
 use integration_tests::{account_balance, get_account, init_logger, new_account};
-use lee::{PrivateKey, test_utils::TestSigner};
+use lee::{signature::PublicAccountSecret, test_utils::TestSigner};
 use log::info;
 use logos_blockchain_core::mantle::channel::ChannelState;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
@@ -87,7 +87,7 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
     let joiner_stake_key = sequencer_stake_core::SequencerKey::new(joiner_key.to_bytes())
         .expect("a channel signing public key is a valid Ed25519 public key");
 
-    let funding_private_key = PrivateKey::new_os_random();
+    let funding_private_key = PublicAccountSecret::new_os_random();
     let funding_signer = TestSigner::from(&funding_private_key);
     let funding_id = funding_signer.account_id();
 

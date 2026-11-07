@@ -151,7 +151,7 @@ async fn a_private_pda_receives_and_spends() -> Result<()> {
     // locally — one `WriteSegment` per `MAX_SEGMENT_DATA_LEN` chunk of the ELF (linked
     // tail-to-head), then a `CreateHeader` naming `proxy_id` itself as the header.
     let payer = &initial_pub_accounts_private_keys()[0];
-    let payer_signer = TestSigner::from(&payer.pub_sign_key);
+    let payer_signer = TestSigner::from(&payer.secret);
     let payer_nonce = get_account(&ctx, payer.account_id).await?.nonce;
 
     // Segments only ever hold `user_elf`.

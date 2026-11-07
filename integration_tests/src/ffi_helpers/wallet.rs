@@ -375,8 +375,8 @@ pub fn new_wallet_ffi_with_test_context_config(
     let source_key_chain = source_wallet.storage().key_chain();
 
     for (account_id, _chain_index) in source_key_chain.public_account_ids() {
-        let private_key_hex = source_wallet
-            .get_account_public_signing_key(account_id)
+        let private_key_hex = source_key_chain
+            .pub_account_secret(account_id)
             .unwrap()
             .to_string();
         let private_key_hex = CString::new(private_key_hex)?;

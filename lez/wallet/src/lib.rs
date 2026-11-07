@@ -1129,7 +1129,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
     pub fn get_account_public_signing_key(
         &self,
         account_id: AccountId,
-    ) -> Option<&lee::PrivateKey> {
+    ) -> Option<(lee::PrivateKey, lee::PublicKey)> {
         self.storage.key_chain().pub_account_signing_key(account_id)
     }
 
@@ -2052,7 +2052,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 ));
             }
             Some(payer) => {
-                let key = self.get_account_public_signing_key(payer).ok_or_else(|| {
+                let keys = self.get_account_public_signing_key(payer).ok_or_else(|| {
                     invalid_input("Fee payer's signing key is not held by this wallet")
                 })?;
                 let account = self
@@ -2061,7 +2061,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                     .map_err(ExecutionFailureKind::SequencerError)?
                     .unwrap_or_default();
                 nonces.insert(payer, account.nonce);
-                (payer, Some(key))
+                (payer, Some(keys))
             }
         };
 
@@ -2083,11 +2083,8 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         let mut signatures_public_keys = acc_manager
             .sign_message(message_hash)
             .map_err(ExecutionFailureKind::SignError)?;
-        if let Some(key) = co_signer {
-            signatures_public_keys.push((
-                lee::Signature::new(key, &message_hash),
-                lee::PublicKey::new_from_private_key(key),
-            ));
+        if let Some((key, public_key)) = co_signer {
+            signatures_public_keys.push((lee::Signature::new(&key, &message_hash), public_key));
         }
         // Witness entries follow `nonces` order.
         signatures_public_keys.sort_by_key(|(_, public_key)| lee::AccountId::from(public_key));
@@ -3090,8 +3087,8 @@ mod tests {
 
     #[tokio::test]
     async fn an_unstake_request_is_refused_before_submission_only_for_an_unpayable_destination() {
-        let owner_key = lee::PrivateKey::try_new([3; 32]).unwrap();
-        let ownership = AccountId::from(&lee::PublicKey::new_from_private_key(&owner_key));
+        let owner_key = lee::signature::PublicAccountSecret::new([3; 32]);
+        let ownership = lee::test_utils::TestSigner::from(&owner_key).account_id();
         let public = AccountId::new([7; 32]);
         let bound = AccountId::new([8; 32]);
         let absent = AccountId::new([9; 32]);
@@ -3408,7 +3405,7 @@ mod tests {
         key_chain
             .insert_private_account(regular, PrivateAccountKind::Regular, Account::funded(9))
             .unwrap();
-        key_chain.add_imported_public_account(lee::PrivateKey::try_new([3; 32]).unwrap());
+        key_chain.add_imported_public_account(lee::signature::PublicAccountSecret::new([3; 32]));
         wallet
             .storage
             .add_label(
