@@ -5,7 +5,6 @@ use std::{
 };
 
 use anyhow::Result;
-use keycard_wallet::KeycardWallet;
 use lee::{
     AccountId, PrivateKey, PublicAccountEvidence, PublicKey, Recipient, RecipientEncryption,
     Signature,
@@ -949,12 +948,12 @@ impl AccountManager {
             })
             .collect();
 
-        if let Some(pin) = self.pin.clone() {
-            let mut wallet = KeycardWallet::new()?;
-            wallet.connect(&pin)?;
-            for path in keycard_paths {
-                sigs.push(wallet.sign_message_for_path(path, &message_hash)?);
-            }
+        if let Some(pin) = &self.pin {
+            sigs.extend(crate::keycard_support::sign(
+                pin,
+                &keycard_paths,
+                &message_hash,
+            )?);
         }
 
         Ok(sigs)
@@ -1040,6 +1039,8 @@ async fn prepare_account<C: WalletSequencerClient>(
         AccountIdentity::PublicKeycard { key_path, .. } if authorizes => {
             let (account, _) = prepare_public_account(wallet, actor_state_selector).await?;
             if pin.is_none() {
+                crate::keycard_support::ensure_available()
+                    .map_err(ExecutionFailureKind::SignError)?;
                 *pin = Some(
                     crate::utils::read_pin()
                         .map_err(ExecutionFailureKind::SignError)?

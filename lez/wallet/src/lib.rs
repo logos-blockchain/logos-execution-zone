@@ -59,6 +59,7 @@ pub mod account;
 mod account_manager;
 pub mod cli;
 pub mod config;
+mod keycard_support;
 pub mod poller;
 pub mod program_facades;
 pub mod storage;
