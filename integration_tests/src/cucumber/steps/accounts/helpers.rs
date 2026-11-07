@@ -1,3 +1,4 @@
+use lee::test_utils::TestSigner;
 use test_fixtures::config::{
     default_private_accounts_for_wallet, default_public_accounts_for_wallet,
     private_funder_account_id, private_funding_cost,
@@ -10,8 +11,7 @@ pub(super) fn expected_public_balance(account: lee::AccountId) -> Option<u128> {
     default_public_accounts_for_wallet()
         .into_iter()
         .find_map(|(private_key, balance)| {
-            let configured_account =
-                lee::AccountId::from(&lee::PublicKey::new_from_private_key(&private_key));
+            let configured_account = TestSigner::from(&private_key).account_id();
             if configured_account != account {
                 return None;
             }

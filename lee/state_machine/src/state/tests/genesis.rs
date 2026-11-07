@@ -2,10 +2,10 @@ use super::*;
 
 #[test]
 fn new_works() {
-    let key1 = PrivateKey::try_new([1; 32]).unwrap();
-    let key2 = PrivateKey::try_new([2; 32]).unwrap();
-    let addr1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
-    let addr2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
+    let key1 = TestSigner::new(1);
+    let key2 = TestSigner::new(2);
+    let addr1 = key1.account_id();
+    let addr2 = key2.account_id();
     let expected_public_state: rpds::HashTrieMapSync<_, _> =
         [(addr1, Account::funded(100)), (addr2, Account::funded(151))]
             .into_iter()
@@ -126,8 +126,8 @@ fn genesis_mutable_program_lands_no_immutable_mirror_commitment() {
 
 #[test]
 fn get_account_by_account_id_non_default_account() {
-    let key = PrivateKey::try_new([1; 32]).unwrap();
-    let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let key = TestSigner::new(1);
+    let account_id = key.account_id();
     let initial_data = [(account_id, Account::funded(100))];
     let state = V03State::new().with_public_accounts(initial_data);
     let expected_account = &state.public_state[&account_id];

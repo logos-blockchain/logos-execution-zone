@@ -6,7 +6,7 @@ fn native_transfer_tx(
     receiver: AccountId,
     nonces: Vec<Nonce>,
     amount: u128,
-    signers: &[&PrivateKey],
+    signers: &[&TestSigner],
 ) -> PublicTransaction {
     let from = Actor::native_balance(sender);
     let to = Actor::native_balance(receiver);
@@ -42,8 +42,8 @@ fn program_should_fail_if_it_debits_an_unauthorized_account() {
 
 #[test]
 fn program_should_transfer_balance_from_an_authorized_account() {
-    let sender_key = PrivateKey::try_new([3; 32]).unwrap();
-    let sender_account_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
+    let sender_key = TestSigner::new(3);
+    let sender_account_id = sender_key.account_id();
     let receiver_account_id = AccountId::new([2; 32]);
     let mut state = V03State::new()
         .with_public_account_balances([(sender_account_id, 100), (receiver_account_id, 0)]);
@@ -174,13 +174,13 @@ fn a_public_transaction_rejects_a_transition_forging_any_echoed_field() {
 
 #[test]
 fn insufficient_balance_transfer_leaves_state_untouched() {
-    let from_key = PrivateKey::try_new([21; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+    let from_key = TestSigner::new(21);
+    let from = from_key.account_id();
     let initial_balance = 10;
     let mut state = V03State::new().with_public_account_balances([(from, initial_balance)]);
 
-    let to_key = PrivateKey::try_new([22; 32]).unwrap();
-    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let to_key = TestSigner::new(22);
+    let to = to_key.account_id();
     let amount: u128 = initial_balance + 1;
 
     let sender_pre = state.get_account_by_id(from);

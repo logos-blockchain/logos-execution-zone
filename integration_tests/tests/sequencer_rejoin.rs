@@ -11,7 +11,7 @@ use anyhow::{Context as _, Result, ensure};
 use integration_tests::{
     account_balance, assert_same_chain, committee, get_account, init_logger, wait_until,
 };
-use lee::{AccountId, PublicKey, program::Program};
+use lee::{AccountId, program::Program, test_utils::TestSigner};
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
@@ -58,7 +58,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
 
     // B's genesis stake sits on an account only this key can sign for.
     let owner_b = config::founding_stake_owner_key(1)?;
-    let ownership_b = AccountId::from(&PublicKey::new_from_private_key(&owner_b));
+    let ownership_b = TestSigner::from(&owner_b).account_id();
     let funds_b = system_accounts::stake_funds_account_id(&ownership_b);
     ctx.wallet_mut()
         .storage_mut()
@@ -68,9 +68,8 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     let config_id = system_accounts::sequencer_stake_config_account_id();
     let stake_id = programs::sequencer_stake_account_id();
 
-    let settlement = AccountId::from(&PublicKey::new_from_private_key(
-        &config::default_public_accounts_for_wallet()[0].0,
-    ));
+    let settlement =
+        TestSigner::from(&config::default_public_accounts_for_wallet()[0].0).account_id();
 
     wait_until("both staked keys to be accredited", || async {
         Ok(committee(&observer).await?.0.contains(&key_b.to_bytes()))

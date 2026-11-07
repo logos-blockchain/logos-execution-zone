@@ -47,7 +47,7 @@ pub mod program;
 pub mod public_transaction;
 mod signature;
 mod state;
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-signer"))]
 pub mod test_utils;
 mod transaction_message;
 mod validated_state_diff;

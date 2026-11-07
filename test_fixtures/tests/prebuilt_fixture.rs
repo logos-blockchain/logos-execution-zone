@@ -3,7 +3,7 @@
 #![expect(clippy::tests_outside_test_module, reason = "It's a tests module")]
 
 use anyhow::{Context as _, Result};
-use lee::{AccountId, PublicKey};
+use lee::test_utils::TestSigner;
 use sequencer_service_rpc::RpcClient as _;
 use sequencer_stake_core::SequencerStakeConfig;
 use test_fixtures::{
@@ -41,7 +41,7 @@ async fn prebuilt_context_follows_config() -> Result<()> {
 /// unfunded default root account, so we check the configured accounts specifically.)
 async fn assert_context_follows_config(ctx: &TestContext) -> Result<()> {
     for (private_key, expected_balance) in default_public_accounts_for_wallet() {
-        let account_id = AccountId::from(&PublicKey::new_from_private_key(&private_key));
+        let account_id = TestSigner::from(&private_key).account_id();
         let balance = ctx
             .sequencer_client()
             .get_account_balance(account_id)

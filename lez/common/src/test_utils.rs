@@ -5,8 +5,10 @@ use std::collections::BTreeMap;
 #[cfg(test)]
 use std::collections::HashMap;
 
+#[cfg(any(test, feature = "test-utils"))]
+use lee::test_utils::{TestSigner, signer_nonces, witness_for};
 #[cfg(test)]
-use lee::{Account, PrivateKey, PublicKey, V03State, ValidatedStateDiff};
+use lee::{Account, V03State, ValidatedStateDiff};
 use lee::{AccountId, Actor};
 
 use crate::{
@@ -36,11 +38,15 @@ pub fn producer_seed() -> (AccountId, lee::Account) {
 #[cfg(test)]
 #[must_use]
 pub fn any_public_transaction() -> LeeTransaction {
-    let sender_key = PrivateKey::try_new([9_u8; 32]).expect("valid key");
-    let sender_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
-    let recipient_key = PrivateKey::try_new([8_u8; 32]).expect("valid key");
-    let recipient_id = AccountId::from(&PublicKey::new_from_private_key(&recipient_key));
-    create_transaction_native_token_transfer(sender_id, 0, recipient_id, 1, &sender_key)
+    let sender = TestSigner::new(9);
+    let recipient = TestSigner::new(8);
+    create_transaction_native_token_transfer(
+        sender.account_id(),
+        0,
+        recipient.account_id(),
+        1,
+        &sender,
+    )
 }
 
 /// Builds a state whose only entry is `account_id` (set to `pre`) and a single-entry diff
@@ -123,43 +129,45 @@ pub const fn test_fee_declaration(payer: AccountId) -> lee::FeeDeclaration {
     lee::FeeDeclaration::new(payer, 2_000_000, 0, u128::MAX >> 1)
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[must_use]
 pub fn create_transaction_native_token_transfer(
     from: AccountId,
     nonce: u128,
     to: AccountId,
     balance_to_move: u128,
-    signing_key: &lee::PrivateKey,
+    signer: &TestSigner,
 ) -> LeeTransaction {
     create_transaction_native_token_transfer_with_fees(
         from,
         nonce,
         to,
         balance_to_move,
-        signing_key,
+        signer,
         test_fee_declaration(from),
     )
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 #[must_use]
 pub fn create_transaction_native_token_transfer_with_fees(
     from: AccountId,
     nonce: u128,
     to: AccountId,
     balance_to_move: u128,
-    signing_key: &lee::PrivateKey,
+    signer: &TestSigner,
     fee_declaration: lee::FeeDeclaration,
 ) -> LeeTransaction {
     let public_actors = vec![Actor::native_balance(from), Actor::native_balance(to)];
     let message = lee::public_transaction::Message::try_new_with_fees(
         Actor::native_balance(from),
         public_actors,
-        signer_nonce(signing_key, nonce),
+        signer_nonces(&[signer], vec![lee_core::account::Nonce(nonce)]),
         native_transfer(to, balance_to_move),
         fee_declaration,
     )
     .unwrap();
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
+    let witness_set = witness_for(&message, &[signer]);
 
     let lee_tx = lee::PublicTransaction::new(message, witness_set);
 
@@ -170,22 +178,23 @@ pub fn create_transaction_native_token_transfer_with_fees(
 ///
 /// Classification rejects this: a user public transaction that is not an exempt
 /// shape must declare a fee, or it would be executed and included for free.
+#[cfg(any(test, feature = "test-utils"))]
 #[must_use]
 pub fn create_transaction_native_token_transfer_without_fee(
     from: AccountId,
     nonce: u128,
     to: AccountId,
     balance_to_move: u128,
-    signing_key: &lee::PrivateKey,
+    signer: &TestSigner,
 ) -> LeeTransaction {
     let message = lee::public_transaction::Message::try_new(
         Actor::native_balance(from),
         vec![Actor::native_balance(from), Actor::native_balance(to)],
-        signer_nonce(signing_key, nonce),
+        signer_nonces(&[signer], vec![lee_core::account::Nonce(nonce)]),
         native_transfer(to, balance_to_move),
     )
     .unwrap();
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
+    let witness_set = witness_for(&message, &[signer]);
 
     LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
 }

@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use cucumber::{gherkin::Step, given, when};
+use lee::test_utils::TestSigner;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use sequencer_bedrock_actor::protocol::GetAccreditedKeys;
 use sequencer_core::Ed25519PublicKey;
@@ -423,19 +424,16 @@ async fn submit_committee_transfer(
         .get_account_balance(sender)
         .await
         .map_err(StepError::query_failed)?;
-    let signing_key = initial_pub_accounts_private_keys()
-        .get(sender_index)
-        .ok_or_else(|| StepError::InvalidArgument {
-            message: format!("sender account index {sender_index} has no signing key"),
-        })?
-        .pub_sign_key
-        .clone();
+    let signer = TestSigner::from(
+        &initial_pub_accounts_private_keys()
+            .get(sender_index)
+            .ok_or_else(|| StepError::InvalidArgument {
+                message: format!("sender account index {sender_index} has no signing key"),
+            })?
+            .pub_sign_key,
+    );
     let transaction = common::test_utils::create_transaction_native_token_transfer(
-        sender,
-        nonce.0,
-        receiver,
-        amount,
-        &signing_key,
+        sender, nonce.0, receiver, amount, &signer,
     );
     let transaction_hash = sequencer
         .client()

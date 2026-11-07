@@ -32,3 +32,6 @@ logos-blockchain-common-http-client.workspace = true
 [dev-dependencies]
 lee = { workspace = true, features = ["test-utils"] }
 ping_core.workspace = true
+
+[features]
+test-utils = ["lee/test-signer"]
