@@ -2590,7 +2590,9 @@ dependencies = [
  "clap",
  "json-pretty-compact",
  "sequencer_core_metrics",
+ "sequencer_executor_actor_metrics",
  "sequencer_rpc_server_actor_metrics",
+ "sequencer_service_metrics",
  "serde",
  "serde_json",
 ]
@@ -11483,6 +11485,7 @@ dependencies = [
  "sequencer_executor_actor",
  "sequencer_gossip_actor",
  "sequencer_rpc_server_actor",
+ "sequencer_service_metrics",
  "sequencer_service_rpc",
  "sequencer_slasher_actor",
  "sequencer_stake_core",
@@ -11493,6 +11496,10 @@ dependencies = [
  "tokio-util",
  "wallet",
 ]
+
+[[package]]
+name = "sequencer_service_metrics"
+version = "0.1.0"
 
 [[package]]
 name = "sequencer_service_protocol"
