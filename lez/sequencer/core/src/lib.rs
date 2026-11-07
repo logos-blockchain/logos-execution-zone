@@ -84,6 +84,7 @@ mod faults;
 pub mod fees;
 pub mod gossip;
 pub mod logging;
+pub mod pending;
 pub mod task_group;
 
 /// Failed production attempts before a cross-zone dispatch is given up on.
@@ -192,6 +193,17 @@ impl From<TransactionOrigin> for sequencer_core_metrics::TransactionOrigin {
     }
 }
 
+/// Why admission refused a transaction.
+#[derive(Debug, thiserror::Error)]
+pub enum AdmissionError {
+    #[error(transparent)]
+    Fee(#[from] fees::Error),
+    #[error(transparent)]
+    Authentication(#[from] lee::HeadAuthError),
+    #[error(transparent)]
+    Pending(#[from] pending::PendingRefusal),
+}
+
 /// Whom a bridge deposit credits.
 enum Credited<'recipient> {
     /// A public account, declared with the admission evidence it carries.
@@ -223,6 +235,8 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     chain: Arc<Mutex<ChainState>>,
     mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
+    /// Which transaction holds each pending `(account, nonce)` slot.
+    pending: pending::PendingIndex,
     sequencer_config: SequencerConfig,
     storage_ref: ActorRef<S>,
     bedrock_ref: ActorRef<B>,
@@ -628,6 +642,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             storage_ref,
             mempool,
             mempool_handle: mempool_handle.clone(),
+            pending: pending::PendingIndex::new(config.mempool_max_per_account),
             sequencer_config: config,
             bedrock_ref,
             watchers,
@@ -1136,7 +1151,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // queue is a follow-up.
         for tx in resubmit_txs {
             let tx_hash = tx.hash();
-            if let Err(err) = self.mempool_handle.try_push((TransactionOrigin::User, tx)) {
+            if let Err(err) = self
+                .mempool_handle
+                .try_push((TransactionOrigin::User, tx.clone()))
+            {
+                self.pending.remove(&tx);
                 warn!(
                     "Dropping orphaned transaction {tx_hash} on resubmit: {:#}",
                     anyhow!(err)
@@ -1967,6 +1986,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             )
         };
 
+        // Slots below the head nonce were filled by included transactions.
+        self.pending.prune(&working_state);
+
         // A Slash executes against the head config, so it is proposed from it.
         let slash_txs = match committee_discovery::read_config(&working_state) {
             Some(config) => self
@@ -2160,6 +2182,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     );
                     if from_store {
                         self.count_dispatch_failure(&tx).await;
+                    } else {
+                        self.pending.remove(&tx);
                     }
                     continue;
                 }
@@ -2204,6 +2228,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                         view.gas_stor(),
                     );
                     self.count_dispatch_failure(&tx).await;
+                    self.pending.remove(&tx);
                     continue;
                 }
                 warn!(
@@ -2263,6 +2288,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // dispatch: that one is re-fed from the store every turn, so one
                 // that can never execute would fail on every block for ever.
                 self.count_dispatch_failure(&tx).await;
+                self.pending.remove(&tx);
             }
 
             if valid_transactions.len() >= self.sequencer_config.max_num_tx_in_block {
@@ -2320,6 +2346,28 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// reuse `V03State`'s own API (accounts, nonces, proofs) with no whole-state copy.
     pub async fn with_state<R>(&self, f: impl FnOnce(&lee::V03State) -> R) -> R {
         f(self.chain.lock().await.head_state())
+    }
+
+    /// Admission against the head state and the mempool's pending slots: the fee screen, then
+    /// the signers' authentication (against pending keys ahead of the head), then the slots.
+    /// Admits nothing: [`Self::record_pending`] does, once the transaction is in the mempool.
+    pub async fn admit(
+        &mut self,
+        tx: &LeeTransaction,
+    ) -> Result<pending::Admission, AdmissionError> {
+        let chain = self.chain.lock().await;
+        let state = chain.head_state();
+        fees::screen(tx, state)?;
+        self.pending.prune_signers(tx, state);
+        let pending = &self.pending;
+        tx.authenticate_at_head(state, |account, nonce| pending.key_at(account, nonce))?;
+        Ok(self.pending.check(tx)?)
+    }
+
+    /// Records the slots of a transaction now in the mempool.
+    pub fn record_pending(&mut self, tx: &LeeTransaction) {
+        self.pending.insert(tx);
+        sequencer_core_metrics::record_mempool_pending_slots(self.pending.len());
     }
 
     #[must_use]

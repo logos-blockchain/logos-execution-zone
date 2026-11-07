@@ -5,7 +5,7 @@ use lee_core::{
 
 use super::*;
 use crate::{
-    ValidatedStateDiff, authenticate_privacy_transaction_at_head,
+    HeadAuthError, ValidatedStateDiff, authenticate_privacy_transaction_at_head,
     authenticate_public_transaction_at_head,
     public_transaction::WitnessEntry,
     signature::{AuthError, authenticate, current_key},
@@ -935,6 +935,20 @@ fn public_an_account_rotates_from_wots_to_schnorr_and_back() {
     }
 }
 
+// No pending transactions.
+fn none_pending(_: AccountId, _: Nonce) -> Option<SigningKeyState> {
+    None
+}
+
+// The definitive refusal inside a head authentication result.
+fn definitive(result: Result<(), HeadAuthError>) -> Result<(), LeeError> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(HeadAuthError::Definitive(err)) => Err(err),
+        Err(HeadAuthError::Pending(err)) => panic!("expected a definitive refusal, got {err}"),
+    }
+}
+
 #[test]
 fn public_at_head_a_signer_at_its_accounts_nonce_is_authenticated() {
     let sender = TestSigner::new(51);
@@ -942,13 +956,17 @@ fn public_at_head_a_signer_at_its_accounts_nonce_is_authenticated() {
     let mut state =
         V03State::new().with_public_account_balances([(sender.account_id(), 100), (recipient, 0)]);
     let first = native_transfer(&sender, recipient, Nonce(0), 10);
-    authenticate_public_transaction_at_head(&first, &state).unwrap();
+    authenticate_public_transaction_at_head(&first, &state, none_pending).unwrap();
 
     let mut tampered = first.clone();
     let last = tampered.witness_set.entries[0].auth_data.len() - 1;
     tampered.witness_set.entries[0].auth_data[last] ^= 1;
     assert_refused(
-        authenticate_public_transaction_at_head(&tampered, &state),
+        definitive(authenticate_public_transaction_at_head(
+            &tampered,
+            &state,
+            none_pending,
+        )),
         sender.account_id(),
         "invalid signature",
     );
@@ -958,13 +976,13 @@ fn public_at_head_a_signer_at_its_accounts_nonce_is_authenticated() {
         .transition_from_public_transaction(&first, 1, 0)
         .unwrap();
     assert!(matches!(
-        authenticate_public_transaction_at_head(&first, &state),
+        definitive(authenticate_public_transaction_at_head(&first, &state, none_pending)),
         Err(LeeError::InvalidInput(message)) if message.contains("is below its account's nonce 1")
     ));
 }
 
 #[test]
-fn public_at_head_a_signer_ahead_of_its_accounts_nonce_is_not_checked() {
+fn public_at_head_a_signer_ahead_with_no_pending_key_is_not_checked() {
     let sender = TestSigner::new(51);
     let recipient = AccountId::new([52; 32]);
     let state = V03State::new().with_public_account_balances([(sender.account_id(), 100)]);
@@ -972,7 +990,31 @@ fn public_at_head_a_signer_ahead_of_its_accounts_nonce_is_not_checked() {
     // Its key at nonce 1 depends on the transaction at nonce 0, not yet applied.
     let mut ahead = native_transfer(&sender, recipient, Nonce(1), 10);
     ahead.witness_set.entries[0].auth_data = vec![0; 3];
-    authenticate_public_transaction_at_head(&ahead, &state).unwrap();
+    authenticate_public_transaction_at_head(&ahead, &state, none_pending).unwrap();
+}
+
+#[test]
+fn public_at_head_a_signer_ahead_is_checked_against_its_pending_key() {
+    let sender = TestSigner::new(51);
+    let recipient = AccountId::new([52; 32]);
+    let state = V03State::new().with_public_account_balances([(sender.account_id(), 100)]);
+    // The key the pending transaction at nonce 0 commits the account to at nonce 1.
+    let pending_key = sender.key_state(Nonce(1));
+    let pending = |account: AccountId, nonce: Nonce| {
+        (account == sender.account_id() && nonce == Nonce(1)).then_some(pending_key)
+    };
+
+    let ahead = native_transfer(&sender, recipient, Nonce(1), 10);
+    authenticate_public_transaction_at_head(&ahead, &state, pending).unwrap();
+
+    let mut tampered = ahead;
+    let last = tampered.witness_set.entries[0].auth_data.len() - 1;
+    tampered.witness_set.entries[0].auth_data[last] ^= 1;
+    assert!(matches!(
+        authenticate_public_transaction_at_head(&tampered, &state, pending),
+        Err(HeadAuthError::Pending(LeeError::InvalidInput(message)))
+            if message.contains("fails authentication against its pending key")
+    ));
 }
 
 #[test]
@@ -980,13 +1022,17 @@ fn privacy_at_head_a_signer_at_its_accounts_nonce_is_authenticated() {
     let sender = TestSigner::new(51);
     let state = V03State::new().with_public_account_balances([(sender.account_id(), 100)]);
     let honest = privacy_shield(&state, &[&sender], &test_private_account_keys_1(), 30);
-    authenticate_privacy_transaction_at_head(&honest, &state).unwrap();
+    authenticate_privacy_transaction_at_head(&honest, &state, none_pending).unwrap();
 
     let mut tampered = honest;
     let last = tampered.witness_set.entries[0].auth_data.len() - 1;
     tampered.witness_set.entries[0].auth_data[last] ^= 1;
     assert_refused(
-        authenticate_privacy_transaction_at_head(&tampered, &state),
+        definitive(authenticate_privacy_transaction_at_head(
+            &tampered,
+            &state,
+            none_pending,
+        )),
         sender.account_id(),
         "invalid signature",
     );

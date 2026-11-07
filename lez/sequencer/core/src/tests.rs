@@ -316,6 +316,7 @@ fn setup_sequencer_config() -> SequencerConfig {
         home,
         max_num_tx_in_block: 10,
         mempool_max_size: 10000,
+        mempool_max_per_account: crate::config::default_mempool_max_per_account(),
         block_create_timeout: Duration::from_secs(1),
         bedrock_config: BedrockConfig {
             channel_id: ChannelId::from([0; 32]),
@@ -7201,5 +7202,45 @@ fn a_peer_genesis_hash_round_trips_as_hex() {
         serde_json::to_string(&peer)
             .expect("peer serializes")
             .contains("\"0202020202020202020202020202020202020202020202020202020202020202\"")
+    );
+}
+
+#[tokio::test]
+async fn a_transaction_dropped_at_build_time_frees_its_nonce() {
+    let (mut sequencer, mempool_handle) = common_setup().await;
+    let accounts = initial_pub_accounts_private_keys();
+    let signer = TestSigner::from(&accounts[0].secret);
+    // Far ahead of the account's nonce: admitted unchecked, never applicable, so dropped at build.
+    let transfer = |amount| {
+        common::test_utils::create_transaction_native_token_transfer(
+            accounts[0].account_id,
+            1000,
+            accounts[1].account_id,
+            amount,
+            &signer,
+        )
+    };
+    let first = transfer(1);
+    assert_eq!(
+        sequencer.admit(&first).await.unwrap(),
+        crate::pending::Admission::New
+    );
+    mempool_handle
+        .push((TransactionOrigin::User, first.clone()))
+        .await
+        .unwrap();
+    sequencer.record_pending(&first);
+
+    assert!(matches!(
+        sequencer.admit(&transfer(2)).await,
+        Err(crate::AdmissionError::Pending(
+            crate::pending::PendingRefusal::NoncePending { .. }
+        ))
+    ));
+
+    sequencer.build_block_from_mempool().await.unwrap();
+    assert_eq!(
+        sequencer.admit(&transfer(2)).await.unwrap(),
+        crate::pending::Admission::New
     );
 }

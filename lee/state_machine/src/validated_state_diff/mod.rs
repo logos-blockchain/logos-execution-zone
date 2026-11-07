@@ -29,6 +29,20 @@ mod public_backend;
 
 type KeyRotation = (AccountId, SigningKeyState);
 
+/// Why a transaction's signers were refused at admission.
+#[derive(Debug, thiserror::Error)]
+pub enum HeadAuthError {
+    /// The transaction can never be valid: a signer's nonce is below its account's, or a signer
+    /// at its account's nonce fails authentication (an account's key changes only when its nonce
+    /// advances).
+    #[error(transparent)]
+    Definitive(LeeError),
+    /// A signer ahead of its account's nonce fails against the key a pending transaction commits
+    /// it to. That key is the admitting node's own view, so the refusal is not definitive.
+    #[error(transparent)]
+    Pending(LeeError),
+}
+
 #[derive(Default)]
 pub struct StateDiff {
     pub signer_account_ids: Vec<AccountId>,
@@ -676,34 +690,55 @@ fn authenticate_signer(
         .map_err(|error| refused(error.to_string()))
 }
 
-/// The head-state admission check of a transaction's signers: a signer whose nonce is below its
-/// account's is refused, one at its account's nonce is authenticated against its current key, and
-/// one above it is skipped, since its key then depends on transactions not yet applied.
-///
-/// A refusal is definitive: a nonce below the account's never becomes valid, and an account's key
-/// changes only when its nonce advances.
+/// The admission check of a transaction's signers against the head state: a signer whose nonce is
+/// below its account's is refused, one at its account's nonce is authenticated against its current
+/// key, and one above it is authenticated against `pending(account, nonce)`, the key a pending
+/// transaction commits it to at that nonce, or admitted unchecked when there is none. Definitive
+/// refusals are checked first, so they take precedence.
 fn authenticate_signers_at_head(
     state: &V03State,
     nonces: &BTreeMap<AccountId, Nonce>,
     entries: &[WitnessEntry],
     message_with_keys: impl FnOnce(&[SigningKeyState]) -> [u8; 32],
-) -> Result<(), LeeError> {
+    pending: impl Fn(AccountId, Nonce) -> Option<SigningKeyState>,
+) -> Result<(), HeadAuthError> {
     let next_keys: Vec<SigningKeyState> = entries.iter().map(|entry| entry.next).collect();
     let message_with_keys = message_with_keys(&next_keys);
-    for (&signer, entry) in nonces.keys().zip(entries) {
-        let nonce = nonces[&signer];
-        let head = state
-            .get_account_by_id_ref(signer)
-            .map_or_else(Nonce::default, |account| account.nonce);
-        ensure!(
-            nonce.0 >= head.0,
-            LeeError::InvalidInput(format!(
+    let signers: Vec<_> = nonces
+        .iter()
+        .zip(entries)
+        .map(|((&signer, &nonce), entry)| {
+            let head = state
+                .get_account_by_id_ref(signer)
+                .map_or_else(Nonce::default, |account| account.nonce);
+            (signer, nonce, head, entry)
+        })
+        .collect();
+    for &(signer, nonce, head, entry) in &signers {
+        if nonce.0 < head.0 {
+            return Err(HeadAuthError::Definitive(LeeError::InvalidInput(format!(
                 "Signer {signer}'s nonce {} is below its account's nonce {}",
                 nonce.0, head.0
-            ))
-        );
+            ))));
+        }
         if nonce == head {
-            authenticate_signer(state, signer, entry, &message_with_keys)?;
+            authenticate_signer(state, signer, entry, &message_with_keys)
+                .map_err(HeadAuthError::Definitive)?;
+        }
+    }
+    for &(signer, nonce, head, entry) in &signers {
+        if nonce.0 > head.0
+            && let Some(key) = pending(signer, nonce)
+        {
+            let (current, auth_data) =
+                current_key(Some(key), signer, &entry.auth_data).expect("a known key is current");
+            authenticate(&current, &message_with_keys, auth_data, &entry.next).map_err(
+                |error| {
+                    HeadAuthError::Pending(LeeError::InvalidInput(format!(
+                        "Signer {signer} fails authentication against its pending key: {error}"
+                    )))
+                },
+            )?;
         }
     }
     Ok(())
@@ -713,24 +748,36 @@ fn authenticate_signers_at_head(
 pub fn authenticate_public_transaction_at_head(
     tx: &PublicTransaction,
     state: &V03State,
-) -> Result<(), LeeError> {
-    tx.check_stateless()?;
+    pending: impl Fn(AccountId, Nonce) -> Option<SigningKeyState>,
+) -> Result<(), HeadAuthError> {
+    tx.check_stateless()
+        .map_err(|err| HeadAuthError::Definitive(err.into()))?;
     let message = tx.message();
-    authenticate_signers_at_head(state, &message.nonces, tx.witness_set().entries(), |next| {
-        message.message_with_keys(next)
-    })
+    authenticate_signers_at_head(
+        state,
+        &message.nonces,
+        tx.witness_set().entries(),
+        |next| message.message_with_keys(next),
+        pending,
+    )
 }
 
 /// [`authenticate_signers_at_head`] for a privacy transaction's public signers.
 pub fn authenticate_privacy_transaction_at_head(
     tx: &PrivacyPreservingTransaction,
     state: &V03State,
-) -> Result<(), LeeError> {
-    tx.check_stateless()?;
+    pending: impl Fn(AccountId, Nonce) -> Option<SigningKeyState>,
+) -> Result<(), HeadAuthError> {
+    tx.check_stateless()
+        .map_err(|err| HeadAuthError::Definitive(err.into()))?;
     let message = tx.message();
-    authenticate_signers_at_head(state, &message.nonces, tx.witness_set().entries(), |next| {
-        message.message_with_keys(next)
-    })
+    authenticate_signers_at_head(
+        state,
+        &message.nonces,
+        tx.witness_set().entries(),
+        |next| message.message_with_keys(next),
+        pending,
+    )
 }
 
 fn check_nonces(state: &V03State, nonces: &BTreeMap<AccountId, Nonce>) -> Result<(), LeeError> {

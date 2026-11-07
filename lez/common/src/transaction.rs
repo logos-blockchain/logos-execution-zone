@@ -77,12 +77,21 @@ impl LeeTransaction {
         Ok(self)
     }
 
-    /// Authenticates the signers at their account's nonce in `state` (see
-    /// [`lee::authenticate_public_transaction_at_head`]); a refusal is definitive.
-    pub fn authenticate_at_head(&self, state: &V03State) -> Result<(), lee::error::LeeError> {
+    /// Authenticates the signers against `state` and, ahead of it, against `pending` keys (see
+    /// [`lee::authenticate_public_transaction_at_head`]).
+    pub fn authenticate_at_head(
+        &self,
+        state: &V03State,
+        pending: impl Fn(
+            lee::AccountId,
+            lee_core::account::Nonce,
+        ) -> Option<lee_core::signing_key::SigningKeyState>,
+    ) -> Result<(), lee::HeadAuthError> {
         match self {
-            Self::Public(tx) => lee::authenticate_public_transaction_at_head(tx, state),
-            Self::PrivacyPreserving(tx) => lee::authenticate_privacy_transaction_at_head(tx, state),
+            Self::Public(tx) => lee::authenticate_public_transaction_at_head(tx, state, pending),
+            Self::PrivacyPreserving(tx) => {
+                lee::authenticate_privacy_transaction_at_head(tx, state, pending)
+            }
         }
     }
 

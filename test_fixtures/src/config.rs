@@ -159,6 +159,7 @@ pub fn sequencer_config(
         home,
         max_num_tx_in_block,
         mempool_max_size,
+        mempool_max_per_account: sequencer_core::config::default_mempool_max_per_account(),
         block_create_timeout,
         retry_pending_blocks_timeout: Duration::from_secs(5),
         genesis: Some(GenesisConfig {

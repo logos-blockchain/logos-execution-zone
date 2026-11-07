@@ -35,6 +35,15 @@ pub enum Error {
     #[error("Invalid transaction")]
     InvalidTransaction(#[source] lee::error::LeeError),
 
+    /// A signer ahead of its account's nonce fails against the key a pending transaction in
+    /// this node's mempool commits it to.
+    #[error("Fails authentication against a pending transaction")]
+    PendingAuthentication(#[source] lee::error::LeeError),
+
+    /// A slot the transaction claims is already pending, or a signer's account is at its limit.
+    #[error("Refused by the mempool")]
+    PendingSlot(#[source] sequencer_core::pending::PendingRefusal),
+
     /// A privacy-preserving transaction's reserve the head fee outgrew: priced again off a fresh
     /// quote, it may pass.
     #[error(

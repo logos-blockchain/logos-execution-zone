@@ -140,6 +140,9 @@ pub struct SequencerConfig {
     pub max_num_tx_in_block: usize,
     /// Mempool maximum size.
     pub mempool_max_size: usize,
+    /// Most pending transactions one account may have in the mempool, across its nonces.
+    #[serde(default = "default_mempool_max_per_account")]
+    pub mempool_max_per_account: usize,
     /// Interval in which blocks produced.
     #[serde(with = "humantime_serde")]
     pub block_create_timeout: Duration,
@@ -291,6 +294,11 @@ fn default_gossip_listen_addr() -> libp2p::Multiaddr {
     "/ip4/0.0.0.0/udp/0/quic-v1"
         .parse()
         .expect("hardcoded default gossip listen addr is a valid multiaddr")
+}
+
+#[must_use]
+pub const fn default_mempool_max_per_account() -> usize {
+    16
 }
 
 #[expect(clippy::unnecessary_wraps, reason = "Required by serde")]

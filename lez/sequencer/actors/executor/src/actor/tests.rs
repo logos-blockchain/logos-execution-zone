@@ -41,6 +41,7 @@ fn sequencer_config() -> (SequencerConfig, TempDir) {
         home: home.path().to_path_buf(),
         max_num_tx_in_block: 10,
         mempool_max_size: 10,
+        mempool_max_per_account: sequencer_core::config::default_mempool_max_per_account(),
         block_create_timeout: std::time::Duration::from_secs(5),
         retry_pending_blocks_timeout: std::time::Duration::from_secs(5),
         bedrock_config: BedrockConfig {
@@ -136,7 +137,17 @@ async fn spawn_executor_on_empty_genesis() -> Result<(
     kameo::actor::ActorRef<ExecutorActor<MockStorageActor, MockBedrockActor>>,
     TempDir,
 )> {
+    spawn_executor_with(|config| config).await
+}
+
+async fn spawn_executor_with(
+    configure: impl FnOnce(SequencerConfig) -> SequencerConfig,
+) -> Result<(
+    kameo::actor::ActorRef<ExecutorActor<MockStorageActor, MockBedrockActor>>,
+    TempDir,
+)> {
     let (config, home) = sequencer_config();
+    let config = configure(config);
     let storage_ref = MockStorageActor::spawn(prepare_mock_storage_with_empty_genesis());
     let executor = ExecutorActor::spawn(
         ExecutorActor::new(
@@ -516,19 +527,20 @@ async fn handle_transaction_fails_on_full_mempool() -> Result<()> {
         .tell(sequencer_storage_actor::mock::Checkpoint)
         .await?;
 
-    // Fill mempool
+    // Fill mempool, one nonce after another: one pending transaction per nonce.
+    let mut nonce = 0_u128;
     for _ in 0..mempool_max_size {
-        let tx = test_transaction();
         executor
             .ask(protocol::Transaction {
-                transaction: tx,
+                transaction: transfer_from_payer_at(nonce, u128::MAX),
                 origin: TransactionOrigin::User,
             })
             .await?;
+        nonce = nonce.checked_add(1).expect("a small nonce");
     }
 
     // Now the mempool is full, the next transaction should fail
-    let tx = test_transaction();
+    let tx = transfer_from_payer_at(nonce, u128::MAX);
     assert!(matches!(
         executor
             .ask(protocol::Transaction {
@@ -722,6 +734,102 @@ async fn handle_transaction_admits_nonces_n_and_n_plus_one_back_to_back() -> Res
     submit(&executor, transfer_from_payer_at(1, u128::MAX))
         .await
         .map_err(|err| anyhow::anyhow!("nonce 1 refused: {err:?}"))?;
+
+    Ok(())
+}
+
+#[test]
+async fn handle_transaction_checks_a_future_nonce_against_its_pending_key() -> Result<()> {
+    let _res = env_logger::try_init();
+    let (executor, _home) = spawn_executor_on_empty_genesis().await?;
+
+    submit(&executor, transfer_from_payer_at(0, u128::MAX))
+        .await
+        .map_err(|err| anyhow::anyhow!("nonce 0 refused: {err:?}"))?;
+
+    // Nonce 0's pending transaction commits the account to its key at nonce 1.
+    let res = submit(
+        &executor,
+        with_a_bad_signature(transfer_from_payer_at(1, u128::MAX)),
+    )
+    .await;
+    let Err(Some(err)) = res else {
+        panic!("a bad signature against the pending key was admitted: {res:?}");
+    };
+    assert!(matches!(err, crate::error::Error::PendingAuthentication(_)));
+    assert!(!err.is_definitive());
+
+    Ok(())
+}
+
+#[test]
+async fn handle_transaction_admits_a_future_nonce_unchecked_without_a_pending_key() -> Result<()> {
+    let _res = env_logger::try_init();
+    let (executor, _home) = spawn_executor_on_empty_genesis().await?;
+
+    // Nothing is pending at nonce 0, so nothing commits the account's key at nonce 1.
+    submit(
+        &executor,
+        with_a_bad_signature(transfer_from_payer_at(1, u128::MAX)),
+    )
+    .await
+    .map_err(|err| anyhow::anyhow!("nonce 1 refused: {err:?}"))?;
+
+    Ok(())
+}
+
+#[test]
+async fn handle_transaction_keeps_the_first_transaction_seen_at_a_nonce() -> Result<()> {
+    let _res = env_logger::try_init();
+    let (executor, _home) = spawn_executor_on_empty_genesis().await?;
+    let first = transfer_from_payer_at(0, u128::MAX);
+
+    submit(&executor, first.clone())
+        .await
+        .map_err(|err| anyhow::anyhow!("nonce 0 refused: {err:?}"))?;
+
+    // The very same transaction again is already pending.
+    submit(&executor, first)
+        .await
+        .map_err(|err| anyhow::anyhow!("an identical re-send refused: {err:?}"))?;
+
+    // Another one at the same nonce is not.
+    let res = submit(&executor, transfer_from_payer_at(0, u128::MAX - 1)).await;
+    let Err(Some(err)) = res else {
+        panic!("a second transaction at a pending nonce was admitted: {res:?}");
+    };
+    assert!(matches!(
+        err,
+        crate::error::Error::PendingSlot(
+            sequencer_core::pending::PendingRefusal::NoncePending { .. }
+        )
+    ));
+    assert!(!err.is_definitive());
+
+    Ok(())
+}
+
+#[test]
+async fn handle_transaction_limits_the_pending_transactions_of_one_account() -> Result<()> {
+    let _res = env_logger::try_init();
+    let (executor, _home) = spawn_executor_with(|config| SequencerConfig {
+        mempool_max_per_account: 2,
+        ..config
+    })
+    .await?;
+
+    for nonce in 0..2 {
+        submit(&executor, transfer_from_payer_at(nonce, u128::MAX))
+            .await
+            .map_err(|err| anyhow::anyhow!("nonce {nonce} refused: {err:?}"))?;
+    }
+    let res = submit(&executor, transfer_from_payer_at(2, u128::MAX)).await;
+    assert!(matches!(
+        res,
+        Err(Some(crate::error::Error::PendingSlot(
+            sequencer_core::pending::PendingRefusal::AccountLimit { limit: 2, .. }
+        )))
+    ));
 
     Ok(())
 }

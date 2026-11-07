@@ -37,7 +37,7 @@ pub use transaction_message::{
     InvalidTransaction, PublicAccountEvidence, TransactionMessage, nonce_map,
 };
 pub use validated_state_diff::{
-    ExecutionCharge, ValidatedStateDiff, authenticate_privacy_transaction_at_head,
+    ExecutionCharge, HeadAuthError, ValidatedStateDiff, authenticate_privacy_transaction_at_head,
     authenticate_public_transaction_at_head,
 };
 
