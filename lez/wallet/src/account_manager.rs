@@ -305,7 +305,7 @@ struct Row {
 enum State {
     Public {
         account: PreparedAccount,
-        sk: Option<PublicAccountSecret>,
+        secret: Option<PublicAccountSecret>,
         admission: Admission,
     },
     PublicKeycard {
@@ -345,7 +345,7 @@ impl State {
 
     fn is_authorized(&self) -> bool {
         match self {
-            Self::Public { sk, .. } => sk.is_some(),
+            Self::Public { secret, .. } => secret.is_some(),
             Self::PublicKeycard { .. } => true,
             Self::Private(pre) => pre.kind.is_authorized(),
         }
@@ -555,11 +555,11 @@ impl AccountManager {
             .filter_map(|state| match state {
                 State::Public {
                     account,
-                    sk: Some(_),
+                    secret: Some(_),
                     ..
                 }
                 | State::PublicKeycard { account, .. } => Some(account.account_id),
-                State::Public { sk: None, .. } | State::Private(_) => None,
+                State::Public { secret: None, .. } | State::Private(_) => None,
             })
             .collect()
     }
@@ -569,7 +569,7 @@ impl AccountManager {
             .iter()
             .filter_map(|state| match state {
                 State::Public {
-                    sk: None,
+                    secret: None,
                     admission: Admission::Evidence(evidence),
                     ..
                 } => Some(evidence.clone()),
@@ -583,7 +583,7 @@ impl AccountManager {
             .iter()
             .filter_map(|state| match state {
                 State::Public {
-                    sk: None,
+                    secret: None,
                     admission: Admission::Missing,
                     ..
                 }
@@ -601,13 +601,13 @@ impl AccountManager {
             .filter_map(|state| match state {
                 State::Public {
                     account,
-                    sk: Some(_),
+                    secret: Some(_),
                     ..
                 }
                 | State::PublicKeycard { account, .. } => {
                     Some((account.account_id, account.account.nonce))
                 }
-                State::Public { sk: None, .. } | State::Private(_) => None,
+                State::Public { secret: None, .. } | State::Private(_) => None,
             })
             .collect()
     }
@@ -821,7 +821,7 @@ impl AccountManager {
     /// The account that pays this transaction's fee: the first public signing
     /// account that holds a balance. Its ordinary signature covers the message,
     /// so it is fee-authorized without a separate fee witness. Non-signing
-    /// public accounts (`sk: None`) are skipped.
+    /// public accounts (`secret: None`) are skipped.
     ///
     /// If no signing account is funded, falls back to the first signing account.
     /// A fee-exempt transaction carries a vestigial fee declaration the sequencer
@@ -854,7 +854,7 @@ impl AccountManager {
         for index in 0..self.states.len() {
             let (State::Public {
                 account,
-                sk: Some(_),
+                secret: Some(_),
                 ..
             }
             | State::PublicKeycard { account, .. }) = &mut self.states[index]
@@ -889,11 +889,11 @@ impl AccountManager {
         self.states.iter().any(|state| match state {
             State::Public {
                 account,
-                sk: Some(_),
+                secret: Some(_),
                 ..
             }
             | State::PublicKeycard { account, .. } => account.account_id == account_id,
-            State::Public { sk: None, .. } | State::Private(_) => false,
+            State::Public { secret: None, .. } | State::Private(_) => false,
         })
     }
 
@@ -920,7 +920,7 @@ impl AccountManager {
             .filter_map(|state| match state {
                 State::Public {
                     account,
-                    sk: Some(secret),
+                    secret: Some(secret),
                     ..
                 } => {
                     let nonce = *nonces
@@ -928,7 +928,7 @@ impl AccountManager {
                         .expect("every signing account is in the message's nonces");
                     Some(signer(account.account_id, secret, nonce))
                 }
-                State::Public { sk: None, .. }
+                State::Public { secret: None, .. }
                 | State::PublicKeycard { .. }
                 | State::Private(_) => None,
             })
@@ -1013,7 +1013,7 @@ async fn prepare_account<C: WalletSequencerClient>(
     let owned_evidence = wallet
         .get_account_public_signing_key(account_id)
         .map(|(_sk, pk)| PublicAccountEvidence::Key(pk));
-    let (sk, evidence) = match identity {
+    let (secret, evidence) = match identity {
         AccountIdentity::Public(_) => (owned_secret.filter(|_| authorizes), owned_evidence),
         AccountIdentity::PublicKeycard { .. } if authorizes => {
             let (account, _) = prepare_public_account(wallet, actor_state_selector).await?;
@@ -1075,7 +1075,7 @@ async fn prepare_account<C: WalletSequencerClient>(
     let (account, present) = prepare_public_account(wallet, actor_state_selector).await?;
     Ok(State::Public {
         account,
-        sk,
+        secret,
         admission: Admission::of(present, evidence),
     })
 }
@@ -1386,7 +1386,7 @@ mod tests {
         };
         State::Public {
             account,
-            sk: None,
+            secret: None,
             admission: Admission::Present,
         }
     }
@@ -1396,14 +1396,14 @@ mod tests {
     }
 
     fn public_signing_state_with(seed: u8, account: Account) -> State {
-        let sk = PublicAccountSecret::new([seed; 32]);
-        let account_id = lee::AccountId::from(&signing_key::<Schnorr>(&sk, Nonce(0)).1);
+        let secret = PublicAccountSecret::new([seed; 32]);
+        let account_id = lee::AccountId::from(&signing_key::<Schnorr>(&secret, Nonce(0)).1);
         State::Public {
             account: PreparedAccount {
                 account_id,
                 account,
             },
-            sk: Some(sk),
+            secret: Some(secret),
             admission: Admission::Present,
         }
     }
@@ -1513,7 +1513,7 @@ mod tests {
 
     #[test]
     fn fee_payer_skips_a_non_signing_public_account() {
-        // A tracked but unsignable public account (sk: None, e.g.
+        // A tracked but unsignable public account (secret: None, e.g.
         // definition PDA passed as a non-signing input) must not be
         // designated payer -- the first funded signing account is chosen instead.
         let signing = public_signing_state(3, 1_000);
@@ -1751,7 +1751,7 @@ mod tests {
 
         let unsigned = manager(vec![State::Public {
             account: account(),
-            sk: None,
+            secret: None,
             admission: Admission::Present,
         }]);
         assert!(!unsigned.selected_actor_states()[0].is_authorized);
@@ -1780,12 +1780,12 @@ mod tests {
             program: AccountId::new([4; 32]),
             seed: PdaSeed::new([5; 32]),
         };
-        let public = |sk, admission| State::Public {
+        let public = |secret, admission| State::Public {
             account: PreparedAccount {
                 account_id: AccountId::new([1; 32]),
                 account: Account::default(),
             },
-            sk,
+            secret,
             admission,
         };
         let manager = manager(vec![
@@ -1808,12 +1808,12 @@ mod tests {
         let signer = PublicAccountSecret::new([8; 32]);
         let signer_evidence =
             PublicAccountEvidence::Key(signing_key::<Schnorr>(&signer, Nonce(0)).1);
-        let public = |tag, sk, admission| State::Public {
+        let public = |tag, secret, admission| State::Public {
             account: PreparedAccount {
                 account_id: AccountId::new([tag; 32]),
                 account: Account::default(),
             },
-            sk,
+            secret,
             admission,
         };
         let pda = PublicAccountEvidence::Pda {
