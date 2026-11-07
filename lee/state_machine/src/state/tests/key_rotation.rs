@@ -825,3 +825,41 @@ fn privacy_a_signer_whose_account_the_transaction_also_writes_ends_with_its_new_
         &key_at(&sender, 2)
     );
 }
+
+#[test]
+fn privacy_witness_entries_must_follow_the_nonces_order() {
+    let (a, b) = (TestSigner::new(51), TestSigner::new(52));
+    let state = V03State::new().with_public_account_balances([(a.account_id(), 100)]);
+    let honest = privacy_shield(&state, &[&a, &b], &test_private_account_keys_1(), 30);
+    assert!(ValidatedStateDiff::from_privacy_preserving_transaction(&honest, &state, 1, 0).is_ok());
+
+    let first = honest.signer_account_ids()[0];
+    let mut tx = honest;
+    tx.witness_set.entries.swap(0, 1);
+
+    assert_refused(
+        ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0),
+        first,
+        "revealed key does not give the account id",
+    );
+}
+
+#[test]
+fn privacy_a_witness_entry_of_an_unlisted_account_is_refused() {
+    let (a, b) = (TestSigner::new(51), TestSigner::new(52));
+    let state = V03State::new().with_public_account_balances([(a.account_id(), 100)]);
+    let mut tx = privacy_shield(&state, &[&a, &b], &test_private_account_keys_1(), 30);
+
+    let first = tx.signer_account_ids()[0];
+    let stranger = TestSigner::new(53);
+    let message_with_keys = tx
+        .message
+        .message_with_keys(&[stranger.key_state(Nonce(1)), tx.witness_set.entries[1].next]);
+    tx.witness_set.entries[0] = stranger.entry(Nonce(0), &message_with_keys);
+
+    assert_refused(
+        ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0),
+        first,
+        "revealed key does not give the account id",
+    );
+}
