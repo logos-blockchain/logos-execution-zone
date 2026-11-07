@@ -8,7 +8,7 @@ use anyhow::{Result, ensure};
 use bridge_core::BridgeAmount;
 pub use bridge_core::DepositRecipient;
 use common::config::BasicAuth;
-pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
+pub use cross_zone::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use humantime_serde;
 use lee::{AccountId, PublicKey, Signature};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
