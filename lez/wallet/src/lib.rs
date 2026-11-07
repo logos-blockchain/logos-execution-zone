@@ -1787,9 +1787,11 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             };
 
             let message_hash = message.hash();
-            let signatures_public_keys = acc_manager
+            let mut signatures_public_keys = acc_manager
                 .sign_message(message_hash)
                 .map_err(ExecutionFailureKind::SignError)?;
+            // Witness entries follow `nonces` order.
+            signatures_public_keys.sort_by_key(|(_, public_key)| lee::AccountId::from(public_key));
 
             let witness_set =
                 lee::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
@@ -2087,6 +2089,8 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 lee::PublicKey::new_from_private_key(key),
             ));
         }
+        // Witness entries follow `nonces` order.
+        signatures_public_keys.sort_by_key(|(_, public_key)| lee::AccountId::from(public_key));
 
         let witness_set =
             lee::public_transaction::WitnessSet::from_raw_parts(signatures_public_keys);

@@ -1,6 +1,9 @@
 //! Fee fields and payer authorization shared by signed message kinds.
 
+use std::collections::BTreeMap;
+
 use borsh::{BorshDeserialize, BorshSerialize};
+use lee_core::account::Nonce;
 
 use crate::{AccountId, Balance, Fee, Gas, public_transaction::WitnessSet};
 
@@ -37,26 +40,29 @@ pub trait SignedMessage {
     fn signing_hash(&self) -> [u8; 32];
     /// The designated fee payer, or `None` for a fee-exempt message.
     fn payer(&self) -> Option<AccountId>;
+    fn nonces(&self) -> &BTreeMap<AccountId, Nonce>;
 }
 
 /// Whether the transaction's fee is authorized: a fee-exempt message always is;
 /// a charged message requires a valid signature by its designated payer.
 ///
-/// Scans for the payer's signature directly — checking the account id before
-/// verifying the signature, so only the payer's signature is verified, not
-/// every signer's.
+/// Checks only the witness entry at the payer's position in `nonces` — its
+/// account id before its signature, so only the payer's signature is verified,
+/// not every signer's.
 #[must_use]
 pub fn is_fee_authorized<M: SignedMessage>(message: &M, witness_set: &WitnessSet) -> bool {
     let Some(payer) = message.payer() else {
         return true;
     };
-    let message_hash = message.signing_hash();
+    let Some(position) = message.nonces().keys().position(|signer| *signer == payer) else {
+        return false;
+    };
     witness_set
         .signatures_and_public_keys()
-        .iter()
-        .any(|(signature, public_key)| {
+        .get(position)
+        .is_some_and(|(signature, public_key)| {
             AccountId::from(public_key) == payer
-                && signature.is_valid_for(&message_hash, public_key)
+                && signature.is_valid_for(&message.signing_hash(), public_key)
         })
 }
 
@@ -68,8 +74,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        public_transaction::{Message, WitnessSet},
-        test_utils::{TestSigner, signed_entry, witness_for},
+        public_transaction::Message,
+        test_utils::{TestSigner, witness_for},
     };
 
     fn keys() -> (TestSigner, TestSigner) {
@@ -115,11 +121,13 @@ mod tests {
     fn a_co_signing_payer_is_authorized() {
         // The payer need not own an `account_id`; any co-signer may pay.
         let (signer_key, payer_key) = keys();
-        let message = charged_message(payer_key.account_id());
-        let witness_set = WitnessSet::from_raw_parts(vec![
-            signed_entry(&signer_key, &message),
-            signed_entry(&payer_key, &message),
-        ]);
+        let mut message = charged_message(payer_key.account_id());
+        message.nonces.insert(payer_key.account_id(), Nonce(0));
+        message
+            .public_context
+            .authorized_accounts
+            .insert(payer_key.account_id());
+        let witness_set = witness_for(&message, &[&signer_key, &payer_key]);
         assert!(is_fee_authorized(&message, &witness_set));
     }
 

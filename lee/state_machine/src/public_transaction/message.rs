@@ -104,6 +104,10 @@ impl crate::fees::SignedMessage for Message {
     fn payer(&self) -> Option<AccountId> {
         self.execution.fee.map(|fee| fee.payer)
     }
+
+    fn nonces(&self) -> &BTreeMap<AccountId, Nonce> {
+        &self.nonces
+    }
 }
 
 #[cfg(test)]

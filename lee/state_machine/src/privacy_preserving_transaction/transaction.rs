@@ -42,7 +42,18 @@ impl PrivacyPreservingTransaction {
 
     pub fn check_stateless(&self) -> Result<Vec<AccountId>, InvalidTransaction> {
         let signers = self.signer_account_ids();
-        self.message.check_signers(&signers)?;
+        let witness = self.witness_set.signatures_and_public_keys();
+        if witness.len() != signers.len() {
+            return Err(InvalidTransaction::Nonces);
+        }
+        if witness
+            .iter()
+            .zip(&signers)
+            .any(|((_, public_key), signer)| AccountId::from(public_key) != *signer)
+        {
+            return Err(InvalidTransaction::SignerOrder);
+        }
+        self.message.check_signers()?;
         if !self.witness_set.signatures_are_valid_for(&self.message) {
             return Err(InvalidTransaction::Signature);
         }
@@ -50,11 +61,7 @@ impl PrivacyPreservingTransaction {
     }
 
     pub(crate) fn signer_account_ids(&self) -> Vec<AccountId> {
-        self.witness_set
-            .signatures_and_public_keys()
-            .iter()
-            .map(|(_, public_key)| AccountId::from(public_key))
-            .collect()
+        self.message.nonces.keys().copied().collect()
     }
 
     #[must_use]

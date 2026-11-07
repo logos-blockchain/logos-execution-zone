@@ -494,7 +494,9 @@ async fn assert_sender_and_new_account_sign(
         .iter()
         .map(|(_, public_key)| public_key)
         .collect();
-    if signers != vec![&expected_sender, &expected_receiver] {
+    let mut expected = vec![&expected_sender, &expected_receiver];
+    expected.sort_by_key(|public_key| lee::AccountId::from(*public_key));
+    if signers != expected {
         return Err(StepError::AssertionFailed {
             message: format!(
                 "expected sender {expected_sender:?} and new account {expected_receiver:?} to sign, got {signers:?}"
