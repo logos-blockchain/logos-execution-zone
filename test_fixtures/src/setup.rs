@@ -9,11 +9,7 @@ use std::{
 
 use anyhow::{Context as _, Result, bail};
 use indexer_service::{ChannelId, IndexerHandle};
-use lee::{
-    AccountId,
-    signature::{PublicAccountSecret, Schnorr, signing_key},
-};
-use lee_core::account::Nonce;
+use lee::signature::{PublicAccountSecret, public_account_id};
 use log::{debug, warn};
 use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
 use sequencer_service::{GenesisAction, SequencerConfig, SequencerHandle};
@@ -609,13 +605,7 @@ pub async fn fund_private_accounts(
     initial_public_accounts: &[(PublicAccountSecret, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
 ) -> Result<()> {
-    let funder_id = AccountId::from(
-        &signing_key::<Schnorr>(
-            &initial_public_accounts[config::PRIVATE_FUNDER_INDEX].0,
-            Nonce(0),
-        )
-        .1,
-    );
+    let funder_id = public_account_id(&initial_public_accounts[config::PRIVATE_FUNDER_INDEX].0);
 
     for private_account in initial_private_accounts {
         // The recipient pays the shielding's in-proof fee out of what it receives, so it is
@@ -629,7 +619,7 @@ pub async fn fund_private_accounts(
                 to_npk: None,
                 to_vpk: None,
                 to_keys: None,
-                to_pk: None,
+                to_initial_key: None,
                 amount: private_account
                     .balance
                     .checked_add(config::min_private_fee())

@@ -10,7 +10,7 @@ pub use bridge_core::DepositRecipient;
 use common::config::BasicAuth;
 pub use cross_zone::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use humantime_serde;
-use lee::{AccountId, PublicKey, public_transaction::WitnessEntry};
+use lee::{AccountId, public_transaction::WitnessEntry};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
 pub use sequencer_stake_core::ChannelParams;
@@ -106,10 +106,12 @@ pub enum GenesisAction {
     /// Stakes `sequencer_key` at genesis.
     StakeSequencer {
         sequencer_key: sequencer_stake_core::SequencerKey,
-        ownership_public_key: PublicKey,
+        /// The account owning the stake.
+        ownership_id: AccountId,
         /// The ownership account's witness entry for its genesis `Stake`, from
         /// `sign_genesis_stake`: `{"auth_data": hex, "next": hex}`, the next key in its 33-byte
-        /// encoding (key type byte, then key commitment).
+        /// encoding (key type byte, then key commitment). At nonce 0, `auth_data` starts with
+        /// the account's initial key.
         #[serde(with = "hex_witness_entry")]
         stake_entry: WitnessEntry,
     },

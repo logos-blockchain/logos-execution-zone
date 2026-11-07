@@ -8,8 +8,10 @@ use bip39::Mnemonic;
 use clap::{Parser, Subcommand};
 use common::HashType;
 use derive_more::Display;
-use lee::PublicKey;
-use lee_core::{BlockId, NullifierPublicKey, PrivateAccountKind, encryption::ViewingPublicKey};
+use lee_core::{
+    BlockId, NullifierPublicKey, PrivateAccountKind, encryption::ViewingPublicKey,
+    signing_key::SigningKeyState,
+};
 
 pub use crate::utils::{read_mnemonic, read_pin};
 use crate::{
@@ -164,12 +166,7 @@ impl CliAccountMention {
             Self::Label(label) => storage
                 .resolve_label(label)
                 .ok_or_else(|| anyhow::anyhow!("No account found for label `{label}`")),
-            Self::KeyPath(path) => {
-                let public_key = keycard_public_key(path)?;
-                Ok(AccountIdWithPrivacy::Public(lee::AccountId::from(
-                    &public_key,
-                )))
-            }
+            Self::KeyPath(_) => Err(keycard_unsupported()),
         }
     }
 
@@ -203,20 +200,15 @@ impl CliAccountMention {
     // An account that signs where public, with its keycard when named by a key path.
     pub(crate) fn signer(self, storage: &Storage) -> Result<AccountIdentity> {
         match self {
-            Self::KeyPath(key_path) => Ok(AccountIdentity::PublicKeycard {
-                account_id: lee::AccountId::from(&keycard_public_key(&key_path)?),
-                key_path,
-            }),
+            Self::KeyPath(_) => Err(keycard_unsupported()),
             Self::Id(_) | Self::Label(_) => self.stored(storage, AccountIdentity::Public),
         }
     }
 
-    // An account that does not sign; a keycard's public key admits its account on first use.
+    // An account that does not sign.
     pub(crate) fn unsigned(self, storage: &Storage) -> Result<AccountIdentity> {
         match self {
-            Self::KeyPath(key_path) => Ok(AccountIdentity::PublicForeign(keycard_public_key(
-                &key_path,
-            )?)),
+            Self::KeyPath(_) => Err(keycard_unsupported()),
             Self::Id(_) | Self::Label(_) => self.stored(storage, AccountIdentity::PublicNoSign),
         }
     }
@@ -406,17 +398,18 @@ pub fn read_keys_file(path: &str) -> Result<(NullifierPublicKey, ViewingPublicKe
 }
 
 // The destination a command names: an account, a private account's public keys or a keys file
-// holding them, or the public key of a public account not used yet.
+// holding them, or the initial key of a public account not used yet.
 pub(crate) fn destination(
     storage: &Storage,
     account: Option<CliAccountMention>,
     npk: Option<String>,
     vpk: Option<String>,
     keys_file: Option<String>,
-    public_key: Option<PublicKey>,
+    initial_key: Option<SigningKeyState>,
 ) -> Result<AccountIdentity> {
-    if let Some(public_key) = public_key {
-        return Ok(AccountIdentity::PublicForeign(public_key));
+    if let Some(initial_key) = initial_key {
+        return AccountIdentity::public_foreign(initial_key)
+            .context("The recipient's key is not an initial key: it names no account");
     }
     let (npk, vpk) = match (account, npk, vpk, keys_file) {
         (Some(account), None, None, None) => return account.unsigned(storage),
@@ -439,9 +432,9 @@ pub(crate) fn destination(
     })
 }
 
-fn keycard_public_key(key_path: &str) -> Result<PublicKey> {
-    crate::keycard_support::ensure_available()?;
-    crate::keycard_support::public_key(&read_pin()?, key_path)
+// A Keycard key is a Schnorr key, which cannot be an account's initial key.
+fn keycard_unsupported() -> anyhow::Error {
+    anyhow::anyhow!("Keycard accounts are not supported: their keys cannot be initial keys")
 }
 
 pub(crate) fn decode_npk_vpk(
@@ -556,8 +549,8 @@ mod tests {
         std::fs::write(&keys_path, format!("{npk_hex}\n{vpk_hex}\n")).unwrap();
         let keys_file = keys_path.to_str().unwrap().to_owned();
         let account_id = lee::AccountId::new([4; 32]);
-        let public_key =
-            PublicKey::new_from_private_key(&lee::PrivateKey::try_new([5; 32]).unwrap());
+        let initial_key =
+            lee::signature::initial_key(&lee::signature::PublicAccountSecret::new([5; 32]));
         let mention = |prefix: &str| {
             Some(CliAccountMention::from_str(&format!("{prefix}/{account_id}")).unwrap())
         };
@@ -582,8 +575,8 @@ mod tests {
                 None,
                 None,
                 None,
-                Some(public_key.clone()),
-                AccountIdentity::PublicForeign(public_key),
+                Some(initial_key),
+                AccountIdentity::public_foreign(initial_key).unwrap(),
             ),
             (
                 mention("Public"),

@@ -606,7 +606,7 @@ fn evidence(
         .chain(
             admission_evidence
                 .iter()
-                .map(PublicAccountEvidence::account_id),
+                .filter_map(PublicAccountEvidence::account_id),
         )
         .collect()
 }
@@ -660,9 +660,9 @@ fn authenticate_signers(
                 stored.is_some() || nonce == Nonce::default(),
                 refused(format!("no key is stored at nonce {}", nonce.0))
             );
-            let current = current_key(stored, signer, &entry.auth_data)
+            let (current, auth_data) = current_key(stored, signer, &entry.auth_data)
                 .map_err(|error| refused(error.to_string()))?;
-            authenticate(&current, &message_with_keys, &entry.auth_data, &entry.next)
+            authenticate(&current, &message_with_keys, auth_data, &entry.next)
                 .map(|next| (signer, next))
                 .map_err(|error| refused(error.to_string()))
         })

@@ -544,7 +544,7 @@ mod tests {
                     &*tx.message.admission_evidence,
                     [evidence @ lee::PublicAccountEvidence::Pda { program, .. }]
                         if *program == root.program_account_id
-                            && evidence.account_id() == root.account_id
+                            && evidence.account_id() == Some(root.account_id)
                 ),
                 "{root:?} carries {:?}",
                 tx.message.admission_evidence
@@ -576,7 +576,7 @@ mod tests {
                 .iter()
                 .map(lee::PublicAccountEvidence::account_id)
                 .collect::<Vec<_>>(),
-            vec![shard.account_id]
+            vec![Some(shard.account_id)]
         );
     }
 }

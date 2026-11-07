@@ -149,7 +149,7 @@ pub async fn send(
         to_npk: None,
         to_vpk: None,
         to_keys: None,
-        to_pk: None,
+        to_initial_key: None,
         amount,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -277,7 +277,7 @@ pub fn assert_public_account_restored(ctx: &TestContext, account_id: AccountId, 
     ctx.wallet()
         .storage()
         .key_chain()
-        .pub_account_signing_key(account_id)
+        .pub_account_initial_key(account_id)
         .unwrap_or_else(|| panic!("{label} should be restored"));
 }
 

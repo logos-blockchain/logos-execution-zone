@@ -27,8 +27,8 @@ use lee::{
     AccountId, Actor, PublicAccountEvidence, PublicTransaction,
     public_transaction::{Message, WitnessEntry},
     signature::{
-        KeyScheme as _, PublicAccountSecret, Schnorr, SignatureScheme as _, authenticate,
-        current_key, signing_key,
+        INITIAL_KEY_TYPE, PublicAccountSecret, Signer, authenticate, current_key, initial_key,
+        public_account_id,
     },
 };
 use lee_core::{GENESIS_BLOCK_ID, account::Nonce, signing_key::SigningKeyState};
@@ -131,7 +131,7 @@ struct FoundingStake {
     /// the genesis deposit funding it.
     genesis_index: u64,
     key: sequencer_stake_core::SequencerKey,
-    owner: lee::PublicKey,
+    owner: AccountId,
     entry: WitnessEntry,
 }
 
@@ -201,10 +201,11 @@ enum Credited<'recipient> {
 }
 
 impl Credited<'_> {
-    fn account_id(&self) -> AccountId {
+    /// `None` for public evidence that names no account.
+    fn account_id(&self) -> Option<AccountId> {
         match self {
             Self::Public(evidence) => evidence.account_id(),
-            Self::Private(address) => *address,
+            Self::Private(address) => Some(*address),
         }
     }
 
@@ -2960,9 +2961,7 @@ fn build_genesis_state(
     // credit is zero and the account is left untouched.
     let producer = staked
         .first()
-        .map_or_else(lee::AccountId::default, |stake| {
-            lee::AccountId::from(&stake.owner)
-        });
+        .map_or_else(lee::AccountId::default, |stake| stake.owner);
 
     let genesis_summary = fee_core::BlockFeeSummary::default();
     let genesis_payout = chain_state::apply::block_payout(&genesis_opening, &genesis_summary);
@@ -3007,14 +3006,14 @@ fn founding_stakes(genesis: &[GenesisAction]) -> Vec<FoundingStake> {
         .filter_map(|(index, action)| match action {
             GenesisAction::StakeSequencer {
                 sequencer_key,
-                ownership_public_key,
+                ownership_id,
                 stake_entry,
             } => {
                 let index = u64::try_from(index).expect("genesis action count fits in u64");
                 Some(FoundingStake {
                     genesis_index: index,
                     key: *sequencer_key,
-                    owner: ownership_public_key.clone(),
+                    owner: *ownership_id,
                     entry: stake_entry.clone(),
                 })
             }
@@ -3049,10 +3048,9 @@ fn effective_genesis_actions(
         let key_path = config.home.join("sequencer_stake_signing_key");
         let secret = load_or_create_stake_secret(&key_path)
             .expect("Failed to load or create the stake secret");
-        let (_, ownership_public_key) = signing_key::<Schnorr>(&secret, Nonce(0));
         GenesisAction::StakeSequencer {
             sequencer_key: key,
-            ownership_public_key,
+            ownership_id: public_account_id(&secret),
             // The only stake, so it is the first to sign with the funding key.
             stake_entry: sign_genesis_stake(
                 0,
@@ -3094,19 +3092,18 @@ fn founding_committee(
 }
 
 fn genesis_stake_funding_account() -> AccountId {
-    AccountId::from(&signing_key::<Schnorr>(&GENESIS_STAKE_FUNDING_KEY, Nonce(0)).1)
+    public_account_id(&GENESIS_STAKE_FUNDING_KEY)
 }
 
-/// The genesis funding account's key pair at its nonce in `message`, and the key state it
-/// rotates to.
-fn genesis_stake_funding_keys(
-    message: &Message,
-) -> (lee::PrivateKey, lee::PublicKey, SigningKeyState) {
-    let mut nonce = message.nonces[&genesis_stake_funding_account()];
-    let (key, public_key) = signing_key::<Schnorr>(&GENESIS_STAKE_FUNDING_KEY, nonce);
-    nonce.public_account_nonce_increment();
-    let next = Schnorr::key_state(&signing_key::<Schnorr>(&GENESIS_STAKE_FUNDING_KEY, nonce).1);
-    (key, public_key, next)
+/// The genesis funding account as a signer at its nonce in `message`.
+fn genesis_stake_funding_signer(message: &Message) -> Signer {
+    let nonce = message.nonces[&genesis_stake_funding_account()];
+    Signer::new(
+        &GENESIS_STAKE_FUNDING_KEY,
+        nonce,
+        INITIAL_KEY_TYPE,
+        INITIAL_KEY_TYPE,
+    )
 }
 
 /// What both signers of a genesis `Stake` sign: `message` with the funding account's next key
@@ -3117,9 +3114,11 @@ pub fn genesis_stake_message_with_keys(
     ownership_id: AccountId,
     owner_next: SigningKeyState,
 ) -> [u8; 32] {
-    let (.., funding_next) = genesis_stake_funding_keys(message);
     let next_keys: Vec<_> = BTreeMap::from([
-        (genesis_stake_funding_account(), funding_next),
+        (
+            genesis_stake_funding_account(),
+            genesis_stake_funding_signer(message).next(),
+        ),
         (ownership_id, owner_next),
     ])
     .into_values()
@@ -3187,18 +3186,18 @@ pub fn sign_genesis_stake(
     ownership_secret: &PublicAccountSecret,
     minimum_stake: u128,
 ) -> WitnessEntry {
-    let (ownership_key, ownership_public_key) = signing_key::<Schnorr>(ownership_secret, Nonce(0));
-    let ownership_id = AccountId::from(&ownership_public_key);
+    let owner = Signer::new(
+        ownership_secret,
+        Nonce(0),
+        INITIAL_KEY_TYPE,
+        INITIAL_KEY_TYPE,
+    );
+    let ownership_id = owner.account_id();
     let message = genesis_stake_message(index, sequencer_key, ownership_id, minimum_stake);
-    let next = Schnorr::key_state(&signing_key::<Schnorr>(ownership_secret, Nonce(1)).1);
-    let message_with_keys = genesis_stake_message_with_keys(&message, ownership_id, next);
+    let message_with_keys = genesis_stake_message_with_keys(&message, ownership_id, owner.next());
     WitnessEntry {
-        auth_data: Schnorr::auth_data(
-            &ownership_public_key,
-            &Schnorr::sign(&ownership_key, &message_with_keys),
-        )
-        .to_vec(),
-        next,
+        auth_data: owner.auth_data(&message_with_keys),
+        next: owner.next(),
     }
 }
 
@@ -3239,9 +3238,9 @@ fn build_stake_genesis_transactions(
         return Vec::new();
     }
 
-    let funding = DepositRecipient::Identified(PublicAccountEvidence::Key(
-        signing_key::<Schnorr>(&GENESIS_STAKE_FUNDING_KEY, Nonce(0)).1,
-    ));
+    let funding = DepositRecipient::Identified(PublicAccountEvidence::Key(initial_key(
+        &GENESIS_STAKE_FUNDING_KEY,
+    )));
     let amount =
         BridgeAmount::try_from(minimum_stake).expect("minimum sequencer stake exceeds u64");
 
@@ -3259,7 +3258,7 @@ fn build_stake_genesis_transactions(
         .collect();
 
     for (index, stake) in staked.iter().enumerate() {
-        let ownership_id = AccountId::from(&stake.owner);
+        let ownership_id = stake.owner;
         let stake_message = genesis_stake_message(index, stake.key, ownership_id, minimum_stake);
         let message_with_keys =
             genesis_stake_message_with_keys(&stake_message, ownership_id, stake.entry.next);
@@ -3267,10 +3266,10 @@ fn build_stake_genesis_transactions(
         // Redundant with the authentication every tx gets, but names the entry.
         assert!(
             current_key(None, ownership_id, &stake.entry.auth_data)
-                .and_then(|current| authenticate(
+                .and_then(|(current, signature)| authenticate(
                     &current,
                     &message_with_keys,
-                    &stake.entry.auth_data,
+                    signature,
                     &stake.entry.next
                 ))
                 .is_ok(),
@@ -3278,15 +3277,10 @@ fn build_stake_genesis_transactions(
             hex::encode(stake.key)
         );
 
-        let (funding_key, funding_public_key, funding_next) =
-            genesis_stake_funding_keys(&stake_message);
+        let funding_signer = genesis_stake_funding_signer(&stake_message);
         let funding_entry = WitnessEntry {
-            auth_data: Schnorr::auth_data(
-                &funding_public_key,
-                &Schnorr::sign(&funding_key, &message_with_keys),
-            )
-            .to_vec(),
-            next: funding_next,
+            auth_data: funding_signer.auth_data(&message_with_keys),
+            next: funding_signer.next(),
         };
         // Witness entries follow `nonces` order.
         let stake_witness_set = lee::public_transaction::WitnessSet::from_raw_parts(
@@ -3358,7 +3352,11 @@ fn bridge_deposit_tx(
     amount: BridgeAmount,
 ) -> Result<PublicTransaction, lee::error::LeeError> {
     let receipt = bridge_receipt_actor(op_id);
-    let recipient_id = credited.account_id();
+    let recipient_id = credited.account_id().ok_or_else(|| {
+        lee::error::LeeError::InvalidInput(
+            "the deposit recipient's evidence names no account".into(),
+        )
+    })?;
     let message = Message {
         admission_evidence: std::iter::once(PublicAccountEvidence::Pda {
             program: programs::bridge_account_id(),
@@ -3368,7 +3366,7 @@ fn bridge_deposit_tx(
         .collect(),
         ..Message::try_new(
             receipt,
-            bridge_deposit_actors(receipt, credited),
+            bridge_deposit_actors(receipt, credited, recipient_id),
             BTreeMap::new(),
             bridge_core::Message::Deposit {
                 l1_deposit_op_id: op_id,
@@ -3393,14 +3391,14 @@ fn bridge_receipt_actor(op_id: [u8; 32]) -> Actor {
 
 /// The receipt, then the bridge custody and the public recipient the deposit's transfer moves
 /// balance between. A private recipient is not declared: its credit is published to it.
-fn bridge_deposit_actors(receipt: Actor, credited: &Credited<'_>) -> Vec<Actor> {
+fn bridge_deposit_actors(
+    receipt: Actor,
+    credited: &Credited<'_>,
+    recipient_id: AccountId,
+) -> Vec<Actor> {
     let custody = Actor::native_balance(system_accounts::bridge_account_id());
     match credited {
-        Credited::Public(evidence) => vec![
-            receipt,
-            custody,
-            Actor::native_balance(evidence.account_id()),
-        ],
+        Credited::Public(_) => vec![receipt, custody, Actor::native_balance(recipient_id)],
         Credited::Private(_) => vec![receipt, custody],
     }
 }

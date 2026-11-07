@@ -8,7 +8,7 @@ use integration_tests::{
 };
 use lee::{
     AccountId,
-    signature::{PublicAccountSecret, Schnorr, signing_key},
+    signature::{PublicAccountSecret, initial_key},
     test_utils::TestSigner,
 };
 use sequencer_service_rpc::RpcClient as _;
@@ -53,7 +53,7 @@ async fn successful_transfer_to_existing_account() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         to_keys: None,
-        to_pk: None,
+        to_initial_key: None,
         amount: 100,
     });
     let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -132,12 +132,12 @@ pub async fn successful_transfer_to_new_account() -> Result<()> {
 // A recipient absent from public state whose key this wallet does not hold: named by its public
 // key, the transfer carries that key's identity evidence, so its first credit lands.
 #[test]
-async fn a_foreign_recipient_named_by_its_public_key_receives_its_first_credit() -> Result<()> {
+async fn a_foreign_recipient_named_by_its_initial_key_receives_its_first_credit() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     let sender = ctx.existing_public_accounts()[0];
     let recipient_secret = PublicAccountSecret::new([77; 32]);
-    let recipient_key = signing_key::<Schnorr>(&recipient_secret, 0.into()).1;
+    let recipient_key = initial_key(&recipient_secret);
     let recipient = TestSigner::from(&recipient_secret).account_id();
     assert!(
         ctx.sequencer_client()
@@ -152,7 +152,7 @@ async fn a_foreign_recipient_named_by_its_public_key_receives_its_first_credit()
         to_npk: None,
         to_vpk: None,
         to_keys: None,
-        to_pk: Some(recipient_key),
+        to_initial_key: Some(recipient_key),
         amount: 100,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;

@@ -1,11 +1,9 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::signing_key::SigningKeyState;
 
 use crate::{
-    AccountId, PrivateKey, PublicKey,
     privacy_preserving_transaction::{circuit::Proof, message::Message},
-    public_transaction::WitnessEntry,
-    signature::{KeyScheme as _, Schnorr, SignatureScheme as _},
+    public_transaction::{WitnessEntry, sign_entries},
+    signature::Signer,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -16,27 +14,11 @@ pub struct WitnessSet {
 
 impl WitnessSet {
     #[must_use]
-    pub fn sign(
-        message: &Message,
-        proof: Proof,
-        signers: &[(AccountId, PrivateKey, SigningKeyState)],
-    ) -> Self {
-        let mut signers: Vec<_> = signers.iter().collect();
-        signers.sort_by_key(|(account_id, ..)| *account_id);
-        let next_keys: Vec<_> = signers.iter().map(|(.., next)| *next).collect();
-        let message_with_keys = message.message_with_keys(&next_keys);
-        let entries = signers
-            .into_iter()
-            .map(|(_, key, next)| WitnessEntry {
-                auth_data: Schnorr::auth_data(
-                    &PublicKey::new_from_private_key(key),
-                    &Schnorr::sign(key, &message_with_keys),
-                )
-                .to_vec(),
-                next: *next,
-            })
-            .collect();
-        Self { entries, proof }
+    pub fn sign(message: &Message, proof: Proof, signers: &[Signer]) -> Self {
+        Self {
+            entries: sign_entries(signers, |next| message.message_with_keys(next)),
+            proof,
+        }
     }
 
     #[must_use]

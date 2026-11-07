@@ -11,8 +11,9 @@ pub enum DepositRecipient {
 }
 
 impl DepositRecipient {
+    /// The account the deposit credits; `None` if its evidence names none.
     #[must_use]
-    pub fn account_id(&self) -> AccountId {
+    pub fn account_id(&self) -> Option<AccountId> {
         self.evidence().account_id()
     }
 
@@ -30,13 +31,18 @@ pub struct DepositMetadata {
 
 #[cfg(test)]
 mod tests {
-    use lee::{PrivateKey, PublicKey};
-    use lee_core::program::PdaSeed;
+    use lee_core::{
+        program::PdaSeed,
+        signing_key::{KeyType, SigningKeyState},
+    };
 
     use super::*;
 
-    fn key() -> PublicKey {
-        PublicKey::new_from_private_key(&PrivateKey::try_new([3; 32]).unwrap())
+    fn key() -> SigningKeyState {
+        SigningKeyState {
+            key_type: KeyType::Wots,
+            key_commitment: [3; 32],
+        }
     }
 
     #[test]
@@ -48,8 +54,8 @@ mod tests {
         };
         for (evidence, bytes) in [
             (
-                PublicAccountEvidence::Key(key.clone()),
-                [&[1, 0][..], &key.value()[..]].concat(),
+                PublicAccountEvidence::Key(key),
+                [&[1, 0, 0][..], &key.key_commitment[..]].concat(),
             ),
             (pda, [&[1, 1][..], &[4; 32][..], &[6; 32][..]].concat()),
         ] {
@@ -69,10 +75,11 @@ mod tests {
     fn deposit_metadata_rejects_the_address_form_unknown_tags_and_misfit_lengths() {
         let key = key();
         for bytes in [
-            [&[0][..], &key.value()[..]].concat(),
-            [&[2, 0][..], &key.value()[..]].concat(),
-            [&[1, 0][..], &key.value()[..31]].concat(),
-            [&[1, 0][..], &key.value()[..], &[0][..]].concat(),
+            [&[0, 0][..], &key.key_commitment[..]].concat(),
+            [&[2, 0, 0][..], &key.key_commitment[..]].concat(),
+            [&[1, 0, 2][..], &key.key_commitment[..]].concat(),
+            [&[1, 0, 0][..], &key.key_commitment[..31]].concat(),
+            [&[1, 0, 0][..], &key.key_commitment[..], &[0][..]].concat(),
         ] {
             assert!(
                 DepositMetadata::try_from_slice(&bytes).is_err(),

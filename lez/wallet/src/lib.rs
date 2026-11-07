@@ -29,6 +29,7 @@ use lee::{
         circuit::{Dependency, ProgramCatalog, ProgramKind},
         message::Message,
     },
+    signature::INITIAL_KEY_TYPE,
 };
 use lee_core::{
     BlockId, Commitment, CommitmentPosition, CommitmentSetDigest, EphemeralSecretKey, FeeTransfer,
@@ -38,6 +39,7 @@ use lee_core::{
     execution_state::TransactionEntry,
     native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::{MessageBody, MessageData, PROGRAM_LOADER_ACCOUNT_ID, Publication},
+    signing_key::{KeyType, SIGNATURE_PROGRAM_ID, SigningKeyState},
 };
 use log::warn;
 /// The fee quote a [`WalletSequencerClient`] returns.
@@ -558,7 +560,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                     AccountIdentity::PrivateShared { .. } => true,
                     AccountIdentity::Public(_)
                     | AccountIdentity::PublicNoSign(_)
-                    | AccountIdentity::PublicForeign(_)
+                    | AccountIdentity::PublicForeign { .. }
                     | AccountIdentity::PublicPda { .. }
                     | AccountIdentity::PublicKeycard { .. }
                     | AccountIdentity::PrivateForeign { .. }
@@ -586,7 +588,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                     }
                     AccountIdentity::Public(_)
                     | AccountIdentity::PublicNoSign(_)
-                    | AccountIdentity::PublicForeign(_)
+                    | AccountIdentity::PublicForeign { .. }
                     | AccountIdentity::PublicPda { .. }
                     | AccountIdentity::PublicKeycard { .. }
                     | AccountIdentity::PrivateForeign { .. }
@@ -1125,12 +1127,28 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         Ok(self.sequencer_client.get_recovery_binding(address).await?)
     }
 
+    /// A held public account's initial key: what others name it by to pay it.
     #[must_use]
-    pub fn get_account_public_signing_key(
-        &self,
-        account_id: AccountId,
-    ) -> Option<(lee::PrivateKey, lee::PublicKey)> {
-        self.storage.key_chain().pub_account_signing_key(account_id)
+    pub fn get_account_initial_key(&self, account_id: AccountId) -> Option<SigningKeyState> {
+        self.storage.key_chain().pub_account_initial_key(account_id)
+    }
+
+    /// The type of a public account's current key: its stored key's, or the initial type for an
+    /// account that has not signed yet.
+    pub async fn current_key_type(&self, account_id: AccountId) -> Result<KeyType> {
+        let Some(account) = self
+            .get_account_view(Actor::new(account_id, SIGNATURE_PROGRAM_ID))
+            .await?
+        else {
+            return Ok(INITIAL_KEY_TYPE);
+        };
+        let stored = account.data.actor_state(SIGNATURE_PROGRAM_ID);
+        if stored.is_empty() {
+            return Ok(INITIAL_KEY_TYPE);
+        }
+        Ok(SigningKeyState::try_from(stored)
+            .context("The account's stored key does not decode")?
+            .key_type)
     }
 
     #[must_use]
@@ -2059,9 +2077,13 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                     .map_err(ExecutionFailureKind::SequencerError)?
                     .unwrap_or_default();
                 nonces.insert(payer, account.nonce);
+                let key_type = self
+                    .current_key_type(payer)
+                    .await
+                    .map_err(ExecutionFailureKind::SequencerError)?;
                 (
                     payer,
-                    Some(account_manager::signer(payer, &secret, account.nonce)),
+                    Some(account_manager::signer(&secret, account.nonce, key_type)),
                 )
             }
         };

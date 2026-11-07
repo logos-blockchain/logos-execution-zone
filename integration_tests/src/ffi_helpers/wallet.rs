@@ -15,7 +15,7 @@ use common::HashType;
 use core_ffi::{
     error,
     primitives::types::{
-        FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey, account::FfiAccount,
+        FfiBytes32, FfiPrivateAccountKeys, FfiSigningKeyState, account::FfiAccount,
     },
     sequencer::SequencerServiceFFI,
     wallet::{
@@ -105,10 +105,10 @@ unsafe extern "C" {
 
     pub fn wallet_ffi_free_account_data(account: *mut FfiAccount);
 
-    pub fn wallet_ffi_get_public_account_key(
+    pub fn wallet_ffi_get_public_account_initial_key(
         handle: *mut WalletHandle,
         account_id: *const FfiBytes32,
-        out_public_key: *mut FfiPublicAccountKey,
+        out_initial_key: *mut FfiSigningKeyState,
     ) -> error::FfiOperationError;
 
     pub fn wallet_ffi_get_private_account_keys(

@@ -8,16 +8,16 @@ use std::{
 };
 
 use common::HashType;
-use lee::{AccountId, ActorState, PublicKey};
+use lee::{AccountId, ActorState};
 use lee_core::{
     AuthorizationSecretKey, NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
-    encryption::MlKem768EncapsulationKey, program::PdaSeed,
+    encryption::MlKem768EncapsulationKey, program::PdaSeed, signing_key::SigningKeyState,
 };
 use wallet::{AccountIdentity, AccountMention, account::AccountIdWithPrivacy};
 
 use crate::{
     error::FfiOperationError,
-    primitives::types::{FfiBytes32, FfiPdaSeed, FfiU128},
+    primitives::types::{FfiBytes32, FfiPdaSeed, FfiSigningKeyState, FfiU128},
     wallet::list,
 };
 
@@ -95,13 +95,6 @@ impl Default for FfiPrivateAccountKeys {
             viewing_public_key_len: 0,
         }
     }
-}
-
-/// Public key info for a public account.
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct FfiPublicAccountKey {
-    pub public_key: FfiBytes32,
 }
 
 /// Single entry in the account list.
@@ -237,7 +230,7 @@ pub enum FfiAccountIdentityKind {
 /// An account identity used by `AccountManager`.
 ///
 /// Public PDAs and foreign and shared private PDAs require `authority` and `seed`, and
-/// `PublicForeign` requires `public_key`; other kinds ignore them. Their account IDs are checked
+/// `PublicForeign` requires `initial_key`; other kinds ignore them. Their account IDs are checked
 /// on import and derived on export.
 ///
 /// `PrivateOwned` and `PrivatePdaOwned` use the wallet's stored account data.
@@ -248,7 +241,7 @@ pub struct FfiAccountIdentity {
     pub account_id: FfiBytes32,
     /// C-compatible string.
     pub key_path: *mut c_char,
-    pub public_key: FfiBytes32,
+    pub initial_key: FfiSigningKeyState,
     pub authority: FfiBytes32,
     pub seed: FfiPdaSeed,
     pub authorization_secret_key: FfiBytes32,
@@ -264,7 +257,7 @@ impl Default for FfiAccountIdentity {
             kind: FfiAccountIdentityKind::Public,
             account_id: FfiBytes32::default(),
             key_path: std::ptr::null_mut(),
-            public_key: FfiBytes32::default(),
+            initial_key: FfiSigningKeyState::default(),
             authority: FfiBytes32::default(),
             seed: FfiPdaSeed::default(),
             authorization_secret_key: FfiBytes32::default(),
@@ -386,24 +379,6 @@ impl TryFrom<&FfiAccount> for lee::Account {
     }
 }
 
-impl From<lee::PublicKey> for FfiPublicAccountKey {
-    fn from(value: lee::PublicKey) -> Self {
-        Self {
-            public_key: FfiBytes32::from_bytes(*value.value()),
-        }
-    }
-}
-
-impl TryFrom<&FfiPublicAccountKey> for lee::PublicKey {
-    type Error = FfiOperationError;
-
-    fn try_from(value: &FfiPublicAccountKey) -> Result<Self, Self::Error> {
-        let public_key = Self::try_new(value.public_key.data)
-            .map_err(|_err| FfiOperationError::InvalidTypeConversion)?;
-        Ok(public_key)
-    }
-}
-
 impl From<AccountIdentity> for FfiAccountIdentity {
     fn from(value: AccountIdentity) -> Self {
         match value {
@@ -417,10 +392,13 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                 account_id: account_id.into(),
                 ..Default::default()
             },
-            AccountIdentity::PublicForeign(public_key) => Self {
+            AccountIdentity::PublicForeign {
+                account_id,
+                initial_key,
+            } => Self {
                 kind: FfiAccountIdentityKind::PublicForeign,
-                account_id: AccountId::from(&public_key).into(),
-                public_key: FfiBytes32::from_bytes(*public_key.value()),
+                account_id: account_id.into(),
+                initial_key: initial_key.into(),
                 ..Default::default()
             },
             AccountIdentity::PublicPda { program, seed } => Self {
@@ -548,12 +526,12 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
             FfiAccountIdentityKind::Public => Ok(Self::Public(value.account_id.into())),
             FfiAccountIdentityKind::PublicNoSign => Ok(Self::PublicNoSign(value.account_id.into())),
             FfiAccountIdentityKind::PublicForeign => {
-                let public_key = PublicKey::try_new(value.public_key.data)
-                    .map_err(|_| FfiOperationError::InvalidKeyValue)?;
-                if AccountId::from(value.account_id) != AccountId::from(&public_key) {
+                let identity = Self::public_foreign(SigningKeyState::from(value.initial_key))
+                    .ok_or(FfiOperationError::InvalidKeyValue)?;
+                if AccountId::from(value.account_id) != identity.account_id() {
                     return Err(FfiOperationError::InvalidAccountId);
                 }
-                Ok(Self::PublicForeign(public_key))
+                Ok(identity)
             }
             FfiAccountIdentityKind::PublicPda => {
                 let program: AccountId = value.authority.into();
@@ -706,7 +684,7 @@ impl From<FfiAccountIdWithPrivacy> for AccountIdWithPrivacy {
 mod tests {
     use std::collections::BTreeSet;
 
-    use lee::{AccountId, PrivateKey, PublicKey};
+    use lee::AccountId;
     use lee_core::{
         AuthorizationSecretKey, NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
         encryption::ViewingPublicKey, program::PdaSeed,
@@ -721,9 +699,8 @@ mod tests {
 
     #[test]
     fn account_identity_roundtrip() {
-        let private_key = PrivateKey::try_new([42; 32]).unwrap();
-        let public_key = PublicKey::new_from_private_key(&private_key);
-        let pub_acc_id = (&public_key).into();
+        let pub_acc_id =
+            lee::signature::public_account_id(&lee::signature::PublicAccountSecret::new([42; 32]));
 
         let ask = AuthorizationSecretKey([43; 32]);
         let nsk = NullifierSecretKey::from(&ask);
@@ -908,13 +885,13 @@ mod tests {
 
     #[test]
     fn a_public_foreign_address_is_derived_from_its_key_on_export_and_checked_on_import() {
-        let pk = lee::PublicKey::new_from_private_key(&lee::PrivateKey::try_new([48; 32]).unwrap());
-        let identity = AccountIdentity::PublicForeign(pk.clone());
+        let key = lee::signature::initial_key(&lee::signature::PublicAccountSecret::new([48; 32]));
+        let identity = AccountIdentity::public_foreign(key).unwrap();
 
         let exported: FfiAccountIdentity = identity.clone().into();
 
         assert_eq!(exported.kind, FfiAccountIdentityKind::PublicForeign);
-        assert_eq!(AccountId::from(exported.account_id), AccountId::from(&pk));
+        assert_eq!(AccountId::from(exported.account_id), identity.account_id());
         assert_eq!(AccountIdentity::try_from(&exported).unwrap(), identity);
 
         let mut contradictory = exported;

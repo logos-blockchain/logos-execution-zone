@@ -214,7 +214,10 @@ fn build_lock_tx(
         program: outbox_id,
         seed: outbox_pda_seed(bridge_lock_id, &target_zone, ordinal),
     };
-    let outbox = Actor::new(slot.account_id(), outbox_id);
+    let outbox = Actor::new(
+        slot.account_id().expect("PDA evidence names its account"),
+        outbox_id,
+    );
     let lock = bridge_lock_core::Message::Lock {
         outbox,
         amount: LOCK_AMOUNT,

@@ -6,9 +6,9 @@ use key_protocol::key_management::{
 use lee::{
     Account, AccountId, Recipient, RecoveryBinding, V03State,
     program::Program,
-    signature::{PublicAccountSecret, Schnorr, signing_key},
+    signature::{PublicAccountSecret, public_account_id},
 };
-use lee_core::{PrivateAccountKind, account::Nonce};
+use lee_core::PrivateAccountKind;
 use serde::{Deserialize, Serialize};
 
 const PRIVATE_KEY_PUB_ACC_A: [u8; 32] = [
@@ -82,11 +82,11 @@ pub fn initial_pub_accounts_private_keys() -> Vec<PublicAccountPrivateInitialDat
 
     vec![
         PublicAccountPrivateInitialData {
-            account_id: AccountId::from(&signing_key::<Schnorr>(&acc1_secret, Nonce(0)).1),
+            account_id: public_account_id(&acc1_secret),
             secret: acc1_secret,
         },
         PublicAccountPrivateInitialData {
-            account_id: AccountId::from(&signing_key::<Schnorr>(&acc2_secret, Nonce(0)).1),
+            account_id: public_account_id(&acc2_secret),
             secret: acc2_secret,
         },
     ]
@@ -264,8 +264,8 @@ mod tests {
         66, 136, 209, 158, 243, 254, 168, 14, 19, 222, 8, 97,
     ];
 
-    const PUB_ACC_A_TEXT_ADDR: &str = "8Ve4qeiiEivt7WAuac8znaYe69xk2YHnTM3FvNFWtfVm";
-    const PUB_ACC_B_TEXT_ADDR: &str = "EpRY7mzRC2EmQDwzDdVUZmVcnWCzW7ERHmuXE5GW3AVJ";
+    const PUB_ACC_A_TEXT_ADDR: &str = "BKd6L3pQukGEWaDdJiXn58SZeSooKx9c3ahMCSKxtB1y";
+    const PUB_ACC_B_TEXT_ADDR: &str = "9L72jk5RRbF7FfNMnDQw6ksdp54T9pAhHq8ADJFknNPF";
 
     const PRIV_ACC_A_TEXT_ADDR: &str = "44KVvzvh2ephQU9aR5snboGUXKgS1FnPYh1W4KZKwmhm";
     const PRIV_ACC_B_TEXT_ADDR: &str = "478hD6LXFTYu5gRRkWkCyXPRsWgCwAfRredoCUfxr5b9";

@@ -13,24 +13,31 @@ use std::collections::{BTreeMap, BTreeSet};
 use lee_core::{
     AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, MembershipProof, NullifierPublicKey,
     NullifierSecretKey, NullifierWitness, PrivateWitness, RecipientEncryption, RegularKey,
-    WitnessKind, account::Nonce, encryption::ViewingPublicKey, program::MessageBody,
-    signing_key::SigningKeyState,
+    WitnessKind,
+    account::Nonce,
+    encryption::ViewingPublicKey,
+    program::MessageBody,
+    signing_key::{KeyType, SigningKeyState},
 };
 
 #[cfg(feature = "test-utils")]
 use crate::validated_state_diff::{StateDiff, ValidatedStateDiff};
 use crate::{
-    Account, AccountId, PrivateKey, PublicAccountEvidence,
+    Account, AccountId, PublicAccountEvidence,
     error::LeeError,
     privacy_preserving_transaction::{self, circuit::Proof},
     public_transaction::{self, WitnessEntry},
-    signature::{KeyScheme as _, PublicAccountSecret, Schnorr, SignatureScheme as _, signing_key},
+    signature::{
+        INITIAL_KEY_TYPE, PublicAccountSecret, Signer, initial_key, key_state, public_account_id,
+    },
 };
 
-/// A public account's signing key material, as tests sign with it.
+/// A public account's signing key material, as tests sign with it: its initial key type at
+/// nonce 0, and any rotations to other types from given nonces on.
 #[derive(Debug, Clone)]
 pub struct TestSigner {
     secret: PublicAccountSecret,
+    rotations: Vec<(Nonce, KeyType)>,
 }
 
 impl TestSigner {
@@ -38,23 +45,54 @@ impl TestSigner {
     pub const fn new(seed: u8) -> Self {
         Self {
             secret: PublicAccountSecret::new([seed; 32]),
+            rotations: Vec::new(),
         }
+    }
+
+    /// Signs with `key_type` from `from` on (until a later rotation).
+    #[must_use]
+    pub fn rotating_to(mut self, key_type: KeyType, from: Nonce) -> Self {
+        assert!(from != Nonce(0), "nonce 0 always uses the initial key type");
+        self.rotations.push((from, key_type));
+        self.rotations.sort_by_key(|(nonce, _)| nonce.0);
+        self
     }
 
     #[must_use]
     pub fn account_id(&self) -> AccountId {
-        AccountId::from(&signing_key::<Schnorr>(&self.secret, Nonce(0)).1)
+        public_account_id(&self.secret)
     }
 
     #[must_use]
     pub fn evidence(&self) -> PublicAccountEvidence {
-        PublicAccountEvidence::Key(signing_key::<Schnorr>(&self.secret, Nonce(0)).1)
+        PublicAccountEvidence::Key(initial_key(&self.secret))
+    }
+
+    /// The type of the account's key at `nonce`.
+    #[must_use]
+    pub fn key_type(&self, nonce: Nonce) -> KeyType {
+        self.rotations
+            .iter()
+            .rev()
+            .find(|(from, _)| from.0 <= nonce.0)
+            .map_or(INITIAL_KEY_TYPE, |(_, key_type)| *key_type)
     }
 
     /// The key state of the account's key at `nonce`.
     #[must_use]
     pub fn key_state(&self, nonce: Nonce) -> SigningKeyState {
-        Schnorr::key_state(&signing_key::<Schnorr>(&self.secret, nonce).1)
+        key_state(&self.secret, self.key_type(nonce), nonce)
+    }
+
+    /// The account as a signer at `nonce`, rotating to its key at the next nonce.
+    #[must_use]
+    pub fn signer(&self, nonce: Nonce) -> Signer {
+        Signer::new(
+            &self.secret,
+            nonce,
+            self.key_type(nonce),
+            self.key_type(next_nonce(nonce)),
+        )
     }
 
     /// One witness entry signing `message_with_keys` with the key at `nonce` and rotating to the
@@ -62,11 +100,10 @@ impl TestSigner {
     /// disagree with their message.
     #[must_use]
     pub fn entry(&self, nonce: Nonce, message_with_keys: &[u8; 32]) -> WitnessEntry {
-        let (key, public_key) = signing_key::<Schnorr>(&self.secret, nonce);
+        let signer = self.signer(nonce);
         WitnessEntry {
-            auth_data: Schnorr::auth_data(&public_key, &Schnorr::sign(&key, message_with_keys))
-                .to_vec(),
-            next: self.key_state(next_nonce(nonce)),
+            auth_data: signer.auth_data(message_with_keys),
+            next: signer.next(),
         }
     }
 }
@@ -75,6 +112,7 @@ impl From<&PublicAccountSecret> for TestSigner {
     fn from(secret: &PublicAccountSecret) -> Self {
         Self {
             secret: secret.clone(),
+            rotations: Vec::new(),
         }
     }
 }
@@ -143,10 +181,7 @@ pub fn privacy_witness_for(
     )
 }
 
-fn signing_keys(
-    nonces: &BTreeMap<AccountId, Nonce>,
-    signers: &[&TestSigner],
-) -> Vec<(AccountId, PrivateKey, SigningKeyState)> {
+fn signing_keys(nonces: &BTreeMap<AccountId, Nonce>, signers: &[&TestSigner]) -> Vec<Signer> {
     signers
         .iter()
         .map(|signer| {
@@ -154,8 +189,7 @@ fn signing_keys(
             let nonce = *nonces
                 .get(&account_id)
                 .unwrap_or_else(|| panic!("signer {account_id} is not in the message's nonces"));
-            let (key, _) = signing_key::<Schnorr>(&signer.secret, nonce);
-            (account_id, key, signer.key_state(next_nonce(nonce)))
+            signer.signer(nonce)
         })
         .collect()
 }

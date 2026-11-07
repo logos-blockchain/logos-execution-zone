@@ -4,8 +4,9 @@ use common::transaction::LeeTransaction;
 use lee::{
     AccountId, Actor, PublicTransaction,
     public_transaction::{Message, WitnessSet},
-    signature::{KeyScheme as _, Schnorr, signing_key},
+    signature::Signer,
 };
+use lee_core::signing_key::KeyType;
 use program_deployment::deploy_program;
 use sequencer_service_rpc::RpcClient as _;
 use wallet::WalletCore;
@@ -79,13 +80,13 @@ async fn main() {
         .await
         .expect("Node should be reachable to query account data")[0];
     let nonces = BTreeMap::from([(account_id, nonce)]);
-    // Sign with the key at the current nonce, committing to the key at the next nonce, which the
-    // account rotates to
-    let (key, _public_key) = signing_key::<Schnorr>(&secret, nonce);
-    let mut next_nonce = nonce;
-    next_nonce.public_account_nonce_increment();
-    let next_key = Schnorr::key_state(&signing_key::<Schnorr>(&secret, next_nonce).1);
-    let signing_keys = [(account_id, key, next_key)];
+    // Sign with the account's current key, committing to the WOTS+ key at the next nonce, which
+    // the account rotates to
+    let key_type = wallet_core
+        .current_key_type(account_id)
+        .await
+        .expect("Node should be reachable to query the account's key");
+    let signing_keys = [Signer::new(&secret, nonce, key_type, KeyType::Wots)];
     let hello = Actor::new(account_id, program_account_id);
     let message = Message::try_new(hello, vec![hello], nonces, greeting).unwrap();
     // Pass the signing key to sign the message. This will be used by the node

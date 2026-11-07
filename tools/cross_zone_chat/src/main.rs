@@ -60,9 +60,9 @@ use cross_zone_outbox_core::{outbox_pda, outbox_pda_seed};
 use lee::{
     AccountId, Actor, PublicAccountEvidence, PublicTransaction,
     public_transaction::{Message, WitnessSet},
-    signature::{KeyScheme as _, Schnorr, signing_key},
+    signature::Signer,
 };
-use lee_core::account::Nonce;
+use lee_core::{account::Nonce, signing_key::KeyType};
 use log::{info, warn};
 use ping_core::{
     CrossZoneEmission, ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id,
@@ -594,7 +594,10 @@ fn build_send_tx(
         program: outbox_id,
         seed: outbox_pda_seed(sender_id, &other_zone, ordinal),
     };
-    let outbox = Actor::new(slot.account_id(), outbox_id);
+    let outbox = Actor::new(
+        slot.account_id().expect("PDA evidence names its account"),
+        outbox_id,
+    );
     let send = SenderMessage::Send {
         outbox,
         emission: CrossZoneEmission {
@@ -621,14 +624,14 @@ fn build_send_tx(
         .expect("build ping_sender message")
     };
 
-    let mut next_nonce = payer_nonce;
-    next_nonce.public_account_nonce_increment();
+    // The payer only ever signs with WOTS+ keys and rotates to WOTS+ keys.
     let witness_set = WitnessSet::sign(
         &message,
-        &[(
-            payer.account_id,
-            signing_key::<Schnorr>(&payer.secret, payer_nonce).0,
-            Schnorr::key_state(&signing_key::<Schnorr>(&payer.secret, next_nonce).1),
+        &[Signer::new(
+            &payer.secret,
+            payer_nonce,
+            KeyType::Wots,
+            KeyType::Wots,
         )],
     );
     LeeTransaction::Public(PublicTransaction::new(message, witness_set))

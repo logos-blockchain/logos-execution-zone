@@ -21,7 +21,7 @@
                 "supply_account": {
                     "recipient": {
                         "identified": {
-                            "key": "f0a19ae37f5a6c8e0daa86baf7ab807804879a02b8f143a99afe97f9241200d6"
+                            "key": "0096d3aa5d357f21c4489de48636b3d36a87a753ba7a077d95d163e955bb0234df"
                         }
                     },
                     "balance": 10000
@@ -31,7 +31,7 @@
                 "supply_account": {
                     "recipient": {
                         "identified": {
-                            "key": "ec87abead79ea4b347488182f14d159523688c80585f3dd476586a8e90cfb7af"
+                            "key": "005058032321a95f5ff141a64e2c1eb3a962259b1b262a599688a3e98435db2531"
                         }
                     },
                     "balance": 20000

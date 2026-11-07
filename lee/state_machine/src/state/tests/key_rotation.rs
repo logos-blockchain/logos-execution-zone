@@ -1,9 +1,13 @@
-use lee_core::{FeeTransfer, signing_key::SIGNATURE_PROGRAM_ID};
+use lee_core::{
+    FeeTransfer,
+    signing_key::{KeyType, SIGNATURE_PROGRAM_ID, SigningKeyState},
+};
 
 use super::*;
 use crate::{
-    PublicKey, ValidatedStateDiff,
-    signature::{AuthError, authenticate},
+    ValidatedStateDiff,
+    public_transaction::WitnessEntry,
+    signature::{AuthError, authenticate, current_key},
 };
 
 const FEE: Balance = 5;
@@ -31,17 +35,43 @@ fn assert_refused<T>(result: Result<T, LeeError>, signer: AccountId, reason: &st
 }
 
 // What authenticating a signer at nonce 0 fails with once its authentication data is changed at
-// `position`: past the signature, the revealed key no longer gives its account id, if it is a key.
+// `position`: in the initial key, its account id no longer matches (or the key no longer
+// decodes); in the signature, the leaf index may leave its range, and otherwise the signature
+// fails.
 fn tampered_reason(auth_data: &[u8], position: usize) -> &'static str {
-    if position < 64 {
-        return "invalid signature";
+    const INITIAL_KEY_LEN: usize = 33;
+    if position < INITIAL_KEY_LEN {
+        return if borsh::from_slice::<SigningKeyState>(&auth_data[..INITIAL_KEY_LEN]).is_ok() {
+            "revealed key does not give the account id"
+        } else {
+            "malformed authentication data"
+        };
     }
-    let revealed = auth_data[64..].try_into().unwrap();
-    if PublicKey::try_new(revealed).is_ok() {
-        "revealed key does not give the account id"
+    if position == INITIAL_KEY_LEN && auth_data[position] >= wots_tree::LEAVES {
+        return "malformed authentication data";
+    }
+    "invalid signature"
+}
+
+// `entry` without the initial key that prefixes a nonce-0 entry.
+fn without_initial_key(signer: &TestSigner, mut entry: WitnessEntry) -> WitnessEntry {
+    let (_, signature) = current_key(None, signer.account_id(), &entry.auth_data).unwrap();
+    entry.auth_data = signature.to_vec();
+    entry
+}
+
+// `key` with byte `byte` of its encoding changed: byte 0 is the key type, the rest the
+// commitment.
+fn with_changed_byte(mut key: SigningKeyState, byte: usize) -> SigningKeyState {
+    if byte == 0 {
+        key.key_type = match key.key_type {
+            KeyType::Wots => KeyType::Schnorr,
+            KeyType::Schnorr => KeyType::Wots,
+        };
     } else {
-        "malformed authentication data"
+        key.key_commitment[byte - 1] ^= 1;
     }
+    key
 }
 
 fn native_transfer(
@@ -203,7 +233,7 @@ fn public_a_tampered_byte_in_any_signers_authentication_data_is_refused() {
     assert!(ValidatedStateDiff::from_public_transaction(&honest, &state, 1, 0).is_ok());
 
     for (index, signer) in honest.signer_account_ids().into_iter().enumerate() {
-        for position in 0..96 {
+        for position in 0..honest.witness_set.entries[index].auth_data.len() {
             let mut tx = honest.clone();
             tx.witness_set.entries[index].auth_data[position] ^= 1;
             let reason = tampered_reason(&tx.witness_set.entries[index].auth_data, position);
@@ -303,7 +333,10 @@ fn public_the_next_transaction_authenticates_with_the_new_key_and_the_old_key_is
     let message_with_keys = next
         .message
         .message_with_keys(&[sender.key_state(Nonce(1))]);
-    with_old_key.witness_set.entries = vec![sender.entry(Nonce(0), &message_with_keys)];
+    with_old_key.witness_set.entries = vec![without_initial_key(
+        &sender,
+        sender.entry(Nonce(0), &message_with_keys),
+    )];
     assert_refused(
         ValidatedStateDiff::from_public_transaction(&with_old_key, &state, 2, 0),
         sender.account_id(),
@@ -388,9 +421,10 @@ fn public_a_changed_byte_in_any_signers_next_key_breaks_every_signature() {
     signers.sort_by_key(|signer| signer.account_id());
 
     for changed in 0..signers.len() {
-        for byte in 0..32 {
+        for byte in 0..33 {
             let mut tx = honest.clone();
-            tx.witness_set.entries[changed].next.key_commitment[byte] ^= 1;
+            tx.witness_set.entries[changed].next =
+                with_changed_byte(tx.witness_set.entries[changed].next, byte);
             let next: Vec<_> = tx
                 .witness_set
                 .entries
@@ -401,11 +435,13 @@ fn public_a_changed_byte_in_any_signers_next_key_breaks_every_signature() {
 
             for (entry, signer) in tx.witness_set.entries.iter().zip(signers) {
                 assert_eq!(
-                    authenticate(
-                        &signer.key_state(Nonce(0)),
-                        &message_with_keys,
-                        &entry.auth_data,
-                        &entry.next
+                    current_key(None, signer.account_id(), &entry.auth_data).and_then(
+                        |(current, signature)| authenticate(
+                            &current,
+                            &message_with_keys,
+                            signature,
+                            &entry.next
+                        )
                     ),
                     Err(AuthError::InvalidSignature)
                 );
@@ -533,7 +569,7 @@ fn privacy_a_tampered_byte_in_any_signers_authentication_data_is_refused() {
     assert!(ValidatedStateDiff::from_privacy_preserving_transaction(&honest, &state, 1, 0).is_ok());
 
     for (index, signer) in honest.signer_account_ids().into_iter().enumerate() {
-        for position in 0..96 {
+        for position in 0..honest.witness_set.entries[index].auth_data.len() {
             let mut tx = honest.clone();
             tx.witness_set.entries[index].auth_data[position] ^= 1;
             let reason = tampered_reason(&tx.witness_set.entries[index].auth_data, position);
@@ -640,7 +676,10 @@ fn privacy_the_next_transaction_authenticates_with_the_new_key_and_the_old_key_i
     let message_with_keys = next
         .message
         .message_with_keys(&[sender.key_state(Nonce(1))]);
-    with_old_key.witness_set.entries = vec![sender.entry(Nonce(0), &message_with_keys)];
+    with_old_key.witness_set.entries = vec![without_initial_key(
+        &sender,
+        sender.entry(Nonce(0), &message_with_keys),
+    )];
     assert_refused(
         ValidatedStateDiff::from_privacy_preserving_transaction(&with_old_key, &state, 2, 0),
         sender.account_id(),
@@ -738,9 +777,10 @@ fn privacy_a_changed_byte_in_any_signers_next_key_breaks_every_signature() {
     signers.sort_by_key(|signer| signer.account_id());
 
     for changed in 0..signers.len() {
-        for byte in 0..32 {
+        for byte in 0..33 {
             let mut tx = honest.clone();
-            tx.witness_set.entries[changed].next.key_commitment[byte] ^= 1;
+            tx.witness_set.entries[changed].next =
+                with_changed_byte(tx.witness_set.entries[changed].next, byte);
             let next: Vec<_> = tx
                 .witness_set
                 .entries
@@ -751,11 +791,13 @@ fn privacy_a_changed_byte_in_any_signers_next_key_breaks_every_signature() {
 
             for (entry, signer) in tx.witness_set.entries.iter().zip(signers) {
                 assert_eq!(
-                    authenticate(
-                        &signer.key_state(Nonce(0)),
-                        &message_with_keys,
-                        &entry.auth_data,
-                        &entry.next
+                    current_key(None, signer.account_id(), &entry.auth_data).and_then(
+                        |(current, signature)| authenticate(
+                            &current,
+                            &message_with_keys,
+                            signature,
+                            &entry.next
+                        )
                     ),
                     Err(AuthError::InvalidSignature)
                 );
@@ -862,4 +904,32 @@ fn privacy_a_witness_entry_of_an_unlisted_account_is_refused() {
         first,
         "revealed key does not give the account id",
     );
+}
+
+#[test]
+fn public_an_account_rotates_from_wots_to_schnorr_and_back() {
+    let sender = TestSigner::new(51)
+        .rotating_to(KeyType::Schnorr, Nonce(1))
+        .rotating_to(KeyType::Wots, Nonce(2));
+    let recipient = AccountId::new([52; 32]);
+    let mut state =
+        V03State::new().with_public_account_balances([(sender.account_id(), 100), (recipient, 0)]);
+
+    // The key type a transaction at each nonce rotates to: Schnorr after nonce 0, WOTS+ after 1.
+    for (block_id, nonce, stored_type) in [
+        (1, 0, KeyType::Schnorr),
+        (2, 1, KeyType::Wots),
+        (3, 2, KeyType::Wots),
+    ] {
+        state
+            .transition_from_public_transaction(
+                &native_transfer(&sender, recipient, Nonce(nonce), 10),
+                block_id,
+                0,
+            )
+            .unwrap();
+        let stored = SigningKeyState::try_from(&stored_key(&state, sender.account_id())).unwrap();
+        assert_eq!(stored.key_type, stored_type);
+        assert_eq!(stored, sender.key_state(Nonce(nonce + 1)));
+    }
 }

@@ -17,8 +17,7 @@ use common::{
 };
 use kameo::actor::Spawn as _;
 use lee::{
-    Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction, RootCall,
-    TransactionEntry, V03State,
+    Account, AccountId, Actor, PublicTransaction, RootCall, TransactionEntry, V03State,
     program::Program,
     test_utils::{TestPrivateKeys, TestSigner, init_witness, no_seal, signer_nonces, witness_for},
 };
@@ -6969,7 +6968,7 @@ fn a_genesis_stake_carries_the_evidence_of_the_funds_it_credits() {
             &*message.admission_evidence,
             [evidence @ lee::PublicAccountEvidence::Pda { program, .. }]
                 if *program == programs::sequencer_stake_account_id()
-                    && evidence.account_id() == funds.account_id
+                    && evidence.account_id() == Some(funds.account_id)
         ),
         "{:?}",
         message.admission_evidence
@@ -7010,7 +7009,7 @@ fn a_bridge_deposit_carries_its_receipts_and_its_recipients_evidence() {
                     .iter()
                     .map(lee::PublicAccountEvidence::account_id)
                     .collect::<Vec<_>>(),
-                [receipt, recipient.account_id()],
+                [Some(receipt), recipient.account_id()],
                 "{recipient:?}"
             );
         }
@@ -7023,7 +7022,9 @@ fn a_bridge_deposit_credits_a_recipient_absent_from_public_state() {
     let (mut state, _, _) =
         build_genesis_state(&config, Some(test_bootstrap_sequencer_key(&config)));
     let recipient = DepositRecipient::Identified(TestSigner::new(3).evidence());
-    let recipient_id = recipient.account_id();
+    let recipient_id = recipient
+        .account_id()
+        .expect("a key's evidence names its account");
     assert!(state.get_account_by_id_ref(recipient_id).is_none());
 
     let op_id = [0x7e; 32];
@@ -7066,7 +7067,7 @@ fn a_bridge_deposit_credits_a_recipient_absent_from_public_state() {
 #[test]
 fn a_deposit_recipient_reads_only_as_key_or_pda_evidence() {
     let account_id = AccountId::new([4; 32]);
-    let key = PublicKey::new_from_private_key(&PrivateKey::try_new([3; 32]).unwrap());
+    let key = lee::signature::initial_key(&lee::signature::PublicAccountSecret::new([3; 32]));
     let seed: [u8; 32] = [6; 32];
     assert!(
         serde_json::from_value::<DepositRecipient>(
@@ -7099,7 +7100,7 @@ fn a_deposit_recipient_reads_only_as_key_or_pda_evidence() {
 
 #[test]
 fn a_genesis_supply_names_its_recipient_in_the_deposit_form() {
-    let key = PublicKey::new_from_private_key(&PrivateKey::try_new([3; 32]).unwrap());
+    let key = lee::signature::initial_key(&lee::signature::PublicAccountSecret::new([3; 32]));
 
     let action: config::GenesisAction = serde_json::from_value(serde_json::json!({
         "supply_account": {

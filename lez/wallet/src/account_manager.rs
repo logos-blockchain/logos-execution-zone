@@ -6,8 +6,8 @@ use std::{
 
 use anyhow::Result;
 use lee::{
-    AccountId, PrivateKey, PublicAccountEvidence, PublicKey, Recipient, RecipientEncryption,
-    signature::{KeyScheme as _, PublicAccountSecret, Schnorr, signing_key},
+    AccountId, PublicAccountEvidence, Recipient, RecipientEncryption,
+    signature::{INITIAL_KEY_TYPE, PublicAccountSecret, Signer, initial_key},
 };
 use lee_core::{
     AuthorizationSecretKey, Commitment, CommitmentPosition, CommitmentSetDigest, DummyInput,
@@ -19,7 +19,7 @@ use lee_core::{
     encryption::{Ciphertext, EncryptedNote, MlKem768EncapsulationKey, ViewingPublicKey},
     native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::PdaSeed,
-    signing_key::SigningKeyState,
+    signing_key::{KeyType, SigningKeyState},
 };
 use rand::{RngCore as _, rngs::OsRng};
 
@@ -41,7 +41,12 @@ pub enum AccountIdentity {
     Public(AccountId),
     /// A public account without signing. Would not try to sign, even if account is owned.
     PublicNoSign(AccountId),
-    PublicForeign(PublicKey),
+    /// A public account this wallet does not hold, named by its initial key. Built with
+    /// [`AccountIdentity::public_foreign`].
+    PublicForeign {
+        account_id: AccountId,
+        initial_key: SigningKeyState,
+    },
     PublicPda {
         program: AccountId,
         seed: PdaSeed,
@@ -82,7 +87,14 @@ impl fmt::Debug for AccountIdentity {
         match self {
             Self::Public(id) => f.debug_tuple("Public").field(id).finish(),
             Self::PublicNoSign(id) => f.debug_tuple("PublicNoSign").field(id).finish(),
-            Self::PublicForeign(pk) => f.debug_tuple("PublicForeign").field(pk).finish(),
+            Self::PublicForeign {
+                account_id,
+                initial_key,
+            } => f
+                .debug_struct("PublicForeign")
+                .field("account_id", account_id)
+                .field("initial_key", initial_key)
+                .finish(),
             Self::PublicPda { program, seed } => f
                 .debug_struct("PublicPda")
                 .field("program", program)
@@ -125,6 +137,16 @@ impl fmt::Debug for AccountIdentity {
 }
 
 impl AccountIdentity {
+    /// A public account this wallet does not hold, named by its initial key; `None` for a key of
+    /// a type that cannot be initial.
+    #[must_use]
+    pub fn public_foreign(initial_key: SigningKeyState) -> Option<Self> {
+        AccountId::for_initial_key(&initial_key).map(|account_id| Self::PublicForeign {
+            account_id,
+            initial_key,
+        })
+    }
+
     #[must_use]
     /// Note: `PublicNoSign` still counts as public, the variant just suppresses the signing-key
     /// lookup.
@@ -133,7 +155,7 @@ impl AccountIdentity {
             &self,
             Self::Public(_)
                 | Self::PublicNoSign(_)
-                | Self::PublicForeign(_)
+                | Self::PublicForeign { .. }
                 | Self::PublicPda { .. }
                 | Self::PublicKeycard { .. }
         )
@@ -145,9 +167,10 @@ impl AccountIdentity {
     pub fn public_account_id(&self) -> Option<lee::AccountId> {
         match self {
             Self::Public(id) | Self::PublicNoSign(id) => Some(*id),
-            Self::PublicForeign(pk) => Some(AccountId::from(pk)),
+            Self::PublicForeign { account_id, .. } | Self::PublicKeycard { account_id, .. } => {
+                Some(*account_id)
+            }
             Self::PublicPda { program, seed } => Some(AccountId::for_public_pda(program, seed)),
-            Self::PublicKeycard { account_id, .. } => Some(*account_id),
             Self::PrivateOwned(_)
             | Self::PrivateForeign { .. }
             | Self::PrivateShared { .. }
@@ -162,7 +185,7 @@ impl AccountIdentity {
                 Self::PublicNoSign(account_id)
             }
             Self::PublicNoSign(_)
-            | Self::PublicForeign(_)
+            | Self::PublicForeign { .. }
             | Self::PublicPda { .. }
             | Self::PrivateOwned(_)
             | Self::PrivateForeign { .. }
@@ -186,9 +209,10 @@ impl AccountIdentity {
     pub fn account_id(&self) -> AccountId {
         match self {
             Self::Public(id) | Self::PublicNoSign(id) | Self::PrivateOwned(id) => *id,
-            Self::PublicForeign(pk) => AccountId::from(pk),
+            Self::PublicForeign { account_id, .. } | Self::PublicKeycard { account_id, .. } => {
+                *account_id
+            }
             Self::PublicPda { program, seed } => AccountId::for_public_pda(program, seed),
-            Self::PublicKeycard { account_id, .. } => *account_id,
             Self::PrivateForeign { npk, vpk, kind } => {
                 AccountId::for_private_account(npk, vpk, kind)
             }
@@ -306,6 +330,8 @@ enum State {
     Public {
         account: PreparedAccount,
         secret: Option<PublicAccountSecret>,
+        /// The type of the account's current key, which a signing account signs with.
+        key_type: KeyType,
         admission: Admission,
     },
     PublicKeycard {
@@ -911,22 +937,20 @@ impl AccountManager {
 
     /// What `WitnessSet::sign` takes for each public account whose secret the wallet holds,
     /// signing at its nonce in `nonces`. A Keycard account gets none: it cannot rotate its key.
-    pub fn signing_keys(
-        &self,
-        nonces: &BTreeMap<AccountId, Nonce>,
-    ) -> Vec<(AccountId, PrivateKey, SigningKeyState)> {
+    pub fn signing_keys(&self, nonces: &BTreeMap<AccountId, Nonce>) -> Vec<Signer> {
         self.states
             .iter()
             .filter_map(|state| match state {
                 State::Public {
                     account,
                     secret: Some(secret),
+                    key_type,
                     ..
                 } => {
                     let nonce = *nonces
                         .get(&account.account_id)
                         .expect("every signing account is in the message's nonces");
-                    Some(signer(account.account_id, secret, nonce))
+                    Some(signer(secret, nonce, *key_type))
                 }
                 State::Public { secret: None, .. }
                 | State::PublicKeycard { .. }
@@ -1010,9 +1034,9 @@ async fn prepare_account<C: WalletSequencerClient>(
         .key_chain()
         .pub_account_secret(account_id)
         .cloned();
-    let owned_evidence = wallet
-        .get_account_public_signing_key(account_id)
-        .map(|(_sk, pk)| PublicAccountEvidence::Key(pk));
+    let owned_evidence = owned_secret
+        .as_ref()
+        .map(|secret| PublicAccountEvidence::Key(initial_key(secret)));
     let (secret, evidence) = match identity {
         AccountIdentity::Public(_) => (owned_secret.filter(|_| authorizes), owned_evidence),
         AccountIdentity::PublicKeycard { .. } if authorizes => {
@@ -1023,7 +1047,9 @@ async fn prepare_account<C: WalletSequencerClient>(
         AccountIdentity::PublicNoSign(_) | AccountIdentity::PublicKeycard { .. } => {
             (None, owned_evidence)
         }
-        AccountIdentity::PublicForeign(pk) => (None, Some(PublicAccountEvidence::Key(pk))),
+        AccountIdentity::PublicForeign { initial_key, .. } => {
+            (None, Some(PublicAccountEvidence::Key(initial_key)))
+        }
         AccountIdentity::PublicPda { program, seed } => {
             (None, Some(PublicAccountEvidence::Pda { program, seed }))
         }
@@ -1072,10 +1098,18 @@ async fn prepare_account<C: WalletSequencerClient>(
             ))));
         }
     };
+    let key_type = match secret {
+        Some(_) => wallet
+            .current_key_type(account_id)
+            .await
+            .map_err(ExecutionFailureKind::SequencerError)?,
+        None => INITIAL_KEY_TYPE,
+    };
     let (account, present) = prepare_public_account(wallet, actor_state_selector).await?;
     Ok(State::Public {
         account,
         secret,
+        key_type,
         admission: Admission::of(present, evidence),
     })
 }
@@ -1270,7 +1304,7 @@ pub fn recipient<C: WalletSequencerClient>(
         ),
         AccountIdentity::Public(_)
         | AccountIdentity::PublicNoSign(_)
-        | AccountIdentity::PublicForeign(_)
+        | AccountIdentity::PublicForeign { .. }
         | AccountIdentity::PublicPda { .. }
         | AccountIdentity::PublicKeycard { .. } => return None,
     };
@@ -1282,21 +1316,10 @@ pub fn recipient<C: WalletSequencerClient>(
     })
 }
 
-/// What `WitnessSet::sign` takes for `account_id` signing at `nonce`: its key there, and the key
-/// state at the next nonce, which it rotates to.
-pub fn signer(
-    account_id: AccountId,
-    secret: &PublicAccountSecret,
-    nonce: Nonce,
-) -> (AccountId, PrivateKey, SigningKeyState) {
-    let (key, _) = signing_key::<Schnorr>(secret, nonce);
-    let mut next = nonce;
-    next.public_account_nonce_increment();
-    (
-        account_id,
-        key,
-        Schnorr::key_state(&signing_key::<Schnorr>(secret, next).1),
-    )
+/// What `WitnessSet::sign` takes for an account signing at `nonce` with its key of type
+/// `current`. The wallet's transactions rotate to a WOTS+ key.
+pub fn signer(secret: &PublicAccountSecret, nonce: Nonce, current: KeyType) -> Signer {
+    Signer::new(secret, nonce, current, KeyType::Wots)
 }
 
 pub fn random_bytes() -> [u8; 32] {
@@ -1387,6 +1410,7 @@ mod tests {
         State::Public {
             account,
             secret: None,
+            key_type: KeyType::Wots,
             admission: Admission::Present,
         }
     }
@@ -1397,13 +1421,14 @@ mod tests {
 
     fn public_signing_state_with(seed: u8, account: Account) -> State {
         let secret = PublicAccountSecret::new([seed; 32]);
-        let account_id = lee::AccountId::from(&signing_key::<Schnorr>(&secret, Nonce(0)).1);
+        let account_id = lee::signature::public_account_id(&secret);
         State::Public {
             account: PreparedAccount {
                 account_id,
                 account,
             },
             secret: Some(secret),
+            key_type: KeyType::Wots,
             admission: Admission::Present,
         }
     }
@@ -1752,6 +1777,7 @@ mod tests {
         let unsigned = manager(vec![State::Public {
             account: account(),
             secret: None,
+            key_type: KeyType::Wots,
             admission: Admission::Present,
         }]);
         assert!(!unsigned.selected_actor_states()[0].is_authorized);
@@ -1761,8 +1787,8 @@ mod tests {
 
     #[test]
     fn only_an_absent_non_signing_public_account_carries_admission_evidence() {
-        let key = lee::PrivateKey::try_new([9; 32]).expect("valid key");
-        let key_evidence = PublicAccountEvidence::Key(lee::PublicKey::new_from_private_key(&key));
+        let key_evidence =
+            PublicAccountEvidence::Key(initial_key(&PublicAccountSecret::new([9; 32])));
         assert_eq!(
             Admission::of(false, Some(key_evidence.clone())),
             Admission::Evidence(key_evidence.clone())
@@ -1774,8 +1800,7 @@ mod tests {
         assert_eq!(Admission::of(false, None), Admission::Missing);
 
         let signer = PublicAccountSecret::new([8; 32]);
-        let signer_evidence =
-            PublicAccountEvidence::Key(signing_key::<Schnorr>(&signer, Nonce(0)).1);
+        let signer_evidence = PublicAccountEvidence::Key(initial_key(&signer));
         let pda = PublicAccountEvidence::Pda {
             program: AccountId::new([4; 32]),
             seed: PdaSeed::new([5; 32]),
@@ -1786,6 +1811,7 @@ mod tests {
                 account: Account::default(),
             },
             secret,
+            key_type: KeyType::Wots,
             admission,
         };
         let manager = manager(vec![
@@ -1806,14 +1832,14 @@ mod tests {
     #[test]
     fn admitted_accounts_are_signers_and_accounts_present_or_carrying_evidence() {
         let signer = PublicAccountSecret::new([8; 32]);
-        let signer_evidence =
-            PublicAccountEvidence::Key(signing_key::<Schnorr>(&signer, Nonce(0)).1);
+        let signer_evidence = PublicAccountEvidence::Key(initial_key(&signer));
         let public = |tag, secret, admission| State::Public {
             account: PreparedAccount {
                 account_id: AccountId::new([tag; 32]),
                 account: Account::default(),
             },
             secret,
+            key_type: KeyType::Wots,
             admission,
         };
         let pda = PublicAccountEvidence::Pda {
@@ -1845,18 +1871,23 @@ mod tests {
 
     #[test]
     fn a_public_foreign_identity_names_its_keys_account_and_is_kept_without_signing() {
-        let pk = lee::PublicKey::new_from_private_key(
-            &lee::PrivateKey::try_new([9; 32]).expect("valid key"),
-        );
-        let foreign = AccountIdentity::PublicForeign(pk.clone());
+        let key = initial_key(&PublicAccountSecret::new([9; 32]));
+        let account_id = AccountId::for_initial_key(&key).expect("an initial key");
+        let foreign = AccountIdentity::public_foreign(key).expect("an initial key");
 
         assert!(foreign.is_public());
-        assert_eq!(foreign.account_id(), AccountId::from(&pk));
-        assert_eq!(foreign.public_account_id(), Some(AccountId::from(&pk)));
-        assert_eq!(
-            foreign.without_signing(),
-            AccountIdentity::PublicForeign(pk)
-        );
+        assert_eq!(foreign.account_id(), account_id);
+        assert_eq!(foreign.public_account_id(), Some(account_id));
+        assert_eq!(foreign.clone().without_signing(), foreign);
+    }
+
+    #[test]
+    fn a_key_that_cannot_be_initial_names_no_foreign_account() {
+        let key = SigningKeyState {
+            key_type: KeyType::Schnorr,
+            ..initial_key(&PublicAccountSecret::new([9; 32]))
+        };
+        assert_eq!(AccountIdentity::public_foreign(key), None);
     }
 
     #[test]

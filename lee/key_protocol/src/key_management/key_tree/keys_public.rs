@@ -1,5 +1,4 @@
-use lee::signature::{PublicAccountSecret, Schnorr, signing_key};
-use lee_core::account::Nonce;
+use lee::signature::{PublicAccountSecret, public_account_id};
 use serde::{Deserialize, Serialize};
 
 use crate::key_management::key_tree::{split_hash, traits::KeyTreeNode};
@@ -41,7 +40,7 @@ impl ChildKeysPublic {
 
     #[must_use]
     pub fn account_id(&self) -> lee::AccountId {
-        lee::AccountId::from(&signing_key::<Schnorr>(&self.secret, Nonce(0)).1)
+        public_account_id(&self.secret)
     }
 }
 
@@ -61,6 +60,9 @@ impl KeyTreeNode for ChildKeysPublic {
 
 #[cfg(test)]
 mod tests {
+    use lee::signature::{KeyScheme as _, Wots, signing_key};
+    use lee_core::account::Nonce;
+
     use super::*;
 
     const SEED: [u8; 64] = [
@@ -99,8 +101,11 @@ mod tests {
     #[test]
     fn account_id_is_that_of_the_nonce_zero_key() {
         let keys = ChildKeysPublic::root(SEED);
-        let (_sk_0, pk_0) = signing_key::<Schnorr>(&keys.secret, Nonce(0));
+        let (_sk_0, pk_0) = signing_key::<Wots>(&keys.secret, Nonce(0));
 
-        assert_eq!(keys.account_id(), lee::AccountId::from(&pk_0));
+        assert_eq!(
+            Some(keys.account_id()),
+            lee::AccountId::for_initial_key(&Wots::key_state(&pk_0))
+        );
     }
 }

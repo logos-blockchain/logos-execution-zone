@@ -22,6 +22,7 @@ typedef enum FfiPublicAccountEvidenceKind {
  * A signing key's type.
  */
 typedef enum FfiKeyType {
+  Wots = 0,
   Schnorr = 1,
 } FfiKeyType;
 
@@ -180,11 +181,20 @@ typedef struct FfiPublicExecutionContext {
   FfiPromotionList promotions;
 } FfiPublicExecutionContext;
 
-typedef struct FfiBytes32 FfiPublicKey;
+/**
+ * A signing key's type and 32-byte commitment.
+ */
+typedef struct FfiSigningKeyState {
+  enum FfiKeyType key_type;
+  struct FfiBytes32 key_commitment;
+} FfiSigningKeyState;
 
 typedef struct FfiPublicAccountEvidence {
   enum FfiPublicAccountEvidenceKind kind;
-  FfiPublicKey key;
+  /**
+   * The account's initial key, for `Key` evidence.
+   */
+  struct FfiSigningKeyState key;
   FfiAccountId program;
   struct FfiBytes32 seed;
 } FfiPublicAccountEvidence;
@@ -235,14 +245,6 @@ typedef struct FfiVec_FfiSealedMessage {
 } FfiVec_FfiSealedMessage;
 
 typedef struct FfiVec_FfiSealedMessage FfiSealedMessageList;
-
-/**
- * A signing key's type and 32-byte commitment.
- */
-typedef struct FfiSigningKeyState {
-  enum FfiKeyType key_type;
-  struct FfiBytes32 key_commitment;
-} FfiSigningKeyState;
 
 /**
  * One signer's authentication data, and the key it rotates to.

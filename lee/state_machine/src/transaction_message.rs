@@ -10,21 +10,26 @@ use lee_core::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::{PublicKey, error::LeeError};
+use crate::error::LeeError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PublicAccountEvidence {
-    Key(PublicKey),
-    Pda { program: AccountId, seed: PdaSeed },
+    /// The account's initial key.
+    Key(SigningKeyState),
+    Pda {
+        program: AccountId,
+        seed: PdaSeed,
+    },
 }
 
 impl PublicAccountEvidence {
+    /// The account the evidence names; `None` for a key of a type that cannot be initial.
     #[must_use]
-    pub fn account_id(&self) -> AccountId {
+    pub fn account_id(&self) -> Option<AccountId> {
         match self {
-            Self::Key(key) => AccountId::from(key),
-            Self::Pda { program, seed } => AccountId::for_public_pda(program, seed),
+            Self::Key(key) => AccountId::for_initial_key(key),
+            Self::Pda { program, seed } => Some(AccountId::for_public_pda(program, seed)),
         }
     }
 }

@@ -10,6 +10,7 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 use crate::{
     NullifierSecretKey,
     native_token::{InvalidBalanceEncoding, NATIVE_TOKEN_PROGRAM_ID, decode_balance},
+    signing_key::{KeyType, SigningKeyState},
 };
 
 pub mod actor_state;
@@ -250,6 +251,32 @@ impl AccountId {
     pub const fn into_value(self) -> [u8; 32] {
         self.value
     }
+
+    /// The id of the account whose nonce-0 key is `key`: `Sha256(PUBLIC_ACCOUNT_ID_PREFIX ||
+    /// Sha256(PREFIX_WOTS || c_0))`. `None` for key types not allowed as an initial key.
+    #[must_use]
+    pub fn for_initial_key(key: &SigningKeyState) -> Option<Self> {
+        const PUBLIC_ACCOUNT_ID_PREFIX: &[u8; 32] =
+            b"/LEE/v0.3/AccountId/Public/\x00\x00\x00\x00\x00";
+        const PREFIX_WOTS: &[u8; 32] = b"/LEE/v0.3/AccountId/Public/WOTS/";
+
+        let prefix = match key.key_type {
+            KeyType::Wots => PREFIX_WOTS,
+            KeyType::Schnorr => return None,
+        };
+        let mut bytes = [0; 64];
+        bytes[..32].copy_from_slice(prefix);
+        bytes[32..].copy_from_slice(&key.key_commitment);
+        let key_hash = *Impl::hash_bytes(&bytes);
+        bytes[32..].copy_from_slice(key_hash.as_bytes());
+        bytes[..32].copy_from_slice(PUBLIC_ACCOUNT_ID_PREFIX);
+        Some(Self::new(
+            Impl::hash_bytes(&bytes)
+                .as_bytes()
+                .try_into()
+                .expect("Hash output must be exactly 32 bytes long"),
+        ))
+    }
 }
 
 impl AsRef<[u8]> for AccountId {
@@ -289,6 +316,27 @@ impl Display for AccountId {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_initial_key_gives_its_account_id() {
+        let key = SigningKeyState {
+            key_type: KeyType::Wots,
+            key_commitment: [7; 32],
+        };
+        assert_eq!(
+            AccountId::for_initial_key(&key).map(|id| id.to_string()),
+            Some("7K8fbHd4rGVjphRpDYwBGTqbeWroGFGa26HKVx29Z37b".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_schnorr_key_is_not_an_initial_key() {
+        let key = SigningKeyState {
+            key_type: KeyType::Schnorr,
+            key_commitment: [7; 32],
+        };
+        assert_eq!(AccountId::for_initial_key(&key), None);
+    }
 
     #[test]
     fn a_persisted_account_with_a_legacy_balance_field_is_refused() {

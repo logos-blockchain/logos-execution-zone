@@ -11,9 +11,9 @@ use lee::test_utils::{TestSigner, signer_nonces, witness_for};
 use lee::{Account, V03State, ValidatedStateDiff};
 use lee::{
     AccountId, Actor,
-    signature::{KeyScheme as _, PublicAccountSecret, Schnorr, signing_key},
+    signature::{INITIAL_KEY_TYPE, PublicAccountSecret, Signer, public_account_id},
 };
-use lee_core::account::Nonce;
+use lee_core::{account::Nonce, signing_key::KeyType};
 
 use crate::{
     HashType,
@@ -26,9 +26,7 @@ use crate::{
 /// The test block-producer's reward account.
 #[must_use]
 pub fn producer_account_for_testing() -> AccountId {
-    AccountId::from(&lee::PublicKey::new_from_private_key(
-        &lee::PrivateKey::try_new([37; 32]).unwrap(),
-    ))
+    public_account_id(&PublicAccountSecret::new([37; 32]))
 }
 
 /// The test block producer's reward account and its initial state.
@@ -112,8 +110,7 @@ pub fn produce_dummy_block(
 pub fn produce_dummy_empty_transaction() -> LeeTransaction {
     let nowhere = Actor::native_balance(AccountId::default());
     let secret = PublicAccountSecret::new([1; 32]);
-    let (private_key, public_key) = signing_key::<Schnorr>(&secret, Nonce(0));
-    let account_id = AccountId::from(&public_key);
+    let account_id = public_account_id(&secret);
     let message = lee::public_transaction::Message::try_new(
         nowhere,
         Vec::new(),
@@ -121,9 +118,15 @@ pub fn produce_dummy_empty_transaction() -> LeeTransaction {
         native_transfer(nowhere.account_id, 0),
     )
     .unwrap();
-    let next = Schnorr::key_state(&signing_key::<Schnorr>(&secret, Nonce(1)).1);
-    let witness_set =
-        lee::public_transaction::WitnessSet::sign(&message, &[(account_id, private_key, next)]);
+    let witness_set = lee::public_transaction::WitnessSet::sign(
+        &message,
+        &[Signer::new(
+            &secret,
+            Nonce(0),
+            INITIAL_KEY_TYPE,
+            KeyType::Wots,
+        )],
+    );
 
     let lee_tx = lee::PublicTransaction::new(message, witness_set);
 

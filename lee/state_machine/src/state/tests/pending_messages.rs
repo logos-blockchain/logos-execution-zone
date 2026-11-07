@@ -3,6 +3,7 @@ use lee_core::{
     compute_digest_for_path,
     execution_state::Placement,
     program::{MessageBody, Publication},
+    signing_key::{KeyType, SigningKeyState},
 };
 
 use super::*;
@@ -524,10 +525,19 @@ fn a_call_to_an_absent_public_account_needs_evidence_deriving_it() {
         scripted_id(),
     );
     let stranger = TestSigner::new(8);
+    // The receiver's initial commitment under a type that cannot be initial: it names no account.
+    let PublicAccountEvidence::Key(initial) = receiver_signer().evidence() else {
+        unreachable!("a signer's evidence is its initial key");
+    };
+    let schnorr_typed = PublicAccountEvidence::Key(SigningKeyState {
+        key_type: KeyType::Schnorr,
+        ..initial
+    });
     for (to, admission_evidence, admitted) in [
         (receiver(), vec![], false),
         (receiver(), vec![receiver_signer().evidence()], true),
         (receiver(), vec![stranger.evidence()], false),
+        (receiver(), vec![schnorr_typed], false),
         (
             pda,
             vec![PublicAccountEvidence::Pda {

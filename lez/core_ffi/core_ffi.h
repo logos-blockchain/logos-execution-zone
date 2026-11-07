@@ -14,6 +14,7 @@ typedef enum FfiPublicAccountEvidenceKind {
  * A signing key's type.
  */
 typedef enum FfiKeyType {
+  FfiKeyType_Wots = 0,
   FfiKeyType_Schnorr = 1,
 } FfiKeyType;
 
@@ -354,11 +355,20 @@ typedef struct FfiVec_FfiNonceEntry {
 
 typedef struct FfiVec_FfiNonceEntry FfiNonceList;
 
-typedef struct FfiBytes32 FfiPublicKey;
+/**
+ * A signing key's type and 32-byte commitment.
+ */
+typedef struct FfiSigningKeyState {
+  enum FfiKeyType key_type;
+  struct FfiBytes32 key_commitment;
+} FfiSigningKeyState;
 
 typedef struct FfiPublicAccountEvidence {
   enum FfiPublicAccountEvidenceKind kind;
-  FfiPublicKey key;
+  /**
+   * The account's initial key, for `Key` evidence.
+   */
+  struct FfiSigningKeyState key;
   FfiAccountId program;
   struct FfiBytes32 seed;
 } FfiPublicAccountEvidence;
@@ -379,14 +389,6 @@ typedef struct FfiPublicMessage {
   FfiNonceList nonces;
   FfiPublicAccountEvidenceList admission_evidence;
 } FfiPublicMessage;
-
-/**
- * A signing key's type and 32-byte commitment.
- */
-typedef struct FfiSigningKeyState {
-  enum FfiKeyType key_type;
-  struct FfiBytes32 key_commitment;
-} FfiSigningKeyState;
 
 /**
  * One signer's authentication data, and the key it rotates to.
@@ -821,7 +823,7 @@ typedef struct FfiBytes32 FfiPdaSeed;
  * An account identity used by `AccountManager`.
  *
  * Public PDAs and foreign and shared private PDAs require `authority` and `seed`, and
- * `PublicForeign` requires `public_key`; other kinds ignore them. Their account IDs are checked
+ * `PublicForeign` requires `initial_key`; other kinds ignore them. Their account IDs are checked
  * on import and derived on export.
  *
  * `PrivateOwned` and `PrivatePdaOwned` use the wallet's stored account data.
@@ -834,7 +836,7 @@ typedef struct FfiAccountIdentity {
    * C-compatible string.
    */
   char *key_path;
-  struct FfiBytes32 public_key;
+  struct FfiSigningKeyState initial_key;
   struct FfiBytes32 authority;
   FfiPdaSeed seed;
   struct FfiBytes32 authorization_secret_key;
@@ -925,13 +927,6 @@ typedef struct FfiProgramCatalog {
   const struct FfiDependency *programs;
   uintptr_t programs_size;
 } FfiProgramCatalog;
-
-/**
- * Public key info for a public account.
- */
-typedef struct FfiPublicAccountKey {
-  struct FfiBytes32 public_key;
-} FfiPublicAccountKey;
 
 typedef struct LabelAvailability {
   bool is_available;
@@ -1927,14 +1922,12 @@ enum FfiOperationError wallet_ffi_poll_transaction_status(struct WalletHandle *h
 void wallet_ffi_free_transaction_result(struct FfiTransactionResult *result);
 
 /**
- * Get the public key for a public account.
- *
- * This returns the public key derived from the account's signing key.
+ * Get the initial key of a public account: what others name it by to pay it.
  *
  * # Parameters
  * - `handle`: Valid wallet handle
  * - `account_id`: The account ID (32 bytes)
- * - `out_public_key`: Output pointer for the public key
+ * - `out_initial_key`: Output pointer for the initial key
  *
  * # Returns
  * - `Success` on successful retrieval
@@ -1944,11 +1937,11 @@ void wallet_ffi_free_transaction_result(struct FfiTransactionResult *result);
  * # Safety
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
  * - `account_id` must be a valid pointer to a `FfiBytes32` struct
- * - `out_public_key` must be a valid pointer to a `FfiPublicAccountKey` struct
+ * - `out_initial_key` must be a valid pointer to a `FfiSigningKeyState` struct
  */
-enum FfiOperationError wallet_ffi_get_public_account_key(struct WalletHandle *handle,
-                                                         const struct FfiBytes32 *account_id,
-                                                         struct FfiPublicAccountKey *out_public_key);
+enum FfiOperationError wallet_ffi_get_public_account_initial_key(struct WalletHandle *handle,
+                                                                 const struct FfiBytes32 *account_id,
+                                                                 struct FfiSigningKeyState *out_initial_key);
 
 /**
  * Get keys for a private account.

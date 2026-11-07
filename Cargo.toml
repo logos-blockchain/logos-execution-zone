@@ -229,6 +229,7 @@ async-stream = "0.3.6"
 strum = { version = "0.28.0", features = ["derive"] }
 mockall = "0.15.0"
 
+wots_tree = { git = "https://github.com/jonesmarvin8/signatures.git", rev = "9cd435e884b808ce05a8204cd098ed70ab9b53ef" }
 logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
 logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }
 logos-blockchain-binary-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d480efc6bbb48fb493c10fe9afefd84c18a04f02" }

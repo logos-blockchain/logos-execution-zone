@@ -27,7 +27,7 @@ async fn private_transaction_pads_notes_to_max() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         to_keys: None,
-        to_pk: None,
+        to_initial_key: None,
         amount: 100,
     });
 

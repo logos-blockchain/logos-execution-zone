@@ -1,15 +1,24 @@
 use std::str::FromStr;
 
-use lee_core::{account::Nonce, signing_key::KeyType};
+use lee_core::{
+    account::{AccountId, Nonce},
+    signing_key::{KeyType, SigningKeyState},
+};
 use rand::{Rng as _, rngs::OsRng};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 use sha2::{Digest as _, Sha256};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use super::{KeyScheme, PublicKeyOf, SecretKeyOf, SignatureScheme as _};
+use super::{
+    KeyScheme, PublicKeyOf, Schnorr, SecretKeyOf, SignatureScheme as _, Wots, WotsSecretKey,
+};
+use crate::{PrivateKey, PublicKey};
 
 const DS_KEY_SEED: &[u8; 32] =
     b"/LEE/v0.3/KeySeed/\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+
+/// The type every public account's nonce-0 key has.
+pub const INITIAL_KEY_TYPE: KeyType = KeyType::Wots;
 
 /// A public account's secret: the root its per-nonce signing keys are derived from.
 #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop, SerializeDisplay, DeserializeFromStr)]
@@ -54,6 +63,95 @@ impl PublicAccountSecret {
     }
 }
 
+enum SigningSecret {
+    Schnorr(PrivateKey),
+    Wots(WotsSecretKey),
+}
+
+/// One signer of a transaction: its key at its nonce in the message, and the key it rotates to.
+pub struct Signer {
+    account_id: AccountId,
+    secret: SigningSecret,
+    initial: Option<SigningKeyState>,
+    next: SigningKeyState,
+}
+
+impl SigningSecret {
+    fn new(
+        secret: &PublicAccountSecret,
+        key_type: KeyType,
+        nonce: Nonce,
+    ) -> (Self, SigningKeyState) {
+        match key_type {
+            KeyType::Wots => {
+                let (sk, pk) = signing_key::<Wots>(secret, nonce);
+                (Self::Wots(sk), Wots::key_state(&pk))
+            }
+            KeyType::Schnorr => {
+                let (sk, pk) = signing_key::<Schnorr>(secret, nonce);
+                (Self::Schnorr(sk), Schnorr::key_state(&pk))
+            }
+        }
+    }
+
+    fn auth_data(&self, message_with_keys: &[u8; 32]) -> Vec<u8> {
+        match self {
+            Self::Wots(sk) => Wots::sign(sk, message_with_keys).to_vec(),
+            Self::Schnorr(sk) => Schnorr::auth_data(
+                &PublicKey::new_from_private_key(sk),
+                &Schnorr::sign(sk, message_with_keys),
+            )
+            .to_vec(),
+        }
+    }
+}
+
+impl Signer {
+    /// Signs with the key of type `current` at `nonce` and rotates to the key of type `next` at
+    /// the next nonce; at nonce 0 the entry also carries the initial key.
+    #[must_use]
+    pub fn new(
+        secret: &PublicAccountSecret,
+        nonce: Nonce,
+        current: KeyType,
+        next: KeyType,
+    ) -> Self {
+        let (signing_secret, current_key) = SigningSecret::new(secret, current, nonce);
+        let initial = (nonce == Nonce(0)).then_some(current_key);
+        let mut next_nonce = nonce;
+        next_nonce.public_account_nonce_increment();
+        Self {
+            account_id: initial
+                .and_then(|key| AccountId::for_initial_key(&key))
+                .unwrap_or_else(|| public_account_id(secret)),
+            secret: signing_secret,
+            initial,
+            next: key_state(secret, next, next_nonce),
+        }
+    }
+
+    #[must_use]
+    pub const fn account_id(&self) -> AccountId {
+        self.account_id
+    }
+
+    #[must_use]
+    pub const fn next(&self) -> SigningKeyState {
+        self.next
+    }
+
+    /// The witness entry's authentication data over `message_with_keys`.
+    #[must_use]
+    pub fn auth_data(&self, message_with_keys: &[u8; 32]) -> Vec<u8> {
+        let mut auth_data = self
+            .initial
+            .map(|key| borsh::to_vec(&key).expect("a signing key state encodes to 33 bytes"))
+            .unwrap_or_default();
+        auth_data.extend(self.secret.auth_data(message_with_keys));
+        auth_data
+    }
+}
+
 /// Per-nonce seed for one key type: `Sha256(DS_KEY_SEED || secret || key_type byte || nonce as
 /// 16 bytes LE)`.
 fn key_seed(secret: &PublicAccountSecret, key_type: KeyType, nonce: Nonce) -> [u8; 32] {
@@ -75,6 +173,24 @@ pub fn signing_key<K: KeyScheme>(
     let keys = K::Scheme::keygen(&seed);
     seed.zeroize();
     keys
+}
+
+/// The account's nonce-0 key state.
+#[must_use]
+pub fn initial_key(secret: &PublicAccountSecret) -> SigningKeyState {
+    key_state(secret, INITIAL_KEY_TYPE, Nonce(0))
+}
+
+/// The id of the public account `secret` holds.
+#[must_use]
+pub fn public_account_id(secret: &PublicAccountSecret) -> AccountId {
+    AccountId::for_initial_key(&initial_key(secret)).expect("the initial key type gives an id")
+}
+
+/// The account's key state of type `key_type` at `nonce`.
+#[must_use]
+pub fn key_state(secret: &PublicAccountSecret, key_type: KeyType, nonce: Nonce) -> SigningKeyState {
+    SigningSecret::new(secret, key_type, nonce).1
 }
 
 #[cfg(test)]
