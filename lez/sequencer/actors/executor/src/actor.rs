@@ -350,7 +350,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
         }: Transaction,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let online = self.state.online()?;
+        let online = self.state.online_mut()?;
 
         let size = u64::try_from(
             borsh::object_length(&transaction)
@@ -366,34 +366,26 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
             return Err(Error::TransactionTooLarge { size, max });
         }
 
-        // Admission against the head state, before the mempool sees it. The fee
-        // screen comes first, so an unfundable transaction costs no signature
-        // verification. Its refusals are advisory (base fees and balances move);
-        // an authentication refusal is definitive (see `Error::is_definitive`).
-        // Everything turned away would have been refused by the block builder.
-        online
-            .sequencer()
-            .with_state(|state| {
-                sequencer_core::fees::screen(&transaction, state).map_err(|err| {
-                    if let sequencer_core::fees::Error::FeeCore(
-                        FeeError::PrivateFeeBelowRequired { required, reserve },
-                    ) = err
-                    {
-                        Error::PrivateFeeBelowHead { required, reserve }
-                    } else {
-                        Error::IncorrectFee(err.into())
-                    }
-                })?;
-                transaction
-                    .authenticate_at_head(state)
-                    .map_err(Error::InvalidTransaction)
-            })
-            .await?;
+        // Admission against the head state and the pending slots, before the
+        // mempool sees it: the fee screen first, so an unfundable transaction
+        // costs no signature verification, then authentication, then the slots
+        // (first seen wins). Only an authentication refusal at or below the head
+        // is definitive (see `Error::is_definitive`); the rest depend on this
+        // node's head and mempool. An identical re-send is already pending.
+        let admission = online
+            .sequencer_mut()
+            .admit(&transaction)
+            .await
+            .map_err(admission_error)?;
+        if admission == sequencer_core::pending::Admission::Duplicate {
+            return Ok(());
+        }
 
         online
             .mempool_handle()
-            .try_push((origin.into(), transaction))
+            .try_push((origin.into(), transaction.clone()))
             .map_err(|_err| Error::MempoolIsFull)?;
+        online.sequencer_mut().record_pending(&transaction);
         Ok(())
     }
 }
@@ -961,5 +953,21 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
         }
 
         Ok(())
+    }
+}
+
+fn admission_error(err: sequencer_core::AdmissionError) -> Error {
+    match err {
+        sequencer_core::AdmissionError::Fee(sequencer_core::fees::Error::FeeCore(
+            FeeError::PrivateFeeBelowRequired { required, reserve },
+        )) => Error::PrivateFeeBelowHead { required, reserve },
+        sequencer_core::AdmissionError::Fee(err) => Error::IncorrectFee(err.into()),
+        sequencer_core::AdmissionError::Authentication(lee::HeadAuthError::Definitive(err)) => {
+            Error::InvalidTransaction(err)
+        }
+        sequencer_core::AdmissionError::Authentication(lee::HeadAuthError::Pending(err)) => {
+            Error::PendingAuthentication(err)
+        }
+        sequencer_core::AdmissionError::Pending(refusal) => Error::PendingSlot(refusal),
     }
 }

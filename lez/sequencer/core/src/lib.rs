@@ -77,6 +77,7 @@ pub mod cross_zone_watcher;
 pub mod faults;
 pub mod fees;
 pub mod logging;
+pub mod pending;
 pub mod release_finality;
 pub mod system_approvals;
 pub mod task_group;
@@ -181,6 +182,17 @@ impl From<TransactionOrigin> for sequencer_core_metrics::TransactionOrigin {
     }
 }
 
+/// Why admission refused a transaction.
+#[derive(Debug, thiserror::Error)]
+pub enum AdmissionError {
+    #[error(transparent)]
+    Fee(#[from] fees::Error),
+    #[error(transparent)]
+    Authentication(#[from] lee::HeadAuthError),
+    #[error(transparent)]
+    Pending(#[from] pending::PendingRefusal),
+}
+
 pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     // TODO: Remove in favor of `sequencer_config` field
     channel_id: ChannelId,
@@ -188,6 +200,8 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     /// `on_follow` sink feeds adopted/orphaned/finalized peer blocks into it.
     chain: Arc<Mutex<ChainState>>,
     mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
+    /// Which transaction holds each pending `(account, nonce)` slot.
+    pending: Box<pending::PendingIndex>,
     sequencer_config: SequencerConfig,
     /// Cross-zone watchers, stopped when this sequencer is dropped. They hold a
     /// store handle, so leaving them running would keep the `RocksDB` lock held
@@ -304,6 +318,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             channel_id,
             chain: Arc::new(Mutex::new(chain)),
             mempool,
+            pending: Box::new(pending::PendingIndex::new(config.mempool_max_per_account)),
             stake_config: StakeConfigUpdate::default(),
             storage_ref,
             bedrock_pool_ref,
@@ -587,14 +602,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     ///
     /// TODO: a full mempool still drops the transaction; a durable resubmit
     /// queue is a follow-up.
-    fn resubmit_orphaned(&self, txs: Vec<LeeTransaction>) {
+    fn resubmit_orphaned(&mut self, txs: Vec<LeeTransaction>) {
         for tx in txs {
             let tx_hash = tx.hash();
             if let Err(err) = self
                 .mempool
                 .handle()
-                .try_push((TransactionOrigin::User, tx))
+                .try_push((TransactionOrigin::User, tx.clone()))
             {
+                self.pending.remove(&tx);
                 warn!(
                     %tx_hash,
                     error = format_args!("{:#}", anyhow!(err)),
@@ -1433,6 +1449,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             (prev, height, chain.head_state().clone(), pending, parent)
         };
 
+        // Slots below the head nonce were filled by included transactions.
+        self.pending.prune(&working_state);
+
         // A Slash executes against the head config, so it is proposed from it.
         let slash_txs = match committee_discovery::read_config(&working_state) {
             Some(config) => self
@@ -1664,6 +1683,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     );
                     if from_store {
                         self.count_dispatch_failure(&tx).await;
+                    } else {
+                        self.pending.remove(&tx);
                     }
                     continue;
                 }
@@ -1711,6 +1732,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                          stalling production"
                     );
                     self.count_dispatch_failure(&tx).await;
+                    self.pending.remove(&tx);
                     continue;
                 }
                 warn!(
@@ -1802,6 +1824,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // dispatch: that one is re-fed from the store every turn, so one
                 // that can never execute would fail on every block for ever.
                 self.count_dispatch_failure(&tx).await;
+                self.pending.remove(&tx);
             }
 
             if valid_transactions.len() >= self.sequencer_config.max_num_tx_in_block {
@@ -1954,6 +1977,28 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// reuse `V03State`'s own API (accounts, nonces, proofs) with no whole-state copy.
     pub async fn with_state<R>(&self, f: impl FnOnce(&lee::V03State) -> R) -> R {
         f(self.chain.lock().await.head_state())
+    }
+
+    /// Admission against the head state and the mempool's pending slots: the fee screen, then
+    /// the signers' authentication (against pending keys ahead of the head), then the slots.
+    /// Admits nothing: [`Self::record_pending`] does, once the transaction is in the mempool.
+    pub async fn admit(
+        &mut self,
+        tx: &LeeTransaction,
+    ) -> Result<pending::Admission, AdmissionError> {
+        let chain = self.chain.lock().await;
+        let state = chain.head_state();
+        fees::screen(tx, state)?;
+        self.pending.prune_signers(tx, state);
+        let pending = &self.pending;
+        tx.authenticate_at_head(state, |account, nonce| pending.key_at(account, nonce))?;
+        Ok(self.pending.check(tx)?)
+    }
+
+    /// Records the slots of a transaction now in the mempool.
+    pub fn record_pending(&mut self, tx: &LeeTransaction) {
+        self.pending.insert(tx);
+        sequencer_core_metrics::record_mempool_pending_slots(self.pending.len());
     }
 
     #[must_use]
