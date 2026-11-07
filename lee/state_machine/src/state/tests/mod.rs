@@ -45,6 +45,7 @@ mod deploy;
 mod events;
 mod flash_swap;
 mod genesis;
+mod key_rotation;
 mod native_transfer;
 mod pending_messages;
 mod privacy_preserving;
