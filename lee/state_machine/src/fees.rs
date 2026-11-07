@@ -74,7 +74,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        public_transaction::Message,
+        public_transaction::{Message, WitnessSet},
         test_utils::{TestSigner, witness_for},
     };
 
@@ -176,5 +176,20 @@ mod tests {
             let back: Message = borsh::from_slice(&bytes).expect("deserializes");
             assert_eq!(back, message);
         }
+    }
+
+    #[test]
+    fn a_payer_entry_off_its_nonces_position_is_unauthorized() {
+        let (signer_key, payer_key) = keys();
+        let mut message = charged_message(payer_key.account_id());
+        message.nonces.insert(payer_key.account_id(), Nonce(0));
+        message
+            .public_context
+            .authorized_accounts
+            .insert(payer_key.account_id());
+        let mut entries = witness_for(&message, &[&signer_key, &payer_key]).into_raw_parts();
+        entries.swap(0, 1);
+        let witness_set = WitnessSet::from_raw_parts(entries);
+        assert!(!is_fee_authorized(&message, &witness_set));
     }
 }
