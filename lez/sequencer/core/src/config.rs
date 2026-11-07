@@ -161,8 +161,8 @@ impl SequencerConfig {
     /// The genesis this config describes, or a placeholder with the default channel params when
     /// [`Self::genesis`] is absent.
     ///
-    /// When [`Self::genesis`] stakes no sequencer, `bootstrap_sequencer_key` is staked by the key
-    /// in `<home>/sequencer_stake_signing_key`, created on first use.
+    /// When [`Self::genesis`] stakes no sequencer, `bootstrap_sequencer_key` is staked by the
+    /// secret in `<home>/sequencer_stake_signing_key`, created on first use.
     pub fn genesis_spec(
         &self,
         bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
@@ -182,10 +182,13 @@ impl SequencerConfig {
         if let Some(sequencer_key) = bootstrap_sequencer_key
             && !sequencer_genesis::stakes_any_sequencer(&spec.actions)
         {
-            let ownership_key = crate::load_or_create_stake_signing_key(
-                &self.home.join("sequencer_stake_signing_key"),
-            )
-            .context("Failed to load or create the stake signing key")?;
+            let secret =
+                crate::load_or_create_stake_secret(&self.home.join("sequencer_stake_signing_key"))
+                    .context("Failed to load or create the stake secret")?;
+            let (ownership_key, _) = lee::signature::signing_key::<lee::signature::Schnorr>(
+                &secret,
+                lee_core::account::Nonce(0),
+            );
             spec.actions.push(sequencer_genesis::self_stake(
                 sequencer_key,
                 &ownership_key,

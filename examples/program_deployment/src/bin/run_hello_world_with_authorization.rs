@@ -61,12 +61,11 @@ async fn main() {
         .unwrap();
 
     // Load signing keys to provide authorization
-    let signing_key = wallet_core
+    let (signing_key, _public_key) = wallet_core
         .storage()
         .key_chain()
         .pub_account_signing_key(account_id)
-        .expect("Input account should be a self owned public account")
-        .clone();
+        .expect("Input account should be a self owned public account");
 
     // Define the desired greeting in ASCII
     let greeting: Vec<u8> = vec![72, 111, 108, 97, 32, 109, 117, 110, 100, 111, 33];

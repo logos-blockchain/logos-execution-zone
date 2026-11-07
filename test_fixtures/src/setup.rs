@@ -9,7 +9,11 @@ use std::{
 
 use anyhow::{Context as _, Result, bail};
 use indexer_service::{ChannelId, IndexerHandle};
-use lee::{AccountId, PrivateKey, PublicKey};
+use lee::{
+    AccountId,
+    signature::{PublicAccountSecret, Schnorr, signing_key},
+};
+use lee_core::account::Nonce;
 use logos_blockchain_zone_sdk::key_management_system_service::keys::UnsecuredEd25519Key;
 use sequencer_service::{GenesisAction, SequencerConfig, SequencerHandle};
 use sequencer_service_protocol::SequencerStatus;
@@ -562,7 +566,7 @@ pub async fn setup_indexer_at(
 
 pub fn setup_wallet(
     sequencer_addr: &SocketAddr,
-    initial_public_accounts: &[(PrivateKey, u128)],
+    initial_public_accounts: &[(PublicAccountSecret, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     config_overrides: WalletConfigOverrides,
 ) -> Result<(WalletCore<SequencerClient>, TempDir, String)> {
@@ -582,7 +586,7 @@ pub fn setup_wallet(
 /// Set up the wallet in an explicit home directory owned by the caller.
 pub fn setup_wallet_at(
     sequencer_addr: &SocketAddr,
-    initial_public_accounts: &[(PrivateKey, u128)],
+    initial_public_accounts: &[(PublicAccountSecret, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     config_overrides: WalletConfigOverrides,
     home: &Path,
@@ -607,11 +611,11 @@ pub fn setup_wallet_at(
     )
     .context("Failed to init wallet")?;
 
-    for (private_key, _balance) in initial_public_accounts {
+    for (secret, _balance) in initial_public_accounts {
         wallet
             .storage_mut()
             .key_chain_mut()
-            .add_imported_public_account(private_key.clone());
+            .add_imported_public_account(secret.clone());
     }
 
     for private_account in initial_private_accounts {
@@ -635,12 +639,16 @@ pub fn setup_wallet_at(
 /// Funds each of the wallet's private accounts from one of its public accounts.
 pub async fn fund_private_accounts(
     wallet: &mut WalletCore<SequencerClient>,
-    initial_public_accounts: &[(PrivateKey, u128)],
+    initial_public_accounts: &[(PublicAccountSecret, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
 ) -> Result<()> {
-    let funder_id = AccountId::from(&PublicKey::new_from_private_key(
-        &initial_public_accounts[config::PRIVATE_FUNDER_INDEX].0,
-    ));
+    let funder_id = AccountId::from(
+        &signing_key::<Schnorr>(
+            &initial_public_accounts[config::PRIVATE_FUNDER_INDEX].0,
+            Nonce(0),
+        )
+        .1,
+    );
 
     for private_account in initial_private_accounts {
         // The recipient pays the shielding's in-proof fee out of what it receives, so it is

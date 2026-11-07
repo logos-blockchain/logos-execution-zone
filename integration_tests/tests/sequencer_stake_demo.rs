@@ -14,7 +14,7 @@ use common::{
     transaction::{FeePayee, LeeTransaction, fee_invocation_payee},
 };
 use integration_tests::{account_balance, get_account, new_account, wait_for_same_chain};
-use lee::{AccountId, PrivateKey, program::Program, test_utils::TestSigner};
+use lee::{AccountId, program::Program, signature::PublicAccountSecret, test_utils::TestSigner};
 use logos_blockchain_zone_sdk::key_management_system_service::keys::{
     Ed25519Key, UnsecuredEd25519Key,
 };
@@ -54,7 +54,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     let demo_stake_key = sequencer_stake_core::SequencerKey::new(demo_sequencer_key.to_bytes())
         .expect("a channel signing public key is a valid Ed25519 public key");
 
-    let funding_private_key = PrivateKey::new_os_random();
+    let funding_private_key = PublicAccountSecret::new_os_random();
     let funding_signer = TestSigner::from(&funding_private_key);
     let funding_id = funding_signer.account_id();
 

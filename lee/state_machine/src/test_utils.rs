@@ -23,6 +23,7 @@ use crate::{
     error::LeeError,
     privacy_preserving_transaction::{self, circuit::Proof},
     public_transaction,
+    signature::{PublicAccountSecret, Schnorr, signing_key},
 };
 
 /// A public account's signing key material, as tests sign with it.
@@ -57,6 +58,14 @@ impl TestSigner {
 impl From<&PrivateKey> for TestSigner {
     fn from(key: &PrivateKey) -> Self {
         Self { key: key.clone() }
+    }
+}
+
+impl From<&PublicAccountSecret> for TestSigner {
+    fn from(secret: &PublicAccountSecret) -> Self {
+        Self {
+            key: signing_key::<Schnorr>(secret, Nonce(0)).0,
+        }
     }
 }
 

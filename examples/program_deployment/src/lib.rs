@@ -1,4 +1,4 @@
-use lee::{AccountId, FeeDeclaration, PrivateKey, PublicAccountEvidence, PublicKey};
+use lee::{AccountId, FeeDeclaration, PrivateKey, PublicAccountEvidence};
 use lee_core::account::Nonce;
 use program_loader_core::MAX_SEGMENT_DATA_LEN;
 use wallet::{
@@ -68,10 +68,9 @@ pub async fn fee_paid_by<C: WalletSequencerClient>(
     wallet_core: &WalletCore<C>,
     payer: AccountId,
 ) -> anyhow::Result<(FeeDeclaration, Nonce, PrivateKey)> {
-    let signing_key = wallet_core
+    let (signing_key, _) = wallet_core
         .get_account_public_signing_key(payer)
-        .ok_or_else(|| anyhow::anyhow!("fee payer {payer} is not a self owned public account"))?
-        .clone();
+        .ok_or_else(|| anyhow::anyhow!("fee payer {payer} is not a self owned public account"))?;
     let nonce = wallet_core.get_accounts_nonces(&[payer]).await?[0];
     let gas_limit = wallet_core.config().gas_limit;
     let fee = FeeDeclaration::new(payer, gas_limit, 0, max_fee_for(gas_limit));
@@ -89,5 +88,5 @@ pub fn admission_evidence<C: WalletSequencerClient>(
 ) -> Option<PublicAccountEvidence> {
     wallet_core
         .get_account_public_signing_key(account_id)
-        .map(|key| PublicAccountEvidence::Key(PublicKey::new_from_private_key(key)))
+        .map(|(_, public_key)| PublicAccountEvidence::Key(public_key))
 }

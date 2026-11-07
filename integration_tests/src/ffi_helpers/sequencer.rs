@@ -29,7 +29,7 @@ use core_ffi::{
         },
     },
 };
-use lee::{Account, AccountId, PrivateKey, test_utils::TestSigner};
+use lee::{Account, AccountId, signature::PublicAccountSecret, test_utils::TestSigner};
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
@@ -204,7 +204,7 @@ pub fn joining_setup_with_stake() -> Result<JoiningSetup> {
         sequencer_stake_core::SequencerKey::new(joining_sequencer_key.to_bytes())
             .expect("a channel signing public key is a valid Ed25519 public key");
 
-    let funding_private_key = PrivateKey::new_os_random();
+    let funding_private_key = PublicAccountSecret::new_os_random();
     let funding_signer = TestSigner::from(&funding_private_key);
     let funding_id = funding_signer.account_id();
 

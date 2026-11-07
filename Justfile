@@ -180,8 +180,8 @@ get-sequencer-metrics:
 # Import test accounts supplied in sequencer configuration.
 wallet-import-test-accounts:
     @echo "⚙️ Initializing accounts"
-    just run-wallet account import public --private-key 10a26a9aec7d34b82364eeae45c5294dbb0a764b000b94eeb9b58511dc487c4d
-    just run-wallet account import public --private-key 717940b1cc55e5d6b2066dbf1d9a3f26f212f4db08d02388177fcfedd8a9be1b
+    just run-wallet account import public --secret 10a26a9aec7d34b82364eeae45c5294dbb0a764b000b94eeb9b58511dc487c4d
+    just run-wallet account import public --secret 717940b1cc55e5d6b2066dbf1d9a3f26f212f4db08d02388177fcfedd8a9be1b
 
     just run-wallet account list
 

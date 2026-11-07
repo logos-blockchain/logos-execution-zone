@@ -239,12 +239,21 @@ async fn run_scripted_write(ctx: &mut TestContext, program: AccountId) -> Result
         test_guest_core::Script::write(written.clone()),
         common::test_utils::test_fee_declaration(payer),
     )?;
-    let keys = signers.map(|id| {
-        ctx.wallet()
-            .get_account_public_signing_key(id)
-            .expect("the wallet holds both keys")
-    });
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &keys);
+    // Witness entries follow `nonces` order.
+    let keys: Vec<_> = message
+        .nonces
+        .keys()
+        .map(|id| {
+            ctx.wallet()
+                .get_account_public_signing_key(*id)
+                .expect("the wallet holds both keys")
+                .0
+        })
+        .collect();
+    let witness_set = lee::public_transaction::WitnessSet::for_message(
+        &message,
+        &keys.iter().collect::<Vec<_>>(),
+    );
     let tx_hash = ctx
         .sequencer_client()
         .send_transaction(LeeTransaction::Public(lee::PublicTransaction::new(

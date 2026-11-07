@@ -308,12 +308,12 @@ fn test_wallet_ffi_get_public_account_keys() -> Result<()> {
     };
 
     let expected_key = {
-        let private_key = ctx
+        let (_private_key, public_key) = ctx
             .ctx()
             .wallet()
             .get_account_public_signing_key(account_id)
             .unwrap();
-        PublicKey::new_from_private_key(private_key)
+        public_key
     };
 
     assert_eq!(key, expected_key);

@@ -1217,7 +1217,7 @@ mod tests {
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
-        let signer = TestSigner::from(&accounts[0].pub_sign_key);
+        let signer = TestSigner::from(&accounts[0].secret);
         let initial_from = state.get_account_by_id(from).data.native_balance().unwrap();
         let initial_to = state.get_account_by_id(to).data.native_balance().unwrap();
 
@@ -1288,7 +1288,7 @@ mod tests {
 
         let accounts = initial_pub_accounts_private_keys();
         let attacker = accounts[0].account_id;
-        let attacker_signer = TestSigner::from(&accounts[0].pub_sign_key);
+        let attacker_signer = TestSigner::from(&accounts[0].secret);
         let recipient = accounts[1].account_id;
 
         let opening = FeeState::from_bytes(
@@ -1357,7 +1357,7 @@ mod tests {
 
         let accounts = initial_pub_accounts_private_keys();
         let payer = accounts[0].account_id;
-        let payer_key = accounts[0].pub_sign_key.clone();
+        let payer_key = TestSigner::from(&accounts[0].secret);
         let payer_nonce = state.get_account_by_id(payer).nonce;
         let clock = system_accounts::clock_actor();
         // A tick for block 2 passes the clock's own check, so only the restricted-account guard
@@ -1373,7 +1373,7 @@ mod tests {
             test_fee_declaration(payer),
         )
         .expect("clock message builds");
-        let witness = public_transaction::WitnessSet::for_message(&message, &[&payer_key]);
+        let witness = lee::test_utils::witness_for(&message, &[&payer_key]);
         let tick = LeeTransaction::Public(PublicTransaction::new(message, witness));
         let tick_block = produce_dummy_block(2, Some(tip.hash), vec![tick]);
         let err = apply_block(Some(&tip), &tick_block, &mut state)
@@ -1401,7 +1401,7 @@ mod tests {
 
         let accounts = initial_pub_accounts_private_keys();
         let sender = accounts[0].account_id;
-        let sender_signer = TestSigner::from(&accounts[0].pub_sign_key);
+        let sender_signer = TestSigner::from(&accounts[0].secret);
         let recipient = accounts[1].account_id;
 
         let opening = FeeState::from_bytes(
@@ -1462,7 +1462,7 @@ mod tests {
 
         let accounts = initial_pub_accounts_private_keys();
         let payer = accounts[0].account_id;
-        let payer_signer = TestSigner::from(&accounts[0].pub_sign_key);
+        let payer_signer = TestSigner::from(&accounts[0].secret);
         let recipient = accounts[1].account_id;
 
         let opening = FeeState::from_bytes(
@@ -1574,7 +1574,7 @@ mod tests {
     fn a_block_crediting_an_absent_producer_it_cannot_reach_is_rejected() {
         let mut state = initial_state(true);
         let accounts = initial_pub_accounts_private_keys();
-        let signer = TestSigner::from(&accounts[0].pub_sign_key);
+        let signer = TestSigner::from(&accounts[0].secret);
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
         let tip = tip_of(&genesis);
@@ -1623,7 +1623,7 @@ mod tests {
 
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
-        let signer = TestSigner::from(&accounts[0].pub_sign_key);
+        let signer = TestSigner::from(&accounts[0].secret);
         let emitter_id = AccountId::from_builtin_program(event_emitter().id());
 
         let emitter = Actor::new(from, emitter_id);
@@ -1931,7 +1931,7 @@ mod tests {
         declared: Option<lee::FeeDeclaration>,
     ) -> LeeTransaction {
         let signer_key =
-            declared.map(|_| initial_pub_accounts_private_keys()[1].pub_sign_key.clone());
+            declared.map(|_| TestSigner::from(&initial_pub_accounts_private_keys()[1].secret));
         let signer = declared.map(|_| public_payer());
         let public_actors = vec![
             root.to,
@@ -2001,14 +2001,10 @@ mod tests {
                 output,
             )
         };
-        let signing_keys: Vec<&lee::PrivateKey> = signer_key.iter().collect();
+        let signers: Vec<&TestSigner> = signer_key.iter().collect();
         LeeTransaction::PrivacyPreserving(lee::PrivacyPreservingTransaction::new(
             message.clone(),
-            lee::privacy_preserving_transaction::WitnessSet::for_message(
-                &message,
-                proof,
-                &signing_keys,
-            ),
+            lee::test_utils::privacy_witness_for(&message, proof, &signers),
         ))
     }
 
@@ -2653,7 +2649,7 @@ mod tests {
             0,
             accounts[1].account_id,
             10,
-            &TestSigner::from(&accounts[0].pub_sign_key),
+            &TestSigner::from(&accounts[0].secret),
         );
         let block = settled_block(2, tip.hash, vec![tx], &state);
         let receipt = block.body.receipts[0];

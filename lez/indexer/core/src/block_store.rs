@@ -594,7 +594,7 @@ mod tests {
     // self-pay.
     fn deploy_emitter_txs() -> Vec<LeeTransaction> {
         let payer = &initial_pub_accounts_private_keys()[0];
-        let payer_signer = TestSigner::from(&payer.pub_sign_key);
+        let payer_signer = TestSigner::from(&payer.secret);
         let header_signer = emitter_header_signer();
         let header_id = emitter_header_account_id();
         let loader = lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
@@ -667,7 +667,7 @@ mod tests {
     fn invoke_emitter_tx(events: Vec<ProgramEvent>) -> LeeTransaction {
         // create message with payer so that it's not rejected due to missing fee declaration
         let payer = &initial_pub_accounts_private_keys()[0];
-        let payer_signer = TestSigner::from(&payer.pub_sign_key);
+        let payer_signer = TestSigner::from(&payer.secret);
         // The payer's next nonce after `deploy_emitter_txs`'s chunked deploy.
         let user_elf = test_programs::scripted()
             .user_elf()
@@ -784,7 +784,7 @@ mod tests {
         let initial_accounts = initial_pub_accounts_private_keys();
         let from = initial_accounts[0].account_id;
         let to = initial_accounts[1].account_id;
-        let signer = TestSigner::from(&initial_accounts[0].pub_sign_key);
+        let signer = TestSigner::from(&initial_accounts[0].secret);
 
         // Genesis (block 1): fee/clock only.
         let mut build_state = claimed_build_state();
@@ -854,7 +854,7 @@ mod tests {
         let initial_accounts = initial_pub_accounts_private_keys();
         let from = initial_accounts[0].account_id;
         let to = initial_accounts[1].account_id;
-        let signer = TestSigner::from(&initial_accounts[0].pub_sign_key);
+        let signer = TestSigner::from(&initial_accounts[0].secret);
 
         let mut build_state = claimed_build_state();
         let initial_from = build_state
@@ -1092,7 +1092,7 @@ mod tests {
         let initial_accounts = initial_pub_accounts_private_keys();
         let from = initial_accounts[0].account_id;
         let to = initial_accounts[1].account_id;
-        let signer = TestSigner::from(&initial_accounts[0].pub_sign_key);
+        let signer = TestSigner::from(&initial_accounts[0].secret);
 
         let genesis = produce_dummy_block(1, None, vec![]);
         store.accept_block(&genesis, Slot::from(0)).await.unwrap();
@@ -1567,7 +1567,7 @@ mod accept_tests {
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
-        let signer = TestSigner::from(&accounts[0].pub_sign_key);
+        let signer = TestSigner::from(&accounts[0].secret);
 
         let mut build_state = claimed_build_state();
         let genesis = produce_dummy_block(1, None, vec![]);
@@ -1638,7 +1638,7 @@ mod accept_tests {
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
-        let signer = TestSigner::from(&accounts[0].pub_sign_key);
+        let signer = TestSigner::from(&accounts[0].secret);
 
         // Build a short chain: genesis (1) -> block 2 -> block 3, so the tip is 3.
         let mut build_state = claimed_build_state();
@@ -1723,7 +1723,7 @@ mod accept_tests {
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
-        let signer = TestSigner::from(&accounts[0].pub_sign_key);
+        let signer = TestSigner::from(&accounts[0].secret);
 
         let mut build_state = claimed_build_state();
         let initial_from = build_state

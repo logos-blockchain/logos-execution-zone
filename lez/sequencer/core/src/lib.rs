@@ -2931,13 +2931,14 @@ pub fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
     Ok(Ed25519Key::from_bytes(&load_or_create_key_bytes(path)?))
 }
 
-/// Load the key owning this sequencer's genesis stake, or generate one.
+/// Load the secret owning this sequencer's genesis stake, or generate one.
 ///
 /// Only read when a solo sequencer creates the channel: a configured founding
-/// set carries a signature instead, so the key never reaches the node.
-pub fn load_or_create_stake_signing_key(path: &Path) -> Result<lee::PrivateKey> {
-    let bytes = load_or_create_key_bytes(path)?;
-    lee::PrivateKey::try_new(bytes).context("stake signing key file holds an invalid private key")
+/// set carries a signature instead, so the secret never reaches the node.
+pub fn load_or_create_stake_secret(path: &Path) -> Result<lee::signature::PublicAccountSecret> {
+    Ok(lee::signature::PublicAccountSecret::new(
+        load_or_create_key_bytes(path)?,
+    ))
 }
 
 #[cfg(test)]

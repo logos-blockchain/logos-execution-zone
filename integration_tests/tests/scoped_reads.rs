@@ -100,7 +100,7 @@ async fn submit(
             u128::MAX >> 1,
         ),
     )?;
-    let payer_signer = TestSigner::from(&payer.pub_sign_key);
+    let payer_signer = TestSigner::from(&payer.secret);
     let mut signers = extra_signers.to_vec();
     signers.push(&payer_signer);
     let witness_set = witness_for(&message, &signers);
@@ -135,7 +135,7 @@ fn genesis_payer(ctx: &mut TestContext) -> PublicAccountPrivateInitialData {
     ctx.wallet_mut()
         .storage_mut()
         .key_chain_mut()
-        .add_imported_public_account(payer.pub_sign_key.clone());
+        .add_imported_public_account(payer.secret.clone());
     payer
 }
 

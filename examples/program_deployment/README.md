@@ -39,17 +39,17 @@ You should see `✅All looks good!` if everything went well.
 Deploying a program and sending a transaction both cost fees, and a new account has no balance to pay them. The local network's genesis funds a test account, so import it:
 
 ```bash
-wallet account import public --private-key 7f273098f25b71e6c005a9519f2678da8d1c7f01f6a27778e2d9948abdf901fb
+wallet account import public --secret 10a26a9aec7d34b82364eeae45c5294dbb0a764b000b94eeb9b58511dc487c4d
 ```
 
 Output:
 ```
-Imported public account Public/CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r
+Imported public account Public/Apc9nDR3RAvh8aYajPik6DJ4nM5zWmygraJuyvxU2K36
 ```
 
 Every runner takes this account as its fee payer. For convenience, export it:
 ```bash
-export PAYER=CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r
+export PAYER=Apc9nDR3RAvh8aYajPik6DJ4nM5zWmygraJuyvxU2K36
 ```
 
 # 2. Compile the example programs

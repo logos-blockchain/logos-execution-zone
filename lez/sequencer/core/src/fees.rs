@@ -143,7 +143,7 @@ mod tests {
         let accounts = initial_pub_accounts_private_keys();
         (
             accounts[0].account_id,
-            TestSigner::from(&accounts[0].pub_sign_key),
+            TestSigner::from(&accounts[0].secret),
         )
     }
 
@@ -366,7 +366,7 @@ mod tests {
         };
 
         let state = initial_state(true);
-        let funded = TestSigner::from(&initial_pub_accounts_private_keys()[0].pub_sign_key);
+        let funded = TestSigner::from(&initial_pub_accounts_private_keys()[0].secret);
         let unfunded = TestSigner::new(7);
         let account_id = TestSigner::account_id;
         let declared = |payer, signer: &TestSigner| {
