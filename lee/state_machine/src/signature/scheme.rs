@@ -126,3 +126,69 @@ pub fn authenticate(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn signed(seed: u8, message: &[u8; 32]) -> (PublicKey, SchnorrAuthData) {
+        let (sk, pk) = Schnorr::keygen(&[seed; 32]);
+        let auth = Schnorr::auth_data(&pk, &Schnorr::sign(&sk, message));
+        (pk, auth)
+    }
+
+    #[test]
+    fn current_key_returns_stored_key() {
+        let stored = SigningKeyState {
+            key_type: KeyType::Schnorr,
+            key_commitment: [0; 32],
+        };
+        assert_eq!(
+            current_key(Some(stored), AccountId::new([1; 32]), &[]),
+            Ok(stored)
+        );
+    }
+
+    #[test]
+    fn current_key_accepts_key_giving_account_id_at_nonce_zero() {
+        let (pk, auth) = signed(0, &[1; 32]);
+        assert_eq!(
+            current_key(None, AccountId::from(&pk), &auth),
+            Ok(Schnorr::key_state(&pk))
+        );
+    }
+
+    #[test]
+    fn current_key_rejects_key_not_giving_account_id_at_nonce_zero() {
+        let (_pk, auth) = signed(0, &[1; 32]);
+        assert_eq!(
+            current_key(None, AccountId::new([2; 32]), &auth),
+            Err(AuthError::AccountIdMismatch)
+        );
+    }
+
+    #[test]
+    fn authenticate_returns_next_key() {
+        let message = [1; 32];
+        let (pk, auth) = signed(0, &message);
+        let next = Schnorr::key_state(&Schnorr::keygen(&[2; 32]).1);
+        assert_eq!(
+            authenticate(&Schnorr::key_state(&pk), &message, &auth, &next),
+            Ok(next)
+        );
+    }
+
+    #[test]
+    fn authenticate_rejects_witness_of_wrong_length_before_verification() {
+        let message = [1; 32];
+        let (pk, auth) = signed(0, &message);
+        let current = Schnorr::key_state(&pk);
+        let longer = [&auth[..], &[0]].concat();
+        for witness in [&auth[..95], longer.as_slice()] {
+            assert_eq!(
+                authenticate(&current, &message, witness, &current),
+                Err(AuthError::Malformed)
+            );
+        }
+    }
+}
