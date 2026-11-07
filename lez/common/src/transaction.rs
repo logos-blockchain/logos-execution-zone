@@ -646,7 +646,10 @@ fn native_balance_only_increased(pre: &lee::Account, post: &lee::Account) -> boo
 mod tests {
     use std::collections::BTreeMap;
 
-    use lee::{Account, AccountId, PrivateKey, PublicKey, V03State};
+    use lee::{
+        Account, AccountId, V03State,
+        test_utils::{TestSigner, witness_for},
+    };
     use lee_core::{
         account::Nonce,
         native_token::{NATIVE_TOKEN_PROGRAM_ID, encode_balance},
@@ -831,13 +834,12 @@ mod tests {
     fn validate_on_state_rejects_modifying_a_fee_account() {
         // Fee accounts are restricted the same way clock accounts are: a native
         // transfer crediting any of them must be rejected.
-        let sender_key = PrivateKey::try_new([5_u8; 32]).expect("valid key");
-        let sender_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
+        let sender = TestSigner::new(5);
+        let sender_id = sender.account_id();
         let state = V03State::new().with_public_account_balances([(sender_id, 10_000)]);
 
         for fee_id in system_accounts::fee_account_ids() {
-            let tx =
-                create_transaction_native_token_transfer(sender_id, 0, fee_id, 100, &sender_key);
+            let tx = create_transaction_native_token_transfer(sender_id, 0, fee_id, 100, &sender);
             assert!(
                 tx.validate_on_state(&state, 1, 0).is_err(),
                 "validate_on_state must reject a transfer that credits fee account {fee_id}",
@@ -852,8 +854,8 @@ mod tests {
         // the `!=` → `==` inversion at `validate_doesnt_modify_account` (a changed
         // account would no longer be flagged) and `public_diff → HashMap::new()`
         // (an empty diff hides the modification).
-        let sender_key = PrivateKey::try_new([5_u8; 32]).expect("valid key");
-        let sender_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
+        let sender = TestSigner::new(5);
+        let sender_id = sender.account_id();
         let state = V03State::new().with_public_account_balances([(sender_id, 10_000)]);
 
         let tx = create_transaction_native_token_transfer(
@@ -861,7 +863,7 @@ mod tests {
             0,
             system_accounts::clock_account_ids()[0],
             100,
-            &sender_key,
+            &sender,
         );
 
         assert!(
@@ -888,14 +890,19 @@ mod tests {
             },
         )
         .expect("deposit message");
-        let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
+        let witness_set = witness_for(&message, &[]);
         super::LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
     }
 
     fn signed_transfer() -> super::LeeTransaction {
-        let key = PrivateKey::try_new([3; 32]).unwrap();
-        let from = AccountId::from(&PublicKey::new_from_private_key(&key));
-        create_transaction_native_token_transfer(from, 0, AccountId::new([4; 32]), 1, &key)
+        let signer = TestSigner::new(3);
+        create_transaction_native_token_transfer(
+            signer.account_id(),
+            0,
+            AccountId::new([4; 32]),
+            1,
+            &signer,
+        )
     }
 
     /// The bridge losing 100 of its balance.

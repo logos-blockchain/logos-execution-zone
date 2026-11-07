@@ -18,7 +18,47 @@ use lee_core::{
 
 #[cfg(feature = "test-utils")]
 use crate::validated_state_diff::{StateDiff, ValidatedStateDiff};
-use crate::{Account, AccountId, PrivateKey, PublicKey, error::LeeError};
+use crate::{
+    Account, AccountId, PrivateKey, PublicAccountEvidence, PublicKey, Signature,
+    error::LeeError,
+    privacy_preserving_transaction::{self, circuit::Proof},
+    public_transaction,
+};
+
+/// A public account's signing key material, as tests sign with it.
+#[derive(Debug, Clone)]
+pub struct TestSigner {
+    key: PrivateKey,
+}
+
+impl TestSigner {
+    #[must_use]
+    pub fn new(seed: u8) -> Self {
+        Self {
+            key: PrivateKey::try_new([seed; 32]).expect("seed gives a valid key"),
+        }
+    }
+
+    #[must_use]
+    pub fn account_id(&self) -> AccountId {
+        AccountId::from(&self.public_key())
+    }
+
+    #[must_use]
+    pub fn evidence(&self) -> PublicAccountEvidence {
+        PublicAccountEvidence::Key(self.public_key())
+    }
+
+    fn public_key(&self) -> PublicKey {
+        PublicKey::new_from_private_key(&self.key)
+    }
+}
+
+impl From<&PrivateKey> for TestSigner {
+    fn from(key: &PrivateKey) -> Self {
+        Self { key: key.clone() }
+    }
+}
 
 pub struct TestPrivateKeys {
     pub ask: AuthorizationSecretKey,
@@ -50,12 +90,78 @@ impl TestPrivateKeys {
 
 /// Each signer's nonce, given in signing order.
 #[must_use]
-pub fn signer_nonces(signers: &[&PrivateKey], nonces: Vec<Nonce>) -> BTreeMap<AccountId, Nonce> {
+pub fn signer_nonces(signers: &[&TestSigner], nonces: Vec<Nonce>) -> BTreeMap<AccountId, Nonce> {
     assert_eq!(signers.len(), nonces.len(), "one nonce per signer");
     signers
         .iter()
-        .map(|key| AccountId::from(&PublicKey::new_from_private_key(key)))
+        .map(|signer| signer.account_id())
         .zip(nonces)
+        .collect()
+}
+
+/// The witness of `signers` for `message`; each signer must be named in `message.nonces`.
+#[must_use]
+pub fn witness_for(
+    message: &public_transaction::Message,
+    signers: &[&TestSigner],
+) -> public_transaction::WitnessSet {
+    public_transaction::WitnessSet::for_message(message, &signing_keys(&message.nonces, signers))
+}
+
+/// The witness of `signers` for `message`; each signer must be named in `message.nonces`.
+#[must_use]
+pub fn privacy_witness_for(
+    message: &privacy_preserving_transaction::Message,
+    proof: Proof,
+    signers: &[&TestSigner],
+) -> privacy_preserving_transaction::WitnessSet {
+    privacy_preserving_transaction::WitnessSet::for_message(
+        message,
+        proof,
+        &signing_keys(&message.nonces, signers),
+    )
+}
+
+/// One signer's witness entry for `message`, whether or not `message.nonces` names it: for
+/// witnesses that deliberately disagree with their message.
+#[must_use]
+pub fn signed_entry(
+    signer: &TestSigner,
+    message: &public_transaction::Message,
+) -> (Signature, PublicKey) {
+    (
+        Signature::new(&signer.key, &message.hash()),
+        signer.public_key(),
+    )
+}
+
+/// One signer's witness entry for `message`, whether or not `message.nonces` names it: for
+/// witnesses that deliberately disagree with their message.
+#[must_use]
+pub fn privacy_signed_entry(
+    signer: &TestSigner,
+    message: &privacy_preserving_transaction::Message,
+) -> (Signature, PublicKey) {
+    (
+        Signature::new(&signer.key, &message.hash()),
+        signer.public_key(),
+    )
+}
+
+fn signing_keys<'signer>(
+    nonces: &BTreeMap<AccountId, Nonce>,
+    signers: &[&'signer TestSigner],
+) -> Vec<&'signer PrivateKey> {
+    signers
+        .iter()
+        .map(|signer| {
+            assert!(
+                nonces.contains_key(&signer.account_id()),
+                "signer {} is not in the message's nonces",
+                signer.account_id()
+            );
+            &signer.key
+        })
         .collect()
 }
 

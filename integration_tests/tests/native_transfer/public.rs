@@ -6,7 +6,7 @@ use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, public_mention,
     utils::{account_balance, get_account, new_account, send},
 };
-use lee::{AccountId, PublicKey};
+use lee::{AccountId, PublicKey, test_utils::TestSigner};
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::{
@@ -137,8 +137,9 @@ async fn a_foreign_recipient_named_by_its_public_key_receives_its_first_credit()
     let mut ctx = TestContext::new().await?;
 
     let sender = ctx.existing_public_accounts()[0];
-    let recipient_key = PublicKey::new_from_private_key(&lee::PrivateKey::try_new([77; 32])?);
-    let recipient = AccountId::from(&recipient_key);
+    let recipient_private_key = lee::PrivateKey::try_new([77; 32])?;
+    let recipient_key = PublicKey::new_from_private_key(&recipient_private_key);
+    let recipient = TestSigner::from(&recipient_private_key).account_id();
     assert!(
         ctx.sequencer_client()
             .get_account(recipient)

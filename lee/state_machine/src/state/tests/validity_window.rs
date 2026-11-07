@@ -5,13 +5,7 @@ use super::*;
 fn windowed_public_tx(script: Script) -> PublicTransaction {
     let keys = test_public_account_keys_1();
     let actor = Actor::new(keys.account_id(), scripted_id());
-    public_tx(
-        actor,
-        vec![actor],
-        vec![Nonce(0)],
-        script,
-        &[&keys.signing_key],
-    )
+    public_tx(actor, vec![actor], vec![Nonce(0)], script, &[&keys])
 }
 
 fn windowed_private_tx(script: &Script) -> PrivacyPreservingTransaction {

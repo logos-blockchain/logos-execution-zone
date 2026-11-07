@@ -68,29 +68,22 @@ mod tests {
 
     use super::*;
     use crate::{
-        PrivateKey, PublicKey,
         public_transaction::{Message, WitnessSet},
+        test_utils::{TestSigner, signed_entry, witness_for},
     };
 
-    fn keys() -> (PrivateKey, PrivateKey) {
-        (
-            PrivateKey::try_new([1_u8; 32]).expect("valid key"),
-            PrivateKey::try_new([2_u8; 32]).expect("valid key"),
-        )
-    }
-
-    fn account_id_of(key: &PrivateKey) -> AccountId {
-        AccountId::from(&PublicKey::new_from_private_key(key))
+    fn keys() -> (TestSigner, TestSigner) {
+        (TestSigner::new(1), TestSigner::new(2))
     }
 
     fn charged_message(payer: AccountId) -> Message {
         Message::try_new_with_fees(
             Actor::new(
-                account_id_of(&keys().0),
+                keys().0.account_id(),
                 AccountId::from_builtin_program([0_u32; 8]),
             ),
-            vec![Actor::native_balance(account_id_of(&keys().0))],
-            BTreeMap::from([(account_id_of(&keys().0), Nonce(0))]),
+            vec![Actor::native_balance(keys().0.account_id())],
+            BTreeMap::from([(keys().0.account_id(), Nonce(0))]),
             vec![1_u8, 2, 3],
             FeeDeclaration::new(payer, 1_000, 0, 10_000),
         )
@@ -100,11 +93,11 @@ mod tests {
     fn exempt_message() -> Message {
         Message::try_new(
             Actor::new(
-                account_id_of(&keys().0),
+                keys().0.account_id(),
                 AccountId::from_builtin_program([0_u32; 8]),
             ),
-            vec![Actor::native_balance(account_id_of(&keys().0))],
-            BTreeMap::from([(account_id_of(&keys().0), Nonce(0))]),
+            vec![Actor::native_balance(keys().0.account_id())],
+            BTreeMap::from([(keys().0.account_id(), Nonce(0))]),
             vec![1_u8, 2, 3],
         )
         .expect("valid message")
@@ -113,8 +106,8 @@ mod tests {
     #[test]
     fn self_payer_is_authorized_by_ordinary_signature() {
         let (signer_key, _) = keys();
-        let message = charged_message(account_id_of(&signer_key));
-        let witness_set = WitnessSet::for_message(&message, &[&signer_key]);
+        let message = charged_message(signer_key.account_id());
+        let witness_set = witness_for(&message, &[&signer_key]);
         assert!(is_fee_authorized(&message, &witness_set));
     }
 
@@ -122,8 +115,11 @@ mod tests {
     fn a_co_signing_payer_is_authorized() {
         // The payer need not own an `account_id`; any co-signer may pay.
         let (signer_key, payer_key) = keys();
-        let message = charged_message(account_id_of(&payer_key));
-        let witness_set = WitnessSet::for_message(&message, &[&signer_key, &payer_key]);
+        let message = charged_message(payer_key.account_id());
+        let witness_set = WitnessSet::from_raw_parts(vec![
+            signed_entry(&signer_key, &message),
+            signed_entry(&payer_key, &message),
+        ]);
         assert!(is_fee_authorized(&message, &witness_set));
     }
 
@@ -132,8 +128,8 @@ mod tests {
         // Third-party (non-signing) sponsorship is no longer possible: the
         // payer must be in the witness set.
         let (signer_key, payer_key) = keys();
-        let message = charged_message(account_id_of(&payer_key));
-        let witness_set = WitnessSet::for_message(&message, &[&signer_key]);
+        let message = charged_message(payer_key.account_id());
+        let witness_set = witness_for(&message, &[&signer_key]);
         assert!(!is_fee_authorized(&message, &witness_set));
     }
 
@@ -142,7 +138,7 @@ mod tests {
         let (signer_key, _) = keys();
         let message = exempt_message();
         assert_eq!(message.execution.fee, None);
-        let witness_set = WitnessSet::for_message(&message, &[&signer_key]);
+        let witness_set = witness_for(&message, &[&signer_key]);
         assert!(is_fee_authorized(&message, &witness_set));
     }
 
@@ -151,8 +147,8 @@ mod tests {
         // The fee fields are inside the signed hash: raising gas_limit after
         // signing must break the payer's signature.
         let (signer_key, _) = keys();
-        let message = charged_message(account_id_of(&signer_key));
-        let witness_set = WitnessSet::for_message(&message, &[&signer_key]);
+        let message = charged_message(signer_key.account_id());
+        let witness_set = witness_for(&message, &[&signer_key]);
 
         let mut tampered = message;
         tampered
@@ -167,7 +163,7 @@ mod tests {
 
     #[test]
     fn exempt_and_charged_round_trip() {
-        for message in [exempt_message(), charged_message(account_id_of(&keys().0))] {
+        for message in [exempt_message(), charged_message(keys().0.account_id())] {
             let bytes = borsh::to_vec(&message).expect("serializes");
             let back: Message = borsh::from_slice(&bytes).expect("deserializes");
             assert_eq!(back, message);

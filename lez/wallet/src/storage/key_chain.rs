@@ -1129,9 +1129,8 @@ pub(crate) mod tests {
     use futures::executor::block_on;
     use lee::{
         RecipientEncryption, RecoveryBinding,
-        privacy_preserving_transaction::{
-            PrivacyPreservingTransaction, WitnessSet, circuit::Proof,
-        },
+        privacy_preserving_transaction::{PrivacyPreservingTransaction, circuit::Proof},
+        test_utils::{TestSigner, privacy_witness_for},
     };
     use lee_core::{
         EncryptionScheme, EphemeralSecretKey, PrivateAction, ProvenExecution,
@@ -1144,7 +1143,7 @@ pub(crate) mod tests {
 
     // A block whose one transaction carries `message`.
     pub fn block_of(id: u64, message: Message) -> Block {
-        let witness_set = WitnessSet::for_message(&message, Proof::from_inner(Vec::new()), &[]);
+        let witness_set = privacy_witness_for(&message, Proof::from_inner(Vec::new()), &[]);
         common::test_utils::produce_dummy_block(
             id,
             None,
@@ -1755,7 +1754,7 @@ pub(crate) mod tests {
         let mut user_data = UserKeyChain::default();
 
         let private_key = lee::PrivateKey::new_os_random();
-        let account_id = AccountId::from(&lee::PublicKey::new_from_private_key(&private_key));
+        let account_id = TestSigner::from(&private_key).account_id();
 
         user_data.add_imported_public_account(private_key);
 

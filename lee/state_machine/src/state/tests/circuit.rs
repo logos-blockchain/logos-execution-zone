@@ -357,7 +357,7 @@ fn a_wrong_seed_leaves_a_signer_on_its_credential() {
     V03State::new()
         .with_test_programs()
         .transition_from_privacy_preserving_transaction(
-            &private_tx(proven, vec![Nonce(0)], &[&signer_keys.signing_key]),
+            &private_tx(proven, vec![Nonce(0)], &[&signer_keys]),
             1,
             0,
         )
@@ -666,7 +666,7 @@ fn two_private_pda_family_members_receive_and_spend() {
     let bob_pda_id = AccountId::for_private_pda(&proxy_id, &seed, &bob_keys.npk(), &bob_keys.vpk());
     let recipient_id = test_public_account_keys_2().account_id();
     let recipient = Actor::native_balance(recipient_id);
-    let recipient_signing_key = test_public_account_keys_2().signing_key;
+    let recipient_signing_key = test_public_account_keys_2();
 
     let mut state = V03State::new().with_public_account_balances([(funder_id, 500)]);
     state.insert_program(&crate::test_methods::scripted(), true);
@@ -732,7 +732,7 @@ fn two_private_pda_family_members_receive_and_spend() {
     );
     state
         .transition_from_privacy_preserving_transaction(
-            &private_tx(proven, vec![Nonce(0)], &[&funder_keys.signing_key]),
+            &private_tx(proven, vec![Nonce(0)], &[&funder_keys]),
             1,
             0,
         )
@@ -746,7 +746,7 @@ fn two_private_pda_family_members_receive_and_spend() {
     );
     state
         .transition_from_privacy_preserving_transaction(
-            &private_tx(proven, vec![Nonce(1)], &[&funder_keys.signing_key]),
+            &private_tx(proven, vec![Nonce(1)], &[&funder_keys]),
             2,
             0,
         )
@@ -1039,8 +1039,8 @@ fn deploy_immutable_header(state: &mut V03State) -> (AccountId, ProgramHeader) {
     let program = crate::test_methods::scripted();
     let segment_account_ids = force_insert_segment_chain(state, program.elf(), 0x04);
 
-    let header_key = PrivateKey::try_new([0x11; 32]).unwrap();
-    let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
+    let header_key = TestSigner::new(0x11);
+    let header_account_id = header_key.account_id();
     let header = Actor::new(header_account_id, PROGRAM_LOADER_ACCOUNT_ID);
     let create_tx = public_tx(
         header,
