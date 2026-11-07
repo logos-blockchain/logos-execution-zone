@@ -8,8 +8,9 @@ use common::{
 };
 use kameo::{actor::Spawn as _, error::SendError};
 use lee::{
-    Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction,
-    public_transaction::{Message, WitnessSet},
+    Account, AccountId, Actor, PrivateKey, PublicTransaction,
+    public_transaction::Message,
+    test_utils::{TestSigner, witness_for},
 };
 use lee_core::native_token::Message as NativeMessage;
 use mockall::predicate::{always, eq, function};
@@ -64,15 +65,15 @@ fn sequencer_config() -> (SequencerConfig, TempDir) {
 }
 
 fn test_transaction() -> LeeTransaction {
-    let key2 = PrivateKey::new_os_random();
-    let acc2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
+    let signer2 = TestSigner::from(&PrivateKey::new_os_random());
+    let acc2 = signer2.account_id();
 
     // Fees are self-pay: the payer must be a funded initial-state account that
     // signs the transaction in the ordinary witness set, so it leads the
     // account list and signs alongside the other party.
     let accounts = testnet_initial_state::initial_pub_accounts_private_keys();
     let payer = accounts[0].account_id;
-    let payer_key = accounts[0].pub_sign_key.clone();
+    let payer_signer = TestSigner::from(&accounts[0].pub_sign_key);
 
     let nonces = BTreeMap::from([(payer, 0_u128.into()), (acc2, 0_u128.into())]);
     let message = Message::try_new_with_fees(
@@ -84,7 +85,7 @@ fn test_transaction() -> LeeTransaction {
     )
     .unwrap();
 
-    let witness_set = WitnessSet::for_message(&message, &[&payer_key, &key2]);
+    let witness_set = witness_for(&message, &[&payer_signer, &signer2]);
     PublicTransaction::new(message, witness_set).into()
 }
 
@@ -573,11 +574,11 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
     // (which prices at least the serialized bytes), so admission's static check
     // rejects it before it reaches the mempool. The fee is declared (so it
     // classifies as charged, not `MissingFeeDeclaration`) but set to 0.
-    let key2 = PrivateKey::new_os_random();
-    let acc2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
+    let signer2 = TestSigner::from(&PrivateKey::new_os_random());
+    let acc2 = signer2.account_id();
     let accounts = testnet_initial_state::initial_pub_accounts_private_keys();
     let payer = accounts[0].account_id;
-    let payer_key = accounts[0].pub_sign_key.clone();
+    let payer_signer = TestSigner::from(&accounts[0].pub_sign_key);
     let message = Message::try_new_with_fees(
         Actor::native_balance(payer),
         vec![Actor::native_balance(payer), Actor::native_balance(acc2)],
@@ -586,7 +587,7 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
         lee::FeeDeclaration::new(payer, 2_000_000, 0, 0),
     )
     .unwrap();
-    let witness_set = WitnessSet::for_message(&message, &[&payer_key, &key2]);
+    let witness_set = witness_for(&message, &[&payer_signer, &signer2]);
     let tx: LeeTransaction = PublicTransaction::new(message, witness_set).into();
 
     let res = executor

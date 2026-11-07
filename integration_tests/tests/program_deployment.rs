@@ -8,6 +8,7 @@ use std::time::Duration;
 use anyhow::Result;
 use common::transaction::LeeTransaction;
 use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, get_account, new_account};
+use lee::test_utils::{TestSigner, witness_for};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
@@ -67,16 +68,17 @@ async fn deploy_and_execute_program() -> Result<()> {
         test_guest_core::Script::write(written.clone()),
         common::test_utils::test_fee_declaration(payer_id),
     )?;
-    let target_key = ctx
-        .wallet()
-        .get_account_public_signing_key(target_id)
-        .unwrap();
-    let payer_key = ctx
-        .wallet()
-        .get_account_public_signing_key(payer_id)
-        .unwrap();
-    let witness_set =
-        lee::public_transaction::WitnessSet::for_message(&message, &[target_key, payer_key]);
+    let target_signer = TestSigner::from(
+        ctx.wallet()
+            .get_account_public_signing_key(target_id)
+            .unwrap(),
+    );
+    let payer_signer = TestSigner::from(
+        ctx.wallet()
+            .get_account_public_signing_key(payer_id)
+            .unwrap(),
+    );
+    let witness_set = witness_for(&message, &[&target_signer, &payer_signer]);
     let transaction = lee::PublicTransaction::new(message, witness_set);
     let _response = ctx
         .sequencer_client()

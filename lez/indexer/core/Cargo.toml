@@ -41,6 +41,8 @@ hex.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+common = { workspace = true, features = ["test-utils"] }
+lee = { workspace = true, features = ["test-signer"] }
 cross_zone = { workspace = true, features = ["test-utils"] }
 tempfile.workspace = true
 ping_core.workspace = true

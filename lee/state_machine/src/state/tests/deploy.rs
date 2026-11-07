@@ -11,7 +11,7 @@ fn loader_tx(
     target: AccountId,
     nonces: Vec<Nonce>,
     message: &LoaderMessage,
-    signers: &[&PrivateKey],
+    signers: &[&TestSigner],
 ) -> PublicTransaction {
     let to = Actor::new(target, PROGRAM_LOADER_ACCOUNT_ID);
     public_tx(to, vec![to], nonces, message, signers)
@@ -225,8 +225,8 @@ fn program_with_more_than_max_segments_is_rejected_at_deploy_time() {
         );
     }
 
-    let header_key = PrivateKey::try_new([0xAB; 32]).unwrap();
-    let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
+    let header_key = TestSigner::new(0xAB);
+    let header_account_id = header_key.account_id();
 
     let tx = loader_tx(
         header_account_id,
@@ -266,18 +266,16 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
         .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
         .collect();
     // Base 10 keeps these clear of the header key's [2; 32] below.
-    let segment_keys: Vec<PrivateKey> = (0..chunks.len())
-        .map(|i| PrivateKey::try_new([u8::try_from(i).unwrap().saturating_add(10); 32]).unwrap())
+    let segment_keys: Vec<TestSigner> = (0..chunks.len())
+        .map(|i| TestSigner::new(u8::try_from(i).unwrap().saturating_add(10)))
         .collect();
-    let segment_account_ids: Vec<AccountId> = segment_keys
-        .iter()
-        .map(|key| AccountId::from(&PublicKey::new_from_private_key(key)))
-        .collect();
+    let segment_account_ids: Vec<AccountId> =
+        segment_keys.iter().map(TestSigner::account_id).collect();
 
     write_segments(&mut state, &chunks, &segment_keys, &segment_account_ids);
 
-    let header_key = PrivateKey::try_new([2; 32]).unwrap();
-    let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
+    let header_key = TestSigner::new(2);
+    let header_account_id = header_key.account_id();
     let create_header_tx = loader_tx(
         header_account_id,
         vec![Nonce(0)],
@@ -328,7 +326,7 @@ fn create_header_rejects_a_shadow_derived_target_the_signer_does_not_control() {
     let shadow_addr = AccountId::for_shadow_program(&weakened_program.id());
     state.force_insert_account(shadow_addr, Account::default());
 
-    let unrelated_key = PrivateKey::try_new([0x77; 32]).unwrap();
+    let unrelated_key = TestSigner::new(0x77);
     let tx = loader_tx(
         shadow_addr,
         vec![Nonce(0)],
@@ -362,8 +360,8 @@ fn create_header_immutable_from_birth_lands_immutable_mirror_commitment() {
     let program = crate::test_methods::scripted();
     let segment_account_ids = force_insert_segment_chain(&mut state, program.elf(), 0x01);
 
-    let header_key = PrivateKey::try_new([0xAB; 32]).unwrap();
-    let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
+    let header_key = TestSigner::new(0xAB);
+    let header_account_id = header_key.account_id();
 
     let tx = loader_tx(
         header_account_id,
@@ -401,8 +399,8 @@ fn create_header_mutable_leaves_commitment_tree_unchanged() {
     let root_before = state.commitment_root();
     let segment_account_ids = force_insert_segment_chain(&mut state, program.elf(), 0x02);
 
-    let header_key = PrivateKey::try_new([0xCD; 32]).unwrap();
-    let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
+    let header_key = TestSigner::new(0xCD);
+    let header_account_id = header_key.account_id();
 
     let tx = loader_tx(
         header_account_id,
@@ -433,8 +431,8 @@ fn update_header_flip_to_immutable_lands_immutable_mirror_commitment() {
     let program = crate::test_methods::scripted();
     let segment_account_ids = force_insert_segment_chain(&mut state, program.elf(), 0x03);
 
-    let header_key = PrivateKey::try_new([0xEF; 32]).unwrap();
-    let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
+    let header_key = TestSigner::new(0xEF);
+    let header_account_id = header_key.account_id();
 
     let create_tx = loader_tx(
         header_account_id,
@@ -487,7 +485,7 @@ fn update_header_flip_to_immutable_lands_immutable_mirror_commitment() {
 fn write_segments(
     state: &mut V03State,
     chunks: &[&[u8]],
-    segment_keys: &[PrivateKey],
+    segment_keys: &[TestSigner],
     segment_account_ids: &[AccountId],
 ) {
     // Linked tail-to-head: the last chunk's segment has no `next_segment`.
@@ -519,17 +517,15 @@ fn a_program_deployed_earlier_in_the_transaction_is_dispatchable_by_a_later_call
     let chunks: Vec<&[u8]> = user_elf
         .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
         .collect();
-    let segment_keys: Vec<PrivateKey> = (0..chunks.len())
-        .map(|i| PrivateKey::try_new([u8::try_from(i).unwrap().saturating_add(20); 32]).unwrap())
+    let segment_keys: Vec<TestSigner> = (0..chunks.len())
+        .map(|i| TestSigner::new(u8::try_from(i).unwrap().saturating_add(20)))
         .collect();
-    let segment_account_ids: Vec<AccountId> = segment_keys
-        .iter()
-        .map(|key| AccountId::from(&PublicKey::new_from_private_key(key)))
-        .collect();
+    let segment_account_ids: Vec<AccountId> =
+        segment_keys.iter().map(TestSigner::account_id).collect();
     write_segments(&mut state, &chunks, &segment_keys, &segment_account_ids);
 
-    let header_key = PrivateKey::try_new([30; 32]).unwrap();
-    let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
+    let header_key = TestSigner::new(30);
+    let header_account_id = header_key.account_id();
     let deployer = Actor::new(header_account_id, scripted_id());
     let header = Actor::new(header_account_id, PROGRAM_LOADER_ACCOUNT_ID);
     let deployed = Actor::new(AccountId::new([9; 32]), header_account_id);

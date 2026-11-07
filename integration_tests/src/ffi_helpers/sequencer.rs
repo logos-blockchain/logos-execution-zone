@@ -26,7 +26,7 @@ use core_ffi::{
         api::{lifecycle::InitializedSequencerServiceFFIResult, query::LastBlockIdResult},
     },
 };
-use lee::{Account, AccountId, PrivateKey, PublicAccountEvidence, PublicKey};
+use lee::{Account, AccountId, PrivateKey, test_utils::TestSigner};
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, UnsecuredEd25519Key};
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
@@ -171,7 +171,8 @@ pub fn joining_setup_with_stake() -> Result<JoiningSetup> {
             .expect("a channel signing public key is a valid Ed25519 public key");
 
     let funding_private_key = PrivateKey::new_os_random();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_private_key));
+    let funding_signer = TestSigner::from(&funding_private_key);
+    let funding_id = funding_signer.account_id();
 
     // Boxing to make pointers non-movable.
     let mut ctx = Box::new(
@@ -180,9 +181,7 @@ pub fn joining_setup_with_stake() -> Result<JoiningSetup> {
                 ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
                     .with_sequencer_partial_config(fast_blocks())
                     .with_genesis(vec![GenesisAction::SupplyAccount {
-                        recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(
-                            PublicKey::new_from_private_key(&funding_private_key),
-                        )),
+                        recipient: DepositRecipient::Identified(funding_signer.evidence()),
                         balance: FUNDING_BALANCE.try_into().expect("Must fit"),
                     }]),
             )

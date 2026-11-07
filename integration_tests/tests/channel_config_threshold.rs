@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result, ensure};
 use integration_tests::{account_balance, get_account, init_logger, new_account};
-use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey};
+use lee::{PrivateKey, test_utils::TestSigner};
 use log::info;
 use logos_blockchain_core::mantle::channel::ChannelState;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
@@ -88,7 +88,8 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
         .expect("a channel signing public key is a valid Ed25519 public key");
 
     let funding_private_key = PrivateKey::new_os_random();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_private_key));
+    let funding_signer = TestSigner::from(&funding_private_key);
+    let funding_id = funding_signer.account_id();
 
     let mut ctx = MultiZoneTestContextBuilder::default()
         .with_zone(
@@ -99,9 +100,7 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
             .with_sequencer_partial_config(fast_blocks())
             .with_gossip()
             .with_genesis(vec![GenesisAction::SupplyAccount {
-                recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(
-                    PublicKey::new_from_private_key(&funding_private_key),
-                )),
+                recipient: DepositRecipient::Identified(funding_signer.evidence()),
                 balance: u64::try_from(FUNDING_BALANCE).expect("funding balance fits u64"),
             }]),
         )

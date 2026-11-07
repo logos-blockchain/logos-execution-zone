@@ -14,7 +14,11 @@ use integration_tests::{
         wait_for_indexer_to_catch_up, wait_until,
     },
 };
-use lee::{AccountId, Actor, PrivateKey, PublicKey, program::Program};
+use lee::{
+    AccountId, Actor,
+    program::Program,
+    test_utils::{TestSigner, witness_for},
+};
 use lee_core::{
     account::Nonce, native_token::NATIVE_TOKEN_PROGRAM_ID, program::PROGRAM_LOADER_ACCOUNT_ID,
 };
@@ -73,12 +77,6 @@ fn is_oversized_response(error: &anyhow::Error) -> bool {
     )
 }
 
-fn fresh_key(seed: u8) -> (PrivateKey, AccountId) {
-    let key = PrivateKey::try_new([seed; 32]).expect("seed is a valid private key");
-    let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
-    (key, account_id)
-}
-
 async fn submit(
     ctx: &TestContext,
     root: Actor,
@@ -86,7 +84,7 @@ async fn submit(
     nonces: BTreeMap<AccountId, Nonce>,
     message: impl borsh::BorshSerialize,
     payer: &PublicAccountPrivateInitialData,
-    extra_signers: &[&PrivateKey],
+    extra_signers: &[&TestSigner],
 ) -> Result<()> {
     let message = lee::public_transaction::Message::try_new_with_fees(
         root,
@@ -102,9 +100,10 @@ async fn submit(
             u128::MAX >> 1,
         ),
     )?;
-    let mut keys = extra_signers.to_vec();
-    keys.push(&payer.pub_sign_key);
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &keys);
+    let payer_signer = TestSigner::from(&payer.pub_sign_key);
+    let mut signers = extra_signers.to_vec();
+    signers.push(&payer_signer);
+    let witness_set = witness_for(&message, &signers);
 
     let tx_hash = ctx
         .sequencer_client()
@@ -486,7 +485,8 @@ async fn loader_reads_survive_a_bloated_segment_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
     let payer = &genesis_payer(&mut ctx);
 
-    let (segment_key, segment_id) = fresh_key(0xD0);
+    let segment_signer = TestSigner::new(0xD0);
+    let segment_id = segment_signer.account_id();
     let payer_nonce = get_account(&ctx, payer.account_id).await?.nonce;
     let segment = Actor::new(segment_id, PROGRAM_LOADER_ACCOUNT_ID);
     submit(
@@ -499,7 +499,7 @@ async fn loader_reads_survive_a_bloated_segment_account() -> Result<()> {
             next_segment: None,
         },
         payer,
-        &[&segment_key],
+        &[&segment_signer],
     )
     .await?;
 
