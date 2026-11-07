@@ -42,7 +42,18 @@ impl PrivacyPreservingTransaction {
 
     pub fn check_stateless(&self) -> Result<Vec<AccountId>, InvalidTransaction> {
         let signers = self.signer_account_ids();
-        self.message.check_signers(&signers)?;
+        let witness = self.witness_set.signatures_and_public_keys();
+        if witness.len() != signers.len() {
+            return Err(InvalidTransaction::Nonces);
+        }
+        if witness
+            .iter()
+            .zip(&signers)
+            .any(|((_, public_key), signer)| AccountId::from(public_key) != *signer)
+        {
+            return Err(InvalidTransaction::SignerOrder);
+        }
+        self.message.check_signers()?;
         if !self.witness_set.signatures_are_valid_for(&self.message) {
             return Err(InvalidTransaction::Signature);
         }
@@ -50,11 +61,7 @@ impl PrivacyPreservingTransaction {
     }
 
     pub(crate) fn signer_account_ids(&self) -> Vec<AccountId> {
-        self.witness_set
-            .signatures_and_public_keys()
-            .iter()
-            .map(|(_, public_key)| AccountId::from(public_key))
-            .collect()
+        self.message.nonces.keys().copied().collect()
     }
 
     #[must_use]
@@ -71,12 +78,16 @@ impl PrivacyPreservingTransaction {
 
 #[cfg(test)]
 mod tests {
+    use lee_core::account::Nonce;
+
     use crate::{
-        PrivacyPreservingTransaction,
+        InvalidTransaction, PrivacyPreservingTransaction,
         privacy_preserving_transaction::{
-            circuit::Proof, message::tests::message_for_tests, witness_set::WitnessSet,
+            circuit::Proof,
+            message::{Message, tests::message_for_tests},
+            witness_set::WitnessSet,
         },
-        test_utils::{TestSigner, privacy_signed_entry},
+        test_utils::{TestSigner, privacy_signed_entry, privacy_witness_for},
     };
 
     fn proof_for_tests() -> Proof {
@@ -100,5 +111,43 @@ mod tests {
         let bytes = tx.to_bytes();
         let tx_from_bytes = PrivacyPreservingTransaction::from_bytes(&bytes).unwrap();
         assert_eq!(tx, tx_from_bytes);
+    }
+
+    fn message_signed_by(signers: &[&TestSigner]) -> Message {
+        let mut message = message_for_tests();
+        message.nonces = signers
+            .iter()
+            .map(|signer| (signer.account_id(), Nonce(0)))
+            .collect();
+        message.public_context.authorized_accounts = message.nonces.keys().copied().collect();
+        message
+    }
+
+    #[test]
+    fn witness_entries_must_follow_the_nonces_order() {
+        let (signer1, signer2) = (TestSigner::new(1), TestSigner::new(2));
+        let message = message_signed_by(&[&signer1, &signer2]);
+        let witness_set = privacy_witness_for(&message, proof_for_tests(), &[&signer1, &signer2]);
+        let in_order = PrivacyPreservingTransaction::new(message.clone(), witness_set.clone());
+        assert!(in_order.check_stateless().is_ok());
+
+        let (mut entries, proof) = witness_set.into_raw_parts();
+        entries.swap(0, 1);
+        let tx =
+            PrivacyPreservingTransaction::new(message, WitnessSet::from_raw_parts(entries, proof));
+        assert_eq!(tx.check_stateless(), Err(InvalidTransaction::SignerOrder));
+    }
+
+    #[test]
+    fn a_witness_entry_of_an_unlisted_account_is_rejected() {
+        let (signer1, signer2) = (TestSigner::new(1), TestSigner::new(2));
+        let message = message_signed_by(&[&signer1, &signer2]);
+        let (mut entries, proof) =
+            privacy_witness_for(&message, proof_for_tests(), &[&signer1, &signer2])
+                .into_raw_parts();
+        entries[0] = privacy_signed_entry(&TestSigner::new(3), &message);
+        let tx =
+            PrivacyPreservingTransaction::new(message, WitnessSet::from_raw_parts(entries, proof));
+        assert_eq!(tx.check_stateless(), Err(InvalidTransaction::SignerOrder));
     }
 }

@@ -362,8 +362,7 @@ mod tests {
     #[test]
     fn a_private_transaction_declaring_its_fee_is_screened_on_its_signer() {
         use lee::privacy_preserving_transaction::{
-            Message as PrivateMessage, PrivacyPreservingTransaction,
-            WitnessSet as PrivateWitnessSet, circuit::Proof,
+            Message as PrivateMessage, PrivacyPreservingTransaction, circuit::Proof,
         };
 
         let state = initial_state(true);
@@ -378,13 +377,18 @@ mod tests {
                     0,
                     u128::MAX >> 1,
                 )),
+                nonces: std::collections::BTreeMap::from([(
+                    signer.account_id(),
+                    lee_core::account::Nonce(0),
+                )]),
                 ..PrivateMessage::default()
             };
             LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
                 message.clone(),
-                PrivateWitnessSet::from_raw_parts(
-                    vec![lee::test_utils::privacy_signed_entry(signer, &message)],
+                lee::test_utils::privacy_witness_for(
+                    &message,
                     Proof::from_inner(vec![]),
+                    &[signer],
                 ),
             ))
         };

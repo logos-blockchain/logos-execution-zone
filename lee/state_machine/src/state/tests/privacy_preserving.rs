@@ -168,7 +168,7 @@ fn privacy_preserving_witness_set_cannot_have_duplicate_signers() {
     let result = state.transition_from_privacy_preserving_transaction(&tx, 1, 0);
     assert!(matches!(
         result,
-        Err(LeeError::InvalidInput(msg)) if msg.contains("Duplicate signers")
+        Err(LeeError::InvalidInput(msg)) if msg == crate::InvalidTransaction::Nonces.to_string()
     ));
 }
 

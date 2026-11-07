@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 
-use crate::{PrivateKey, PublicKey, Signature, public_transaction::Message};
+use crate::{AccountId, PrivateKey, PublicKey, Signature, public_transaction::Message};
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct WitnessSet {
@@ -11,7 +11,7 @@ impl WitnessSet {
     #[must_use]
     pub fn for_message(message: &Message, private_keys: &[&PrivateKey]) -> Self {
         let message_hash = message.hash();
-        let signatures_and_public_keys = private_keys
+        let mut signatures_and_public_keys: Vec<_> = private_keys
             .iter()
             .map(|&key| {
                 (
@@ -20,6 +20,7 @@ impl WitnessSet {
                 )
             })
             .collect();
+        signatures_and_public_keys.sort_by_key(|(_, public_key)| AccountId::from(public_key));
         Self {
             signatures_and_public_keys,
         }
@@ -89,7 +90,7 @@ mod tests {
         for ((signature, public_key), expected_public_key) in witness_set
             .signatures_and_public_keys
             .into_iter()
-            .zip([pubkey1, pubkey2])
+            .zip([pubkey2, pubkey1])
         {
             assert_eq!(public_key, expected_public_key);
             assert!(signature.is_valid_for(&message_bytes, &expected_public_key));

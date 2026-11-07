@@ -2023,9 +2023,11 @@ impl<C: WalletSequencerClient> WalletCore<C> {
 
             let (output, proof) = run_proven(input, acc_manager.presenter(None)).await??;
             let message = declared(fee, output);
-            let signatures_public_keys = acc_manager
+            let mut signatures_public_keys = acc_manager
                 .sign_message(message.hash())
                 .map_err(ExecutionFailureKind::SignError)?;
+            // Witness entries follow `nonces` order.
+            signatures_public_keys.sort_by_key(|(_, public_key)| lee::AccountId::from(public_key));
             let tx = PrivacyPreservingTransaction::new(
                 message,
                 lee::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
@@ -2129,9 +2131,11 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 admission_evidence: acc_manager.admission_evidence(),
                 ..Message::from_circuit_output(acc_manager.public_account_nonces(), output)
             };
-            let signatures_public_keys = acc_manager
+            let mut signatures_public_keys = acc_manager
                 .sign_message(message.hash())
                 .map_err(ExecutionFailureKind::SignError)?;
+            // Witness entries follow `nonces` order.
+            signatures_public_keys.sort_by_key(|(_, public_key)| lee::AccountId::from(public_key));
             Ok::<_, ExecutionFailureKind>(PrivacyPreservingTransaction::new(
                 message,
                 lee::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
@@ -2649,6 +2653,8 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 lee::PublicKey::new_from_private_key(key),
             ));
         }
+        // Witness entries follow `nonces` order.
+        signatures_public_keys.sort_by_key(|(_, public_key)| lee::AccountId::from(public_key));
 
         let witness_set =
             lee::public_transaction::WitnessSet::from_raw_parts(signatures_public_keys);

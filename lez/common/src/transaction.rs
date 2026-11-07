@@ -62,11 +62,13 @@ impl LeeTransaction {
         match self {
             Self::Public(tx) => lee::is_fee_authorized(
                 tx.message().fee,
+                &tx.message().nonces,
                 &tx.message().hash(),
                 tx.witness_set().signatures_and_public_keys(),
             ),
             Self::PrivacyPreserving(tx) => lee::is_fee_authorized(
                 tx.message().fee,
+                &tx.message().nonces,
                 &tx.message().hash(),
                 tx.witness_set().signatures_and_public_keys(),
             ),

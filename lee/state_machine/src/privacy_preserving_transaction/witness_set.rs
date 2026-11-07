@@ -1,7 +1,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::{
-    PrivateKey, PublicKey, Signature,
+    AccountId, PrivateKey, PublicKey, Signature,
     privacy_preserving_transaction::{circuit::Proof, message::Message},
 };
 
@@ -15,7 +15,7 @@ impl WitnessSet {
     #[must_use]
     pub fn for_message(message: &Message, proof: Proof, private_keys: &[&PrivateKey]) -> Self {
         let message_hash = message.hash();
-        let signatures_and_public_keys = private_keys
+        let mut signatures_and_public_keys: Vec<_> = private_keys
             .iter()
             .map(|&key| {
                 (
@@ -24,6 +24,7 @@ impl WitnessSet {
                 )
             })
             .collect();
+        signatures_and_public_keys.sort_by_key(|(_, public_key)| AccountId::from(public_key));
         Self {
             signatures_and_public_keys,
             proof,
