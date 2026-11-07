@@ -95,7 +95,7 @@ impl ReceiverConfig {
     }
 }
 
-/// Message to `ping_sender`'s config PDA. `Send`'s emission fields are forwarded
+/// Message to `ping_sender`'s config PDA. `Send`'s emission is forwarded
 /// verbatim into `cross_zone_outbox_core::Message::Emit`.
 ///
 /// Variants are append-only. Borsh encodes the variant as a leading tag byte,
@@ -103,7 +103,7 @@ impl ReceiverConfig {
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum SenderMessage {
     /// Emit a cross-zone message through `outbox`, which must run the pinned
-    /// outbox program. The trailing fields are the emission wire contract.
+    /// outbox program.
     Send {
         outbox: Actor,
         emission: CrossZoneEmission,
