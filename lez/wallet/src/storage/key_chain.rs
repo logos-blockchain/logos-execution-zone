@@ -2074,4 +2074,53 @@ pub(crate) mod tests {
             pda_keys_a.generate_nullifier_public_key(),
         );
     }
+
+    #[test]
+    fn an_imported_secret_gives_the_account_and_key_of_its_hd_node() {
+        let mut generator = UserKeyChain::default();
+        let (account_id, _) = generator.generate_new_public_transaction_private_key(None);
+        let secret = generator
+            .public_key_tree
+            .get_node(account_id)
+            .unwrap()
+            .secret
+            .clone();
+
+        let mut importer = UserKeyChain::default();
+        importer.add_imported_public_account(secret);
+
+        assert_eq!(
+            importer
+                .public_account_ids()
+                .filter(|(_, chain_index)| chain_index.is_none())
+                .map(|(imported, _)| imported)
+                .collect::<Vec<_>>(),
+            vec![account_id]
+        );
+        let node_key = generator.pub_account_signing_key(account_id);
+        assert!(node_key.is_some());
+        assert_eq!(importer.pub_account_signing_key(account_id), node_key);
+    }
+
+    #[test]
+    fn a_created_public_account_signs_a_transaction_passing_the_stateless_check() {
+        let mut user_data = UserKeyChain::default();
+        let (account_id, _) = user_data.generate_new_public_transaction_private_key(None);
+        let (sk, _pk) = user_data.pub_account_signing_key(account_id).unwrap();
+
+        let message = lee::public_transaction::Message::try_new(
+            Actor::native_balance(account_id),
+            vec![Actor::native_balance(account_id)],
+            BTreeMap::from([(account_id, Nonce(0))]),
+            lee_core::native_token::Message::Transfer {
+                to: account_id,
+                amount: 1,
+            },
+        )
+        .unwrap();
+        let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&sk]);
+        let tx = lee::PublicTransaction::new(message, witness_set);
+
+        assert_eq!(tx.check_stateless(), Ok(vec![account_id]));
+    }
 }
