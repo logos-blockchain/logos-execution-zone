@@ -115,11 +115,11 @@ async fn new_public_account_without_label() -> Result<()> {
 async fn import_public_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let private_key = lee::PrivateKey::new_os_random();
-    let account_id = TestSigner::from(&private_key).account_id();
+    let secret = lee::signature::PublicAccountSecret::new_os_random();
+    let account_id = TestSigner::from(&secret).account_id();
 
     let command = Command::Account(AccountSubcommand::Import(ImportSubcommand::Public {
-        private_key,
+        secret,
     }));
     let sub_ret = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
     let SubcommandReturnValue::Empty = sub_ret else {

@@ -1029,10 +1029,13 @@ async fn prepare_account<C: WalletSequencerClient>(
 ) -> Result<State, ExecutionFailureKind> {
     let account_id = actor_state_selector.account_id;
     let owned_key = wallet.get_account_public_signing_key(account_id);
+    let owned_evidence = owned_key
+        .as_ref()
+        .map(|(_sk, pk)| PublicAccountEvidence::Key(pk.clone()));
     let (sk, evidence) = match identity {
         AccountIdentity::Public(_) => (
-            owned_key.filter(|_| authorizes).cloned(),
-            owned_key.map(key_evidence),
+            owned_key.filter(|_| authorizes).map(|(sk, _pk)| sk),
+            owned_evidence,
         ),
         AccountIdentity::PublicKeycard { key_path, .. } if authorizes => {
             let (account, _) = prepare_public_account(wallet, actor_state_selector).await?;
@@ -1048,7 +1051,7 @@ async fn prepare_account<C: WalletSequencerClient>(
             return Ok(State::PublicKeycard { account, key_path });
         }
         AccountIdentity::PublicNoSign(_) | AccountIdentity::PublicKeycard { .. } => {
-            (None, owned_key.map(key_evidence))
+            (None, owned_evidence)
         }
         AccountIdentity::PublicForeign(pk) => (None, Some(PublicAccountEvidence::Key(pk))),
         AccountIdentity::PublicPda { program, seed } => {
@@ -1113,10 +1116,6 @@ fn regular_key(ask: AuthorizationSecretKey, authorizes: bool) -> RegularKey {
     } else {
         RegularKey::Nullifying(NullifierSecretKey::from(&ask))
     }
-}
-
-fn key_evidence(key: &PrivateKey) -> PublicAccountEvidence {
-    PublicAccountEvidence::Key(PublicKey::new_from_private_key(key))
 }
 
 fn private_shared_acc_preparation<C: WalletSequencerClient>(

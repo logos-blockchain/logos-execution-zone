@@ -73,7 +73,7 @@ fn test_transaction() -> LeeTransaction {
     // account list and signs alongside the other party.
     let accounts = testnet_initial_state::initial_pub_accounts_private_keys();
     let payer = accounts[0].account_id;
-    let payer_signer = TestSigner::from(&accounts[0].pub_sign_key);
+    let payer_signer = TestSigner::from(&accounts[0].secret);
 
     let nonces = BTreeMap::from([(payer, 0_u128.into()), (acc2, 0_u128.into())]);
     let message = Message::try_new_with_fees(
@@ -578,7 +578,7 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
     let acc2 = signer2.account_id();
     let accounts = testnet_initial_state::initial_pub_accounts_private_keys();
     let payer = accounts[0].account_id;
-    let payer_signer = TestSigner::from(&accounts[0].pub_sign_key);
+    let payer_signer = TestSigner::from(&accounts[0].secret);
     let message = Message::try_new_with_fees(
         Actor::native_balance(payer),
         vec![Actor::native_balance(payer), Actor::native_balance(acc2)],

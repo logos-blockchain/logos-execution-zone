@@ -145,7 +145,7 @@ mod tests {
         let accounts = initial_pub_accounts_private_keys();
         (
             accounts[0].account_id,
-            TestSigner::from(&accounts[0].pub_sign_key),
+            TestSigner::from(&accounts[0].secret),
         )
     }
 

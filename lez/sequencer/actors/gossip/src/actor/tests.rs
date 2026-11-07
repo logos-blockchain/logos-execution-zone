@@ -185,7 +185,7 @@ fn test_config_sink() -> kameo::actor::Recipient<Wire> {
 fn valid_transaction() -> LeeTransaction {
     let acc1 = initial_public_user_accounts()[0].account_id;
     let acc2 = initial_public_user_accounts()[1].account_id;
-    let signer1 = TestSigner::from(&initial_pub_accounts_private_keys()[0].pub_sign_key);
+    let signer1 = TestSigner::from(&initial_pub_accounts_private_keys()[0].secret);
     common::test_utils::create_transaction_native_token_transfer(acc1, 0, acc2, 10, &signer1)
 }
 
@@ -198,8 +198,11 @@ fn invalidly_signed_transaction() -> LeeTransaction {
         unreachable!("valid_transaction always builds a Public transaction");
     };
     let (signature, _correct_public_key) = tx.witness_set.signatures_and_public_keys()[0].clone();
-    let wrong_public_key =
-        lee::PublicKey::new_from_private_key(&initial_pub_accounts_private_keys()[1].pub_sign_key);
+    let wrong_public_key = lee::signature::signing_key::<lee::signature::Schnorr>(
+        &initial_pub_accounts_private_keys()[1].secret,
+        0.into(),
+    )
+    .1;
     tx.witness_set =
         lee::public_transaction::WitnessSet::from_raw_parts(vec![(signature, wrong_public_key)]);
     LeeTransaction::Public(tx)

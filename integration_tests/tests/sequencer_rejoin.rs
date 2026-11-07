@@ -57,7 +57,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     let observer = spawn_channel_observer(ctx.bedrock_addr(), channel).await?;
 
     // B's genesis stake sits on an account only this key can sign for.
-    let owner_b = config::founding_stake_owner_key(1)?;
+    let owner_b = config::founding_stake_owner_secret(1);
     let ownership_b = TestSigner::from(&owner_b).account_id();
     let funds_b = system_accounts::stake_funds_account_id(&ownership_b);
     ctx.wallet_mut()

@@ -68,7 +68,7 @@ async fn gossiped_transaction_reaches_producing_sequencer() -> Result<()> {
     let accounts = initial_public_user_accounts();
     let from = accounts[0].account_id;
     let to = accounts[1].account_id;
-    let signer = TestSigner::from(&initial_pub_accounts_private_keys()[0].pub_sign_key);
+    let signer = TestSigner::from(&initial_pub_accounts_private_keys()[0].secret);
 
     let to_balance_before = seq_client_a.get_account_balance(to).await?;
     let nonce = seq_client_b.get_accounts_nonces(vec![from]).await?[0];

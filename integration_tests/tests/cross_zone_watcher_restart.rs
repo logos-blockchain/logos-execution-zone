@@ -249,7 +249,7 @@ fn build_ping_tx(
         )
         .expect("build ping message")
     };
-    let witness_set = witness_for(&message, &[&TestSigner::from(&payer.pub_sign_key)]);
+    let witness_set = witness_for(&message, &[&TestSigner::from(&payer.secret)]);
     LeeTransaction::Public(PublicTransaction::new(message, witness_set))
 }
 

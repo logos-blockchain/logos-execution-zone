@@ -24,9 +24,11 @@ use cross_zone_inbox_core::CrossZoneMessage;
 use futures::StreamExt as _;
 use kameo::actor::{ActorRef, Spawn as _};
 use lee::{
-    AccountId, Actor, PublicAccountEvidence, PublicTransaction, public_transaction::Message,
+    AccountId, Actor, PublicAccountEvidence, PublicTransaction,
+    public_transaction::Message,
+    signature::{PublicAccountSecret, Schnorr, signing_key},
 };
-use lee_core::GENESIS_BLOCK_ID;
+use lee_core::{GENESIS_BLOCK_ID, account::Nonce};
 use log::{debug, error, info, warn};
 use logos_blockchain_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 pub use logos_blockchain_core::mantle::{NoteId, ops::channel::MsgId};
@@ -3042,11 +3044,12 @@ fn effective_genesis_actions(
 
     actions.extend(bootstrap_sequencer_key.map(|key| {
         let key_path = config.home.join("sequencer_stake_signing_key");
-        let owner = load_or_create_stake_signing_key(&key_path)
-            .expect("Failed to load or create the stake signing key");
+        let secret = load_or_create_stake_secret(&key_path)
+            .expect("Failed to load or create the stake secret");
+        let (owner, ownership_public_key) = signing_key::<Schnorr>(&secret, Nonce(0));
         GenesisAction::StakeSequencer {
             sequencer_key: key,
-            ownership_public_key: lee::PublicKey::new_from_private_key(&owner),
+            ownership_public_key,
             // The only stake, so it is the first to sign with the funding key.
             stake_signature: sign_genesis_stake(
                 0,
@@ -3663,13 +3666,12 @@ pub fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
     Ok(Ed25519Key::from_bytes(&load_or_create_key_bytes(path)?))
 }
 
-/// Load the key owning this sequencer's genesis stake, or generate one.
+/// Load the secret owning this sequencer's genesis stake, or generate one.
 ///
 /// Only read when a solo sequencer creates the channel: a configured founding
-/// set carries a signature instead, so the key never reaches the node.
-pub fn load_or_create_stake_signing_key(path: &Path) -> Result<lee::PrivateKey> {
-    let bytes = load_or_create_key_bytes(path)?;
-    lee::PrivateKey::try_new(bytes).context("stake signing key file holds an invalid private key")
+/// set carries a signature instead, so the secret never reaches the node.
+pub fn load_or_create_stake_secret(path: &Path) -> Result<PublicAccountSecret> {
+    Ok(PublicAccountSecret::new(load_or_create_key_bytes(path)?))
 }
 
 #[cfg(test)]

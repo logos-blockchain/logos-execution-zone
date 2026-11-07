@@ -100,7 +100,7 @@ async fn accept_transaction_within_limit() -> Result<()> {
     // fee-paying so admission accepts it outright rather than just clearing the size check.
     let small_binary = vec![0_u8; 1024]; // 1 KiB binary
     let payer = &initial_pub_accounts_private_keys()[0];
-    let payer_signer = TestSigner::from(&payer.pub_sign_key);
+    let payer_signer = TestSigner::from(&payer.secret);
     let segment_signer = TestSigner::new(221);
     let segment_id = segment_signer.account_id();
     let payer_nonce = integration_tests::get_account(&ctx, payer.account_id)
@@ -167,7 +167,7 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
     let initial_block_height = ctx.sequencer_client().get_last_block_id().await?;
 
     let payer = &initial_pub_accounts_private_keys()[0];
-    let payer_signer = TestSigner::from(&payer.pub_sign_key);
+    let payer_signer = TestSigner::from(&payer.secret);
     let segment_signer_a = TestSigner::new(222);
     let segment_id_a = segment_signer_a.account_id();
     let segment_signer_b = TestSigner::new(223);

@@ -1751,11 +1751,11 @@ enum FfiOperationError wallet_ffi_get_account_view(struct WalletHandle *handle,
 void wallet_ffi_free_account_data(struct FfiAccount *account);
 
 /**
- * Import a public account private key into wallet storage.
+ * Import a public account secret into wallet storage.
  *
  * # Parameters
  * - `handle`: Valid wallet handle
- * - `private_key_hex`: Hex-encoded private key string
+ * - `secret_hex`: Hex-encoded public account secret
  *
  * # Returns
  * - `Success` on successful import
@@ -1763,10 +1763,10 @@ void wallet_ffi_free_account_data(struct FfiAccount *account);
  *
  * # Safety
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
- * - `private_key_hex` must be a valid pointer to a null-terminated C string
+ * - `secret_hex` must be a valid pointer to a null-terminated C string
  */
 enum FfiOperationError wallet_ffi_import_public_account(struct WalletHandle *handle,
-                                                        const char *private_key_hex);
+                                                        const char *secret_hex);
 
 /**
  * Import a private account keychain and account state into wallet storage.

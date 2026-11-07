@@ -11,11 +11,13 @@ pub use scheme::{
 };
 pub use schnorr::{Schnorr, SchnorrAuthData};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
+pub use signing_keys::{PublicAccountSecret, signing_key};
 
 mod private_key;
 mod public_key;
 mod scheme;
 mod schnorr;
+mod signing_keys;
 
 #[derive(
     Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, SerializeDisplay, DeserializeFromStr,

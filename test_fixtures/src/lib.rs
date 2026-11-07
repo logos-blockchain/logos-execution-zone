@@ -8,7 +8,7 @@ use common::{HashType, transaction::LeeTransaction};
 use futures::FutureExt as _;
 use indexer_service::{ChannelId, IndexerHandle};
 use kameo::actor::{ActorRef, Spawn as _};
-use lee::{AccountId, PrivacyPreservingTransaction, PrivateKey};
+use lee::{AccountId, PrivacyPreservingTransaction, signature::PublicAccountSecret};
 use lee_core::Commitment;
 use log::{debug, error};
 use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
@@ -1174,7 +1174,7 @@ async fn build_sequencer_components(
     bedrock_addr: SocketAddr,
     enable_wallet: bool,
     use_prebuilt: bool,
-    initial_public_accounts: &[(PrivateKey, u128)],
+    initial_public_accounts: &[(PublicAccountSecret, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     genesis_transactions: Option<Vec<GenesisAction>>,
     sequencer_key: UnsecuredEd25519Key,

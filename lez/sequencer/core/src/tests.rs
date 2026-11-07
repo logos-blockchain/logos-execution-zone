@@ -300,8 +300,8 @@ fn empty_channel_update() -> ChannelUpdate {
 /// from the same file genesis uses, which creates it on first read.
 fn bootstrap_stake_key(config: &SequencerConfig) -> TestSigner {
     TestSigner::from(
-        &crate::load_or_create_stake_signing_key(&config.home.join("sequencer_stake_signing_key"))
-            .expect("Failed to load or create the stake signing key"),
+        &crate::load_or_create_stake_secret(&config.home.join("sequencer_stake_signing_key"))
+            .expect("Failed to load or create the stake secret"),
     )
 }
 
@@ -432,11 +432,11 @@ fn assert_block_tail(block: &common::block::Block, user_txs: &[LeeTransaction]) 
 }
 
 fn create_signing_key_for_account1() -> TestSigner {
-    TestSigner::from(&initial_pub_accounts_private_keys()[0].pub_sign_key)
+    TestSigner::from(&initial_pub_accounts_private_keys()[0].secret)
 }
 
 fn create_signing_key_for_account2() -> TestSigner {
-    TestSigner::from(&initial_pub_accounts_private_keys()[1].pub_sign_key)
+    TestSigner::from(&initial_pub_accounts_private_keys()[1].secret)
 }
 
 async fn common_setup() -> (
@@ -2093,7 +2093,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     // Deploy `scripted` at the header account `scripted_id`, which signs for its own header.
     // A funded genesis account signs and pays both deployment fees.
     let payer = &initial_pub_accounts_private_keys()[0];
-    let payer_signer = TestSigner::from(&payer.pub_sign_key);
+    let payer_signer = TestSigner::from(&payer.secret);
     let segment_key = TestSigner::new(210);
     let segment_id = segment_key.account_id();
     let header_key = TestSigner::new(211);
