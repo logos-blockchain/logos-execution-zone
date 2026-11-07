@@ -4,6 +4,7 @@
 //! config account.
 
 use borsh::{BorshDeserialize, BorshSerialize};
+pub use cross_zone_emission_core::ZoneId;
 use lee_core::{
     account::{AccountId, Balance},
     program::PdaSeed,
@@ -25,9 +26,6 @@ const CONFIG_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/WrappedTokenConfig/00/";
 const HOLDING_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/WrappedTokenHold/0000/";
 
 pub const WRAPPED_TOKEN_NAME: [u8; 13] = *b"wrapped_token";
-
-/// Raw 32-byte zone (channel) id, matching the inbox's.
-pub type ZoneId = [u8; 32];
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Message {

@@ -1,5 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-pub use cross_zone_emission_core::CrossZoneEmission;
+pub use cross_zone_emission_core::{CrossZoneEmission, ZoneId};
 use lee_core::{
     account::{AccountId, Actor},
     program::PdaSeed,
@@ -11,9 +11,6 @@ const RECEIVER_CONFIG_SEED: [u8; 32] = *b"/LEZ/v0.3/PingReceiverCfg/00000/";
 
 pub const PING_SENDER_NAME: [u8; 11] = *b"ping_sender";
 pub const PING_RECEIVER_NAME: [u8; 13] = *b"ping_receiver";
-
-/// Raw 32-byte zone (channel) id, matching the inbox's.
-pub type ZoneId = [u8; 32];
 
 /// Message to `ping_receiver`.
 ///

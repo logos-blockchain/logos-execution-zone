@@ -2224,6 +2224,7 @@ name = "cross_zone_inbox_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "cross_zone_emission_core",
  "cross_zone_marker_core",
  "lee_core",
  "risc0-zkvm",
@@ -2244,6 +2245,7 @@ name = "cross_zone_marker_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "cross_zone_emission_core",
  "lee_core",
  "risc0-zkvm",
 ]
@@ -2253,6 +2255,7 @@ name = "cross_zone_outbox_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "cross_zone_emission_core",
  "lee_core",
  "risc0-zkvm",
 ]
@@ -14688,6 +14691,7 @@ name = "wrapped_token_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "cross_zone_emission_core",
  "lee_core",
  "risc0-zkvm",
 ]

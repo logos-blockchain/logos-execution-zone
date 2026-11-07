@@ -43,7 +43,7 @@ pub struct Emission {
 impl Emission {
     /// The ordinal only shapes the source-side outbox slot, so it is dropped.
     #[must_use]
-    pub fn declared(source: AccountId, wire: cross_zone_emission_core::CrossZoneEmission) -> Self {
+    pub fn from_wire(source: AccountId, wire: cross_zone_emission_core::CrossZoneEmission) -> Self {
         Self {
             source,
             target_zone: wire.target_zone,
@@ -93,13 +93,13 @@ pub fn extract_emission(tx: &lee::PublicTransaction) -> Option<Emission> {
         let Ok(ping_core::SenderMessage::Send { emission, .. }) = borsh::from_slice(message) else {
             return None;
         };
-        Some(Emission::declared(to.program_account_id, emission))
+        Some(Emission::from_wire(to.program_account_id, emission))
     } else if to.program_account_id == programs::bridge_lock_account_id() {
         let Ok(bridge_lock_core::Message::Lock { emission, .. }) = borsh::from_slice(message)
         else {
             return None;
         };
-        Some(Emission::declared(to.program_account_id, emission))
+        Some(Emission::from_wire(to.program_account_id, emission))
     } else {
         None
     }
