@@ -12,6 +12,7 @@ use lee_core::{
     },
     native_token::encode_balance,
     program::{PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, PrivateAccountKind, SyncMessage},
+    signing_key::SIGNATURE_PROGRAM_ID,
 };
 use test_guest_core::Script;
 
@@ -713,7 +714,11 @@ fn a_hand_built_input_with_a_matching_receipt_proves() {
 #[test]
 fn a_guest_image_claim_for_the_reserved_id_is_refused() {
     let scripted = crate::test_methods::scripted();
-    for reserved in [NATIVE_TOKEN_PROGRAM_ID, PROGRAM_LOADER_ACCOUNT_ID] {
+    for reserved in [
+        NATIVE_TOKEN_PROGRAM_ID,
+        PROGRAM_LOADER_ACCOUNT_ID,
+        SIGNATURE_PROGRAM_ID,
+    ] {
         let (receipt, response) =
             receive_receipt(&scripted, &scripted_root_input(&Script::default(), true));
         let mut input = direct_input(

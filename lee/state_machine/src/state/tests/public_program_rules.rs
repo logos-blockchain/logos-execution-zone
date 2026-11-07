@@ -1,3 +1,5 @@
+use lee_core::signing_key::SIGNATURE_PROGRAM_ID;
+
 use super::*;
 use crate::ValidatedStateDiff;
 
@@ -265,4 +267,101 @@ fn a_declared_account_no_transition_changes_stays_out_of_the_diff_and_the_state(
     assert!(diff.public_diff().is_empty());
     state.apply_state_diff(diff).unwrap();
     assert!(state.get_account_by_id_ref(bystander.account_id).is_none());
+}
+
+fn planted_signature_program() -> V03State {
+    V03State::new()
+        .with_programs([crate::test_methods::scripted()])
+        .with_named_programs([(SIGNATURE_PROGRAM_ID, crate::test_methods::scripted())])
+}
+
+fn assert_charged_as_an_unknown_callee(tx: &PublicTransaction, signer: AccountId) {
+    let mut state = planted_signature_program();
+    let error = ValidatedStateDiff::from_public_transaction(tx, &state, 1, 0)
+        .err()
+        .expect("a message to the signature program must fail");
+    assert!(
+        matches!(error, LeeError::UnknownProgram { at_root: false }),
+        "expected the signature program to be unknown past the root, got {error:?}"
+    );
+
+    let (charge, result) = ValidatedStateDiff::from_public_transaction_metered(
+        tx,
+        &state,
+        1,
+        0,
+        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+    );
+
+    assert_eq!(charge.revert, Some(error.to_string()));
+    let diff = result.expect("a charged failure still yields an applicable diff");
+    state.apply_state_diff(diff).unwrap();
+    assert_eq!(
+        state.get_account_by_id(signer),
+        Account {
+            nonce: Nonce(1),
+            ..Account::default()
+        }
+    );
+}
+
+#[test]
+fn a_root_call_to_the_signature_program_is_unknown_and_not_charged() {
+    let key = TestSigner::new(1);
+    let signature = Actor::new(key.account_id(), SIGNATURE_PROGRAM_ID);
+    let tx = public_tx(
+        signature,
+        vec![signature],
+        vec![Nonce(0)],
+        Script::default(),
+        &[&key],
+    );
+
+    let (_, result) = ValidatedStateDiff::from_public_transaction_metered(
+        &tx,
+        &planted_signature_program(),
+        1,
+        0,
+        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+    );
+
+    let Err(error) = result else {
+        panic!("a root call to the signature program must reject the block");
+    };
+    assert!(
+        matches!(error, LeeError::UnknownProgram { at_root: true }),
+        "expected the signature program to be unknown at the root, got {error:?}"
+    );
+}
+
+#[test]
+fn a_chained_call_to_the_signature_program_is_charged_and_reverted() {
+    let key = TestSigner::new(1);
+    let sender = Actor::new(key.account_id(), scripted_id());
+    let signature = Actor::new(key.account_id(), SIGNATURE_PROGRAM_ID);
+    let tx = public_tx(
+        sender,
+        vec![sender, signature],
+        vec![Nonce(0)],
+        Script::write(vec![7; 4]).send_sync(signature, &Script::default()),
+        &[&key],
+    );
+
+    assert_charged_as_an_unknown_callee(&tx, key.account_id());
+}
+
+#[test]
+fn an_async_message_to_the_signature_program_is_charged_and_reverted() {
+    let key = TestSigner::new(1);
+    let sender = Actor::new(key.account_id(), scripted_id());
+    let signature = Actor::new(key.account_id(), SIGNATURE_PROGRAM_ID);
+    let tx = public_tx(
+        sender,
+        vec![sender, signature],
+        vec![Nonce(0)],
+        Script::write(vec![7; 4]).send_async(signature, &Script::default()),
+        &[&key],
+    );
+
+    assert_charged_as_an_unknown_callee(&tx, key.account_id());
 }
