@@ -246,16 +246,14 @@ pub fn clock_invocation(block_id: BlockId, timestamp: Timestamp) -> lee::PublicT
     )
 }
 
-/// Whether `tx` is a sequencer-injected or account-less system transaction.
+/// Whether `tx` is a sequencer-injected system transaction.
 ///
-/// Identified by shape: an empty witness set invoking the bridge deposit, the
-/// cross-zone inbox dispatch, or the `ping_sender` cross-zone send. Fee- and
-/// cap-exempt. Shared by the sequencer (build) and the transition (replay) so
-/// the two can never disagree.
-///
-/// Cross-zone traffic is exempt by design, not as a stopgap: an outbound send
-/// is account-less (there is no payer to charge) and an inbound dispatch is
-/// sequencer-injected, so neither can carry a fee.
+/// Identified by shape: an empty witness set invoking the bridge deposit or
+/// the cross-zone inbox dispatch, the two transactions only the sequencer
+/// builds. Fee- and cap-exempt: neither has a payer to charge. Shared by the
+/// sequencer (build) and the transition (replay) so the two can never
+/// disagree. An outbound send (`ping_sender::Send`) is deliberately not here:
+/// it pays like any user transaction (#799).
 #[must_use]
 pub fn is_system_injection(tx: &LeeTransaction) -> bool {
     let LeeTransaction::Public(public_tx) = tx else {
@@ -282,22 +280,14 @@ pub fn is_system_injection(tx: &LeeTransaction) -> bool {
             Ok(cross_zone_inbox_core::Message::Dispatch(_))
         );
     }
-    if program_account_id == programs::ping_sender_account_id() {
-        return matches!(
-            borsh::from_slice::<ping_core::SenderMessage>(message),
-            Ok(ping_core::SenderMessage::Send { .. })
-        );
-    }
     false
 }
 
 /// Whether `tx` is a cross-zone outbound lock (`bridge_lock::Lock`).
 ///
-/// Fee-exempt like the rest of the cross-zone traffic: the lock debits the
-/// holder's holding PDA and escrows it against a mint on the target zone, so
-/// there is no spendable account to charge without stranding the bridged
-/// balance. Signed (the holder authorizes the debit), so it is not caught by
-/// [`is_system_injection`]'s empty-witness shape.
+/// Fee-exempt though signed: the lock debits a holding PDA into escrow, so
+/// nothing spendable is left to charge. The empty-witness shape in
+/// [`is_system_injection`] misses it.
 #[must_use]
 pub fn is_cross_zone_lock(tx: &LeeTransaction) -> bool {
     let Some((to, message)) = tx.public_call() else {
@@ -958,5 +948,35 @@ mod tests {
         let (state, diff) = inbox_state_write();
         assert!(validate_user_state_modification(&injected_deposit(), &state, &diff).is_err());
         assert!(validate_user_state_modification(&signed_transfer(), &state, &diff).is_err());
+    }
+
+    #[test]
+    fn an_unsigned_ping_send_is_not_a_system_injection() {
+        let sender_id = programs::ping_sender_account_id();
+        let config = lee::Actor::new(AccountId::new([7; 32]), sender_id);
+        let outbox = lee::Actor::new(
+            AccountId::new([8; 32]),
+            programs::cross_zone_outbox_account_id(),
+        );
+        let send = ping_core::SenderMessage::Send {
+            outbox,
+            target_zone: [2; 32],
+            target_account_id: AccountId::new([9; 32]),
+            target_accounts: vec![],
+            payload: vec![1],
+            ordinal: 0,
+        };
+        let message = lee::public_transaction::Message::try_new(
+            config,
+            vec![config, outbox],
+            BTreeMap::new(),
+            send,
+        )
+        .expect("build send message");
+        let tx = crate::transaction::LeeTransaction::Public(lee::PublicTransaction::new(
+            message,
+            lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        ));
+        assert!(!super::is_system_injection(&tx));
     }
 }
