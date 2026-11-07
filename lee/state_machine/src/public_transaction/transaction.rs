@@ -356,4 +356,25 @@ pub mod tests {
             Err(LeeError::UnknownProgram { at_root: true })
         ));
     }
+
+    #[test]
+    fn witness_entries_must_follow_the_nonces_order() {
+        let (key1, key2, ..) = keys_for_tests();
+        let message = transaction_for_tests().message;
+
+        let witness_set = WitnessSet::from_raw_parts(vec![
+            signed_entry(&key1, &message),
+            signed_entry(&key2, &message),
+        ]);
+        let tx = PublicTransaction::new(message, witness_set);
+        assert_eq!(tx.check_stateless(), Err(InvalidTransaction::SignerOrder));
+    }
+
+    #[test]
+    fn a_witness_entry_of_an_unlisted_account_is_rejected() {
+        let mut tx = transaction_for_tests();
+        tx.witness_set.signatures_and_public_keys[0] =
+            signed_entry(&TestSigner::new(3), &tx.message);
+        assert_eq!(tx.check_stateless(), Err(InvalidTransaction::SignerOrder));
+    }
 }
