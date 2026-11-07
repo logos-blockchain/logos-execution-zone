@@ -90,4 +90,35 @@ mod tests {
             "Not all bytes read"
         );
     }
+
+    #[test]
+    fn a_signing_key_state_round_trips_through_an_actor_state() {
+        let state = SigningKeyState {
+            key_type: KeyType::Schnorr,
+            key_commitment: [7; 32],
+        };
+        let actor_state = ActorState::from(state);
+        assert_eq!(actor_state.as_ref(), [&[1][..], &[7; 32][..]].concat());
+        assert_eq!(SigningKeyState::try_from(&actor_state).unwrap(), state);
+    }
+
+    #[test]
+    fn an_actor_state_of_another_shape_is_not_a_signing_key_state() {
+        for (bytes, error) in [
+            (Vec::new(), "Unexpected length of input"),
+            (vec![1; 32], "Unexpected length of input"),
+            (vec![1; 34], "Not all bytes read"),
+            (
+                [&[2][..], &[7; 32][..]].concat(),
+                "Unexpected variant tag: 2",
+            ),
+        ] {
+            assert_eq!(
+                SigningKeyState::try_from(&ActorState::from(bytes))
+                    .unwrap_err()
+                    .to_string(),
+                error
+            );
+        }
+    }
 }

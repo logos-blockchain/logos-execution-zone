@@ -57,18 +57,38 @@ impl Message {
 pub mod tests {
     use std::collections::BTreeMap;
 
+    use hex_literal::hex;
     use lee_core::{
         Commitment, EphemeralPublicKey, Nullifier, NullifierPublicKey, PrivateAction,
         ProvenExecution,
-        account::{Account, AccountId, Nonce},
+        account::{Account, AccountId, Actor, Nonce},
         encryption::{Ciphertext, ViewingPublicKey},
         execution_state::{Boundary, PublicExecutionContext},
         program::{PdaSeed, ValidityWindows},
+        signing_key::{KeyType, SigningKeyState},
     };
     use sha2::{Digest as _, Sha256};
 
-    use super::{EncryptedNote, Message, PREFIX};
-    use crate::PublicAccountEvidence;
+    use super::{EncryptedNote, KEYED_PREFIX, Message, PREFIX};
+    use crate::{PublicAccountEvidence, public_transaction, transaction_message::hash_with_keys};
+
+    fn key(commitment: u8) -> SigningKeyState {
+        SigningKeyState {
+            key_type: KeyType::Schnorr,
+            key_commitment: [commitment; 32],
+        }
+    }
+
+    fn pinned_message() -> Message {
+        Message {
+            nonces: BTreeMap::from([(AccountId::new([2; 32]), Nonce(1))]),
+            admission_evidence: vec![PublicAccountEvidence::Pda {
+                program: AccountId::new([0; 32]),
+                seed: PdaSeed::new([1; 32]),
+            }],
+            ..Message::default()
+        }
+    }
 
     #[must_use]
     pub fn message_for_tests() -> Message {
@@ -154,5 +174,39 @@ pub mod tests {
         assert_eq!(message.to_bytes(), expected);
         let digest: [u8; 32] = Sha256::digest([&PREFIX[..], &expected].concat()).into();
         assert_eq!(message.hash(), digest);
+    }
+
+    #[test]
+    fn message_with_keys_has_known_answers() {
+        let message = pinned_message();
+        assert_eq!(
+            message.message_with_keys(&[key(7)]),
+            hex!("8a3f24ce59592ca5fd3f0ebb236e4e8a096827eace51d44b5e558ab9f74f5f27")
+        );
+        assert_eq!(
+            message.message_with_keys(&[key(1), key(2), key(3)]),
+            hex!("4bbf392c96d717f0a19722489a96cd19d0754f6af475adb6daaccc2e4dfc598c")
+        );
+    }
+
+    #[test]
+    fn a_public_and_a_privacy_message_with_the_same_bytes_and_next_keys_differ() {
+        let to = Actor::new(AccountId::new([42; 32]), AccountId::new([0; 32]));
+        let public = public_transaction::Message::new_preserialized(
+            to,
+            vec![0],
+            [to],
+            BTreeMap::from([(to.account_id, Nonce(1))]),
+            None,
+        );
+        let next = [key(7)];
+        // What a privacy message with the public message's bytes would have its signers sign.
+        let as_privacy = hash_with_keys(KEYED_PREFIX, &public.hash_under(PREFIX), &next);
+
+        assert_eq!(
+            as_privacy,
+            hex!("7d10fab90723366cb16ae3e207a25e0aeafacf65a196ff33e23a0f6f3c601f5a")
+        );
+        assert_ne!(public.message_with_keys(&next), as_privacy);
     }
 }
