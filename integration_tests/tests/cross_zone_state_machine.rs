@@ -23,7 +23,10 @@ use lee::{
     public_transaction::{Message, WitnessSet},
     test_utils::{TestSigner, witness_for},
 };
-use lee_core::{account::Account, native_token::TransferError, program::SyncMessage};
+use lee_core::{
+    account::Account, native_token::TransferError, program::SyncMessage,
+    signing_key::SIGNATURE_PROGRAM_ID,
+};
 use ping_core::{
     CrossZoneEmission, ReceiverMessage, outbox_bytes, ping_record_pda, ping_record_seed,
     read_outbox, receiver_config_account_id, sender_config_account_id, sender_config_seed,
@@ -1812,11 +1815,7 @@ fn the_token_authority_path_holds() {
         "the new source is authorized"
     );
     assert!(
-        state
-            .get_account_by_id(authority)
-            .data
-            .actor_states
-            .is_empty(),
+        holds_only_its_key(&state, authority),
         "acting as the authority must not hand the account to wrapped_token"
     );
 
@@ -2165,11 +2164,7 @@ fn the_governance_path_holds() {
         uncapped_entries(&[(src_zone, programs::bridge_lock_account_id())])
     );
     assert!(
-        state
-            .get_account_by_id(authority)
-            .data
-            .actor_states
-            .is_empty(),
+        holds_only_its_key(&state, authority),
         "acting as the authority must not hand the account to wrapped_token"
     );
 
@@ -2347,11 +2342,7 @@ fn the_receiver_governance_path_holds() {
         vec![(src_zone, programs::ping_sender_account_id())]
     );
     assert!(
-        state
-            .get_account_by_id(authority)
-            .data
-            .actor_states
-            .is_empty(),
+        holds_only_its_key(&state, authority),
         "acting as the authority must not hand the account to ping_receiver"
     );
 }
@@ -2393,11 +2384,7 @@ fn a_shared_authority_serves_both_targets() {
         .apply_state_diff(first)
         .expect("the validated diff applies");
     assert!(
-        state
-            .get_account_by_id(authority)
-            .data
-            .actor_states
-            .is_empty(),
+        holds_only_its_key(&state, authority),
         "a data-free authority is owned by nobody, whichever target uses it first"
     );
 
@@ -2424,11 +2411,7 @@ fn a_shared_authority_serves_both_targets() {
         vec![(src_zone, programs::ping_sender_account_id())]
     );
     assert!(
-        state
-            .get_account_by_id(authority)
-            .data
-            .actor_states
-            .is_empty(),
+        holds_only_its_key(&state, authority),
         "the authority holds no record from either target"
     );
 
@@ -2909,4 +2892,14 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
         shard_after.src_block_hash, SRC_BLOCK_HASH,
         "a shard stays bound to the block that claimed it"
     );
+}
+
+/// Whether the account holds no actor state but the key its signatures rotated to.
+fn holds_only_its_key(state: &V03State, account: AccountId) -> bool {
+    state
+        .get_account_by_id(account)
+        .data
+        .actor_states
+        .keys()
+        .all(|program| *program == SIGNATURE_PROGRAM_ID)
 }

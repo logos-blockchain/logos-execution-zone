@@ -23,10 +23,12 @@ use integration_tests::{
         primitives as primitives_ffi_helpers, sequencer as sequencer_ffi_helpers, wallet::*,
     },
 };
-use lee::{Account, AccountId};
+use lee::{Account, AccountId, test_utils::TestSigner};
 use lee_core::{
-    native_token::NATIVE_TOKEN_PROGRAM_ID, program::PROGRAM_LOADER_ACCOUNT_ID,
-    signing_key::SigningKeyState,
+    account::Nonce,
+    native_token::NATIVE_TOKEN_PROGRAM_ID,
+    program::PROGRAM_LOADER_ACCOUNT_ID,
+    signing_key::{SIGNATURE_PROGRAM_ID, SigningKeyState},
 };
 
 #[test]
@@ -107,9 +109,20 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
         (&out_account).try_into().unwrap()
     };
 
+    // Genesis credits the account, and its key rotated with each of its two signatures.
+    let signer = TestSigner::from(
+        ctx.ctx()
+            .wallet()
+            .storage()
+            .key_chain()
+            .pub_account_secret(account_id)
+            .expect("the wallet holds the account"),
+    );
     assert_eq!(
         account.data,
-        Account::funded(INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]).data
+        Account::funded(INITIAL_PUBLIC_BALANCES_FOR_WALLET[0])
+            .with_actor_state(SIGNATURE_PROGRAM_ID, signer.key_state(Nonce(2)).into())
+            .data
     );
     assert_eq!(account.nonce.0, 2);
 
