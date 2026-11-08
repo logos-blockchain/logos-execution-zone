@@ -60,7 +60,7 @@ use cross_zone_outbox_core::{outbox_pda, outbox_pda_seed};
 use lee::{
     AccountId, Actor, PublicAccountEvidence, PublicTransaction,
     public_transaction::{Message, WitnessSet},
-    signature::Signer,
+    signature::{Signer, WOTS_LEAVES},
 };
 use lee_core::{account::Nonce, signing_key::KeyType};
 use log::{info, warn};
@@ -148,7 +148,14 @@ struct ZoneRuntime {
     /// Next payer nonce, seeded from the chain at startup and advanced only on
     /// a successful submit. Held across the submit, so two sends in one block
     /// interval cannot take the same nonce.
-    payer_nonce: tokio::sync::Mutex<u64>,
+    payer_nonce: tokio::sync::Mutex<PayerNonce>,
+}
+
+/// The payer's next nonce and how many signatures were sent at it, each with
+/// the next leaf of its WOTS+ key.
+struct PayerNonce {
+    nonce: u64,
+    attempts: u8,
 }
 
 struct AppState {
@@ -342,13 +349,19 @@ async fn main() -> Result<()> {
             other_zone: zone_b,
             client: client_a,
             ordinal: AtomicU32::new(ordinal_a),
-            payer_nonce: tokio::sync::Mutex::new(payer_nonce_a),
+            payer_nonce: tokio::sync::Mutex::new(PayerNonce {
+                nonce: payer_nonce_a,
+                attempts: 0,
+            }),
         },
         zone_b: ZoneRuntime {
             other_zone: zone_a,
             client: client_b,
             ordinal: AtomicU32::new(ordinal_b),
-            payer_nonce: tokio::sync::Mutex::new(payer_nonce_b),
+            payer_nonce: tokio::sync::Mutex::new(PayerNonce {
+                nonce: payer_nonce_b,
+                attempts: 0,
+            }),
         },
         next_id: AtomicU64::new(1),
         messages: Mutex::new(Vec::new()),
@@ -579,6 +592,7 @@ fn build_send_tx(
     text: &str,
     payer: &PublicAccountPrivateInitialData,
     payer_nonce: Nonce,
+    leaf: u8,
 ) -> LeeTransaction {
     let receiver_id = programs::ping_receiver_account_id();
     let outbox_id = programs::cross_zone_outbox_account_id();
@@ -627,12 +641,7 @@ fn build_send_tx(
     // The payer only ever signs with WOTS+ keys and rotates to WOTS+ keys.
     let witness_set = WitnessSet::sign(
         &message,
-        &[Signer::new(
-            &payer.secret,
-            payer_nonce,
-            KeyType::Wots,
-            KeyType::Wots,
-        )],
+        &[Signer::new(&payer.secret, payer_nonce, KeyType::Wots, KeyType::Wots).with_leaf(leaf)],
     );
     LeeTransaction::Public(PublicTransaction::new(message, witness_set))
 }
@@ -657,6 +666,12 @@ async fn send_handler(
     let zone = state.zone(source_label).expect("zone runtime exists");
 
     let mut next_nonce = zone.payer_nonce.lock().await;
+    if next_nonce.attempts >= WOTS_LEAVES {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the payer has signed with every one-time key at its nonce".to_owned(),
+        ));
+    }
     let ordinal = zone.ordinal.fetch_add(1, Ordering::SeqCst);
     let payer = &initial_pub_accounts_private_keys()[0];
     let tx = build_send_tx(
@@ -664,13 +679,17 @@ async fn send_handler(
         ordinal,
         text,
         payer,
-        Nonce(u128::from(*next_nonce)),
+        Nonce(u128::from(next_nonce.nonce)),
+        next_nonce.attempts,
     );
+    // The leaf is spent once the signature leaves, whether or not the submit succeeds.
+    next_nonce.attempts += 1;
     zone.client
         .send_transaction(tx)
         .await
         .map_err(|err| (StatusCode::BAD_GATEWAY, format!("submit failed: {err:#}")))?;
-    *next_nonce += 1;
+    next_nonce.nonce += 1;
+    next_nonce.attempts = 0;
     let id = state.record_outbound(source_label, dest_label, ordinal, text.to_owned());
     Ok(Json(SendResponse { id }))
 }

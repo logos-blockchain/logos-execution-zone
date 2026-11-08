@@ -15,7 +15,7 @@ pub use signing_keys::{
     INITIAL_KEY_TYPE, PublicAccountSecret, Signer, initial_key, key_state, public_account_id,
     signing_key,
 };
-pub use wots::{Wots, WotsAuthData, WotsPublicKey, WotsSecretKey};
+pub use wots::{WOTS_LEAVES, Wots, WotsAuthData, WotsPublicKey, WotsSecretKey};
 
 mod private_key;
 mod public_key;

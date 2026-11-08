@@ -679,6 +679,7 @@ impl WalletSubcommand for ImportSubcommand {
                     .storage_mut()
                     .key_chain_mut()
                     .add_imported_public_account(secret);
+                wallet_core.mark_foreign_account(account_id).await?;
 
                 wallet_core.store_persistent_data()?;
 

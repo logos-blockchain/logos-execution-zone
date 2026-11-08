@@ -18,11 +18,15 @@ use integration_tests::{
 };
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{Account, AccountId};
+use lee_core::account::Nonce;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
-use wallet::cli::{
-    Command, SubcommandReturnValue, account::AccountSubcommand,
-    programs::native_token_transfer::AuthTransferSubcommand,
+use wallet::{
+    cli::{
+        Command, SubcommandReturnValue, account::AccountSubcommand,
+        programs::native_token_transfer::AuthTransferSubcommand,
+    },
+    storage::leaf_records::LeafRecords,
 };
 
 #[test]
@@ -175,6 +179,12 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     log::info!("Tree checks passed, testing restored accounts can transact");
 
+    // A restored account takes leaves from the end of its tree, which the lost wallet probably
+    // did not use.
+    let leaves_path = ctx.wallet().storage_path().with_extension("leaves");
+    let leaves = || LeafRecords::open(leaves_path.clone());
+    assert_eq!(leaves()?.next_leaf(to_account_id3, Nonce(0)), Ok(7));
+
     // Test that restored accounts can send transactions
     send(
         &mut ctx,
@@ -190,6 +200,7 @@ async fn restore_keys_from_seed() -> Result<()> {
         11,
     )
     .await?;
+    assert_eq!(leaves()?.next_leaf(to_account_id3, Nonce(0)), Ok(6));
 
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 

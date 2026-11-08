@@ -9,8 +9,9 @@ use clap::{Parser, Subcommand};
 use common::HashType;
 use derive_more::Display;
 use lee_core::{
-    BlockId, NullifierPublicKey, PrivateAccountKind, encryption::ViewingPublicKey,
-    signing_key::SigningKeyState,
+    BlockId, NullifierPublicKey, PrivateAccountKind,
+    encryption::ViewingPublicKey,
+    signing_key::{KeyType, SigningKeyState},
 };
 
 pub use crate::utils::{read_mnemonic, read_pin};
@@ -135,6 +136,10 @@ pub struct Args {
     /// to it.
     #[arg(long, global = true, value_name = "ACCOUNT_ID")]
     pub refund_to: Option<lee::AccountId>,
+    /// Rotate each account signing a transaction of this command to a key of this type (`wots`
+    /// or `schnorr`), instead of one of its current type.
+    #[arg(long, global = true, value_name = "TYPE", value_parser = parse_key_type)]
+    pub next_key_type: Option<KeyType>,
     /// Wallet command.
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -361,8 +366,16 @@ async fn execute_restore_keys<C: WalletSequencerClient>(
     wallet_core.restore_keys(depth).await
 }
 
+fn parse_key_type(name: &str) -> Result<KeyType> {
+    match name.to_lowercase().as_str() {
+        "wots" => Ok(KeyType::Wots),
+        "schnorr" => Ok(KeyType::Schnorr),
+        _ => anyhow::bail!("Unknown key type {name}, expected wots or schnorr"),
+    }
+}
+
 /// Asks on stderr; true without a terminal, so scripts never block.
-pub(crate) fn confirm(question: &str) -> Result<bool> {
+pub fn confirm(question: &str) -> Result<bool> {
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return Ok(true);
     }

@@ -29,7 +29,7 @@ use lee::{
         circuit::{Dependency, ProgramCatalog, ProgramKind},
         message::Message,
     },
-    signature::INITIAL_KEY_TYPE,
+    signature::{INITIAL_KEY_TYPE, Signer},
 };
 use lee_core::{
     BlockId, Commitment, CommitmentPosition, CommitmentSetDigest, EphemeralSecretKey, FeeTransfer,
@@ -45,7 +45,11 @@ use log::warn;
 /// The fee quote a [`WalletSequencerClient`] returns.
 pub use sequencer_service_rpc::FeeStateQuote;
 use sequencer_service_rpc::{RpcClient, SequencerClient, SequencerClientBuilder};
-use storage::{Storage, StorageKey, spent_nullifiers::SpentNullifiers};
+use storage::{
+    Storage, StorageKey,
+    leaf_records::{LeafError, LeafRecords},
+    spent_nullifiers::SpentNullifiers,
+};
 use tokio::io::AsyncWriteExt as _;
 use url::Url;
 
@@ -192,6 +196,10 @@ pub enum ExecutionFailureKind {
     SignError(anyhow::Error),
     #[error("Dry run: the transaction was simulated and not sent")]
     DryRun,
+    #[error(transparent)]
+    LeavesExhausted(#[from] LeafError),
+    #[error("Not signing again at a nonce a transaction was already sent at")]
+    ResendDeclined,
     #[error("Sending transaction failed for each client")]
     MultiSequencerTransactionSendError,
     #[error("Failed to store wallet data")]
@@ -419,6 +427,13 @@ pub struct WalletCore<C: WalletSequencerClient> {
     /// which a later send leaves alone until the spent-nullifier cache covers them. A
     /// transaction seen reverted or not included gives its claims back.
     swept: std::sync::Mutex<HashMap<HashType, Vec<Nullifier>>>,
+    /// Which WOTS+ leaf each public account signs with next.
+    leaf_records: std::sync::Mutex<LeafRecords>,
+    /// The key type each signer rotates to; `None` keeps its current type.
+    next_key_type: Option<KeyType>,
+    /// Asked before signing again at a nonce a transaction was already sent at; without it the
+    /// wallet warns and signs.
+    confirm_resend: Option<fn(&str) -> Result<bool>>,
 }
 
 impl<C: WalletSequencerClient> WalletCore<C> {
@@ -498,6 +513,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         }
 
         let spent_nullifiers = SpentNullifiers::open(storage_path.with_extension("nullifiers"))?;
+        let leaf_records = LeafRecords::open(storage_path.with_extension("leaves"))?;
 
         Ok(Self {
             config_path,
@@ -512,6 +528,9 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             fee_payer: None,
             refund_to: None,
             swept: std::sync::Mutex::new(HashMap::new()),
+            leaf_records: std::sync::Mutex::new(leaf_records),
+            next_key_type: None,
+            confirm_resend: None,
         })
     }
 
@@ -602,6 +621,118 @@ impl<C: WalletSequencerClient> WalletCore<C> {
     /// with [`ExecutionFailureKind::DryRun`].
     pub const fn set_dry_run(&mut self, dry_run: bool) {
         self.dry_run = dry_run;
+    }
+
+    /// Rotates every signer to a key of type `next_key_type`; `None` keeps each one's type.
+    pub const fn set_next_key_type(&mut self, next_key_type: Option<KeyType>) {
+        self.next_key_type = next_key_type;
+    }
+
+    /// Asks `confirm` before signing again at a nonce a transaction was already sent at.
+    pub fn set_confirm_resend(&mut self, confirm: fn(&str) -> Result<bool>) {
+        self.confirm_resend = Some(confirm);
+    }
+
+    /// Marks a public account this wallet did not create whose current key is WOTS+: another
+    /// wallet may have used leaves at its current nonce. Without the chain, the mark applies at
+    /// whatever nonce the account next signs at.
+    pub async fn mark_foreign_account(&self, account_id: AccountId) -> Result<()> {
+        let nonce = match self.current_key(account_id).await {
+            Ok((_, KeyType::Schnorr)) => return Ok(()),
+            Ok((nonce, KeyType::Wots)) => Some(nonce),
+            Err(error) => {
+                warn!("Could not read the current key of {account_id}: {error:#}");
+                None
+            }
+        };
+        self.leaf_records
+            .lock()
+            .expect("the leaf records are not poisoned")
+            .mark_foreign(account_id, nonce)
+    }
+
+    /// Asks before signing again at a nonce one of `signers` already sent a transaction at.
+    fn confirm_resends(
+        &self,
+        signers: impl IntoIterator<Item = AccountId>,
+        nonces: &BTreeMap<AccountId, Nonce>,
+    ) -> Result<(), ExecutionFailureKind> {
+        if self.dry_run {
+            return Ok(());
+        }
+        let resent: Vec<String> = {
+            let records = self
+                .leaf_records
+                .lock()
+                .expect("the leaf records are not poisoned");
+            signers
+                .into_iter()
+                .filter(|account| {
+                    nonces
+                        .get(account)
+                        .is_some_and(|nonce| records.sent_at(*account, *nonce))
+                })
+                .map(|account| account.to_string())
+                .collect()
+        };
+        if resent.is_empty() {
+            return Ok(());
+        }
+        let question = format!(
+            "A transaction was already sent at the current nonce of {}; while it is pending, \
+             the sequencer refuses this one. Sign it anyway?",
+            resent.join(", ")
+        );
+        match self.confirm_resend {
+            None => {
+                warn!("{question}");
+                Ok(())
+            }
+            Some(confirm) => {
+                if confirm(&question).map_err(ExecutionFailureKind::SignError)? {
+                    Ok(())
+                } else {
+                    Err(ExecutionFailureKind::ResendDeclined)
+                }
+            }
+        }
+    }
+
+    /// Signs with each WOTS+ signer's next leaf at its nonce in `nonces`, and spends the leaves
+    /// before the signatures leave the wallet, unless this is a dry run.
+    fn sign_with_leaves<T>(
+        &self,
+        signers: Vec<Signer>,
+        nonces: &BTreeMap<AccountId, Nonce>,
+        sign: impl FnOnce(&[Signer]) -> T,
+    ) -> Result<T, ExecutionFailureKind> {
+        let mut records = self
+            .leaf_records
+            .lock()
+            .expect("the leaf records are not poisoned");
+        let mut spent = Vec::new();
+        let signers = signers
+            .into_iter()
+            .map(|signer| {
+                if !signer.has_leaves() {
+                    return Ok(signer);
+                }
+                let account = signer.account_id();
+                let nonce = *nonces
+                    .get(&account)
+                    .expect("every signing account is in the message's nonces");
+                let leaf = records.next_leaf(account, nonce)?;
+                spent.push((account, nonce));
+                Ok(signer.with_leaf(leaf))
+            })
+            .collect::<Result<Vec<_>, LeafError>>()?;
+        let signed = sign(&signers);
+        if !self.dry_run {
+            records
+                .spend(&spent)
+                .map_err(ExecutionFailureKind::StorageError)?;
+        }
+        Ok(signed)
     }
 
     /// Get configuration with applied overrides.
@@ -1136,19 +1267,25 @@ impl<C: WalletSequencerClient> WalletCore<C> {
     /// The type of a public account's current key: its stored key's, or the initial type for an
     /// account that has not signed yet.
     pub async fn current_key_type(&self, account_id: AccountId) -> Result<KeyType> {
+        Ok(self.current_key(account_id).await?.1)
+    }
+
+    /// A public account's nonce and the type of its key at that nonce.
+    async fn current_key(&self, account_id: AccountId) -> Result<(Nonce, KeyType)> {
         let Some(account) = self
             .get_account_view(Actor::new(account_id, SIGNATURE_PROGRAM_ID))
             .await?
         else {
-            return Ok(INITIAL_KEY_TYPE);
+            return Ok((Nonce(0), INITIAL_KEY_TYPE));
         };
         let stored = account.data.actor_state(SIGNATURE_PROGRAM_ID);
         if stored.is_empty() {
-            return Ok(INITIAL_KEY_TYPE);
+            return Ok((account.nonce, INITIAL_KEY_TYPE));
         }
-        Ok(SigningKeyState::try_from(stored)
+        let key_type = SigningKeyState::try_from(stored)
             .context("The account's stored key does not decode")?
-            .key_type)
+            .key_type;
+        Ok((account.nonce, key_type))
     }
 
     #[must_use]
@@ -1713,6 +1850,8 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .recoveries
             .push(acc_manager.fee_recovery(payer, opening)?);
 
+        self.confirm_resends(acc_manager.signers(), &acc_manager.public_account_nonces())?;
+
         // Base fees move between the quote and inclusion; a reserve the screen finds below the
         // head fee is priced again off a fresh quote and proven again.
         let mut reprices = 0;
@@ -1804,11 +1943,15 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 ..Message::from_circuit_output(acc_manager.public_account_nonces(), output)
             };
 
-            let witness_set = lee::privacy_preserving_transaction::witness_set::WitnessSet::sign(
-                &message,
-                proof,
-                &acc_manager.signing_keys(&message.nonces),
-            );
+            let witness_set = self.sign_with_leaves(
+                acc_manager.signing_keys(&message.nonces, self.next_key_type),
+                &message.nonces,
+                |signers| {
+                    lee::privacy_preserving_transaction::witness_set::WitnessSet::sign(
+                        &message, proof, signers,
+                    )
+                },
+            )?;
 
             let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
@@ -2083,7 +2226,12 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                     .map_err(ExecutionFailureKind::SequencerError)?;
                 (
                     payer,
-                    Some(account_manager::signer(&secret, account.nonce, key_type)),
+                    Some(account_manager::signer(
+                        &secret,
+                        account.nonce,
+                        key_type,
+                        self.next_key_type,
+                    )),
                 )
             }
         };
@@ -2102,9 +2250,12 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             acc_manager.admission_evidence(),
         );
 
-        let mut signers = acc_manager.signing_keys(&message.nonces);
+        let mut signers = acc_manager.signing_keys(&message.nonces, self.next_key_type);
         signers.extend(co_signer);
-        let witness_set = lee::public_transaction::WitnessSet::sign(&message, &signers);
+        self.confirm_resends(signers.iter().map(Signer::account_id), &message.nonces)?;
+        let witness_set = self.sign_with_leaves(signers, &message.nonces, |signers| {
+            lee::public_transaction::WitnessSet::sign(&message, signers)
+        })?;
 
         let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
         if self.dry_run {
@@ -2410,6 +2561,16 @@ impl<C: WalletSequencerClient> WalletCore<C> {
              Private tree cleaned up"
         );
 
+        let restored: Vec<AccountId> = self
+            .storage
+            .key_chain()
+            .public_account_ids()
+            .map(|(account_id, _)| account_id)
+            .collect();
+        for account_id in restored {
+            self.mark_foreign_account(account_id).await?;
+        }
+
         self.store_persistent_data()?;
 
         Ok(())
@@ -2536,6 +2697,7 @@ impl WalletCore<SequencerClient> {
 
         let sequencer_client = Self::client_from_config(&config)?;
         let spent_nullifiers = SpentNullifiers::open(storage_path.with_extension("nullifiers"))?;
+        let leaf_records = LeafRecords::open(storage_path.with_extension("leaves"))?;
 
         Ok(Self {
             config_path,
@@ -2550,6 +2712,9 @@ impl WalletCore<SequencerClient> {
             fee_payer: None,
             refund_to: None,
             swept: std::sync::Mutex::new(HashMap::new()),
+            leaf_records: std::sync::Mutex::new(leaf_records),
+            next_key_type: None,
+            confirm_resend: None,
         })
     }
 
@@ -2675,7 +2840,7 @@ fn root_actor(accounts: &[AccountMention], root: usize) -> Result<Actor, Executi
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{BTreeSet, HashMap},
+        collections::{BTreeMap, BTreeSet, HashMap},
         ffi::CString,
         str::FromStr as _,
         sync::{Arc, Mutex},
@@ -2700,7 +2865,7 @@ mod tests {
         Commitment, CommitmentPosition, EncryptedNote, EphemeralSecretKey, MembershipProof,
         Nullifier, PrivateAccountKind, ProgramImageClaim, Recipient, RecipientEncryption,
         RecoveryBinding,
-        account::{Account, Actor, ActorState},
+        account::{Account, Actor, ActorState, Nonce},
         compute_digest_for_path,
         native_token::{self, TransferError},
         program::{
@@ -2714,8 +2879,8 @@ mod tests {
     use test_guest_core::Script;
 
     use super::{
-        AccountIdentity, AccountMention, AsyncDelivery, ExecutionFailureKind,
-        NATIVE_TOKEN_PROGRAM_ID, PendingMessage, WalletCore,
+        AccountIdentity, AccountMention, AsyncDelivery, ExecutionFailureKind, KeyType, LeafRecords,
+        NATIVE_TOKEN_PROGRAM_ID, PendingMessage, WalletCore, account_manager,
     };
     use crate::{
         account::{AccountIdWithPrivacy, Label},
@@ -3182,6 +3347,140 @@ mod tests {
             )) if message.contains("FinalizeUnstake cannot pay")
         ));
         assert!(submitted.lock().unwrap().is_empty());
+    }
+
+    fn auth_data_at_nonce_zero(
+        wallet: &WalletCore<SequencerClient>,
+        secret: &lee::signature::PublicAccountSecret,
+        current: KeyType,
+    ) -> Result<Vec<u8>, ExecutionFailureKind> {
+        let account = lee::signature::public_account_id(secret);
+        wallet.sign_with_leaves(
+            vec![account_manager::signer(secret, Nonce(0), current, None)],
+            &BTreeMap::from([(account, Nonce(0))]),
+            |signers| signers.first().unwrap().auth_data(&[0; 32]),
+        )
+    }
+
+    #[tokio::test]
+    async fn each_signature_at_a_nonce_takes_the_next_leaf_and_a_dry_run_spends_none() {
+        let (mut wallet, home, _sequencer) = served_wallet(RpcModule::new(())).await;
+        let secret = lee::signature::PublicAccountSecret::new([3; 32]);
+        let account = lee::signature::public_account_id(&secret);
+        let next_leaf = |wallet: &WalletCore<SequencerClient>| {
+            wallet
+                .leaf_records
+                .lock()
+                .unwrap()
+                .next_leaf(account, Nonce(0))
+        };
+
+        let first = auth_data_at_nonce_zero(&wallet, &secret, KeyType::Wots).unwrap();
+        let second = auth_data_at_nonce_zero(&wallet, &secret, KeyType::Wots).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(next_leaf(&wallet), Ok(2));
+
+        wallet.set_dry_run(true);
+        auth_data_at_nonce_zero(&wallet, &secret, KeyType::Wots).unwrap();
+        assert_eq!(next_leaf(&wallet), Ok(2));
+
+        let saved = LeafRecords::open(home.path().join("storage.leaves")).unwrap();
+        assert_eq!(saved.next_leaf(account, Nonce(0)), Ok(2));
+    }
+
+    #[tokio::test]
+    async fn a_schnorr_signature_spends_no_leaf() {
+        let (wallet, _home, _sequencer) = served_wallet(RpcModule::new(())).await;
+        let secret = lee::signature::PublicAccountSecret::new([3; 32]);
+        let account = lee::signature::public_account_id(&secret);
+
+        auth_data_at_nonce_zero(&wallet, &secret, KeyType::Schnorr).unwrap();
+        assert!(
+            !wallet
+                .leaf_records
+                .lock()
+                .unwrap()
+                .sent_at(account, Nonce(0))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_second_send_at_a_nonce_goes_ahead_only_if_confirmed() {
+        let (mut wallet, _home, _sequencer) = served_wallet(RpcModule::new(())).await;
+        let secret = lee::signature::PublicAccountSecret::new([3; 32]);
+        let account = lee::signature::public_account_id(&secret);
+        let nonces = BTreeMap::from([(account, Nonce(0))]);
+
+        wallet.set_confirm_resend(|_| Ok(false));
+        assert!(wallet.confirm_resends([account], &nonces).is_ok());
+
+        auth_data_at_nonce_zero(&wallet, &secret, KeyType::Wots).unwrap();
+        assert!(matches!(
+            wallet.confirm_resends([account], &nonces),
+            Err(ExecutionFailureKind::ResendDeclined)
+        ));
+
+        wallet.set_confirm_resend(|_| Ok(true));
+        assert!(wallet.confirm_resends([account], &nonces).is_ok());
+    }
+
+    #[tokio::test]
+    async fn only_a_foreign_account_on_a_wots_key_counts_down_and_only_at_its_current_nonce() {
+        let on_wots = lee::signature::PublicAccountSecret::new([3; 32]);
+        let on_schnorr = lee::signature::PublicAccountSecret::new([4; 32]);
+        let stored = |secret: &lee::signature::PublicAccountSecret, key_type| Account {
+            nonce: Nonce(3),
+            ..Account::default().with_actor_state(
+                lee_core::signing_key::SIGNATURE_PROGRAM_ID,
+                lee::signature::key_state(secret, key_type, Nonce(3)).into(),
+            )
+        };
+        let views = HashMap::from([
+            (
+                lee::signature::public_account_id(&on_wots),
+                stored(&on_wots, KeyType::Wots),
+            ),
+            (
+                lee::signature::public_account_id(&on_schnorr),
+                stored(&on_schnorr, KeyType::Schnorr),
+            ),
+        ]);
+        let mut sequencer = RpcModule::new(views);
+        sequencer
+            .register_method("getAccountView", |params, views, _| {
+                let actor = params.one::<Actor>()?;
+                Ok::<_, ErrorObjectOwned>(views.get(&actor.account_id).cloned())
+            })
+            .unwrap();
+        let (wallet, _home, _sequencer) = served_wallet(sequencer).await;
+
+        for secret in [&on_wots, &on_schnorr] {
+            wallet
+                .mark_foreign_account(lee::signature::public_account_id(secret))
+                .await
+                .unwrap();
+        }
+
+        let records = wallet.leaf_records.lock().unwrap();
+        let wots_id = lee::signature::public_account_id(&on_wots);
+        assert_eq!(records.next_leaf(wots_id, Nonce(3)), Ok(7));
+        assert_eq!(records.next_leaf(wots_id, Nonce(4)), Ok(0));
+        let schnorr_id = lee::signature::public_account_id(&on_schnorr);
+        assert_eq!(records.next_leaf(schnorr_id, Nonce(3)), Ok(0));
+    }
+
+    #[tokio::test]
+    async fn signing_stops_once_every_leaf_at_a_nonce_is_spent() {
+        let (wallet, _home, _sequencer) = served_wallet(RpcModule::new(())).await;
+        let secret = lee::signature::PublicAccountSecret::new([3; 32]);
+
+        for _ in 0..lee::signature::WOTS_LEAVES {
+            auth_data_at_nonce_zero(&wallet, &secret, KeyType::Wots).unwrap();
+        }
+        assert!(matches!(
+            auth_data_at_nonce_zero(&wallet, &secret, KeyType::Wots),
+            Err(ExecutionFailureKind::LeavesExhausted(_))
+        ));
     }
 
     async fn wallet_with_a_received_message() -> (

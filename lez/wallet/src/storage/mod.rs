@@ -22,6 +22,7 @@ use crate::{
 
 mod encryption;
 pub mod key_chain;
+pub mod leaf_records;
 mod persistent;
 pub mod spent_nullifiers;
 

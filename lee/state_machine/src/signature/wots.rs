@@ -5,6 +5,9 @@ use wots_tree::{AUTH_LEN, PUBLIC_KEY_LEN, Tree};
 
 use super::{AuthError, KeyScheme, SignatureError, SignatureScheme};
 
+/// Leaves in each nonce's tree: one-time keys an account may sign with at that nonce.
+pub const WOTS_LEAVES: u8 = wots_tree::LEAVES;
+
 /// A tree of WOTS+ one-time keys in direct mode: the account stores the tree's public key
 /// `PK.seed || root` as is, and the witness carries the signature alone.
 pub struct Wots;
@@ -25,6 +28,20 @@ impl fmt::Debug for WotsSecretKey {
         f.debug_struct("WotsSecretKey")
             .field("leaf", &self.leaf)
             .finish_non_exhaustive()
+    }
+}
+
+impl WotsSecretKey {
+    /// The same tree's key at `leaf`.
+    ///
+    /// # Panics
+    ///
+    /// If `leaf` is not below [`wots_tree::LEAVES`].
+    #[must_use]
+    pub fn with_leaf(mut self, leaf: u8) -> Self {
+        assert!(leaf < wots_tree::LEAVES, "leaf index out of range");
+        self.leaf = leaf;
+        self
     }
 }
 
@@ -95,6 +112,17 @@ mod tests {
             Wots::authenticate(&key.key_commitment, &[2; 32], &auth),
             Err(AuthError::InvalidSignature)
         );
+    }
+
+    #[test]
+    fn each_leaf_signs_for_the_same_key() {
+        let (sk, pk) = Wots::keygen(&[7; 32]);
+        let message = [1; 32];
+        let first = Wots::sign(&sk, &message);
+        let fifth = Wots::sign(&sk.with_leaf(5), &message);
+        assert_eq!(fifth[0], 5);
+        assert_ne!(first, fifth);
+        assert_eq!(Wots::verify(&pk, &message, &fifth), Ok(()));
     }
 
     #[test]

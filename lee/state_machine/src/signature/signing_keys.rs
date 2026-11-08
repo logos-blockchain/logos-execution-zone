@@ -130,9 +130,28 @@ impl Signer {
         }
     }
 
+    /// Signs with leaf `leaf` of a WOTS+ key's tree; a Schnorr key has a single key per nonce.
+    ///
+    /// # Panics
+    ///
+    /// If `leaf` is not below [`wots_tree::LEAVES`].
+    #[must_use]
+    pub fn with_leaf(mut self, leaf: u8) -> Self {
+        if let SigningSecret::Wots(sk) = self.secret {
+            self.secret = SigningSecret::Wots(sk.with_leaf(leaf));
+        }
+        self
+    }
+
     #[must_use]
     pub const fn account_id(&self) -> AccountId {
         self.account_id
+    }
+
+    /// Whether the key signs with one of a tree's leaves, see [`Self::with_leaf`].
+    #[must_use]
+    pub const fn has_leaves(&self) -> bool {
+        matches!(self.secret, SigningSecret::Wots(_))
     }
 
     #[must_use]

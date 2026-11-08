@@ -936,8 +936,13 @@ impl AccountManager {
     }
 
     /// What `WitnessSet::sign` takes for each public account whose secret the wallet holds,
-    /// signing at its nonce in `nonces`. A Keycard account gets none: it cannot rotate its key.
-    pub fn signing_keys(&self, nonces: &BTreeMap<AccountId, Nonce>) -> Vec<Signer> {
+    /// signing at its nonce in `nonces` and rotating to a key of type `next`, or of its current
+    /// type. A Keycard account gets none: it cannot rotate its key.
+    pub fn signing_keys(
+        &self,
+        nonces: &BTreeMap<AccountId, Nonce>,
+        next: Option<KeyType>,
+    ) -> Vec<Signer> {
         self.states
             .iter()
             .filter_map(|state| match state {
@@ -950,7 +955,7 @@ impl AccountManager {
                     let nonce = *nonces
                         .get(&account.account_id)
                         .expect("every signing account is in the message's nonces");
-                    Some(signer(secret, nonce, *key_type))
+                    Some(signer(secret, nonce, *key_type, next))
                 }
                 State::Public { secret: None, .. }
                 | State::PublicKeycard { .. }
@@ -1317,9 +1322,14 @@ pub fn recipient<C: WalletSequencerClient>(
 }
 
 /// What `WitnessSet::sign` takes for an account signing at `nonce` with its key of type
-/// `current`. The wallet's transactions rotate to a WOTS+ key.
-pub fn signer(secret: &PublicAccountSecret, nonce: Nonce, current: KeyType) -> Signer {
-    Signer::new(secret, nonce, current, KeyType::Wots)
+/// `current`, rotating to a key of type `next`, or of type `current`.
+pub fn signer(
+    secret: &PublicAccountSecret,
+    nonce: Nonce,
+    current: KeyType,
+    next: Option<KeyType>,
+) -> Signer {
+    Signer::new(secret, nonce, current, next.unwrap_or(current))
 }
 
 pub fn random_bytes() -> [u8; 32] {

@@ -600,10 +600,17 @@ pub unsafe extern "C" fn wallet_ffi_import_public_account(
         }
     };
 
+    let account_id = lee::signature::public_account_id(&secret);
     wallet
         .storage_mut()
         .key_chain_mut()
         .add_imported_public_account(secret);
+    if let Err(e) = block_on(wallet.mark_foreign_account(account_id)) {
+        print_error(format!(
+            "Failed to save leaf records after public import: {e}"
+        ));
+        return FfiOperationError::StorageError;
+    }
 
     match wallet.store_persistent_data() {
         Ok(()) => FfiOperationError::Success,
