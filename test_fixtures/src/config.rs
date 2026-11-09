@@ -17,12 +17,13 @@ use sequencer_stake_core::SequencerKey;
 use url::Url;
 use wallet::config::{SequencerConnectionData, WalletConfig};
 
-/// Turn length the integration-test channels are created with.
+/// Turn length the integration-test channels are created with, in L1 slots.
 ///
 /// Deliberately below the production default, whose 300-slot turn outlasts the
 /// committee-removal waits these tests are built around; the minimum stake
-/// stays at the production value.
-pub const TEST_POSTING_TIMEFRAME: u32 = 20;
+/// stays at the production value. Over `tps`'s 12s blocks, which `keeps_turn`
+/// reads as seconds.
+pub const TEST_POSTING_TIMEFRAME: u32 = 13;
 
 /// Idle slots before the turn passes on; the production 25 outlasts the shortened timeframe.
 pub const TEST_POSTING_TIMEOUT: u32 = TEST_POSTING_TIMEFRAME;

@@ -9,7 +9,8 @@ use lee::{
 };
 use lee_core::account::{AccountId, Actor};
 use ping_core::{
-    SenderMessage, ping_record_pda, receiver_config_account_id, sender_config_account_id,
+    CrossZoneEmission, SenderMessage, ping_record_pda, receiver_config_account_id,
+    sender_config_account_id,
 };
 
 /// The peer's hash-linked chain from its genesis up to and including `last`,
@@ -44,14 +45,16 @@ pub fn ping_emission(
     let outbox = Actor::new(slot.account_id(), outbox_id);
     let send = SenderMessage::Send {
         outbox,
-        target_zone,
-        target_account_id,
-        target_accounts: vec![
-            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
-            Actor::new(ping_record_pda(receiver_id), receiver_id),
-        ],
-        payload: payload.to_vec(),
-        ordinal: 0,
+        emission: CrossZoneEmission {
+            target_zone,
+            target_account_id,
+            target_accounts: vec![
+                Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+                Actor::new(ping_record_pda(receiver_id), receiver_id),
+            ],
+            payload: payload.to_vec(),
+            ordinal: 0,
+        },
     };
     let message = Message {
         admission_evidence: vec![slot],

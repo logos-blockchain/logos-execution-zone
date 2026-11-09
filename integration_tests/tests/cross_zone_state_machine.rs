@@ -25,8 +25,8 @@ use lee::{
 };
 use lee_core::{account::Account, native_token::TransferError, program::SyncMessage};
 use ping_core::{
-    ReceiverMessage, outbox_bytes, ping_record_pda, ping_record_seed, read_outbox,
-    receiver_config_account_id, sender_config_account_id, sender_config_seed,
+    CrossZoneEmission, ReceiverMessage, outbox_bytes, ping_record_pda, ping_record_seed,
+    read_outbox, receiver_config_account_id, sender_config_account_id, sender_config_seed,
 };
 use test_guest_core::Script;
 
@@ -395,14 +395,16 @@ fn send_tx(
     .expect("serialize ping message");
     let send = ping_core::SenderMessage::Send {
         outbox,
-        target_zone,
-        target_account_id: receiver_id,
-        target_accounts: vec![
-            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
-            Actor::new(ping_record_pda(receiver_id), receiver_id),
-        ],
-        payload,
-        ordinal,
+        emission: CrossZoneEmission {
+            target_zone,
+            target_account_id: receiver_id,
+            target_accounts: vec![
+                Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+                Actor::new(ping_record_pda(receiver_id), receiver_id),
+            ],
+            payload,
+            ordinal,
+        },
     };
     let message = Message {
         admission_evidence,
@@ -987,11 +989,13 @@ fn lock_tx_to(
         bridge_lock_core::Message::Lock {
             outbox: lock_slot(zone_b, ordinal),
             amount: LOCK_AMOUNT,
-            target_zone: zone_b,
-            target_account_id,
-            target_accounts,
-            payload: mint_payload(),
-            ordinal,
+            emission: CrossZoneEmission {
+                target_zone: zone_b,
+                target_account_id,
+                target_accounts,
+                payload: mint_payload(),
+                ordinal,
+            },
         },
     )
 }
@@ -1021,11 +1025,8 @@ fn signed_lock(
 ) -> PublicTransaction {
     let bridge_lock_id = programs::bridge_lock_account_id();
     let bridge_lock_core::Message::Lock {
-        outbox,
-        target_zone,
-        ordinal,
-        ..
-    } = lock
+        outbox, emission, ..
+    } = &lock
     else {
         panic!("signed_lock sends a Lock");
     };
@@ -1042,7 +1043,7 @@ fn signed_lock(
             },
             PublicAccountEvidence::Pda {
                 program: outbox.program_account_id,
-                seed: outbox_pda_seed(bridge_lock_id, &target_zone, ordinal),
+                seed: outbox_pda_seed(bridge_lock_id, &emission.target_zone, emission.ordinal),
             },
         ],
         ..Message::try_new(
@@ -1055,7 +1056,7 @@ fn signed_lock(
                 ),
                 Actor::native_balance(holding_id_of(holder_id)),
                 Actor::native_balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
-                outbox,
+                *outbox,
             ],
             BTreeMap::from([(
                 AccountId::from(&PublicKey::new_from_private_key(key)),
@@ -1408,11 +1409,13 @@ fn a_zero_amount_lock_is_refused() {
         bridge_lock_core::Message::Lock {
             outbox: lock_slot(zone_b, 0),
             amount: 0,
-            target_zone: zone_b,
-            target_account_id: wrapped_token_id,
-            target_accounts: mint_target_accounts(wrapped_token_id),
-            payload: mint_payload_of(0),
-            ordinal: 0,
+            emission: CrossZoneEmission {
+                target_zone: zone_b,
+                target_account_id: wrapped_token_id,
+                target_accounts: mint_target_accounts(wrapped_token_id),
+                payload: mint_payload_of(0),
+                ordinal: 0,
+            },
         },
     );
     rejects_at(&state, &tx, 1, "locked amount must be positive");
@@ -1440,11 +1443,13 @@ fn a_lock_naming_someone_elses_holding_is_refused() {
         bridge_lock_core::Message::Lock {
             outbox: lock_slot(zone_b, 0),
             amount: LOCK_AMOUNT,
-            target_zone: zone_b,
-            target_account_id: wrapped_token_id,
-            target_accounts: mint_target_accounts(wrapped_token_id),
-            payload: mint_payload(),
-            ordinal: 0,
+            emission: CrossZoneEmission {
+                target_zone: zone_b,
+                target_account_id: wrapped_token_id,
+                target_accounts: mint_target_accounts(wrapped_token_id),
+                payload: mint_payload(),
+                ordinal: 0,
+            },
         },
     );
     rejects_at(&state, &tx, 1, "holder must authorize the lock");

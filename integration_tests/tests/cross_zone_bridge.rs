@@ -62,6 +62,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
                 mint_cap: None,
             }],
             min_committee_size: 0,
+            genesis_hash: None,
         }],
         source_authority: None,
         source_governance: None,
@@ -216,11 +217,13 @@ fn build_lock_tx(
     let lock = bridge_lock_core::Message::Lock {
         outbox,
         amount: LOCK_AMOUNT,
-        target_zone,
-        target_account_id: wrapped_token_id,
-        target_accounts,
-        payload,
-        ordinal,
+        emission: bridge_lock_core::CrossZoneEmission {
+            target_zone,
+            target_account_id: wrapped_token_id,
+            target_accounts,
+            payload,
+            ordinal,
+        },
     };
 
     // The lock is received at the holder's own actor, which its signature authorizes; it
