@@ -8,7 +8,7 @@ use tracing::level_filters::LevelFilter;
 /// - `level` is a null-terminated string (`off`/`error`/`warn`/`info`/`debug`/ `trace`,
 ///   case-insensitive); null or unparseable falls back to `info`.
 ///
-/// Only the `sequencer_ffi` and `sequencer_core` targets are enabled!
+/// `RUST_LOG`, when set, overrides `level` (e.g. `info,sequencer_core=debug`).
 ///
 /// # Safety
 /// - `level` must be a valid null-terminated C string, or null.
@@ -25,7 +25,9 @@ pub unsafe extern "C" fn sequencer_ffi_init_logger(level: *const c_char) {
             .unwrap_or(LevelFilter::INFO)
     };
 
-    let _dontcare = logging::try_init_with_filter(EnvFilter::new(format!(
-        "sequencer_ffi={level},sequencer_core={level}"
-    )));
+    let _dontcare = logging::try_init_with_filter(
+        EnvFilter::builder()
+            .with_default_directive(level.into())
+            .from_env_lossy(),
+    );
 }

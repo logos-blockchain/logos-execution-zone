@@ -8,7 +8,7 @@ use tracing::level_filters::LevelFilter;
 /// - `level` is a null-terminated string (`off`/`error`/`warn`/`info`/`debug`/ `trace`,
 ///   case-insensitive); null or unparseable falls back to `info`.
 ///
-/// Only the `indexer_ffi` and `indexer_core` targets are enabled!
+/// `RUST_LOG`, when set, overrides `level` (e.g. `info,indexer_core=debug`).
 ///
 /// # Safety
 /// - `level` must be a valid null-terminated C string, or null.
@@ -25,7 +25,9 @@ pub unsafe extern "C" fn init_logger(level: *const c_char) {
             .unwrap_or(LevelFilter::INFO)
     };
 
-    let _dontcare = logging::try_init_with_filter(EnvFilter::new(format!(
-        "indexer_ffi={level},indexer_core={level}"
-    )));
+    let _dontcare = logging::try_init_with_filter(
+        EnvFilter::builder()
+            .with_default_directive(level.into())
+            .from_env_lossy(),
+    );
 }
