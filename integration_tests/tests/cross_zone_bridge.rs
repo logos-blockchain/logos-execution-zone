@@ -36,8 +36,6 @@ use test_fixtures::{
 use tokio::test;
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(600);
-// LGO-scale: the holder's balance also pays the lock's fee (reserve ≈ 16M+ at
-// wallet-like gas limits), so the bridgeable seed must dwarf it.
 const INITIAL_BALANCE: u64 = 10_000_000_000;
 const LOCK_AMOUNT: u128 = 30;
 const RECIPIENT: [u8; 32] = [9; 32];

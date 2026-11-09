@@ -31,14 +31,14 @@ use crate::{
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
         DropSettledCrossZoneDispatches, DumpDb, GetAccountTransactions, GetAllBlocks, GetBlock,
         GetBlockByHash, GetBlockEvents, GetChannelViewBytes, GetCrossZonePeerFloorBytes,
-        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetEventFilter,
-        GetFinalSnapshot, GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,
-        GetTransactionByHash, GetTxHashToBlockIdMapItem, GetZoneAnchor, GetZoneCheckpoint,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutSlashRecordBytes,
-        RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
-        SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
-        WithdrawalReconciliationKey, ZoneAnchorRecord, ZoneCheckpointRecord,
+        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatchRetainedCount,
+        GetDeadLetterDispatches, GetEventFilter, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
+        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        GetSlashRecordBytes, GetTransactionByHash, GetTxHashToBlockIdMapItem, GetZoneAnchor,
+        GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+        PutSlashRecordBytes, RecordDispatchFailure, RequeueDeadLetterDispatch,
+        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome,
+        UpdateZoneCheckpoint, WithdrawalReconciliationKey, ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
 
@@ -1345,6 +1345,21 @@ impl Message<GetDeadLetterDispatchCount> for StorageActor {
             .db()
             .get::<entities::DeadLetterDispatches>(&encoding::SingletonKey)?
             .map_or(0, |dispatches| dispatches.total))
+    }
+}
+
+impl Message<GetDeadLetterDispatchRetainedCount> for StorageActor {
+    type Reply = Result<usize>;
+
+    async fn handle(
+        &mut self,
+        GetDeadLetterDispatchRetainedCount: GetDeadLetterDispatchRetainedCount,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self
+            .db()
+            .get::<entities::DeadLetterDispatches>(&encoding::SingletonKey)?
+            .map_or(0, |dispatches| dispatches.records.len()))
     }
 }
 

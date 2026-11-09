@@ -21,12 +21,13 @@ use crate::{
         DeleteCrossZonePeerFloor, DispatchFailure, DispatchOrigin, DropSettledCrossZoneDispatches,
         GetAccountTransactions, GetBlock, GetBlockByHash, GetBlockEvents, GetChannelViewBytes,
         GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
-        GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
-        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
-        GetTransactionByHash, GetZoneCheckpoint, PendingCrossZoneDispatchRecord,
-        PendingDepositEventRecord, RecordDispatchFailure, RequeueDeadLetterDispatch,
-        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, UpdateZoneCheckpoint,
-        WithdrawalReconciliationKey, ZoneCheckpointRecord,
+        GetDeadLetterDispatchRetainedCount, GetDeadLetterDispatches, GetFinalSnapshot,
+        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
+        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetTransactionByHash,
+        GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+        RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
+        SetCrossZonePeerTip, UpdateZoneCheckpoint, WithdrawalReconciliationKey,
+        ZoneCheckpointRecord,
     },
 };
 
@@ -1819,6 +1820,44 @@ async fn one_delivery_that_always_fails_takes_one_dead_letter_slot() {
             .expect("Failed to read the dead letter count"),
         6,
         "The count still measures give-ups, so the repetition stays visible"
+    );
+}
+
+/// The gauge's read: retained length only, cheap enough for the follow path.
+#[tokio::test]
+async fn retained_count_follows_the_retained_list_not_the_total() {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
+
+    assert_eq!(
+        storage_ref
+            .ask(GetDeadLetterDispatchRetainedCount)
+            .await
+            .expect("Failed to read the retained count"),
+        0,
+        "An empty store retains nothing"
+    );
+
+    retire_dispatch(&storage_ref, key_from_index(2), 2).await;
+    for _ in 0..5 {
+        retire_dispatch(&storage_ref, key_from_index(1), 1).await;
+    }
+
+    assert_eq!(
+        storage_ref
+            .ask(GetDeadLetterDispatchRetainedCount)
+            .await
+            .expect("Failed to read the retained count"),
+        2,
+        "One retained entry per delivery, however often it was given up on"
+    );
+    assert_eq!(
+        storage_ref
+            .ask(GetDeadLetterDispatchCount)
+            .await
+            .expect("Failed to read the dead letter count"),
+        6,
+        "The total keeps counting give-ups past the retained list"
     );
 }
 

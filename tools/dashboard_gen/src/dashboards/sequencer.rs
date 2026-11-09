@@ -278,6 +278,23 @@ pub fn dashboard() -> Dashboard {
         .row(
             8,
             [
+                Panel::timeseries("Peer watchers alive")
+                    .width(6)
+                    .unit(Unit::Short)
+                    .min(0.0)
+                    .target(
+                        Target::new(seq(sequencer_core_metrics::names::CROSS_ZONE_WATCHER_ALIVE).to_string())
+                        .legend("peer {{peer}}"),
+                    ),
+                Panel::stat("Pending cross-zone dispatches")
+                    .width(6)
+                    .unit(Unit::Short)
+                    .decimals(0)
+                    .color(Color::fixed("orange"))
+                    .target(
+                        Target::new(seq(sequencer_core_metrics::names::CROSS_ZONE_PENDING_DISPATCHES).to_string())
+                        .legend("pending"),
+                    ),
                 // 1 while that peer's watcher is suspended on the committee
                 // floor; recorded dispatches keep draining meanwhile.
                 Panel::timeseries("Peer watchers suspended on the committee floor")

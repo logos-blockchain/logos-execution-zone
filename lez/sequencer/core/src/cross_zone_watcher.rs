@@ -244,6 +244,7 @@ pub fn spawn_watchers<S: StorageActorTrait>(
             hex::encode(peer.channel_id),
             false,
         );
+        sequencer_core_metrics::record_cross_zone_watcher_alive(hex::encode(peer.channel_id), true);
         tasks.push(tokio::spawn(watch_peer(
             ZoneIndexer::new(ChannelId::from(peer.channel_id), node),
             PeerContext {
@@ -292,6 +293,7 @@ async fn watch_peer<S: StorageActorTrait>(
                 "Watcher failed to load the stored delivery floor for peer {}: {err:#}. Stopping this watcher rather than re-reading the channel from the beginning.",
                 hex::encode(peer_zone)
             );
+            sequencer_core_metrics::record_cross_zone_watcher_alive(hex::encode(peer_zone), false);
             return;
         }
     };
@@ -305,6 +307,7 @@ async fn watch_peer<S: StorageActorTrait>(
                 "Watcher failed to load the stored chain tip for peer {}: {err:#}. Stopping this watcher rather than accepting blocks with nothing to link them against.",
                 hex::encode(peer_zone)
             );
+            sequencer_core_metrics::record_cross_zone_watcher_alive(hex::encode(peer_zone), false);
             return;
         }
     };
@@ -322,6 +325,7 @@ async fn watch_peer<S: StorageActorTrait>(
                 "Watcher could not clear the stale delivery floor for peer {}: {err:#}. Stopping this watcher rather than rebuilding its chain against a floor a restart would resume from.",
                 hex::encode(peer_zone)
             );
+            sequencer_core_metrics::record_cross_zone_watcher_alive(hex::encode(peer_zone), false);
             return;
         }
     }
@@ -1156,6 +1160,39 @@ mod tests {
         assert!(
             recorded_keys(&storage_ref).await.is_empty(),
             "a message aimed at a sequencer-only program must not be recorded"
+        );
+        assert_eq!(
+            get_cross_zone_peer_floor(&storage_ref, PEER_ZONE)
+                .await
+                .unwrap(),
+            Some(Slot::from(0)),
+            "the slot was fully read, so the floor still advances"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_delivery_into_the_fee_program_is_never_recorded() {
+        let (_dir, storage_ref) = store().await;
+        let mut cursor = None;
+        let mut tip = None;
+
+        let outcome = consume_peer_stream(
+            stream::iter(vec![peer_block_msg_to(1, 0, programs::fee_account_id())]),
+            &peer_context(),
+            &storage_ref,
+            &mut cursor,
+            &mut tip,
+        )
+        .await;
+
+        assert_eq!(
+            outcome,
+            PassOutcome::Drained,
+            "a message the watcher drops is not a failure"
+        );
+        assert!(
+            recorded_keys(&storage_ref).await.is_empty(),
+            "a message aimed at the fee program must not be recorded"
         );
         assert_eq!(
             get_cross_zone_peer_floor(&storage_ref, PEER_ZONE)

@@ -103,6 +103,9 @@ pub struct RequeueDeadLetterDispatch {
 
 pub struct GetDeadLetterDispatchCount;
 
+/// Retained dead-letter count, without shipping bodies across the actor boundary.
+pub struct GetDeadLetterDispatchRetainedCount;
+
 pub struct GetCrossZonePeerFloorBytes {
     pub peer_zone: PeerZoneKey,
 }
