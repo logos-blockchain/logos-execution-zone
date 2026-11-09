@@ -35,11 +35,7 @@ impl PublicTransaction {
     }
 
     pub(crate) fn signer_account_ids(&self) -> Vec<AccountId> {
-        self.witness_set
-            .signatures_and_public_keys()
-            .iter()
-            .map(|(_, public_key)| AccountId::from(public_key))
-            .collect()
+        self.message.nonces.keys().copied().collect()
     }
 
     #[must_use]
@@ -65,10 +61,10 @@ impl PublicTransaction {
             return Err(InvalidTransaction::PublicPromotions);
         }
         let signers = self.signer_account_ids();
-        self.message.check_signers(&signers)?;
-        if !self.witness_set.is_valid_for(&self.message) {
-            return Err(InvalidTransaction::Signature);
+        if self.witness_set.entries().len() != signers.len() {
+            return Err(InvalidTransaction::Nonces);
         }
+        self.message.check_signers()?;
         Ok(signers)
     }
 
@@ -88,22 +84,23 @@ pub mod tests {
     use lee_core::{
         account::{Account, Actor, Nonce},
         native_token::Message as NativeMessage,
+        signing_key::SIGNATURE_PROGRAM_ID,
     };
     use sha2::{Digest as _, digest::FixedOutput as _};
 
     use crate::{
-        AccountId, InvalidTransaction, PrivateKey, PublicKey, PublicTransaction, Signature,
-        V03State,
+        AccountId, InvalidTransaction, PublicTransaction, V03State,
         error::LeeError,
         public_transaction::{Message, WitnessSet},
+        test_utils::{TestSigner, witness_for},
         validated_state_diff::ValidatedStateDiff,
     };
 
-    fn keys_for_tests() -> (PrivateKey, PrivateKey, AccountId, AccountId) {
-        let key1 = PrivateKey::try_new([1; 32]).unwrap();
-        let key2 = PrivateKey::try_new([2; 32]).unwrap();
-        let addr1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
-        let addr2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
+    fn keys_for_tests() -> (TestSigner, TestSigner, AccountId, AccountId) {
+        let key1 = TestSigner::new(1);
+        let key2 = TestSigner::new(2);
+        let addr1 = key1.account_id();
+        let addr2 = key2.account_id();
         (key1, key2, addr1, addr2)
     }
 
@@ -120,8 +117,8 @@ pub mod tests {
         V03State::new().with_public_account_balances(initial_data)
     }
 
-    fn signed(message: Message, keys: &[&PrivateKey]) -> PublicTransaction {
-        let witness_set = WitnessSet::for_message(&message, keys);
+    fn signed(message: Message, keys: &[&TestSigner]) -> PublicTransaction {
+        let witness_set = witness_for(&message, keys);
         PublicTransaction::new(message, witness_set)
     }
 
@@ -166,12 +163,12 @@ pub mod tests {
         let tx = transaction_for_tests();
         let expected_signer_account_ids = vec![
             AccountId::new([
-                148, 179, 206, 253, 199, 51, 82, 86, 232, 2, 152, 122, 80, 243, 54, 207, 237, 112,
-                83, 153, 44, 59, 204, 49, 128, 84, 160, 227, 216, 149, 97, 102,
+                136, 85, 110, 176, 187, 223, 118, 231, 220, 6, 76, 219, 141, 204, 92, 86, 11, 9,
+                58, 69, 236, 65, 151, 252, 70, 200, 199, 236, 73, 165, 44, 103,
             ]),
             AccountId::new([
-                30, 145, 107, 3, 207, 73, 192, 230, 160, 63, 238, 207, 18, 69, 54, 216, 103, 244,
-                92, 94, 124, 248, 42, 16, 141, 19, 119, 18, 14, 226, 140, 204,
+                225, 58, 92, 4, 23, 111, 67, 111, 243, 254, 6, 60, 160, 104, 179, 151, 250, 45,
+                122, 11, 81, 253, 84, 24, 193, 42, 250, 64, 61, 82, 6, 220,
             ]),
         ];
         let signer_account_ids = tx.signer_account_ids();
@@ -212,7 +209,7 @@ pub mod tests {
         let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
         assert!(matches!(
             result,
-            Err(LeeError::InvalidInput(msg)) if msg.contains("Duplicate signers")
+            Err(LeeError::InvalidInput(msg)) if msg == InvalidTransaction::Nonces.to_string()
         ));
     }
 
@@ -222,7 +219,13 @@ pub mod tests {
         let mut message = transaction_for_tests().message;
         message.nonces.remove(&addr2);
 
-        let tx = signed(message, &[&key1, &key2]);
+        let message_with_keys =
+            message.message_with_keys(&[key1.key_state(Nonce(1)), key2.key_state(Nonce(1))]);
+        let witness_set = WitnessSet::from_raw_parts(vec![
+            key1.entry(Nonce(0), &message_with_keys),
+            key2.entry(Nonce(0), &message_with_keys),
+        ]);
+        let tx = PublicTransaction::new(message, witness_set);
         assert_eq!(tx.check_stateless(), Err(InvalidTransaction::Nonces));
     }
 
@@ -256,7 +259,8 @@ pub mod tests {
                 Account {
                     nonce: Nonce(1),
                     ..Account::funded(20000)
-                },
+                }
+                .with_actor_state(SIGNATURE_PROGRAM_ID, key2.key_state(Nonce(1)).into()),
             ),
         ]);
         let mut message = transaction_for_tests().message;
@@ -287,9 +291,15 @@ pub mod tests {
     fn all_signatures_must_be_valid() {
         let state = state_for_tests();
         let mut tx = transaction_for_tests();
-        tx.witness_set.signatures_and_public_keys[0].0 = Signature::new_for_tests([1; 64]);
+        let first = tx.signer_account_ids()[0];
+        let last = tx.witness_set.entries[0].auth_data.len() - 1;
+        tx.witness_set.entries[0].auth_data[last] ^= 1;
         let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
-        assert!(matches!(result, Err(LeeError::InvalidInput(_))));
+        assert!(matches!(
+            result,
+            Err(LeeError::InvalidInput(msg))
+                if msg == format!("Signer {first} fails authentication: invalid signature")
+        ));
     }
 
     #[test]
@@ -343,6 +353,39 @@ pub mod tests {
         assert!(matches!(
             result,
             Err(LeeError::UnknownProgram { at_root: true })
+        ));
+    }
+
+    #[test]
+    fn witness_entries_must_follow_the_nonces_order() {
+        let tx = transaction_for_tests();
+        let first = tx.signer_account_ids()[0];
+        let mut entries = tx.witness_set.into_raw_parts();
+        entries.swap(0, 1);
+
+        let tx = PublicTransaction::new(tx.message, WitnessSet::from_raw_parts(entries));
+        assert!(matches!(
+            ValidatedStateDiff::from_public_transaction(&tx, &state_for_tests(), 1, 0),
+            Err(LeeError::InvalidInput(msg)) if msg == format!(
+                "Signer {first} fails authentication: revealed key does not give the account id"
+            )
+        ));
+    }
+
+    #[test]
+    fn a_witness_entry_of_an_unlisted_account_is_rejected() {
+        let mut tx = transaction_for_tests();
+        let first = tx.signer_account_ids()[0];
+        let stranger = TestSigner::new(3);
+        let message_with_keys = tx
+            .message
+            .message_with_keys(&[stranger.key_state(Nonce(1)), tx.witness_set.entries[1].next]);
+        tx.witness_set.entries[0] = stranger.entry(Nonce(0), &message_with_keys);
+        assert!(matches!(
+            ValidatedStateDiff::from_public_transaction(&tx, &state_for_tests(), 1, 0),
+            Err(LeeError::InvalidInput(msg)) if msg == format!(
+                "Signer {first} fails authentication: revealed key does not give the account id"
+            )
         ));
     }
 }

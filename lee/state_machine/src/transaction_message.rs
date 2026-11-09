@@ -1,29 +1,35 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, Nonce},
     execution_state::PublicExecutionContext,
     program::PdaSeed,
+    signing_key::SigningKeyState,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::{PublicKey, error::LeeError};
+use crate::error::LeeError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PublicAccountEvidence {
-    Key(PublicKey),
-    Pda { program: AccountId, seed: PdaSeed },
+    /// The account's initial key.
+    Key(SigningKeyState),
+    Pda {
+        program: AccountId,
+        seed: PdaSeed,
+    },
 }
 
 impl PublicAccountEvidence {
+    /// The account the evidence names; `None` for a key of a type that cannot be initial.
     #[must_use]
-    pub fn account_id(&self) -> AccountId {
+    pub fn account_id(&self) -> Option<AccountId> {
         match self {
-            Self::Key(key) => AccountId::from(key),
-            Self::Pda { program, seed } => AccountId::for_public_pda(program, seed),
+            Self::Key(key) => AccountId::for_initial_key(key),
+            Self::Pda { program, seed } => Some(AccountId::for_public_pda(program, seed)),
         }
     }
 }
@@ -43,10 +49,6 @@ pub struct TransactionMessage<P> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 pub enum InvalidTransaction {
-    #[error("Invalid signature for given message and public key")]
-    Signature,
-    #[error("Duplicate signers found in witness set")]
-    DuplicateSigner,
     #[error("Nonces do not name exactly the signers")]
     Nonces,
     #[error("Authorized accounts do not match the signers")]
@@ -71,15 +73,12 @@ impl<P: BorshSerialize> TransactionMessage<P> {
 }
 
 impl<P> TransactionMessage<P> {
-    pub(crate) fn check_signers(&self, signers: &[AccountId]) -> Result<(), InvalidTransaction> {
-        let unique: BTreeSet<AccountId> = signers.iter().copied().collect();
-        if unique.len() != signers.len() {
-            return Err(InvalidTransaction::DuplicateSigner);
-        }
-        if !self.nonces.keys().eq(&unique) {
-            return Err(InvalidTransaction::Nonces);
-        }
-        if unique != self.public_context.authorized_accounts {
+    pub(crate) fn check_signers(&self) -> Result<(), InvalidTransaction> {
+        if !self
+            .nonces
+            .keys()
+            .eq(&self.public_context.authorized_accounts)
+        {
             return Err(InvalidTransaction::AuthorizedAccounts);
         }
         Ok(())
@@ -90,6 +89,22 @@ impl From<InvalidTransaction> for LeeError {
     fn from(error: InvalidTransaction) -> Self {
         Self::InvalidInput(error.to_string())
     }
+}
+
+/// `Sha256(domain || message_hash || next_0 || next_1 || …)`, each next key as
+/// `key_type || key_commitment` (33 B), in `nonces` order.
+pub fn hash_with_keys(
+    domain: &[u8; 32],
+    message_hash: &[u8; 32],
+    next: &[SigningKeyState],
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(domain);
+    hasher.update(message_hash);
+    for key in next {
+        hasher.update(borsh::to_vec(key).expect("a signing key state encodes to 33 bytes"));
+    }
+    hasher.finalize().into()
 }
 
 pub fn nonce_map(

@@ -84,7 +84,7 @@ async fn main() {
         }],
         ..Message::try_new(caller, public_actors, nonces, callee_account_id).unwrap()
     };
-    let witness_set = WitnessSet::for_message(&message, &signing_keys);
+    let witness_set = WitnessSet::sign(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 
     // Submit the transaction

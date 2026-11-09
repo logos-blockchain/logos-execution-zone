@@ -24,8 +24,9 @@ use integration_tests::{
     indexer_client::IndexerClient,
 };
 use lee::{
-    AccountId, Actor, PrivateKey, PublicAccountEvidence, PublicKey, PublicTransaction,
-    public_transaction::{Message, WitnessSet},
+    AccountId, Actor, PublicAccountEvidence, PublicTransaction,
+    public_transaction::Message,
+    test_utils::{TestSigner, witness_for},
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute, GenesisAction};
 use sequencer_service_rpc::RpcClient as _;
@@ -49,8 +50,8 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     let channel_b = config::bedrock_channel_id_b();
     let zone_b: [u8; 32] = *channel_b.as_ref();
 
-    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let holder_signer = TestSigner::new(7);
+    let holder_id = holder_signer.account_id();
 
     let wrapped_token_id = programs::wrapped_token_account_id();
     let cross_zone = CrossZoneConfig {
@@ -106,7 +107,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     let ind_client_b = ctx.indexer_client_zone(channel_b).unwrap();
 
     // Lock LOCK_AMOUNT on zone A, addressed to the recipient on zone B.
-    let lock = build_lock_tx(&holder_key, holder_id, zone_b);
+    let lock = build_lock_tx(&holder_signer, holder_id, zone_b);
     seq_client_a
         .send_transaction(lock)
         .await
@@ -183,7 +184,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
 /// Builds a signed `bridge_lock` Lock that forwards a wrapped-token Mint of the
 /// locked amount to the recipient on the target zone.
 fn build_lock_tx(
-    holder_key: &PrivateKey,
+    holder_signer: &TestSigner,
     holder_id: AccountId,
     target_zone: [u8; 32],
 ) -> LeeTransaction {
@@ -213,7 +214,10 @@ fn build_lock_tx(
         program: outbox_id,
         seed: outbox_pda_seed(bridge_lock_id, &target_zone, ordinal),
     };
-    let outbox = Actor::new(slot.account_id(), outbox_id);
+    let outbox = Actor::new(
+        slot.account_id().expect("PDA evidence names its account"),
+        outbox_id,
+    );
     let lock = bridge_lock_core::Message::Lock {
         outbox,
         amount: LOCK_AMOUNT,
@@ -260,7 +264,7 @@ fn build_lock_tx(
         )
         .expect("build lock message")
     };
-    let witness = WitnessSet::for_message(&message, &[holder_key]);
+    let witness = witness_for(&message, &[holder_signer]);
     LeeTransaction::Public(PublicTransaction::new(message, witness))
 }
 

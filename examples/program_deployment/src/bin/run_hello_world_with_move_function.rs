@@ -111,7 +111,7 @@ async fn main() {
             let message =
                 public_transaction::Message::try_new(account, vec![account], nonces, message)
                     .unwrap();
-            let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+            let witness_set = public_transaction::WitnessSet::sign(&message, &[]);
             let tx = PublicTransaction::new(message, witness_set);
 
             // Submit the transaction
@@ -154,7 +154,7 @@ async fn main() {
                 message,
             )
             .unwrap();
-            let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+            let witness_set = public_transaction::WitnessSet::sign(&message, &[]);
             let tx = PublicTransaction::new(message, witness_set);
 
             // Submit the transaction

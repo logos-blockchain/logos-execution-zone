@@ -3,7 +3,7 @@
 use std::{ffi::c_char, ptr, str::FromStr as _};
 
 use key_protocol::key_management::{KeyChain, key_tree::chain_index::ChainIndex};
-use lee::{AccountId, Actor};
+use lee::{AccountId, Actor, signature::PublicAccountSecret};
 use wallet::account::{AccountIdWithPrivacy, HumanReadableAccount};
 
 use crate::{
@@ -556,11 +556,11 @@ pub unsafe extern "C" fn wallet_ffi_free_account_data(account: *mut FfiAccount) 
     }
 }
 
-/// Import a public account private key into wallet storage.
+/// Import a public account secret into wallet storage.
 ///
 /// # Parameters
 /// - `handle`: Valid wallet handle
-/// - `private_key_hex`: Hex-encoded private key string
+/// - `secret_hex`: Hex-encoded public account secret
 ///
 /// # Returns
 /// - `Success` on successful import
@@ -568,26 +568,26 @@ pub unsafe extern "C" fn wallet_ffi_free_account_data(account: *mut FfiAccount) 
 ///
 /// # Safety
 /// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
-/// - `private_key_hex` must be a valid pointer to a null-terminated C string
+/// - `secret_hex` must be a valid pointer to a null-terminated C string
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn wallet_ffi_import_public_account(
     handle: *mut WalletHandle,
-    private_key_hex: *const c_char,
+    secret_hex: *const c_char,
 ) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
     };
 
-    let private_key_hex = match c_str_to_string(private_key_hex, "private_key_hex") {
+    let secret_hex = match c_str_to_string(secret_hex, "secret_hex") {
         Ok(value) => value,
         Err(e) => return e,
     };
 
-    let private_key = match lee::PrivateKey::from_str(&private_key_hex) {
+    let secret = match PublicAccountSecret::from_str(&secret_hex) {
         Ok(value) => value,
         Err(e) => {
-            print_error(format!("Invalid public account private key: {e}"));
+            print_error(format!("Invalid public account secret: {e}"));
             return FfiOperationError::InvalidKeyValue;
         }
     };
@@ -600,10 +600,17 @@ pub unsafe extern "C" fn wallet_ffi_import_public_account(
         }
     };
 
+    let account_id = lee::signature::public_account_id(&secret);
     wallet
         .storage_mut()
         .key_chain_mut()
-        .add_imported_public_account(private_key);
+        .add_imported_public_account(secret);
+    if let Err(e) = block_on(wallet.mark_foreign_account(account_id)) {
+        print_error(format!(
+            "Failed to save leaf records after public import: {e}"
+        ));
+        return FfiOperationError::StorageError;
+    }
 
     match wallet.store_persistent_data() {
         Ok(()) => FfiOperationError::Success,

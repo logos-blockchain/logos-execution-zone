@@ -99,6 +99,15 @@ pub fn increment_blocks_produced_total() {
     blocks_produced_total_counter().increment(1);
 }
 
+pub fn record_mempool_pending_slots(slots: usize) {
+    gauge!(
+        description: "Pending (account, nonce) slots the mempool holds",
+        unit: Unit::Count,
+        names::MEMPOOL_PENDING_SLOTS
+    )
+    .set(u64::try_from(slots).expect("Pending slot count should fit into u64") as f64);
+}
+
 pub fn record_mempool_size(size: usize) {
     gauge!(
         description: "Size of the mempool",

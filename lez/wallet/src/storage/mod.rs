@@ -22,6 +22,7 @@ use crate::{
 
 mod encryption;
 pub mod key_chain;
+pub mod leaf_records;
 mod persistent;
 pub mod spent_nullifiers;
 
@@ -329,10 +330,8 @@ mod tests {
             .key_chain_mut()
             .generate_new_privacy_preserving_transaction_key_chain(None);
 
-        let private_key = lee::PrivateKey::new_os_random();
-        storage
-            .key_chain_mut()
-            .add_imported_public_account(private_key);
+        let secret = lee::signature::PublicAccountSecret::new_os_random();
+        storage.key_chain_mut().add_imported_public_account(secret);
 
         let key_chain = key_protocol::key_management::KeyChain::new_os_random();
         let account = lee::Account::default();

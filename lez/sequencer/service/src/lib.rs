@@ -401,8 +401,8 @@ pub async fn setup_gossip(
     // libp2p identity; `GossipActor::new` derives the keypair.
     let signing_key = load_or_create_signing_key(channel_signing_key_path)?;
     // Gossiped transactions enter through the executor's admission door
-    // (fee screen + mempool push), same as RPC submissions — gossip never
-    // touches the mempool directly.
+    // (fee screen, authentication, mempool push), same as RPC submissions —
+    // gossip never touches the mempool directly.
     let submit_ref = executor_ref.clone();
     let submit: sequencer_gossip_actor::IngestSubmit = std::sync::Arc::new(move |transaction| {
         let executor_submit_ref = submit_ref.clone();
@@ -412,7 +412,19 @@ pub async fn setup_gossip(
                 transaction,
                 origin: TransactionOrigin::Gossip,
             };
-            executor_submit_ref.ask(message).await.map_err(Into::into)
+            match executor_submit_ref.ask(message).await {
+                Ok(()) => sequencer_gossip_actor::IngestVerdict::Admitted,
+                Err(kameo::error::SendError::HandlerError(err)) if err.is_definitive() => {
+                    sequencer_gossip_actor::IngestVerdict::Invalid(format!(
+                        "{:#}",
+                        anyhow::Error::from(err)
+                    ))
+                }
+                Err(err) => sequencer_gossip_actor::IngestVerdict::Refused(format!(
+                    "{:#}",
+                    anyhow::Error::from(err)
+                )),
+            }
         })
     });
 

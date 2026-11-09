@@ -9,7 +9,7 @@ use super::{
     super::log_step,
     helpers::{
         assert_private_balance_delta, assert_public_balance_delta, assert_sender_paid_fee,
-        expected_balance_after, expected_public_signing_key, get_transfer_transaction,
+        expected_balance_after, expected_public_initial_key, get_transfer_transaction,
         rejected_transfer_details, transfer_artifact, transfer_details,
         wait_for_transfer_inclusion,
     },
@@ -435,16 +435,13 @@ async fn assert_only_sender_signs(
         });
     };
     let expected_sender =
-        expected_public_signing_key(sender).ok_or_else(|| StepError::QueryFailed {
+        expected_public_initial_key(sender).ok_or_else(|| StepError::QueryFailed {
             message: format!("sender {sender:?} is not in the configured public accounts"),
         })?;
-    let signers: Vec<_> = transaction
-        .witness_set()
-        .signatures_and_public_keys()
-        .iter()
-        .map(|(_, public_key)| public_key)
-        .collect();
-    if signers != vec![&expected_sender] {
+    let signers: Vec<_> = transaction.message().nonces.keys().copied().collect();
+    if signers != [lee::AccountId::for_initial_key(&expected_sender).expect("an initial key")]
+        || transaction.witness_set().entries().len() != signers.len()
+    {
         return Err(StepError::AssertionFailed {
             message: format!("expected only sender {expected_sender:?} to sign, got {signers:?}"),
         });
@@ -479,22 +476,22 @@ async fn assert_sender_and_new_account_sign(
         });
     };
     let expected_sender =
-        expected_public_signing_key(sender).ok_or_else(|| StepError::QueryFailed {
+        expected_public_initial_key(sender).ok_or_else(|| StepError::QueryFailed {
             message: format!("sender {sender:?} is not in the configured public accounts"),
         })?;
     let expected_receiver = context
-        .public_account_signing_key(receiver)
+        .public_account_initial_key(receiver)
         .await?
         .ok_or_else(|| StepError::QueryFailed {
-            message: format!("new account {receiver:?} has no wallet signing key"),
+            message: format!("new account {receiver:?} has no wallet initial key"),
         })?;
-    let signers: Vec<_> = transaction
-        .witness_set()
-        .signatures_and_public_keys()
-        .iter()
-        .map(|(_, public_key)| public_key)
-        .collect();
-    if signers != vec![&expected_sender, &expected_receiver] {
+    let signers: Vec<_> = transaction.message().nonces.keys().copied().collect();
+    let mut expected = vec![
+        lee::AccountId::for_initial_key(&expected_sender).expect("an initial key"),
+        lee::AccountId::for_initial_key(&expected_receiver).expect("an initial key"),
+    ];
+    expected.sort();
+    if signers != expected || transaction.witness_set().entries().len() != signers.len() {
         return Err(StepError::AssertionFailed {
             message: format!(
                 "expected sender {expected_sender:?} and new account {expected_receiver:?} to sign, got {signers:?}"

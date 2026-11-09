@@ -75,7 +75,7 @@ async fn main() {
     let caller = Actor::new(account_id, caller_account_id);
     let callee = Actor::new(account_id, callee_account_id);
     let message = Message::try_new(caller, vec![caller, callee], nonces, callee).unwrap();
-    let witness_set = WitnessSet::for_message(&message, &signing_keys);
+    let witness_set = WitnessSet::sign(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 
     // Submit the transaction

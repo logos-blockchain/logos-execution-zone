@@ -1,3 +1,5 @@
+use lee_core::signing_key::SIGNATURE_PROGRAM_ID;
+
 use super::*;
 
 fn native_send(from: AccountId, to: AccountId, amount: u128) -> SyncMessage {
@@ -6,8 +8,8 @@ fn native_send(from: AccountId, to: AccountId, amount: u128) -> SyncMessage {
 
 #[test]
 fn public_sent_calls() {
-    let key = PrivateKey::try_new([1; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let key = TestSigner::new(1);
+    let from = key.account_id();
     let to = AccountId::new([2; 32]);
     let initial_balance = 1000;
     let mut state = V03State::new()
@@ -135,10 +137,10 @@ fn a_pda_seed_delegated_to_one_sibling_does_not_leak_to_another() {
 
 #[test]
 fn a_credit_leaves_a_stranger_actor_state_at_the_recipient_untouched() {
-    let from_key = PrivateKey::try_new([1; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
-    let to_key = PrivateKey::try_new([2; 32]).unwrap();
-    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let from_key = TestSigner::new(1);
+    let from = from_key.account_id();
+    let to_key = TestSigner::new(2);
+    let to = to_key.account_id();
     let stranger = AccountId::new([9; 32]);
     let stranger_data: ActorState = b"stranger".to_vec().into();
     let initial_balance = 100;
@@ -177,7 +179,9 @@ fn a_credit_leaves_a_stranger_actor_state_at_the_recipient_untouched() {
         state.get_account_by_id(to),
         Account {
             nonce: Nonce(1),
-            ..Account::funded(amount).with_actor_state(stranger, stranger_data)
+            ..Account::funded(amount)
+                .with_actor_state(stranger, stranger_data)
+                .with_actor_state(SIGNATURE_PROGRAM_ID, to_key.key_state(Nonce(1)).into())
         }
     );
 }

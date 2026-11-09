@@ -10,12 +10,48 @@ pub use bridge_core::DepositRecipient;
 use common::config::BasicAuth;
 pub use cross_zone::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use humantime_serde;
-use lee::{AccountId, PublicKey, Signature};
+use lee::{AccountId, public_transaction::WitnessEntry};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
 pub use sequencer_stake_core::ChannelParams;
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+mod hex_witness_entry {
+    use lee::public_transaction::WitnessEntry;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
+
+    #[derive(Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct HexWitnessEntry {
+        auth_data: String,
+        next: String,
+    }
+
+    pub fn serialize<S: Serializer>(
+        entry: &WitnessEntry,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        HexWitnessEntry {
+            auth_data: hex::encode(&entry.auth_data),
+            next: hex::encode(
+                borsh::to_vec(&entry.next).expect("a signing key state encodes to 33 bytes"),
+            ),
+        }
+        .serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<WitnessEntry, D::Error> {
+        let HexWitnessEntry { auth_data, next } = HexWitnessEntry::deserialize(deserializer)?;
+        Ok(WitnessEntry {
+            auth_data: hex::decode(auth_data).map_err(D::Error::custom)?,
+            next: borsh::from_slice(&hex::decode(next).map_err(D::Error::custom)?)
+                .map_err(D::Error::custom)?,
+        })
+    }
+}
 
 /// Bytes reserved out of `max_block_size` for the block header plus the forced
 /// fee and clock tail transactions; RPC and gossip cap a single transaction at
@@ -70,8 +106,14 @@ pub enum GenesisAction {
     /// Stakes `sequencer_key` at genesis.
     StakeSequencer {
         sequencer_key: sequencer_stake_core::SequencerKey,
-        ownership_public_key: PublicKey,
-        stake_signature: Signature,
+        /// The account owning the stake.
+        ownership_id: AccountId,
+        /// The ownership account's witness entry for its genesis `Stake`, from
+        /// `sign_genesis_stake`: `{"auth_data": hex, "next": hex}`, the next key in its 33-byte
+        /// encoding (key type byte, then key commitment). At nonce 0, `auth_data` starts with
+        /// the account's initial key.
+        #[serde(with = "hex_witness_entry")]
+        stake_entry: WitnessEntry,
     },
 }
 
@@ -98,6 +140,9 @@ pub struct SequencerConfig {
     pub max_num_tx_in_block: usize,
     /// Mempool maximum size.
     pub mempool_max_size: usize,
+    /// Most pending transactions one account may have in the mempool, across its nonces.
+    #[serde(default = "default_mempool_max_per_account")]
+    pub mempool_max_per_account: usize,
     /// Interval in which blocks produced.
     #[serde(with = "humantime_serde")]
     pub block_create_timeout: Duration,
@@ -249,6 +294,11 @@ fn default_gossip_listen_addr() -> libp2p::Multiaddr {
     "/ip4/0.0.0.0/udp/0/quic-v1"
         .parse()
         .expect("hardcoded default gossip listen addr is a valid multiaddr")
+}
+
+#[must_use]
+pub const fn default_mempool_max_per_account() -> usize {
+    16
 }
 
 #[expect(clippy::unnecessary_wraps, reason = "Required by serde")]

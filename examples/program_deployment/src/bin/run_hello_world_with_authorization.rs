@@ -4,7 +4,9 @@ use common::transaction::LeeTransaction;
 use lee::{
     AccountId, Actor, PublicTransaction,
     public_transaction::{Message, WitnessSet},
+    signature::Signer,
 };
+use lee_core::signing_key::KeyType;
 use program_deployment::deploy_program;
 use sequencer_service_rpc::RpcClient as _;
 use wallet::WalletCore;
@@ -60,11 +62,11 @@ async fn main() {
         .await
         .unwrap();
 
-    // Load signing keys to provide authorization
-    let signing_key = wallet_core
+    // Load the secret the account's signing keys derive from, one key per nonce
+    let secret = wallet_core
         .storage()
         .key_chain()
-        .pub_account_signing_key(account_id)
+        .pub_account_secret(account_id)
         .expect("Input account should be a self owned public account")
         .clone();
 
@@ -73,19 +75,23 @@ async fn main() {
 
     // Construct the public transaction
     // Query the current nonce from the node
-    let nonces = BTreeMap::from([(
-        account_id,
-        wallet_core
-            .get_accounts_nonces(&[account_id])
-            .await
-            .expect("Node should be reachable to query account data")[0],
-    )]);
-    let signing_keys = [&signing_key];
+    let nonce = wallet_core
+        .get_accounts_nonces(&[account_id])
+        .await
+        .expect("Node should be reachable to query account data")[0];
+    let nonces = BTreeMap::from([(account_id, nonce)]);
+    // Sign with the account's current key, committing to the WOTS+ key at the next nonce, which
+    // the account rotates to
+    let key_type = wallet_core
+        .current_key_type(account_id)
+        .await
+        .expect("Node should be reachable to query the account's key");
+    let signing_keys = [Signer::new(&secret, nonce, key_type, KeyType::Wots)];
     let hello = Actor::new(account_id, program_account_id);
     let message = Message::try_new(hello, vec![hello], nonces, greeting).unwrap();
     // Pass the signing key to sign the message. This will be used by the node
     // to flag the pre_state as `is_authorized` when executing the program
-    let witness_set = WitnessSet::for_message(&message, &signing_keys);
+    let witness_set = WitnessSet::sign(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 
     // Submit the transaction

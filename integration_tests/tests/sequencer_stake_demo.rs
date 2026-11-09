@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use integration_tests::{account_balance, get_account, new_account};
-use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey, program::Program};
+use lee::{AccountId, program::Program, signature::PublicAccountSecret, test_utils::TestSigner};
 use log::info;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, UnsecuredEd25519Key};
 use sequencer_bedrock_actor::protocol::GetAccreditedKeys;
@@ -42,8 +42,9 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     let demo_stake_key = sequencer_stake_core::SequencerKey::new(demo_sequencer_key.to_bytes())
         .expect("a channel signing public key is a valid Ed25519 public key");
 
-    let funding_private_key = PrivateKey::new_os_random();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_private_key));
+    let funding_private_key = PublicAccountSecret::new_os_random();
+    let funding_signer = TestSigner::from(&funding_private_key);
+    let funding_id = funding_signer.account_id();
 
     // Comfortably above `system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE`, and
     // `u64` because genesis funds it through the bridge's `Deposit`.
@@ -55,9 +56,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
                 .with_sequencer_partial_config(fast_blocks())
                 .with_genesis(vec![GenesisAction::SupplyAccount {
-                    recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(
-                        PublicKey::new_from_private_key(&funding_private_key),
-                    )),
+                    recipient: DepositRecipient::Identified(funding_signer.evidence()),
                     balance: funding_balance,
                 }]),
         )

@@ -17,10 +17,9 @@ use common::{
 };
 use kameo::actor::Spawn as _;
 use lee::{
-    Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction, RootCall,
-    TransactionEntry, V03State,
+    Account, AccountId, Actor, PublicTransaction, RootCall, TransactionEntry, V03State,
     program::Program,
-    test_utils::{TestPrivateKeys, init_witness, no_seal, signer_nonces},
+    test_utils::{TestPrivateKeys, TestSigner, init_witness, no_seal, signer_nonces, witness_for},
 };
 use lee_core::{GENESIS_BLOCK_ID, account::Nonce};
 use logos_blockchain_core::{
@@ -298,15 +297,15 @@ fn empty_channel_update() -> ChannelUpdate {
 
 /// Key of the account holding a solo channel creator's genesis stake. Read
 /// from the same file genesis uses, which creates it on first read.
-fn bootstrap_stake_key(config: &SequencerConfig) -> PrivateKey {
-    crate::load_or_create_stake_signing_key(&config.home.join("sequencer_stake_signing_key"))
-        .expect("Failed to load or create the stake signing key")
+fn bootstrap_stake_key(config: &SequencerConfig) -> TestSigner {
+    TestSigner::from(
+        &crate::load_or_create_stake_secret(&config.home.join("sequencer_stake_signing_key"))
+            .expect("Failed to load or create the stake secret"),
+    )
 }
 
 fn bootstrap_stake_account_id(config: &SequencerConfig) -> AccountId {
-    AccountId::from(&PublicKey::new_from_private_key(&bootstrap_stake_key(
-        config,
-    )))
+    bootstrap_stake_key(config).account_id()
 }
 
 fn setup_sequencer_config() -> SequencerConfig {
@@ -317,6 +316,7 @@ fn setup_sequencer_config() -> SequencerConfig {
         home,
         max_num_tx_in_block: 10,
         mempool_max_size: 10000,
+        mempool_max_per_account: crate::config::default_mempool_max_per_account(),
         block_create_timeout: Duration::from_secs(1),
         bedrock_config: BedrockConfig {
             channel_id: ChannelId::from([0; 32]),
@@ -431,12 +431,12 @@ fn assert_block_tail(block: &common::block::Block, user_txs: &[LeeTransaction]) 
     );
 }
 
-fn create_signing_key_for_account1() -> lee::PrivateKey {
-    initial_pub_accounts_private_keys()[0].pub_sign_key.clone()
+fn create_signing_key_for_account1() -> TestSigner {
+    TestSigner::from(&initial_pub_accounts_private_keys()[0].secret)
 }
 
-fn create_signing_key_for_account2() -> lee::PrivateKey {
-    initial_pub_accounts_private_keys()[1].pub_sign_key.clone()
+fn create_signing_key_for_account2() -> TestSigner {
+    TestSigner::from(&initial_pub_accounts_private_keys()[1].secret)
 }
 
 async fn common_setup() -> (
@@ -505,10 +505,10 @@ fn create_charged_bridge_deposit(
     recipient_id: AccountId,
     amount: bridge_core::BridgeAmount,
     payer_nonce: u128,
-    payer_key: &PrivateKey,
+    payer_key: &TestSigner,
 ) -> LeeTransaction {
     let bridge_program_id = programs::bridge_account_id();
-    let payer = AccountId::from(&PublicKey::new_from_private_key(payer_key));
+    let payer = payer_key.account_id();
     let receipt = Actor::new(
         bridge_core::deposit_receipt_account_id(bridge_program_id, op_id),
         bridge_program_id,
@@ -535,7 +535,7 @@ fn create_charged_bridge_deposit(
         )
         .expect("charged bridge deposit message builds")
     };
-    let witness = lee::public_transaction::WitnessSet::for_message(&message, &[payer_key]);
+    let witness = witness_for(&message, &[payer_key]);
     LeeTransaction::Public(PublicTransaction::new(message, witness))
 }
 
@@ -547,7 +547,7 @@ async fn a_charged_bridge_deposit_is_dropped_by_the_builder_bridge_guard() {
 
     let (mut sequencer, mempool_handle) = start_sequencer(config).await;
 
-    let payer_key = initial_pub_accounts_private_keys()[0].pub_sign_key.clone();
+    let payer_key = create_signing_key_for_account1();
     let recipient_id = initial_public_user_accounts()[1].account_id;
     let op_id = [0x5a_u8; 32];
     let forged = create_charged_bridge_deposit(op_id, recipient_id, 1, 0, &payer_key);
@@ -612,9 +612,7 @@ async fn an_exempt_public_bridge_deposit_is_dropped_by_the_builder_bridge_guard(
 
     let (mut sequencer, mempool_handle) = start_sequencer(config).await;
 
-    let recipient = DepositRecipient::Identified(lee::PublicAccountEvidence::Key(
-        PublicKey::new_from_private_key(&initial_pub_accounts_private_keys()[1].pub_sign_key),
-    ));
+    let recipient = DepositRecipient::Identified(create_signing_key_for_account2().evidence());
     let op_id = [0x7c_u8; 32];
     let forged = build_bridge_deposit_tx_from_event(&PendingDepositEventRecord {
         deposit_op_id: HashType(op_id),
@@ -940,10 +938,7 @@ async fn settlement_rejects_a_dispatch_a_user_signed() {
         )
         .unwrap()
     };
-    let witness_set = lee::public_transaction::WitnessSet::for_message(
-        &message,
-        &[&create_signing_key_for_account1()],
-    );
+    let witness_set = witness_for(&message, &[&create_signing_key_for_account1()]);
     let signed = LeeTransaction::Public(PublicTransaction::new(message, witness_set));
 
     let settle = |tx: &LeeTransaction| {
@@ -1270,9 +1265,8 @@ async fn a_mempool_transaction_too_large_for_any_block_is_dropped() {
         .max_block_size = 4 * 1024;
     let (mut sequencer, mempool_handle) = start_sequencer(config).await;
 
-    let segment_key = lee::PrivateKey::try_new([212; 32]).unwrap();
     let segment = Actor::new(
-        AccountId::from(&lee::PublicKey::new_from_private_key(&segment_key)),
+        TestSigner::new(212).account_id(),
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
     );
     let message = lee::public_transaction::Message::try_new(
@@ -2099,10 +2093,11 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     // Deploy `scripted` at the header account `scripted_id`, which signs for its own header.
     // A funded genesis account signs and pays both deployment fees.
     let payer = &initial_pub_accounts_private_keys()[0];
-    let segment_key = lee::PrivateKey::try_new([210; 32]).unwrap();
-    let segment_id = AccountId::from(&lee::PublicKey::new_from_private_key(&segment_key));
-    let header_key = lee::PrivateKey::try_new([211; 32]).unwrap();
-    let scripted_id = AccountId::from(&lee::PublicKey::new_from_private_key(&header_key));
+    let payer_signer = TestSigner::from(&payer.secret);
+    let segment_key = TestSigner::new(210);
+    let segment_id = segment_key.account_id();
+    let header_key = TestSigner::new(211);
+    let scripted_id = header_key.account_id();
 
     // Segments only ever hold `user_elf`.
     let user_elf = scripted.user_elf().expect("valid ProgramBinary");
@@ -2111,7 +2106,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         segment,
         vec![segment],
         signer_nonces(
-            &[&segment_key, &payer.pub_sign_key],
+            &[&segment_key, &payer_signer],
             vec![lee_core::account::Nonce(0), lee_core::account::Nonce(0)],
         ),
         program_loader_core::Message::WriteSegment {
@@ -2121,10 +2116,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         common::test_utils::test_fee_declaration(payer.account_id),
     )
     .expect("WriteSegment message should always be serializable");
-    let segment_witness_set = lee::public_transaction::WitnessSet::for_message(
-        &segment_message,
-        &[&segment_key, &payer.pub_sign_key],
-    );
+    let segment_witness_set = witness_for(&segment_message, &[&segment_key, &payer_signer]);
     let segment_tx = LeeTransaction::Public(lee::PublicTransaction::new(
         segment_message,
         segment_witness_set,
@@ -2140,7 +2132,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         header,
         vec![header],
         signer_nonces(
-            &[&header_key, &payer.pub_sign_key],
+            &[&header_key, &payer_signer],
             vec![lee_core::account::Nonce(0), lee_core::account::Nonce(1)],
         ),
         program_loader_core::Message::CreateHeader {
@@ -2150,10 +2142,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         common::test_utils::test_fee_declaration(payer.account_id),
     )
     .expect("CreateHeader message should always be serializable");
-    let header_witness_set = lee::public_transaction::WitnessSet::for_message(
-        &header_message,
-        &[&header_key, &payer.pub_sign_key],
-    );
+    let header_witness_set = witness_for(&header_message, &[&header_key, &payer_signer]);
     let deploy_tx = LeeTransaction::Public(lee::PublicTransaction::new(
         header_message,
         header_witness_set,
@@ -2272,7 +2261,7 @@ fn state_with_clock_and_program(program: Program, clock_timestamp: u64) -> V03St
 
 fn time_locked_transfer_transaction(
     from: AccountId,
-    from_key: &PrivateKey,
+    from_key: &TestSigner,
     from_nonce: u128,
     to: AccountId,
     clock_account_id: AccountId,
@@ -2294,7 +2283,7 @@ fn time_locked_transfer_transaction(
         (amount, deadline, to),
     )
     .unwrap();
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[from_key]);
+    let witness_set = witness_for(&message, &[from_key]);
     PublicTransaction::new(message, witness_set)
 }
 
@@ -2305,8 +2294,8 @@ fn time_locked_transfer_succeeds_when_deadline_has_passed() {
         state_with_clock_and_program(test_programs::time_locked_transfer(), clock_timestamp);
 
     let recipient_id = AccountId::new([42; 32]);
-    let key1 = PrivateKey::try_new([1; 32]).unwrap();
-    let sender_id = AccountId::from(&PublicKey::new_from_private_key(&key1));
+    let key1 = TestSigner::new(1);
+    let sender_id = key1.account_id();
     state.force_insert_account(sender_id, Account::funded(100));
     state.force_insert_account(recipient_id, Account::default());
 
@@ -2354,8 +2343,8 @@ fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
         state_with_clock_and_program(test_programs::time_locked_transfer(), clock_timestamp);
 
     let recipient_id = AccountId::new([42; 32]);
-    let key1 = PrivateKey::try_new([1; 32]).unwrap();
-    let sender_id = AccountId::from(&PublicKey::new_from_private_key(&key1));
+    let key1 = TestSigner::new(1);
+    let sender_id = key1.account_id();
     state.force_insert_account(sender_id, Account::funded(100));
 
     let amount = 100;
@@ -2419,7 +2408,7 @@ fn cooldown_transaction(
         timestamp,
     )
     .unwrap();
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
+    let witness_set = witness_for(&message, &[]);
     PublicTransaction::new(message, witness_set)
 }
 
@@ -2518,11 +2507,7 @@ fn resubmittable_txs_drops_clock_and_bridge_deposits() {
         source_tx_hash: HashType([7; 32]),
         amount: 1,
         metadata: borsh::to_vec(&DepositMetadata {
-            recipient: DepositRecipient::Identified(lee::PublicAccountEvidence::Key(
-                PublicKey::new_from_private_key(
-                    &initial_pub_accounts_private_keys()[0].pub_sign_key,
-                ),
-            )),
+            recipient: DepositRecipient::Identified(create_signing_key_for_account1().evidence()),
         })
         .unwrap(),
     })
@@ -2867,9 +2852,7 @@ async fn follow_update_records_deposits_for_the_production_drain() {
     let config = setup_sequencer_config();
     let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
 
-    let recipient = DepositRecipient::Identified(lee::PublicAccountEvidence::Key(
-        PublicKey::new_from_private_key(&initial_pub_accounts_private_keys()[0].pub_sign_key),
-    ));
+    let recipient = DepositRecipient::Identified(create_signing_key_for_account1().evidence());
     let metadata = borsh::to_vec(&DepositMetadata { recipient }).unwrap();
     let deposit = DepositInfo {
         op_id: [21; 32],
@@ -2900,9 +2883,7 @@ async fn follow_update_records_deposits_for_the_production_drain() {
 /// A deposit of `amount` to the first test account, its value re-created as
 /// the channel notes `notes`.
 fn deposit_info(op_id: [u8; 32], amount: u64, notes: &[NoteId]) -> DepositInfo {
-    let recipient = DepositRecipient::Identified(lee::PublicAccountEvidence::Key(
-        PublicKey::new_from_private_key(&initial_pub_accounts_private_keys()[0].pub_sign_key),
-    ));
+    let recipient = DepositRecipient::Identified(create_signing_key_for_account1().evidence());
     let metadata = borsh::to_vec(&DepositMetadata { recipient }).unwrap();
     let notes: Vec<DepositNote> = notes
         .iter()
@@ -4389,9 +4370,7 @@ async fn a_foreign_block_below_the_final_tip_settles_no_deposit_record() {
         }))
         .await;
 
-    let recipient = DepositRecipient::Identified(lee::PublicAccountEvidence::Key(
-        PublicKey::new_from_private_key(&initial_pub_accounts_private_keys()[0].pub_sign_key),
-    ));
+    let recipient = DepositRecipient::Identified(create_signing_key_for_account1().evidence());
     let metadata = borsh::to_vec(&DepositMetadata { recipient }).unwrap();
     let deposit = DepositInfo {
         op_id: [21; 32],
@@ -4581,10 +4560,10 @@ async fn a_restart_without_a_view_follows_the_channel_from_the_final_tier() {
 /// record correctly.
 #[test]
 fn diag_sequencer_stake_writes_the_ownership_account_record() {
-    let funding_key = PrivateKey::try_new([21; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
-    let ownership_key = PrivateKey::try_new([22; 32]).unwrap();
-    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+    let funding_key = TestSigner::new(21);
+    let funding_id = funding_key.account_id();
+    let ownership_key = TestSigner::new(22);
+    let ownership_id = ownership_key.account_id();
 
     let amount: u128 = 5_000_000;
     let sequencer_key = test_sequencer_key(0x42);
@@ -4634,8 +4613,7 @@ fn diag_sequencer_stake_writes_the_ownership_account_record() {
         )
         .unwrap()
     };
-    let witness_set =
-        lee::public_transaction::WitnessSet::for_message(&message, &[&funding_key, &ownership_key]);
+    let witness_set = witness_for(&message, &[&funding_key, &ownership_key]);
     let tx = PublicTransaction::new(message, witness_set);
 
     state
@@ -4676,8 +4654,8 @@ fn diag_sequencer_stake_writes_the_ownership_account_record() {
 /// `state`.
 fn stake_transaction(
     state: &V03State,
-    funding: (AccountId, &PrivateKey),
-    ownership: (AccountId, &PrivateKey),
+    funding: (AccountId, &TestSigner),
+    ownership: (AccountId, &TestSigner),
     sequencer_key: sequencer_stake_core::SequencerKey,
     amount: u128,
 ) -> PublicTransaction {
@@ -4719,8 +4697,7 @@ fn stake_transaction(
         )
         .unwrap()
     };
-    let witness_set =
-        lee::public_transaction::WitnessSet::for_message(&message, &[funding_key, ownership_key]);
+    let witness_set = witness_for(&message, &[funding_key, ownership_key]);
     PublicTransaction::new(message, witness_set)
 }
 
@@ -4779,7 +4756,7 @@ fn exit_delay(state: &V03State) -> u64 {
 /// Builds an `UnstakeRequest` against `ownership`.
 fn unstake_request_transaction(
     state: &V03State,
-    ownership: (AccountId, &PrivateKey),
+    ownership: (AccountId, &TestSigner),
     sequencer_key: sequencer_stake_core::SequencerKey,
     amount: u128,
     destination: AccountId,
@@ -4806,7 +4783,7 @@ fn unstake_request_transaction(
         },
     )
     .unwrap();
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[ownership_key]);
+    let witness_set = witness_for(&message, &[ownership_key]);
     PublicTransaction::new(message, witness_set)
 }
 
@@ -4845,10 +4822,10 @@ fn signed_destination(state: &mut V03State, seed: u8) -> AccountId {
 /// the balance rather than the tracked stake must be rejected.
 #[test]
 fn an_unstake_request_cannot_exceed_the_tracked_stake() {
-    let funding_key = PrivateKey::try_new([31; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
-    let ownership_key = PrivateKey::try_new([32; 32]).unwrap();
-    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+    let funding_key = TestSigner::new(31);
+    let funding_id = funding_key.account_id();
+    let ownership_key = TestSigner::new(32);
+    let ownership_id = ownership_key.account_id();
 
     let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let donation = 1;
@@ -4881,7 +4858,7 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
         },
     )
     .unwrap();
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&funding_key]);
+    let witness_set = witness_for(&message, &[&funding_key]);
     state
         .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 2, 0)
         .expect("donation should succeed");
@@ -4925,12 +4902,12 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
 
 #[test]
 fn dust_credited_before_a_stake_neither_blocks_nor_inflates_it() {
-    let funding_key = PrivateKey::try_new([71; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
-    let ownership_key = PrivateKey::try_new([72; 32]).unwrap();
-    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
-    let griefer_key = PrivateKey::try_new([73; 32]).unwrap();
-    let griefer_id = AccountId::from(&PublicKey::new_from_private_key(&griefer_key));
+    let funding_key = TestSigner::new(71);
+    let funding_id = funding_key.account_id();
+    let ownership_key = TestSigner::new(72);
+    let ownership_id = ownership_key.account_id();
+    let griefer_key = TestSigner::new(73);
+    let griefer_id = griefer_key.account_id();
 
     let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let dust = 1;
@@ -4965,7 +4942,7 @@ fn dust_credited_before_a_stake_neither_blocks_nor_inflates_it() {
         admission_evidence: vec![stake_funds_evidence(&ownership_id)],
         ..message
     };
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&griefer_key]);
+    let witness_set = witness_for(&message, &[&griefer_key]);
     state
         .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 1, 0)
         .expect("anyone can credit the funds account");
@@ -5000,10 +4977,10 @@ fn dust_credited_before_a_stake_neither_blocks_nor_inflates_it() {
 
 #[test]
 fn a_stake_whose_funding_fails_records_nothing() {
-    let funding_key = PrivateKey::try_new([74; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
-    let ownership_key = PrivateKey::try_new([75; 32]).unwrap();
-    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+    let funding_key = TestSigner::new(74);
+    let funding_id = funding_key.account_id();
+    let ownership_key = TestSigner::new(75);
+    let ownership_id = ownership_key.account_id();
 
     let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let sequencer_key = test_sequencer_key(0x48);
@@ -5055,10 +5032,10 @@ fn a_stake_whose_funding_fails_records_nothing() {
 
 #[test]
 fn a_top_up_is_rejected_while_an_unstake_request_is_pending() {
-    let funding_key = PrivateKey::try_new([33; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
-    let ownership_key = PrivateKey::try_new([34; 32]).unwrap();
-    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+    let funding_key = TestSigner::new(33);
+    let funding_id = funding_key.account_id();
+    let ownership_key = TestSigner::new(34);
+    let ownership_id = ownership_key.account_id();
 
     let minimum = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let sequencer_key = test_sequencer_key(0x44);
@@ -5104,10 +5081,10 @@ fn a_top_up_is_rejected_while_an_unstake_request_is_pending() {
 /// ownership account can stake again against it.
 #[test]
 fn a_fully_exited_ownership_account_can_stake_again() {
-    let funding_key = PrivateKey::try_new([21; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
-    let ownership_key = PrivateKey::try_new([22; 32]).unwrap();
-    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+    let funding_key = TestSigner::new(21);
+    let funding_id = funding_key.account_id();
+    let ownership_key = TestSigner::new(22);
+    let ownership_id = ownership_key.account_id();
 
     let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let sequencer_key = test_sequencer_key(0x42);
@@ -5164,7 +5141,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
         },
     )
     .unwrap();
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&ownership_key]);
+    let witness_set = witness_for(&message, &[&ownership_key]);
     state
         .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 2, 0)
         .expect("UnstakeRequest should succeed");
@@ -5297,9 +5274,7 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     let (mut state, _genesis_txs, _) = build_genesis_state(&config, Some(bootstrap_sequencer_key));
 
     let stake_id = bootstrap_stake_account_id(&config);
-    let destination = AccountId::from(&PublicKey::new_from_private_key(
-        &PrivateKey::try_new([56; 32]).unwrap(),
-    ));
+    let destination = TestSigner::new(56).account_id();
 
     let sequencer_stake_program_id = programs::sequencer_stake_account_id();
     let ownership = Actor::new(stake_id, sequencer_stake_program_id);
@@ -5322,10 +5297,7 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
         },
     )
     .unwrap();
-    let witness_set = lee::public_transaction::WitnessSet::for_message(
-        &message,
-        &[&bootstrap_stake_key(&config)],
-    );
+    let witness_set = witness_for(&message, &[&bootstrap_stake_key(&config)]);
     let tx = PublicTransaction::new(message, witness_set);
 
     state
@@ -5352,12 +5324,12 @@ fn slashable_state(
     V03State,
     sequencer_stake_core::SequencerKey,
     AccountId,
-    PrivateKey,
+    TestSigner,
 ) {
-    let funding_key = PrivateKey::try_new([41; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
-    let ownership_key = PrivateKey::try_new([42; 32]).unwrap();
-    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+    let funding_key = TestSigner::new(41);
+    let funding_id = funding_key.account_id();
+    let ownership_key = TestSigner::new(42);
+    let ownership_id = ownership_key.account_id();
     let sequencer_key = test_sequencer_key(0x44);
 
     // Two peers alongside the offender: no single key can clear the threshold,
@@ -5658,10 +5630,10 @@ fn an_unstake_request_lands_only_within_its_dating_window() {
 
 #[test]
 fn a_top_up_must_add_at_least_the_minimum() {
-    let funding_key = PrivateKey::try_new([35; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
-    let ownership_key = PrivateKey::try_new([36; 32]).unwrap();
-    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+    let funding_key = TestSigner::new(35);
+    let funding_id = funding_key.account_id();
+    let ownership_key = TestSigner::new(36);
+    let ownership_id = ownership_key.account_id();
     let minimum = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let sequencer_key = test_sequencer_key(0x47);
 
@@ -5768,13 +5740,13 @@ fn balance_of(state: &V03State, account_id: AccountId) -> u128 {
 
 fn restake(
     state: &mut V03State,
-    ownership: (AccountId, &PrivateKey),
+    ownership: (AccountId, &TestSigner),
     sequencer_key: sequencer_stake_core::SequencerKey,
     amount: u128,
     block_id: u64,
 ) {
-    let funding_key = PrivateKey::try_new([43; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+    let funding_key = TestSigner::new(43);
+    let funding_id = funding_key.account_id();
     state.force_insert_account(funding_id, Account::funded(amount));
     let stake = stake_transaction(
         state,
@@ -6116,7 +6088,7 @@ fn a_privately_owned_and_funded_stake_is_slashed_without_its_owners_witness() {
     );
     // Nothing the owner holds is read or signed.
     assert!(!slash.affected_public_account_ids().contains(&ownership_id));
-    assert!(slash.witness_set().signatures_and_public_keys().is_empty());
+    assert!(slash.witness_set().entries().is_empty());
     state
         .transition_from_public_transaction(&slash, 4, 0)
         .expect("the peers' approvals alone should slash a private stake");
@@ -6424,8 +6396,8 @@ async fn a_slash_lands_over_a_pending_partial_unstake() {
     let amount = 2 * system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let offender = test_sequencer_key(0x44);
     let (offender_id, offender_key) = committee_ownership(0x44);
-    let funding_key = PrivateKey::try_new([41; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+    let funding_key = TestSigner::new(41);
+    let funding_id = funding_key.account_id();
 
     let config = {
         let chain = sequencer.chain();
@@ -6516,15 +6488,15 @@ async fn a_slash_lands_over_a_pending_partial_unstake() {
 }
 
 /// The account backing `seed`'s stake, and the key that owns it.
-fn committee_ownership(seed: u8) -> (AccountId, PrivateKey) {
-    let key = PrivateKey::try_new([seed.wrapping_add(0x50); 32]).unwrap();
-    (AccountId::from(&PublicKey::new_from_private_key(&key)), key)
+fn committee_ownership(seed: u8) -> (AccountId, TestSigner) {
+    let key = TestSigner::new(seed.wrapping_add(0x50));
+    (key.account_id(), key)
 }
 
 /// A state staking one sequencer per seed, the first of which is the offender.
 fn committee_state(seeds: &[u8], amount: u128) -> V03State {
-    let funding_key = PrivateKey::try_new([41; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+    let funding_key = TestSigner::new(41);
+    let funding_id = funding_key.account_id();
     let mut state = stake_test_state(
         funding_id,
         amount.saturating_mul(u128::try_from(seeds.len()).expect("committee fits a u128")),
@@ -6997,7 +6969,7 @@ fn a_genesis_stake_carries_the_evidence_of_the_funds_it_credits() {
             &*message.admission_evidence,
             [evidence @ lee::PublicAccountEvidence::Pda { program, .. }]
                 if *program == programs::sequencer_stake_account_id()
-                    && evidence.account_id() == funds.account_id
+                    && evidence.account_id() == Some(funds.account_id)
         ),
         "{:?}",
         message.admission_evidence
@@ -7006,10 +6978,9 @@ fn a_genesis_stake_carries_the_evidence_of_the_funds_it_credits() {
 
 #[test]
 fn a_bridge_deposit_carries_its_receipts_and_its_recipients_evidence() {
-    let key = PublicKey::new_from_private_key(&PrivateKey::try_new([3; 32]).unwrap());
     let op_id = [0x7d; 32];
     for recipient in [
-        DepositRecipient::Identified(lee::PublicAccountEvidence::Key(key)),
+        DepositRecipient::Identified(TestSigner::new(3).evidence()),
         DepositRecipient::Identified(lee::PublicAccountEvidence::Pda {
             program: AccountId::new([4; 32]),
             seed: lee_core::program::PdaSeed::new([6; 32]),
@@ -7039,7 +7010,7 @@ fn a_bridge_deposit_carries_its_receipts_and_its_recipients_evidence() {
                     .iter()
                     .map(lee::PublicAccountEvidence::account_id)
                     .collect::<Vec<_>>(),
-                [receipt, recipient.account_id()],
+                [Some(receipt), recipient.account_id()],
                 "{recipient:?}"
             );
         }
@@ -7051,10 +7022,10 @@ fn a_bridge_deposit_credits_a_recipient_absent_from_public_state() {
     let config = setup_sequencer_config();
     let (mut state, _, _) =
         build_genesis_state(&config, Some(test_bootstrap_sequencer_key(&config)));
-    let recipient = DepositRecipient::Identified(lee::PublicAccountEvidence::Key(
-        PublicKey::new_from_private_key(&PrivateKey::try_new([3; 32]).unwrap()),
-    ));
-    let recipient_id = recipient.account_id();
+    let recipient = DepositRecipient::Identified(TestSigner::new(3).evidence());
+    let recipient_id = recipient
+        .account_id()
+        .expect("a key's evidence names its account");
     assert!(state.get_account_by_id_ref(recipient_id).is_none());
 
     let op_id = [0x7e; 32];
@@ -7069,7 +7040,7 @@ fn a_bridge_deposit_credits_a_recipient_absent_from_public_state() {
     else {
         panic!("a bridge deposit is a public transaction");
     };
-    assert!(deposit.witness_set.signatures_and_public_keys().is_empty());
+    assert!(deposit.witness_set.entries().is_empty());
     assert!(deposit.message.nonces.is_empty());
     assert!(
         !deposit
@@ -7097,7 +7068,7 @@ fn a_bridge_deposit_credits_a_recipient_absent_from_public_state() {
 #[test]
 fn a_deposit_recipient_reads_only_as_key_or_pda_evidence() {
     let account_id = AccountId::new([4; 32]);
-    let key = PublicKey::new_from_private_key(&PrivateKey::try_new([3; 32]).unwrap());
+    let key = lee::signature::initial_key(&lee::signature::PublicAccountSecret::new([3; 32]));
     let seed: [u8; 32] = [6; 32];
     assert!(
         serde_json::from_value::<DepositRecipient>(
@@ -7130,7 +7101,7 @@ fn a_deposit_recipient_reads_only_as_key_or_pda_evidence() {
 
 #[test]
 fn a_genesis_supply_names_its_recipient_in_the_deposit_form() {
-    let key = PublicKey::new_from_private_key(&PrivateKey::try_new([3; 32]).unwrap());
+    let key = lee::signature::initial_key(&lee::signature::PublicAccountSecret::new([3; 32]));
 
     let action: config::GenesisAction = serde_json::from_value(serde_json::json!({
         "supply_account": {
@@ -7231,5 +7202,45 @@ fn a_peer_genesis_hash_round_trips_as_hex() {
         serde_json::to_string(&peer)
             .expect("peer serializes")
             .contains("\"0202020202020202020202020202020202020202020202020202020202020202\"")
+    );
+}
+
+#[tokio::test]
+async fn a_transaction_dropped_at_build_time_frees_its_nonce() {
+    let (mut sequencer, mempool_handle) = common_setup().await;
+    let accounts = initial_pub_accounts_private_keys();
+    let signer = TestSigner::from(&accounts[0].secret);
+    // Far ahead of the account's nonce: admitted unchecked, never applicable, so dropped at build.
+    let transfer = |amount| {
+        common::test_utils::create_transaction_native_token_transfer(
+            accounts[0].account_id,
+            1000,
+            accounts[1].account_id,
+            amount,
+            &signer,
+        )
+    };
+    let first = transfer(1);
+    assert_eq!(
+        sequencer.admit(&first).await.unwrap(),
+        crate::pending::Admission::New
+    );
+    mempool_handle
+        .push((TransactionOrigin::User, first.clone()))
+        .await
+        .unwrap();
+    sequencer.record_pending(&first);
+
+    assert!(matches!(
+        sequencer.admit(&transfer(2)).await,
+        Err(crate::AdmissionError::Pending(
+            crate::pending::PendingRefusal::NoncePending { .. }
+        ))
+    ));
+
+    sequencer.build_block_from_mempool().await.unwrap();
+    assert_eq!(
+        sequencer.admit(&transfer(2)).await.unwrap(),
+        crate::pending::Admission::New
     );
 }

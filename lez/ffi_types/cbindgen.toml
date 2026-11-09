@@ -21,7 +21,7 @@ include = [
   "FfiRecoveryBindingList",
   "FfiRootCall",
   "FfiSealedMessageList",
-  "FfiSignaturePubKeyList",
   "FfiU128",
   "FfiVecU8",
+  "FfiWitnessEntryList",
 ]

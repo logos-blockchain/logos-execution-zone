@@ -42,7 +42,10 @@ pub fn ping_emission(
         program: outbox_id,
         seed: cross_zone_outbox_core::outbox_pda_seed(sender_id, &target_zone, 0),
     };
-    let outbox = Actor::new(slot.account_id(), outbox_id);
+    let outbox = Actor::new(
+        slot.account_id().expect("PDA evidence names its account"),
+        outbox_id,
+    );
     let send = SenderMessage::Send {
         outbox,
         emission: CrossZoneEmission {

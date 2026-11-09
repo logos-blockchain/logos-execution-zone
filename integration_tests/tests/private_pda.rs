@@ -12,8 +12,10 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, Actor, PrivateKey, PublicKey,
-    privacy_preserving_transaction::circuit::ProgramCatalog, program::Program,
+    AccountId, Actor,
+    privacy_preserving_transaction::circuit::ProgramCatalog,
+    program::Program,
+    test_utils::{TestSigner, witness_for},
 };
 use lee_core::{
     NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
@@ -139,8 +141,8 @@ async fn a_private_pda_receives_and_spends() -> Result<()> {
     let proxy = test_programs::scripted();
     // The scripted proxy is deployed fresh below, so its header target must be a real key the
     // wallet signs for — `program_loader` requires `is_authorized` for `CreateHeader`.
-    let proxy_key = PrivateKey::try_new([209; 32]).unwrap();
-    let proxy_id = AccountId::from(&PublicKey::new_from_private_key(&proxy_key));
+    let proxy_signer = TestSigner::new(209);
+    let proxy_id = proxy_signer.account_id();
     let seed = PdaSeed::new([42; 32]);
     let amount: u128 = 100;
 
@@ -149,6 +151,7 @@ async fn a_private_pda_receives_and_spends() -> Result<()> {
     // locally — one `WriteSegment` per `MAX_SEGMENT_DATA_LEN` chunk of the ELF (linked
     // tail-to-head), then a `CreateHeader` naming `proxy_id` itself as the header.
     let payer = &initial_pub_accounts_private_keys()[0];
+    let payer_signer = TestSigner::from(&payer.secret);
     let payer_nonce = get_account(&ctx, payer.account_id).await?.nonce;
 
     // Segments only ever hold `user_elf`.
@@ -157,13 +160,10 @@ async fn a_private_pda_receives_and_spends() -> Result<()> {
         .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
         .collect();
     // Base 230 avoids colliding with other fixed account ids in this test.
-    let segment_keys: Vec<PrivateKey> = (0..chunks.len())
-        .map(|i| PrivateKey::try_new([u8::try_from(i).unwrap().saturating_add(230); 32]).unwrap())
+    let segment_signers: Vec<TestSigner> = (0..chunks.len())
+        .map(|i| TestSigner::new(u8::try_from(i).unwrap().saturating_add(230)))
         .collect();
-    let segment_ids: Vec<AccountId> = segment_keys
-        .iter()
-        .map(|key| AccountId::from(&PublicKey::new_from_private_key(key)))
-        .collect();
+    let segment_ids: Vec<AccountId> = segment_signers.iter().map(TestSigner::account_id).collect();
 
     let mut next_payer_nonce = payer_nonce.0;
     for i in (0..chunks.len()).rev() {
@@ -181,10 +181,8 @@ async fn a_private_pda_receives_and_spends() -> Result<()> {
             },
             common::test_utils::test_fee_declaration(payer.account_id),
         )?;
-        let segment_witness_set = lee::public_transaction::WitnessSet::for_message(
-            &segment_message,
-            &[&segment_keys[i], &payer.pub_sign_key],
-        );
+        let segment_witness_set =
+            witness_for(&segment_message, &[&segment_signers[i], &payer_signer]);
         ctx.sequencer_client()
             .send_transaction(LeeTransaction::Public(lee::PublicTransaction::new(
                 segment_message,
@@ -212,10 +210,7 @@ async fn a_private_pda_receives_and_spends() -> Result<()> {
         },
         common::test_utils::test_fee_declaration(payer.account_id),
     )?;
-    let header_witness_set = lee::public_transaction::WitnessSet::for_message(
-        &header_message,
-        &[&proxy_key, &payer.pub_sign_key],
-    );
+    let header_witness_set = witness_for(&header_message, &[&proxy_signer, &payer_signer]);
     ctx.sequencer_client()
         .send_transaction(LeeTransaction::Public(lee::PublicTransaction::new(
             header_message,

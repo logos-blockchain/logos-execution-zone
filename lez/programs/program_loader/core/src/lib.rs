@@ -16,6 +16,7 @@ use lee_core::{
     account::{AccountId, ActorState},
     native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramId, ReceiveInput, Response, Transition},
+    signing_key::SIGNATURE_PROGRAM_ID,
 };
 
 /// Recommended bytecode chunk size for deployment.
@@ -117,6 +118,10 @@ fn reject_reserved_target(account_id: AccountId) {
     assert_ne!(
         account_id, PROGRAM_LOADER_ACCOUNT_ID,
         "the loader's own dispatch address is not a deployable target"
+    );
+    assert_ne!(
+        account_id, SIGNATURE_PROGRAM_ID,
+        "the signature program has no deployable bytecode"
     );
 }
 

@@ -39,8 +39,9 @@ pub enum ConfigEvaluation {
 }
 
 /// Decodes and stateless-checks a gossiped transaction the same way the RPC
-/// admits a submitted one: size check, signature/witness check, then the
-/// sequencer-only-program guard.
+/// admits a submitted one: size check, witness structure check, then the
+/// sequencer-only-program guard. Signatures need the head state: the
+/// executor verifies them when the transaction is submitted.
 #[must_use]
 pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
     let tx_size = u64::try_from(data.len()).unwrap_or(u64::MAX);
@@ -127,6 +128,7 @@ pub fn evaluate_config_message(
 
 #[cfg(test)]
 mod tests {
+    use lee::test_utils::TestSigner;
     use logos_blockchain_core::proofs::channel_multi_sig_proof::IndexedSignature;
     use logos_blockchain_key_management_system_service::keys::Ed25519Key;
     use sequencer_channel_signing_actor::Signature;
@@ -201,8 +203,8 @@ mod tests {
     fn valid_transaction() -> LeeTransaction {
         let acc1 = initial_public_user_accounts()[0].account_id;
         let acc2 = initial_public_user_accounts()[1].account_id;
-        let sign_key1 = initial_pub_accounts_private_keys()[0].pub_sign_key.clone();
-        common::test_utils::create_transaction_native_token_transfer(acc1, 0, acc2, 10, &sign_key1)
+        let signer1 = TestSigner::from(&initial_pub_accounts_private_keys()[0].secret);
+        common::test_utils::create_transaction_native_token_transfer(acc1, 0, acc2, 10, &signer1)
     }
 
     #[test]

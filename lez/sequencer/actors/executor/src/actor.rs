@@ -255,27 +255,25 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
         }: Transaction,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        // Fee admission against the head state, before the mempool sees it.
-        // Advisory (base fees and balances move), but everything it turns
-        // away would have been refused by the block builder anyway.
-        self.sequencer
-            .with_state(|state| sequencer_core::fees::screen(&transaction, state))
+        // Admission against the head state and the pending slots, before the
+        // mempool sees it: the fee screen first, so an unfundable transaction
+        // costs no signature verification, then authentication, then the slots
+        // (first seen wins). Only an authentication refusal at or below the head
+        // is definitive (see `Error::is_definitive`); the rest depend on this
+        // node's head and mempool. An identical re-send is already pending.
+        let admission = self
+            .sequencer
+            .admit(&transaction)
             .await
-            .map_err(|err| {
-                if let sequencer_core::fees::Error::FeeCore(FeeError::PrivateFeeBelowRequired {
-                    required,
-                    reserve,
-                }) = err
-                {
-                    Error::PrivateFeeBelowHead { required, reserve }
-                } else {
-                    Error::IncorrectFee(err.into())
-                }
-            })?;
+            .map_err(admission_error)?;
+        if admission == sequencer_core::pending::Admission::Duplicate {
+            return Ok(());
+        }
 
         self.mempool_handle
-            .try_push((origin.into(), transaction))
+            .try_push((origin.into(), transaction.clone()))
             .map_err(|_err| Error::MempoolIsFull)?;
+        self.sequencer.record_pending(&transaction);
         Ok(())
     }
 }
@@ -654,5 +652,21 @@ impl<S: StorageActorTrait, B: BedrockActorTrait>
                 self.sequencer.on_observed_deposits(deposits).await;
             }
         }
+    }
+}
+
+fn admission_error(err: sequencer_core::AdmissionError) -> Error {
+    match err {
+        sequencer_core::AdmissionError::Fee(sequencer_core::fees::Error::FeeCore(
+            FeeError::PrivateFeeBelowRequired { required, reserve },
+        )) => Error::PrivateFeeBelowHead { required, reserve },
+        sequencer_core::AdmissionError::Fee(err) => Error::IncorrectFee(err.into()),
+        sequencer_core::AdmissionError::Authentication(lee::HeadAuthError::Definitive(err)) => {
+            Error::InvalidTransaction(err)
+        }
+        sequencer_core::AdmissionError::Authentication(lee::HeadAuthError::Pending(err)) => {
+            Error::PendingAuthentication(err)
+        }
+        sequencer_core::AdmissionError::Pending(refusal) => Error::PendingSlot(refusal),
     }
 }

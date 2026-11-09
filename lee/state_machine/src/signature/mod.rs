@@ -5,10 +5,24 @@ use k256::ecdsa::signature::hazmat::PrehashVerifier as _;
 pub use private_key::PrivateKey;
 pub use public_key::PublicKey;
 use rand::{RngCore as _, rngs::OsRng};
+pub use scheme::{
+    AuthError, KeyScheme, PublicKeyOf, SecretKeyOf, SignatureError, SignatureOf, SignatureScheme,
+    authenticate, current_key,
+};
+pub use schnorr::{Schnorr, SchnorrAuthData};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
+pub use signing_keys::{
+    INITIAL_KEY_TYPE, PublicAccountSecret, Signer, initial_key, key_state, public_account_id,
+    signing_key,
+};
+pub use wots::{WOTS_LEAVES, Wots, WotsAuthData, WotsPublicKey, WotsSecretKey};
 
 mod private_key;
 mod public_key;
+mod scheme;
+mod schnorr;
+mod signing_keys;
+mod wots;
 
 #[derive(
     Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, SerializeDisplay, DeserializeFromStr,
@@ -87,12 +101,6 @@ mod bip340_test_vectors;
 mod tests {
 
     use crate::{Signature, signature::bip340_test_vectors};
-
-    impl Signature {
-        pub(crate) fn new_for_tests(value: [u8; 64]) -> Self {
-            Self { value }
-        }
-    }
 
     #[test]
     fn signature_generation_from_bip340_test_vectors() {

@@ -9,7 +9,10 @@ use std::{collections::BTreeMap, time::Duration};
 use anyhow::Result;
 use common::transaction::LeeTransaction;
 use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, config::SequencerPartialConfig};
-use lee::{AccountId, Actor, PrivateKey, PublicKey};
+use lee::{
+    AccountId, Actor,
+    test_utils::{TestSigner, witness_for},
+};
 use lee_core::account::Nonce;
 use sequencer_core::config::ChannelParams;
 use sequencer_service_rpc::RpcClient as _;
@@ -40,9 +43,7 @@ async fn reject_oversized_transaction() -> Result<()> {
     // check (see `gossip::validation::evaluate_transaction`), so an unsigned, unfunded
     // `WriteSegment` is enough to exercise it.
     let oversized_binary = vec![0_u8; 1900 * 1024];
-    let segment_id = AccountId::from(&PublicKey::new_from_private_key(
-        &PrivateKey::try_new([220; 32]).unwrap(),
-    ));
+    let segment_id = TestSigner::new(220).account_id();
     let segment = Actor::new(segment_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID);
     let message = lee::public_transaction::Message::try_new(
         segment,
@@ -99,8 +100,9 @@ async fn accept_transaction_within_limit() -> Result<()> {
     // fee-paying so admission accepts it outright rather than just clearing the size check.
     let small_binary = vec![0_u8; 1024]; // 1 KiB binary
     let payer = &initial_pub_accounts_private_keys()[0];
-    let segment_key = PrivateKey::try_new([221; 32]).unwrap();
-    let segment_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
+    let payer_signer = TestSigner::from(&payer.secret);
+    let segment_signer = TestSigner::new(221);
+    let segment_id = segment_signer.account_id();
     let payer_nonce = integration_tests::get_account(&ctx, payer.account_id)
         .await?
         .nonce;
@@ -116,10 +118,7 @@ async fn accept_transaction_within_limit() -> Result<()> {
         },
         common::test_utils::test_fee_declaration(payer.account_id),
     )?;
-    let witness_set = lee::public_transaction::WitnessSet::for_message(
-        &message,
-        &[&segment_key, &payer.pub_sign_key],
-    );
+    let witness_set = witness_for(&message, &[&segment_signer, &payer_signer]);
     let tx = LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set));
 
     // This should succeed
@@ -168,15 +167,16 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
     let initial_block_height = ctx.sequencer_client().get_last_block_id().await?;
 
     let payer = &initial_pub_accounts_private_keys()[0];
-    let segment_key_a = PrivateKey::try_new([222; 32]).unwrap();
-    let segment_id_a = AccountId::from(&PublicKey::new_from_private_key(&segment_key_a));
-    let segment_key_b = PrivateKey::try_new([223; 32]).unwrap();
-    let segment_id_b = AccountId::from(&PublicKey::new_from_private_key(&segment_key_b));
+    let payer_signer = TestSigner::from(&payer.secret);
+    let segment_signer_a = TestSigner::new(222);
+    let segment_id_a = segment_signer_a.account_id();
+    let segment_signer_b = TestSigner::new(223);
+    let segment_id_b = segment_signer_b.account_id();
     let payer_nonce = integration_tests::get_account(&ctx, payer.account_id)
         .await?
         .nonce;
 
-    let build_tx = |segment_key: &PrivateKey,
+    let build_tx = |segment_signer: &TestSigner,
                     segment_id: AccountId,
                     bytecode: Vec<u8>,
                     nonce_for_payer: Nonce| {
@@ -192,17 +192,14 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
             common::test_utils::test_fee_declaration(payer.account_id),
         )
         .expect("WriteSegment message should always be serializable");
-        let witness_set = lee::public_transaction::WitnessSet::for_message(
-            &message,
-            &[segment_key, &payer.pub_sign_key],
-        );
+        let witness_set = witness_for(&message, &[segment_signer, &payer_signer]);
         LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
     };
 
     // Submit both segment writes back to back, before either lands.
     ctx.sequencer_client()
         .send_transaction(build_tx(
-            &segment_key_a,
+            &segment_signer_a,
             segment_id_a,
             filler_a.clone(),
             payer_nonce,
@@ -210,7 +207,7 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
         .await?;
     ctx.sequencer_client()
         .send_transaction(build_tx(
-            &segment_key_b,
+            &segment_signer_b,
             segment_id_b,
             filler_b.clone(),
             Nonce(payer_nonce.0 + 1),

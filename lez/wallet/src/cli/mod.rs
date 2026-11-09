@@ -8,8 +8,11 @@ use bip39::Mnemonic;
 use clap::{Parser, Subcommand};
 use common::HashType;
 use derive_more::Display;
-use lee::PublicKey;
-use lee_core::{BlockId, NullifierPublicKey, PrivateAccountKind, encryption::ViewingPublicKey};
+use lee_core::{
+    BlockId, NullifierPublicKey, PrivateAccountKind,
+    encryption::ViewingPublicKey,
+    signing_key::{KeyType, SigningKeyState},
+};
 
 pub use crate::utils::{read_mnemonic, read_pin};
 use crate::{
@@ -20,7 +23,6 @@ use crate::{
         chain::ChainSubcommand,
         config::ConfigSubcommand,
         group::GroupSubcommand,
-        keycard::KeycardSubcommand,
         network::NetworkAlias,
         pending::PendingSubcommand,
         programs::{
@@ -36,6 +38,7 @@ pub mod account;
 pub mod chain;
 pub mod config;
 pub mod group;
+#[cfg(keycard)]
 pub mod keycard;
 pub mod network;
 pub mod pending;
@@ -99,8 +102,9 @@ pub enum Command {
         yes: bool,
     },
     /// Keycard hardware wallet management.
+    #[cfg(keycard)]
     #[command(subcommand)]
-    Keycard(KeycardSubcommand),
+    Keycard(keycard::KeycardSubcommand),
 }
 
 /// To execute commands, env var `LEE_WALLET_HOME_DIR` must be set into directory with config.
@@ -132,6 +136,10 @@ pub struct Args {
     /// to it.
     #[arg(long, global = true, value_name = "ACCOUNT_ID")]
     pub refund_to: Option<lee::AccountId>,
+    /// Rotate each account signing a transaction of this command to a key of this type (`wots`
+    /// or `schnorr`), instead of one of its current type.
+    #[arg(long, global = true, value_name = "TYPE", value_parser = parse_key_type)]
+    pub next_key_type: Option<KeyType>,
     /// Wallet command.
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -163,16 +171,7 @@ impl CliAccountMention {
             Self::Label(label) => storage
                 .resolve_label(label)
                 .ok_or_else(|| anyhow::anyhow!("No account found for label `{label}`")),
-            Self::KeyPath(path) => {
-                let pin = read_pin()?;
-                let id_str =
-                    keycard_wallet::KeycardWallet::get_public_account_id_for_path_with_connect(
-                        &pin, path,
-                    )
-                    .map_err(anyhow::Error::from)?;
-                AccountIdWithPrivacy::from_str(&id_str)
-                    .map_err(|e| anyhow::anyhow!("Invalid account id from keycard: {e}"))
-            }
+            Self::KeyPath(_) => Err(keycard_unsupported()),
         }
     }
 
@@ -206,20 +205,15 @@ impl CliAccountMention {
     // An account that signs where public, with its keycard when named by a key path.
     pub(crate) fn signer(self, storage: &Storage) -> Result<AccountIdentity> {
         match self {
-            Self::KeyPath(key_path) => Ok(AccountIdentity::PublicKeycard {
-                account_id: lee::AccountId::from(&keycard_public_key(&key_path)?),
-                key_path,
-            }),
+            Self::KeyPath(_) => Err(keycard_unsupported()),
             Self::Id(_) | Self::Label(_) => self.stored(storage, AccountIdentity::Public),
         }
     }
 
-    // An account that does not sign; a keycard's public key admits its account on first use.
+    // An account that does not sign.
     pub(crate) fn unsigned(self, storage: &Storage) -> Result<AccountIdentity> {
         match self {
-            Self::KeyPath(key_path) => Ok(AccountIdentity::PublicForeign(keycard_public_key(
-                &key_path,
-            )?)),
+            Self::KeyPath(_) => Err(keycard_unsupported()),
             Self::Id(_) | Self::Label(_) => self.stored(storage, AccountIdentity::PublicNoSign),
         }
     }
@@ -305,6 +299,7 @@ pub async fn execute_subcommand<C: WalletSequencerClient>(
         Command::Pending(pending_subcommand) => {
             pending_subcommand.handle_subcommand(wallet_core).await?
         }
+        #[cfg(keycard)]
         Command::Keycard(keycard_subcommand) => {
             keycard_subcommand.handle_subcommand(wallet_core).await?
         }
@@ -371,8 +366,16 @@ async fn execute_restore_keys<C: WalletSequencerClient>(
     wallet_core.restore_keys(depth).await
 }
 
+fn parse_key_type(name: &str) -> Result<KeyType> {
+    match name.to_lowercase().as_str() {
+        "wots" => Ok(KeyType::Wots),
+        "schnorr" => Ok(KeyType::Schnorr),
+        _ => anyhow::bail!("Unknown key type {name}, expected wots or schnorr"),
+    }
+}
+
 /// Asks on stderr; true without a terminal, so scripts never block.
-pub(crate) fn confirm(question: &str) -> Result<bool> {
+pub fn confirm(question: &str) -> Result<bool> {
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return Ok(true);
     }
@@ -408,17 +411,18 @@ pub fn read_keys_file(path: &str) -> Result<(NullifierPublicKey, ViewingPublicKe
 }
 
 // The destination a command names: an account, a private account's public keys or a keys file
-// holding them, or the public key of a public account not used yet.
+// holding them, or the initial key of a public account not used yet.
 pub(crate) fn destination(
     storage: &Storage,
     account: Option<CliAccountMention>,
     npk: Option<String>,
     vpk: Option<String>,
     keys_file: Option<String>,
-    public_key: Option<PublicKey>,
+    initial_key: Option<SigningKeyState>,
 ) -> Result<AccountIdentity> {
-    if let Some(public_key) = public_key {
-        return Ok(AccountIdentity::PublicForeign(public_key));
+    if let Some(initial_key) = initial_key {
+        return AccountIdentity::public_foreign(initial_key)
+            .context("The recipient's key is not an initial key: it names no account");
     }
     let (npk, vpk) = match (account, npk, vpk, keys_file) {
         (Some(account), None, None, None) => return account.unsigned(storage),
@@ -441,13 +445,9 @@ pub(crate) fn destination(
     })
 }
 
-fn keycard_public_key(key_path: &str) -> Result<PublicKey> {
-    Ok(
-        keycard_wallet::KeycardWallet::get_public_key_for_path_with_connect(
-            &read_pin()?,
-            key_path,
-        )?,
-    )
+// A Keycard key is a Schnorr key, which cannot be an account's initial key.
+fn keycard_unsupported() -> anyhow::Error {
+    anyhow::anyhow!("Keycard accounts are not supported: their keys cannot be initial keys")
 }
 
 pub(crate) fn decode_npk_vpk(
@@ -562,8 +562,8 @@ mod tests {
         std::fs::write(&keys_path, format!("{npk_hex}\n{vpk_hex}\n")).unwrap();
         let keys_file = keys_path.to_str().unwrap().to_owned();
         let account_id = lee::AccountId::new([4; 32]);
-        let public_key =
-            PublicKey::new_from_private_key(&lee::PrivateKey::try_new([5; 32]).unwrap());
+        let initial_key =
+            lee::signature::initial_key(&lee::signature::PublicAccountSecret::new([5; 32]));
         let mention = |prefix: &str| {
             Some(CliAccountMention::from_str(&format!("{prefix}/{account_id}")).unwrap())
         };
@@ -588,8 +588,8 @@ mod tests {
                 None,
                 None,
                 None,
-                Some(public_key.clone()),
-                AccountIdentity::PublicForeign(public_key),
+                Some(initial_key),
+                AccountIdentity::public_foreign(initial_key).unwrap(),
             ),
             (
                 mention("Public"),

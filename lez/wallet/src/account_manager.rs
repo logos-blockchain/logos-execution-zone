@@ -5,10 +5,9 @@ use std::{
 };
 
 use anyhow::Result;
-use keycard_wallet::KeycardWallet;
 use lee::{
-    AccountId, PrivateKey, PublicAccountEvidence, PublicKey, Recipient, RecipientEncryption,
-    Signature,
+    AccountId, PublicAccountEvidence, Recipient, RecipientEncryption,
+    signature::{INITIAL_KEY_TYPE, PublicAccountSecret, Signer, initial_key},
 };
 use lee_core::{
     AuthorizationSecretKey, Commitment, CommitmentPosition, CommitmentSetDigest, DummyInput,
@@ -20,10 +19,13 @@ use lee_core::{
     encryption::{Ciphertext, EncryptedNote, MlKem768EncapsulationKey, ViewingPublicKey},
     native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::PdaSeed,
+    signing_key::{KeyType, SigningKeyState},
 };
 use rand::{RngCore as _, rngs::OsRng};
 
-use crate::{ExecutionFailureKind, PendingMessage, WalletCore, WalletSequencerClient};
+use crate::{
+    ExecutionFailureKind, PendingMessage, WalletCore, WalletSequencerClient, keycard_support,
+};
 
 /// Length every note ciphertext the wallet emits is padded up to.
 ///
@@ -39,7 +41,12 @@ pub enum AccountIdentity {
     Public(AccountId),
     /// A public account without signing. Would not try to sign, even if account is owned.
     PublicNoSign(AccountId),
-    PublicForeign(PublicKey),
+    /// A public account this wallet does not hold, named by its initial key. Built with
+    /// [`AccountIdentity::public_foreign`].
+    PublicForeign {
+        account_id: AccountId,
+        initial_key: SigningKeyState,
+    },
     PublicPda {
         program: AccountId,
         seed: PdaSeed,
@@ -80,7 +87,14 @@ impl fmt::Debug for AccountIdentity {
         match self {
             Self::Public(id) => f.debug_tuple("Public").field(id).finish(),
             Self::PublicNoSign(id) => f.debug_tuple("PublicNoSign").field(id).finish(),
-            Self::PublicForeign(pk) => f.debug_tuple("PublicForeign").field(pk).finish(),
+            Self::PublicForeign {
+                account_id,
+                initial_key,
+            } => f
+                .debug_struct("PublicForeign")
+                .field("account_id", account_id)
+                .field("initial_key", initial_key)
+                .finish(),
             Self::PublicPda { program, seed } => f
                 .debug_struct("PublicPda")
                 .field("program", program)
@@ -123,6 +137,16 @@ impl fmt::Debug for AccountIdentity {
 }
 
 impl AccountIdentity {
+    /// A public account this wallet does not hold, named by its initial key; `None` for a key of
+    /// a type that cannot be initial.
+    #[must_use]
+    pub fn public_foreign(initial_key: SigningKeyState) -> Option<Self> {
+        AccountId::for_initial_key(&initial_key).map(|account_id| Self::PublicForeign {
+            account_id,
+            initial_key,
+        })
+    }
+
     #[must_use]
     /// Note: `PublicNoSign` still counts as public, the variant just suppresses the signing-key
     /// lookup.
@@ -131,7 +155,7 @@ impl AccountIdentity {
             &self,
             Self::Public(_)
                 | Self::PublicNoSign(_)
-                | Self::PublicForeign(_)
+                | Self::PublicForeign { .. }
                 | Self::PublicPda { .. }
                 | Self::PublicKeycard { .. }
         )
@@ -143,9 +167,10 @@ impl AccountIdentity {
     pub fn public_account_id(&self) -> Option<lee::AccountId> {
         match self {
             Self::Public(id) | Self::PublicNoSign(id) => Some(*id),
-            Self::PublicForeign(pk) => Some(AccountId::from(pk)),
+            Self::PublicForeign { account_id, .. } | Self::PublicKeycard { account_id, .. } => {
+                Some(*account_id)
+            }
             Self::PublicPda { program, seed } => Some(AccountId::for_public_pda(program, seed)),
-            Self::PublicKeycard { account_id, .. } => Some(*account_id),
             Self::PrivateOwned(_)
             | Self::PrivateForeign { .. }
             | Self::PrivateShared { .. }
@@ -160,7 +185,7 @@ impl AccountIdentity {
                 Self::PublicNoSign(account_id)
             }
             Self::PublicNoSign(_)
-            | Self::PublicForeign(_)
+            | Self::PublicForeign { .. }
             | Self::PublicPda { .. }
             | Self::PrivateOwned(_)
             | Self::PrivateForeign { .. }
@@ -184,9 +209,10 @@ impl AccountIdentity {
     pub fn account_id(&self) -> AccountId {
         match self {
             Self::Public(id) | Self::PublicNoSign(id) | Self::PrivateOwned(id) => *id,
-            Self::PublicForeign(pk) => AccountId::from(pk),
+            Self::PublicForeign { account_id, .. } | Self::PublicKeycard { account_id, .. } => {
+                *account_id
+            }
             Self::PublicPda { program, seed } => AccountId::for_public_pda(program, seed),
-            Self::PublicKeycard { account_id, .. } => *account_id,
             Self::PrivateForeign { npk, vpk, kind } => {
                 AccountId::for_private_account(npk, vpk, kind)
             }
@@ -303,12 +329,13 @@ struct Row {
 enum State {
     Public {
         account: PreparedAccount,
-        sk: Option<PrivateKey>,
+        secret: Option<PublicAccountSecret>,
+        /// The type of the account's current key, which a signing account signs with.
+        key_type: KeyType,
         admission: Admission,
     },
     PublicKeycard {
         account: PreparedAccount,
-        key_path: String,
     },
     Private(Box<AccountPreparedData>),
 }
@@ -344,7 +371,7 @@ impl State {
 
     fn is_authorized(&self) -> bool {
         match self {
-            Self::Public { sk, .. } => sk.is_some(),
+            Self::Public { secret, .. } => secret.is_some(),
             Self::PublicKeycard { .. } => true,
             Self::Private(pre) => pre.kind.is_authorized(),
         }
@@ -369,7 +396,6 @@ pub struct AccountManager {
     rows: Vec<Row>,
     /// A private account named to pay the fee; prepared like a mention but outside the root call.
     fee_payer: Option<AccountId>,
-    pin: Option<String>,
     dummy_commitment_root: CommitmentSetDigest,
     message_path: Option<MembershipProof>,
     /// The membership path of each received message the transaction claims before its root.
@@ -400,7 +426,6 @@ impl AccountManager {
         let mut states: Vec<State> = Vec::new();
         let mut rows = Vec::with_capacity(mentions.len());
         let mut prepared: HashMap<AccountId, (usize, AccountIdentity, bool)> = HashMap::new();
-        let mut pin = None;
         // Whether the transaction itself authorizes the fee payer; if not, the payer's key
         // authorizes only the fee entry.
         let mut payer_authorized = false;
@@ -448,14 +473,8 @@ impl AccountManager {
                 None => {
                     let index = states.len();
                     states.push(
-                        prepare_account(
-                            wallet,
-                            identity.clone(),
-                            actor_state_selector,
-                            authorizes,
-                            &mut pin,
-                        )
-                        .await?,
+                        prepare_account(wallet, identity.clone(), actor_state_selector, authorizes)
+                            .await?,
                     );
                     prepared.insert(account_id, (index, identity, authorizes));
                     index
@@ -478,7 +497,6 @@ impl AccountManager {
                     AccountIdentity::PrivateOwned(payer),
                     Actor::native_balance(payer),
                     true,
-                    &mut pin,
                 )
                 .await?,
             );
@@ -511,7 +529,6 @@ impl AccountManager {
             states,
             rows,
             fee_payer,
-            pin,
             dummy_commitment_root,
             message_path,
             claim_paths,
@@ -564,11 +581,11 @@ impl AccountManager {
             .filter_map(|state| match state {
                 State::Public {
                     account,
-                    sk: Some(_),
+                    secret: Some(_),
                     ..
                 }
                 | State::PublicKeycard { account, .. } => Some(account.account_id),
-                State::Public { sk: None, .. } | State::Private(_) => None,
+                State::Public { secret: None, .. } | State::Private(_) => None,
             })
             .collect()
     }
@@ -578,7 +595,7 @@ impl AccountManager {
             .iter()
             .filter_map(|state| match state {
                 State::Public {
-                    sk: None,
+                    secret: None,
                     admission: Admission::Evidence(evidence),
                     ..
                 } => Some(evidence.clone()),
@@ -592,7 +609,7 @@ impl AccountManager {
             .iter()
             .filter_map(|state| match state {
                 State::Public {
-                    sk: None,
+                    secret: None,
                     admission: Admission::Missing,
                     ..
                 }
@@ -610,13 +627,13 @@ impl AccountManager {
             .filter_map(|state| match state {
                 State::Public {
                     account,
-                    sk: Some(_),
+                    secret: Some(_),
                     ..
                 }
                 | State::PublicKeycard { account, .. } => {
                     Some((account.account_id, account.account.nonce))
                 }
-                State::Public { sk: None, .. } | State::Private(_) => None,
+                State::Public { secret: None, .. } | State::Private(_) => None,
             })
             .collect()
     }
@@ -830,7 +847,7 @@ impl AccountManager {
     /// The account that pays this transaction's fee: the first public signing
     /// account that holds a balance. Its ordinary signature covers the message,
     /// so it is fee-authorized without a separate fee witness. Non-signing
-    /// public accounts (`sk: None`) are skipped.
+    /// public accounts (`secret: None`) are skipped.
     ///
     /// If no signing account is funded, falls back to the first signing account.
     /// A fee-exempt transaction carries a vestigial fee declaration the sequencer
@@ -863,7 +880,7 @@ impl AccountManager {
         for index in 0..self.states.len() {
             let (State::Public {
                 account,
-                sk: Some(_),
+                secret: Some(_),
                 ..
             }
             | State::PublicKeycard { account, .. }) = &mut self.states[index]
@@ -893,16 +910,16 @@ impl AccountManager {
         Ok(first_signer)
     }
 
-    /// Whether `account_id` is a public account whose signature [`Self::sign_message`] produces.
+    /// Whether `account_id` is a public account whose key [`Self::signing_keys`] produces.
     pub fn signs_for(&self, account_id: AccountId) -> bool {
         self.states.iter().any(|state| match state {
             State::Public {
                 account,
-                sk: Some(_),
+                secret: Some(_),
                 ..
             }
             | State::PublicKeycard { account, .. } => account.account_id == account_id,
-            State::Public { sk: None, .. } | State::Private(_) => false,
+            State::Public { secret: None, .. } | State::Private(_) => false,
         })
     }
 
@@ -918,46 +935,33 @@ impl AccountManager {
             .collect()
     }
 
-    pub fn public_non_keycard_account_auth(&self) -> Vec<&PrivateKey> {
+    /// What `WitnessSet::sign` takes for each public account whose secret the wallet holds,
+    /// signing at its nonce in `nonces` and rotating to a key of type `next`, or of its current
+    /// type. A Keycard account gets none: it cannot rotate its key.
+    pub fn signing_keys(
+        &self,
+        nonces: &BTreeMap<AccountId, Nonce>,
+        next: Option<KeyType>,
+    ) -> Vec<Signer> {
         self.states
             .iter()
             .filter_map(|state| match state {
-                State::Public { sk, .. } => sk.as_ref(),
-                State::PublicKeycard { .. } | State::Private(_) => None,
+                State::Public {
+                    account,
+                    secret: Some(secret),
+                    key_type,
+                    ..
+                } => {
+                    let nonce = *nonces
+                        .get(&account.account_id)
+                        .expect("every signing account is in the message's nonces");
+                    Some(signer(secret, nonce, *key_type, next))
+                }
+                State::Public { secret: None, .. }
+                | State::PublicKeycard { .. }
+                | State::Private(_) => None,
             })
             .collect()
-    }
-
-    pub fn sign_message(&self, message_hash: [u8; 32]) -> Result<Vec<(Signature, PublicKey)>> {
-        let mut sigs: Vec<(Signature, PublicKey)> = self
-            .public_non_keycard_account_auth()
-            .into_iter()
-            .map(|key| {
-                (
-                    Signature::new(key, &message_hash),
-                    PublicKey::new_from_private_key(key),
-                )
-            })
-            .collect();
-
-        let keycard_paths: Vec<&str> = self
-            .states
-            .iter()
-            .filter_map(|state| match state {
-                State::PublicKeycard { key_path, .. } => Some(key_path.as_str()),
-                State::Private(_) | State::Public { .. } => None,
-            })
-            .collect();
-
-        if let Some(pin) = self.pin.clone() {
-            let mut wallet = KeycardWallet::new()?;
-            wallet.connect(&pin)?;
-            for path in keycard_paths {
-                sigs.push(wallet.sign_message_for_path(path, &message_hash)?);
-            }
-        }
-
-        Ok(sigs)
     }
 }
 
@@ -1028,31 +1032,29 @@ async fn prepare_account<C: WalletSequencerClient>(
     identity: AccountIdentity,
     actor_state_selector: Actor,
     authorizes: bool,
-    pin: &mut Option<String>,
 ) -> Result<State, ExecutionFailureKind> {
     let account_id = actor_state_selector.account_id;
-    let owned_key = wallet.get_account_public_signing_key(account_id);
-    let (sk, evidence) = match identity {
-        AccountIdentity::Public(_) => (
-            owned_key.filter(|_| authorizes).cloned(),
-            owned_key.map(key_evidence),
-        ),
-        AccountIdentity::PublicKeycard { key_path, .. } if authorizes => {
+    let owned_secret = wallet
+        .storage
+        .key_chain()
+        .pub_account_secret(account_id)
+        .cloned();
+    let owned_evidence = owned_secret
+        .as_ref()
+        .map(|secret| PublicAccountEvidence::Key(initial_key(secret)));
+    let (secret, evidence) = match identity {
+        AccountIdentity::Public(_) => (owned_secret.filter(|_| authorizes), owned_evidence),
+        AccountIdentity::PublicKeycard { .. } if authorizes => {
             let (account, _) = prepare_public_account(wallet, actor_state_selector).await?;
-            if pin.is_none() {
-                *pin = Some(
-                    crate::utils::read_pin()
-                        .map_err(ExecutionFailureKind::SignError)?
-                        .as_str()
-                        .to_owned(),
-                );
-            }
-            return Ok(State::PublicKeycard { account, key_path });
+            keycard_support::ensure_available().map_err(ExecutionFailureKind::SignError)?;
+            return Ok(State::PublicKeycard { account });
         }
         AccountIdentity::PublicNoSign(_) | AccountIdentity::PublicKeycard { .. } => {
-            (None, owned_key.map(key_evidence))
+            (None, owned_evidence)
         }
-        AccountIdentity::PublicForeign(pk) => (None, Some(PublicAccountEvidence::Key(pk))),
+        AccountIdentity::PublicForeign { initial_key, .. } => {
+            (None, Some(PublicAccountEvidence::Key(initial_key)))
+        }
         AccountIdentity::PublicPda { program, seed } => {
             (None, Some(PublicAccountEvidence::Pda { program, seed }))
         }
@@ -1101,10 +1103,18 @@ async fn prepare_account<C: WalletSequencerClient>(
             ))));
         }
     };
+    let key_type = match secret {
+        Some(_) => wallet
+            .current_key_type(account_id)
+            .await
+            .map_err(ExecutionFailureKind::SequencerError)?,
+        None => INITIAL_KEY_TYPE,
+    };
     let (account, present) = prepare_public_account(wallet, actor_state_selector).await?;
     Ok(State::Public {
         account,
-        sk,
+        secret,
+        key_type,
         admission: Admission::of(present, evidence),
     })
 }
@@ -1115,10 +1125,6 @@ fn regular_key(ask: AuthorizationSecretKey, authorizes: bool) -> RegularKey {
     } else {
         RegularKey::Nullifying(NullifierSecretKey::from(&ask))
     }
-}
-
-fn key_evidence(key: &PrivateKey) -> PublicAccountEvidence {
-    PublicAccountEvidence::Key(PublicKey::new_from_private_key(key))
 }
 
 fn private_shared_acc_preparation<C: WalletSequencerClient>(
@@ -1303,7 +1309,7 @@ pub fn recipient<C: WalletSequencerClient>(
         ),
         AccountIdentity::Public(_)
         | AccountIdentity::PublicNoSign(_)
-        | AccountIdentity::PublicForeign(_)
+        | AccountIdentity::PublicForeign { .. }
         | AccountIdentity::PublicPda { .. }
         | AccountIdentity::PublicKeycard { .. } => return None,
     };
@@ -1313,6 +1319,17 @@ pub fn recipient<C: WalletSequencerClient>(
         kind,
         opening: None,
     })
+}
+
+/// What `WitnessSet::sign` takes for an account signing at `nonce` with its key of type
+/// `current`, rotating to a key of type `next`, or of type `current`.
+pub fn signer(
+    secret: &PublicAccountSecret,
+    nonce: Nonce,
+    current: KeyType,
+    next: Option<KeyType>,
+) -> Signer {
+    Signer::new(secret, nonce, current, next.unwrap_or(current))
 }
 
 pub fn random_bytes() -> [u8; 32] {
@@ -1402,7 +1419,8 @@ mod tests {
         };
         State::Public {
             account,
-            sk: None,
+            secret: None,
+            key_type: KeyType::Wots,
             admission: Admission::Present,
         }
     }
@@ -1412,14 +1430,15 @@ mod tests {
     }
 
     fn public_signing_state_with(seed: u8, account: Account) -> State {
-        let sk = lee::PrivateKey::try_new([seed; 32]).expect("valid key");
-        let account_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&sk));
+        let secret = PublicAccountSecret::new([seed; 32]);
+        let account_id = lee::signature::public_account_id(&secret);
         State::Public {
             account: PreparedAccount {
                 account_id,
                 account,
             },
-            sk: Some(sk),
+            secret: Some(secret),
+            key_type: KeyType::Wots,
             admission: Admission::Present,
         }
     }
@@ -1457,7 +1476,6 @@ mod tests {
             states,
             rows,
             fee_payer: None,
-            pin: None,
             dummy_commitment_root: [0; 32],
             message_path: None,
             claim_paths: Vec::new(),
@@ -1530,7 +1548,7 @@ mod tests {
 
     #[test]
     fn fee_payer_skips_a_non_signing_public_account() {
-        // A tracked but unsignable public account (sk: None, e.g.
+        // A tracked but unsignable public account (secret: None, e.g.
         // definition PDA passed as a non-signing input) must not be
         // designated payer -- the first funded signing account is chosen instead.
         let signing = public_signing_state(3, 1_000);
@@ -1758,10 +1776,7 @@ mod tests {
             },
         };
 
-        let signing = manager(vec![State::PublicKeycard {
-            account: account(),
-            key_path: "m/44'/60'/0'/0/0".to_owned(),
-        }]);
+        let signing = manager(vec![State::PublicKeycard { account: account() }]);
         assert!(signing.selected_actor_states()[0].is_authorized);
         assert_eq!(signing.signers(), HashSet::from([account_id]));
         assert_eq!(
@@ -1771,7 +1786,8 @@ mod tests {
 
         let unsigned = manager(vec![State::Public {
             account: account(),
-            sk: None,
+            secret: None,
+            key_type: KeyType::Wots,
             admission: Admission::Present,
         }]);
         assert!(!unsigned.selected_actor_states()[0].is_authorized);
@@ -1781,8 +1797,8 @@ mod tests {
 
     #[test]
     fn only_an_absent_non_signing_public_account_carries_admission_evidence() {
-        let key = lee::PrivateKey::try_new([9; 32]).expect("valid key");
-        let key_evidence = PublicAccountEvidence::Key(lee::PublicKey::new_from_private_key(&key));
+        let key_evidence =
+            PublicAccountEvidence::Key(initial_key(&PublicAccountSecret::new([9; 32])));
         assert_eq!(
             Admission::of(false, Some(key_evidence.clone())),
             Admission::Evidence(key_evidence.clone())
@@ -1793,19 +1809,19 @@ mod tests {
         );
         assert_eq!(Admission::of(false, None), Admission::Missing);
 
-        let signer = lee::PrivateKey::try_new([8; 32]).expect("valid key");
-        let signer_evidence =
-            PublicAccountEvidence::Key(lee::PublicKey::new_from_private_key(&signer));
+        let signer = PublicAccountSecret::new([8; 32]);
+        let signer_evidence = PublicAccountEvidence::Key(initial_key(&signer));
         let pda = PublicAccountEvidence::Pda {
             program: AccountId::new([4; 32]),
             seed: PdaSeed::new([5; 32]),
         };
-        let public = |sk, admission| State::Public {
+        let public = |secret, admission| State::Public {
             account: PreparedAccount {
                 account_id: AccountId::new([1; 32]),
                 account: Account::default(),
             },
-            sk,
+            secret,
+            key_type: KeyType::Wots,
             admission,
         };
         let manager = manager(vec![
@@ -1825,15 +1841,15 @@ mod tests {
 
     #[test]
     fn admitted_accounts_are_signers_and_accounts_present_or_carrying_evidence() {
-        let signer = lee::PrivateKey::try_new([8; 32]).expect("valid key");
-        let signer_evidence =
-            PublicAccountEvidence::Key(lee::PublicKey::new_from_private_key(&signer));
-        let public = |tag, sk, admission| State::Public {
+        let signer = PublicAccountSecret::new([8; 32]);
+        let signer_evidence = PublicAccountEvidence::Key(initial_key(&signer));
+        let public = |tag, secret, admission| State::Public {
             account: PreparedAccount {
                 account_id: AccountId::new([tag; 32]),
                 account: Account::default(),
             },
-            sk,
+            secret,
+            key_type: KeyType::Wots,
             admission,
         };
         let pda = PublicAccountEvidence::Pda {
@@ -1851,7 +1867,6 @@ mod tests {
                     account_id: AccountId::new([5; 32]),
                     account: Account::default(),
                 },
-                key_path: "m/44'/60'/0'/0/0".to_owned(),
             },
             public(6, None, Admission::Missing),
             public(7, None, Admission::Present),
@@ -1866,18 +1881,23 @@ mod tests {
 
     #[test]
     fn a_public_foreign_identity_names_its_keys_account_and_is_kept_without_signing() {
-        let pk = lee::PublicKey::new_from_private_key(
-            &lee::PrivateKey::try_new([9; 32]).expect("valid key"),
-        );
-        let foreign = AccountIdentity::PublicForeign(pk.clone());
+        let key = initial_key(&PublicAccountSecret::new([9; 32]));
+        let account_id = AccountId::for_initial_key(&key).expect("an initial key");
+        let foreign = AccountIdentity::public_foreign(key).expect("an initial key");
 
         assert!(foreign.is_public());
-        assert_eq!(foreign.account_id(), AccountId::from(&pk));
-        assert_eq!(foreign.public_account_id(), Some(AccountId::from(&pk)));
-        assert_eq!(
-            foreign.without_signing(),
-            AccountIdentity::PublicForeign(pk)
-        );
+        assert_eq!(foreign.account_id(), account_id);
+        assert_eq!(foreign.public_account_id(), Some(account_id));
+        assert_eq!(foreign.clone().without_signing(), foreign);
+    }
+
+    #[test]
+    fn a_key_that_cannot_be_initial_names_no_foreign_account() {
+        let key = SigningKeyState {
+            key_type: KeyType::Schnorr,
+            ..initial_key(&PublicAccountSecret::new([9; 32]))
+        };
+        assert_eq!(AccountIdentity::public_foreign(key), None);
     }
 
     #[test]

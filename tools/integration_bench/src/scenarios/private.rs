@@ -33,7 +33,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                     to_npk: None,
                     to_vpk: None,
                     to_keys: None,
-                    to_pk: None,
+                    to_initial_key: None,
                     amount: 1_000,
                 }),
             )
@@ -52,7 +52,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                     to_npk: None,
                     to_vpk: None,
                     to_keys: None,
-                    to_pk: None,
+                    to_initial_key: None,
                     amount: 100,
                 }),
             )
@@ -71,7 +71,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                     to_npk: None,
                     to_vpk: None,
                     to_keys: None,
-                    to_pk: None,
+                    to_initial_key: None,
                     amount: 200,
                 }),
             )

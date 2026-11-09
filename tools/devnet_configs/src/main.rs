@@ -16,7 +16,10 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
-use lee::{PrivateKey, PublicKey};
+use lee::{
+    PrivateKey,
+    signature::{PublicAccountSecret, public_account_id},
+};
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use sequencer_core::{
     config::{ChannelParams, GenesisAction, GossipConfig, SequencerConfig},
@@ -114,13 +117,13 @@ fn genesis_sequencer_stakes(
                 .context("Sequencer signing key is not a valid Ed25519 point")?;
             // Separate from the signing key: posting and stake control are
             // distinct roles.
-            let owner = PrivateKey::new_os_random();
+            let owner = PublicAccountSecret::new_os_random();
             Ok(GenesisAction::StakeSequencer {
                 sequencer_key,
-                ownership_public_key: PublicKey::new_from_private_key(&owner),
+                ownership_id: public_account_id(&owner),
                 // The index is signed over too, so these must stay in the order
                 // they are written to the genesis list.
-                stake_signature: sign_genesis_stake(index, sequencer_key, &owner, minimum_stake),
+                stake_entry: sign_genesis_stake(index, sequencer_key, &owner, minimum_stake),
             })
         })
         .collect()
@@ -159,8 +162,8 @@ fn repo_root() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use lee::AccountId;
-    use sequencer_core::genesis_stake_message;
+    use lee::signature::{authenticate, current_key};
+    use sequencer_core::{genesis_stake_message, genesis_stake_message_with_keys};
 
     use super::*;
 
@@ -180,22 +183,26 @@ mod tests {
         let stakes = genesis.actions.iter().filter_map(|action| match action {
             GenesisAction::StakeSequencer {
                 sequencer_key,
-                ownership_public_key,
-                stake_signature,
-            } => Some((sequencer_key, ownership_public_key, stake_signature)),
+                ownership_id,
+                stake_entry,
+            } => Some((sequencer_key, *ownership_id, stake_entry)),
             GenesisAction::SupplyAccount { .. }
             | GenesisAction::SupplyPrivateAccount { .. }
             | GenesisAction::SupplyBridgeLockHolding { .. } => None,
         });
-        for (index, (sequencer_key, ownership_public_key, stake_signature)) in stakes.enumerate() {
-            let message = genesis_stake_message(
-                index,
-                *sequencer_key,
-                AccountId::from(ownership_public_key),
-                minimum_stake,
-            );
+        for (index, (sequencer_key, ownership_id, stake_entry)) in stakes.enumerate() {
+            let message = genesis_stake_message(index, *sequencer_key, ownership_id, minimum_stake);
+            let message_with_keys =
+                genesis_stake_message_with_keys(&message, ownership_id, stake_entry.next);
             anyhow::ensure!(
-                stake_signature.is_valid_for(&message.hash(), ownership_public_key),
+                current_key(None, ownership_id, &stake_entry.auth_data)
+                    .and_then(|(current, signature)| authenticate(
+                        &current,
+                        &message_with_keys,
+                        signature,
+                        &stake_entry.next
+                    ))
+                    .is_ok(),
                 "Stake signature of founding sequencer {index} is stale, run `just regenerate-devnet-configs`"
             );
         }

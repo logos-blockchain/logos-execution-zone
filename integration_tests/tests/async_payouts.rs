@@ -14,10 +14,9 @@ use integration_tests::{
 use lee::{
     AccountId, Actor, PrivacyPreservingTransaction, ProvingInput, PublicExecutionContext,
     Publication, RecipientEncryption, SenderPresentation, execute_and_prove_with_cross_messages,
-    privacy_preserving_transaction::{
-        circuit::ProgramCatalog, message::Message, witness_set::WitnessSet,
-    },
+    privacy_preserving_transaction::{circuit::ProgramCatalog, message::Message},
     program::Program,
+    test_utils::privacy_witness_for,
 };
 use lee_core::{
     Commitment, Nullifier, NullifierWitness, PrivateAccountKind, PrivateWitness, RegularKey,
@@ -153,7 +152,7 @@ fn prove_trade(
         no_seal,
     )?;
     let message = Message::from_circuit_output(BTreeMap::new(), output);
-    let witness_set = WitnessSet::for_message(&message, proof, &[]);
+    let witness_set = privacy_witness_for(&message, proof, &[]);
     Ok(PrivacyPreservingTransaction::new(message, witness_set))
 }
 

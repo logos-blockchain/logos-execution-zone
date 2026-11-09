@@ -36,7 +36,10 @@ pub use state::V03State;
 pub use transaction_message::{
     InvalidTransaction, PublicAccountEvidence, TransactionMessage, nonce_map,
 };
-pub use validated_state_diff::{ExecutionCharge, ValidatedStateDiff};
+pub use validated_state_diff::{
+    ExecutionCharge, HeadAuthError, ValidatedStateDiff, authenticate_privacy_transaction_at_head,
+    authenticate_public_transaction_at_head,
+};
 
 pub mod encoding;
 pub mod error;
@@ -45,9 +48,9 @@ mod merkle_tree;
 pub mod privacy_preserving_transaction;
 pub mod program;
 pub mod public_transaction;
-mod signature;
+pub mod signature;
 mod state;
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-signer"))]
 pub mod test_utils;
 mod transaction_message;
 mod validated_state_diff;

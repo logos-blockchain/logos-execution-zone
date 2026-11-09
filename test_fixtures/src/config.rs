@@ -3,7 +3,10 @@ use std::{net::SocketAddr, num::NonZeroU32, path::PathBuf, time::Duration};
 use anyhow::{Context as _, Result};
 use indexer_service::{ChannelId, ClientConfig, EventFilterConfig, IndexerConfig};
 use key_protocol::key_management::{KeyChain, secret_holders::SeedHolder};
-use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey};
+use lee::{
+    AccountId, PublicAccountEvidence,
+    signature::{PublicAccountSecret, initial_key, public_account_id},
+};
 use logos_blockchain_key_management_system_service::keys::{UnsecuredEd25519Key, ZkPublicKey};
 use num_bigint::BigUint;
 use sequencer_core::{
@@ -41,7 +44,7 @@ pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000, 20_0
 /// The public account for funding the private accounts' balances at genesis.
 pub(crate) const PRIVATE_FUNDER_INDEX: usize = 0;
 
-/// Key of the account holding the sequencer's genesis stake.
+/// Secret of the account holding the sequencer's genesis stake.
 pub const SEQUENCER_STAKE_KEY: [u8; 32] = [55; 32];
 
 /// Channel signing key of the test sequencer, staked in the prebuilt dump.
@@ -156,6 +159,7 @@ pub fn sequencer_config(
         home,
         max_num_tx_in_block,
         mempool_max_size,
+        mempool_max_per_account: sequencer_core::config::default_mempool_max_per_account(),
         block_create_timeout,
         retry_pending_blocks_timeout: Duration::from_secs(5),
         genesis: Some(GenesisConfig {
@@ -180,16 +184,14 @@ pub fn sequencer_config(
 }
 
 #[must_use]
-pub fn default_public_accounts_for_wallet() -> Vec<(PrivateKey, u128)> {
-    let mut private_keys = DEFAULT_PUBLIC_ACCOUNT_SEEDS
+pub fn default_public_accounts_for_wallet() -> Vec<(PublicAccountSecret, u128)> {
+    let mut secrets = DEFAULT_PUBLIC_ACCOUNT_SEEDS
         .iter()
-        .map(|seed| PrivateKey::try_new(*seed).expect("Fixed public account seed must be valid"))
+        .map(|seed| PublicAccountSecret::new(*seed))
         .collect::<Vec<_>>();
-    private_keys.sort_unstable_by_key(|private_key| {
-        AccountId::from(&PublicKey::new_from_private_key(private_key))
-    });
+    secrets.sort_unstable_by_key(public_account_id);
 
-    private_keys
+    secrets
         .into_iter()
         .zip(INITIAL_PUBLIC_BALANCES_FOR_WALLET)
         .collect()
@@ -198,9 +200,8 @@ pub fn default_public_accounts_for_wallet() -> Vec<(PrivateKey, u128)> {
 /// The public account that funds the private accounts' balances.
 #[must_use]
 pub fn private_funder_account_id() -> AccountId {
-    let private_key = PrivateKey::try_new(PRIVATE_FUNDER_ACCOUNT_SEED)
-        .expect("Fixed private funder account seed must be valid");
-    AccountId::from(&PublicKey::new_from_private_key(&private_key))
+    let secret = PublicAccountSecret::new(PRIVATE_FUNDER_ACCOUNT_SEED);
+    public_account_id(&secret)
 }
 
 #[must_use]
@@ -269,12 +270,12 @@ pub fn private_funding_cost(private_accounts: &[InitialPrivateAccountForWallet])
 
 #[must_use]
 pub fn genesis_from_accounts(
-    public_accounts: &[(PrivateKey, u128)],
+    public_accounts: &[(PublicAccountSecret, u128)],
     private_funding_cost: u128,
 ) -> Vec<GenesisAction> {
-    let mut balances: Vec<(PublicKey, u128)> = public_accounts
+    let mut balances: Vec<_> = public_accounts
         .iter()
-        .map(|(private_key, balance)| (PublicKey::new_from_private_key(private_key), *balance))
+        .map(|(secret, balance)| (initial_key(secret), *balance))
         .collect();
 
     let funder_balance = &mut balances[PRIVATE_FUNDER_INDEX].1;
@@ -284,8 +285,8 @@ pub fn genesis_from_accounts(
 
     balances
         .into_iter()
-        .map(|(public_key, balance)| GenesisAction::SupplyAccount {
-            recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(public_key)),
+        .map(|(key, balance)| GenesisAction::SupplyAccount {
+            recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(key)),
             balance: u64::try_from(balance).expect("genesis balance exceeds u64"),
         })
         .collect()
@@ -385,10 +386,10 @@ fn founding_stake_owner_seed(index: usize) -> [u8; 32] {
     seed
 }
 
-/// Key owning sequencer `index`'s founding stake.
-pub fn founding_stake_owner_key(index: usize) -> Result<PrivateKey> {
-    PrivateKey::try_new(founding_stake_owner_seed(index))
-        .context("Failed to build the founding stake ownership key")
+/// Secret owning sequencer `index`'s founding stake.
+#[must_use]
+pub fn founding_stake_owner_secret(index: usize) -> PublicAccountSecret {
+    PublicAccountSecret::new(founding_stake_owner_seed(index))
 }
 
 /// Genesis entries staking every sequencer in `sequencer_signing_keys`, so the
@@ -408,11 +409,11 @@ pub fn genesis_sequencer_stakes(
             let public_key = signing_key.public_key();
             let sequencer_key = SequencerKey::new(public_key.to_bytes())
                 .context("Sequencer signing key is not a valid Ed25519 point")?;
-            let owner = founding_stake_owner_key(index)?;
+            let owner = founding_stake_owner_secret(index);
             Ok(GenesisAction::StakeSequencer {
                 sequencer_key,
-                ownership_public_key: PublicKey::new_from_private_key(&owner),
-                stake_signature: sign_genesis_stake(index, sequencer_key, &owner, minimum_stake),
+                ownership_id: public_account_id(&owner),
+                stake_entry: sign_genesis_stake(index, sequencer_key, &owner, minimum_stake),
             })
         })
         .collect()
@@ -462,9 +463,7 @@ mod tests {
     #[test]
     fn private_funder_identity_matches_configured_index() {
         let public_accounts = default_public_accounts_for_wallet();
-        let configured_funder = AccountId::from(&PublicKey::new_from_private_key(
-            &public_accounts[PRIVATE_FUNDER_INDEX].0,
-        ));
+        let configured_funder = public_account_id(&public_accounts[PRIVATE_FUNDER_INDEX].0);
 
         assert_eq!(
             private_funder_account_id(),
@@ -482,13 +481,11 @@ mod tests {
         let funding_cost = private_funding_cost(&private_accounts);
         let genesis = genesis_from_accounts(&public_accounts, funding_cost);
 
-        let funder = AccountId::from(&PublicKey::new_from_private_key(
-            &public_accounts[PRIVATE_FUNDER_INDEX].0,
-        ));
+        let funder = public_account_id(&public_accounts[PRIVATE_FUNDER_INDEX].0);
         let supplied = |wanted: AccountId| {
             genesis.iter().find_map(|action| match action {
                 GenesisAction::SupplyAccount { recipient, balance }
-                    if recipient.account_id() == wanted =>
+                    if recipient.account_id() == Some(wanted) =>
                 {
                     Some(*balance)
                 }

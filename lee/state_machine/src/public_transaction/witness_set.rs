@@ -1,98 +1,121 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+use lee_core::signing_key::SigningKeyState;
 
-use crate::{PrivateKey, PublicKey, Signature, public_transaction::Message};
+use crate::{public_transaction::Message, signature::Signer};
+
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct WitnessEntry {
+    pub auth_data: Vec<u8>,
+    pub next: SigningKeyState,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct WitnessSet {
-    pub(crate) signatures_and_public_keys: Vec<(Signature, PublicKey)>,
+    pub(crate) entries: Vec<WitnessEntry>,
 }
 
 impl WitnessSet {
     #[must_use]
-    pub fn for_message(message: &Message, private_keys: &[&PrivateKey]) -> Self {
-        let message_hash = message.hash();
-        let signatures_and_public_keys = private_keys
-            .iter()
-            .map(|&key| {
-                (
-                    Signature::new(key, &message_hash),
-                    PublicKey::new_from_private_key(key),
-                )
-            })
-            .collect();
+    pub fn sign(message: &Message, signers: &[Signer]) -> Self {
         Self {
-            signatures_and_public_keys,
+            entries: sign_entries(signers, |next| message.message_with_keys(next)),
         }
     }
 
     #[must_use]
-    pub fn is_valid_for(&self, message: &Message) -> bool {
-        let message_hash = message.hash();
-        for (signature, public_key) in self.signatures_and_public_keys() {
-            if !signature.is_valid_for(&message_hash, public_key) {
-                return false;
-            }
-        }
-        true
+    pub fn entries(&self) -> &[WitnessEntry] {
+        &self.entries
     }
 
     #[must_use]
-    pub fn signatures_and_public_keys(&self) -> &[(Signature, PublicKey)] {
-        &self.signatures_and_public_keys
+    pub fn into_raw_parts(self) -> Vec<WitnessEntry> {
+        self.entries
     }
 
     #[must_use]
-    pub fn into_raw_parts(self) -> Vec<(Signature, PublicKey)> {
-        self.signatures_and_public_keys
+    pub const fn from_raw_parts(entries: Vec<WitnessEntry>) -> Self {
+        Self { entries }
     }
+}
 
-    #[must_use]
-    pub const fn from_raw_parts(signatures_and_public_keys: Vec<(Signature, PublicKey)>) -> Self {
-        Self {
-            signatures_and_public_keys,
-        }
-    }
+/// One entry per signer, in `nonces` (account id) order, each signing the message with every
+/// signer's next key.
+pub fn sign_entries(
+    signers: &[Signer],
+    message_with_keys: impl FnOnce(&[SigningKeyState]) -> [u8; 32],
+) -> Vec<WitnessEntry> {
+    let mut signers: Vec<_> = signers.iter().collect();
+    signers.sort_by_key(|signer| signer.account_id());
+    let next_keys: Vec<_> = signers.iter().map(|signer| signer.next()).collect();
+    let message_with_keys = message_with_keys(&next_keys);
+    signers
+        .into_iter()
+        .map(|signer| WitnessEntry {
+            auth_data: signer.auth_data(&message_with_keys),
+            next: signer.next(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use lee_core::account::{Actor, Nonce};
+    use lee_core::{
+        account::{Actor, Nonce},
+        signing_key::KeyType,
+    };
 
     use super::*;
-    use crate::AccountId;
+    use crate::{
+        AccountId,
+        signature::{PublicAccountSecret, authenticate, key_state, public_account_id},
+    };
 
     #[test]
-    fn for_message_constructor() {
-        let key1 = PrivateKey::try_new([1; 32]).unwrap();
-        let key2 = PrivateKey::try_new([2; 32]).unwrap();
-        let pubkey1 = PublicKey::new_from_private_key(&key1);
-        let pubkey2 = PublicKey::new_from_private_key(&key2);
-        let addr1 = AccountId::from(&pubkey1);
-        let addr2 = AccountId::from(&pubkey2);
-        let nonces = BTreeMap::from([(addr1, Nonce(1)), (addr2, Nonce(2))]);
-        let instruction = vec![1, 2, 3, 4];
+    fn sign_orders_entries_by_account_and_signs_with_every_next_key() {
+        let secret1 = PublicAccountSecret::new([1; 32]);
+        let secret2 = PublicAccountSecret::new([2; 32]);
+        let (addr1, addr2) = (public_account_id(&secret1), public_account_id(&secret2));
         let message = Message::try_new(
             Actor::new(addr1, AccountId::from_builtin_program([0; 8])),
             vec![Actor::native_balance(addr1), Actor::native_balance(addr2)],
-            nonces,
-            instruction,
+            BTreeMap::from([(addr1, Nonce(1)), (addr2, Nonce(2))]),
+            vec![1, 2, 3, 4],
         )
         .unwrap();
+        // One signer per key type: WOTS+ staying WOTS+, Schnorr rotating back to WOTS+.
+        let mut expected = vec![
+            (
+                addr1,
+                key_state(&secret1, KeyType::Wots, Nonce(1)),
+                key_state(&secret1, KeyType::Wots, Nonce(2)),
+            ),
+            (
+                addr2,
+                key_state(&secret2, KeyType::Schnorr, Nonce(2)),
+                key_state(&secret2, KeyType::Wots, Nonce(3)),
+            ),
+        ];
+        expected.sort_by_key(|(account_id, ..)| *account_id);
 
-        let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
+        let witness_set = WitnessSet::sign(
+            &message,
+            &[
+                Signer::new(&secret2, Nonce(2), KeyType::Schnorr, KeyType::Wots),
+                Signer::new(&secret1, Nonce(1), KeyType::Wots, KeyType::Wots),
+            ],
+        );
 
-        assert_eq!(witness_set.signatures_and_public_keys.len(), 2);
-
-        let message_bytes = message.hash();
-        for ((signature, public_key), expected_public_key) in witness_set
-            .signatures_and_public_keys
-            .into_iter()
-            .zip([pubkey1, pubkey2])
-        {
-            assert_eq!(public_key, expected_public_key);
-            assert!(signature.is_valid_for(&message_bytes, &expected_public_key));
+        assert_eq!(witness_set.entries.len(), 2);
+        let next_keys: Vec<_> = expected.iter().map(|(.., next)| *next).collect();
+        let message_with_keys = message.message_with_keys(&next_keys);
+        for (entry, (_, current, next)) in witness_set.entries.iter().zip(expected) {
+            assert_eq!(entry.next, next);
+            assert_eq!(
+                authenticate(&current, &message_with_keys, &entry.auth_data, &entry.next),
+                Ok(next)
+            );
         }
     }
 }

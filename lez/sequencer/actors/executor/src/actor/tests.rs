@@ -8,8 +8,10 @@ use common::{
 };
 use kameo::{actor::Spawn as _, error::SendError};
 use lee::{
-    Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction,
+    Account, AccountId, Actor, PublicTransaction,
     public_transaction::{Message, WitnessSet},
+    signature::PublicAccountSecret,
+    test_utils::{TestSigner, witness_for},
 };
 use lee_core::native_token::Message as NativeMessage;
 use mockall::predicate::{always, eq, function};
@@ -39,6 +41,7 @@ fn sequencer_config() -> (SequencerConfig, TempDir) {
         home: home.path().to_path_buf(),
         max_num_tx_in_block: 10,
         mempool_max_size: 10,
+        mempool_max_per_account: sequencer_core::config::default_mempool_max_per_account(),
         block_create_timeout: std::time::Duration::from_secs(5),
         retry_pending_blocks_timeout: std::time::Duration::from_secs(5),
         bedrock_config: BedrockConfig {
@@ -64,15 +67,15 @@ fn sequencer_config() -> (SequencerConfig, TempDir) {
 }
 
 fn test_transaction() -> LeeTransaction {
-    let key2 = PrivateKey::new_os_random();
-    let acc2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
+    let signer2 = TestSigner::from(&PublicAccountSecret::new_os_random());
+    let acc2 = signer2.account_id();
 
     // Fees are self-pay: the payer must be a funded initial-state account that
     // signs the transaction in the ordinary witness set, so it leads the
     // account list and signs alongside the other party.
     let accounts = testnet_initial_state::initial_pub_accounts_private_keys();
     let payer = accounts[0].account_id;
-    let payer_key = accounts[0].pub_sign_key.clone();
+    let payer_signer = TestSigner::from(&accounts[0].secret);
 
     let nonces = BTreeMap::from([(payer, 0_u128.into()), (acc2, 0_u128.into())]);
     let message = Message::try_new_with_fees(
@@ -84,7 +87,7 @@ fn test_transaction() -> LeeTransaction {
     )
     .unwrap();
 
-    let witness_set = WitnessSet::for_message(&message, &[&payer_key, &key2]);
+    let witness_set = witness_for(&message, &[&payer_signer, &signer2]);
     PublicTransaction::new(message, witness_set).into()
 }
 
@@ -93,6 +96,84 @@ fn transfer_to(recipient: AccountId) -> NativeMessage {
         to: recipient,
         amount: 1337,
     }
+}
+
+/// `tx` with the last byte of its first witness entry changed: a signature that does not verify.
+fn with_a_bad_signature(tx: LeeTransaction) -> LeeTransaction {
+    let LeeTransaction::Public(tx) = tx else {
+        unreachable!("the test transactions are public");
+    };
+    let message = tx.message().clone();
+    let mut entries = tx.witness_set().clone().into_raw_parts();
+    *entries[0]
+        .auth_data
+        .last_mut()
+        .expect("an entry carries authentication data") ^= 1;
+    PublicTransaction::new(message, WitnessSet::from_raw_parts(entries)).into()
+}
+
+/// A self-paid transfer from the first initial-state account at `nonce`.
+fn transfer_from_payer_at(nonce: u128, max_fee: u128) -> LeeTransaction {
+    let accounts = testnet_initial_state::initial_pub_accounts_private_keys();
+    let payer = accounts[0].account_id;
+    let payer_signer = TestSigner::from(&accounts[0].secret);
+    let recipient = accounts[1].account_id;
+    let message = Message::try_new_with_fees(
+        Actor::native_balance(payer),
+        vec![
+            Actor::native_balance(payer),
+            Actor::native_balance(recipient),
+        ],
+        BTreeMap::from([(payer, nonce.into())]),
+        transfer_to(recipient),
+        lee::FeeDeclaration::new(payer, 2_000_000, 0, max_fee),
+    )
+    .unwrap();
+    let witness_set = witness_for(&message, &[&payer_signer]);
+    PublicTransaction::new(message, witness_set).into()
+}
+
+async fn spawn_executor_on_empty_genesis() -> Result<(
+    kameo::actor::ActorRef<ExecutorActor<MockStorageActor, MockBedrockActor>>,
+    TempDir,
+)> {
+    spawn_executor_with(|config| config).await
+}
+
+async fn spawn_executor_with(
+    configure: impl FnOnce(SequencerConfig) -> SequencerConfig,
+) -> Result<(
+    kameo::actor::ActorRef<ExecutorActor<MockStorageActor, MockBedrockActor>>,
+    TempDir,
+)> {
+    let (config, home) = sequencer_config();
+    let config = configure(config);
+    let storage_ref = MockStorageActor::spawn(prepare_mock_storage_with_empty_genesis());
+    let executor = ExecutorActor::spawn(
+        ExecutorActor::new(
+            config,
+            storage_ref.clone(),
+            MockBedrockActor::spawn(prepare_mock_bedrock_with_empty_channel()),
+        )
+        .await?,
+    );
+    storage_ref
+        .tell(sequencer_storage_actor::mock::Checkpoint)
+        .await?;
+    Ok((executor, home))
+}
+
+async fn submit(
+    executor: &kameo::actor::ActorRef<ExecutorActor<MockStorageActor, MockBedrockActor>>,
+    transaction: LeeTransaction,
+) -> std::result::Result<(), Option<crate::error::Error>> {
+    executor
+        .ask(protocol::Transaction {
+            transaction,
+            origin: TransactionOrigin::User,
+        })
+        .await
+        .map_err(SendError::err)
 }
 
 /// A Bedrock whose channel exists but holds nothing yet, with this node on turn.
@@ -446,19 +527,20 @@ async fn handle_transaction_fails_on_full_mempool() -> Result<()> {
         .tell(sequencer_storage_actor::mock::Checkpoint)
         .await?;
 
-    // Fill mempool
+    // Fill mempool, one nonce after another: one pending transaction per nonce.
+    let mut nonce = 0_u128;
     for _ in 0..mempool_max_size {
-        let tx = test_transaction();
         executor
             .ask(protocol::Transaction {
-                transaction: tx,
+                transaction: transfer_from_payer_at(nonce, u128::MAX),
                 origin: TransactionOrigin::User,
             })
             .await?;
+        nonce = nonce.checked_add(1).expect("a small nonce");
     }
 
     // Now the mempool is full, the next transaction should fail
-    let tx = test_transaction();
+    let tx = transfer_from_payer_at(nonce, u128::MAX);
     assert!(matches!(
         executor
             .ask(protocol::Transaction {
@@ -573,11 +655,11 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
     // (which prices at least the serialized bytes), so admission's static check
     // rejects it before it reaches the mempool. The fee is declared (so it
     // classifies as charged, not `MissingFeeDeclaration`) but set to 0.
-    let key2 = PrivateKey::new_os_random();
-    let acc2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
+    let signer2 = TestSigner::from(&PublicAccountSecret::new_os_random());
+    let acc2 = signer2.account_id();
     let accounts = testnet_initial_state::initial_pub_accounts_private_keys();
     let payer = accounts[0].account_id;
-    let payer_key = accounts[0].pub_sign_key.clone();
+    let payer_signer = TestSigner::from(&accounts[0].secret);
     let message = Message::try_new_with_fees(
         Actor::native_balance(payer),
         vec![Actor::native_balance(payer), Actor::native_balance(acc2)],
@@ -586,7 +668,7 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
         lee::FeeDeclaration::new(payer, 2_000_000, 0, 0),
     )
     .unwrap();
-    let witness_set = WitnessSet::for_message(&message, &[&payer_key, &key2]);
+    let witness_set = witness_for(&message, &[&payer_signer, &signer2]);
     let tx: LeeTransaction = PublicTransaction::new(message, witness_set).into();
 
     let res = executor
@@ -598,6 +680,155 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
     assert!(matches!(
         res.map_err(SendError::err),
         Err(Some(crate::error::Error::IncorrectFee(_)))
+    ));
+
+    Ok(())
+}
+
+#[test]
+async fn handle_transaction_refuses_a_bad_signature_definitively() -> Result<()> {
+    let _res = env_logger::try_init();
+    let (executor, _home) = spawn_executor_on_empty_genesis().await?;
+
+    let res = submit(&executor, with_a_bad_signature(test_transaction())).await;
+    let Err(Some(err)) = res else {
+        panic!("a bad signature was admitted: {res:?}");
+    };
+    assert!(matches!(err, crate::error::Error::InvalidTransaction(_)));
+    assert!(err.is_definitive());
+
+    Ok(())
+}
+
+#[test]
+async fn handle_transaction_screens_the_fee_before_verifying_signatures() -> Result<()> {
+    let _res = env_logger::try_init();
+    let (executor, _home) = spawn_executor_on_empty_genesis().await?;
+
+    // A max fee of 0 never covers the reserve, and the signature is bad too: the fee screen
+    // answers first, and its refusal is advisory.
+    let res = submit(
+        &executor,
+        with_a_bad_signature(transfer_from_payer_at(0, 0)),
+    )
+    .await;
+    let Err(Some(err)) = res else {
+        panic!("an unfundable transaction was admitted: {res:?}");
+    };
+    assert!(matches!(err, crate::error::Error::IncorrectFee(_)));
+    assert!(!err.is_definitive());
+
+    Ok(())
+}
+
+#[test]
+async fn handle_transaction_admits_nonces_n_and_n_plus_one_back_to_back() -> Result<()> {
+    let _res = env_logger::try_init();
+    let (executor, _home) = spawn_executor_on_empty_genesis().await?;
+
+    // Nonce 1 is ahead of the head: its key depends on nonce 0's transaction, so it is admitted
+    // unchecked and authenticated when the block is built.
+    submit(&executor, transfer_from_payer_at(0, u128::MAX))
+        .await
+        .map_err(|err| anyhow::anyhow!("nonce 0 refused: {err:?}"))?;
+    submit(&executor, transfer_from_payer_at(1, u128::MAX))
+        .await
+        .map_err(|err| anyhow::anyhow!("nonce 1 refused: {err:?}"))?;
+
+    Ok(())
+}
+
+#[test]
+async fn handle_transaction_checks_a_future_nonce_against_its_pending_key() -> Result<()> {
+    let _res = env_logger::try_init();
+    let (executor, _home) = spawn_executor_on_empty_genesis().await?;
+
+    submit(&executor, transfer_from_payer_at(0, u128::MAX))
+        .await
+        .map_err(|err| anyhow::anyhow!("nonce 0 refused: {err:?}"))?;
+
+    // Nonce 0's pending transaction commits the account to its key at nonce 1.
+    let res = submit(
+        &executor,
+        with_a_bad_signature(transfer_from_payer_at(1, u128::MAX)),
+    )
+    .await;
+    let Err(Some(err)) = res else {
+        panic!("a bad signature against the pending key was admitted: {res:?}");
+    };
+    assert!(matches!(err, crate::error::Error::PendingAuthentication(_)));
+    assert!(!err.is_definitive());
+
+    Ok(())
+}
+
+#[test]
+async fn handle_transaction_admits_a_future_nonce_unchecked_without_a_pending_key() -> Result<()> {
+    let _res = env_logger::try_init();
+    let (executor, _home) = spawn_executor_on_empty_genesis().await?;
+
+    // Nothing is pending at nonce 0, so nothing commits the account's key at nonce 1.
+    submit(
+        &executor,
+        with_a_bad_signature(transfer_from_payer_at(1, u128::MAX)),
+    )
+    .await
+    .map_err(|err| anyhow::anyhow!("nonce 1 refused: {err:?}"))?;
+
+    Ok(())
+}
+
+#[test]
+async fn handle_transaction_keeps_the_first_transaction_seen_at_a_nonce() -> Result<()> {
+    let _res = env_logger::try_init();
+    let (executor, _home) = spawn_executor_on_empty_genesis().await?;
+    let first = transfer_from_payer_at(0, u128::MAX);
+
+    submit(&executor, first.clone())
+        .await
+        .map_err(|err| anyhow::anyhow!("nonce 0 refused: {err:?}"))?;
+
+    // The very same transaction again is already pending.
+    submit(&executor, first)
+        .await
+        .map_err(|err| anyhow::anyhow!("an identical re-send refused: {err:?}"))?;
+
+    // Another one at the same nonce is not.
+    let res = submit(&executor, transfer_from_payer_at(0, u128::MAX - 1)).await;
+    let Err(Some(err)) = res else {
+        panic!("a second transaction at a pending nonce was admitted: {res:?}");
+    };
+    assert!(matches!(
+        err,
+        crate::error::Error::PendingSlot(
+            sequencer_core::pending::PendingRefusal::NoncePending { .. }
+        )
+    ));
+    assert!(!err.is_definitive());
+
+    Ok(())
+}
+
+#[test]
+async fn handle_transaction_limits_the_pending_transactions_of_one_account() -> Result<()> {
+    let _res = env_logger::try_init();
+    let (executor, _home) = spawn_executor_with(|config| SequencerConfig {
+        mempool_max_per_account: 2,
+        ..config
+    })
+    .await?;
+
+    for nonce in 0..2 {
+        submit(&executor, transfer_from_payer_at(nonce, u128::MAX))
+            .await
+            .map_err(|err| anyhow::anyhow!("nonce {nonce} refused: {err:?}"))?;
+    }
+    let res = submit(&executor, transfer_from_payer_at(2, u128::MAX)).await;
+    assert!(matches!(
+        res,
+        Err(Some(crate::error::Error::PendingSlot(
+            sequencer_core::pending::PendingRefusal::AccountLimit { limit: 2, .. }
+        )))
     ));
 
     Ok(())

@@ -39,7 +39,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                         to_npk: None,
                         to_vpk: None,
                         to_keys: None,
-                        to_pk: None,
+                        to_initial_key: None,
                         amount: AMOUNT_PER_TRANSFER,
                     }),
                 )

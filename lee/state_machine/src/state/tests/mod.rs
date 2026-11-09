@@ -25,7 +25,7 @@ use test_guest_core::{ForgeField, Script};
 
 pub use crate::test_utils::{TestPrivateKeys, init_witness, no_seal, update_witness};
 use crate::{
-    ProvingInput, PublicAccountEvidence, PublicExecutionContext, PublicKey, PublicTransaction,
+    ProvingInput, PublicAccountEvidence, PublicExecutionContext, PublicTransaction,
     SenderPresentation, Simulation, V03State,
     error::{InvalidProgramBehaviorError, LeeError},
     execute_and_prove, execute_and_prove_with_cross_messages,
@@ -33,12 +33,10 @@ use crate::{
         PrivacyPreservingTransaction,
         circuit::{ProgramCatalog, Proof},
         message::Message,
-        witness_set::WitnessSet,
     },
     program::Program,
     public_transaction,
-    signature::PrivateKey,
-    test_utils::signer_nonces,
+    test_utils::{TestSigner, privacy_witness_for, signer_nonces, witness_for},
 };
 
 mod chained_calls;
@@ -47,6 +45,7 @@ mod deploy;
 mod events;
 mod flash_swap;
 mod genesis;
+mod key_rotation;
 mod native_transfer;
 mod pending_messages;
 mod privacy_preserving;
@@ -77,16 +76,6 @@ impl V03State {
         let commitment = Commitment::new(&account_id, account);
         self.private_state.0.extend(&[commitment]);
         self
-    }
-}
-
-pub struct TestPublicKeys {
-    pub signing_key: PrivateKey,
-}
-
-impl TestPublicKeys {
-    pub fn account_id(&self) -> AccountId {
-        AccountId::from(&PublicKey::new_from_private_key(&self.signing_key))
     }
 }
 
@@ -192,12 +181,10 @@ pub fn binding(
     )
     .unwrap();
     let message = Message {
-        admission_evidence: vec![PublicAccountEvidence::Key(PublicKey::new_from_private_key(
-            &keys.signing_key,
-        ))],
+        admission_evidence: vec![keys.evidence()],
         ..Message::from_circuit_output(BTreeMap::new(), output)
     };
-    let witness_set = WitnessSet::for_message(&message, proof, &[]);
+    let witness_set = privacy_witness_for(&message, proof, &[]);
     PrivacyPreservingTransaction::new(message, witness_set)
 }
 
@@ -206,7 +193,7 @@ pub fn public_tx(
     public_actors: Vec<Actor>,
     nonces: Vec<Nonce>,
     message: impl BorshSerialize,
-    signers: &[&PrivateKey],
+    signers: &[&TestSigner],
 ) -> PublicTransaction {
     let message = public_transaction::Message::try_new(
         to,
@@ -215,17 +202,17 @@ pub fn public_tx(
         message,
     )
     .unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, signers);
+    let witness_set = witness_for(&message, signers);
     PublicTransaction::new(message, witness_set)
 }
 
 pub fn private_tx(
     (output, proof): (PrivacyPreservingCircuitOutput, Proof),
     nonces: Vec<Nonce>,
-    signers: &[&PrivateKey],
+    signers: &[&TestSigner],
 ) -> PrivacyPreservingTransaction {
     let message = Message::from_circuit_output(signer_nonces(signers, nonces), output);
-    let witness_set = WitnessSet::for_message(&message, proof, signers);
+    let witness_set = privacy_witness_for(&message, proof, signers);
     PrivacyPreservingTransaction::new(message, witness_set)
 }
 
@@ -240,10 +227,10 @@ pub fn execution_error<T: std::fmt::Debug>(result: Result<T, LeeError>) -> Execu
 
 fn transfer_transaction(
     from: AccountId,
-    from_key: &PrivateKey,
+    from_key: &TestSigner,
     from_nonce: u128,
     to: AccountId,
-    to_key: &PrivateKey,
+    to_key: &TestSigner,
     to_nonce: u128,
     balance: u128,
 ) -> PublicTransaction {
@@ -283,16 +270,12 @@ fn flash_swap_tx(
     )
 }
 
-fn test_public_account_keys_1() -> TestPublicKeys {
-    TestPublicKeys {
-        signing_key: PrivateKey::try_new([37; 32]).unwrap(),
-    }
+fn test_public_account_keys_1() -> TestSigner {
+    TestSigner::new(37)
 }
 
-fn test_public_account_keys_2() -> TestPublicKeys {
-    TestPublicKeys {
-        signing_key: PrivateKey::try_new([38; 32]).unwrap(),
-    }
+fn test_public_account_keys_2() -> TestSigner {
+    TestSigner::new(38)
 }
 
 pub fn test_private_account_keys_1() -> TestPrivateKeys {
@@ -384,7 +367,7 @@ pub fn update_pda_witness(
 }
 
 fn shielded_balance_transfer_for_tests(
-    sender_keys: &TestPublicKeys,
+    sender_keys: &TestSigner,
     recipient_keys: &TestPrivateKeys,
     balance_to_move: u128,
     state: &V03State,
@@ -414,7 +397,7 @@ fn shielded_balance_transfer_for_tests(
     private_tx(
         proven,
         vec![state.get_account_by_id(sender_id).nonce],
-        &[&sender_keys.signing_key],
+        &[sender_keys],
     )
 }
 

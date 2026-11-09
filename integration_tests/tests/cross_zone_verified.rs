@@ -19,7 +19,9 @@ use integration_tests::{
     indexer_client::IndexerClient,
 };
 use lee::{
-    AccountId, Actor, PublicAccountEvidence, PublicTransaction, public_transaction::Message,
+    AccountId, Actor, PublicAccountEvidence, PublicTransaction,
+    public_transaction::Message,
+    test_utils::{TestSigner, witness_for},
 };
 use lee_core::account::Nonce;
 use ping_core::{
@@ -167,8 +169,7 @@ fn build_ping_tx(
         )
         .expect("build ping message")
     };
-    let witness_set =
-        lee::public_transaction::WitnessSet::for_message(&message, &[&payer.pub_sign_key]);
+    let witness_set = witness_for(&message, &[&TestSigner::from(&payer.secret)]);
     LeeTransaction::Public(PublicTransaction::new(message, witness_set))
 }
 

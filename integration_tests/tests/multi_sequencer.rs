@@ -16,6 +16,7 @@ use integration_tests::{
     config::{self, SequencerPartialConfig},
     init_logger, wait_until,
 };
+use lee::test_utils::TestSigner;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{
@@ -97,7 +98,7 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
     let accounts = initial_public_user_accounts();
     let from = accounts[0].account_id;
     let to = accounts[1].account_id;
-    let sign_key = initial_pub_accounts_private_keys()[0].pub_sign_key.clone();
+    let signer = TestSigner::from(&initial_pub_accounts_private_keys()[0].secret);
 
     let to_balance_before = a.get_account_balance(to).await?;
     let nonce = b.get_accounts_nonces(vec![from]).await?[0];
@@ -106,7 +107,7 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
         nonce.0,
         to,
         TRANSFER_AMOUNT,
-        &sign_key,
+        &signer,
     );
     b.send_transaction(tx)
         .await

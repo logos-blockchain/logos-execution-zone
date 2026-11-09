@@ -47,3 +47,6 @@ url.workspace = true
 time.workspace = true
 
 logos-blockchain-key-management-system-service.workspace = true
+
+[dev-dependencies]
+lee = { workspace = true, features = ["test-signer"] }

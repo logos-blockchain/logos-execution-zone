@@ -6,7 +6,11 @@ use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, public_mention,
     utils::{account_balance, get_account, new_account, send},
 };
-use lee::{AccountId, PublicKey};
+use lee::{
+    AccountId,
+    signature::{PublicAccountSecret, initial_key},
+    test_utils::TestSigner,
+};
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::{
@@ -49,7 +53,7 @@ async fn successful_transfer_to_existing_account() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         to_keys: None,
-        to_pk: None,
+        to_initial_key: None,
         amount: 100,
     });
     let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -81,21 +85,16 @@ async fn successful_transfer_to_existing_account() -> Result<()> {
     let LeeTransaction::Public(tx) = tx else {
         anyhow::bail!("Expected a public transaction");
     };
-    let sender_public_key = PublicKey::new_from_private_key(
-        ctx.wallet()
-            .get_account_public_signing_key(sender)
-            .context("sender should have a signing key")?,
-    );
-    let signers: Vec<_> = tx
-        .witness_set()
-        .signatures_and_public_keys()
-        .iter()
-        .map(|(_, public_key)| public_key)
-        .collect();
+    let signers: Vec<_> = tx.message().nonces.keys().copied().collect();
     assert_eq!(
         signers,
-        vec![&sender_public_key],
+        vec![sender],
         "only the sender should sign a transfer to an existing account"
+    );
+    assert_eq!(
+        tx.witness_set().entries().len(),
+        signers.len(),
+        "the witness set should hold exactly the sender's entry"
     );
 
     Ok(())
@@ -133,12 +132,13 @@ pub async fn successful_transfer_to_new_account() -> Result<()> {
 // A recipient absent from public state whose key this wallet does not hold: named by its public
 // key, the transfer carries that key's identity evidence, so its first credit lands.
 #[test]
-async fn a_foreign_recipient_named_by_its_public_key_receives_its_first_credit() -> Result<()> {
+async fn a_foreign_recipient_named_by_its_initial_key_receives_its_first_credit() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     let sender = ctx.existing_public_accounts()[0];
-    let recipient_key = PublicKey::new_from_private_key(&lee::PrivateKey::try_new([77; 32])?);
-    let recipient = AccountId::from(&recipient_key);
+    let recipient_secret = PublicAccountSecret::new([77; 32]);
+    let recipient_key = initial_key(&recipient_secret);
+    let recipient = TestSigner::from(&recipient_secret).account_id();
     assert!(
         ctx.sequencer_client()
             .get_account(recipient)
@@ -152,7 +152,7 @@ async fn a_foreign_recipient_named_by_its_public_key_receives_its_first_credit()
         to_npk: None,
         to_vpk: None,
         to_keys: None,
-        to_pk: Some(recipient_key),
+        to_initial_key: Some(recipient_key),
         amount: 100,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;

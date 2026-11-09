@@ -18,12 +18,13 @@ use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use integration_tests::{config::SequencerPartialConfig, no_seal};
 use lee::{
-    Account, AccountId, Actor, PrivacyPreservingTransaction, PrivateKey, ProvingInput,
-    PublicAccountEvidence, PublicExecutionContext, PublicKey, PublicTransaction,
-    SenderPresentation,
+    Account, AccountId, Actor, PrivacyPreservingTransaction, ProvingInput, PublicExecutionContext,
+    PublicTransaction, SenderPresentation,
     privacy_preserving_transaction::{self as pptx, circuit},
     program::Program,
     public_transaction as putx,
+    signature::PublicAccountSecret,
+    test_utils::{TestSigner, privacy_witness_for, witness_for},
 };
 use lee_core::{
     AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, MembershipProof, NullifierPublicKey,
@@ -49,7 +50,7 @@ const TPS_ACCOUNT_SUPPLY: u64 = 10_000_000;
 const TPS_TRANSFER_GAS_LIMIT: u64 = 100_000;
 
 pub(crate) struct TpsTestManager {
-    public_keypairs: Vec<(PrivateKey, AccountId)>,
+    public_keypairs: Vec<(TestSigner, AccountId)>,
     target_tps: u64,
 }
 
@@ -61,10 +62,9 @@ impl TpsTestManager {
             .map(|i| {
                 let mut private_key_bytes = [0_u8; 32];
                 private_key_bytes[..8].copy_from_slice(&i.to_le_bytes());
-                let private_key = PrivateKey::try_new(private_key_bytes).unwrap();
-                let public_key = PublicKey::new_from_private_key(&private_key);
-                let account_id = AccountId::from(&public_key);
-                (private_key, account_id)
+                let signer = TestSigner::from(&PublicAccountSecret::new(private_key_bytes));
+                let account_id = signer.account_id();
+                (signer, account_id)
             })
             .collect();
         Self {
@@ -106,8 +106,7 @@ impl TpsTestManager {
                     lee::FeeDeclaration::new(pair[0].1, TPS_TRANSFER_GAS_LIMIT, 0, DEFAULT_MAX_FEE),
                 )
                 .unwrap();
-                let witness_set =
-                    lee::public_transaction::WitnessSet::for_message(&message, &[&pair[0].0]);
+                let witness_set = witness_for(&message, &[&pair[0].0]);
                 PublicTransaction::new(message, witness_set)
             })
             .collect();
@@ -121,10 +120,8 @@ impl TpsTestManager {
     fn generate_genesis(&self) -> Vec<GenesisAction> {
         self.public_keypairs
             .iter()
-            .map(|(private_key, _)| GenesisAction::SupplyAccount {
-                recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(
-                    PublicKey::new_from_private_key(private_key),
-                )),
+            .map(|(signer, _)| GenesisAction::SupplyAccount {
+                recipient: DepositRecipient::Identified(signer.evidence()),
                 balance: TPS_ACCOUNT_SUPPLY,
             })
             .collect()
@@ -316,6 +313,6 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     )
     .unwrap();
     let message = pptx::message::Message::from_circuit_output(BTreeMap::new(), output);
-    let witness_set = pptx::witness_set::WitnessSet::for_message(&message, proof, &[]);
+    let witness_set = privacy_witness_for(&message, proof, &[]);
     pptx::PrivacyPreservingTransaction::new(message, witness_set)
 }

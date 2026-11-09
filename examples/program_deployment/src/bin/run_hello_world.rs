@@ -68,7 +68,7 @@ async fn main() {
     let signing_keys = [];
     let hello = Actor::new(account_id, program_account_id);
     let message = Message::try_new(hello, vec![hello], nonces, greeting).unwrap();
-    let witness_set = WitnessSet::for_message(&message, &signing_keys);
+    let witness_set = WitnessSet::sign(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 
     // Submit the transaction

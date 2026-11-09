@@ -4,13 +4,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::Context as _;
 use common::transaction::LeeTransaction;
 use kameo::{
     Actor,
     actor::{ActorRef, Spawn as _},
     message::{Context, Message},
 };
+use lee::test_utils::TestSigner;
 use logos_blockchain_core::proofs::channel_multi_sig_proof::IndexedSignature;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
 use mempool::{MemPool, MemPoolHandle};
@@ -21,7 +21,7 @@ use sequencer_stake_core::SequencerKey;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 use tokio::sync::mpsc;
 
-use super::{GossipActor, IngestSubmit, MAILBOX_CAPACITY, peer_id_from_ed25519};
+use super::{GossipActor, IngestSubmit, IngestVerdict, MAILBOX_CAPACITY, peer_id_from_ed25519};
 use crate::protocol::{GetConnectedPeers, PublishConfig, PublishTransaction};
 
 const CHANNEL: [u8; 32] = [1; 32];
@@ -149,9 +149,10 @@ fn unscreened_mempool_submit(
     Arc::new(move |tx| {
         let mempool = mempool.clone();
         Box::pin(async move {
-            mempool
-                .try_push((TransactionOrigin::Gossip, tx))
-                .context("mempool is full")
+            match mempool.try_push((TransactionOrigin::Gossip, tx)) {
+                Ok(()) => IngestVerdict::Admitted,
+                Err(_) => IngestVerdict::Refused("mempool is full".to_owned()),
+            }
         })
     })
 }
@@ -184,23 +185,18 @@ fn test_config_sink() -> kameo::actor::Recipient<Wire> {
 fn valid_transaction() -> LeeTransaction {
     let acc1 = initial_public_user_accounts()[0].account_id;
     let acc2 = initial_public_user_accounts()[1].account_id;
-    let sign_key1 = initial_pub_accounts_private_keys()[0].pub_sign_key.clone();
-    common::test_utils::create_transaction_native_token_transfer(acc1, 0, acc2, 10, &sign_key1)
+    let signer1 = TestSigner::from(&initial_pub_accounts_private_keys()[0].secret);
+    common::test_utils::create_transaction_native_token_transfer(acc1, 0, acc2, 10, &signer1)
 }
 
-/// Structurally well-formed but with a signature/public-key pair that does
-/// not match, so it decodes but fails the stateless witness check; used to
-/// exercise rejection through the real gossip pipeline rather than
-/// `evaluate_transaction` directly.
+/// Structurally well-formed but with no witness entry for its signer, so it decodes but fails
+/// the stateless witness check; used to exercise rejection through the real gossip pipeline
+/// rather than `evaluate_transaction` directly.
 fn invalidly_signed_transaction() -> LeeTransaction {
     let LeeTransaction::Public(mut tx) = valid_transaction() else {
         unreachable!("valid_transaction always builds a Public transaction");
     };
-    let (signature, _correct_public_key) = tx.witness_set.signatures_and_public_keys()[0].clone();
-    let wrong_public_key =
-        lee::PublicKey::new_from_private_key(&initial_pub_accounts_private_keys()[1].pub_sign_key);
-    tx.witness_set =
-        lee::public_transaction::WitnessSet::from_raw_parts(vec![(signature, wrong_public_key)]);
+    tx.witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![]);
     LeeTransaction::Public(tx)
 }
 
@@ -592,4 +588,24 @@ async fn a_re_announced_channel_config_message_reaches_the_other_node_again() {
         "two publishes should deliver exactly twice"
     );
     drop((node_a, node_b));
+}
+
+#[test]
+fn an_invalid_verdict_is_rejected_and_never_submitted_again() {
+    assert!(matches!(
+        IngestVerdict::Invalid("bad signature".to_owned()).mesh_handling(),
+        (libp2p::gossipsub::MessageAcceptance::Reject, true)
+    ));
+}
+
+#[test]
+fn a_refused_verdict_is_forwarded_and_may_be_retried() {
+    assert!(matches!(
+        IngestVerdict::Refused("payer cannot fund".to_owned()).mesh_handling(),
+        (libp2p::gossipsub::MessageAcceptance::Accept, false)
+    ));
+    assert!(matches!(
+        IngestVerdict::Admitted.mesh_handling(),
+        (libp2p::gossipsub::MessageAcceptance::Accept, true)
+    ));
 }

@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use common::transaction::LeeTransaction;
-use lee::{AccountId, PublicKey};
-use lee_core::account::Nonce;
+use lee::{AccountId, signature::initial_key, test_utils::TestSigner};
+use lee_core::{account::Nonce, signing_key::SigningKeyState};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use wallet::DEFAULT_MAX_FEE;
 
@@ -203,12 +203,12 @@ pub(super) async fn assert_private_balance_delta(
     Ok(observed_balance)
 }
 
-pub(super) fn expected_public_signing_key(account: AccountId) -> Option<PublicKey> {
+pub(super) fn expected_public_initial_key(account: AccountId) -> Option<SigningKeyState> {
     default_public_accounts_for_wallet()
         .into_iter()
         .find_map(|(private_key, _)| {
-            let public_key = PublicKey::new_from_private_key(&private_key);
-            (AccountId::from(&public_key) == account).then_some(public_key)
+            (TestSigner::from(&private_key).account_id() == account)
+                .then(|| initial_key(&private_key))
         })
 }
 

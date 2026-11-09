@@ -566,6 +566,7 @@ mod tests {
         HashType,
         test_utils::{create_transaction_native_token_transfer, produce_dummy_block},
     };
+    use lee::test_utils::TestSigner;
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_state};
 
     use super::*;
@@ -618,6 +619,7 @@ mod tests {
     /// A valid block 2 on `blocks[0]` that differs from `blocks[1]`.
     fn competing_block2(blocks: &[Block]) -> Block {
         let accounts = initial_pub_accounts_private_keys();
+        let signer = TestSigner::from(&accounts[0].secret);
         let mut on_block1 = ChainState::new(claimed_initial_state());
         on_block1.apply_extension(vec![entry(1, MsgId::root(), Some(&blocks[0]))]);
         let tx = create_transaction_native_token_transfer(
@@ -625,7 +627,7 @@ mod tests {
             0,
             accounts[1].account_id,
             1,
-            &accounts[0].pub_sign_key,
+            &signer,
         );
         settled(on_block1.head_state(), 2, blocks[0].header.hash, vec![tx])
     }
@@ -1565,13 +1567,13 @@ mod tests {
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
-        let sign_key = accounts[0].pub_sign_key.clone();
+        let signer = TestSigner::from(&accounts[0].secret);
 
         let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         chain.apply_extension(vec![entry(1, MsgId::root(), Some(&genesis))]);
 
-        let tx = create_transaction_native_token_transfer(from, 0, to, 10, &sign_key);
+        let tx = create_transaction_native_token_transfer(from, 0, to, 10, &signer);
         let block2 = settled(chain.head_state(), 2, genesis.header.hash, vec![tx]);
         chain.apply_extension(vec![entry(2, msg(1), Some(&block2))]);
 
