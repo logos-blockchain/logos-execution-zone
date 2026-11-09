@@ -21,6 +21,7 @@ use core_ffi::{
     wallet::{
         FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiAccountMention,
         FfiPendingMessageList, FfiTransferResult, WalletHandle,
+        fees::{FfiFeeParams, FfiFeeState},
         generic_transaction::{FfiProgramCatalog, FfiTransactionResult},
         label::{AccountIdResolvedFromLabel, LabelAvailability, LabelList},
         lifecycle::FfiCreateWalletOutput,
@@ -163,6 +164,26 @@ unsafe extern "C" {
 
     pub fn wallet_ffi_free_transfer_result(result: *mut FfiTransferResult);
 
+    pub fn wallet_ffi_set_dry_run(
+        handle: *mut WalletHandle,
+        dry_run: bool,
+    ) -> error::FfiOperationError;
+
+    pub fn wallet_ffi_set_allow_revert(
+        handle: *mut WalletHandle,
+        allow_revert: bool,
+    ) -> error::FfiOperationError;
+
+    pub fn wallet_ffi_set_fee_params(
+        handle: *mut WalletHandle,
+        params: *const FfiFeeParams,
+    ) -> error::FfiOperationError;
+
+    pub fn wallet_ffi_get_fee_state(
+        handle: *mut WalletHandle,
+        out_fee_state: *mut FfiFeeState,
+    ) -> error::FfiOperationError;
+
     pub fn wallet_ffi_list_pending_messages(
         handle: *mut WalletHandle,
         out_list: *mut FfiPendingMessageList,
@@ -176,13 +197,13 @@ unsafe extern "C" {
         out_result: *mut FfiTransferResult,
     ) -> error::FfiOperationError;
 
-    // pub fn wallet_ffi_bridge_withdraw(
-    //     handle: *mut WalletHandle,
-    //     from: *const FfiBytes32,
-    //     amount: u64,
-    //     bedrock_account_pk: *const FfiBytes32,
-    //     out_result: *mut FfiTransferResult,
-    // ) -> error::FfiOperationError;
+    pub fn wallet_ffi_bridge_withdraw(
+        handle: *mut WalletHandle,
+        from: *const FfiBytes32,
+        amount: u64,
+        bedrock_account_pk: *const FfiBytes32,
+        out_result: *mut FfiTransferResult,
+    ) -> error::FfiOperationError;
 
     pub fn wallet_ffi_save(handle: *mut WalletHandle) -> error::FfiOperationError;
 
