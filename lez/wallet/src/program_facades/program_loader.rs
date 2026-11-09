@@ -282,6 +282,7 @@ impl<C: WalletSequencerClient> ProgramLoader<'_, C> {
             }
             Ok(
                 Message::CreateHeader { first_segment, .. }
+                | Message::CreateHeaderOf { first_segment, .. }
                 | Message::UpdateHeader { first_segment, .. },
             ) => self.segments(first_segment).await,
             Ok(Message::WriteSegment { .. }) | Err(_) => Ok(Vec::new()),

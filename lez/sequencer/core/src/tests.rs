@@ -7290,6 +7290,8 @@ fn a_due_system_upgrade_gets_an_apply() {
         super::build_due_apply_tx(&state, 6),
         None,
         "an upgrade activates only at its height"
+    );
+}
 
 #[test]
 fn dispatch_slots_are_shared_round_robin_across_peers() {
