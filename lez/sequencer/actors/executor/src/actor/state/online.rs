@@ -39,13 +39,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
     /// Goes online once bootstrapping replayed the channel up to its tip, read at `tip_slot`.
     pub(super) async fn from_bootstrapping(
         bootstrapping_state: bootstrapping::BootstrappingState<S, B>,
-        tip_slot: Slot,
+        replayed_up_to: Slot,
     ) -> Result<Self> {
-        // The tip's slot is replayed only up to the tip; the publisher reports the rest of it.
-        let replayed_up_to = tip_slot.into_inner().checked_sub(1).map(Slot::from);
         Self::start(
             true,
-            replayed_up_to,
+            Some(replayed_up_to),
             bootstrapping_state.config,
             bootstrapping_state.chain,
             bootstrapping_state.channel_signing_key,

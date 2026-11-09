@@ -29,8 +29,8 @@ use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_us
 use tokio::test;
 
 use super::{
-    executor_args, finalized_at, sequencer_config, spawn_bedrock_pool, spawn_executor,
-    stored_chain::genesis,
+    catching_up, executor_args, finalized_at, finalized_up_to, sequencer_config,
+    spawn_bedrock_pool, spawn_executor, stored_chain::genesis,
 };
 use crate::{
     ExecutorActor,
@@ -254,20 +254,25 @@ async fn a_start_over_a_stored_genesis_bootstraps_from_the_channel() -> Result<(
             event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&genesis, 0))),
         })
         .await?;
+    executor
+        .ask(finalized_up_to(config.bedrock_config.channel_id, 0))
+        .await?;
 
     assert_eq!(executor.ask(GetLastBlockId).await?, 1);
     Ok(())
 }
 
-/// A config change moves the channel tip slot past the slot of the last message, so the tip is
-/// reached on that message alone.
+/// The channel tip at startup can be orphaned and never finalize, so bootstrapping completes once
+/// it replays the history the node has finalized, even with no message at that slot.
 #[test]
-async fn bootstrapping_reaches_a_tip_whose_slot_a_config_change_moved() -> Result<()> {
+async fn bootstrapping_completes_at_the_finalized_slot_without_reaching_the_tip() -> Result<()> {
     let (config, _home) = sequencer_config();
+    let channel_id = config.bedrock_config.channel_id;
     let genesis = genesis();
+    let orphaned = common::test_utils::produce_dummy_block(2, Some(genesis.header.hash), vec![]);
     let channel = CannedChannel {
         tip_slot: Some(Slot::from(50)),
-        tip: Some(mock_msg_of(&genesis)),
+        tip: Some(mock_msg_of(&orphaned)),
         ..CannedChannel::absent()
     }
     .share();
@@ -275,17 +280,66 @@ async fn bootstrapping_reaches_a_tip_whose_slot_a_config_change_moved() -> Resul
 
     executor
         .ask(ChannelEvent {
-            channel_id: config.bedrock_config.channel_id,
+            channel_id,
             event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&genesis, 10))),
         })
         .await?;
+    executor.ask(catching_up(channel_id, 49, 50)).await?;
+    let bootstrapping = executor.ask(GetStatus).await?;
+    assert!(
+        matches!(bootstrapping, ExecutorStatus::Bootstrapping { .. }),
+        "{bootstrapping:?}"
+    );
 
-    assert_eq!(executor.ask(GetLastBlockId).await?, 1);
+    executor.ask(finalized_up_to(channel_id, 50)).await?;
+    let online = executor.ask(GetStatus).await?;
+    assert!(
+        matches!(online, ExecutorStatus::Online { height: 1, .. }),
+        "{online:?}"
+    );
+    assert_eq!(channel.lock().replayed_up_to, Some(Slot::from(50)));
     Ok(())
 }
 
-/// Bootstrapping records the deposits the channel replay carries, and hands the publisher the last
-/// slot it fully replayed, past which the publisher reports them instead.
+/// A node holding no block has nothing to follow the channel from, so it keeps bootstrapping until
+/// the channel's first block finalizes.
+#[test]
+async fn an_empty_chain_bootstraps_until_a_block_finalizes() -> Result<()> {
+    let (config, _home) = sequencer_config();
+    let channel_id = config.bedrock_config.channel_id;
+    let genesis = genesis();
+    let channel = CannedChannel {
+        tip_slot: Some(Slot::from(5)),
+        tip: Some(mock_msg_of(&genesis)),
+        ..CannedChannel::absent()
+    }
+    .share();
+    let executor = start(&config, &SharedStore::default(), &channel).await?;
+
+    executor.ask(finalized_up_to(channel_id, 5)).await?;
+    let bootstrapping = executor.ask(GetStatus).await?;
+    assert!(
+        matches!(bootstrapping, ExecutorStatus::Bootstrapping { .. }),
+        "{bootstrapping:?}"
+    );
+
+    executor
+        .ask(ChannelEvent {
+            channel_id,
+            event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&genesis, 6))),
+        })
+        .await?;
+    executor.ask(finalized_up_to(channel_id, 6)).await?;
+    let online = executor.ask(GetStatus).await?;
+    assert!(
+        matches!(online, ExecutorStatus::Online { height: 1, .. }),
+        "{online:?}"
+    );
+    Ok(())
+}
+
+/// Bootstrapping records the deposits the channel replay carries, and hands the publisher the slot
+/// it replayed up to, past which the publisher reports them instead.
 #[test]
 async fn bootstrapping_records_replayed_deposits_up_to_the_publisher_handoff() -> Result<()> {
     let (config, _home) = sequencer_config();
@@ -311,11 +365,12 @@ async fn bootstrapping_records_replayed_deposits_up_to_the_publisher_handoff() -
             event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&genesis, 10))),
         })
         .await?;
+    executor.ask(finalized_up_to(channel_id, 10)).await?;
     assert!(matches!(
         executor.ask(GetStatus).await?,
         ExecutorStatus::Online { .. }
     ));
-    assert_eq!(channel.lock().replayed_up_to, Some(Slot::from(9)));
+    assert_eq!(channel.lock().replayed_up_to, Some(Slot::from(10)));
     executor.ask(deposit_event([2; 32])).await?;
 
     let recorded: Vec<[u8; 32]> = store
@@ -365,6 +420,9 @@ async fn a_restart_restores_the_state_from_storage() -> Result<()> {
             })
             .await?;
     }
+    executor
+        .ask(finalized_up_to(config.bedrock_config.channel_id, 0))
+        .await?;
 
     // The recipient gained exactly the transfer; the sender also paid a real fee.
     assert!(
@@ -415,6 +473,9 @@ async fn a_block_produced_after_a_restart_chains_on_the_stored_tip() -> Result<(
             })
             .await?;
     }
+    executor
+        .ask(finalized_up_to(config.bedrock_config.channel_id, 0))
+        .await?;
 
     let tx = transfer(1, 50);
     executor
@@ -530,6 +591,9 @@ async fn a_restart_restores_the_head_tier_and_recovers_from_an_orphan() -> Resul
             event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&genesis, 0))),
         })
         .await?;
+    executor
+        .ask(finalized_up_to(config.bedrock_config.channel_id, 0))
+        .await?;
     assert_eq!(executor.ask(GetLastBlockId).await?, 2);
 
     // The L1 orphans block 2 and adopts a competing empty block 2'.
@@ -636,6 +700,9 @@ async fn a_restart_reanchors_on_the_persisted_final_snapshot() -> Result<()> {
             .await?;
     }
     executor
+        .ask(finalized_up_to(config.bedrock_config.channel_id, 0))
+        .await?;
+    executor
         .ask(ChannelEvent {
             channel_id: config.bedrock_config.channel_id,
             event: ChannelEventKind::Publisher(Arc::new(PublisherEvent::Update(Box::new(
@@ -679,7 +746,8 @@ async fn a_production_turn_while_bootstrapping_does_not_stop_the_actor() -> Resu
     Ok(())
 }
 
-/// A bootstrapping executor reports the tip it replays to, and goes on to report itself online.
+/// A bootstrapping executor reports the slot it replays up to and the one it completes at, and
+/// goes on to report itself online.
 #[test]
 async fn the_status_follows_bootstrapping_to_online() -> Result<()> {
     let (config, _home) = sequencer_config();
@@ -696,10 +764,10 @@ async fn the_status_follows_bootstrapping_to_online() -> Result<()> {
         matches!(
             bootstrapping,
             ExecutorStatus::Bootstrapping {
-                target,
-                replayed_to: None,
+                target: None,
+                replayed_up_to: None,
                 height: None,
-            } if target == mock_msg_of(&genesis)
+            }
         ),
         "{bootstrapping:?}"
     );
@@ -709,6 +777,25 @@ async fn the_status_follows_bootstrapping_to_online() -> Result<()> {
             channel_id: config.bedrock_config.channel_id,
             event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&genesis, 0))),
         })
+        .await?;
+    executor
+        .ask(catching_up(config.bedrock_config.channel_id, 0, 5))
+        .await?;
+    let catching = executor.ask(GetStatus).await?;
+    assert!(
+        matches!(
+            catching,
+            ExecutorStatus::Bootstrapping {
+                target: Some(target),
+                replayed_up_to: Some(replayed_up_to),
+                height: Some(1),
+            } if target == Slot::from(5) && replayed_up_to == Slot::from(0)
+        ),
+        "{catching:?}"
+    );
+
+    executor
+        .ask(finalized_up_to(config.bedrock_config.channel_id, 5))
         .await?;
 
     let online = executor.ask(GetStatus).await?;

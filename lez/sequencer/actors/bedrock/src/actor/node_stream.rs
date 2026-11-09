@@ -23,7 +23,7 @@ use crate::{
     error::Error,
     protocol::{
         BlockData, BoxStream, ChannelEvent, ChannelEventKind, ChannelId, DepositInfo,
-        Ed25519PublicKey, FinalizedBlock, Slot, WithdrawInfo, ZoneMessage,
+        Ed25519PublicKey, FinalizedBlock, FinalizedUpTo, Slot, WithdrawInfo, ZoneMessage,
     },
 };
 
@@ -33,11 +33,23 @@ const NODE_REQUEST_ATTEMPTS: u32 = 8;
 const INITIAL_RETRY_DELAY: Duration = Duration::from_millis(200);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(5);
 
+/// What [`NodeStream`] reads from the node.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Nearly every item is a message, so boxing it only adds an allocation"
+)]
+pub enum StreamItem {
+    /// A finalized message and the slot it was read at.
+    Message(ZoneMessage, Slot),
+    /// Every finalized message up to a slot has been read.
+    ReadUpTo(FinalizedUpTo),
+}
+
 /// Follows the channel's finalized history from the stored anchor on, publishing it to the
 /// `channel/<channel_id>/finalized_*` topics.
 pub struct NodeStream {
     channel_id: ChannelId,
-    stream: BoxStream<Result<(ZoneMessage, Slot)>>,
+    stream: BoxStream<Result<StreamItem>>,
     broker_ref: ActorRef<Broker<ChannelEvent>>,
 }
 
@@ -70,9 +82,8 @@ impl NodeStream {
         })
     }
 
-    /// The next finalized message and the slot it was read at. Cancel safe, unlike
-    /// [`Self::on_message`].
-    pub async fn next_message(&mut self) -> Option<Result<(ZoneMessage, Slot)>> {
+    /// The next item read from the node. Cancel safe, unlike [`Self::on_item`].
+    pub async fn next_item(&mut self) -> Option<Result<StreamItem>> {
         self.stream.next().await
     }
 
@@ -81,7 +92,7 @@ impl NodeStream {
         last_seen_slot: Option<Slot>,
         channel_id: ChannelId,
         batch_slots: NonZero<u64>,
-    ) -> Result<impl Stream<Item = Result<(ZoneMessage, Slot)>>> {
+    ) -> Result<impl Stream<Item = Result<StreamItem>>> {
         struct StreamState {
             last_processed_slot: Option<Slot>,
             last_known_lib_slot: Slot,
@@ -130,15 +141,22 @@ impl NodeStream {
                 let start_slot = stream_state
                     .last_processed_slot
                     .map_or_else(Slot::genesis, |slot| slot.strict_add(1.into()));
+                let last_finalized_slot = stream_state.last_known_lib_slot;
                 let end_slot =
                     (Slot::from(start_slot.into_inner().saturating_add(batch_slots.get())))
-                        .min(stream_state.last_known_lib_slot);
+                        .min(last_finalized_slot);
 
                 let backfill_stream = with_retries("Reading finalized zone messages", || {
                     node.zone_messages_in_blocks(start_slot, end_slot, channel_id)
                 })
                 .await?
-                .map(Ok);
+                .map(|(msg, slot)| Ok(StreamItem::Message(msg, slot)))
+                .chain(futures::stream::once(async move {
+                    Ok(StreamItem::ReadUpTo(FinalizedUpTo {
+                        slot: end_slot,
+                        last_finalized_slot,
+                    }))
+                }));
 
                 stream_state.last_processed_slot = Some(end_slot);
                 Ok::<_, Error>(Some((backfill_stream.boxed(), stream_state)))
@@ -149,8 +167,19 @@ impl NodeStream {
         Ok(stream)
     }
 
+    /// Publishes what `item` reports to the broker.
+    pub async fn on_item(&mut self, item: StreamItem) -> Result<()> {
+        match item {
+            StreamItem::Message(msg, slot) => self.on_message(msg, slot).await,
+            StreamItem::ReadUpTo(up_to) => {
+                self.publish("finalized_up_to", ChannelEventKind::FinalizedUpTo(up_to))
+                    .await
+            }
+        }
+    }
+
     /// Publishes what `msg`, read at `slot`, reports to the broker.
-    pub async fn on_message(&mut self, msg: ZoneMessage, slot: Slot) -> Result<()> {
+    async fn on_message(&mut self, msg: ZoneMessage, slot: Slot) -> Result<()> {
         match msg {
             ZoneMessage::Block(zone_block) => {
                 let block = match borsh::from_slice::<Block>(&zone_block.data) {
@@ -304,18 +333,27 @@ mod tests {
     use super::*;
     use crate::protocol::MsgId;
 
-    #[derive(Actor)]
-    struct FinalizedBlocks(mpsc::UnboundedSender<MsgId>);
+    #[derive(Debug, PartialEq, Eq)]
+    enum Published {
+        Block(MsgId),
+        UpTo(FinalizedUpTo),
+    }
 
-    impl Message<ChannelEvent> for FinalizedBlocks {
+    #[derive(Actor)]
+    struct Recorder(mpsc::UnboundedSender<Published>);
+
+    impl Message<ChannelEvent> for Recorder {
         type Reply = ();
 
         async fn handle(&mut self, msg: ChannelEvent, _ctx: &mut Context<Self, ()>) {
-            if let ChannelEventKind::FinalizedBlock(finalized) = msg.event {
-                self.0
-                    .send(finalized.msg_id)
-                    .expect("the test is listening");
-            }
+            let published = match msg.event {
+                ChannelEventKind::FinalizedBlock(finalized) => Published::Block(finalized.msg_id),
+                ChannelEventKind::FinalizedUpTo(up_to) => Published::UpTo(up_to),
+                ChannelEventKind::FinalizedDeposit(_)
+                | ChannelEventKind::FinalizedWithdrawal(_)
+                | ChannelEventKind::Publisher(_) => return,
+            };
+            self.0.send(published).expect("the test is listening");
         }
     }
 
@@ -330,15 +368,17 @@ mod tests {
         .into_pending_block()
     }
 
-    /// A node stream over no node, and the ids of the finalized blocks it publishes.
-    async fn node_stream(channel_id: ChannelId) -> (NodeStream, mpsc::UnboundedReceiver<MsgId>) {
+    /// A node stream over no node, and the finalized blocks and slots it publishes.
+    async fn node_stream(
+        channel_id: ChannelId,
+    ) -> (NodeStream, mpsc::UnboundedReceiver<Published>) {
         let broker_ref = Broker::spawn(Broker::new(DeliveryStrategy::Guaranteed));
         let (sender, published) = mpsc::unbounded_channel();
         broker_ref
             .tell(Subscribe {
                 topic: glob::Pattern::new(&format!("channel/{channel_id}/**"))
                     .expect("a valid topic pattern"),
-                recipient: FinalizedBlocks::spawn(FinalizedBlocks(sender)).recipient(),
+                recipient: Recorder::spawn(Recorder(sender)).recipient(),
             })
             .await
             .expect("the broker is running");
@@ -367,10 +407,12 @@ mod tests {
             .expect("the broker is running");
     }
 
-    async fn next_published(published: &mut mpsc::UnboundedReceiver<MsgId>) -> Option<MsgId> {
+    async fn next_published(
+        published: &mut mpsc::UnboundedReceiver<Published>,
+    ) -> Option<Published> {
         tokio::time::timeout(Duration::from_secs(5), published.recv())
             .await
-            .expect("a block is published")
+            .expect("an event is published")
     }
 
     #[tokio::test]
@@ -383,7 +425,34 @@ mod tests {
         let misplaced = MsgId::from([4; 32]);
         read(&mut node_stream, misplaced, &block(5), 43).await;
 
-        assert_eq!(next_published(&mut published).await, Some(misplaced));
+        assert_eq!(
+            next_published(&mut published).await,
+            Some(Published::Block(misplaced))
+        );
+    }
+
+    #[tokio::test]
+    async fn the_slot_read_up_to_is_published_after_the_blocks_it_covers() {
+        let (mut node_stream, mut published) = node_stream(ChannelId::from([1; 32])).await;
+        let msg_id = MsgId::from([2; 32]);
+        read(&mut node_stream, msg_id, &block(7), 42).await;
+        let up_to = FinalizedUpTo {
+            slot: Slot::from(50),
+            last_finalized_slot: Slot::from(60),
+        };
+        node_stream
+            .on_item(StreamItem::ReadUpTo(up_to))
+            .await
+            .expect("the broker is running");
+
+        assert_eq!(
+            next_published(&mut published).await,
+            Some(Published::Block(msg_id))
+        );
+        assert_eq!(
+            next_published(&mut published).await,
+            Some(Published::UpTo(up_to))
+        );
     }
 
     #[tokio::test(start_paused = true)]
