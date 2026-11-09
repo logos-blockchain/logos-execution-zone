@@ -27,11 +27,12 @@ use crate::{
         GetBlockByHash, GetChannelViewBytes, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
         GetDeadLetterDispatchCount, GetDeadLetterDispatchRetainedCount, GetDeadLetterDispatches,
         GetEventFilter, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta,
-        GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,
-        GetTransactionByHash, GetZoneAnchor, GetZoneCheckpoint, PendingCrossZoneDispatchRecord,
-        PendingDepositEventRecord, PutSlashRecordBytes, RecordDispatchFailure,
-        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
-        StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
+        GetLeeState, GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches,
+        GetPendingDepositEvents, GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor,
+        GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+        PutSlashRecordBytes, RecordDispatchFailure, RequeueDeadLetterDispatch,
+        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome,
+        UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
 
@@ -156,6 +157,12 @@ mockall::mock! {
             msg: GetPendingCrossZoneDispatches,
             ctx: &mut Context<Self, Result<Vec<PendingCrossZoneDispatchRecord>>>
         ) -> Result<Vec<PendingCrossZoneDispatchRecord>>;
+
+        pub fn handle_get_pending_cross_zone_dispatch_count(
+            &mut self,
+            msg: GetPendingCrossZoneDispatchCount,
+            ctx: &mut Context<Self, Result<usize>>
+        ) -> Result<usize>;
 
         pub fn handle_add_pending_cross_zone_dispatches(
             &mut self,
@@ -526,6 +533,18 @@ impl Message<GetPendingCrossZoneDispatches> for MockStorageActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_pending_cross_zone_dispatches(msg, ctx)
+    }
+}
+
+impl Message<GetPendingCrossZoneDispatchCount> for MockStorageActor {
+    type Reply = Result<usize>;
+
+    async fn handle(
+        &mut self,
+        msg: GetPendingCrossZoneDispatchCount,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_pending_cross_zone_dispatch_count(msg, ctx)
     }
 }
 

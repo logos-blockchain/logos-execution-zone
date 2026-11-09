@@ -27,4 +27,4 @@ bytesize.workspace = true
 
 [dev-dependencies]
 sequencer_executor_actor = { workspace = true, features = ["mock"] }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt"] }

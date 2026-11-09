@@ -83,6 +83,9 @@ pub struct AddPendingCrossZoneDispatches {
     pub dispatches: Vec<PendingCrossZoneDispatchRecord>,
 }
 
+/// How many dispatches are pending, counted without decoding any of them.
+pub struct GetPendingCrossZoneDispatchCount;
+
 pub struct DropSettledCrossZoneDispatches {
     pub message_keys: HashSet<CrossZoneMessageKey>,
 }

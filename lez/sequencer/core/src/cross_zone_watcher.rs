@@ -28,8 +28,8 @@ use sequencer_storage_actor::{
     StorageActorTrait,
     protocol::{
         AddPendingCrossZoneDispatches, DeleteCrossZonePeerFloor, GetCrossZonePeerFloorBytes,
-        GetCrossZonePeerTip, PeerZoneKey, PendingCrossZoneDispatchRecord,
-        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip,
+        GetCrossZonePeerTip, GetPendingCrossZoneDispatchCount, PeerZoneKey,
+        PendingCrossZoneDispatchRecord, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip,
     },
 };
 
@@ -650,6 +650,17 @@ async fn advance_cursor<S: StorageActorTrait>(
     }
 }
 
+/// Sets the pending-dispatch gauge from the store, so it follows the list.
+pub(crate) async fn record_pending_dispatch_gauge<S: StorageActorTrait>(storage_ref: &ActorRef<S>) {
+    match storage_ref.ask(GetPendingCrossZoneDispatchCount).await {
+        Ok(pending) => sequencer_core_metrics::record_cross_zone_pending_dispatches(pending),
+        Err(err) => warn!(
+            "Failed to read the pending cross-zone dispatch count: {:#}",
+            anyhow::Error::from(err)
+        ),
+    }
+}
+
 /// Scans one peer block for outbound messages and records a dispatch per match.
 ///
 /// Returns `false` if a delivery could not be recorded, which the caller turns
@@ -743,6 +754,7 @@ async fn record_block_deliveries<S: StorageActorTrait>(
         // the slot stays stuck.
         Ok(accepted) => {
             if accepted > 0 {
+                record_pending_dispatch_gauge(storage_ref).await;
                 log::info!(
                     "Watcher recorded {accepted} of {offered} cross-zone deliveries from peer {} block {}",
                     hex::encode(peer_zone),

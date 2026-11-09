@@ -23,11 +23,11 @@ use crate::{
         GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
         GetDeadLetterDispatchRetainedCount, GetDeadLetterDispatches, GetFinalSnapshot,
         GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetTransactionByHash,
-        GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
-        SetCrossZonePeerTip, UpdateZoneCheckpoint, WithdrawalReconciliationKey,
-        ZoneCheckpointRecord,
+        GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        GetTransactionByHash, GetZoneCheckpoint, PendingCrossZoneDispatchRecord,
+        PendingDepositEventRecord, RecordDispatchFailure, RequeueDeadLetterDispatch,
+        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, UpdateZoneCheckpoint,
+        WithdrawalReconciliationKey, ZoneCheckpointRecord,
     },
 };
 
@@ -877,6 +877,14 @@ async fn settled_dispatch_reconciles_its_dead_letter_but_not_the_count() {
             .expect("Failed to read the dead letter count"),
         1,
         "This node still gave up once, and the count says how often that happened"
+    );
+    assert_eq!(
+        storage_ref
+            .ask(GetDeadLetterDispatchRetainedCount)
+            .await
+            .expect("Failed to read the retained count"),
+        0,
+        "and the retained count reads the emptied list, not an absent one"
     );
 }
 
@@ -1820,6 +1828,39 @@ async fn one_delivery_that_always_fails_takes_one_dead_letter_slot() {
             .expect("Failed to read the dead letter count"),
         6,
         "The count still measures give-ups, so the repetition stays visible"
+    );
+}
+
+/// The watcher's read, so the gauge follows the list between production turns.
+#[tokio::test]
+async fn the_pending_count_follows_the_stored_dispatches() {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
+
+    assert_eq!(
+        storage_ref
+            .ask(GetPendingCrossZoneDispatchCount)
+            .await
+            .expect("Failed to read the pending count"),
+        0
+    );
+
+    storage_ref
+        .ask(AddPendingCrossZoneDispatches {
+            dispatches: vec![
+                PendingCrossZoneDispatchRecord::recorded(key_from_index(1), vec![1]),
+                PendingCrossZoneDispatchRecord::recorded(key_from_index(2), vec![2]),
+            ],
+        })
+        .await
+        .expect("Failed to record dispatches");
+
+    assert_eq!(
+        storage_ref
+            .ask(GetPendingCrossZoneDispatchCount)
+            .await
+            .expect("Failed to read the pending count"),
+        2
     );
 }
 

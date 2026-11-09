@@ -66,6 +66,7 @@ use tokio::sync::Mutex;
 use tokio_retry::{Retry, strategy::FixedInterval};
 
 use crate::{
+    cross_zone_watcher::record_pending_dispatch_gauge,
     gossip::{
         AccreditedKeys, AccreditedKeysReceiver, AccreditedKeysSender, MaxBlockSizeReceiver,
         MaxBlockSizeSender, accredited_keys_channel,
@@ -641,6 +642,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
         sequencer_core_metrics::record_chain_height(sequencer_core.chain_height().await);
         sequencer_core.record_dead_letter_gauge().await;
+        record_pending_dispatch_gauge(&sequencer_core.storage_ref).await;
 
         Ok((sequencer_core, mempool_handle))
     }
@@ -1117,6 +1119,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // dead letter of a delivery this node gave up on; re-read only when one settled.
         if settled_deliveries {
             self.record_dead_letter_gauge().await;
+            record_pending_dispatch_gauge(&self.storage_ref).await;
+            record_pending_dispatch_gauge(&self.storage_ref).await;
         }
 
         if outcome.accepted_deposits > 0 {
@@ -2454,6 +2458,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             Ok(DispatchFailure::Retired(record)) => {
                 sequencer_core_metrics::increment_cross_zone_dispatches_retired_total();
                 self.record_dead_letter_gauge().await;
+                record_pending_dispatch_gauge(&self.storage_ref).await;
                 error!(
                     "Giving up on cross-zone delivery {} from peer zone {} block {} transaction {} ({} bytes) after {} failed attempts. This node will not retry it; unless another sequencer carries it, the message is not delivered. Kept in the dead letter; requeueCrossZoneDeadLetter restores it.",
                     hex::encode(key),
@@ -2504,6 +2509,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .ask(RequeueDeadLetterDispatch { message_key })
             .await?;
         self.record_dead_letter_gauge().await;
+        record_pending_dispatch_gauge(&self.storage_ref).await;
         Ok(outcome)
     }
 

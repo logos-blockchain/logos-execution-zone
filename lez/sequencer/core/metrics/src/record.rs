@@ -203,7 +203,7 @@ pub fn record_cross_zone_watcher_alive(peer: String, alive: bool) {
     .set(if alive { 1.0 } else { 0.0 });
 }
 
-/// Deliveries recorded and awaiting a production turn, sampled when this node produces.
+/// Deliveries recorded and awaiting a production turn.
 pub fn record_cross_zone_pending_dispatches(count: usize) {
     gauge!(
         description: "Cross-zone deliveries recorded and awaiting inclusion in a block",

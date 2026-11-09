@@ -16,11 +16,12 @@ use crate::{
         GetBlockByHash, GetChannelViewBytes, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
         GetDeadLetterDispatchCount, GetDeadLetterDispatchRetainedCount, GetDeadLetterDispatches,
         GetFinalSnapshot, GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,
-        GetTransactionByHash, GetZoneAnchor, GetZoneCheckpoint, PendingCrossZoneDispatchRecord,
-        PendingDepositEventRecord, PutSlashRecordBytes, RecordDispatchFailure,
-        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
-        StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
+        GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor, GetZoneCheckpoint,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutSlashRecordBytes,
+        RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
+        SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
+        ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
 
@@ -47,6 +48,7 @@ pub trait StorageActorTrait:
     + Message<GetPendingDepositEvents, Reply = Result<Vec<PendingDepositEventRecord>>>
     + Message<GetPendingCrossZoneDispatches, Reply = Result<Vec<PendingCrossZoneDispatchRecord>>>
     + Message<AddPendingCrossZoneDispatches, Reply = Result<usize>>
+    + Message<GetPendingCrossZoneDispatchCount, Reply = Result<usize>>
     + Message<DropSettledCrossZoneDispatches, Reply = Result<()>>
     + Message<RecordDispatchFailure, Reply = Result<DispatchFailure>>
     + Message<RequeueDeadLetterDispatch, Reply = Result<DeadLetterRequeue>>
