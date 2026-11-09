@@ -1,6 +1,6 @@
 //! Signs a committee member's approval of a `system_upgrader` change, offline.
 //!
-//! Reads `<home>/bedrock_signing_key` (the node's sequencer key) and the zone's channel id from the
+//! Reads `<home>/channel_signing_key` (the node's sequencer key) and the zone's channel id from the
 //! given sequencer config, and prints the signed approval as hex-encoded borsh, ready to submit to
 //! the nodes, and the proposal's hash on stderr, for committee members to compare. Never touches
 //! the network, and never creates a key.
@@ -47,8 +47,8 @@ struct Args {
 enum ProposalArgs {
     /// Switch `name` to the segment chain at `first_segment`, at block `activation_height`.
     Schedule {
-        #[clap(long)]
-        name: String,
+        #[clap(long, value_parser = parse_name)]
+        name: SystemProgramName,
         #[clap(long)]
         first_segment: AccountId,
         /// The chain's image ID, from a reproducible build, as 64 hex digits.
@@ -60,8 +60,8 @@ enum ProposalArgs {
     /// Withdraw `name`'s pending upgrade, if it is exactly this one. Approvals are checked when the
     /// change lands, so a cancel needs the current committee's signatures.
     Cancel {
-        #[clap(long)]
-        name: String,
+        #[clap(long, value_parser = parse_name)]
+        name: SystemProgramName,
         #[clap(long)]
         first_segment: AccountId,
         #[clap(long)]
@@ -69,8 +69,8 @@ enum ProposalArgs {
     },
     /// Deploy a new system program `name` from the segment chain at `first_segment`.
     Install {
-        #[clap(long)]
-        name: String,
+        #[clap(long, value_parser = parse_name)]
+        name: SystemProgramName,
         #[clap(long)]
         first_segment: AccountId,
         /// The chain's image ID, from a reproducible build, as 64 hex digits.
@@ -79,39 +79,39 @@ enum ProposalArgs {
     },
 }
 
-impl ProposalArgs {
-    fn proposal(self) -> Result<Proposal> {
-        Ok(match self {
-            Self::Schedule {
+impl From<ProposalArgs> for Proposal {
+    fn from(args: ProposalArgs) -> Self {
+        match args {
+            ProposalArgs::Schedule {
                 name,
                 first_segment,
                 image_id,
                 activation_height,
-            } => Proposal::Schedule {
-                name: parse_name(&name)?,
-                first_segment,
-                image_id,
-                activation_height,
-            },
-            Self::Cancel {
-                name,
-                first_segment,
-                activation_height,
-            } => Proposal::Cancel {
-                name: parse_name(&name)?,
-                first_segment,
-                activation_height,
-            },
-            Self::Install {
+            } => Self::Schedule {
                 name,
                 first_segment,
                 image_id,
-            } => Proposal::Install {
-                name: parse_name(&name)?,
+                activation_height,
+            },
+            ProposalArgs::Cancel {
+                name,
+                first_segment,
+                activation_height,
+            } => Self::Cancel {
+                name,
+                first_segment,
+                activation_height,
+            },
+            ProposalArgs::Install {
+                name,
+                first_segment,
+                image_id,
+            } => Self::Install {
+                name,
                 first_segment,
                 image_id,
             },
-        })
+        }
     }
 }
 
@@ -193,12 +193,13 @@ fn main() -> Result<()> {
         proposal,
     } = Args::parse();
 
-    let proposal = proposal.proposal()?;
+    let proposal = Proposal::from(proposal);
     let valid_until = valid_until(&proposal, tip, requested, min_lead)?;
 
     let config = sequencer_service::SequencerConfig::from_path(&config_path)?;
     let home = home.unwrap_or(config.home);
-    let key = sequencer_core::load_signing_key(&home.join("bedrock_signing_key"))?;
+    let key =
+        sequencer_core::load_signing_key(&home.join(sequencer_core::CHANNEL_SIGNING_KEY_FILE))?;
     let channel_id: [u8; 32] = config.bedrock_config.channel_id.into();
 
     let message = system_upgrader_core::approval_message(channel_id, &proposal, valid_until);

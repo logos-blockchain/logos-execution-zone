@@ -16,9 +16,9 @@ use sequencer_gossip_actor::protocol::Publish;
 use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
     CommitmentSetDigest, CrossZoneDeadLetter, CrossZoneDeadLetterReport,
-    CrossZoneDeadLetterRequeue, EncryptedNote, FeeStateQuote, HashType, MembershipProof, Nonce,
-    PageLimit, ProgramId, Publication, SystemProposal, SystemProposalApproval,
-    SystemProposalReport,
+    CrossZoneDeadLetterRequeue, EncryptedNote, FeeStateQuote, HashType, HexBytes, MembershipProof,
+    Nonce, PageLimit, ProgramId, Publication, SequencerPublicKey, SystemProposal,
+    SystemProposalApproval, SystemProposalReport,
 };
 
 pub struct Service<E: ExecutorActorTrait> {
@@ -364,13 +364,14 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             threshold: u32::try_from(threshold).unwrap_or(u32::MAX),
             proposals: proposals
                 .into_iter()
-                .map(|(proposal, approvals)| SystemProposal {
-                    proposal_hash: HashType(proposal.hash()),
-                    proposal: hex::encode(proposal.to_bytes()),
-                    approvals: approvals
+                .map(|held| SystemProposal {
+                    proposal_hash: HashType(held.proposal.hash()),
+                    proposal: HexBytes(held.proposal.to_bytes()),
+                    approvals: held
+                        .approvals
                         .into_iter()
                         .map(|approval| SystemProposalApproval {
-                            signer: hex::encode(approval.signer.to_bytes()),
+                            signer: SequencerPublicKey(approval.signer.to_bytes()),
                             valid_until: approval.valid_until,
                         })
                         .collect(),
@@ -379,14 +380,15 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         })
     }
 
-    async fn submit_system_approval(&self, approval: String) -> Result<(), ErrorObjectOwned> {
-        let invalid = |message: String| {
-            ErrorObjectOwned::owned(ErrorCode::InvalidParams.code(), message, None::<()>)
-        };
-        let bytes = hex::decode(approval.trim())
-            .map_err(|err| invalid(format!("the approval is not hex: {err}")))?;
-        let signed: system_upgrader_core::SignedApproval = borsh::from_slice(&bytes)
-            .map_err(|err| invalid(format!("the approval does not decode: {err}")))?;
+    async fn submit_system_approval(&self, approval: HexBytes) -> Result<(), ErrorObjectOwned> {
+        let signed: system_upgrader_core::SignedApproval =
+            borsh::from_slice(&approval.0).map_err(|err| {
+                ErrorObjectOwned::owned(
+                    ErrorCode::InvalidParams.code(),
+                    format!("the approval does not decode: {err}"),
+                    None::<()>,
+                )
+            })?;
 
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::SubmitSystemApproval {

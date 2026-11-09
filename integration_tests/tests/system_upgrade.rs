@@ -139,7 +139,7 @@ async fn submit_approvals(
             approval,
         };
         ctx.sequencer_client()
-            .submit_system_approval(hex::encode(borsh::to_vec(&signed)?))
+            .submit_system_approval(sequencer_service_rpc::HexBytes(borsh::to_vec(&signed)?))
             .await?;
     }
     let (channel_id, _) = ctx.zones_iter().next().context("the test has a zone")?;

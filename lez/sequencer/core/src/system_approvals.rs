@@ -4,9 +4,13 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context as _, Result, ensure};
+use common::system_upgrades::ProposalApprovals;
 use lee_core::BlockId;
 use sequencer_stake_core::{SequencerKey, SequencerStakeConfig, slash_approval_threshold};
 use system_upgrader_core::{Approval, Proposal, SignedApproval, verify_approval};
+
+/// Distinct proposals one signer's approvals may hold in the pool at once.
+const MAX_PROPOSALS_PER_SIGNER: usize = 16;
 
 type ByProposal = BTreeMap<Proposal, BTreeMap<SequencerKey, Approval>>;
 
@@ -17,6 +21,14 @@ pub struct SystemApprovals {
     by_proposal: ByProposal,
     /// Changed since the last [`SystemApprovals::take_changed`].
     changed: bool,
+}
+
+/// The approvals the head's committee must reach for a change, and every proposal held with its
+/// approvals.
+#[derive(Debug)]
+pub struct SystemProposals {
+    pub threshold: usize,
+    pub proposals: Vec<ProposalApprovals>,
 }
 
 /// How the pool is persisted, versioned so a later layout can still read this one.
@@ -74,12 +86,27 @@ impl SystemApprovals {
             verify_approval(&approval, channel_id, &proposal),
             "the approval's signature does not verify"
         );
+        let approved_already = self
+            .by_proposal
+            .get(&proposal)
+            .is_some_and(|approvals| approvals.contains_key(&approval.signer));
+        ensure!(
+            approved_already || self.proposals_of(&approval.signer) < MAX_PROPOSALS_PER_SIGNER,
+            "the signer already has {MAX_PROPOSALS_PER_SIGNER} proposals pending"
+        );
         self.by_proposal
             .entry(proposal)
             .or_default()
             .insert(approval.signer, approval);
         self.changed = true;
         Ok(())
+    }
+
+    fn proposals_of(&self, signer: &SequencerKey) -> usize {
+        self.by_proposal
+            .values()
+            .filter(|approvals| approvals.contains_key(signer))
+            .count()
     }
 
     /// Every proposal a threshold of `committee` approves at `block_id`, each with a threshold's
@@ -89,7 +116,7 @@ impl SystemApprovals {
         &mut self,
         committee: &SequencerStakeConfig,
         block_id: BlockId,
-    ) -> Vec<(Proposal, Vec<Approval>)> {
+    ) -> Vec<ProposalApprovals> {
         let before: usize = self.by_proposal.values().map(BTreeMap::len).sum();
         self.by_proposal.retain(|proposal, approvals| {
             approvals.retain(|_, approval| usable_at(proposal, approval, block_id));
@@ -111,7 +138,10 @@ impl SystemApprovals {
                 }
                 usable.sort_by_key(|approval| std::cmp::Reverse(approval.valid_until));
                 usable.truncate(threshold);
-                Some((*proposal, usable))
+                Some(ProposalApprovals {
+                    proposal: *proposal,
+                    approvals: usable,
+                })
             })
             .collect()
     }
@@ -219,6 +249,34 @@ mod tests {
         signed_of(proposal(), seed, valid_until)
     }
 
+    fn install_of(index: u8) -> Proposal {
+        Proposal::Install {
+            name: SystemProgramName::new(&[b'p', index]),
+            first_segment: AccountId::new([index; 32]),
+            image_id: [7; 8],
+        }
+    }
+
+    #[test]
+    fn a_signer_holds_at_most_the_cap_of_proposals() {
+        let mut pool = SystemApprovals::default();
+        let cap = u8::try_from(MAX_PROPOSALS_PER_SIGNER).unwrap();
+        for index in 0..cap {
+            pool.add(signed_of(install_of(index), 1, 20), &committee(), 1)
+                .unwrap();
+        }
+
+        assert!(
+            pool.add(signed_of(install_of(cap), 1, 20), &committee(), 1)
+                .is_err(),
+            "a new proposal past the cap"
+        );
+        pool.add(signed_of(install_of(0), 1, 30), &committee(), 1)
+            .expect("a proposal already held can be approved again");
+        pool.add(signed_of(install_of(cap), 2, 20), &committee(), 1)
+            .expect("another signer has its own cap");
+    }
+
     #[test]
     fn a_proposal_is_ready_once_a_threshold_approves() {
         let mut pool = SystemApprovals::default();
@@ -227,11 +285,11 @@ mod tests {
 
         pool.add(signed(2, 30), &committee(), 1).unwrap();
         let ready = pool.ready(&committee(), 1);
-        let [(ready_proposal, approvals)] = ready.as_slice() else {
+        let [ready] = ready.as_slice() else {
             panic!("expected one ready proposal, got {ready:?}");
         };
-        assert_eq!(*ready_proposal, proposal());
-        assert_eq!(approvals.len(), 2);
+        assert_eq!(ready.proposal, proposal());
+        assert_eq!(ready.approvals.len(), 2);
     }
 
     #[test]
@@ -243,7 +301,7 @@ mod tests {
         }
 
         let ready = pool.ready(&committee(), 1);
-        let signers: Vec<SequencerKey> = ready[0].1.iter().map(|a| a.signer).collect();
+        let signers: Vec<SequencerKey> = ready[0].approvals.iter().map(|a| a.signer).collect();
         assert_eq!(signers, vec![sequencer_key(2), sequencer_key(3)]);
     }
 

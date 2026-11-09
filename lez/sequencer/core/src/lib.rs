@@ -17,6 +17,7 @@ use chain_state::{
 use common::{
     HashType,
     block::{BedrockStatus, Block, BlockMeta, HashableBlockData},
+    system_upgrades::ProposalApprovals,
     transaction::{FeePayee, LeeTransaction, TxEvents, clock_invocation, fee_invocation},
 };
 use config::{GenesisAction, SequencerConfig};
@@ -2069,12 +2070,21 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         ));
         let clock_tx = clock_invocation(new_block_height, new_block_timestamp);
         let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
-        // The block an upgrade activates in must carry its `Apply`, so its room is held from the
-        // start, with the fee's and the clock's.
+        // The slot before the fee takes one `system_upgrader` transaction: the due `Apply`, which
+        // its block must carry, else the first approved change. Its room is held from the start,
+        // with the fee's and the clock's; the slot itself is filled after the mempool.
         let due_apply = build_due_apply_tx(&working_state, new_block_height);
+        let first_approved =
+            committee_discovery::read_config(&working_state).and_then(|committee| {
+                build_approved_txs(self.system_approvals.ready(&committee, new_block_height))
+                    .into_iter()
+                    .next()
+                    .map(|(_, tx, _)| tx)
+            });
         let trailing: Vec<LeeTransaction> = due_apply
-            .iter()
-            .cloned()
+            .clone()
+            .or(first_approved)
+            .into_iter()
             .chain([placeholder_fee_lee_tx.clone(), clock_lee_tx.clone()])
             .collect();
 
@@ -2444,15 +2454,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
     /// The approvals the head's committee must reach for a change, and every proposal held with
     /// its approvals.
-    pub async fn system_proposals(
-        &self,
-    ) -> Result<(
-        usize,
-        Vec<(
-            system_upgrader_core::Proposal,
-            Vec<system_upgrader_core::Approval>,
-        )>,
-    )> {
+    pub async fn system_proposals(&self) -> Result<system_approvals::SystemProposals> {
         let committee = committee_discovery::read_config(self.chain.lock().await.head_state())
             .context("the head state has no committee config")?;
         let threshold = sequencer_stake_core::slash_approval_threshold(
@@ -2461,9 +2463,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let proposals = self
             .system_approvals
             .proposals()
-            .map(|(proposal, approvals)| (*proposal, approvals.cloned().collect()))
+            .map(|(proposal, approvals)| ProposalApprovals {
+                proposal: *proposal,
+                approvals: approvals.cloned().collect(),
+            })
             .collect();
-        Ok((threshold, proposals))
+        Ok(system_approvals::SystemProposals {
+            threshold,
+            proposals,
+        })
     }
 
     /// Writes the approval pool to storage if it changed, so a restart keeps it.
@@ -3524,10 +3532,7 @@ fn build_due_apply_tx(
 
 /// The `Schedule`, `Cancel` or `Install` carrying out each approved proposal, with the proposal.
 fn build_approved_txs(
-    approved: Vec<(
-        system_upgrader_core::Proposal,
-        Vec<system_upgrader_core::Approval>,
-    )>,
+    approved: Vec<ProposalApprovals>,
 ) -> Vec<(
     TransactionOrigin,
     LeeTransaction,
@@ -3535,11 +3540,15 @@ fn build_approved_txs(
 )> {
     approved
         .into_iter()
-        .filter_map(|(proposal, approvals)| {
-            system_upgrader_tx(system_upgrader_core::Message::approved(proposal, approvals))
-                .map_err(|err| warn!("Skipping an approved system_upgrader change: {err:#}"))
-                .ok()
-                .map(|tx| (TransactionOrigin::Sequencer, tx, Some(proposal)))
+        .filter_map(|approved| {
+            let proposal = approved.proposal;
+            system_upgrader_tx(system_upgrader_core::Message::approved(
+                proposal,
+                approved.approvals,
+            ))
+            .map_err(|err| warn!("Skipping an approved system_upgrader change: {err:#}"))
+            .ok()
+            .map(|tx| (TransactionOrigin::Sequencer, tx, Some(proposal)))
         })
         .collect()
 }

@@ -4,13 +4,13 @@ use jsonrpsee::proc_macros::rpc;
 pub use jsonrpsee::types::ErrorObjectOwned;
 #[cfg(feature = "client")]
 pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
-pub use sequencer_service_protocol::FeeStateQuote;
 use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
     CommitmentSetDigest, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, EncryptedNote,
     HashType, LeeTransaction, MembershipProof, Nonce, PageLimit, ProgramId, Publication,
     SystemProposalReport,
 };
+pub use sequencer_service_protocol::{FeeStateQuote, HexBytes};
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
 compile_error!("At least one of `server` or `client` features must be enabled.");
@@ -168,10 +168,10 @@ pub trait Rpc {
         message_key: HashType,
     ) -> Result<CrossZoneDeadLetterRequeue, ErrorObjectOwned>;
 
-    /// Hands the node a committee member's approval of a `system_upgrader` change: a hex-encoded
-    /// borsh `SignedApproval`, as `approve_system_change` prints it.
+    /// Hands the node a committee member's approval of a `system_upgrader` change: a borsh
+    /// `SignedApproval`, as `approve_system_change` prints it.
     #[method(name = "submitSystemApproval")]
-    async fn submit_system_approval(&self, approval: String) -> Result<(), ErrorObjectOwned>;
+    async fn submit_system_approval(&self, approval: HexBytes) -> Result<(), ErrorObjectOwned>;
 
     #[method(name = "getSystemProposals")]
     async fn get_system_proposals(&self) -> Result<SystemProposalReport, ErrorObjectOwned>;

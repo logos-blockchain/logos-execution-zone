@@ -601,7 +601,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetSystemProposals>
         GetSystemProposals: GetSystemProposals,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let (threshold, proposals) = self
+        let sequencer_core::system_approvals::SystemProposals {
+            threshold,
+            proposals,
+        } = self
             .sequencer
             .system_proposals()
             .await

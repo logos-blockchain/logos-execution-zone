@@ -7293,7 +7293,10 @@ fn an_approved_change_is_built_with_its_approvals_and_actors() {
         signature: vec![0; 64],
     }];
 
-    let built = super::build_approved_txs(vec![(proposal, approvals.clone())]);
+    let built = super::build_approved_txs(vec![common::system_upgrades::ProposalApprovals {
+        proposal,
+        approvals: approvals.clone(),
+    }]);
     let [(TransactionOrigin::Sequencer, tx, Some(built_proposal))] = built.as_slice() else {
         panic!("expected one sequencer-built change, got {}", built.len());
     };
@@ -7313,4 +7316,163 @@ fn an_approved_change_is_built_with_its_approvals_and_actors() {
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     ));
     assert_eq!(*tx, expected);
+}
+
+/// However full the mempool, a ready approved change keeps its room in the block.
+#[tokio::test]
+async fn an_approved_change_has_room_in_a_full_block() {
+    use lee_core::program::SYSTEM_UPGRADER_ACCOUNT_ID;
+    use system_upgrader_core::{
+        Approval, Proposal, Registry, ScheduledUpgrade, SignedApproval, registry_account_id,
+    };
+
+    const ACTIVATION_HEIGHT: lee_core::BlockId = 1000;
+
+    let mut config = setup_sequencer_config();
+    config.max_num_tx_in_block = 1000;
+    config
+        .genesis
+        .as_mut()
+        .unwrap()
+        .channel_params
+        .max_block_size = sequencer_stake_core::MIN_MAX_BLOCK_SIZE;
+    let (mut sequencer, mempool_handle) = common_setup_with_config(config).await;
+
+    // `clock`'s upgrade is pending, so a Cancel of it applies; a second accredited member joins
+    // the node, since a threshold is at least two approvals.
+    let first_segment = AccountId::new([0x51; 32]);
+    let peer = sequencer_stake_core::ed25519_dalek::SigningKey::from_bytes(&[0x52; 32]);
+    let peer_key =
+        sequencer_stake_core::SequencerKey::new(peer.verifying_key().to_bytes()).unwrap();
+    {
+        let chain = sequencer.chain();
+        let mut chain = chain.lock().await;
+        let state = chain.head_state_mut();
+        let config_id = system_accounts::sequencer_stake_config_account_id();
+        let mut config_account = state.get_account_by_id(config_id);
+        let mut committee = sequencer_stake_core::SequencerStakeConfig::from_bytes(
+            config_account
+                .data
+                .actor_state(programs::sequencer_stake_account_id()),
+        )
+        .unwrap();
+        let minimum_stake = committee
+            .channel_params
+            .expect("genesis sets the channel params")
+            .minimum_sequencer_stake;
+        committee.entries.insert(
+            peer_key,
+            sequencer_stake_core::SequencerEntry {
+                account_id: AccountId::new([0x52; 32]),
+                total_staked: minimum_stake,
+                pending_unstake: None,
+            },
+        );
+        config_account.data.set_actor_state(
+            programs::sequencer_stake_account_id(),
+            committee.to_bytes().into(),
+        );
+        state.force_insert_account(config_id, config_account);
+        let mut registry = common::system_upgrades::registry(state);
+        registry.programs.insert(
+            programs::CLOCK_NAME,
+            Some(ScheduledUpgrade {
+                first_segment,
+                image_id: [0; 8],
+                activation_height: ACTIVATION_HEIGHT,
+            }),
+        );
+        state.force_insert_account(
+            registry_account_id(),
+            Account::default().with_actor_state(
+                SYSTEM_UPGRADER_ACCOUNT_ID,
+                Registry::to_bytes(&registry).into(),
+            ),
+        );
+    }
+
+    let channel_id = sequencer
+        .with_state(crate::committee_discovery::read_config)
+        .await
+        .and_then(|committee| committee.channel_id)
+        .expect("genesis sets the channel id");
+    let proposal = Proposal::Cancel {
+        name: programs::CLOCK_NAME,
+        first_segment,
+        activation_height: ACTIVATION_HEIGHT,
+    };
+    let valid_until = ACTIVATION_HEIGHT - 1;
+    let message = system_upgrader_core::approval_message(channel_id, &proposal, valid_until);
+    let own = Approval {
+        signer: sequencer_stake_core::SequencerKey::new(
+            sequencer.channel_signing_key.public_key().to_bytes(),
+        )
+        .unwrap(),
+        valid_until,
+        signature: sequencer
+            .channel_signing_key
+            .sign_payload(&message)
+            .to_bytes()
+            .to_vec(),
+    };
+    let peers = Approval {
+        signer: peer_key,
+        valid_until,
+        signature: {
+            use sequencer_stake_core::ed25519_dalek::Signer as _;
+            peer.sign(&message).to_bytes().to_vec()
+        },
+    };
+    for approval in [own, peers] {
+        sequencer
+            .submit_system_approval(SignedApproval { proposal, approval })
+            .await
+            .unwrap();
+    }
+
+    // More transfers than one block holds.
+    let acc1 = initial_public_user_accounts()[0].account_id;
+    let acc2 = initial_public_user_accounts()[1].account_id;
+    let sign_key = create_signing_key_for_account1();
+    let transfers: Vec<_> = (0..40_u128)
+        .map(|nonce| {
+            common::test_utils::create_transaction_native_token_transfer(
+                acc1, nonce, acc2, 10, &sign_key,
+            )
+        })
+        .collect();
+    for tx in &transfers {
+        mempool_handle
+            .push((TransactionOrigin::User, tx.clone()))
+            .await
+            .unwrap();
+    }
+
+    let block_id = sequencer.run_production_turn().await.unwrap();
+    let block = sequencer
+        .storage_ref
+        .ask(GetBlock { block_id })
+        .await
+        .unwrap()
+        .unwrap();
+    let txs = &block.body.transactions;
+    let included = txs.iter().filter(|tx| transfers.contains(tx)).count();
+    assert!(
+        included > 0 && included < transfers.len(),
+        "transfers fill the block and the rest wait, got {included}"
+    );
+    assert!(
+        txs.iter()
+            .any(common::system_upgrades::is_system_upgrader_tx),
+        "the approved Cancel has its room"
+    );
+    assert_eq!(
+        sequencer
+            .with_state(|state| common::system_upgrades::scheduled_upgrade(
+                state,
+                &programs::CLOCK_NAME
+            ))
+            .await,
+        None
+    );
 }

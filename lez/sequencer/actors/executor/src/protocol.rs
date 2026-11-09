@@ -167,10 +167,7 @@ pub struct GetSystemProposals;
 pub struct GetSystemProposalsReply {
     /// Approvals the head's committee must reach for a change.
     pub threshold: usize,
-    pub proposals: Vec<(
-        system_upgrader_core::Proposal,
-        Vec<system_upgrader_core::Approval>,
-    )>,
+    pub proposals: Vec<common::system_upgrades::ProposalApprovals>,
 }
 
 /// A committee member's approval of a `system_upgrader` change, for the producer's pool.
