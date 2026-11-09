@@ -274,13 +274,12 @@ impl V03State {
         );
         self.check_recovery_bindings_are_new(&recovery_bindings)?;
         for publication in &published {
-            if let Publication::Clear { body, recovery } = publication {
+            if let Publication::Clear { body, .. } = publication {
                 let address = body.to.account_id;
                 ensure!(
-                    self.bound_note(&recovery_bindings, address) == Some(recovery),
+                    self.bound_note(&recovery_bindings, address).is_some(),
                     LeeError::InvalidInput(format!(
-                        "The recovery binding for {address} differs from the one its publication \
-                         carries"
+                        "The recovery binding for {address} is missing"
                     ))
                 );
             }

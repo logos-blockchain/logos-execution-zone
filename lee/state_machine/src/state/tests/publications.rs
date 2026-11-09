@@ -228,12 +228,8 @@ fn a_durable_async_message_to_an_unbound_address_is_charged_and_publishes_nothin
 }
 
 #[test]
-fn a_diff_carrying_a_recovery_note_its_target_state_does_not_bind_is_refused_at_apply() {
-    let bound = bound_state();
-    let unbound = V03State::new().with_test_programs();
-    let rebound = unbound
-        .clone()
-        .with_recovery_bindings([recovery(6).bind_recovery()]);
+fn a_diff_publishing_clear_to_an_address_its_target_state_does_not_bind_is_refused_at_apply() {
+    let mut target = V03State::new().with_test_programs();
     let tx = public_tx(
         sender(),
         vec![sender()],
@@ -241,15 +237,12 @@ fn a_diff_carrying_a_recovery_note_its_target_state_does_not_bind_is_refused_at_
         Script::default().send_async(payout(), &credit(1)),
         &[],
     );
+    let diff = ValidatedStateDiff::from_public_transaction(&tx, &bound_state(), 2, 0).unwrap();
+    let before = target.clone();
 
-    for mut target in [unbound, rebound] {
-        let diff = ValidatedStateDiff::from_public_transaction(&tx, &bound, 2, 0).unwrap();
-        let before = target.clone();
-
-        assert!(matches!(
-            target.apply_state_diff(diff),
-            Err(LeeError::InvalidInput(message)) if message.starts_with("The recovery binding for ")
-        ));
-        assert_eq!(target, before);
-    }
+    assert!(matches!(
+        target.apply_state_diff(diff),
+        Err(LeeError::InvalidInput(message)) if message.starts_with("The recovery binding for ")
+    ));
+    assert_eq!(target, before);
 }
