@@ -935,10 +935,14 @@ impl CrossZoneVerifier {
 
         // Everything below is a property of the peer block just read, so a
         // mismatch is the dispatch lying about it, not a transient condition.
+        let src_tx_index = usize::try_from(msg.src_tx_index).expect("u32 index fits in usize");
+        if peer_block.body.is_reverted(src_tx_index) {
+            return Err(forged(msg, "peer emission transaction reverted".to_owned()));
+        }
         let emission_tx = peer_block
             .body
             .transactions
-            .get(usize::try_from(msg.src_tx_index).expect("u32 index fits in usize"))
+            .get(src_tx_index)
             .ok_or_else(|| forged(msg, "src_tx_index out of range in peer block".to_owned()))?;
 
         let LeeTransaction::Public(emission_tx) = emission_tx else {
@@ -1632,6 +1636,38 @@ mod tests {
                 Err(CrossZoneVerifyError::Forged(_))
             ),
             "a delivery claiming a source block hash the peer block does not have is forged"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_a_dispatch_whose_source_transaction_reverted() {
+        let verifier = verifier();
+        let mut chain = peer_chain(b"hi");
+        chain.pop().expect("chain reaches PEER_BLOCK_ID");
+        let reverted = common::test_utils::produce_dummy_block_with_reverted(
+            PEER_BLOCK_ID,
+            chain.last().map(|block| block.header.hash),
+            vec![emission(b"hi")],
+            vec![0],
+        );
+        chain.push(reverted.clone());
+        cache_chain(&verifier, chain).await;
+
+        let block = produce_dummy_block(
+            9,
+            None,
+            vec![dispatch_naming_block_hash(
+                b"hi",
+                reverted.recompute_hash().0,
+            )],
+        );
+        let err = verifier
+            .verify_block(&block, Slot::from(0))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, CrossZoneVerifyError::Forged(_)) && err.to_string().contains("reverted"),
+            "unexpected error: {err}"
         );
     }
 

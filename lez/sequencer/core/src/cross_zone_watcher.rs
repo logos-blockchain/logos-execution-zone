@@ -666,6 +666,10 @@ async fn record_block_deliveries<S: StorageActorTrait>(
     // RocksDBIO::add_pending_cross_zone_dispatches.
     let mut deliveries = Vec::new();
     for (index, tx) in block.body.transactions.iter().enumerate() {
+        // Effects did not take; the verifier refuses the dispatch identically.
+        if block.body.is_reverted(index) {
+            continue;
+        }
         let LeeTransaction::Public(public_tx) = tx else {
             continue;
         };
@@ -901,6 +905,18 @@ mod tests {
         block_msg(&chain_block(block_id), slot)
     }
 
+    /// A stream item carrying the peer's block `block_id`, its one emission reverted.
+    fn peer_block_msg_reverted(block_id: u64, slot: u64) -> (ZoneMessage, Slot) {
+        let prefix = chain_to(block_id.saturating_sub(1));
+        let block = common::test_utils::produce_dummy_block_with_reverted(
+            block_id,
+            prefix.last().map(|block| block.header.hash),
+            vec![emission()],
+            vec![0],
+        );
+        block_msg(&block, slot)
+    }
+
     /// A stream item carrying a block whose one emission targets
     /// `target_program_id`.
     fn peer_block_msg_to(
@@ -1084,6 +1100,28 @@ mod tests {
         let mut expected = vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)];
         expected.sort_unstable();
         assert_eq!(recorded_keys(&storage_ref).await, expected);
+    }
+
+    #[tokio::test]
+    async fn a_reverted_emission_is_never_recorded() {
+        let (_dir, storage_ref) = store().await;
+        let mut cursor = None;
+        let mut tip = None;
+
+        let outcome = consume_peer_stream(
+            stream::iter(vec![peer_block_msg_reverted(1, 0)]),
+            &peer_context(),
+            &storage_ref,
+            &mut cursor,
+            &mut tip,
+        )
+        .await;
+
+        assert_eq!(outcome, PassOutcome::Drained);
+        assert!(
+            recorded_keys(&storage_ref).await.is_empty(),
+            "an emission whose transaction reverted must not be delivered"
+        );
     }
 
     #[tokio::test]
