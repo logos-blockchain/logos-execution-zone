@@ -6,7 +6,10 @@ use lee::{
     AccountId, Actor, ActorState,
     program::{Program, load_program},
 };
-use lee_core::program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader};
+use lee_core::{
+    RootCall,
+    program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader},
+};
 use program_loader_core::{LoaderActorState as _, MAX_PROGRAM_SEGMENTS, Message, build_segments};
 
 use crate::{AccountIdentity, ExecutionFailureKind, WalletCore, WalletSequencerClient};
@@ -250,6 +253,39 @@ impl<C: WalletSequencerClient> ProgramLoader<'_, C> {
                 segments.get(&account_id)
             }
         }))
+    }
+
+    /// The loader states a message to the loader at `root` reads without declaring them: a
+    /// written segment's successor, and a header's whole segment chain.
+    pub(crate) async fn undeclared_reads(
+        &self,
+        root: &RootCall,
+    ) -> Result<Vec<(AccountId, ActorState)>> {
+        if root.to.program_account_id != PROGRAM_LOADER_ACCOUNT_ID {
+            return Ok(Vec::new());
+        }
+        match borsh::from_slice(&root.message) {
+            Ok(Message::WriteSegment {
+                next_segment: Some(next),
+                ..
+            }) => {
+                let account = self
+                    .0
+                    .get_account_view(Actor::new(next, PROGRAM_LOADER_ACCOUNT_ID))
+                    .await
+                    .with_context(|| format!("failed to fetch segment account {next}"))?
+                    .unwrap_or_default();
+                Ok(vec![(
+                    next,
+                    account.data.actor_state(PROGRAM_LOADER_ACCOUNT_ID).clone(),
+                )])
+            }
+            Ok(
+                Message::CreateHeader { first_segment, .. }
+                | Message::UpdateHeader { first_segment, .. },
+            ) => self.segments(first_segment).await,
+            Ok(Message::WriteSegment { .. }) | Err(_) => Ok(Vec::new()),
+        }
     }
 
     async fn segments(&self, first_segment: AccountId) -> Result<Vec<(AccountId, ActorState)>> {

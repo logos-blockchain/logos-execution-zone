@@ -540,6 +540,9 @@ pub enum PeerHealth {
     /// The peer's live committee is below the configured floor; reading is
     /// suspended until it recovers.
     Suspended,
+    /// The configured genesis pin refused the only anchor the channel offered;
+    /// nothing from this peer verifies until the pin or the channel is fixed.
+    PinMismatch,
     /// A verified-absence verdict was issued against this peer's chain.
     Halted,
     /// A health this client build does not know: a newer server added one.
@@ -849,6 +852,7 @@ mod tests {
             PeerHealth::Lagging,
             PeerHealth::Holed,
             PeerHealth::Suspended,
+            PeerHealth::PinMismatch,
             PeerHealth::Halted,
             PeerHealth::Unknown,
         ] {
