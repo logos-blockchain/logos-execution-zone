@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     hash::Hash,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -12,7 +13,10 @@ use lee_core::{
         BoundaryStep, PublicExecutionContext, PublicOutcome, PublicPart, TransactionEntry,
         TransitionView, WholeExecution,
     },
-    program::{MessageBody, PROGRAM_LOADER_ACCOUNT_ID, Publication, TransactionEvent},
+    program::{
+        MessageBody, PROGRAM_LOADER_ACCOUNT_ID, Publication, ReceiveInput, TransactionEvent,
+        Transition,
+    },
 };
 use public_backend::PublicBackend;
 
@@ -24,6 +28,10 @@ use crate::{
 };
 
 mod public_backend;
+
+/// Cycles charged per loader actor state byte read, as the native loader records none. ~3.7x
+/// below measured cost, kept so the default wallet gas limit covers any legal chain.
+pub const LOADER_CYCLES_PER_BYTE: Cycles = 1;
 
 #[derive(Default)]
 pub struct StateDiff {
@@ -502,6 +510,35 @@ pub const fn charged_cycles<T>(
         Err(LeeError::ProgramExitedWithCode { cycles, .. }) => cycles_used.saturating_add(*cycles),
         Err(_) => cycle_budget,
     }
+}
+
+/// Runs a loader message as Rust, charging [`LOADER_CYCLES_PER_BYTE`] for its pre-state and
+/// every actor state it reads.
+pub fn run_program_loader<'state>(
+    input: &ReceiveInput,
+    actor_state: impl Fn(AccountId) -> &'state ActorState,
+    cycle_budget: Cycles,
+    cycles_used: &mut Cycles,
+) -> Result<(Transition, Option<Commitment>), LeeError> {
+    let bytes_read = Cell::new(byte_len(&input.pre_state));
+    let output = catch_program_loader_panic(|| {
+        program_loader_core::handle_message(input, |account_id| {
+            let read = actor_state(account_id);
+            bytes_read.set(bytes_read.get().saturating_add(byte_len(read)));
+            read
+        })
+    })?;
+    let call_cycles = bytes_read.get().saturating_mul(LOADER_CYCLES_PER_BYTE);
+    let budget = cycle_budget.saturating_sub(*cycles_used);
+    ensure!(call_cycles <= budget, LeeError::OutOfGas { budget });
+    *cycles_used = cycles_used
+        .checked_add(call_cycles)
+        .expect("cycle sums fit u64: the charge is within the budget");
+    Ok(output)
+}
+
+fn byte_len(actor_state: &ActorState) -> u64 {
+    u64::try_from(actor_state.len()).expect("an actor state's length fits u64")
 }
 
 /// `program_loader_core`'s functions panic on malformed input, mirroring the assert-based style
