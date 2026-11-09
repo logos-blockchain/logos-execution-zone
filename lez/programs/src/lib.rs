@@ -235,6 +235,7 @@ mod inner {
                     }),
                     channel_id: Some(CHANNEL_ID),
                     entries,
+                    params_votes: BTreeMap::new(),
                 };
                 (
                     committee_actor().account_id,

@@ -119,6 +119,7 @@ pub fn sequencer_stake_config_account(
             channel_params,
             channel_id,
             entries: BTreeMap::new(),
+            params_votes: BTreeMap::new(),
         }
         .to_bytes()
         .into(),

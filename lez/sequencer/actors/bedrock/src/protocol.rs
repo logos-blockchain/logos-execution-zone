@@ -205,6 +205,10 @@ pub struct LiveChannelConfig {
     pub required_signatures: u16,
     /// Signatures Bedrock demands of a channel transfer, exactly.
     pub transfer_threshold: u16,
+    /// Slots one sequencer's posting turn lasts.
+    pub posting_timeframe: u32,
+    /// Idle slots after which Bedrock passes a turn on.
+    pub posting_timeout: u32,
 }
 
 /// Start following the channel's finalized history, publishing it to the `finalized_*` topics.

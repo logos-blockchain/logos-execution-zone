@@ -264,6 +264,7 @@ fn committee_config(committee_size: usize) -> (Actor, ActorState) {
         }),
         channel_id: Some(CHANNEL_ID),
         entries,
+        params_votes: BTreeMap::new(),
     };
     (committee_actor(), config.to_bytes().into())
 }

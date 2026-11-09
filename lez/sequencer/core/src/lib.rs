@@ -2308,9 +2308,13 @@ fn config_target(
         .collect();
     let new_keys = committee_discovery::committee_update(
         final_state,
-        &live_keys,
-        live.required_signatures,
-        live.transfer_threshold,
+        &committee_discovery::LiveChannel {
+            accredited_keys: &live_keys,
+            configuration_threshold: live.required_signatures,
+            transfer_threshold: live.transfer_threshold,
+            posting_timeframe: live.posting_timeframe,
+            posting_timeout: live.posting_timeout,
+        },
     )?;
     let Some(channel_params) = committee_discovery::channel_params(final_state) else {
         warn!("sequencer_stake config carries no channel posting params, no committee update");

@@ -588,6 +588,7 @@ mod tests {
                     )
                 })
                 .collect(),
+            params_votes: BTreeMap::new(),
         }
     }
 

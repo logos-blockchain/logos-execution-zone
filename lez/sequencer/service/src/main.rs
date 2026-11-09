@@ -7,6 +7,7 @@ use std::{
 
 use anyhow::{Context as _, Result, ensure};
 use clap::{Parser, Subcommand, builder::BoolishValueParser};
+use lee::Balance;
 use libp2p::{Multiaddr, multiaddr::Protocol};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use sequencer_core::{Ed25519PublicKey, config::GossipConfig};
@@ -62,7 +63,7 @@ enum Command {
         from: CliAccountMention,
         /// Defaults to the minimum stake.
         #[clap(long)]
-        amount: Option<u128>,
+        amount: Option<Balance>,
         /// Defaults to `$LEE_WALLET_HOME_DIR`, else `~/.lee/wallet`.
         #[clap(long)]
         wallet_home: Option<PathBuf>,
@@ -77,7 +78,21 @@ enum Command {
         destination: CliAccountMention,
         /// Defaults to the whole stake.
         #[clap(long)]
-        amount: Option<u128>,
+        amount: Option<Balance>,
+        /// Defaults to `$LEE_WALLET_HOME_DIR`, else `~/.lee/wallet`.
+        #[clap(long)]
+        wallet_home: Option<PathBuf>,
+    },
+    /// Votes, as a staked key's owner, for new channel params, through the wallet's sequencer.
+    ///
+    /// Params left out keep the values in force, and voting with none withdraws the key's vote.
+    /// The params change once two thirds of the accredited keys vote for the same values.
+    VoteParams {
+        /// Accredited channel signing public key voting, in hex.
+        #[clap(long, value_parser = operator::parse_sequencer_key)]
+        sequencer_key: SequencerKey,
+        #[clap(flatten)]
+        changes: operator::ParamsArgs,
         /// Defaults to `$LEE_WALLET_HOME_DIR`, else `~/.lee/wallet`.
         #[clap(long)]
         wallet_home: Option<PathBuf>,
@@ -173,6 +188,11 @@ async fn main() -> Result<()> {
             amount,
             wallet_home,
         } => operator::unstake(wallet_home, sequencer_key, destination, amount).await,
+        Command::VoteParams {
+            sequencer_key,
+            changes,
+            wallet_home,
+        } => operator::vote_params(wallet_home, sequencer_key, changes).await,
     }
 }
 

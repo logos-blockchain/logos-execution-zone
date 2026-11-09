@@ -1692,6 +1692,8 @@ fn live_channel(keys: Vec<Ed25519PublicKey>) -> LiveChannelConfig {
         config_tip: MsgId::root(),
         required_signatures: 1,
         transfer_threshold: 1,
+        posting_timeframe: config::default_channel_params().posting_timeframe,
+        posting_timeout: config::default_channel_params().posting_timeout,
     }
 }
 

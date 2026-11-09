@@ -1,4 +1,4 @@
-//! The `setup`, `stake` and `unstake` commands.
+//! The `setup`, `stake`, `unstake` and `vote-params` commands.
 #![expect(
     clippy::print_stdout,
     reason = "these commands report to the operator on stdout"
@@ -7,11 +7,13 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
-use lee::{AccountId, Actor};
+use lee::{AccountId, Actor, Balance};
 use sequencer_core::config::GenesisAction;
 use sequencer_service::SequencerConfig;
 use sequencer_service_rpc::SequencerClient;
-use sequencer_stake_core::{SequencerKey, SequencerStakeConfig};
+use sequencer_stake_core::{
+    ChannelParams, SequencerKey, SequencerStakeConfig, params_vote_threshold,
+};
 use wallet::{
     AccountIdentity, WalletCore, account::AccountIdWithPrivacy, cli::CliAccountMention,
     program_facades::sequencer_stake::SequencerStake,
@@ -19,6 +21,36 @@ use wallet::{
 
 /// The node's config, read by `start`.
 pub const CONFIG_FILE: &str = "sequencer_config.json";
+
+/// Channel params to vote for; each one left out keeps the value in force.
+#[derive(Debug, clap::Args)]
+pub struct ParamsArgs {
+    #[clap(long)]
+    minimum_sequencer_stake: Option<Balance>,
+    /// In slots.
+    #[clap(long)]
+    posting_timeframe: Option<u32>,
+    /// In slots.
+    #[clap(long)]
+    posting_timeout: Option<u32>,
+    /// In bytes.
+    #[clap(long)]
+    max_block_size: Option<u64>,
+}
+
+impl ParamsArgs {
+    fn applied_to(&self, params: ChannelParams) -> ChannelParams {
+        ChannelParams {
+            minimum_sequencer_stake: self
+                .minimum_sequencer_stake
+                .unwrap_or(params.minimum_sequencer_stake),
+            posting_timeframe: self.posting_timeframe.unwrap_or(params.posting_timeframe),
+            posting_timeout: self.posting_timeout.unwrap_or(params.posting_timeout),
+            max_block_size: self.max_block_size.unwrap_or(params.max_block_size),
+            finality_depth: params.finality_depth,
+        }
+    }
+}
 
 /// Creates `home` with its config, channel signing key and Bedrock funding public key.
 pub fn setup(
@@ -116,7 +148,7 @@ pub async fn stake(
     wallet_home: Option<PathBuf>,
     key: SequencerKey,
     from: CliAccountMention,
-    amount: Option<u128>,
+    amount: Option<Balance>,
 ) -> Result<()> {
     let mut wallet = open_wallet(wallet_home)?;
     let funding = public_account(&wallet, &from)?;
@@ -160,7 +192,7 @@ pub async fn unstake(
     wallet_home: Option<PathBuf>,
     key: SequencerKey,
     destination: CliAccountMention,
-    amount: Option<u128>,
+    amount: Option<Balance>,
 ) -> Result<()> {
     let wallet = open_wallet(wallet_home)?;
     let destination = public_account(&wallet, &destination)?;
@@ -201,6 +233,69 @@ pub async fn unstake(
         .map_err(|err| anyhow!("Failed to submit the UnstakeRequest transaction: {err:?}"))?;
     println!("Releasing {amount} to {destination}: {tx_hash}");
     confirm(&wallet, tx_hash).await
+}
+
+/// Votes, as `key`'s stake owner, for the params in force with `changes` applied; no changes
+/// withdraws `key`'s vote.
+pub async fn vote_params(
+    wallet_home: Option<PathBuf>,
+    key: SequencerKey,
+    changes: ParamsArgs,
+) -> Result<()> {
+    let wallet = open_wallet(wallet_home)?;
+    let config = stake_config(&wallet).await?;
+    let in_force = config
+        .channel_params
+        .context("The stake config has no channel params")?;
+    let entry = config
+        .entries
+        .get(&key)
+        .context("This channel signing key has no stake")?;
+    ensure!(
+        config.is_accredited_committee_member(&key),
+        "This channel signing key is not accredited, so it cannot vote"
+    );
+    // The wallet drops a signature it holds no key for without saying so.
+    ensure!(
+        wallet
+            .get_account_public_signing_key(entry.account_id)
+            .is_some(),
+        "The wallet holds no key for the stake's ownership account {}; import it with `wallet \
+         account import public`",
+        entry.account_id
+    );
+
+    let params = changes.applied_to(in_force);
+    let tx_hash = SequencerStake(&wallet)
+        .send_params_vote(entry.account_id, params, None)
+        .await
+        .map_err(|err| anyhow!("Failed to submit the VoteChannelParams transaction: {err:?}"))?;
+    if params == in_force {
+        println!("Withdrawing this key's vote: {tx_hash}");
+    } else {
+        println!("Voting for {params:?}: {tx_hash}");
+    }
+    confirm(&wallet, tx_hash).await?;
+
+    let after = stake_config(&wallet).await?;
+    if after.channel_params == Some(params) {
+        if params != in_force {
+            println!("The channel params are now {params:?}");
+        }
+    } else if after.params_votes.get(&key) == Some(&params) {
+        let backing = after
+            .params_votes
+            .iter()
+            .filter(|(voter, voted)| {
+                **voted == params && after.is_accredited_committee_member(voter)
+            })
+            .count();
+        let needed = params_vote_threshold(after.accredited_committee_members_count());
+        println!("{backing} of the {needed} accredited keys these params need have voted for them");
+    } else {
+        bail!("The vote did not take effect; the transaction was likely rejected");
+    }
+    Ok(())
 }
 
 fn open_wallet(home: Option<PathBuf>) -> Result<WalletCore<SequencerClient>> {
@@ -245,7 +340,7 @@ async fn stake_config(wallet: &WalletCore<SequencerClient>) -> Result<SequencerS
         .context("Failed to decode the stake config")
 }
 
-fn minimum_stake(config: &SequencerStakeConfig) -> Result<u128> {
+fn minimum_stake(config: &SequencerStakeConfig) -> Result<Balance> {
     Ok(config
         .channel_params
         .context("The stake config has no channel params")?
