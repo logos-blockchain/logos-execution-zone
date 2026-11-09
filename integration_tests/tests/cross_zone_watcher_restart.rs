@@ -21,6 +21,7 @@ use common::transaction::LeeTransaction;
 use cross_zone_outbox_core::{outbox_pda, outbox_pda_seed};
 use integration_tests::{
     config::{self, SequencerPartialConfig},
+    init_logger,
     setup::{SequencerSetup, sequencer_client, setup_bedrock_node},
 };
 use lee::{
@@ -45,6 +46,7 @@ const PING_PAYLOAD: &[u8] = b"hello-cross-zone";
 
 #[test]
 async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Result<()> {
+    init_logger();
     // Declared first so it outlives both zones (drops run in reverse order).
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
