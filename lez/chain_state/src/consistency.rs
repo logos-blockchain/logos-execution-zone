@@ -280,7 +280,8 @@ where
             .await?;
         let mut stream = std::pin::pin!(stream);
 
-        while let Some((msg, slot)) = stream.next().await {
+        while let Some(item) = stream.next().await {
+            let (msg, slot) = item?;
             if check.observe(&msg, slot).is_some() {
                 break;
             }
@@ -320,7 +321,7 @@ fn frontier_verdict(anchor_slot: Slot, channel_tip_slot: Option<Slot>) -> Option
 mod tests {
     use common::block::HashableBlockData;
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
-    use logos_blockchain_zone_sdk::ZoneBlock;
+    use logos_blockchain_zone_sdk::{UnverifiedEd25519PublicKey, ZoneBlock};
 
     use super::*;
 
@@ -330,6 +331,7 @@ mod tests {
             prev_block_hash: HashType([0; 32]),
             timestamp,
             transactions: vec![],
+            reverted: Vec::new(),
         }
         .into_pending_block()
     }
@@ -339,6 +341,7 @@ mod tests {
         ZoneMessage::Block(ZoneBlock {
             id: MsgId::from([0_u8; 32]),
             data: Inscription::try_from(bytes.as_slice()).expect("inscription"),
+            signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
         })
     }
 
@@ -413,6 +416,7 @@ mod tests {
         let garbage = ZoneMessage::Block(ZoneBlock {
             id: MsgId::from([0_u8; 32]),
             data: Inscription::try_from(&[1_u8, 2, 3][..]).expect("inscription"),
+            signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
         });
         assert!(matches!(
             anchor.probe_anchor_slot(&garbage, Slot::from(1_000)),
@@ -428,6 +432,7 @@ mod tests {
         let garbage = ZoneMessage::Block(ZoneBlock {
             id: MsgId::from([0_u8; 32]),
             data: Inscription::try_from(&[1_u8, 2, 3][..]).expect("inscription"),
+            signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
         });
         assert!(matches!(
             anchor.probe_anchor_slot(&garbage, Slot::from(1_000)),

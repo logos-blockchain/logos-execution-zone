@@ -92,6 +92,7 @@ pub fn produce_dummy_block(
         prev_block_hash: prev_hash.unwrap_or_default(),
         timestamp: id.saturating_mul(100),
         transactions,
+        reverted: Vec::new(),
     };
 
     block_data.into_pending_block()

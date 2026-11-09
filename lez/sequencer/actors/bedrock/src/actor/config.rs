@@ -9,8 +9,9 @@ pub struct Config {
     pub node_url: Url,
     pub basic_auth: Option<BasicAuthCredentials>,
     pub channel_id: ChannelId,
-    pub bedrock_signing_key: Ed25519Key,
+    pub channel_signing_key: Ed25519Key,
     pub funding_pk: ZkPublicKey,
     pub priority_fee_percent: u64,
     pub resubmit_interval: Duration,
+    pub stale_refund_slots: u64,
 }

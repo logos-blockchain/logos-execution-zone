@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use jsonrpsee::{
     core::async_trait,
@@ -10,7 +9,8 @@ use kameo::{
     actor::{ActorRef, Recipient},
     error::{Infallible, SendError},
 };
-use log::{error, warn};
+use log::debug;
+use sequencer_core::gossip::MaxBlockSizeReceiver;
 use sequencer_executor_actor::ExecutorActorTrait;
 use sequencer_gossip_actor::protocol::Publish;
 use sequencer_service_protocol::{
@@ -23,21 +23,21 @@ use sequencer_service_protocol::{
 
 pub struct Service<E: ExecutorActorTrait> {
     executor_ref: ActorRef<E>,
-    max_block_size: ByteSize,
+    max_block_size_rx: MaxBlockSizeReceiver,
     gossip: Option<Recipient<Publish>>,
 }
 
 impl<E: ExecutorActorTrait> Service<E> {
     pub fn new(
         executor_ref: ActorRef<E>,
-        max_block_size: ByteSize,
+        max_block_size_rx: MaxBlockSizeReceiver,
         gossip: Option<Recipient<Publish>>,
     ) -> Self {
         sequencer_rpc_server_actor_metrics::init();
 
         Self {
             executor_ref,
-            max_block_size,
+            max_block_size_rx,
             gossip,
         }
     }
@@ -57,8 +57,8 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
                 u64::try_from(encoded_tx.len()).expect("Transaction size should fit in u64");
 
             let max_tx_size = self
-                .max_block_size
-                .as_u64()
+                .max_block_size_rx
+                .borrow()
                 .saturating_sub(sequencer_core::config::BLOCK_OVERHEAD);
 
             if tx_size > max_tx_size {
@@ -69,16 +69,13 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
                 ));
             }
 
-            let authenticated_tx = tx
-                .transaction_stateless_check()
-                .inspect_err(|err| warn!("Error at pre_check {err:#?}"))
-                .map_err(|err| {
-                    ErrorObjectOwned::owned(
-                        ErrorCode::InvalidParams.code(),
-                        err.to_string(),
-                        None::<()>,
-                    )
-                })?;
+            let authenticated_tx = tx.transaction_stateless_check().map_err(|err| {
+                ErrorObjectOwned::owned(
+                    ErrorCode::InvalidParams.code(),
+                    err.to_string(),
+                    None::<()>,
+                )
+            })?;
 
             // Sequencer-only programs (the cross-zone inbox) are injected by the
             // watcher; a user must not invoke them top-level, or anyone could forge
@@ -101,7 +98,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         let authenticated_tx = res.await.inspect_err(|err| {
             sequencer_rpc_server_actor_metrics::increment_before_mempool_failed_transactions_total(
             );
-            error!("Transaction failed before reaching mempool: {err:#?}");
+            debug!("Transaction failed before reaching mempool: {err:#?}");
         })?;
 
         self
@@ -254,11 +251,11 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
     async fn get_proofs_and_root(
         &self,
         commitments: Vec<Commitment>,
-        message_position: Option<CommitmentPosition>,
+        message_positions: Vec<CommitmentPosition>,
     ) -> Result<
         (
             Vec<Option<MembershipProof>>,
-            Option<MembershipProof>,
+            Vec<Option<MembershipProof>>,
             CommitmentSetDigest,
         ),
         ErrorObjectOwned,
@@ -266,7 +263,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetProofsAndRoot {
                 commitments,
-                message_position,
+                message_positions,
             })
             .await
             .map_err(map_infallible_error)
@@ -429,8 +426,6 @@ const fn map_fee_state_quote(
 fn map_executor_error<M>(
     err: SendError<M, sequencer_executor_actor::error::Error>,
 ) -> ErrorObjectOwned {
-    const MEMPOOL_IS_FULL_ERROR_CODE: i32 = -31900;
-
     match err {
         SendError::HandlerError(handle_err) => match handle_err {
             refused @ sequencer_executor_actor::error::Error::SystemApprovalRefused(_) => {
@@ -440,15 +435,24 @@ fn map_executor_error<M>(
                     None::<()>,
                 )
             }
-            incorrect_fee @ sequencer_executor_actor::error::Error::IncorrectFee(_) => {
+            // A reserve the head fee outgrew gets its own code: priced again, it may pass.
+            below @ sequencer_executor_actor::error::Error::PrivateFeeBelowHead { .. } => {
                 ErrorObjectOwned::owned(
-                    ErrorCode::InvalidParams.code(),
-                    format!("{incorrect_fee:#}"),
+                    sequencer_service_rpc::PRIVATE_FEE_BELOW_HEAD_ERROR_CODE,
+                    below.to_string(),
                     None::<()>,
                 )
             }
+            invalid @ sequencer_executor_actor::error::Error::IncorrectFee(_) => {
+                // With its cause, which the sender is shown.
+                let message = std::error::Error::source(&invalid).map_or_else(
+                    || invalid.to_string(),
+                    |cause| format!("{invalid}: {cause:#}"),
+                );
+                ErrorObjectOwned::owned(ErrorCode::InvalidParams.code(), message, None::<()>)
+            }
             sequencer_executor_actor::error::Error::MempoolIsFull => ErrorObjectOwned::owned(
-                MEMPOOL_IS_FULL_ERROR_CODE,
+                sequencer_service_rpc::MEMPOOL_IS_FULL_ERROR_CODE,
                 "Mempool is full".to_owned(),
                 None::<()>,
             ),
@@ -476,4 +480,24 @@ fn map_infallible_error<M>(err: SendError<M, Infallible>) -> ErrorObjectOwned {
 
 fn internal_error(err: impl std::fmt::Display) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_reserve_below_the_head_fee_gets_the_reprice_code() {
+        let below = map_executor_error(SendError::<(), _>::HandlerError(
+            sequencer_executor_actor::error::Error::PrivateFeeBelowHead {
+                required: 2,
+                reserve: 1,
+            },
+        ));
+        assert_eq!(
+            below.code(),
+            sequencer_service_rpc::PRIVATE_FEE_BELOW_HEAD_ERROR_CODE
+        );
+        assert!(below.message().contains("below the 2 required"));
+    }
 }

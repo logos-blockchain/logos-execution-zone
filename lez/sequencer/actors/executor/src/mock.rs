@@ -152,6 +152,7 @@ mockall::mock! {
             msg: GetFeeQuote,
             ctx: &mut Context<Self, FeeStateQuote>
         ) -> FeeStateQuote;
+
     }
 }
 

@@ -44,7 +44,8 @@ pub enum Message {
         first_segment: AccountId,
         immutable: bool,
     },
-    /// [`Message::CreateHeader`], refused unless the chain's image ID is `image_id`.
+    /// Creates a header as [`Message::CreateHeader`] does, but fails unless the chain's image ID
+    /// is `image_id`.
     CreateHeaderOf {
         first_segment: AccountId,
         image_id: ProgramId,

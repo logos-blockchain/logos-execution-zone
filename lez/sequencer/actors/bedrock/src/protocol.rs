@@ -4,6 +4,7 @@ pub use chain_state::ChannelEntry;
 use common::block::Block;
 use kameo::Reply;
 pub use logos_blockchain_core::mantle::NoteId;
+use logos_blockchain_core::mantle::{OpProof, transactions::Ops};
 pub use logos_blockchain_key_management_system_service::keys::Ed25519PublicKey;
 pub use logos_blockchain_zone_sdk::{
     Slot, ZoneMessage,
@@ -13,11 +14,14 @@ pub use logos_blockchain_zone_sdk::{
         SequencerCheckpoint as Checkpoint, WithdrawArg, WithdrawInfo,
     },
 };
-pub use sequencer_channel_config_actor::protocol::ConfigTarget;
+pub use sequencer_channel_signing_actor::protocol::ConfigTarget;
 pub use sequencer_stake_core::ChannelParams;
 
 /// A boxed, pinned, Send stream.
 pub type BoxStream<T> = std::pin::Pin<Box<dyn futures::Stream<Item = T> + Send>>;
+
+/// What [`ReadChannel`] serves: a failed read is an `Err` item, not the stream's end.
+pub type ChannelReadStream = BoxStream<crate::Result<(ZoneMessage, Slot)>>;
 
 /// Version of the channel view the actor holds, bumped by every broadcast update
 /// and every publish.
@@ -70,9 +74,16 @@ pub enum ChannelEvent {
 
     Turn {
         our_turn_to_write: bool,
+        /// Slot the current turn started at, if known. A new one is a new turn,
+        /// even when it is ours again.
+        starting_slot: Option<Slot>,
     },
 
     Config(LiveChannelConfig),
+
+    /// Deposits seen in L1 blocks before finality. Observations, not view: a
+    /// reorg can drop one or deliver it again.
+    Deposits(Vec<DepositInfo>),
 }
 
 /// How the unfinalized message lineage moved across one update.
@@ -120,6 +131,8 @@ pub struct LiveChannelConfig {
     pub config_tip: MsgId,
     /// Signatures Bedrock demands of the next config op, exactly.
     pub required_signatures: u16,
+    /// Signatures Bedrock demands of a channel transfer, exactly.
+    pub transfer_threshold: u16,
 }
 
 /// Create the channel and write `genesis` into it in one Mantle tx.
@@ -131,6 +144,7 @@ pub struct CreateChannel {
     pub keys: Vec<Ed25519PublicKey>,
     pub channel_params: ChannelParams,
     pub configuration_threshold: u16,
+    pub transfer_threshold: u16,
 }
 
 /// Publish block to the configured channel.
@@ -145,6 +159,83 @@ pub struct PublishBlock {
     /// the caller has not applied yet moved the channel under it.
     ///
     /// [`None`] will omit the check.
+    pub expected_seq: Option<ChannelSeq>,
+}
+
+/// Funds `block` chained on `parent` and bundled with a transfer re-creating
+/// `notes` unchanged, so it lands only where they exist; submits nothing.
+pub struct PreparePin {
+    pub block: Block,
+    pub parent: MsgId,
+    /// Deposited channel notes the block mints from.
+    pub notes: Vec<NoteId>,
+    /// As in [`PublishBlock::expected_seq`].
+    pub expected_seq: Option<ChannelSeq>,
+}
+
+/// A funded pinned block, short of the signatures its transfer needs.
+pub struct PreparedPin {
+    pub(crate) tx: Ops,
+    pub(crate) msg_id: MsgId,
+    pub(crate) parent: MsgId,
+    /// Proof of the fee transfer the wallet appended, if it appended one.
+    #[cfg_attr(
+        not(feature = "actor"),
+        expect(dead_code, reason = "Only the actor publishes a pin")
+    )]
+    pub(crate) fee_proof: Option<OpProof>,
+    /// Id of the pinned block, for the publish log.
+    #[cfg_attr(
+        not(feature = "actor"),
+        expect(dead_code, reason = "Only the actor publishes a pin")
+    )]
+    pub(crate) block_id: u64,
+    /// Encoded size of the pinned block in bytes, for the publish log.
+    #[cfg_attr(
+        not(feature = "actor"),
+        expect(dead_code, reason = "Only the actor publishes a pin")
+    )]
+    pub(crate) block_size: usize,
+}
+
+impl PreparedPin {
+    /// The transaction the transfer's signers sign.
+    #[must_use]
+    pub const fn tx(&self) -> &Ops {
+        &self.tx
+    }
+
+    #[must_use]
+    pub const fn msg_id(&self) -> MsgId {
+        self.msg_id
+    }
+
+    #[must_use]
+    pub const fn parent(&self) -> MsgId {
+        self.parent
+    }
+
+    /// A pin conjured outside the actor, for a mocked channel to serve.
+    #[cfg(feature = "mock")]
+    #[must_use]
+    pub const fn mocked(msg_id: MsgId, parent: MsgId) -> Self {
+        Self {
+            tx: Ops::empty(),
+            msg_id,
+            parent,
+            fee_proof: None,
+            block_id: 0,
+            block_size: 0,
+        }
+    }
+}
+
+/// Publishes a prepared pin with exactly the channel's transfer threshold of
+/// signatures.
+pub struct PublishPin {
+    pub prepared: PreparedPin,
+    pub signatures: Vec<IndexedSignature>,
+    /// As in [`PublishBlock::expected_seq`].
     pub expected_seq: Option<ChannelSeq>,
 }
 
@@ -221,6 +312,9 @@ impl AccreditedKeys {
         self.keys.get(usize::from(self.tip_sequencer)).copied()
     }
 }
+
+/// The channel's notes on the current L1 branch, finalized or not.
+pub struct GetChannelNotes;
 
 /// Get current channel frontier slot on the connected chain.
 pub struct GetChannelTipSlot;

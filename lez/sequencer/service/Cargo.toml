@@ -10,34 +10,40 @@ workspace = true
 
 [dependencies]
 sequencer_core.workspace = true
-sequencer_channel_config_actor.workspace = true
+sequencer_channel_signing_actor.workspace = true
 sequencer_gossip_actor = { workspace = true, features = ["actor"] }
 sequencer_rpc_server_actor = { workspace = true, optional = true }
 sequencer_executor_actor = { workspace = true, features = ["actor"] }
 sequencer_slasher_actor.workspace = true
 sequencer_storage_actor = { workspace = true, features = ["actor"] }
 sequencer_bedrock_actor = { workspace = true, features = ["actor"] }
-lee = { workspace = true, optional = true }
+lee.workspace = true
 lee_core = { workspace = true, optional = true }
 common.workspace = true
 borsh = { workspace = true, optional = true }
-wallet = { workspace = true, optional = true }
-sequencer_stake_core = { workspace = true, optional = true }
+programs.workspace = true
+system_accounts.workspace = true
+wallet.workspace = true
+sequencer_stake_core.workspace = true
+sequencer_service_rpc.workspace = true
+sequencer_service_metrics.workspace = true
 system_upgrader_core = { workspace = true, optional = true }
 
 clap = { workspace = true, features = ["derive", "env"] }
 anyhow.workspace = true
+axum.workspace = true
 env_logger.workspace = true
 kameo.workspace = true
 kameo_actors.workspace = true
 hex.workspace = true
+libp2p.workspace = true
 log.workspace = true
 metrics-exporter-prometheus.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 futures.workspace = true
 glob.workspace = true
-bytesize = { workspace = true, optional = true }
+serde_json.workspace = true
 
 [[bin]]
 name = "sequencer_service"
@@ -54,16 +60,11 @@ name = "approve_system_change"
 path = "src/bin/approve_system_change.rs"
 required-features = ["approve_system_change"]
 
-[[bin]]
-name = "submit_stake"
-path = "src/bin/submit_stake.rs"
-required-features = ["submit_stake"]
-
 [features]
 default = ["rpc"]
 # Serves the sequencer over the JSON-RPC API. Off for embedders that hold a
 # `SequencerHandle` and talk to the executor directly.
-rpc = ["dep:sequencer_rpc_server_actor", "dep:bytesize"]
+rpc = ["dep:sequencer_rpc_server_actor"]
 # In-process guest execution with a memoized memory image, via `lee`.
 prove = ["sequencer_core/prove"]
 # Runs the sequencer in standalone mode without depending on Bedrock.
@@ -75,14 +76,6 @@ inscribe_garbage = [
   "sequencer_storage_actor/mock",
   "sequencer_bedrock_actor/test-utils",
   "dep:borsh",
-  "dep:lee",
 ]
 # Needed only by the approve_system_change bin.
-approve_system_change = [
-  "dep:lee",
-  "dep:lee_core",
-  "dep:borsh",
-  "dep:system_upgrader_core",
-]
-# Needed only by the submit_stake bin.
-submit_stake = ["dep:lee", "dep:wallet", "dep:sequencer_stake_core"]
+approve_system_change = ["dep:lee_core", "dep:borsh", "dep:system_upgrader_core"]

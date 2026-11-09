@@ -14,7 +14,7 @@ use kameo::{
 use logos_blockchain_core::proofs::channel_multi_sig_proof::IndexedSignature;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
 use mempool::{MemPool, MemPoolHandle};
-use sequencer_channel_config_actor::{Signature, Wire};
+use sequencer_channel_signing_actor::{Signature, Wire};
 use sequencer_core::{TransactionOrigin, config::GossipConfig, gossip::accredited_keys_channel};
 use sequencer_slasher_actor::{Approval, Offence};
 use sequencer_stake_core::SequencerKey;
@@ -71,7 +71,7 @@ impl Message<Approval> for ApprovalSink {
 }
 
 /// Forwards every channel-config message the gossip actor delivers into a
-/// channel the test can assert on; stands in for the channel-config actor.
+/// channel the test can assert on; stands in for the channel-signing actor.
 struct ConfigSink(mpsc::UnboundedSender<Wire>);
 
 impl Actor for ConfigSink {
@@ -242,7 +242,7 @@ async fn start_node(secret: [u8; 32], bootstrap: Vec<libp2p::Multiaddr>) -> (Tes
         CHANNEL,
         Ed25519Key::from_bytes(&secret),
         sink_ref.recipient(),
-        TEST_MAX_BLOCK_SIZE,
+        tokio::sync::watch::channel(TEST_MAX_BLOCK_SIZE).1,
         unscreened_mempool_submit(mempool_handle),
         accredited_keys_channel().1,
         accredited_keys_channel().1,
@@ -283,7 +283,7 @@ async fn wait_for(timeout: Duration, mut condition: impl AsyncFnMut() -> bool) -
 }
 
 #[test]
-fn a_peer_id_yields_the_bedrock_key_it_was_derived_from() {
+fn a_peer_id_yields_the_channel_signing_key_it_was_derived_from() {
     let key = Ed25519Key::from_bytes(&[9; 32]);
     let mut secret = key.clone().into_unsecured().to_bytes();
     let peer_id = libp2p::identity::Keypair::ed25519_from_bytes(&mut *secret)
@@ -318,7 +318,7 @@ async fn new_binds_and_reports_listen_addr() {
         [1; 32],
         Ed25519Key::from_bytes(&[9; 32]),
         test_approval_sink(),
-        TEST_MAX_BLOCK_SIZE,
+        tokio::sync::watch::channel(TEST_MAX_BLOCK_SIZE).1,
         unscreened_mempool_submit(test_mempool_handle()),
         accredited_keys_channel().1,
         accredited_keys_channel().1,
@@ -340,7 +340,7 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         [1; 32],
         Ed25519Key::from_bytes(&[9; 32]),
         test_approval_sink(),
-        TEST_MAX_BLOCK_SIZE,
+        tokio::sync::watch::channel(TEST_MAX_BLOCK_SIZE).1,
         unscreened_mempool_submit(test_mempool_handle()),
         accredited_keys_channel().1,
         accredited_keys_channel().1,
@@ -368,7 +368,7 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         [1; 32],
         Ed25519Key::from_bytes(&[10; 32]),
         test_approval_sink(),
-        TEST_MAX_BLOCK_SIZE,
+        tokio::sync::watch::channel(TEST_MAX_BLOCK_SIZE).1,
         unscreened_mempool_submit(test_mempool_handle()),
         accredited_keys_channel().1,
         accredited_keys_channel().1,
@@ -627,7 +627,7 @@ async fn a_channel_config_signature_reaches_the_other_nodes() {
     drop((node_a, node_b, node_c));
 }
 
-/// The channel-config actor re-announces the same draft byte-identically, so
+/// The channel-signing actor re-announces the same draft byte-identically, so
 /// a verbatim re-announcement has to reach peers rather than count as a
 /// duplicate.
 #[tokio::test]

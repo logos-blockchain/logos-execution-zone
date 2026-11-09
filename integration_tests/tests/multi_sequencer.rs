@@ -60,7 +60,7 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
         .context("Missing sequencer B")?;
     let indexer = ctx.indexer_client();
 
-    let pub_a = Ed25519Key::from_bytes(&config::BEDROCK_SIGNING_KEY).public_key();
+    let pub_a = Ed25519Key::from_bytes(&config::CHANNEL_SIGNING_KEY).public_key();
     let pub_b = config::sequencer_signing_key_from_seed(1).public_key();
 
     let observer = spawn_channel_observer(ctx.bedrock_addr(), channel).await?;

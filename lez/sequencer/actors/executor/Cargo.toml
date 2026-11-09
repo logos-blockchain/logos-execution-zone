@@ -11,7 +11,7 @@ workspace = true
 # Adds actor implementation.
 actor = [
   "dep:sequencer_executor_actor_metrics",
-  "dep:lee",
+  "dep:fee_core",
   "dep:sequencer_core",
   "dep:mempool",
 
@@ -33,7 +33,8 @@ system_upgrader_core.workspace = true
 sequencer_executor_actor_metrics = { workspace = true, features = [
   "record",
 ], optional = true }
-lee = { workspace = true, optional = true }
+lee.workspace = true
+fee_core = { workspace = true, optional = true }
 sequencer_core = { workspace = true, optional = true }
 mempool = { workspace = true, optional = true }
 
@@ -68,5 +69,4 @@ env_logger.workspace = true
 mockall.workspace = true
 tempfile.workspace = true
 bytesize.workspace = true
-num-bigint.workspace = true
 borsh.workspace = true

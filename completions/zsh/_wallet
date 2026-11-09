@@ -24,7 +24,8 @@ _wallet() {
                 'bridge:Bridge program interaction subcommand'
                 'check-health:Check the wallet can connect to the node and builtin local programs match the remote versions'
                 'config:Command to setup config, get and set config fields'
-                'restore-keys:Restoring keys from given password at given depth'
+                'set-password:Set, change or remove the wallet storage password'
+                'restore-keys:Restoring keys from a mnemonic phrase at given depth'
                 'deploy-program:Deploy a program'
                 'help:Print help message or the help of the given subcommand(s)'
             )
@@ -161,6 +162,11 @@ _wallet_account() {
                     _arguments \
                         '(-l --long)'{-l,--long}'[Display detailed account information]'
                     ;;
+                sync-private)
+                    _arguments \
+                        '--rescan[Rediscover private accounts from genesis]' \
+                        '(-y --yes)'{-y,--yes}'[Skip the confirmation prompt before the chain scan]'
+                    ;;
                 new)
                     _arguments -C \
                         '1: :->account_type' \
@@ -277,7 +283,8 @@ _wallet_config() {
 # restore-keys subcommand
 _wallet_restore_keys() {
     _arguments \
-        '(-d --depth)'{-d,--depth}'[How deep in tree accounts may be]:depth:'
+        '(-d --depth)'{-d,--depth}'[How deep in tree accounts may be]:depth:' \
+        '(-y --yes)'{-y,--yes}'[Skip the confirmation prompt before the chain scan]'
 }
 
 # deploy-program subcommand
@@ -296,7 +303,8 @@ _wallet_help() {
         'bridge:Bridge program interaction subcommand'
         'check-health:Check the wallet can connect to the node'
         'config:Command to setup config, get and set config fields'
-        'restore-keys:Restoring keys from given password at given depth'
+        'set-password:Set, change or remove the wallet storage password'
+        'restore-keys:Restoring keys from a mnemonic phrase at given depth'
         'deploy-program:Deploy a program'
     )
     _describe -t commands 'wallet commands' commands

@@ -1,0 +1,27 @@
+{
+    "home": "/var/lib/sequencer_service",
+    "max_num_tx_in_block": 20,
+    "mempool_max_size": 10000,
+    "block_create_timeout": "30s",
+    "retry_pending_blocks_timeout": "30s",
+    "bedrock_config": {
+        "channel_id": "abababababababababababababababababababababababababababababababab",
+        "node_url": "http://localhost:18080",
+        "priority_fee_percent": 12
+    },
+    "genesis": {
+        "channel_params": {
+            "minimum_sequencer_stake": 25000000000,
+            "posting_timeframe": 900,
+            "posting_timeout": 150,
+            "exit_delay": 240,
+            "max_block_size": 1048576
+        },
+        "actions": []
+    },
+    "metrics_listen_address": "0.0.0.0:9000",
+    "gossip": {
+        "listen_addr": "/ip4/0.0.0.0/udp/4040/quic-v1",
+        "bootstrap_peers": []
+    }
+}

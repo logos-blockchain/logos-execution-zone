@@ -174,6 +174,7 @@ mod tests {
                 posting_timeframe: 1,
                 posting_timeout: 2,
                 exit_delay: 1,
+                max_block_size: 1 << 20,
             }),
             channel_id: Some(CHANNEL_ID),
             entries: (1..=3)

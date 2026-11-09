@@ -1,6 +1,7 @@
 use std::future::Future;
 
 use common::{PageLimit, block::Block, transaction::LeeTransaction};
+use fee_core::validity::FeeError;
 use futures::{
     FutureExt as _, StreamExt as _, TryFutureExt as _, TryStreamExt as _, future::ready, stream,
 };
@@ -16,19 +17,22 @@ use lee_core::{
     account::{Actor, Balance, Nonce},
     program::Publication,
 };
-use log::{info, warn};
+use log::{debug, warn};
 use mempool::MemPoolHandle;
 use sequencer_actors_common::EraseMessage as _;
 use sequencer_bedrock_actor::BedrockActorTrait;
 use sequencer_core::{
-    ChannelConfigActor, SequencerCore, SubmitConfig, TransactionOrigin, config::SequencerConfig,
-    gossip::AccreditedKeysReceiver, task_group::TaskGroup,
+    ChannelSigningActor, SequencerCore, SubmitConfig, TransactionOrigin,
+    config::SequencerConfig,
+    gossip::{AccreditedKeysReceiver, MaxBlockSizeReceiver},
+    task_group::TaskGroup,
 };
 use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActorTrait;
 
 use crate::{
     ExecutorActorTrait, Result,
+    actor::turn::Turn,
     error::Error,
     protocol::{
         ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
@@ -44,6 +48,7 @@ use crate::{
 mod conversions;
 #[cfg(test)]
 mod tests;
+mod turn;
 
 /// How many block lookups a single [`GetBlockRange`] keeps in flight.
 const BLOCK_RANGE_CONCURRENCY: usize = 16;
@@ -55,8 +60,8 @@ pub struct ExecutorActor<S: StorageActorTrait, B: BedrockActorTrait> {
     storage_ref: ActorRef<S>,
     bedrock_ref: ActorRef<B>,
 
-    /// Is it our turn to produce a blocks.
-    is_our_turn: bool,
+    /// Whose turn it is to write: blocks are only produced in ours.
+    turn: Turn,
 
     // TODO: Remove this field
     background_task: TaskGroup,
@@ -93,6 +98,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
                     Error::BedrockRequestFailed(err.erase_message())
                 })?;
 
+            sequencer_executor_actor_metrics::record_turn_to_write(is_our_turn);
+            if is_our_turn {
+                sequencer_executor_actor_metrics::increment_turns_to_write_total();
+            }
+
             let background_task = sequencer.background_task();
 
             Ok(Self {
@@ -100,7 +110,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
                 sequencer,
                 storage_ref,
                 bedrock_ref,
-                is_our_turn,
+                turn: Turn::new(is_our_turn),
                 background_task,
                 failed_attempts: 0,
             })
@@ -113,10 +123,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
         self.sequencer.slasher_ref().clone()
     }
 
-    /// Handle to the channel-config actor, for the service to feed gossip into.
+    /// Handle to the channel-signing actor, for the service to feed gossip into.
     #[must_use]
-    pub fn config_manager_ref(&self) -> ActorRef<ChannelConfigActor> {
-        self.sequencer.config_manager_ref().clone()
+    pub fn channel_signer_ref(&self) -> ActorRef<ChannelSigningActor> {
+        self.sequencer.channel_signer_ref().clone()
     }
 
     /// The committee the gossip mesh screens slash approvals against.
@@ -129,6 +139,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
     #[must_use]
     pub fn staked_keys_watch(&self) -> AccreditedKeysReceiver {
         self.sequencer.staked_keys_watch()
+    }
+
+    /// The chain's `max_block_size`, which admission caps transactions at.
+    #[must_use]
+    pub fn max_block_size_watch(&self) -> MaxBlockSizeReceiver {
+        self.sequencer.max_block_size_watch()
     }
 }
 
@@ -174,12 +190,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
         ProduceBlock: ProduceBlock,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        if !self.is_our_turn {
-            info!("Not our turn to produce a block, skipping");
+        if !self.turn.is_ours() {
+            debug!("Not our turn to produce a block, skipping");
             return Ok(());
         }
 
-        info!("Our turn: producing a block and any committee update");
+        debug!("Our turn: producing a block and any committee update");
         // A failed turn costs this block only. Returning the error would stop
         // this actor, and the scheduler's interval task gives up for good the
         // first time it finds us not running — the node then looks healthy and
@@ -194,7 +210,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
                 }
                 log::info!(
                     "Block with id {id} created by {}",
-                    self.sequencer.bedrock_public_key_hex()
+                    self.sequencer.channel_signing_public_key_hex()
                 );
             }
             Err(err) if err.is::<sequencer_core::ChannelMovedWhileBuilding>() => {
@@ -246,7 +262,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
         self.sequencer
             .with_state(|state| sequencer_core::fees::screen(&transaction, state))
             .await
-            .map_err(|err| Error::IncorrectFee(err.into()))?;
+            .map_err(|err| {
+                if let sequencer_core::fees::Error::FeeCore(FeeError::PrivateFeeBelowRequired {
+                    required,
+                    reserve,
+                }) = err
+                {
+                    Error::PrivateFeeBelowHead { required, reserve }
+                } else {
+                    Error::IncorrectFee(err.into())
+                }
+            })?;
 
         self.mempool_handle
             .try_push((origin.into(), transaction))
@@ -391,7 +417,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetProofsAndRoot> for E
         &mut self,
         GetProofsAndRoot {
             commitments,
-            message_position,
+            message_positions,
         }: GetProofsAndRoot,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
@@ -401,9 +427,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetProofsAndRoot> for E
                     .iter()
                     .map(|commitment| state.get_proof_for_commitment(commitment))
                     .collect();
-                let message_path =
-                    message_position.and_then(|position| state.get_proof_for_position(position));
-                (proofs, message_path, state.commitment_root())
+                let message_paths = message_positions
+                    .iter()
+                    .map(|position| state.get_proof_for_position(*position))
+                    .collect();
+                (proofs, message_paths, state.commitment_root())
             })
             .await
     }
@@ -648,13 +676,22 @@ impl<S: StorageActorTrait, B: BedrockActorTrait>
             sequencer_bedrock_actor::protocol::ChannelEvent::Update(channel_update) => {
                 self.sequencer.on_channel_update(channel_update).await;
             }
-            sequencer_bedrock_actor::protocol::ChannelEvent::Turn { our_turn_to_write } => {
-                self.is_our_turn = our_turn_to_write;
+            sequencer_bedrock_actor::protocol::ChannelEvent::Turn {
+                our_turn_to_write,
+                starting_slot,
+            } => {
+                if self.turn.update(our_turn_to_write, starting_slot) {
+                    sequencer_executor_actor_metrics::increment_turns_to_write_total();
+                }
+                sequencer_executor_actor_metrics::record_turn_to_write(self.turn.is_ours());
             }
             sequencer_bedrock_actor::protocol::ChannelEvent::Config(live_channel_config) => {
                 self.sequencer
                     .on_channel_config_update(live_channel_config)
                     .await;
+            }
+            sequencer_bedrock_actor::protocol::ChannelEvent::Deposits(deposits) => {
+                self.sequencer.on_observed_deposits(deposits).await;
             }
         }
     }

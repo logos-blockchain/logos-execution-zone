@@ -1,7 +1,6 @@
 use std::{net::SocketAddr, num::NonZeroU32, path::PathBuf, time::Duration};
 
 use anyhow::{Context as _, Result};
-use bytesize::ByteSize;
 use indexer_service::{ChannelId, ClientConfig, EventFilterConfig, IndexerConfig};
 use key_protocol::key_management::{KeyChain, secret_holders::SeedHolder};
 use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey};
@@ -10,7 +9,7 @@ use num_bigint::BigUint;
 use sequencer_core::{
     config::{
         BedrockConfig, ChannelParams, CrossZoneConfig, DepositRecipient, GenesisAction,
-        GossipConfig, SequencerConfig,
+        GenesisConfig, GossipConfig, SequencerConfig,
     },
     sign_genesis_stake,
 };
@@ -31,13 +30,12 @@ pub const TEST_POSTING_TIMEOUT: u32 = TEST_POSTING_TIMEFRAME;
 /// Blocks an unstake waits; the production 100 would outlast the exit tests.
 pub const TEST_EXIT_DELAY: u64 = 3;
 
-// Public balances are LGO-scale (`testnet_initial_state` precedent): charged
-// transactions reserve `gas_limit x base_fee` up front (~16M at wallet
-// defaults), so pre-fee-scale balances cannot afford a single transfer.
-// Private transactions are fee-exempt under the interim policy, so the
-// private balances stay small and private-transfer assertions stay exact.
+// Balances are LGO-scale (`testnet_initial_state` precedent): a charged public
+// transaction reserves `gas_limit x base_fee` up front (~16M at wallet defaults)
+// and a privacy-preserving one pays at least [`min_private_fee`] (~5M), so
+// pre-fee-scale balances cannot afford a single transfer.
 pub const INITIAL_PUBLIC_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000_000, 20_000_000_000_000];
-pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
+pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000, 20_000_000_000];
 
 /// The public account for funding the private accounts' balances at genesis.
 pub(crate) const PRIVATE_FUNDER_INDEX: usize = 0;
@@ -45,8 +43,8 @@ pub(crate) const PRIVATE_FUNDER_INDEX: usize = 0;
 /// Key of the account holding the sequencer's genesis stake.
 pub const SEQUENCER_STAKE_KEY: [u8; 32] = [55; 32];
 
-/// Bedrock signing key of the test sequencer, staked in the prebuilt dump.
-pub const BEDROCK_SIGNING_KEY: [u8; 32] = [77; 32];
+/// Channel signing key of the test sequencer, staked in the prebuilt dump.
+pub const CHANNEL_SIGNING_KEY: [u8; 32] = [77; 32];
 
 // Fixed entropy seeds for the default accounts: deterministic so one prebuilt database is reusable,
 // and distinct from the `testnet_initial_state` accounts to avoid depending on / double-funding
@@ -82,7 +80,6 @@ impl InitialPrivateAccountForWallet {
 #[derive(Debug, Clone, Copy)]
 pub struct SequencerPartialConfig {
     pub max_num_tx_in_block: usize,
-    pub max_block_size: ByteSize,
     pub mempool_max_size: usize,
     pub block_create_timeout: Duration,
     pub priority_fee_percent: u64,
@@ -93,7 +90,6 @@ impl Default for SequencerPartialConfig {
     fn default() -> Self {
         Self {
             max_num_tx_in_block: 20,
-            max_block_size: ByteSize::mib(1),
             mempool_max_size: 10_000,
             block_create_timeout: Duration::from_secs(10),
             priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
@@ -138,23 +134,17 @@ impl Default for MultiNodeTestContextConfig {
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "All fields are necessary and better to keep separate"
-)]
 pub fn sequencer_config(
     partial: SequencerPartialConfig,
     home: PathBuf,
     bedrock_addr: SocketAddr,
     channel_id: ChannelId,
-    funding_key: ZkPublicKey,
     genesis_transactions: Vec<GenesisAction>,
     cross_zone: Option<CrossZoneConfig>,
     gossip: Option<GossipConfig>,
 ) -> Result<SequencerConfig> {
     let SequencerPartialConfig {
         max_num_tx_in_block,
-        max_block_size,
         mempool_max_size,
         block_create_timeout,
         priority_fee_percent,
@@ -164,23 +154,27 @@ pub fn sequencer_config(
     Ok(SequencerConfig {
         home,
         max_num_tx_in_block,
-        max_block_size,
         mempool_max_size,
         block_create_timeout,
         retry_pending_blocks_timeout: Duration::from_secs(5),
-        genesis: genesis_transactions,
+        genesis: Some(GenesisConfig {
+            channel_params,
+            actions: genesis_transactions,
+        }),
         bedrock_config: BedrockConfig {
             channel_id,
             node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)
                 .context("Failed to convert bedrock addr to URL")?,
-            funding_key,
             auth: None,
             priority_fee_percent,
-            channel_params,
+            stale_refund_slots: 0,
         },
         cross_zone,
-        metrics_address: Some(SequencerConfig::DEFAULT_METRICS_ADDRESS),
+        metrics_listen_address: Some(SequencerConfig::DEFAULT_METRICS_LISTEN_ADDRESS),
         gossip,
+        channel_signing_key_file: None,
+        funding_public_key: None,
+        wait_for_channel: false,
     })
 }
 
@@ -248,10 +242,34 @@ pub fn private_total(private_accounts: &[InitialPrivateAccountForWallet]) -> u12
     private_accounts.iter().map(|account| account.balance).sum()
 }
 
+/// The fee a privacy-preserving transaction without guest-evaluated effects pays while the base
+/// fees sit at their floor. Test chains run far below the gas targets, so they never leave it.
+#[must_use]
+pub fn min_private_fee() -> u128 {
+    fee_core::assess::private_fee_required(
+        0,
+        fee_core::market::BASE_FEE_EXEC_MIN,
+        fee_core::market::BASE_FEE_STOR_MIN,
+    )
+}
+
+/// What funding the private accounts costs the funder: every balance plus the fee of each
+/// shielding transaction, which the funder pays since the recipients hold nothing yet.
+#[must_use]
+pub fn private_funding_cost(private_accounts: &[InitialPrivateAccountForWallet]) -> u128 {
+    let fees = u128::try_from(private_accounts.len())
+        .expect("account count fits u128")
+        .checked_mul(min_private_fee())
+        .expect("private funding fees overflow");
+    private_total(private_accounts)
+        .checked_add(fees)
+        .expect("private funding cost overflow")
+}
+
 #[must_use]
 pub fn genesis_from_accounts(
     public_accounts: &[(PrivateKey, u128)],
-    private_total: u128,
+    private_funding_cost: u128,
 ) -> Vec<GenesisAction> {
     let mut balances: Vec<(PublicKey, u128)> = public_accounts
         .iter()
@@ -260,7 +278,7 @@ pub fn genesis_from_accounts(
 
     let funder_balance = &mut balances[PRIVATE_FUNDER_INDEX].1;
     *funder_balance = funder_balance
-        .checked_add(private_total)
+        .checked_add(private_funding_cost)
         .expect("private funder genesis balance overflow");
 
     balances
@@ -284,6 +302,9 @@ pub fn wallet_config(sequencer_addr: &SocketAddr) -> Result<WalletConfig> {
         seq_poll_max_retries: 10,
         seq_block_poll_max_amount: 100,
         gas_limit: wallet::DEFAULT_GAS_LIMIT,
+        // Test chains never leave the floor base fees, so an exact reserve needs no refund and
+        // the balance assertions need no refund accounting.
+        private_fee_headroom_blocks: 0,
     })
 }
 
@@ -451,13 +472,14 @@ mod tests {
         );
     }
 
-    /// `fund_private_accounts` drains the private balances out of the funder.
+    /// `fund_private_accounts` drains the private balances and their shielding fees out of the
+    /// funder.
     #[test]
     fn genesis_supplies_the_funder_enough_to_seed_every_private_account() {
         let public_accounts = default_public_accounts_for_wallet();
         let private_accounts = default_private_accounts_for_wallet();
-        let private_total = private_total(&private_accounts);
-        let genesis = genesis_from_accounts(&public_accounts, private_total);
+        let funding_cost = private_funding_cost(&private_accounts);
+        let genesis = genesis_from_accounts(&public_accounts, funding_cost);
 
         let funder = AccountId::from(&PublicKey::new_from_private_key(
             &public_accounts[PRIVATE_FUNDER_INDEX].0,
@@ -479,8 +501,8 @@ mod tests {
         let funder_supply = supplied(funder).expect("the funder is supplied at genesis");
         assert_eq!(
             u128::from(funder_supply).checked_sub(public_accounts[PRIVATE_FUNDER_INDEX].1),
-            Some(private_total),
-            "genesis must give the funder its own balance plus every private balance"
+            Some(funding_cost),
+            "genesis must give the funder its own balance plus every private balance and fee"
         );
 
         // A private account has no state until the circuit writes its commitment, so a genesis
@@ -509,7 +531,6 @@ mod tests {
             PathBuf::from("test-sequencer"),
             SocketAddr::from(([127, 0, 0, 1], 1234)),
             bedrock_channel_id(),
-            bedrock_funding_key(),
             Vec::new(),
             None,
             None,
@@ -519,6 +540,14 @@ mod tests {
         assert_eq!(
             config.bedrock_config.priority_fee_percent,
             priority_fee_percent
+        );
+    }
+    #[test]
+    fn funding_public_key_file_parses_to_the_fixture_key() {
+        assert_eq!(
+            sequencer_core::parse_funding_public_key(bedrock_funding_key_id())
+                .expect("the fixture funding public key should parse"),
+            bedrock_funding_key()
         );
     }
 }

@@ -118,6 +118,9 @@ class Reader:
     def u32(self) -> int:
         return struct.unpack("<I", self.take(4))[0]
 
+    def u64(self) -> int:
+        return struct.unpack("<Q", self.take(8))[0]
+
     def u128(self) -> int:
         return int.from_bytes(self.take(16), "little")
 
@@ -125,11 +128,12 @@ class Reader:
 def decode_stake_config(data: bytes) -> dict:
     r = Reader(data)
     # `channel_params: Option<ChannelParams>` — one borsh tag byte, then the
-    # three values when present.
+    # values when present.
     if r.take(1)[0]:
         minimum, timeframe, timeout = r.u128(), r.u32(), r.u32()
+        exit_delay, max_block_size = r.u64(), r.u64()
     else:
-        minimum = timeframe = timeout = None
+        minimum = timeframe = timeout = exit_delay = max_block_size = None
     # `channel_id: Option<[u8; 32]>`.
     if r.take(1)[0]:
         r.take(32)
@@ -147,6 +151,8 @@ def decode_stake_config(data: bytes) -> dict:
         "minimum": minimum,
         "posting_timeframe": timeframe,
         "posting_timeout": timeout,
+        "exit_delay": exit_delay,
+        "max_block_size": max_block_size,
         "entries": entries,
     }
 

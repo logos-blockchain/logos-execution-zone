@@ -59,6 +59,21 @@ pub struct BlockHeader {
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
 pub struct BlockBody {
     pub transactions: Vec<LeeTransaction>,
+    /// Indices into `transactions` of the charged transactions whose action reverted, ascending.
+    ///
+    /// TODO: fold into a `receipts` vector parallel to `transactions`, one per transaction with
+    /// its status and fee charged, once receipts are exposed.
+    pub reverted: Vec<u64>,
+}
+
+impl BlockBody {
+    /// Whether the transaction at `position` reverted.
+    #[must_use]
+    pub fn is_reverted(&self, position: usize) -> bool {
+        // note: `contains` here is not too expensive,
+        // we don't expect many reverted tx'es every block
+        u64::try_from(position).is_ok_and(|position| self.reverted.contains(&position))
+    }
 }
 
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
@@ -85,6 +100,7 @@ impl Block {
             prev_block_hash: self.header.prev_block_hash,
             timestamp: self.header.timestamp,
             transactions: self.body.transactions.clone(),
+            reverted: self.body.reverted.clone(),
         }
         .compute_hash()
     }
@@ -108,6 +124,8 @@ pub struct HashableBlockData {
     pub prev_block_hash: BlockHash,
     pub timestamp: Timestamp,
     pub transactions: Vec<LeeTransaction>,
+    /// See [`BlockBody::reverted`].
+    pub reverted: Vec<u64>,
 }
 
 impl HashableBlockData {
@@ -142,6 +160,7 @@ impl HashableBlockData {
             },
             body: BlockBody {
                 transactions: self.transactions,
+                reverted: self.reverted,
             },
             bedrock_status: BedrockStatus::Pending,
         }
@@ -155,6 +174,7 @@ impl From<Block> for HashableBlockData {
             prev_block_hash: value.header.prev_block_hash,
             timestamp: value.header.timestamp,
             transactions: value.body.transactions,
+            reverted: value.body.reverted,
         }
     }
 }
@@ -176,6 +196,7 @@ mod tests {
     #[test]
     fn recompute_hash_matches_header_for_well_formed_block() {
         let block = HashableBlockData {
+            reverted: Vec::new(),
             block_id: 5,
             prev_block_hash: HashType([9_u8; 32]),
             timestamp: 42,
@@ -186,8 +207,27 @@ mod tests {
     }
 
     #[test]
+    fn recompute_hash_covers_the_reverted_list() {
+        let block = HashableBlockData {
+            block_id: 5,
+            prev_block_hash: HashType([9_u8; 32]),
+            timestamp: 42,
+            transactions: vec![test_utils::produce_dummy_empty_transaction()],
+            reverted: Vec::new(),
+        }
+        .into_pending_block();
+
+        let mut listed = block.clone();
+        listed.body.reverted.push(0);
+        assert_ne!(listed.recompute_hash(), block.header.hash);
+        assert!(listed.body.is_reverted(0));
+        assert!(!block.body.is_reverted(0));
+    }
+
+    #[test]
     fn recompute_hash_detects_tampering() {
         let block = HashableBlockData {
+            reverted: Vec::new(),
             block_id: 5,
             prev_block_hash: HashType([9_u8; 32]),
             timestamp: 42,

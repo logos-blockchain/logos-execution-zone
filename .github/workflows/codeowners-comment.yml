@@ -1,0 +1,41 @@
+name: Code owners comment
+
+# Comments on each pull request with why its code owners were requested for
+# review and which files each of them should look at. The review requests
+# themselves come from GitHub's native .github/CODEOWNERS support.
+
+on:
+  # `pull_request_target` lets fork pull requests get the comment too. It is
+  # safe here because only the base branch is checked out: no code from the
+  # pull request runs.
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: codeowners-comment-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  comment:
+    # GitHub requests code owners only once a pull request is ready for review.
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    steps:
+      # Base branch: GitHub also takes CODEOWNERS from there.
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github
+          persist-credentials: false
+
+      - name: Post suggested reviewers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: python3 .github/scripts/codeowners_comment.py .github/CODEOWNERS

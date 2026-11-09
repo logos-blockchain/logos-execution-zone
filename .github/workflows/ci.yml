@@ -103,7 +103,7 @@ jobs:
       group: cucumber-${{ github.event.pull_request.number || github.sha }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-  bedrock-resolver-tests:
+  ci-python-scripts-tests:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
@@ -120,6 +120,9 @@ jobs:
 
       - name: Test integration test target discovery
         run: python3 .github/scripts/test_discover_integration_test_targets.py -v
+
+      - name: Test CODEOWNERS and its pull request comment
+        run: python3 .github/scripts/test_codeowners_comment.py -v
 
   fmt-rs:
     needs: ci-image
@@ -175,6 +178,7 @@ jobs:
   deny:
     needs: ci-image
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     container:
       image: ${{ needs.ci-image.outputs.image }}
       credentials:
@@ -185,8 +189,17 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
 
-      - name: Check licenses and advisories
-        run: cargo deny check
+      - name: Check licenses, bans and sources
+        run: cargo deny --locked check licenses bans sources
+
+      # By severity, not by code: a code list misses the ones hardcoded to
+      # error. Only a fetch failure is absorbed, since nothing can demote it.
+      - name: Report advisories
+        run: |
+          set -o pipefail
+          cargo deny fetch db || exit 0
+          cargo deny --locked check advisories -W denied 2>&1 \
+            | tee -a "$GITHUB_STEP_SUMMARY"
 
   lint:
     needs: ci-image
@@ -207,8 +220,9 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-container
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
+          shared-key: ci-container-tests
+          # Read-only; `unit-tests` is the only writer.
+          save-if: false
 
       - name: Lint workspace
         env:
@@ -237,7 +251,8 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-container
+          shared-key: ci-container-tests
+          # Only writer of this cache.
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
       - name: Run tests
@@ -267,7 +282,7 @@ jobs:
       - name: Pin host toolchain
         uses: ./.github/actions/pin-host-toolchain
       - name: Download resolved Bedrock node
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: bedrock-node
           path: bedrock/.resolved
@@ -275,7 +290,7 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-host-prebuild
+          shared-key: ci-host-prebuild-nodebug
           # Read-only; prebuild is the only writer.
           save-if: false
 
@@ -286,6 +301,8 @@ jobs:
           env: |
             RISC0_DEV_MODE=1
             RUST_LOG=info,kameo=warn
+            CARGO_PROFILE_DEV_DEBUG=0
+            CARGO_PROFILE_TEST_DEBUG=0
           run: cargo nextest run -p test_fixtures
 
   abort-on-stale-fixtures:
@@ -309,6 +326,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       targets: ${{ steps.discover-targets.outputs.targets }}
+      archive_mib: ${{ steps.archive-size.outputs.mib }}
+      test_binaries: ${{ steps.archive-size.outputs.binaries }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -327,7 +346,9 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-host-prebuild
+          # The suffix tracks the debug level: this action cannot see the
+          # container's environment, so a change without a rename never saves.
+          shared-key: ci-host-prebuild-nodebug
           # Only writer of this cache.
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
@@ -335,7 +356,12 @@ jobs:
         uses: ./.github/actions/run-in-ci-image
         with:
           image: ${{ needs.ci-image.outputs.image }}
-          env: RISC0_DEV_MODE=1
+          # One pair per line; a single line makes the whole string the
+          # first variable's value.
+          env: |
+            RISC0_DEV_MODE=1
+            CARGO_PROFILE_DEV_DEBUG=0
+            CARGO_PROFILE_TEST_DEBUG=0
           # Listed from the build just archived: unpacking the archive again
           # overflows the runner's disk.
           run: |
@@ -344,6 +370,17 @@ jobs:
               cargo nextest list -p integration_tests \
                 --message-format json \
                 --no-pager > integration-tests-binaries.json
+
+      - name: Measure the archive
+        id: archive-size
+        run: |
+          mib="$(du -m integration-tests.tar.zst | cut -f1)"
+          binaries="$(jq '[.["rust-suites"][] | select(.kind == "test")] | length' \
+            integration-tests-binaries.json)"
+
+          echo "mib=$mib" >> "$GITHUB_OUTPUT"
+          echo "binaries=$binaries" >> "$GITHUB_OUTPUT"
+          echo "Archive $mib MiB across $binaries test binaries."
 
       - name: Upload integration test archive
         uses: actions/upload-artifact@v4
@@ -367,6 +404,42 @@ jobs:
           echo "targets=$targets_json" >> "$GITHUB_OUTPUT"
           echo "Discovered integration targets: $targets_json"
 
+  # Every shard downloads the whole archive, so its size is paid once per
+  # shard. Its own job so a regression reports without skipping those shards.
+  archive-size-budget:
+    needs: integration-tests-prebuild
+    runs-on: ubuntu-latest
+    env:
+      BUDGET_MIB: 4400
+    steps:
+      - name: Compare the archive against its budget
+        run: |
+          mib="${{ needs.integration-tests-prebuild.outputs.archive_mib }}"
+          binaries="${{ needs.integration-tests-prebuild.outputs.test_binaries }}"
+
+          # An empty output would be 0 to `((` and pass silently.
+          if ! [[ "$mib" =~ ^[0-9]+$ ]]; then
+            echo "::error::The prebuild reported no archive size (got '$mib')."
+            exit 1
+          fi
+
+          {
+            echo "### Integration test archive"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| size | ${mib} MiB |"
+            echo "| budget | ${BUDGET_MIB} MiB |"
+            echo "| test binaries | ${binaries} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if (( mib > BUDGET_MIB )); then
+            echo "::error::The integration test archive is ${mib} MiB, over the ${BUDGET_MIB} MiB budget. Each of the ${binaries} test targets statically links the whole workspace, so a new one costs ~80 MiB on every shard's download. Grouping tests as modules of an existing target costs nothing. If the growth is intended, raise BUDGET_MIB in ci.yml."
+            exit 1
+          fi
+
+          echo "Archive ${mib} MiB across ${binaries} test binaries, within the ${BUDGET_MIB} MiB budget."
+
   integration-tests:
     needs: [ci-image, bedrock-node, integration-tests-prebuild]
     runs-on: ubuntu-latest
@@ -388,15 +461,39 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # `download-artifact` can return a truncated file and still succeed, so
+      # verify before the corrupt stream surfaces as a test failure.
       - name: Download integration test archive
-        timeout-minutes: 10
-        uses: actions/download-artifact@v4
+        id: archive
+        timeout-minutes: 12
+        continue-on-error: true
+        uses: actions/download-artifact@v5
         with:
           name: integration-tests-archive
 
+      - name: Verify the archive
+        id: verify
+        continue-on-error: true
+        run: zstd -t integration-tests.tar.zst
+
+      - name: Discard a bad archive
+        if: steps.archive.outcome == 'failure' || steps.verify.outcome == 'failure'
+        run: rm -f integration-tests.tar.zst
+
+      - name: Download integration test archive, second attempt
+        if: steps.archive.outcome == 'failure' || steps.verify.outcome == 'failure'
+        timeout-minutes: 20
+        uses: actions/download-artifact@v5
+        with:
+          name: integration-tests-archive
+
+      - name: Verify the archive after the second attempt
+        if: steps.archive.outcome == 'failure' || steps.verify.outcome == 'failure'
+        run: zstd -t integration-tests.tar.zst
+
       - name: Download resolved Bedrock node
-        timeout-minutes: 10
-        uses: actions/download-artifact@v4
+        timeout-minutes: 20
+        uses: actions/download-artifact@v5
         with:
           name: bedrock-node
           path: bedrock/.resolved
@@ -408,7 +505,7 @@ jobs:
       - name: Report disk headroom before extraction
         run: |
           ls -l --block-size=M integration-tests.tar.zst
-          zstd -l integration-tests.tar.zst || true
+          zstd -l integration-tests.tar.zst
           df -h / /tmp /mnt || true
 
       - name: Run tests
@@ -420,19 +517,30 @@ jobs:
             RUST_LOG=info,kameo=warn
             LOGOS_BLOCKCHAIN_NODE_BIN=${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
           run: |
-            # `--retries` names the flaky test, `with_retry` covers a bad runner.
-            source .github/scripts/with_retry.sh
-            if [[ "${{ matrix.target }}" == "tf_bedrock_builder" || \
-                  "${{ matrix.target }}" == "tf_app_deployments" ]]; then
+            # A `binary::test` target is one test alone on this runner.
+            target='${{ matrix.target }}'
+            binary="${target%%::*}"
+            if [[ "$target" == *::* ]]; then
+              filter="binary($binary) and test(=${target#*::})"
+            else
+              filter="binary($binary)"
+            fi
+
+            # Four attempts as before, but inside nextest, which names the
+            # flaky test and reruns only it rather than the whole command.
+            if [[ "$binary" == "tf_bedrock_builder" || \
+                  "$binary" == "tf_app_deployments" ]]; then
               # The nextest archive contains the absolute Cargo git checkout
               # path compiled into the Logos testing framework. This is a fresh
               # runner, so materialize the pinned Logos checkout again before
               # allowing TF to use its local build provider.
               cargo fetch --locked
 
-              with_retry 'env -u GITHUB_ACTIONS -u CI cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
+              env -u GITHUB_ACTIONS -u CI cargo nextest run --retries 3 \
+                --archive-file integration-tests.tar.zst -E "$filter"
             else
-              with_retry 'cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
+              cargo nextest run --retries 3 \
+                --archive-file integration-tests.tar.zst -E "$filter"
             fi
 
       - name: Report disk headroom after the tests
@@ -464,7 +572,7 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-host-prebuild
+          shared-key: ci-host-prebuild-nodebug
           # Read-only; prebuild is the only writer.
           save-if: false
 
@@ -523,7 +631,7 @@ jobs:
       - ci-image
       - bedrock-node
       - cucumber
-      - bedrock-resolver-tests
+      - ci-python-scripts-tests
       - fmt-rs
       - fmt-toml
       - machete
@@ -532,6 +640,7 @@ jobs:
       - unit-tests
       - test-fixtures-tests
       - integration-tests-prebuild
+      - archive-size-budget
       - integration-tests
       - artifacts
       - dashboards
