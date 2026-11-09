@@ -25,7 +25,8 @@ use futures::TryFutureExt as _;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
     Account, AccountId, EncryptedNote, PredictedCrossMessages, PrivacyPreservingTransaction,
-    ProgramId, ProvingInput, PublicExecutionContext, Recipient, RecipientEncryption, Simulation,
+    ProgramId, ProvingInput, PublicExecutionContext, PublicationsPage, Recipient,
+    RecipientEncryption, Simulation,
     privacy_preserving_transaction::{
         circuit::{Dependency, ProgramCatalog, ProgramKind},
         message::Message,
@@ -357,7 +358,7 @@ pub trait WalletSequencerClient: Clone {
         &self,
         from_position: CommitmentPosition,
         limit: PageLimit,
-    ) -> Result<Vec<(CommitmentPosition, Publication)>, Self::Error>;
+    ) -> Result<PublicationsPage, Self::Error>;
 
     async fn get_recovery_binding(
         &self,
@@ -444,7 +445,7 @@ impl WalletSequencerClient for SequencerClient {
         &self,
         from_position: CommitmentPosition,
         limit: PageLimit,
-    ) -> Result<Vec<(CommitmentPosition, Publication)>, Self::Error> {
+    ) -> Result<PublicationsPage, Self::Error> {
         RpcClient::get_publications(self, from_position, limit).await
     }
 
@@ -1073,11 +1074,22 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         &self,
         from_position: CommitmentPosition,
         limit: PageLimit,
-    ) -> Result<Vec<(CommitmentPosition, Publication)>> {
-        Ok(self
+    ) -> Result<PublicationsPage> {
+        let page = self
             .sequencer_client
             .get_publications(from_position, limit)
-            .await?)
+            .await?;
+        for (position, publication) in &page.publications {
+            if let Publication::Clear(body) = publication {
+                let address = body.to.account_id;
+                ensure!(
+                    page.recovery_bindings.contains_key(&address),
+                    "No recovery binding for {address}, the destination of the publication at \
+                     {position}"
+                );
+            }
+        }
+        Ok(page)
     }
 
     // Messages that one of this wallet's key pairs opens: a private address's recovery note, or a
@@ -1094,17 +1106,17 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         let mut records = Vec::new();
         let mut from_position = 0;
         loop {
-            let page = self.get_publications(from_position, PAGE).await?;
-            let Some((last, _)) = page.last() else {
+            let PublicationsPage {
+                publications,
+                recovery_bindings,
+            } = self.get_publications(from_position, PAGE).await?;
+            let Some((last, _)) = publications.last() else {
                 return Ok(records);
             };
             from_position = last.saturating_add(1);
-            records.extend(
-                self.unreceived(
-                    page.into_iter()
-                        .filter_map(|(position, publication)| self.read(position, publication)),
-                ),
-            );
+            records.extend(self.unreceived(publications.into_iter().filter_map(
+                |(position, publication)| self.read(position, publication, &recovery_bindings),
+            )));
         }
     }
 
@@ -1113,13 +1125,14 @@ impl<C: WalletSequencerClient> WalletCore<C> {
     fn private_receipt(
         &self,
         publication: &Publication,
+        recovery: Option<&EncryptedNote>,
     ) -> Option<(MessageBody, Recipient, Option<[u8; 32]>, NullifierSecretKey)> {
         match publication {
-            Publication::Clear { body, recovery } => {
+            Publication::Clear(body) => {
                 let (recipient, nsk) = self
                     .storage
                     .key_chain()
-                    .recover(body.to.account_id, recovery)?;
+                    .recover(body.to.account_id, recovery?)?;
                 Some((body.clone(), recipient, None, nsk))
             }
             Publication::Sealed(sealed) => {
@@ -1133,8 +1146,13 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         &self,
         position: CommitmentPosition,
         publication: Publication,
+        recovery_bindings: &BTreeMap<AccountId, EncryptedNote>,
     ) -> Option<(PendingMessage, Nullifier)> {
-        let (body, recipient, rho, nsk) = self.private_receipt(&publication)?;
+        let recovery = match &publication {
+            Publication::Clear(body) => recovery_bindings.get(&body.to.account_id),
+            Publication::Sealed(_) => None,
+        };
+        let (body, recipient, rho, nsk) = self.private_receipt(&publication, recovery)?;
         let receipt = Nullifier::for_message(&nsk, &publication.commitment(), position);
         Some((
             PendingMessage {
@@ -1154,12 +1172,14 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         position: CommitmentPosition,
     ) -> Result<Option<PendingMessage>> {
         self.sync_to_latest_block().await?;
-        let found = self
-            .get_publications(position, 1)
-            .await?
+        let PublicationsPage {
+            publications,
+            recovery_bindings,
+        } = self.get_publications(position, 1).await?;
+        let found = publications
             .into_iter()
             .filter(|(found, _)| *found == position)
-            .filter_map(|(found, publication)| self.read(found, publication));
+            .filter_map(|(found, publication)| self.read(found, publication, &recovery_bindings));
         Ok(self.unreceived(found).last())
     }
 
@@ -1422,7 +1442,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         }
     }
 
-    // A binding already on chain is reused: settlement attaches it to every publication.
+    // A binding already on chain is reused: it serves every publication to its address.
     async fn unbound(
         &self,
         recoveries: Vec<RecipientEncryption>,
@@ -2746,7 +2766,26 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         cross_messages: Option<PredictedCrossMessages>,
         async_delivery: AsyncDelivery,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
-        let Some((body, recipient, rho, nsk)) = self.private_receipt(&publication) else {
+        let recovery = match &publication {
+            Publication::Clear(body) => {
+                let address = body.to.account_id;
+                Some(
+                    self.get_recovery_binding(address)
+                        .await
+                        .map_err(ExecutionFailureKind::SequencerError)?
+                        .ok_or_else(|| {
+                            ExecutionFailureKind::SequencerError(anyhow::anyhow!(
+                                "No recovery binding for {address}, the destination of the \
+                                 publication at {position}"
+                            ))
+                        })?,
+                )
+            }
+            Publication::Sealed(_) => None,
+        };
+        let Some((body, recipient, rho, nsk)) =
+            self.private_receipt(&publication, recovery.as_ref())
+        else {
             return Err(ExecutionFailureKind::TransactionBuildError(
                 lee::error::LeeError::InvalidInput(format!(
                     "No key pair of this wallet opens the message published at {position}"
@@ -3204,7 +3243,7 @@ fn root_actor(accounts: &[AccountMention], root: usize) -> Result<Actor, Executi
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{BTreeSet, HashMap},
+        collections::{BTreeMap, BTreeSet, HashMap},
         ffi::CString,
         str::FromStr as _,
         sync::{Arc, Mutex},
@@ -3220,7 +3259,7 @@ mod tests {
         types::ErrorObjectOwned,
     };
     use lee::{
-        AccountId, BoundaryStep,
+        AccountId, BoundaryStep, PublicationsPage,
         error::{InvalidProgramBehaviorError, LeeError},
         privacy_preserving_transaction::circuit::ProgramCatalog,
         program::Program,
@@ -3258,6 +3297,7 @@ mod tests {
     struct Served {
         blocks: Vec<Block>,
         publications: Vec<(CommitmentPosition, Publication)>,
+        recovery_bindings: BTreeMap<AccountId, EncryptedNote>,
         accounts: HashMap<AccountId, Account>,
         submitted: Vec<LeeTransaction>,
     }
@@ -3745,16 +3785,29 @@ mod tests {
         sequencer
             .register_method("getPublications", |params, served, _| {
                 let (from_position, limit) = params.parse::<(CommitmentPosition, PageLimit)>()?;
-                Ok::<_, ErrorObjectOwned>(
-                    served
-                        .lock()
-                        .unwrap()
+                let served = served.lock().unwrap();
+                Ok::<_, ErrorObjectOwned>(PublicationsPage {
+                    publications: served
                         .publications
                         .iter()
                         .filter(|(position, _)| *position >= from_position)
                         .take(usize::try_from(limit).unwrap())
                         .cloned()
-                        .collect::<Vec<_>>(),
+                        .collect(),
+                    recovery_bindings: served.recovery_bindings.clone(),
+                })
+            })
+            .unwrap();
+        sequencer
+            .register_method("getRecoveryBinding", |params, served, _| {
+                let address = params.one::<AccountId>()?;
+                Ok::<_, ErrorObjectOwned>(
+                    served
+                        .lock()
+                        .unwrap()
+                        .recovery_bindings
+                        .get(&address)
+                        .cloned(),
                 )
             })
             .unwrap();
@@ -3849,13 +3902,7 @@ mod tests {
                     message: borsh::to_vec(&native_token::Message::Credit(u128::from(position)))
                         .unwrap(),
                 };
-                (
-                    position,
-                    Publication::Clear {
-                        body,
-                        recovery: note.clone(),
-                    },
-                )
+                (position, Publication::Clear(body))
             })
             .collect();
         let receipt = Nullifier::for_message(
@@ -3879,6 +3926,7 @@ mod tests {
                 produce_dummy_block(3, None, Vec::new()),
             ],
             publications,
+            recovery_bindings: BTreeMap::from([(address, note)]),
             ..Served::default()
         };
         (wallet, home, handle, served)
@@ -4008,7 +4056,7 @@ mod tests {
         message: &impl borsh::BorshSerialize,
     ) {
         let mut served = served.lock().unwrap();
-        let Publication::Clear { body, .. } = &mut served.publications[1].1 else {
+        let Publication::Clear(body) = &mut served.publications[1].1 else {
             panic!("the fixture publishes in the clear");
         };
         *body = MessageBody {

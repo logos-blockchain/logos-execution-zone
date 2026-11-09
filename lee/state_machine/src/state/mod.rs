@@ -1,11 +1,11 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     BlockId, Commitment, CommitmentPosition, CommitmentSetDigest, DUMMY_COMMITMENT, EncryptedNote,
-    MembershipProof, Nullifier, RecoveryBinding, SealedMessage, Timestamp,
+    MembershipProof, Nullifier, RecoveryBinding, Timestamp,
     account::{Account, AccountId, ActorState},
-    program::{MessageBody, PROGRAM_LOADER_ACCOUNT_ID, ProgramId, Publication, TransactionEvent},
+    program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramId, Publication, TransactionEvent},
 };
 use program_loader_core::get_program_via;
 use rpds::{HashTrieMapSync, HashTrieSetSync, RedBlackTreeMapSync, RedBlackTreeSetSync};
@@ -166,7 +166,7 @@ pub struct V03State {
         serialize_with = "crate::encoding::persistent::serialize_ordered_map",
         deserialize_with = "crate::encoding::persistent::deserialize_ordered_map"
     )]
-    publications: RedBlackTreeMapSync<CommitmentPosition, StoredPublication>,
+    publications: RedBlackTreeMapSync<CommitmentPosition, Publication>,
     #[borsh(
         serialize_with = "crate::encoding::persistent::serialize_ordered_map",
         deserialize_with = "crate::encoding::persistent::deserialize_ordered_map"
@@ -174,11 +174,10 @@ pub struct V03State {
     recovery_bindings: RedBlackTreeMapSync<AccountId, EncryptedNote>,
 }
 
-#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(test, derive(Debug))]
-enum StoredPublication {
-    Clear(MessageBody),
-    Sealed(SealedMessage),
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PublicationsPage {
+    pub publications: Vec<(CommitmentPosition, Publication)>,
+    pub recovery_bindings: BTreeMap<AccountId, EncryptedNote>,
 }
 
 impl Default for V03State {
@@ -274,7 +273,7 @@ impl V03State {
         );
         self.check_recovery_bindings_are_new(&recovery_bindings)?;
         for publication in &published {
-            if let Publication::Clear { body, .. } = publication {
+            if let Publication::Clear(body) = publication {
                 let address = body.to.account_id;
                 ensure!(
                     self.bound_note(&recovery_bindings, address).is_some(),
@@ -299,11 +298,7 @@ impl V03State {
         let messages: Vec<Commitment> = published.iter().map(Publication::commitment).collect();
         let positions = self.private_state.0.append(&new_commitments, &messages);
         self.private_state.1.extend(&spent);
-        let stored = published.into_iter().map(|publication| match publication {
-            Publication::Clear { body, .. } => StoredPublication::Clear(body),
-            Publication::Sealed(sealed) => StoredPublication::Sealed(sealed),
-        });
-        for (position, publication) in positions.into_iter().zip(stored) {
+        for (position, publication) in positions.into_iter().zip(published) {
             self.publications.insert_mut(position, publication);
         }
         for binding in recovery_bindings {
@@ -381,19 +376,33 @@ impl V03State {
     ) -> impl Iterator<Item = (CommitmentPosition, Publication)> {
         self.publications
             .range(from_position..)
-            .map(|(position, stored)| {
-                let publication = match stored {
-                    StoredPublication::Clear(body) => Publication::Clear {
-                        body: body.clone(),
-                        recovery: self
-                            .recovery_binding(body.to.account_id)
-                            .expect("a clear publication's address was bound when it was applied")
-                            .clone(),
-                    },
-                    StoredPublication::Sealed(sealed) => Publication::Sealed(sealed.clone()),
-                };
-                (*position, publication)
+            .map(|(position, publication)| (*position, publication.clone()))
+    }
+
+    #[must_use]
+    pub fn publications_page(
+        &self,
+        from_position: CommitmentPosition,
+        limit: usize,
+    ) -> PublicationsPage {
+        let publications: Vec<_> = self.publications_from(from_position).take(limit).collect();
+        let recovery_bindings = publications
+            .iter()
+            .filter_map(|(_, publication)| match publication {
+                Publication::Clear(body) => Some(body.to.account_id),
+                Publication::Sealed(_) => None,
             })
+            .map(|address| {
+                let note = self
+                    .recovery_binding(address)
+                    .expect("a clear publication's address was bound when it was applied");
+                (address, note.clone())
+            })
+            .collect();
+        PublicationsPage {
+            publications,
+            recovery_bindings,
+        }
     }
 
     /// Reconstructs a genesis-seeded builtin's bytecode from its header and segment chain at

@@ -162,7 +162,7 @@ impl WalletSequencerClient for WalletClient {
         &self,
         from_position: CommitmentPosition,
         limit: common::PageLimit,
-    ) -> Result<Vec<(CommitmentPosition, lee::Publication)>, Self::Error> {
+    ) -> Result<lee::PublicationsPage, Self::Error> {
         match self {
             Self::Embedded(client) => Ok(client.get_publications(from_position, limit).await?),
             Self::Http(client) => Ok(client.get_publications(from_position, limit).await?),

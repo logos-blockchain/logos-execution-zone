@@ -261,7 +261,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
         &self,
         from_position: CommitmentPosition,
         limit: common::PageLimit,
-    ) -> Result<Vec<(CommitmentPosition, lee::Publication)>, Self::Error> {
+    ) -> Result<lee::PublicationsPage, Self::Error> {
         Ok(self
             .0
             .executor_ref()
@@ -270,7 +270,8 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
                 limit,
             })
             .send()
-            .await?)
+            .await?
+            .page)
     }
 
     async fn get_recovery_binding(

@@ -45,10 +45,6 @@ fn bound_state() -> V03State {
         .with_recovery_bindings([recovery(5).bind_recovery()])
 }
 
-fn publications(state: &V03State) -> Vec<(u64, Publication)> {
-    state.publications_from(0).collect()
-}
-
 #[test]
 fn a_public_root_publishes_its_live_async_message_with_the_recovery_note_its_proof_binds() {
     let mut state = V03State::new().with_test_programs();
@@ -65,17 +61,19 @@ fn a_public_root_publishes_its_live_async_message_with_the_recovery_note_its_pro
         .recovery_binding(payout().account_id)
         .cloned()
         .expect("the proof binds the payout's recovery note");
-    let [(_, publication)] = <[_; 1]>::try_from(publications(&state)).unwrap();
+    let page = state.publications_page(0, usize::MAX);
+    let [(_, publication)] = <[_; 1]>::try_from(page.publications).unwrap();
     assert_eq!(
         publication,
-        Publication::Clear {
-            body: MessageBody {
-                from: sender(),
-                to: payout(),
-                message: borsh::to_vec(&credit(7)).unwrap(),
-            },
-            recovery: note,
-        }
+        Publication::Clear(MessageBody {
+            from: sender(),
+            to: payout(),
+            message: borsh::to_vec(&credit(7)).unwrap(),
+        })
+    );
+    assert_eq!(
+        page.recovery_bindings,
+        BTreeMap::from([(payout().account_id, note)])
     );
     assert!(tx.message.execution.private_actions.is_empty());
     assert!(state.get_account_by_id_ref(payout().account_id).is_none());
@@ -95,20 +93,14 @@ fn the_recipient_recovers_and_receives_an_async_message_at_an_alias_it_never_rec
             0,
         )
         .unwrap();
-    let [
-        (
-            position,
-            Publication::Clear {
-                body,
-                recovery: note,
-            },
-        ),
-    ] = <[_; 1]>::try_from(publications(&state)).unwrap()
+    let page = state.publications_page(0, usize::MAX);
+    let [(position, Publication::Clear(body))] = <[_; 1]>::try_from(page.publications).unwrap()
     else {
-        panic!("the async message to a private alias carries its recovery note");
+        panic!("the async message to a private alias is published clear");
     };
 
-    let recovered = Recipient::recover(body.to.account_id, &note, &keys.d, &keys.z).unwrap();
+    let note = &page.recovery_bindings[&body.to.account_id];
+    let recovered = Recipient::recover(body.to.account_id, note, &keys.d, &keys.z).unwrap();
     assert_eq!(recovered, bob());
     let commitment = Commitment::for_message(&body);
     let membership_proof = state.get_proof_for_position(position).unwrap();
@@ -179,17 +171,22 @@ fn an_unproven_async_message_reuses_a_stored_recovery_note_byte_for_byte_whateve
         )
         .unwrap();
 
+    let page = state.publications_page(0, usize::MAX);
     assert_eq!(
-        publications(&state)
+        page.publications
             .into_iter()
             .map(|(_, publication)| {
-                let Publication::Clear { body, recovery } = publication else {
+                let Publication::Clear(body) = publication else {
                     panic!("a public root publishes clear");
                 };
-                (body.message, recovery)
+                body.message
             })
             .collect::<Vec<_>>(),
-        [1, 2].map(|amount| (borsh::to_vec(&credit(amount)).unwrap(), note.clone()))
+        [1, 2].map(|amount| borsh::to_vec(&credit(amount)).unwrap())
+    );
+    assert_eq!(
+        page.recovery_bindings,
+        BTreeMap::from([(payout().account_id, note)])
     );
 }
 

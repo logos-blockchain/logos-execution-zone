@@ -245,7 +245,7 @@ async fn trades_proven_at_one_custody_balance_pay_out_at_the_live_balance() -> R
     let pending = ctx.wallet_mut().owned_pending_messages().await?;
     assert_eq!(pending.len(), 2, "exactly the two payouts are pending");
     for (record, ((_, output), payout)) in pending.iter().zip(traders.iter().zip([200, 190])) {
-        let Publication::Clear { body, .. } = &record.publication else {
+        let Publication::Clear(body) = &record.publication else {
             anyhow::bail!("a public custody's payout is published clear");
         };
         assert_eq!(
@@ -320,7 +320,7 @@ async fn a_public_payout_reaches_a_private_pda_its_recipient_discovers_by_key() 
 
         let [pending] = <[_; 1]>::try_from(ctx.wallet_mut().owned_pending_messages().await?)
             .map_err(|pending| anyhow::anyhow!("expected one payout, found {}", pending.len()))?;
-        let Publication::Clear { body, recovery } = &pending.publication else {
+        let Publication::Clear(body) = &pending.publication else {
             anyhow::bail!("a public sender's payout is published clear");
         };
         assert_eq!(body.to, Actor::native_balance(payout_id));
@@ -328,7 +328,12 @@ async fn a_public_payout_reaches_a_private_pda_its_recipient_discovers_by_key() 
             borsh::from_slice::<native_token::Message>(&body.message)?,
             native_token::Message::Credit(amount)
         );
-        notes.push(recovery.clone());
+        notes.push(
+            ctx.wallet()
+                .get_recovery_binding(payout_id)
+                .await?
+                .context("the payout's address is bound")?,
+        );
         let spent = Nullifier::for_message(
             &keys.private_key_holder.nullifier_secret_key(),
             &Commitment::for_message(body),
@@ -360,10 +365,6 @@ async fn a_public_payout_reaches_a_private_pda_its_recipient_discovers_by_key() 
     assert_eq!(
         notes[0], notes[1],
         "the second payout reuses the binding the first proved"
-    );
-    assert_eq!(
-        ctx.wallet().get_recovery_binding(payout_id).await?,
-        Some(notes[0].clone())
     );
     Ok(())
 }

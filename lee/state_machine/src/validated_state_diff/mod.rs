@@ -13,10 +13,7 @@ use lee_core::{
         BoundaryStep, PublicExecutionContext, PublicOutcome, PublicPart, TransactionEntry,
         TransitionView, WholeExecution,
     },
-    program::{
-        MessageBody, PROGRAM_LOADER_ACCOUNT_ID, Publication, ReceiveInput, TransactionEvent,
-        Transition,
-    },
+    program::{PROGRAM_LOADER_ACCOUNT_ID, Publication, ReceiveInput, TransactionEvent, Transition},
 };
 use public_backend::PublicBackend;
 
@@ -572,13 +569,15 @@ pub fn catch_program_loader_panic<T>(run: impl FnOnce() -> T) -> Result<T, LeeEr
 fn publish(
     state: &V03State,
     introduced: &[RecoveryBinding],
-    body: MessageBody,
+    publication: Publication,
 ) -> Result<Publication, LeeError> {
-    let recovery = state
-        .bound_note(introduced, body.to.account_id)
-        .ok_or(LeeError::UnboundAsyncDestination { actor: body.to })?
-        .clone();
-    Ok(Publication::Clear { body, recovery })
+    if let Publication::Clear(body) = &publication {
+        ensure!(
+            state.bound_note(introduced, body.to.account_id).is_some(),
+            LeeError::UnboundAsyncDestination { actor: body.to }
+        );
+    }
+    Ok(publication)
 }
 
 fn settle(
@@ -621,7 +620,7 @@ fn settle(
         .collect();
     diff.published = async_messages
         .into_iter()
-        .map(|body| publish(state, &diff.recovery_bindings, body))
+        .map(|body| publish(state, &diff.recovery_bindings, Publication::Clear(body)))
         .collect::<Result<_, _>>()?;
     Ok(diff)
 }

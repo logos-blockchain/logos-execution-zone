@@ -15,8 +15,8 @@ use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
     CommitmentSetDigest, CrossZoneDeadLetter, CrossZoneDeadLetterReport,
     CrossZoneDeadLetterRequeue, EncryptedNote, FeeStateQuote, HashType, HexBytes, MembershipProof,
-    Nonce, PageLimit, ProgramId, Publication, SequencerPublicKey, SequencerStatus, SystemProposal,
-    SystemProposalApproval, SystemProposalReport, TransactionReceipt,
+    Nonce, PageLimit, ProgramId, PublicationsPage, SequencerPublicKey, SequencerStatus,
+    SystemProposal, SystemProposalApproval, SystemProposalReport, TransactionReceipt,
 };
 use tracing::debug;
 
@@ -209,13 +209,14 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         &self,
         from_position: CommitmentPosition,
         limit: PageLimit,
-    ) -> Result<Vec<(CommitmentPosition, Publication)>, ErrorObjectOwned> {
+    ) -> Result<PublicationsPage, ErrorObjectOwned> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetPublications {
                 from_position,
                 limit,
             })
             .await
+            .map(|reply| reply.page)
             .map_err(map_executor_error)
     }
 

@@ -1951,14 +1951,14 @@ mod tests {
         state
             .publications_from(0)
             .find_map(|(_, publication)| match publication {
-                Publication::Clear { body, .. } if body.to == Actor::native_balance(alias) => {
+                Publication::Clear(body) if body.to == Actor::native_balance(alias) => {
                     match borsh::from_slice(&body.message).unwrap() {
                         native_token::Message::Credit(amount) => Some(amount),
                         native_token::Message::Transfer { .. }
                         | native_token::Message::ReadState => None,
                     }
                 }
-                Publication::Clear { .. } | Publication::Sealed(_) => None,
+                Publication::Clear(_) | Publication::Sealed(_) => None,
             })
     }
 
