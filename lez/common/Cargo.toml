@@ -15,7 +15,6 @@ fee_core.workspace = true
 bridge_core.workspace = true
 bridge_lock_core.workspace = true
 cross_zone_inbox_core.workspace = true
-ping_core.workspace = true
 programs.workspace = true
 system_accounts.workspace = true
 system_upgrader_core.workspace = true
@@ -33,3 +32,4 @@ logos-blockchain-common-http-client.workspace = true
 
 [dev-dependencies]
 lee = { workspace = true, features = ["test-utils"] }
+ping_core.workspace = true

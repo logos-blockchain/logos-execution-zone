@@ -17,12 +17,13 @@ use sequencer_stake_core::SequencerKey;
 use url::Url;
 use wallet::config::{SequencerConnectionData, WalletConfig};
 
-/// Turn length the integration-test channels are created with.
+/// Turn length the integration-test channels are created with, in L1 slots.
 ///
 /// Deliberately below the production default, whose 300-slot turn outlasts the
 /// committee-removal waits these tests are built around; the minimum stake
-/// stays at the production value.
-pub const TEST_POSTING_TIMEFRAME: u32 = 20;
+/// stays at the production value. Over `tps`'s 12s blocks, which `keeps_turn`
+/// reads as seconds.
+pub const TEST_POSTING_TIMEFRAME: u32 = 13;
 
 /// Idle slots before the turn passes on; the production 25 outlasts the shortened timeframe.
 pub const TEST_POSTING_TIMEOUT: u32 = TEST_POSTING_TIMEFRAME;
@@ -302,9 +303,10 @@ pub fn wallet_config(sequencer_addr: &SocketAddr) -> Result<WalletConfig> {
         seq_poll_max_retries: 10,
         seq_block_poll_max_amount: 100,
         gas_limit: wallet::DEFAULT_GAS_LIMIT,
+        public_gas_margin_percent: 25,
         // Test chains never leave the floor base fees, so an exact reserve needs no refund and
         // the balance assertions need no refund accounting.
-        private_fee_headroom_blocks: 0,
+        fee_headroom_blocks: 0,
     })
 }
 

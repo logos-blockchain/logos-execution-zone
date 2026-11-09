@@ -3,6 +3,7 @@
 //! cross-zone message minting the wrapped token on the target zone.
 
 use borsh::{BorshDeserialize, BorshSerialize};
+pub use cross_zone_emission_core::CrossZoneEmission;
 use lee_core::{
     account::{AccountId, Actor},
     program::PdaSeed,
@@ -20,25 +21,22 @@ pub const BRIDGE_LOCK_NAME: lee_core::program::SystemProgramName =
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Message {
     /// Lock `amount` of the holder's balance and emit a cross-zone message
-    /// minting the wrapped token on `target_zone`.
+    /// minting the wrapped token on the emission's target zone.
     ///
-    /// `target_program_id` and `target_accounts` are supplied though the guest
-    /// accepts one value for each: `cross_zone::extract_emission` reads them off
-    /// the transaction, decoding every emitter through one shape.
+    /// The emission's target fields are supplied though the guest accepts one
+    /// value for each: `cross_zone::extract_emission` reads them off the
+    /// transaction, decoding every emitter through one shape.
     ///
-    /// `target_zone` is the caller's, so a lock to a zone that will not route it
-    /// escrows and never mints. TODO: bound it source-side.
+    /// The target zone is the caller's, so a lock to a zone that will not route
+    /// it escrows and never mints. TODO: bound it source-side.
     ///
     /// Sent to the holder's own actor under this program, signed by the holder;
-    /// `outbox` is the outbox PDA actor the emission goes to.
+    /// `outbox` is the outbox PDA actor the emission goes to. The trailing
+    /// fields are the emission wire contract.
     Lock {
         outbox: Actor,
         amount: u128,
-        target_zone: [u8; 32],
-        target_account_id: AccountId,
-        target_accounts: Vec<Actor>,
-        payload: Vec<u8>,
-        ordinal: u32,
+        emission: CrossZoneEmission,
     },
     /// Sets the outbox program and mint target in the config actor state at genesis.
     /// Repeating the same configuration is a no-op; a different one is rejected.
@@ -161,16 +159,28 @@ mod tests {
     /// existing encoding.
     #[test]
     fn lock_is_the_first_variant() {
-        let lock = Message::Lock {
-            outbox: Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32])),
-            amount: 1,
+        let outbox = Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32]));
+        let emission = CrossZoneEmission {
             target_zone: [7; 32],
             target_account_id: AccountId::new([1; 32]),
             target_accounts: vec![],
             payload: vec![],
             ordinal: 0,
         };
+        let lock = Message::Lock {
+            outbox,
+            amount: 1,
+            emission: emission.clone(),
+        };
         let bytes = borsh::to_vec(&lock).expect("Lock serializes");
-        assert_eq!(bytes[0], 0);
+
+        let mut expected = vec![0];
+        expected.extend(borsh::to_vec(&outbox).expect("outbox serializes"));
+        expected.extend(1_u128.to_le_bytes());
+        expected.extend(borsh::to_vec(&emission).expect("emission serializes"));
+        assert_eq!(
+            bytes, expected,
+            "Lock is the tag, the outbox actor, the amount, then the emission wire fields"
+        );
     }
 }

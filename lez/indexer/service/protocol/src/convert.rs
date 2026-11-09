@@ -1065,6 +1065,7 @@ impl From<indexer_core::status::PeerHealth> for PeerHealth {
             indexer_core::status::PeerHealth::Lagging => Self::Lagging,
             indexer_core::status::PeerHealth::Holed => Self::Holed,
             indexer_core::status::PeerHealth::Suspended => Self::Suspended,
+            indexer_core::status::PeerHealth::PinMismatch => Self::PinMismatch,
             indexer_core::status::PeerHealth::Halted => Self::Halted,
         }
     }

@@ -120,6 +120,9 @@ const GENESIS_STAKE_FUNDING_KEY: [u8; 32] = [9; 32];
 /// A number of Bedrock slots, as opposed to a [`Slot`] position.
 type SlotCount = u64;
 
+/// Deliveries awaiting a block, by source zone, keyed by emission order.
+type EligibleDispatches = BTreeMap<Option<[u8; 32]>, Vec<((u64, u32), LeeTransaction)>>;
+
 /// A founding sequencer's key, plus the ownership account attesting to its stake.
 struct FoundingStake {
     /// Index of the `StakeSequencer` action configuring this stake, which names
@@ -1936,18 +1939,36 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             // delivery had already settled, which it does whenever it re-reads a
             // slot it has consumed. Already in the head state but not the final
             // one means the delivery is on this chain but could still orphan, so
-            // the record is skipped and kept. Otherwise it goes in this block.
-            let mut pending: VecDeque<LeeTransaction> = VecDeque::new();
+            // the record is skipped and kept. Otherwise it is eligible, queued
+            // per source zone in emission order: the store reads records in
+            // key-hash order, under which one busy peer starves every other and
+            // a peer's own messages arrive shuffled.
+            let mut eligible = EligibleDispatches::new();
             for (key, message, tx) in recorded_dispatches {
-                match message {
+                let (zone, emitted_at) = match message {
                     Some(message) if dispatch_already_delivered(chain.final_state(), &message) => {
                         settled.push(key);
+                        continue;
                     }
-                    Some(message) if dispatch_already_delivered(chain.head_state(), &message) => {}
-                    _ if pending.len() >= MAX_DISPATCHES_PER_BLOCK => {}
-                    _ => pending.push_back(tx),
-                }
+                    Some(message) if dispatch_already_delivered(chain.head_state(), &message) => {
+                        continue;
+                    }
+                    Some(message) => (
+                        Some(message.src_zone),
+                        (message.src_block_id, message.src_tx_index),
+                    ),
+                    None => (None, (0, 0)),
+                };
+                eligible.entry(zone).or_default().push((emitted_at, tx));
             }
+            let queues = eligible
+                .into_iter()
+                .map(|(zone, mut records)| {
+                    records.sort_by_key(|&(emitted_at, _)| emitted_at);
+                    (zone, records.into_iter().map(|(_, tx)| tx).collect())
+                })
+                .collect();
+            let pending = round_robin(queues, MAX_DISPATCHES_PER_BLOCK);
 
             (
                 prev,
@@ -2792,6 +2813,27 @@ fn dispatch_already_delivered(state: &lee::V03State, message: &CrossZoneMessage)
             seen.binds(&message.src_block_hash) && seen.contains(message.src_tx_index)
         })
     })
+}
+
+/// Takes up to `cap` items, one per queue per round, so no queue starves
+/// another.
+fn round_robin<K: Ord, T>(mut queues: BTreeMap<K, VecDeque<T>>, cap: usize) -> VecDeque<T> {
+    let mut taken = VecDeque::new();
+    while taken.len() < cap {
+        let before = taken.len();
+        for queue in queues.values_mut() {
+            if taken.len() >= cap {
+                break;
+            }
+            if let Some(item) = queue.pop_front() {
+                taken.push_back(item);
+            }
+        }
+        if taken.len() == before {
+            break;
+        }
+    }
+    taken
 }
 
 /// How the fee transaction pays this sequencer's stake ownership account, refusing production while

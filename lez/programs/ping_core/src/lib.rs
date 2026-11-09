@@ -1,4 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+pub use cross_zone_emission_core::{CrossZoneEmission, ZoneId};
 use lee_core::{
     account::{AccountId, Actor},
     program::PdaSeed,
@@ -12,9 +13,6 @@ pub const PING_SENDER_NAME: lee_core::program::SystemProgramName =
     lee_core::program::SystemProgramName::new(b"ping_sender");
 pub const PING_RECEIVER_NAME: lee_core::program::SystemProgramName =
     lee_core::program::SystemProgramName::new(b"ping_receiver");
-
-/// Raw 32-byte zone (channel) id, matching the inbox's.
-pub type ZoneId = [u8; 32];
 
 /// Message to `ping_receiver`.
 ///
@@ -99,7 +97,7 @@ impl ReceiverConfig {
     }
 }
 
-/// Message to `ping_sender`'s config PDA. `Send`'s emission fields are forwarded
+/// Message to `ping_sender`'s config PDA. `Send`'s emission is forwarded
 /// verbatim into `cross_zone_outbox_core::Message::Emit`.
 ///
 /// Variants are append-only. Borsh encodes the variant as a leading tag byte,
@@ -110,11 +108,7 @@ pub enum SenderMessage {
     /// outbox program.
     Send {
         outbox: Actor,
-        target_zone: [u8; 32],
-        target_account_id: AccountId,
-        target_accounts: Vec<Actor>,
-        payload: Vec<u8>,
-        ordinal: u32,
+        emission: CrossZoneEmission,
     },
     /// Pins the outbox program, written once into an empty config actor state at
     /// genesis. A re-run naming a different outbox is refused; an identical one
@@ -192,16 +186,27 @@ mod tests {
     /// existing encoding.
     #[test]
     fn send_is_the_first_variant() {
-        let send = SenderMessage::Send {
-            outbox: Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32])),
+        let outbox = Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32]));
+        let emission = CrossZoneEmission {
             target_zone: [7; 32],
             target_account_id: AccountId::new([1; 32]),
             target_accounts: vec![],
             payload: vec![],
             ordinal: 0,
         };
+        let send = SenderMessage::Send {
+            outbox,
+            emission: emission.clone(),
+        };
         let bytes = borsh::to_vec(&send).expect("Send serializes");
-        assert_eq!(bytes[0], 0);
+
+        let mut expected = vec![0];
+        expected.extend(borsh::to_vec(&outbox).expect("outbox serializes"));
+        expected.extend(borsh::to_vec(&emission).expect("emission serializes"));
+        assert_eq!(
+            bytes, expected,
+            "Send is the tag, the outbox actor, then the emission wire fields"
+        );
     }
 
     /// `Record` is serialized by the source zone into the emission payload and

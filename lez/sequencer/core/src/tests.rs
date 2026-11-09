@@ -1,7 +1,7 @@
 #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
     pin::pin,
     sync::Arc,
     time::Duration,
@@ -74,7 +74,8 @@ use crate::{
         self, BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, SequencerConfig,
     },
     config_target, deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
-    extract_cross_zone_dispatch_key, is_sequencer_only_program, resubmittable_txs, zone_checkpoint,
+    extract_cross_zone_dispatch_key, is_sequencer_only_program, resubmittable_txs, round_robin,
+    zone_checkpoint,
 };
 
 mod canned_channel;
@@ -669,6 +670,7 @@ fn cross_zone_test_config() -> SequencerConfig {
                     mint_cap: None,
                 }],
                 min_committee_size: 0,
+                genesis_hash: None,
             }],
             source_authority: None,
             source_governance: None,
@@ -723,6 +725,16 @@ fn dispatch_record(src_block_id: u64, payload: Vec<u8>) -> PendingCrossZoneDispa
         cross_zone_inbox_core::message_key(&PEER_ZONE, src_block_id, 0),
         borsh::to_vec(&tx).expect("dispatch encodes"),
     )
+}
+
+fn delivered_source_blocks(block: &Block) -> Vec<u64> {
+    block
+        .body
+        .transactions
+        .iter()
+        .filter_map(extract_cross_zone_dispatch)
+        .map(|message| message.src_block_id)
+        .collect()
 }
 
 /// The message keys of the deliveries a block carries.
@@ -1397,10 +1409,13 @@ async fn a_delivery_backlog_is_spread_across_blocks() {
         .await
         .unwrap()
         .unwrap();
+    let cap: u64 = MAX_DISPATCHES_PER_BLOCK
+        .try_into()
+        .expect("cap fits in u64");
     assert_eq!(
-        dispatches_in(&block).len(),
-        MAX_DISPATCHES_PER_BLOCK,
-        "one block must not carry an unbounded number of deliveries"
+        delivered_source_blocks(&block),
+        (100..100 + cap).collect::<Vec<_>>(),
+        "one block carries at most the cap, oldest emission first"
     );
 
     // Deferred, not dropped: the rest go in the next block.
@@ -1411,7 +1426,10 @@ async fn a_delivery_backlog_is_spread_across_blocks() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(dispatches_in(&block).len(), 3);
+    assert_eq!(
+        delivered_source_blocks(&block),
+        (100 + cap..=118).collect::<Vec<_>>()
+    );
 }
 
 #[tokio::test]
@@ -7474,5 +7492,42 @@ async fn an_approved_change_has_room_in_a_full_block() {
             ))
             .await,
         None
+    );
+}
+
+#[test]
+fn dispatch_slots_are_shared_round_robin_across_peers() {
+    let queues: BTreeMap<Option<[u8; 32]>, VecDeque<&str>> = BTreeMap::from([
+        (Some([1; 32]), VecDeque::from(["a0", "a1", "a2", "a3"])),
+        (Some([2; 32]), VecDeque::from(["b0", "b1"])),
+        (None, VecDeque::from(["n0"])),
+    ]);
+
+    let taken = round_robin(queues, 6);
+
+    assert_eq!(taken, VecDeque::from(["n0", "a0", "b0", "a1", "b1", "a2"]));
+
+    let one_queue: BTreeMap<u8, VecDeque<u8>> = BTreeMap::from([(1, VecDeque::from([7, 8, 9]))]);
+    assert_eq!(
+        round_robin(one_queue, 2),
+        VecDeque::from([7, 8]),
+        "the cap still binds a single queue"
+    );
+}
+
+#[test]
+fn a_peer_genesis_hash_round_trips_as_hex() {
+    let peer: CrossZonePeer = serde_json::from_str(
+        r#"{"channel_id":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],
+            "allowed_routes":[],
+            "genesis_hash":"0202020202020202020202020202020202020202020202020202020202020202"}"#,
+    )
+    .expect("hex genesis hash parses");
+
+    assert_eq!(peer.genesis_hash, Some(HashType([2; 32])));
+    assert!(
+        serde_json::to_string(&peer)
+            .expect("peer serializes")
+            .contains("\"0202020202020202020202020202020202020202020202020202020202020202\"")
     );
 }
