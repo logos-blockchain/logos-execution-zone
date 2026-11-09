@@ -15,8 +15,8 @@ use sequencer_gossip_actor::protocol::PublishTransaction;
 use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
     CommitmentSetDigest, CrossZoneDeadLetter, CrossZoneDeadLetterReport,
-    CrossZoneDeadLetterRequeue, EncryptedNote, FeeStateQuote, HashType, MembershipProof, MsgId,
-    Nonce, PageLimit, ProgramId, Publication, SequencerStatus,
+    CrossZoneDeadLetterRequeue, EncryptedNote, FeeStateQuote, HashType, MembershipProof, Nonce,
+    PageLimit, ProgramId, Publication, SequencerStatus,
 };
 
 pub struct Service<E: ExecutorActorTrait> {
@@ -282,16 +282,15 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             .ask(sequencer_executor_actor::protocol::GetStatus)
             .await
             .map_err(map_infallible_error)?;
-        let msg_id = |msg: sequencer_executor_actor::protocol::MsgId| MsgId(*msg.as_ref());
-
         Ok(match status {
             sequencer_executor_actor::protocol::ExecutorStatus::Bootstrapping {
                 target,
-                replayed_to,
+                replayed_up_to,
                 height,
             } => SequencerStatus::Bootstrapping {
-                target: msg_id(target),
-                replayed_to: replayed_to.map(msg_id),
+                target_slot: target.map(sequencer_executor_actor::protocol::Slot::into_inner),
+                replayed_up_to_slot: replayed_up_to
+                    .map(sequencer_executor_actor::protocol::Slot::into_inner),
                 height,
             },
             sequencer_executor_actor::protocol::ExecutorStatus::Online {

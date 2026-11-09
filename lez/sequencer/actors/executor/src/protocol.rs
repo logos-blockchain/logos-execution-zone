@@ -6,7 +6,7 @@ use lee_core::{
     BlockId, Commitment, CommitmentPosition, CommitmentSetDigest, MembershipProof,
     account::{AccountId, Actor},
 };
-pub use sequencer_bedrock_actor::protocol::{ChannelId, MsgId};
+pub use sequencer_bedrock_actor::protocol::{ChannelId, MsgId, Slot};
 // TODO: Move to this module once sequencer_core will be in internal implementation detail of
 // executor.
 pub use sequencer_storage_actor::protocol::{CrossZoneMessageKey, DeadLetterRequeue};
@@ -153,12 +153,13 @@ pub struct GetStatus;
 /// What the executor is doing.
 #[derive(Debug, Clone, Reply)]
 pub enum ExecutorStatus {
-    /// Replaying the channel's finalized history up to the tip it had at startup.
+    /// Replaying the channel's finalized history up to the last slot the node has finalized.
     Bootstrapping {
-        /// The channel entry bootstrapping completes at.
-        target: MsgId,
-        /// The last channel entry replayed, [`None`] before the first.
-        replayed_to: Option<MsgId>,
+        /// The slot bootstrapping completes at: the last one the node had finalized, as of the
+        /// latest batch. [`None`] before the first batch.
+        target: Option<Slot>,
+        /// The slot the finalized history is replayed up to, [`None`] before the first batch.
+        replayed_up_to: Option<Slot>,
         /// Height of the chain replayed so far, [`None`] while it is empty.
         height: Option<BlockId>,
     },

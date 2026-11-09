@@ -9,7 +9,10 @@ use kameo::actor::ActorRef;
 use log::warn;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
-    protocol::{BlockData, DepositInfo, Ed25519Key, FinalizedBlock, MsgId, WithdrawInfo},
+    protocol::{
+        BlockData, DepositInfo, Ed25519Key, FinalizedBlock, FinalizedUpTo, MsgId, Slot,
+        WithdrawInfo,
+    },
 };
 use sequencer_core::{config::SequencerConfig, faults};
 use sequencer_slasher_actor::protocol::{Report, ReportedOffence};
@@ -32,16 +35,13 @@ pub struct BootstrappingState<S: StorageActorTrait, B: BedrockActorTrait> {
     pub(super) chain: ChainState,
     pub(super) channel_signing_key: Ed25519Key,
     pub(super) consistency_check: Option<AnchorConsistencyCheck>,
-    /// Channel tip at startup. Only its message identifies it: a config change moves the tip
-    /// slot without a message the finalized stream would carry.
-    pub(super) bootstrap_to: MsgId,
     /// The final entry the store held at startup. Finalized history is read in lineage order,
     /// but a warm start re-reads what the final tier holds, so the lineage resumes past it.
     pub(super) stored_final: MsgId,
     /// Whether the replay is past [`Self::stored_final`].
     pub(super) on_lineage: bool,
-    /// The last finalized entry replayed.
-    pub(super) replayed_to: Option<MsgId>,
+    /// How far the finalized history is replayed, [`None`] before the first batch.
+    pub(super) replayed: Option<FinalizedUpTo>,
     pub(super) actors: ActorsBundle<S, B>,
 }
 
@@ -51,7 +51,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
         chain: ChainState,
         channel_signing_key: Ed25519Key,
         consistency_check: Option<AnchorConsistencyCheck>,
-        bootstrap_to: MsgId,
         actors: ActorsBundle<S, B>,
     ) -> Self {
         let stored_final = chain.final_msg();
@@ -60,22 +59,22 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             chain,
             channel_signing_key,
             consistency_check,
-            bootstrap_to,
             stored_final,
             on_lineage: stored_final == MsgId::root(),
-            replayed_to: None,
+            replayed: None,
             actors,
         }
     }
 
-    /// The channel entry bootstrapping completes at.
-    pub const fn bootstrap_to(&self) -> MsgId {
-        self.bootstrap_to
+    /// The slot bootstrapping completes at: the last one the node had finalized, as of the
+    /// latest batch. [`None`] before the first batch.
+    pub fn bootstrap_to(&self) -> Option<Slot> {
+        self.replayed.map(|replayed| replayed.last_finalized_slot)
     }
 
-    /// The last finalized entry replayed, [`None`] before the first.
-    pub const fn replayed_to(&self) -> Option<MsgId> {
-        self.replayed_to
+    /// The slot the finalized history is replayed up to, [`None`] before the first batch.
+    pub fn replayed_up_to(&self) -> Option<Slot> {
+        self.replayed.map(|replayed| replayed.slot)
     }
 
     pub const fn chain(&self) -> &ChainState {
@@ -83,7 +82,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
     }
 
     /// Apply a finalized block to the bootstrapping state.
-    pub async fn on_finalized_block(mut self, finalized: &FinalizedBlock) -> Result<State<S, B>> {
+    pub async fn on_finalized_block(&mut self, finalized: &FinalizedBlock) -> Result<()> {
         let block = match &finalized.block {
             BlockData::Block(block) => {
                 if let Some(check) = &mut self.consistency_check
@@ -108,22 +107,29 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
 
         self.apply_finalized_entry(finalized, block).await?;
         self.on_lineage = self.on_lineage || finalized.msg_id == self.stored_final;
-        self.replayed_to = Some(finalized.msg_id);
+        Ok(())
+    }
 
-        if finalized.msg_id == self.bootstrap_to {
-            if !self.on_lineage {
-                warn!(
-                    "Bootstrapping never re-read the stored final entry {}, so it left the \
-                     lineage untouched; the Bedrock node's finality may lag behind it",
-                    self.stored_final
-                );
-            }
-            return Ok(State::Online(
-                online::OnlineState::from_bootstrapping(self, finalized.slot).await?,
-            ));
+    /// Goes online once the finalized history is replayed up to [`Self::bootstrap_to`].
+    ///
+    /// A chain holding no block yet waits for the channel's first one to finalize, as it has
+    /// nothing to follow the channel from.
+    pub async fn on_finalized_up_to(mut self, up_to: FinalizedUpTo) -> Result<State<S, B>> {
+        self.replayed = Some(up_to);
+        if !up_to.is_caught_up() || self.chain.head_tip().is_none() {
+            return Ok(State::Bootstrapping(self));
         }
 
-        Ok(State::Bootstrapping(self))
+        if !self.on_lineage {
+            warn!(
+                "Bootstrapping never re-read the stored final entry {}, so it left the lineage \
+                 untouched; the Bedrock node's finality may lag behind it",
+                self.stored_final
+            );
+        }
+        Ok(State::Online(
+            online::OnlineState::from_bootstrapping(self, up_to.slot).await?,
+        ))
     }
 
     /// Hands the slasher an offence the replay proves.

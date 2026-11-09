@@ -31,7 +31,7 @@ use sequencer_storage_actor::{
 use tokio::test;
 
 use super::{
-    finalized_at, sequencer_config, spawn_bedrock_pool, spawn_executor,
+    finalized_at, finalized_up_to, sequencer_config, spawn_bedrock_pool, spawn_executor,
     stored_chain::{
         PEER_ZONE, block_at, cross_zone_genesis_store, finalized_genesis_store, genesis,
         with_finalized, with_head,
@@ -101,6 +101,7 @@ async fn start_observing(
         spawn_bedrock_pool(move |_channel_id| channel.mock()),
     ))
     .await?;
+    let replayed_up_to = history.last().map(|finalized| finalized.slot.into_inner());
     for finalized in history {
         executor
             .ask(ChannelEvent {
@@ -109,6 +110,9 @@ async fn start_observing(
             })
             .await?;
         observe(store);
+    }
+    if let Some(slot) = replayed_up_to {
+        executor.ask(finalized_up_to(channel_id, slot)).await?;
     }
     executor.ask(GetLastBlockId).await?;
     Ok(())

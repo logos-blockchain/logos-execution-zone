@@ -74,6 +74,8 @@ pub struct Args<S: StorageActorTrait> {
 ///   [`ChannelEventKind::FinalizedDeposit`](crate::protocol::ChannelEventKind::FinalizedDeposit).
 /// - `channel/<channel_id>/finalized_withdrawal`: for
 ///   [`ChannelEventKind::FinalizedWithdrawal`](crate::protocol::ChannelEventKind::FinalizedWithdrawal).
+/// - `channel/<channel_id>/finalized_up_to`: for
+///   [`ChannelEventKind::FinalizedUpTo`](crate::protocol::ChannelEventKind::FinalizedUpTo).
 /// - If publisher was initialized with [`InitializeChannelPublisher`]:
 ///   - `channel/<channel_id>/publisher/update`: for
 ///     [`PublisherEvent::Update`](crate::protocol::PublisherEvent::Update)
@@ -157,9 +159,8 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
         )]
         loop {
             select! {
-                Some(res) = self.node_stream.next_message() => {
-                    let (msg, slot) = res?;
-                    self.node_stream.on_message(msg, slot).await?;
+                Some(item) = self.node_stream.next_item() => {
+                    self.node_stream.on_item(item?).await?;
                 }
                 Some(event) = OptionFuture::from(self.publisher.as_mut().map(publisher::Publisher::next_event)) => {
                     self.publisher().expect("Publisher is initialized").on_event(event).await?;

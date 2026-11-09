@@ -675,7 +675,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetStatus> for Executor
             State::Error(details) => panic!("Actor has encountered an error state: {details}"),
             State::Bootstrapping(bootstrapping) => ExecutorStatus::Bootstrapping {
                 target: bootstrapping.bootstrap_to(),
-                replayed_to: bootstrapping.replayed_to(),
+                replayed_up_to: bootstrapping.replayed_up_to(),
                 height: bootstrapping.chain().head_tip().map(|tip| tip.block_id),
             },
             State::Online(online) => ExecutorStatus::Online {
@@ -785,23 +785,38 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
 
         match msg.event {
             ChannelEventKind::FinalizedBlock(finalized_block) => {
+                // A failure can leave the chain ahead of the store, so it ends in the error state.
                 self.state
-                    .modify(|state| async {
+                    .modify(|mut state| async move {
+                        match &mut state {
+                            State::Error(details) => {
+                                panic!("Actor has encountered an error state: {details}")
+                            }
+                            State::Bootstrapping(bootstrapping) => {
+                                bootstrapping.on_finalized_block(&finalized_block).await?;
+                            }
+                            // Online state listens for Publisher events
+                            State::Online(_) => {}
+                        }
+                        Ok(state)
+                    })
+                    .await?;
+            }
+            ChannelEventKind::FinalizedUpTo(up_to) => {
+                self.state
+                    .modify(|state| async move {
                         match state {
                             State::Error(details) => {
                                 panic!("Actor has encountered an error state: {details}")
                             }
                             State::Bootstrapping(bootstrapping) => {
-                                bootstrapping.on_finalized_block(&finalized_block).await
+                                bootstrapping.on_finalized_up_to(up_to).await
                             }
-                            State::Online(_) => {
-                                // Online state listens for Publisher events
-                                Ok(state)
-                            }
+                            // Online state listens for Publisher events
+                            State::Online(_) => Ok(state),
                         }
                     })
-                    .await
-                    .expect("Failed to handle finalized block, Executor cannot recover from that");
+                    .await?;
             }
             ChannelEventKind::FinalizedDeposit(deposit) => match &self.state {
                 State::Error(details) => panic!("Actor has encountered an error state: {details}"),

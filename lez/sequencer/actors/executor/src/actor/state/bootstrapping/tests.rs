@@ -37,14 +37,13 @@ async fn refusal(store: CannedStore, history: Vec<FinalizedBlock>) -> Error {
         Ok(state) => state,
         Err(err) => return err,
     };
+    let State::Bootstrapping(bootstrapping) = &mut state else {
+        panic!("a channel to refuse must be bootstrapped from");
+    };
     for finalized in &history {
-        let State::Bootstrapping(bootstrapping) = state else {
-            panic!("the channel tip was reached without a refusal");
-        };
-        state = match Box::pin(bootstrapping.on_finalized_block(finalized)).await {
-            Ok(next) => next,
-            Err(err) => return err,
-        };
+        if let Err(err) = Box::pin(bootstrapping.on_finalized_block(finalized)).await {
+            return err;
+        }
     }
     panic!("bootstrapping must refuse this channel");
 }

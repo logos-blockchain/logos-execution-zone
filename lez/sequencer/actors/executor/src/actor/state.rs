@@ -94,9 +94,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
         };
 
         // A channel only configured so far has the root as its tip message.
-        if let Some(bootstrap_to) = channel_tip_slot
+        if channel_tip_slot
             .and(channel_tip_msg_id)
-            .filter(|msg_id| *msg_id != MsgId::root())
+            .is_some_and(|msg_id| msg_id != MsgId::root())
         {
             info!("Channel already exists; joining as a non channel creator");
             // The channel's own genesis is replayed instead, so a creator restarting (or a second
@@ -108,7 +108,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
                 chain,
                 channel_signing_key,
                 consistency_check,
-                bootstrap_to,
                 actors,
             )))
         } else if channel_tip_slot.is_some() {

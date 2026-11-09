@@ -1,7 +1,7 @@
 use std::ffi::{CString, c_char};
 
 use sequencer_executor_actor::protocol::{
-    ExecutorStatus, GetAccountTransactions, GetBlockByHash, GetStatus, MAX_BLOCK_RANGE_LEN,
+    ExecutorStatus, GetAccountTransactions, GetBlockByHash, GetStatus, MAX_BLOCK_RANGE_LEN, Slot,
 };
 use sequencer_storage_actor::{
     actor::event_filter::{EventRecord, MAX_EVENT_QUERY_RESPONSE_BYTES, Selector, record_charge},
@@ -14,7 +14,7 @@ use crate::{
     primitives::{
         result::PointerResult,
         types::{
-            FfiAccountId, FfiBlockId, FfiBytes32, FfiHashType, FfiOption, FfiSelector, FfiVec,
+            FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiSelector, FfiVec,
             account::FfiAccount,
             block::{FfiBlock, FfiBlockOpt},
             event::FfiEventRecord,
@@ -68,8 +68,8 @@ impl LastBlockIdResult {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiExecutorState {
-    /// Replaying the channel's finalized history up to the tip it had at startup.
-    /// State queries fail until it is done.
+    /// Replaying the channel's finalized history up to the last slot the Bedrock node has
+    /// finalized. State queries fail until it is done.
     Bootstrapping = 0x0,
     /// Following the channel and producing blocks on its turns.
     Online,
@@ -86,26 +86,30 @@ pub struct ExecutorStatusResult {
     /// which it always is when `Online`.
     pub height: FfiBlockId,
     pub has_height: bool,
-    /// `Bootstrapping` only: the channel entry bootstrapping completes at.
-    pub target: FfiBytes32,
-    /// `Bootstrapping` only: the last channel entry replayed. Only meaningful
-    /// when `has_replayed_to` is `true`.
-    pub replayed_to: FfiBytes32,
-    pub has_replayed_to: bool,
+    /// `Bootstrapping` only: the Bedrock slot bootstrapping completes at, the last one the
+    /// node had finalized as of the latest batch. Only meaningful when `has_target_slot` is
+    /// `true`.
+    pub target_slot: u64,
+    pub has_target_slot: bool,
+    /// `Bootstrapping` only: the Bedrock slot the finalized history is replayed
+    /// up to. Only meaningful when `has_replayed_up_to_slot` is `true`.
+    pub replayed_up_to_slot: u64,
+    pub has_replayed_up_to_slot: bool,
     /// `Online` only: whether it is this sequencer's turn to produce blocks.
     pub is_our_turn: bool,
     pub error: FfiOperationError,
 }
 
 impl ExecutorStatusResult {
-    fn error(error: FfiOperationError) -> Self {
+    const fn error(error: FfiOperationError) -> Self {
         Self {
             state: FfiExecutorState::Bootstrapping,
             height: 0,
             has_height: false,
-            target: FfiBytes32::default(),
-            replayed_to: FfiBytes32::default(),
-            has_replayed_to: false,
+            target_slot: 0,
+            has_target_slot: false,
+            replayed_up_to_slot: 0,
+            has_replayed_up_to_slot: false,
             is_our_turn: false,
             error,
         }
@@ -117,21 +121,16 @@ impl From<ExecutorStatus> for ExecutorStatusResult {
         match status {
             ExecutorStatus::Bootstrapping {
                 target,
-                replayed_to,
+                replayed_up_to,
                 height,
             } => Self {
                 state: FfiExecutorState::Bootstrapping,
                 height: height.unwrap_or_default(),
                 has_height: height.is_some(),
-                target: FfiBytes32 {
-                    data: *target.as_ref(),
-                },
-                replayed_to: replayed_to
-                    .map(|msg| FfiBytes32 {
-                        data: *msg.as_ref(),
-                    })
-                    .unwrap_or_default(),
-                has_replayed_to: replayed_to.is_some(),
+                target_slot: target.map(Slot::into_inner).unwrap_or_default(),
+                has_target_slot: target.is_some(),
+                replayed_up_to_slot: replayed_up_to.map(Slot::into_inner).unwrap_or_default(),
+                has_replayed_up_to_slot: replayed_up_to.is_some(),
                 is_our_turn: false,
                 error: FfiOperationError::Success,
             },
@@ -142,9 +141,10 @@ impl From<ExecutorStatus> for ExecutorStatusResult {
                 state: FfiExecutorState::Online,
                 height,
                 has_height: true,
-                target: FfiBytes32::default(),
-                replayed_to: FfiBytes32::default(),
-                has_replayed_to: false,
+                target_slot: 0,
+                has_target_slot: false,
+                replayed_up_to_slot: 0,
+                has_replayed_up_to_slot: false,
                 is_our_turn,
                 error: FfiOperationError::Success,
             },

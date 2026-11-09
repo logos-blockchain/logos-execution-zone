@@ -14,12 +14,6 @@ use serde_with::{hex::Hex, serde_as};
 #[serde(transparent)]
 pub struct ChannelId(#[serde_as(as = "Hex")] pub [u8; 32]);
 
-/// Id of an entry on a Bedrock channel.
-#[serde_as]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct MsgId(#[serde_as(as = "Hex")] pub [u8; 32]);
-
 /// The fee market priced off the head state: what a public transaction sizes
 /// its `max_fee` against, and what a private transaction prices its in-proof
 /// fee at.
@@ -93,13 +87,16 @@ pub enum CrossZoneDeadLetterRequeue {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum SequencerStatus {
-    /// Replaying the channel's finalized history up to the tip it had at startup.
+    /// Replaying the channel's finalized history up to the last slot the Bedrock node has
+    /// finalized.
     #[serde(rename_all = "camelCase")]
     Bootstrapping {
-        /// The channel entry bootstrapping completes at.
-        target: MsgId,
-        /// The last channel entry replayed, [`None`] before the first.
-        replayed_to: Option<MsgId>,
+        /// The Bedrock slot bootstrapping completes at: the last one the node had finalized, as
+        /// of the latest batch. [`None`] before the first batch.
+        target_slot: Option<u64>,
+        /// The Bedrock slot the finalized history is replayed up to, [`None`] before the first
+        /// batch.
+        replayed_up_to_slot: Option<u64>,
         /// Height of the chain replayed so far, [`None`] while it is empty.
         height: Option<BlockId>,
     },
@@ -127,8 +124,8 @@ mod tests {
     #[test]
     fn status_is_tagged_by_state() {
         let status = SequencerStatus::Bootstrapping {
-            target: MsgId([1; 32]),
-            replayed_to: None,
+            target_slot: Some(7),
+            replayed_up_to_slot: None,
             height: Some(3),
         };
 
@@ -136,8 +133,8 @@ mod tests {
             serde_json::to_value(&status).unwrap(),
             serde_json::json!({
                 "state": "bootstrapping",
-                "target": "01".repeat(32),
-                "replayedTo": null,
+                "targetSlot": 7,
+                "replayedUpToSlot": null,
                 "height": 3,
             })
         );

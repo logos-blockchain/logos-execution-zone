@@ -22,7 +22,7 @@ use sequencer_bedrock_actor::{
     mock::{MockBedrockActor, SharedChannel, mock_msg_of},
     protocol::{
         BlockData, ChannelEvent, ChannelEventKind, ChannelSeq, Checkpoint, FinalizedBlock,
-        HeaderId, PublishOutcome, Slot,
+        FinalizedUpTo, HeaderId, PublishOutcome, Slot,
     },
 };
 use sequencer_channel_signing_actor::ChannelSigningActor;
@@ -439,7 +439,30 @@ async fn spawn_on_genesis(
             event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&empty_genesis(), 0))),
         })
         .await?;
+    executor.ask(finalized_up_to(channel_id, 0)).await?;
     Ok(executor)
+}
+
+/// The Bedrock actor's report that the finalized history is read up to `slot`, the last one the
+/// node had finalized.
+pub(super) fn finalized_up_to(channel_id: ChannelId, slot: u64) -> ChannelEvent {
+    catching_up(channel_id, slot, slot)
+}
+
+/// The Bedrock actor's report that the finalized history is read up to `slot`, while the node had
+/// finalized up to `last_finalized_slot`.
+pub(super) fn catching_up(
+    channel_id: ChannelId,
+    slot: u64,
+    last_finalized_slot: u64,
+) -> ChannelEvent {
+    ChannelEvent {
+        channel_id,
+        event: ChannelEventKind::FinalizedUpTo(FinalizedUpTo {
+            slot: Slot::from(slot),
+            last_finalized_slot: Slot::from(last_finalized_slot),
+        }),
+    }
 }
 
 /// `block` as the Bedrock actor reports it finalized at `slot`.

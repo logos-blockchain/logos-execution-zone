@@ -100,6 +100,11 @@ pub enum ChannelEventKind {
     /// `channel/<channel_id>/finalized_withdrawal` topic.
     FinalizedWithdrawal(Arc<WithdrawInfo>),
 
+    /// Every finalized block, deposit and withdrawal up to a slot has been published, arriving to
+    /// `channel/<channel_id>/finalized_up_to` topic. Comes after the events it covers, also when
+    /// the slots it covers hold none.
+    FinalizedUpTo(FinalizedUpTo),
+
     /// Events related to the channel publisher arriving to `channel/<channel_id>/publisher/`
     /// topics.
     Publisher(Arc<PublisherEvent>),
@@ -112,6 +117,24 @@ pub struct FinalizedBlock {
     pub slot: Slot,
     /// The key that signed the inscription, [`None`] if it is not a valid one.
     pub signer: Option<Ed25519PublicKey>,
+}
+
+/// How far the finalized history has been published.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FinalizedUpTo {
+    /// Every finalized message up to this slot has been published.
+    pub slot: Slot,
+    /// The last slot the node had finalized when [`Self::slot`] was read. The history is caught
+    /// up once [`Self::slot`] reaches it.
+    pub last_finalized_slot: Slot,
+}
+
+impl FinalizedUpTo {
+    /// Whether the history is published up to the last slot the node had finalized.
+    #[must_use]
+    pub fn is_caught_up(&self) -> bool {
+        self.slot >= self.last_finalized_slot
+    }
 }
 
 #[derive(Debug, Clone)]

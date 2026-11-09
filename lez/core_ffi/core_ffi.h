@@ -156,8 +156,8 @@ typedef enum FfiOperationError {
  */
 typedef enum FfiExecutorState {
   /**
-   * Replaying the channel's finalized history up to the tip it had at startup.
-   * State queries fail until it is done.
+   * Replaying the channel's finalized history up to the last slot the Bedrock node has
+   * finalized. State queries fail until it is done.
    */
   FfiExecutorState_Bootstrapping = 0,
   /**
@@ -716,15 +716,18 @@ typedef struct ExecutorStatusResult {
   FfiBlockId height;
   bool has_height;
   /**
-   * `Bootstrapping` only: the channel entry bootstrapping completes at.
+   * `Bootstrapping` only: the Bedrock slot bootstrapping completes at, the last one the
+   * node had finalized as of the latest batch. Only meaningful when `has_target_slot` is
+   * `true`.
    */
-  struct FfiBytes32 target;
+  uint64_t target_slot;
+  bool has_target_slot;
   /**
-   * `Bootstrapping` only: the last channel entry replayed. Only meaningful
-   * when `has_replayed_to` is `true`.
+   * `Bootstrapping` only: the Bedrock slot the finalized history is replayed
+   * up to. Only meaningful when `has_replayed_up_to_slot` is `true`.
    */
-  struct FfiBytes32 replayed_to;
-  bool has_replayed_to;
+  uint64_t replayed_up_to_slot;
+  bool has_replayed_up_to_slot;
   /**
    * `Online` only: whether it is this sequencer's turn to produce blocks.
    */
