@@ -1,9 +1,10 @@
 //! Which WOTS+ leaf each public account signs with next. A leaf is spent once its signature leaves
 //! the wallet, so the record is saved before a transaction is sent, never after.
 //!
-//! Per account: the nonce the record is for, how many signatures were sent at it, and whether
-//! leaves are taken from the end of the tree (an account this wallet did not create, whose earlier
-//! leaves another wallet may have used). Counters only: nothing here is secret.
+//! Per account: how many signatures were sent at each nonce, kept for every nonce so a rollback
+//! to an earlier nonce never reuses a leaf, and whether leaves are taken from the end of the tree
+//! (an account this wallet did not create, whose earlier leaves another wallet may have used).
+//! Counters only: nothing here is secret.
 
 use std::{
     collections::BTreeMap,
@@ -18,39 +19,52 @@ use serde::{Deserialize, Serialize};
 
 const LEAVES: u8 = lee::signature::WOTS_LEAVES;
 
+/// Where an account takes leaves from the end of the tree.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-struct LeafRecord {
-    /// `None` until the first signature: a restored or imported account's record applies to
-    /// whatever nonce it first signs at.
-    nonce: Option<u128>,
-    attempts: u8,
-    descending: bool,
+enum Foreign {
+    #[default]
+    No,
+    /// A restored or imported account: at whatever nonce it first signs at.
+    NextSigned,
+    At(u128),
 }
 
-impl LeafRecord {
-    /// The record as it stands for a signature at `nonce`.
-    const fn at(self, nonce: Nonce) -> Self {
-        match self.nonce {
-            Some(recorded) if recorded == nonce.0 => self,
-            None => Self {
-                nonce: Some(nonce.0),
-                ..self
-            },
-            Some(_) => Self {
-                nonce: Some(nonce.0),
-                attempts: 0,
-                descending: false,
-            },
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct AccountLeaves {
+    /// Signatures sent at each nonce.
+    spent: BTreeMap<u128, u8>,
+    foreign: Foreign,
+}
+
+impl AccountLeaves {
+    fn attempts(&self, nonce: Nonce) -> u8 {
+        self.spent.get(&nonce.0).copied().unwrap_or(0)
+    }
+
+    const fn descending(&self, nonce: Nonce) -> bool {
+        match self.foreign {
+            Foreign::No => false,
+            Foreign::NextSigned => true,
+            Foreign::At(at) => at == nonce.0,
         }
     }
 
-    fn leaf(self) -> Option<u8> {
+    fn leaf(&self, nonce: Nonce) -> Option<u8> {
         let last = LEAVES.checked_sub(1)?;
-        if self.descending {
-            last.checked_sub(self.attempts)
+        let attempts = self.attempts(nonce);
+        if self.descending(nonce) {
+            last.checked_sub(attempts)
         } else {
-            (self.attempts <= last).then_some(self.attempts)
+            (attempts <= last).then_some(attempts)
         }
+    }
+
+    fn spend(&mut self, nonce: Nonce) {
+        if self.foreign == Foreign::NextSigned {
+            self.foreign = Foreign::At(nonce.0);
+        }
+        let attempts = self.spent.entry(nonce.0).or_insert(0);
+        *attempts = attempts.saturating_add(1);
     }
 }
 
@@ -66,7 +80,7 @@ pub enum LeafError {
 
 pub struct LeafRecords {
     path: PathBuf,
-    records: BTreeMap<AccountId, LeafRecord>,
+    records: BTreeMap<AccountId, AccountLeaves>,
 }
 
 impl LeafRecords {
@@ -85,23 +99,23 @@ impl LeafRecords {
     /// Whether a signature by `account` was already sent at `nonce`.
     #[must_use]
     pub fn sent_at(&self, account: AccountId, nonce: Nonce) -> bool {
-        self.record(account).at(nonce).attempts > 0
+        self.records
+            .get(&account)
+            .is_some_and(|leaves| leaves.attempts(nonce) > 0)
     }
 
     /// The leaf `account`'s next signature at `nonce` uses.
     pub fn next_leaf(&self, account: AccountId, nonce: Nonce) -> Result<u8, LeafError> {
-        self.record(account)
-            .at(nonce)
-            .leaf()
+        self.records
+            .get(&account)
+            .map_or(Some(0), |leaves| leaves.leaf(nonce))
             .ok_or(LeafError::Exhausted { account, nonce })
     }
 
     /// Spends the next leaf of each `(account, nonce)` and saves, before the signatures are sent.
     pub fn spend(&mut self, signers: &[(AccountId, Nonce)]) -> Result<()> {
         for &(account, nonce) in signers {
-            let mut record = self.record(account).at(nonce);
-            record.attempts = record.attempts.saturating_add(1);
-            self.records.insert(account, record);
+            self.records.entry(account).or_default().spend(nonce);
         }
         self.save()
     }
@@ -114,17 +128,12 @@ impl LeafRecords {
         }
         self.records.insert(
             account,
-            LeafRecord {
-                nonce: nonce.map(|nonce| nonce.0),
-                attempts: 0,
-                descending: true,
+            AccountLeaves {
+                spent: BTreeMap::new(),
+                foreign: nonce.map_or(Foreign::NextSigned, |nonce| Foreign::At(nonce.0)),
             },
         );
         self.save()
-    }
-
-    fn record(&self, account: AccountId) -> LeafRecord {
-        self.records.get(&account).copied().unwrap_or_default()
     }
 
     /// Written to a temporary file, then renamed over the old one, so a crash leaves either.
@@ -160,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn leaves_are_taken_in_order_and_reset_when_the_nonce_moves_on() {
+    fn leaves_are_taken_in_order_and_start_over_at_a_new_nonce() {
         let (mut records, _dir) = records();
         assert_eq!(records.next_leaf(ACCOUNT, Nonce(4)), Ok(0));
         assert!(!records.sent_at(ACCOUNT, Nonce(4)));
@@ -214,6 +223,25 @@ mod tests {
         records.mark_foreign(ACCOUNT, Some(Nonce(4))).unwrap();
         assert_eq!(records.next_leaf(ACCOUNT, Nonce(4)), Ok(7));
         assert_eq!(records.next_leaf(ACCOUNT, Nonce(5)), Ok(0));
+    }
+
+    #[test]
+    fn a_rollback_to_an_earlier_nonce_takes_its_next_unspent_leaf() {
+        let (mut records, _dir) = records();
+        records.spend(&[(ACCOUNT, Nonce(4))]).unwrap();
+        records.spend(&[(ACCOUNT, Nonce(5))]).unwrap();
+        assert!(records.sent_at(ACCOUNT, Nonce(4)));
+        assert_eq!(records.next_leaf(ACCOUNT, Nonce(4)), Ok(1));
+    }
+
+    #[test]
+    fn a_foreign_account_still_counts_down_after_a_rollback_to_its_first_nonce() {
+        let (mut records, _dir) = records();
+        records.mark_foreign(ACCOUNT, None).unwrap();
+        records.spend(&[(ACCOUNT, Nonce(9))]).unwrap();
+        records.spend(&[(ACCOUNT, Nonce(10))]).unwrap();
+        assert_eq!(records.next_leaf(ACCOUNT, Nonce(10)), Ok(1));
+        assert_eq!(records.next_leaf(ACCOUNT, Nonce(9)), Ok(6));
     }
 
     #[test]
