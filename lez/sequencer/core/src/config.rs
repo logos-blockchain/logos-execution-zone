@@ -22,24 +22,20 @@ use url::Url;
 /// `max_block_size - BLOCK_OVERHEAD`.
 pub const BLOCK_OVERHEAD: u64 = 2_048;
 
-/// The bytes the L1 lets a block's transactions take, 2 MiB.
-///
-/// Bedrock sets this per era and serves the era's limits from the node
-/// (`/mantle/limits`); this is the value every era has carried so far, kept as
-/// the static ceiling that config validation and gossip need. Publishing checks
-/// the node's live limit.
-const BEDROCK_BLOCK_TRANSACTIONS_SIZE: u64 = 0x0020_0000;
-
 /// The largest usable `max_block_size`, 7/8 of 2 MiB.
 ///
-/// An L2 block is published to Bedrock as a single inscription, which the L1
-/// caps at seven eighths of a block's transaction bytes (an era's
-/// `max_op_data_size`).
+/// An L2 block is published to Bedrock as a single inscription, which an era
+/// caps at its `max_op_data_size`. Bedrock sets its limits per era, so this is
+/// the smallest one in the era schedule of the `logos-blockchain-node` default
+/// deployment.
 pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 = 0x001C_0000;
 
-/// The largest Bedrock transaction: the L1 caps a block's transactions at this
-/// many bytes.
-pub const MAX_BEDROCK_TX_SIZE: u64 = BEDROCK_BLOCK_TRANSACTIONS_SIZE;
+/// The largest Bedrock transaction, 2 MiB.
+///
+/// An era caps a block's transactions at its `max_transactions_size` bytes; this
+/// is the smallest one in the era schedule of the `logos-blockchain-node`
+/// default deployment.
+pub const MAX_BEDROCK_TX_SIZE: u64 = 0x0020_0000;
 
 /// Smallest nonzero `stale_refund_slots`, since a shorter window orphans blocks before L1 can
 /// mine them.
@@ -280,5 +276,37 @@ pub const fn default_channel_params() -> ChannelParams {
         posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
         exit_delay: system_accounts::DEFAULT_SEQUENCER_EXIT_DELAY,
         max_block_size: system_accounts::DEFAULT_MAX_BLOCK_SIZE,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use logos_blockchain_node::config::deployment::{DeploymentSettings, era::ruleset::EraRuleset};
+
+    use super::*;
+
+    #[test]
+    fn bedrock_size_limits_match_the_node_default_deployment() {
+        let deployment = DeploymentSettings::default();
+        let eras: Vec<_> = deployment
+            .era_schedule()
+            .iter()
+            .map(|era| {
+                let EraRuleset::V1(parameters) = &era.parameters.ruleset;
+                &parameters.cryptarchia
+            })
+            .collect();
+
+        let smallest_op_data_size = eras.iter().map(|era| era.max_op_data_size()).min();
+        let smallest_transactions_size = eras.iter().map(|era| era.max_transactions_size).min();
+
+        assert_eq!(
+            smallest_op_data_size.map(u64::from),
+            Some(MAX_PUBLISHABLE_BLOCK_SIZE)
+        );
+        assert_eq!(
+            smallest_transactions_size.map(u64::from),
+            Some(MAX_BEDROCK_TX_SIZE)
+        );
     }
 }

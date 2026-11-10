@@ -237,6 +237,7 @@ logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blo
 logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30" }
 logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30" }
 logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30" }
+logos-blockchain-node = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30" }
 logos-blockchain-testing-framework = { package = "blockchain-test-logos", git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30" }
 testing-framework-app = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
 testing-framework-core = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
