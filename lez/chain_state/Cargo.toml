@@ -33,6 +33,7 @@ prove = ["lee/prove"]
 test-utils = []
 
 [dev-dependencies]
+clock_core.workspace = true
 system_upgrader_core.workspace = true
 lee = { workspace = true, features = ["test-utils"] }
 testnet_initial_state.workspace = true
