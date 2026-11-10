@@ -98,10 +98,6 @@ impl crate::fees::SignedMessage for Message {
     fn signing_hash(&self) -> [u8; 32] {
         self.hash()
     }
-
-    fn payer(&self) -> Option<AccountId> {
-        Self::payer(self)
-    }
 }
 
 #[cfg(test)]

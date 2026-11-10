@@ -581,10 +581,10 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
                     // on `lee_core::ProvenExecution`. FFI/wallet plumbing for address-flexible
                     // program dispatch is tracked separately.
                     program_image_claims: _,
-                    fee,
+                    proven_fee,
                 },
             nonces,
-            fee: declared_fee,
+            fee,
             admission_evidence,
         } = value;
         Self {
@@ -598,8 +598,8 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
             block_validity_window: validity.blocks.into(),
             timestamp_validity_window: validity.timestamps.into(),
             admission_evidence: admission_evidence.into_iter().map(Into::into).collect(),
+            proven_fee: proven_fee.map(Into::into),
             fee: fee.map(Into::into),
-            declared_fee: declared_fee.map(Into::into),
         }
     }
 }
@@ -662,8 +662,8 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             block_validity_window,
             timestamp_validity_window,
             admission_evidence,
+            proven_fee,
             fee,
-            declared_fee,
         } = value;
 
         let private_actions = private_actions.into_iter().map(Into::into).collect();
@@ -688,10 +688,10 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
                 // A privacy-preserving tx submitted through this protocol will fail proof
                 // verification for any program not at its bijection address until this is wired.
                 program_image_claims: Vec::new(),
-                fee: fee.map(Into::into),
+                proven_fee: proven_fee.map(Into::into),
             },
             nonces: nonce_map(nonces)?,
-            fee: declared_fee.map(Into::into),
+            fee: fee.map(Into::into),
             admission_evidence: admission_evidence
                 .into_iter()
                 .map(TryInto::try_into)
@@ -1445,7 +1445,7 @@ mod tests {
             },
             execution: lee_core::ProvenExecution {
                 // The proof commits to its fee, so a mirror dropping it breaks verification.
-                fee: Some(lee_core::ProvenFee {
+                proven_fee: Some(lee_core::ProvenFee {
                     refund_to: Some(account_id(70)),
                     fallback: Some(lee_core::FeeFallback {
                         action: lee_core::PrivateAction::default(),

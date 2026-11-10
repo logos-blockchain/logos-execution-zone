@@ -130,7 +130,10 @@ pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, Class
             };
             // The fallback is applied in place of the proven actions, so it must pay exactly
             // the reserve priced here: the same crossing, alone.
-            if let Some(fallback) = execution.fee.as_ref().and_then(|fee| fee.fallback.as_ref())
+            if let Some(fallback) = execution
+                .proven_fee
+                .as_ref()
+                .and_then(|fee| fee.fallback.as_ref())
                 && fallback.boundary
                     != [
                         BoundaryStep::PrivateToPublic(crossing.clone()),
@@ -147,7 +150,7 @@ pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, Class
             if u64::try_from(size).map_or(true, |size| size > market::PROOF_BYTES) {
                 return Err(ClassifyError::OversizedProof { size });
             }
-            if let Some(target) = execution.fee.as_ref().and_then(|fee| fee.refund_to) {
+            if let Some(target) = execution.proven_fee.as_ref().and_then(|fee| fee.refund_to) {
                 validate_reward_target(target)
                     .map_err(|reason| ClassifyError::InvalidRefundTarget { reason })?;
             }
@@ -303,7 +306,7 @@ mod tests {
         let targeting = |target| {
             let mut message = Message::default();
             message.execution.boundary = crediting();
-            message.execution.fee = Some(lee_core::ProvenFee {
+            message.execution.proven_fee = Some(lee_core::ProvenFee {
                 refund_to: Some(target),
                 fallback: None,
             });
@@ -325,7 +328,7 @@ mod tests {
         let with_fallback = |boundary| {
             let mut message = Message::default();
             message.execution.boundary = vec![credit.clone(), BoundaryStep::EndPublicSubtree];
-            message.execution.fee = Some(lee_core::ProvenFee {
+            message.execution.proven_fee = Some(lee_core::ProvenFee {
                 refund_to: None,
                 fallback: Some(lee_core::FeeFallback {
                     action: lee_core::PrivateAction::default(),

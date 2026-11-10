@@ -1866,7 +1866,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             let fallback = tx
                 .message()
                 .execution
-                .fee
+                .proven_fee
                 .as_ref()
                 .and_then(|fee| fee.fallback.as_ref())
                 .map_or(0, |fallback| {
@@ -2933,7 +2933,10 @@ fn spent_in(block: &Block) -> Vec<Nullifier> {
             LeeTransaction::Public(_) => None,
         })
         .flat_map(|(position, execution)| {
-            let fallback = execution.fee.as_ref().and_then(|fee| fee.fallback.as_ref());
+            let fallback = execution
+                .proven_fee
+                .as_ref()
+                .and_then(|fee| fee.fallback.as_ref());
             match (block.body.is_reverted(position), fallback) {
                 (true, Some(fallback)) => vec![fallback.action.nullifier],
                 (true, None) => Vec::new(),

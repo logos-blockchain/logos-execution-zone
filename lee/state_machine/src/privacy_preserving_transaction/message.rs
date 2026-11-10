@@ -102,7 +102,7 @@ pub mod tests {
                 }],
                 validity: ValidityWindows::new_unbounded(),
                 program_image_claims: vec![],
-                fee: None,
+                proven_fee: None,
             },
             nonces,
             fee: None,
@@ -133,7 +133,7 @@ pub mod tests {
             &[0, 0],           // execution.validity.blocks: from None, to None
             &[0, 0],           // execution.validity.timestamps: from None, to None
             &[0, 0, 0, 0],     // execution.program_image_claims: none
-            &[0],              // execution.fee: None
+            &[0],              // execution.proven_fee: None
             &[1, 0, 0, 0],     // nonces: one account's nonce, a little-endian u128
             &[2; 32],
             &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],

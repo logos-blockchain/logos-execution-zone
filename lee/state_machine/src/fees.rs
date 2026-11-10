@@ -2,7 +2,7 @@
 
 use borsh::{BorshDeserialize, BorshSerialize};
 
-use crate::{AccountId, Balance, Fee, Gas, public_transaction::WitnessSet};
+use crate::{AccountId, Balance, Fee, Gas, TransactionMessage, public_transaction::WitnessSet};
 
 /// The signed fee fields of a charged transaction.
 ///
@@ -31,11 +31,9 @@ impl FeeDeclaration {
     }
 }
 
-/// A message kind that carries an optional fee under a domain-separated hash.
+/// A message kind signed under a domain-separated hash.
 pub trait SignedMessage {
     fn signing_hash(&self) -> [u8; 32];
-    /// The designated fee payer, or `None` for a fee-exempt message.
-    fn payer(&self) -> Option<AccountId>;
 }
 
 /// Whether the transaction's fee is authorized: a fee-exempt message always is;
@@ -45,7 +43,10 @@ pub trait SignedMessage {
 /// verifying the signature, so only the payer's signature is verified, not
 /// every signer's.
 #[must_use]
-pub fn is_fee_authorized<M: SignedMessage>(message: &M, witness_set: &WitnessSet) -> bool {
+pub fn is_fee_authorized<P>(message: &TransactionMessage<P>, witness_set: &WitnessSet) -> bool
+where
+    TransactionMessage<P>: SignedMessage,
+{
     let Some(payer) = message.payer() else {
         return true;
     };

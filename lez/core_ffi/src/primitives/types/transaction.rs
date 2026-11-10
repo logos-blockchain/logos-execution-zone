@@ -266,8 +266,8 @@ struct OwnedPrivateBody {
     block_validity_window: [u64; 2],
     timestamp_validity_window: [u64; 2],
     program_image_claims: Vec<Result<ProgramImageClaim, PrimitiveOperationStatus>>,
-    fee: Option<ProvenFee>,
-    declared_fee: Option<FeeDeclaration>,
+    proven_fee: Option<ProvenFee>,
+    fee: Option<FeeDeclaration>,
     nonces: Vec<FfiNonceEntry>,
     admission_evidence: Vec<FfiPublicAccountEvidence>,
     witness_set: Vec<FfiSignaturePubKeyEntry>,
@@ -296,10 +296,8 @@ impl From<Box<FfiPrivateTransactionBody>> for OwnedPrivateBody {
                 .into_iter()
                 .map(ProgramImageClaim::try_from)
                 .collect(),
-            fee: proven_fee_from_ffi(message.has_fee, message.fee),
-            declared_fee: message
-                .has_declared_fee
-                .then(|| message.declared_fee.into()),
+            proven_fee: proven_fee_from_ffi(message.has_proven_fee, message.proven_fee),
+            fee: message.has_fee.then(|| message.fee.into()),
             nonces: message.nonces.into(),
             admission_evidence: message.admission_evidence.into(),
             witness_set: witness_set.into(),
@@ -323,8 +321,8 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
             block_validity_window,
             timestamp_validity_window,
             program_image_claims,
+            proven_fee,
             fee,
-            declared_fee,
             nonces,
             admission_evidence,
             witness_set,
@@ -346,10 +344,10 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                     program_image_claims: program_image_claims
                         .into_iter()
                         .collect::<Result<_, _>>()?,
-                    fee,
+                    proven_fee,
                 },
                 nonces: nonces_from_ffi(nonces).map_err(cast_error)?,
-                fee: declared_fee,
+                fee,
                 admission_evidence: public_account_evidence(admission_evidence)?,
             },
             witness_set: lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(
@@ -374,11 +372,11 @@ pub struct FfiPrivacyPreservingMessage {
     pub timestamp_validity_window: [u64; 2],
     pub program_image_claims: FfiProgramImageClaims,
     pub admission_evidence: FfiPublicAccountEvidenceList,
+    pub has_proven_fee: bool,
+    pub proven_fee: FfiProvenFee,
+    /// The fee declaration, paid by a public signer instead of inside the proof.
     pub has_fee: bool,
-    pub fee: FfiProvenFee,
-    /// The fee a public signer declares in place of the proof's.
-    pub has_declared_fee: bool,
-    pub declared_fee: FfiFeeDeclaration,
+    pub fee: FfiFeeDeclaration,
 }
 
 /// What a proof commits about its in-proof fee. The `has_*` flags mark which parts are present;
@@ -427,18 +425,18 @@ impl From<lee::privacy_preserving_transaction::Message> for FfiPrivacyPreserving
                     private_actions,
                     validity,
                     program_image_claims,
-                    fee,
+                    proven_fee,
                 },
             nonces,
-            fee: declared_fee,
+            fee,
             admission_evidence,
         } = value;
 
         Self {
+            has_proven_fee: proven_fee.is_some(),
+            proven_fee: proven_fee.into(),
             has_fee: fee.is_some(),
-            fee: fee.into(),
-            has_declared_fee: declared_fee.is_some(),
-            declared_fee: declared_fee.map(Into::into).unwrap_or_default(),
+            fee: fee.map(Into::into).unwrap_or_default(),
             public_context: public_context.into(),
             boundary: boundary
                 .into_iter()
@@ -909,7 +907,7 @@ mod tests {
                         },
                         ProgramImageClaim::Undisclosed { root: [32; 32] },
                     ],
-                    fee: None,
+                    proven_fee: None,
                 },
                 nonces: BTreeMap::from([(account_id(28), Nonce(29))]),
                 fee: Some(FeeDeclaration::new(account_id(30), 500_000, 3, 9_000_000)),
@@ -1163,7 +1161,7 @@ mod tests {
             }),
         ] {
             let mut original = private_transaction();
-            original.message.execution.fee = fee;
+            original.message.execution.proven_fee = fee;
 
             let ffi: FfiPrivateTransactionBody = original.clone().into();
             let back: PrivacyPreservingTransaction = Box::new(ffi).try_into().unwrap();

@@ -97,7 +97,7 @@ fn privacy_garbage_proof_is_rejected() {
             }],
             validity: ValidityWindows::new_unbounded(),
             program_image_claims: vec![],
-            fee: None,
+            proven_fee: None,
         },
         nonces: BTreeMap::new(),
         fee: None,

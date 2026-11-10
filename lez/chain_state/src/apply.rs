@@ -546,7 +546,7 @@ fn settle_private_transaction(
     let refund_to = private_tx
         .message()
         .execution
-        .fee
+        .proven_fee
         .as_ref()
         .and_then(|fee| fee.refund_to);
     let refundable = refund_to.is_some() || state.recovery_binding(*payer).is_some();
@@ -2019,7 +2019,7 @@ mod tests {
         let fallback = private_tx
             .message
             .execution
-            .fee
+            .proven_fee
             .as_ref()
             .and_then(|fee| fee.fallback.as_ref())
             .expect("the payer's pre-state covers the reserve");

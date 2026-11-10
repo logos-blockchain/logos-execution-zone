@@ -567,8 +567,8 @@ fn mock_privacy_preserving_tx(
             block_validity_window: ValidityWindow((None, None)),
             timestamp_validity_window: ValidityWindow((None, None)),
             admission_evidence: vec![],
+            proven_fee: None,
             fee: None,
-            declared_fee: None,
         },
         witness_set: WitnessSet {
             signatures_and_public_keys: vec![],

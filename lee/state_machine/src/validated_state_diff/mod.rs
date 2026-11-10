@@ -411,7 +411,10 @@ impl ValidatedStateDiff {
         );
         // As for a public action.
         let cycles = charged_cycles(&result, cycles_used, cycle_budget);
-        let fallback = execution.fee.as_ref().and_then(|fee| fee.fallback.as_ref());
+        let fallback = execution
+            .proven_fee
+            .as_ref()
+            .and_then(|fee| fee.fallback.as_ref());
         let (diff, revert) = match (result, fallback) {
             (Ok(mut diff), _) => {
                 // The proven private async messages follow the live public ones.
