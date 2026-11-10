@@ -3,7 +3,8 @@
 //! A system program that records the current block ID and timestamp into a single clock account.
 //! A read names its granularity: the clock rounds the value down to a multiple of it.
 //!
-//! Only the sequencer may tick this program, as the last transaction in every block.
+//! Only the sequencer may tick this program, as the first transaction in every block.
+//! Later transactions read the current block's ID and timestamp.
 //! The clock account uses this program's actor state.
 
 use clock_core::{CLOCK_PROGRAM_ACCOUNT_ID, ClockAccountData, Message, Reply};

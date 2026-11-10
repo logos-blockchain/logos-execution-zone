@@ -41,12 +41,12 @@ fn settled_block(
             .expect("test transactions settle")
     };
     let producer = common::test_utils::producer_account_for_testing();
+    transactions.insert(0, LeeTransaction::Public(clock_invocation(id, timestamp)));
     transactions.push(LeeTransaction::Public(fee_invocation(
         summary,
         payout,
         FeePayee::Present(producer),
     )));
-    transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
     common::block::HashableBlockData {
         block_id: id,
         prev_block_hash: prev_hash,

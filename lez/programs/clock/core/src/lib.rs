@@ -11,8 +11,8 @@ pub const CLOCK_PROGRAM_ACCOUNT_ID: AccountId =
 
 pub const CLOCK_NAME: [u8; 5] = *b"clock";
 
-/// The message type for the Clock Program. The sequencer ticks the clock as the last transaction
-/// of every block, so every other transaction sees the previous block's ID and timestamp.
+/// The message type for the Clock Program. The sequencer ticks the clock as the first transaction
+/// of every block, so later transactions read the current block's ID and timestamp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Message {
     Tick {
@@ -26,8 +26,9 @@ pub enum Message {
     /// Example: with a granularity of 50 and the clock at block 57, the sender receives
     /// `Reply::BlockId(50)`.
     ///
-    /// A private transaction that reads the clock stays valid only while the rounded value is the
-    /// one it read, so a fine granularity makes it expire quickly.
+    /// With granularity 1, a private transaction proved against the parent state reads its exact
+    /// block ID and can expire at the next tick. A coarser granularity keeps the reply unchanged
+    /// within a bucket, but crossing a bucket boundary invalidates the clock read.
     ReadBlockId {
         /// The rounding step in blocks, at least 1.
         granularity: u64,
@@ -39,8 +40,10 @@ pub enum Message {
     /// Example: with a granularity of 60,000 ms (one minute) and the clock at 125,000 ms, the
     /// sender receives `Reply::Timestamp(120_000)`.
     ///
-    /// A private transaction that reads the clock stays valid only while the rounded value is the
-    /// one it read, so a fine granularity makes it expire quickly.
+    /// With granularity 1, a private transaction proved against the parent state reads its exact
+    /// timestamp and can expire at the next tick if the timestamp changes. A coarser granularity
+    /// keeps the reply unchanged within a bucket, but crossing a bucket boundary invalidates the
+    /// clock read.
     ReadTimestamp {
         /// The rounding step in milliseconds, at least 1.
         granularity: Timestamp,

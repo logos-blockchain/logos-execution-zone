@@ -1514,7 +1514,7 @@ mod tests {
                 src_zone: PEER_ZONE,
                 src_block_id: PEER_BLOCK_ID,
                 src_block_hash,
-                src_tx_index: 0,
+                src_tx_index: 1,
                 src_account_id: programs::ping_sender_account_id(),
             },
             receiver_id,

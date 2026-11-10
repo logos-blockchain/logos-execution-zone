@@ -508,12 +508,12 @@ fn settled_test_block(
             .expect("test transactions settle");
     let producer = producer_account_for_testing();
     let mut transactions = txs;
+    transactions.insert(0, LeeTransaction::Public(clock_invocation(id, timestamp)));
     transactions.push(LeeTransaction::Public(fee_invocation(
         summary,
         payout,
         FeePayee::Present(producer),
     )));
-    transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
     let block = HashableBlockData {
         reverted,
         block_id: id,
@@ -770,7 +770,7 @@ mod tests {
         let to = initial_accounts[1].account_id;
         let sign_key = initial_accounts[0].pub_sign_key.clone();
 
-        // Genesis (block 1): fee/clock only.
+        // Genesis (block 1): clock and fee only.
         let mut build_state = claimed_build_state();
         let initial_from = build_state
             .get_account_by_id(from)
@@ -943,7 +943,7 @@ mod tests {
             .unwrap()
             .expect("invoking block must have an events row");
         assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].tx_index, 0);
+        assert_eq!(groups[0].tx_index, 1);
         assert_eq!(groups[0].tx_hash, invoke_hash);
 
         let events = &groups[0].events;
@@ -1064,12 +1064,19 @@ mod tests {
         let to = initial_accounts[1].account_id;
         let sign_key = initial_accounts[0].pub_sign_key.clone();
 
-        let genesis = produce_dummy_block(1, None, vec![]);
-        store.accept_block(&genesis, Slot::from(0)).await.unwrap();
+        let mut build_state = claimed_build_state();
+        let genesis = settled_test_block(&mut build_state, 1, None, vec![]);
+        assert!(matches!(
+            store.accept_block(&genesis, Slot::from(0)).await.unwrap(),
+            AcceptOutcome::Applied(_)
+        ));
 
         let tx = create_transaction_native_token_transfer(from, 0, to, 10, &sign_key);
-        let block = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
-        store.accept_block(&block, Slot::from(0)).await.unwrap();
+        let block = settled_test_block(&mut build_state, 2, Some(genesis.header.hash), vec![tx]);
+        assert!(matches!(
+            store.accept_block(&block, Slot::from(0)).await.unwrap(),
+            AcceptOutcome::Applied(_)
+        ));
 
         assert_eq!(store.get_events_for_block(1).unwrap(), None);
         assert_eq!(store.get_events_for_block(2).unwrap(), None);

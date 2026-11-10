@@ -675,12 +675,12 @@ mod tests {
                 .expect("test transactions settle");
         let producer = producer_account_for_testing();
         let mut transactions = txs;
+        transactions.insert(0, LeeTransaction::Public(clock_invocation(id, timestamp)));
         transactions.push(LeeTransaction::Public(fee_invocation(
             summary,
             payout,
             FeePayee::Present(producer),
         )));
-        transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
         HashableBlockData {
             block_id: id,
             prev_block_hash: prev,

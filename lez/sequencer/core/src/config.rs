@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 /// Bytes reserved out of `max_block_size` for the block header plus the forced
-/// fee and clock tail transactions; RPC and gossip cap a single transaction at
+/// clock and fee transactions; RPC and gossip cap a single transaction at
 /// `max_block_size - BLOCK_OVERHEAD`.
 pub const BLOCK_OVERHEAD: u64 = 2_048;
 
