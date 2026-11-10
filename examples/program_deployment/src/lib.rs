@@ -1,4 +1,4 @@
-use lee::{AccountId, FeeDeclaration, PrivateKey};
+use lee::{AccountId, FeeDeclaration, PrivateKey, PublicAccountEvidence, PublicKey};
 use lee_core::account::Nonce;
 use program_loader_core::MAX_SEGMENT_DATA_LEN;
 use wallet::{
@@ -75,4 +75,18 @@ pub async fn fee_paid_by<C: WalletSequencerClient>(
     let gas_limit = wallet_core.config().gas_limit;
     let fee = FeeDeclaration::new(payer, gas_limit, 0, max_fee_for(gas_limit));
     Ok((fee, nonce, signing_key))
+}
+
+/// Admits `account_id` as a public actor of a hand-built transaction if this wallet holds its key.
+///
+/// An actor that doesn't sign and may not exist on chain yet is only admitted with evidence;
+/// without it the call reverts with `UnadmittedPublicActor`, but is still included and charged.
+/// The evidence is the account's public key, which hashes to its id.
+pub fn admission_evidence<C: WalletSequencerClient>(
+    wallet_core: &WalletCore<C>,
+    account_id: AccountId,
+) -> Option<PublicAccountEvidence> {
+    wallet_core
+        .get_account_public_signing_key(account_id)
+        .map(|key| PublicAccountEvidence::Key(PublicKey::new_from_private_key(key)))
 }

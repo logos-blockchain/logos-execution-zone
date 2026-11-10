@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, Actor, PublicAccountEvidence, PublicKey, PublicTransaction,
+    AccountId, Actor, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
-use program_deployment::{deploy_program, fee_paid_by};
+use program_deployment::{admission_evidence, deploy_program, fee_paid_by};
 use sequencer_service_rpc::RpcClient as _;
 use wallet::WalletCore;
 
@@ -70,15 +70,11 @@ async fn main() {
     let signing_keys = [&payer_key];
     let hello = Actor::new(account_id, program_account_id);
     // `account_id` doesn't sign and may not exist on chain yet, so the sequencer only admits it
-    // as a public actor with evidence: its public key, which hashes to the account id. Without
-    // it the call reverts with `UnadmittedPublicActor`, but is still included and charged.
-    let account_key = wallet_core
-        .get_account_public_signing_key(account_id)
-        .expect("account_id must be a public account held by this wallet");
+    // as a public actor with evidence: its public key, which hashes to the account id.
     let message = Message {
-        admission_evidence: vec![PublicAccountEvidence::Key(PublicKey::new_from_private_key(
-            account_key,
-        ))],
+        admission_evidence: admission_evidence(&wallet_core, account_id)
+            .into_iter()
+            .collect(),
         ..Message::try_new_with_fees(hello, vec![hello], nonces, greeting, fee).unwrap()
     };
     let witness_set = WitnessSet::for_message(&message, &signing_keys);

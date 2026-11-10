@@ -5,7 +5,7 @@ use lee::{
     AccountId, Actor, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
-use program_deployment::{deploy_or_reuse, deploy_program, fee_paid_by};
+use program_deployment::{admission_evidence, deploy_or_reuse, deploy_program, fee_paid_by};
 use sequencer_service_rpc::RpcClient as _;
 use wallet::WalletCore;
 
@@ -90,8 +90,14 @@ async fn main() {
     // same account, so both are declared.
     let caller = Actor::new(account_id, caller_account_id);
     let callee = Actor::new(account_id, callee_account_id);
-    let message =
-        Message::try_new_with_fees(caller, vec![caller, callee], nonces, callee, fee).unwrap();
+    // `account_id` doesn't sign and may not exist on chain yet, so it's admitted with evidence;
+    // one entry covers both actors, as admission is per account.
+    let message = Message {
+        admission_evidence: admission_evidence(&wallet_core, account_id)
+            .into_iter()
+            .collect(),
+        ..Message::try_new_with_fees(caller, vec![caller, callee], nonces, callee, fee).unwrap()
+    };
     let witness_set = WitnessSet::for_message(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 

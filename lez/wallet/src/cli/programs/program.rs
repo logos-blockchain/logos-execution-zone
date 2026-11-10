@@ -39,8 +39,8 @@ pub enum ProgramSubcommand {
         actor: Vec<CliActor>,
         /// A funded account to pay the fee; it signs wherever it's declared. If omitted, the
         /// wallet selects a payer from the transaction's signing accounts.
-        #[arg(long, value_parser = parse_mention)]
-        payer: Option<CliAccountMention>,
+        #[arg(long)]
+        payer: Option<PublicMention>,
     },
 }
 
@@ -60,7 +60,7 @@ impl WalletSubcommand for ProgramSubcommand {
                 let storage = wallet_core.storage();
                 let program = public_id(&program, storage)?;
                 let payer = payer
-                    .map(|payer| match payer.resolve(storage)? {
+                    .map(|payer| match payer.0.resolve(storage)? {
                         AccountIdWithPrivacy::Public(account_id) => Ok(account_id),
                         AccountIdWithPrivacy::Private(_) => bail!("the payer must be public"),
                     })
@@ -131,7 +131,7 @@ impl FromStr for CliActor {
                     .with_context(|| format!("{key:?} isn't a public key (64 hex digits)"))?,
             )
         } else {
-            let Ok(mention) = parse_mention(account);
+            let Ok(PublicMention(mention)) = account.parse();
             CliActorAccount::Mention(mention)
         };
         Ok(Self {
@@ -198,19 +198,26 @@ impl CliActor {
 ///
 /// A call is a public transaction, so bare base58 is a public account id; anything else that
 /// isn't an id or a key path is a label.
-fn parse_mention(text: &str) -> Result<CliAccountMention, std::convert::Infallible> {
-    Ok(AccountId::from_str(text).map_or_else(
-        |_| {
-            let Ok(mention) = CliAccountMention::from_str(text);
-            mention
-        },
-        |account_id| CliAccountMention::Id(AccountIdWithPrivacy::Public(account_id)),
-    ))
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicMention(CliAccountMention);
+
+impl FromStr for PublicMention {
+    type Err = std::convert::Infallible;
+
+    fn from_str(text: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(Self(AccountId::from_str(text).map_or_else(
+            |_| {
+                let Ok(mention) = CliAccountMention::from_str(text);
+                mention
+            },
+            |account_id| CliAccountMention::Id(AccountIdWithPrivacy::Public(account_id)),
+        )))
+    }
 }
 
 /// A public account named by base58, `Public/<id>`, or a label.
 fn public_id(text: &str, storage: &Storage) -> Result<AccountId> {
-    let Ok(mention) = parse_mention(text);
+    let Ok(PublicMention(mention)) = text.parse();
     ensure!(
         mention.key_path().is_none(),
         "{text} is a key path: name a program or owner by its id or a label"

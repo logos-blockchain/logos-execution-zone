@@ -203,13 +203,10 @@ let (fee, payer_nonce, payer_key) = fee_paid_by(&wallet_core, payer).await.unwra
 let nonces = BTreeMap::from([(payer, payer_nonce)]);
 let signing_keys = [&payer_key];
 let hello = Actor::new(account_id, program_account_id);
-let account_key = wallet_core
-    .get_account_public_signing_key(account_id)
-    .expect("account_id must be a public account held by this wallet");
 let message = Message {
-    admission_evidence: vec![PublicAccountEvidence::Key(PublicKey::new_from_private_key(
-        account_key,
-    ))],
+    admission_evidence: admission_evidence(&wallet_core, account_id)
+        .into_iter()
+        .collect(),
     ..Message::try_new_with_fees(hello, vec![hello], nonces, greeting, fee).unwrap()
 };
 let witness_set = WitnessSet::for_message(&message, &signing_keys);
@@ -218,7 +215,7 @@ let tx = PublicTransaction::new(message, witness_set);
 
 Only the fee payer signs, and only its nonce is listed. The input account doesn't sign, because Hello World writes its own actor state without checking account authorization.
 
-The input account may not exist on chain yet, so the sequencer only admits it as a public actor with evidence. Here that is its public key, which hashes to the account ID.
+The input account may not exist on chain yet, so the sequencer only admits it as a public actor with evidence. `admission_evidence` (in [`lib.rs`](src/lib.rs)) supplies its public key, which hashes to the account ID, when this wallet holds the account. Without evidence, a call on a fresh account reverts with `UnadmittedPublicActor` but is still charged.
 
 # 7. Private execution of the Hello world example
 
@@ -481,7 +478,7 @@ The callee is named in the message rather than in the program, because a deploye
 > [!NOTE]
 > The last argument is the Hello World instance to call, `$HELLO_WORLD_ID` from section 4. Without it the runner deploys a new `hello_world` from the `.bin`, and the greeting lands in that instance's actor state instead.
 
-We'll reuse public account `BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9`; its Hello World actor state contains `Hola mundo!`. It must already exist on chain, because this runner provides no admission evidence for it.
+We'll reuse public account `BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9`; its Hello World actor state contains `Hola mundo!`. Like `run_hello_world`, the runner admits it with evidence, so a fresh account held by this wallet works too.
 
 Let's run the tail call program
 

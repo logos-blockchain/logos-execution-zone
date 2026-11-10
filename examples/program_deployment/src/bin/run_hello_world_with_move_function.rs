@@ -3,10 +3,10 @@ use std::collections::BTreeMap;
 use clap::{Parser, Subcommand};
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, Actor, PublicAccountEvidence, PublicKey, PublicTransaction,
-    privacy_preserving_transaction::circuit::ProgramCatalog, program::Program, public_transaction,
+    AccountId, Actor, PublicTransaction, privacy_preserving_transaction::circuit::ProgramCatalog,
+    program::Program, public_transaction,
 };
-use program_deployment::{deploy_or_reuse, fee_paid_by};
+use program_deployment::{admission_evidence, deploy_or_reuse, fee_paid_by};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use wallet::{AccountIdentity, WalletCore};
 
@@ -73,17 +73,6 @@ enum Command {
         from: String,
         to: String,
     },
-}
-
-/// Admits `account_id` as a public actor if this wallet holds its key: it doesn't sign and may not
-/// exist on chain yet, and without evidence the call reverts with `UnadmittedPublicActor`.
-fn admission_evidence(
-    wallet_core: &WalletCore<SequencerClient>,
-    account_id: AccountId,
-) -> Option<PublicAccountEvidence> {
-    wallet_core
-        .get_account_public_signing_key(account_id)
-        .map(|key| PublicAccountEvidence::Key(PublicKey::new_from_private_key(key)))
 }
 
 async fn actor_state_bytes(
