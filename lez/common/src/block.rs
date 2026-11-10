@@ -159,6 +159,15 @@ impl HashableBlockData {
     #[must_use]
     pub fn into_pending_block(self) -> Block {
         let hash = self.compute_hash();
+        self.into_block(hash)
+    }
+
+    pub fn inscription_len(self) -> std::io::Result<usize> {
+        // The hash is fixed-width, so its value does not change the length.
+        Ok(self.into_block(HashType([0; 32])).to_inscription()?.len())
+    }
+
+    fn into_block(self, hash: BlockHash) -> Block {
         Block {
             header: BlockHeader {
                 block_id: self.block_id,

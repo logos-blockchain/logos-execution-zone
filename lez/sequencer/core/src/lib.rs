@@ -2125,9 +2125,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 reverted: reverted.iter().copied().chain([0]).collect(),
             };
 
-            let block_size = borsh::to_vec(&temp_hashable_data)
-                .context("Failed to serialize block for size check")?
-                .len();
+            let block_size = temp_hashable_data
+                .inscription_len()
+                .context("Failed to serialize block for size check")?;
 
             if block_size > max_block_size {
                 // Would a block carrying nothing but this still be too big? Then
@@ -2403,9 +2403,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             prev_block_hash,
             timestamp,
         };
-        let size = borsh::to_vec(&alone)
-            .context("Failed to serialize block for size check")?
-            .len();
+        let size = alone
+            .inscription_len()
+            .context("Failed to serialize block for size check")?;
         Ok(size <= max_block_size)
     }
 
