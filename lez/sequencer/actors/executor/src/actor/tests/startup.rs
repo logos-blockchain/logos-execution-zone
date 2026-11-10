@@ -746,6 +746,29 @@ async fn a_production_turn_while_bootstrapping_does_not_stop_the_actor() -> Resu
     Ok(())
 }
 
+/// A node that is not ready yet fails the first channel read, which must not fail the start.
+#[test]
+async fn a_failed_channel_read_at_startup_is_retried() -> Result<()> {
+    let (config, _home) = sequencer_config();
+    let genesis = genesis();
+    let channel = CannedChannel {
+        tip: Some(mock_msg_of(&genesis)),
+        failed_tip_slot_reads: 1,
+        ..CannedChannel::empty()
+    }
+    .share();
+
+    let executor = start(&config, &SharedStore::default(), &channel).await?;
+
+    let status = executor.ask(GetStatus).await?;
+    assert!(
+        matches!(status, ExecutorStatus::Bootstrapping { .. }),
+        "{status:?}"
+    );
+    assert_eq!(channel.lock().failed_tip_slot_reads, 0);
+    Ok(())
+}
+
 /// A bootstrapping executor reports the slot it replays up to and the one it completes at, and
 /// goes on to report itself online.
 #[test]

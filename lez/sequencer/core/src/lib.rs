@@ -4,7 +4,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
     path::Path,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use anyhow::{Context as _, Result, anyhow};
@@ -226,8 +226,6 @@ struct ConfigDraft {
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
-    const CHANNEL_PROBE_RETRIES: usize = 29;
-    const CHANNEL_PROBE_RETRY_DELAY: Duration = Duration::from_secs(2);
     /// Channel slots a submitted config gets to land before this node funds
     /// another; a margin over observed Bedrock confirmation lag.
     const CONFIG_LANDING_DEADLINE: SlotCount = 30;

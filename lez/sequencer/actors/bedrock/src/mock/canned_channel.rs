@@ -32,6 +32,9 @@ pub struct CannedChannel {
     pub tip: Option<MsgId>,
     /// When set, the tip a read reports instead of [`Self::tip`].
     pub stale_tip_read: Option<MsgId>,
+    /// Reads of [`Self::tip_slot`] that fail, as with a node that is not ready yet, before they
+    /// succeed.
+    pub failed_tip_slot_reads: u32,
     /// Fails every publish.
     pub publish_fails: bool,
     /// Fails every pin before it is funded.
@@ -102,7 +105,16 @@ impl SharedChannel {
             .returning(|_msg, _ctx| Ok(true));
         mock.expect_handle_get_channel_tip_slot().returning({
             let channel = self.clone();
-            move |_msg, _ctx| Ok(channel.lock().tip_slot)
+            move |_msg, _ctx| {
+                let mut channel = channel.lock();
+                if channel.failed_tip_slot_reads > 0 {
+                    channel.failed_tip_slot_reads = channel.failed_tip_slot_reads.saturating_sub(1);
+                    return Err(Error::NodeRequestFailed(anyhow!(
+                        "the node is not ready yet"
+                    )));
+                }
+                Ok(channel.tip_slot)
+            }
         });
         // The config entry is the root, which `checkpoint_at` reports
         // finalized, so the committee reads as final.

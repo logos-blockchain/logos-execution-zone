@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{fmt::Display, future::Future, time::Duration};
 
 use chain_state::{Anchor, AnchorConsistencyCheck, ChainConsistency, ChainState, Tip};
 use kameo::actor::ActorRef;
@@ -23,8 +23,12 @@ use crate::{Result, actor::Args, error::Error};
 pub mod bootstrapping;
 pub mod online;
 
-/// How often a node waiting for its channel's creator checks for the channel.
+/// How often a node waiting for its channel's creator checks for the channel, and how long a
+/// failed startup read of the channel waits before it is retried.
 const CHANNEL_PROBE_DELAY: Duration = Duration::from_secs(2);
+/// Retries a failed startup read of the channel gets, so a node that is not ready yet does not fail
+/// the start.
+const CHANNEL_PROBE_RETRIES: u32 = 29;
 
 pub enum State<S: StorageActorTrait, B: BedrockActorTrait> {
     /// An error or future cancellation happened during [`Self::modify()`].
@@ -62,19 +66,26 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
                 .await
                 .map_err(SendErrorExt::flatten)
         };
-        let mut channel_tip_slot = get_channel_tip_slot().await?;
+        let mut channel_tip_slot =
+            with_retries("Reading the channel tip slot", get_channel_tip_slot).await?;
         if channel_tip_slot.is_none() && config.genesis.is_none() && config.wait_for_channel {
             info!("Channel {channel_id} does not exist yet; waiting for its creator");
             while channel_tip_slot.is_none() {
                 tokio::time::sleep(CHANNEL_PROBE_DELAY).await;
-                channel_tip_slot = get_channel_tip_slot().await?;
+                channel_tip_slot = get_channel_tip_slot().await.unwrap_or_else(|err| {
+                    warn!("Failed to check for channel {channel_id}; still waiting: {err:#}");
+                    None
+                });
             }
         }
 
-        let channel_tip_msg_id = bedrock_pool_ref
-            .ask(sequencer_bedrock_actor::protocol::GetChannelTipMessageId { channel_id })
-            .await
-            .map_err(SendErrorExt::flatten)?;
+        let channel_tip_msg_id = with_retries("Reading the channel tip message", || async {
+            bedrock_pool_ref
+                .ask(sequencer_bedrock_actor::protocol::GetChannelTipMessageId { channel_id })
+                .await
+                .map_err(SendErrorExt::flatten)
+        })
+        .await?;
 
         let local_tip = storage_ref
             .ask(sequencer_storage_actor::protocol::GetLatestBlockMeta)
@@ -311,4 +322,28 @@ fn check_startup_channel_params(
         );
     }
     sequencer_core::config::check_max_block_size(params).map_err(Error::UnsupportedChannelParams)
+}
+
+/// Runs `request`, retrying a failure up to [`CHANNEL_PROBE_RETRIES`] times,
+/// [`CHANNEL_PROBE_DELAY`] apart.
+async fn with_retries<T, E, Fut>(
+    what: &str,
+    mut request: impl FnMut() -> Fut,
+) -> std::result::Result<T, E>
+where
+    Fut: Future<Output = std::result::Result<T, E>>,
+    E: Display,
+{
+    let mut retries_left = CHANNEL_PROBE_RETRIES;
+    loop {
+        match request().await {
+            Ok(value) => return Ok(value),
+            Err(err) if retries_left > 0 => {
+                warn!("{what} failed, retrying in {CHANNEL_PROBE_DELAY:?}: {err:#}");
+                retries_left = retries_left.saturating_sub(1);
+                tokio::time::sleep(CHANNEL_PROBE_DELAY).await;
+            }
+            Err(err) => return Err(err),
+        }
+    }
 }
