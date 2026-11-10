@@ -1579,6 +1579,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
 
     #[expect(
         clippy::too_many_arguments,
+        clippy::cognitive_complexity,
         reason = "the proven send threads every input of the transaction it builds"
     )]
     async fn send_proven(
@@ -1887,13 +1888,15 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                     .headroom_reserve
                     .min(balance)
                     .max(pricing.fee_at_head);
-                (bytes, pricing, reserve)
+                (pricing, reserve)
             };
             // A note short of the reserve gets no fee fallback, so the transaction is shorter by
             // it, unless pricing the shorter one lets the note cover it again.
+            //
+            // Between the two prices neither size holds: the full price is kept and the shorter
+            // transaction pays less than it reserves.
             let full = at(wire_bytes);
             let (
-                wire_bytes,
                 ReservePricing {
                     fee_at_head,
                     exec_ceiling,
@@ -1901,11 +1904,16 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                     headroom_reserve,
                 },
                 reserve,
-            ) = if note < full.2 {
+            ) = if note < full.1 {
                 let shorter = at(wire_bytes.saturating_sub(fallback_bytes));
-                if note < shorter.2 { shorter } else { full }
+                if note < shorter.1 { shorter } else { full }
             } else {
                 full
+            };
+            let wire_bytes = if note < reserve {
+                wire_bytes.saturating_sub(fallback_bytes)
+            } else {
+                wire_bytes
             };
             let fee = PrivateFee {
                 payer,
@@ -1972,11 +1980,15 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 }
             };
 
-            let tx = assemble(output, proof)?;
+            let tx = LeeTransaction::PrivacyPreserving(assemble(output, proof)?);
+            debug_assert!(
+                tx.charged_bytes().is_ok_and(|bytes| bytes == wire_bytes),
+                "the proven transaction differs from its measurement"
+            );
 
             match self
                 .sequencer_client
-                .send_transaction(LeeTransaction::PrivacyPreserving(tx))
+                .send_transaction(tx)
                 .await
                 .map_err(Into::into)
             {

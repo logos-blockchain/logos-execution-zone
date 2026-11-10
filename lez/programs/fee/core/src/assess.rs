@@ -176,15 +176,13 @@ mod tests {
 
     #[test]
     fn spec_worked_example_private() {
-        // A 224,063-byte private transaction with no metered effects pays
-        // 409,764·8 + 224,063·8 = 5,070,616; each effect cycle adds one
+        // A private transaction with no metered effects pays
+        // 409,764·8 + 237,039·8 = 5,174,424; each effect cycle adds one
         // base_fee_exec and each byte one base_fee_stor.
-        assert_eq!(private_fee_required(0, 224_063, 8, 8), 5_070_616);
-        assert_eq!(
-            private_fee_required(1_000, 224_063, 8, 8),
-            5_070_616 + 8_000
-        );
-        assert_eq!(private_fee_required(0, 224_064, 8, 8), 5_070_616 + 8);
+        const BYTES: u64 = 237_039;
+        assert_eq!(private_fee_required(0, BYTES, 8, 8), 5_174_424);
+        assert_eq!(private_fee_required(1_000, BYTES, 8, 8), 5_174_424 + 8_000);
+        assert_eq!(private_fee_required(0, BYTES + 1, 8, 8), 5_174_424 + 8);
     }
 
     #[test]
