@@ -7,7 +7,7 @@ use lee_core::program::PdaSeed;
 
 use crate::{
     AccountIdentity, AccountMention, WalletCore, WalletSequencerClient,
-    account::{AccountIdWithPrivacy, Label},
+    account::AccountIdWithPrivacy,
     cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
     storage::Storage,
 };
@@ -22,8 +22,8 @@ pub enum ProgramSubcommand {
     /// `pda:[<owner>/]<seed>[@program]` for a public PDA (admitted by its seed), or
     /// `pk:<hex>[@program]` for an account known by its public key (admitted by it). `@program`
     /// selects that program's state of the account and defaults to `--program`, as does a PDA's
-    /// owner. An account is `Public/<id>`, a label, or a keycard key path; a program or owner is
-    /// base58, `Public/<id>`, or a label; a seed is 0x hex or base58.
+    /// owner. An account is base58, `Public/<id>`, a label, or a keycard key path; a program or
+    /// owner is base58, `Public/<id>`, or a label; a seed is 0x hex or base58.
     Call {
         /// The program the message is for, unless an actor says otherwise.
         #[arg(long)]
@@ -39,7 +39,7 @@ pub enum ProgramSubcommand {
         actor: Vec<CliActor>,
         /// A funded account to pay the fee; it signs wherever it's declared. If omitted, the
         /// wallet selects a payer from the transaction's signing accounts.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_mention)]
         payer: Option<CliAccountMention>,
     },
 }
@@ -131,7 +131,7 @@ impl FromStr for CliActor {
                     .with_context(|| format!("{key:?} isn't a public key (64 hex digits)"))?,
             )
         } else {
-            let Ok(mention) = CliAccountMention::from_str(account);
+            let Ok(mention) = parse_mention(account);
             CliActorAccount::Mention(mention)
         };
         Ok(Self {
@@ -194,18 +194,33 @@ impl CliActor {
     }
 }
 
+/// An account named by base58, `Public/<id>`, `Private/<id>`, a label, or a keycard key path.
+///
+/// A call is a public transaction, so bare base58 is a public account id; anything else that
+/// isn't an id or a key path is a label.
+fn parse_mention(text: &str) -> Result<CliAccountMention, std::convert::Infallible> {
+    Ok(AccountId::from_str(text).map_or_else(
+        |_| {
+            let Ok(mention) = CliAccountMention::from_str(text);
+            mention
+        },
+        |account_id| CliAccountMention::Id(AccountIdWithPrivacy::Public(account_id)),
+    ))
+}
+
 /// A public account named by base58, `Public/<id>`, or a label.
 fn public_id(text: &str, storage: &Storage) -> Result<AccountId> {
-    let resolved = AccountIdWithPrivacy::from_str(text).ok().or_else(|| {
-        AccountId::from_str(text)
-            .ok()
-            .map(AccountIdWithPrivacy::Public)
-            .or_else(|| storage.resolve_label(&Label::new(text)))
-    });
-    match resolved {
-        Some(AccountIdWithPrivacy::Public(account_id)) => Ok(account_id),
-        Some(AccountIdWithPrivacy::Private(_)) => bail!("{text} is private, not a public account"),
-        None => bail!("{text} isn't an account id (base58 or Public/<id>) or a label"),
+    let Ok(mention) = parse_mention(text);
+    ensure!(
+        mention.key_path().is_none(),
+        "{text} is a key path: name a program or owner by its id or a label"
+    );
+    match mention
+        .resolve(storage)
+        .with_context(|| format!("{text} isn't an account id (base58 or Public/<id>) or a label"))?
+    {
+        AccountIdWithPrivacy::Public(account_id) => Ok(account_id),
+        AccountIdWithPrivacy::Private(_) => bail!("{text} is private, not a public account"),
     }
 }
 
@@ -238,6 +253,15 @@ mod tests {
             actor.account,
             CliActorAccount::Mention(CliAccountMention::Id(AccountIdWithPrivacy::Public(_)))
         ));
+
+        let actor: CliActor = format!("{ID}:sign").parse().unwrap();
+        assert!(actor.sign);
+        assert_eq!(
+            actor.account,
+            CliActorAccount::Mention(CliAccountMention::Id(AccountIdWithPrivacy::Public(
+                AccountId::from_str(ID).unwrap()
+            )))
+        );
 
         let actor: CliActor = "alice".parse().unwrap();
         assert!(!actor.sign);
