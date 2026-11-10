@@ -496,8 +496,7 @@ impl Message<CreateChannel> for BedrockActor {
             transfer_threshold,
         )?;
 
-        let data = borsh::to_vec(&genesis).map_err(Error::BlockEncodingFailed)?;
-        let inscription = checked_inscription(&self.node, data, Error::BlockTooLarge).await?;
+        let inscription = block_inscription(&self.node, &genesis).await?;
         // A config moves the config tip only, so the first block chains on the root.
         let inscribe_op = InscriptionOp {
             channel_id: self.config.channel_id,
@@ -923,7 +922,7 @@ impl Message<PublishRawInscription> for BedrockActor {
         PublishRawInscription { data }: PublishRawInscription,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let inscription = checked_inscription(&self.node, data, Error::InscriptionTooLarge).await?;
+        let inscription = checked_inscription(&self.node, data).await?;
 
         let (result, checkpoint) = self
             .sequencer
@@ -1043,18 +1042,11 @@ fn released_notes(tx: &PendingTx) -> Vec<NoteId> {
     }
 }
 
-/// Funds `ops` from the node's wallet, which appends a fee transfer (paid from
-/// `funding_key`, change back to it) and returns its proof.
-///
-/// A timed-out call can leave the node's wallet holding its funding-note
-/// reservation until `pending_note_expiry_blocks` releases it.
-/// `data` as an inscription, or `too_large` if it exceeds what an operation may
-/// carry in the era of the node's current slot. The bound is per era, so it is
-/// asked of the node rather than fixed at build time.
+/// `data` as an inscription, if it fits what an operation may carry in the era
+/// of the node's current slot.
 async fn checked_inscription(
     node: &TimeoutNode<NodeHttpClient>,
     data: Vec<u8>,
-    too_large: Error,
 ) -> Result<Inscription> {
     let max_op_data_size = node
         .limits()
@@ -1063,7 +1055,7 @@ async fn checked_inscription(
         .map_err(Error::NodeRequestFailed)?
         .max_op_data_size;
     if u32::try_from(data.len()).map_or(true, |len| len > max_op_data_size) {
-        return Err(too_large);
+        return Err(Error::InscriptionTooLarge);
     }
     Ok(Inscription::new_unchecked(data))
 }
@@ -1074,9 +1066,14 @@ async fn block_inscription(
     block: &Block,
 ) -> Result<Inscription> {
     let data = borsh::to_vec(block).map_err(Error::BlockEncodingFailed)?;
-    checked_inscription(node, data, Error::BlockTooLarge).await
+    checked_inscription(node, data).await
 }
 
+/// Funds `ops` from the node's wallet, which appends a fee transfer (paid from
+/// `funding_key`, change back to it) and returns its proof.
+///
+/// A timed-out call can leave the node's wallet holding its funding-note
+/// reservation until `pending_note_expiry_blocks` releases it.
 async fn fund_ops(
     node: &TimeoutNode<NodeHttpClient>,
     config: &Config,
