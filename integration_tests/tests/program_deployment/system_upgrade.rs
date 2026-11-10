@@ -1,8 +1,3 @@
-#![expect(
-    clippy::tests_outside_test_module,
-    reason = "We don't care about these in tests"
-)]
-
 use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::{Context as _, Result};

@@ -125,7 +125,7 @@
 /lez/programs/                                @agureev
 /lez/programs/fee/                            @erhant @agureev
 /lez/programs/sequencer_stake/                @agureev @schouhy
-/lez/programs/program_loader/                 @agureev @jonesmarvin8
+/lee/program_loader/                          @agureev @jonesmarvin8
 /lez/programs/bridge/                         @agureev @moudyellaz @arjentix
 /lez/programs/bridge_lock/                    @agureev @moudyellaz
 /lez/programs/wrapped_token/                  @agureev @moudyellaz
