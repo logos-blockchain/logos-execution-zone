@@ -674,6 +674,9 @@ async fn a_peer_does_not_sign_a_config_it_did_not_ask_for() {
     // Same shape, but installing a committee this node never derived.
     let mut rogue = target();
     rogue.keys = vec![key(PEER_SECRET).public_key()];
+    // Thresholds a one-key committee can reach, so the op itself is well formed.
+    rogue.configuration_threshold = 1;
+    rogue.transfer_threshold = 1;
     actor
         .ask(Wire::Draft(Draft {
             tx: Box::new(draft_tx(&rogue)),

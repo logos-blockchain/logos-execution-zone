@@ -30,7 +30,7 @@ eras:
         denominator: 2
       learning_rate: 0.5
       # At most ⌊0.6 × security_param⌋ blocks.
-      uncle_reference_window_in_block: 6
+      uncle_reference_window_in_block: 1
       max_uncles: 4
       max_transactions: 1024
       # The most bytes a block's transactions may take, 2 MiB. An inscription or a
