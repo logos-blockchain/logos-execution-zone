@@ -13,7 +13,6 @@ actor = [
   "dep:logos-blockchain-common-http-client",
   "dep:kameo_actors",
   "dep:tokio",
-  "dep:borsh",
   "dep:url",
   "dep:log",
 ]
@@ -40,7 +39,6 @@ logos-blockchain-key-management-system-service.workspace = true
 logos-blockchain-common-http-client = { workspace = true, optional = true }
 kameo_actors = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
-borsh = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 log = { workspace = true, optional = true }
 mockall = { workspace = true, optional = true }

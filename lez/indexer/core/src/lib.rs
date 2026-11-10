@@ -425,7 +425,7 @@ impl IndexerCore {
                         ZoneMessage::Deposit(_) | ZoneMessage::Withdraw(_) => continue,
                     };
 
-                    let block: Block = match borsh::from_slice(&zone_block.data) {
+                    let block = match Block::from_inscription(&zone_block.data) {
                         Ok(b) => b,
                         Err(error) => {
                             // The stall must be durable before the cursor moves.

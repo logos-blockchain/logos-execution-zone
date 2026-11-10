@@ -19,7 +19,6 @@ sequencer_storage_actor = { workspace = true, features = ["actor"] }
 sequencer_bedrock_actor = { workspace = true, features = ["actor"] }
 lee.workspace = true
 common.workspace = true
-borsh = { workspace = true, optional = true }
 programs.workspace = true
 system_accounts.workspace = true
 wallet.workspace = true
@@ -68,5 +67,4 @@ mdns = ["sequencer_gossip_actor/mdns"]
 inscribe_garbage = [
   "sequencer_storage_actor/mock",
   "sequencer_bedrock_actor/test-utils",
-  "dep:borsh",
 ]

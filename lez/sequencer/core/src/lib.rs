@@ -754,7 +754,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             };
             // An offence the channel already carries, so replaying it must not
             // be fatal: the entry carries no block, and the lineage moves past it.
-            let block = borsh::from_slice::<Block>(&zone_block.data)
+            let block = Block::from_inscription(&zone_block.data)
                 .inspect_err(|_| {
                     warn!(
                         "Skipping an undecodable inscription {:?} at slot {}",
@@ -3544,7 +3544,7 @@ async fn settle_reconstructed_deliveries<S: StorageActorTrait>(
 
 /// The deposits a block inscription mints, or `None` when it is not a block.
 fn inscribed_block_deposits(inscription: &[u8]) -> Option<Vec<[u8; 32]>> {
-    let block = borsh::from_slice::<Block>(inscription).ok()?;
+    let block = Block::from_inscription(inscription).ok()?;
 
     Some(
         block

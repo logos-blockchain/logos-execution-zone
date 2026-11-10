@@ -495,7 +495,9 @@ impl Message<CreateChannel> for BedrockActor {
             transfer_threshold,
         );
 
-        let data = borsh::to_vec(&genesis).map_err(Error::BlockEncodingFailed)?;
+        let data = genesis
+            .to_inscription()
+            .map_err(Error::BlockEncodingFailed)?;
         let inscription: Inscription = data.try_into().map_err(|_rr| Error::BlockTooLarge)?;
         // A config moves the config tip only, so the first block chains on the root.
         let inscribe_op = InscriptionOp {
@@ -1022,7 +1024,7 @@ fn channel_entries(tx: &ChannelUpdateTx, channel_id: ChannelId) -> Vec<ChannelEn
 /// Deserialize an inscription payload into `(this_msg, Block)`. Bad payloads are
 /// logged and skipped.
 fn block_from_inscription(inscription: &InscriptionInfo) -> Option<Block> {
-    borsh::from_slice::<Block>(&inscription.payload)
+    Block::from_inscription(&inscription.payload)
         .inspect_err(|err| {
             warn!("Failed to deserialize block from inscription: {err:?}");
         })
@@ -1044,7 +1046,7 @@ fn released_notes(tx: &PendingTx) -> Vec<NoteId> {
 
 /// `block` as the bytes of an inscription.
 fn block_inscription(block: &Block) -> Result<Inscription> {
-    let data = borsh::to_vec(block).map_err(Error::BlockEncodingFailed)?;
+    let data = block.to_inscription().map_err(Error::BlockEncodingFailed)?;
 
     data.try_into().map_err(|_err| Error::BlockTooLarge)
 }

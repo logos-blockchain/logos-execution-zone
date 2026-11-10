@@ -509,7 +509,7 @@ where
             ZoneMessage::Block(block) => block,
             ZoneMessage::Deposit(_) | ZoneMessage::Withdraw(_) => continue,
         };
-        match borsh::from_slice::<Block>(&zone_block.data) {
+        match Block::from_inscription(&zone_block.data) {
             Ok(block) => {
                 debug!(
                     "Watcher observed finalized peer {} block {}",
@@ -897,7 +897,7 @@ mod tests {
     }
 
     fn block_msg(block: &Block, slot: u64) -> (ZoneMessage, Slot) {
-        peer_msg(borsh::to_vec(block).expect("block serializes"), slot)
+        peer_msg(block.to_inscription().expect("block serializes"), slot)
     }
 
     /// A stream item carrying the peer's block `block_id`.

@@ -1383,7 +1383,7 @@ where
         let ZoneMessage::Block(zone_block) = msg else {
             continue;
         };
-        match borsh::from_slice::<Block>(&zone_block.data) {
+        match Block::from_inscription(&zone_block.data) {
             Ok(block) => {
                 // Before caching, not when a dispatch names it: an unchecked
                 // block steers the prefix, and by then the damage is a halt.
@@ -1440,7 +1440,7 @@ where
         let ZoneMessage::Block(zone_block) = msg else {
             continue;
         };
-        let Ok(mut block) = borsh::from_slice::<Block>(&zone_block.data) else {
+        let Ok(mut block) = Block::from_inscription(&zone_block.data) else {
             continue;
         };
         if block.header.block_id != block_id {
@@ -1547,7 +1547,7 @@ mod tests {
 
     /// A peer-stream item carrying `block`.
     fn peer_block_msg(block: &Block, slot: u64) -> (ZoneMessage, Slot) {
-        peer_msg(borsh::to_vec(block).expect("block serializes"), slot)
+        peer_msg(block.to_inscription().expect("block serializes"), slot)
     }
 
     /// A hash-linked run from the peer's genesis whose last block,

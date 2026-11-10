@@ -101,7 +101,7 @@ fn block_on(
     let block =
         common::test_utils::produce_dummy_block(block_id, Some(parent.header.hash), transactions);
     let block = common::block::HashableBlockData::from(block).into_pending_block();
-    borsh::to_vec(&block).expect("a block should serialize")
+    block.to_inscription().expect("a block should serialize")
 }
 
 /// Waits for the tip to become `msg`. False if the turn ends first: L1 refused it.

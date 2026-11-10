@@ -28,7 +28,11 @@ use crate::protocol::ChannelParams;
 
 /// A tx wrapping `block` in one inscribe op on `channel`.
 fn inscribing_tx(channel: ChannelId, block: &Block) -> SignedOps<Unverified, StandardMode> {
-    let inscription: Inscription = borsh::to_vec(block).expect("serialize").try_into().unwrap();
+    let inscription: Inscription = block
+        .to_inscription()
+        .expect("serialize")
+        .try_into()
+        .unwrap();
     let signer = Ed25519Key::generate(&mut rand::rngs::OsRng);
     let op = Op::ChannelInscribe(InscriptionOp {
         channel_id: channel,

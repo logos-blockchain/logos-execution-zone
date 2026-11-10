@@ -11266,7 +11266,6 @@ name = "sequencer_bedrock_actor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "borsh",
  "chain_state",
  "common",
  "futures",
@@ -11470,7 +11469,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum 0.8.9",
- "borsh",
  "clap",
  "common",
  "env_logger",

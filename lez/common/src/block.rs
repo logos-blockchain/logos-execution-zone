@@ -104,6 +104,14 @@ impl Block {
         }
         .compute_hash()
     }
+
+    pub fn to_inscription(&self) -> std::io::Result<Vec<u8>> {
+        borsh::to_vec(self)
+    }
+
+    pub fn from_inscription(bytes: &[u8]) -> std::io::Result<Self> {
+        borsh::from_slice(bytes)
+    }
 }
 
 impl Serialize for Block {

@@ -136,7 +136,7 @@ impl Anchor {
         let ZoneMessage::Block(zone_block) = msg else {
             return AnchorProbe::KeepLooking;
         };
-        let Ok(block) = borsh::from_slice::<Block>(&zone_block.data) else {
+        let Ok(block) = Block::from_inscription(&zone_block.data) else {
             return AnchorProbe::KeepLooking;
         };
         let (id, hash) = (block.header.block_id, block.header.hash);
@@ -337,7 +337,7 @@ mod tests {
     }
 
     fn block_msg(block: &Block) -> ZoneMessage {
-        let bytes = borsh::to_vec(block).expect("serialize");
+        let bytes = block.to_inscription().expect("serialize");
         ZoneMessage::Block(ZoneBlock {
             id: MsgId::from([0_u8; 32]),
             data: Inscription::try_from(bytes.as_slice()).expect("inscription"),

@@ -3030,7 +3030,7 @@ async fn signs_peer_pin(
     let pin = Ops::from([
         Op::ChannelInscribe(InscriptionOp {
             channel_id,
-            inscription: Inscription::try_from(borsh::to_vec(block).unwrap())
+            inscription: Inscription::try_from(block.to_inscription().unwrap())
                 .expect("the block fits an inscription"),
             parent: MsgId::root(),
             signer: peer.public_key().into_unverified(),
