@@ -119,9 +119,9 @@ impl Anchor {
         Self { slot, block }
     }
 
-    /// Probes a channel message read at/after the anchor slot.
-    /// See [`verify_chain_consistency`].
-    fn probe_anchor_slot(&self, block: &Block, slot: Slot) -> AnchorProbe {
+    /// Probes a channel message read at/after the anchor slot, `block` being [`None`] for one
+    /// that is not a decodable block. See [`verify_chain_consistency`].
+    fn probe_anchor_slot(&self, block: Option<&Block>, slot: Slot) -> AnchorProbe {
         if slot < self.slot {
             return AnchorProbe::KeepLooking;
         }
@@ -135,6 +135,9 @@ impl Anchor {
                     anchor_slot: self.slot,
                 })
             };
+        };
+        let Some(block) = block else {
+            return AnchorProbe::KeepLooking;
         };
         let (id, hash) = (block.header.block_id, block.header.hash);
         if id == anchor_id {
@@ -196,9 +199,10 @@ impl AnchorConsistencyCheck {
         }
     }
 
-    /// Feeds the next channel message in slot order. Returns the verdict once it
-    /// is known so the caller can stop, or `None` while still undetermined.
-    pub fn observe(&mut self, block: &Block, slot: Slot) -> Option<&ChainConsistency> {
+    /// Feeds the next channel message in slot order, `block` being [`None`] for one that is not
+    /// a decodable block. Returns the verdict once it is known so the caller can stop, or `None`
+    /// while still undetermined.
+    pub fn observe(&mut self, block: Option<&Block>, slot: Slot) -> Option<&ChainConsistency> {
         if self.verdict.is_none() {
             self.verdict = match self.anchor.probe_anchor_slot(block, slot) {
                 AnchorProbe::SameChain => Some(ChainConsistency::Consistent),
@@ -280,14 +284,12 @@ where
 
         while let Some(item) = stream.next().await {
             let (msg, slot) = item?;
-            let ZoneMessage::Block(zone_block) = msg else {
-                continue;
-            };
-            let Ok(block) = borsh::from_slice::<Block>(&zone_block.data) else {
-                continue;
+            let block = match msg {
+                ZoneMessage::Block(zone_block) => borsh::from_slice::<Block>(&zone_block.data).ok(),
+                ZoneMessage::Deposit(_) | ZoneMessage::Withdraw(_) => None,
             };
 
-            if check.observe(&block, slot).is_some() {
+            if check.observe(block.as_ref(), slot).is_some() {
                 break;
             }
         }
@@ -348,7 +350,7 @@ mod tests {
         let tip = test_block(5, 42);
         let anchor = anchor_for(&tip, Slot::from(1_000));
         assert!(matches!(
-            anchor.probe_anchor_slot(&tip, Slot::from(1_000)),
+            anchor.probe_anchor_slot(Some(&tip), Slot::from(1_000)),
             AnchorProbe::SameChain
         ));
     }
@@ -360,7 +362,7 @@ mod tests {
         // Same id, different content (timestamp) => different hash.
         let other = test_block(5, 43);
         assert!(matches!(
-            anchor.probe_anchor_slot(&other, Slot::from(1_000)),
+            anchor.probe_anchor_slot(Some(&other), Slot::from(1_000)),
             AnchorProbe::Mismatch(ChainMismatch::Block { .. })
         ));
     }
@@ -374,7 +376,7 @@ mod tests {
         let anchor = anchor_for(&tip, Slot::from(1_000));
         let genesis = test_block(1, 0);
         assert!(matches!(
-            anchor.probe_anchor_slot(&genesis, Slot::from(1_001)),
+            anchor.probe_anchor_slot(Some(&genesis), Slot::from(1_001)),
             AnchorProbe::Mismatch(ChainMismatch::ReinscribedBlock { .. })
         ));
     }
@@ -385,7 +387,7 @@ mod tests {
         let anchor = anchor_for(&tip, Slot::from(1_000));
         let earlier = test_block(4, 41);
         assert!(matches!(
-            anchor.probe_anchor_slot(&earlier, Slot::from(1_000)),
+            anchor.probe_anchor_slot(Some(&earlier), Slot::from(1_000)),
             AnchorProbe::KeepLooking
         ));
     }
@@ -398,8 +400,46 @@ mod tests {
         let anchor = anchor_for(&tip, Slot::from(1_000));
         let newer = test_block(6, 43);
         assert!(matches!(
-            anchor.probe_anchor_slot(&newer, Slot::from(1_001)),
+            anchor.probe_anchor_slot(Some(&newer), Slot::from(1_001)),
             AnchorProbe::Bail
+        ));
+    }
+
+    #[test]
+    fn probe_skips_a_message_that_is_not_a_block_for_a_block_anchor() {
+        let tip = test_block(5, 42);
+        let anchor = anchor_for(&tip, Slot::from(1_000));
+        assert!(matches!(
+            anchor.probe_anchor_slot(None, Slot::from(1_000)),
+            AnchorProbe::KeepLooking
+        ));
+    }
+
+    /// A headerless anchor was recorded on an undecodable inscription, so that inscription,
+    /// still served at the anchor slot, is the evidence of the same chain.
+    #[test]
+    fn an_undecodable_message_at_the_slot_of_a_headerless_anchor_is_the_same_chain() {
+        let mut check = AnchorConsistencyCheck::new(Anchor::new(Slot::from(1_000), None));
+
+        assert!(matches!(
+            check.observe(None, Slot::from(1_000)),
+            Some(ChainConsistency::Consistent)
+        ));
+        assert!(matches!(
+            check.observe(Some(&test_block(6, 43)), Slot::from(1_001)),
+            Some(ChainConsistency::Consistent)
+        ));
+    }
+
+    #[test]
+    fn a_headerless_anchor_with_no_message_at_its_slot_has_changed() {
+        let mut check = AnchorConsistencyCheck::new(Anchor::new(Slot::from(1_000), None));
+
+        assert!(matches!(
+            check.observe(Some(&test_block(6, 43)), Slot::from(1_001)),
+            Some(ChainConsistency::Inconsistent(
+                ChainMismatch::AnchorSlotChanged { .. }
+            ))
         ));
     }
 

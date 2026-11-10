@@ -84,15 +84,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
     /// Apply a finalized block to the bootstrapping state.
     pub async fn on_finalized_block(&mut self, finalized: &FinalizedBlock) -> Result<()> {
         let block = match &finalized.block {
-            BlockData::Block(block) => {
-                if let Some(check) = &mut self.consistency_check
-                    && let Some(ChainConsistency::Inconsistent(mismatch)) =
-                        check.observe(block, finalized.slot)
-                {
-                    return Err(Error::StoreAndChannelDivergence(mismatch.clone()));
-                }
-                Some(block)
-            }
+            BlockData::Block(block) => Some(block),
             BlockData::Undecodable(_data) => {
                 // An offence the channel already carries, so replaying it must not
                 // be fatal: the entry carries no block, and the lineage moves past it.
@@ -104,6 +96,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
                 None
             }
         };
+        if let Some(check) = &mut self.consistency_check
+            && let Some(ChainConsistency::Inconsistent(mismatch)) =
+                check.observe(block, finalized.slot)
+        {
+            return Err(Error::StoreAndChannelDivergence(mismatch.clone()));
+        }
 
         self.apply_finalized_entry(finalized, block).await?;
         self.on_lineage = self.on_lineage || finalized.msg_id == self.stored_final;
