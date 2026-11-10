@@ -18,7 +18,10 @@ use wallet::{AccountIdentity, AccountMention, account::AccountIdWithPrivacy};
 use crate::{
     error::FfiOperationError,
     primitives::types::{FfiBytes32, FfiPdaSeed, FfiU128},
-    wallet::list,
+    wallet::{
+        fees::{FfiDeclaredFee, FfiDryRunReport},
+        list,
+    },
 };
 
 /// Opaque pointer to the Wallet instance.
@@ -180,6 +183,9 @@ impl Default for FfiAccountList {
 }
 
 /// Result of a transfer operation.
+///
+/// A call overwrites the strings it holds without freeing them: free a filled result with
+/// `wallet_ffi_free_transfer_result` before passing it to another call, or they leak.
 #[repr(C)]
 #[derive(Debug)]
 pub struct FfiTransferResult {
@@ -188,6 +194,12 @@ pub struct FfiTransferResult {
     pub tx_hash: *mut c_char,
     /// Whether the transfer succeeded.
     pub success: bool,
+    /// Whether the transfer was only simulated, leaving `tx_hash` null; `dry_run` holds its
+    /// report.
+    pub is_dry_run: bool,
+    pub dry_run: FfiDryRunReport,
+    /// The fee the transfer declared or, on a dry run, would declare.
+    pub fee: FfiDeclaredFee,
 }
 
 impl Default for FfiTransferResult {
@@ -195,6 +207,9 @@ impl Default for FfiTransferResult {
         Self {
             tx_hash: std::ptr::null_mut(),
             success: false,
+            is_dry_run: false,
+            dry_run: FfiDryRunReport::default(),
+            fee: FfiDeclaredFee::default(),
         }
     }
 }

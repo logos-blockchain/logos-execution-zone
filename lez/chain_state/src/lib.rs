@@ -16,4 +16,5 @@ pub mod classify;
 pub mod consistency;
 pub mod ingest_error;
 pub mod stall_reason;
+pub mod timeout_node;
 pub mod zone_indexer;

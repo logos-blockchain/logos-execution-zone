@@ -20,6 +20,7 @@ members = [
   "lez/sequencer/core",
   "lez/sequencer/core/metrics",
   "lez/sequencer/service",
+  "lez/sequencer/service/metrics",
   "lez/sequencer/service/protocol",
   "lez/sequencer/service/rpc",
   "lez/sequencer/actors/channel_signing",
@@ -50,6 +51,7 @@ members = [
   "lez/programs/fee",
   "lez/programs/fee/core",
   "lez/programs/cross_zone_marker",
+  "lez/programs/cross_zone_emission_core",
   "lez/programs/cross_zone_inbox",
   "lez/programs/cross_zone_outbox",
   "lez/programs/bridge_lock",
@@ -91,6 +93,7 @@ storage = { path = "lez/storage" }
 key_protocol = { path = "lee/key_protocol" }
 sequencer_core = { path = "lez/sequencer/core" }
 sequencer_core_metrics = { path = "lez/sequencer/core/metrics" }
+sequencer_service_metrics = { path = "lez/sequencer/service/metrics" }
 sequencer_service_protocol = { path = "lez/sequencer/service/protocol" }
 sequencer_service_rpc = { path = "lez/sequencer/service/rpc" }
 sequencer_channel_signing_actor = { path = "lez/sequencer/actors/channel_signing" }
@@ -123,6 +126,7 @@ fee_core = { path = "lez/programs/fee/core" }
 bridge_core = { path = "lez/programs/bridge/core" }
 cross_zone_inbox_core = { path = "lez/programs/cross_zone_inbox/core" }
 cross_zone_outbox_core = { path = "lez/programs/cross_zone_outbox/core" }
+cross_zone_emission_core = { path = "lez/programs/cross_zone_emission_core" }
 bridge_lock_core = { path = "lez/programs/bridge_lock/core" }
 wrapped_token_core = { path = "lez/programs/wrapped_token/core" }
 ping_core = { path = "lez/programs/ping_core" }

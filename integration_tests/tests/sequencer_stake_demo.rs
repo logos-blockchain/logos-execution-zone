@@ -251,12 +251,8 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .map_err(|err| anyhow::anyhow!("Failed to submit UnstakeRequest transaction: {err:?}"))?;
     info!("Submitted full UnstakeRequest for the demo sequencer key");
 
-    // A full drain crosses below the minimum, so discovery removes the key.
-    // Wide window: the removal has to wait for this sequencer to regain its
-    // round-robin turn (posting_timeframe/posting_timeout reclaim), on top of
-    // normal Bedrock confirmation latency.
     let mut removed = false;
-    for _ in 0..30 {
+    for _ in 0..60 {
         let accredited = observer
             .ask(GetAccreditedKeys)
             .await

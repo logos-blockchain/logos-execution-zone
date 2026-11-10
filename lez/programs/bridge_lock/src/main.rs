@@ -18,11 +18,7 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
         Message::Lock {
             outbox,
             amount,
-            target_zone,
-            target_account_id,
-            target_accounts,
-            payload,
-            ordinal,
+            emission,
         } => {
             assert_top_level(input);
 
@@ -31,7 +27,7 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
             let WrappedMessage::Mint {
                 recipient,
                 amount: mint_amount,
-            } = decode_mint(&payload)
+            } = decode_mint(&emission.payload)
             else {
                 panic!("bridge_lock payload must be a wrapped-token mint");
             };
@@ -40,8 +36,9 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
                 "locked amount must equal the wrapped mint amount"
             );
 
-            // `target_zone` is not checkable here, so a lock aimed at a zone that will not route
-            // it still burns.
+            // The target zone is not checkable here, so a lock aimed at a zone that will not
+            // route it still burns.
+            let target_account_id = emission.target_account_id;
             let expected_accounts = vec![
                 Actor::new(
                     wrapped_token_core::config_account_id(target_account_id),
@@ -53,7 +50,7 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
                 ),
             ];
             assert_eq!(
-                target_accounts, expected_accounts,
+                emission.target_accounts, expected_accounts,
                 "target accounts must be the mint's config and the recipient's holding, under the \
                  wrapped token's own actor state"
             );
@@ -91,11 +88,11 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
                 .send_sync(
                     outbox,
                     &OutboxMessage::Emit {
-                        target_zone,
+                        target_zone: emission.target_zone,
                         target_account_id,
-                        target_accounts,
-                        payload,
-                        ordinal,
+                        target_accounts: emission.target_accounts,
+                        payload: emission.payload,
+                        ordinal: emission.ordinal,
                     },
                 )
         }
@@ -155,6 +152,7 @@ fn decode_mint(payload: &[u8]) -> WrappedMessage {
 
 #[cfg(test)]
 mod tests {
+    use bridge_lock_core::CrossZoneEmission;
     use lee_core::{
         account::{AccountId, ActorState},
         program::{SyncMessage, Transition},
@@ -231,11 +229,13 @@ mod tests {
         Message::Lock {
             outbox: outbox_actor(),
             amount: AMOUNT,
-            target_zone: ZONE,
-            target_account_id,
-            target_accounts: target_accounts(),
-            payload,
-            ordinal: 0,
+            emission: CrossZoneEmission {
+                target_zone: ZONE,
+                target_account_id,
+                target_accounts: target_accounts(),
+                payload,
+                ordinal: 0,
+            },
         }
     }
 
