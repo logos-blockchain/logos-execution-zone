@@ -7,7 +7,7 @@ use wallet::{
 
 /// Deploys `bytecode` through `program_loader`, returning the header's `AccountId`.
 ///
-/// Also prints it as `PROG_CLI {"program_id":"<id>"}`, a line a driving tool can pick out of the
+/// Also prints it as `Deployed Program with {"program_id":"<id>"}`, a line a driving tool can pick out of the
 /// wallet's other output (a runner that deploys two programs prints two, in deploy order).
 ///
 /// `payer` must be an existing, funded account — a freshly-claimed account can't pay for its own
@@ -38,7 +38,7 @@ pub async fn deploy_program<C: WalletSequencerClient>(
     let program_id = ProgramLoader(wallet_core)
         .deploy(header, &segments, bytecode, true, Some(payer))
         .await?;
-    println!("PROG_CLI {{\"program_id\":\"{program_id}\"}}");
+    println!("Deployed Program with {{\"program_id\":\"{program_id}\"}}");
     Ok(program_id)
 }
 

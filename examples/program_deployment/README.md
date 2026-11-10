@@ -95,7 +95,7 @@ You don't deploy the programs by hand in this tutorial: each runner deploys the 
 
 A deployed program is addressed by its program account ID, which is the account holding its header. Each runner prints that ID for every program it deploys, in deploy order:
 ```
-PROG_CLI {"program_id":"2SY3RTDvAST1Zkt92QZaDSDYtJUoLztxmTeYbdeyB9Wh"}
+Deployed Program with {"program_id":"2SY3RTDvAST1Zkt92QZaDSDYtJUoLztxmTeYbdeyB9Wh"}
 ```
 
 > [!IMPORTANT]
