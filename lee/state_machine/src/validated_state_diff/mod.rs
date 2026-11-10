@@ -321,8 +321,8 @@ impl ValidatedStateDiff {
     /// carries one: the diff then spends only the payer's nullifier, commits its post-state
     /// after the fee transfer and replays that transfer's crossing. Of the recovery bindings it
     /// keeps only the payer's, which a refund is published through; the notes the others bind
-    /// never exist. Without a fallback the
-    /// failure is an error, as every pre-execution check is.
+    /// never exist. A transaction whose fee a public signer declares reverts to the signers'
+    /// nonce advances alone. Otherwise the failure is an error, as every pre-execution check is.
     pub fn from_privacy_preserving_transaction_metered(
         tx: &PrivacyPreservingTransaction,
         state: &V03State,
@@ -470,6 +470,15 @@ impl ValidatedStateDiff {
                 )?;
                 (diff, Some(err.to_string()))
             }
+            // A fee declared by a public signer is paid outside the proof, so the revert keeps
+            // only the public payer nonce advances, the proven notes are not spent
+            (Err(err), None) if err.is_chargeable() && message.fee.is_some() => (
+                StateDiff {
+                    signer_account_ids,
+                    ..StateDiff::default()
+                },
+                Some(err.to_string()),
+            ),
             (Err(err), _) => return Err(err),
         };
         Ok((Self(diff), ExecutionCharge { cycles, revert }))

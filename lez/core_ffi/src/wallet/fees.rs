@@ -7,7 +7,7 @@ use std::{
 
 use wallet::{
     DeclaredFee, DryRunReport, ExecutionFailureKind, FeeParams, FeeStateQuote, PrivateFee,
-    WalletCore, WalletSequencerClient,
+    WalletCore, WalletSequencerClient, account::AccountIdWithPrivacy,
 };
 
 use crate::{
@@ -304,9 +304,11 @@ pub struct FfiFeeParams {
     /// reserve), else the configured ones.
     pub has_headroom_blocks: bool,
     pub headroom_blocks: u64,
-    /// Private: the owned private account paying every in-proof fee, else each send picks its
-    /// payer.
+    /// Privacy-preserving: the account paying every fee, else each send picks its payer. An owned
+    /// private account pays inside the proof; with `payer_is_public`, a public account the
+    /// transaction already signs with declares the fee.
     pub has_payer: bool,
+    pub payer_is_public: bool,
     pub payer: FfiAccountId,
     /// Private: the public account the surplus is refunded to, else the payer's alias. Any
     /// account the transaction does not credit publicly is linked to it.
@@ -321,7 +323,13 @@ impl From<&FfiFeeParams> for FeeParams {
             max_fee: value.has_max_fee.then(|| value.max_fee.into()),
             tip: value.tip,
             headroom_blocks: value.has_headroom_blocks.then_some(value.headroom_blocks),
-            payer: value.has_payer.then(|| value.payer.into()),
+            payer: value.has_payer.then(|| {
+                if value.payer_is_public {
+                    AccountIdWithPrivacy::Public(value.payer.into())
+                } else {
+                    AccountIdWithPrivacy::Private(value.payer.into())
+                }
+            }),
             refund_to: value.has_refund_to.then(|| value.refund_to.into()),
         }
     }

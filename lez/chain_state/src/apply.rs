@@ -383,7 +383,9 @@ pub fn settle_transaction(
         | ClassifyError::TooManyPrivateActions { .. }
         | ClassifyError::OversizedProof { .. }
         | ClassifyError::InvalidRefundTarget { .. }
-        | ClassifyError::InvalidFeeFallback => BlockIngestError::InvalidFeeClass {
+        | ClassifyError::InvalidFeeFallback
+        | ClassifyError::DoubleFee
+        | ClassifyError::GasLimitBelowVerification { .. } => BlockIngestError::InvalidFeeClass {
             tx_index,
             reason: err.to_string(),
         },
@@ -614,14 +616,13 @@ fn settle_charged_transaction(
     summary: &mut BlockFeeSummary,
 ) -> Result<(Vec<TransactionEvent>, bool), BlockIngestError> {
     let fee_validity = |reason: String| BlockIngestError::InvalidFeeClass { tx_index, reason };
-    let (LeeTransaction::Public(public_tx), FeeTxView::Public { payer, .. }) = (transaction, view)
-    else {
-        unreachable!("only public transactions classify as a public fee view");
+    let FeeTxView::Public { payer, .. } = view else {
+        unreachable!("only a declared fee classifies as a public fee view");
     };
     let payer = *payer;
 
     validate_static_tx(view, opening).map_err(|err| fee_validity(err.to_string()))?;
-    if !lee::is_fee_authorized(public_tx.message(), public_tx.witness_set()) {
+    if !transaction.is_fee_authorized() {
         return Err(fee_validity(
             "designated payer's authorization is missing".into(),
         ));
@@ -657,13 +658,34 @@ fn settle_charged_transaction(
     // action's effects on success or only the signers' nonce advances on a
     // revert; either way the reserved fee stays committed. An authentication
     // failure is a malformed transaction that invalidates the whole block.
+    //
+    // A private transaction's gas limit also covers its proof's verification;
+    // its public part runs on the gas limit less that cost.
     let gas_limit = view.gas_limit();
-    let (charge, result) = lee::ValidatedStateDiff::from_public_transaction_metered(
-        public_tx, state, block_id, timestamp, gas_limit,
-    );
+    let (charge, result, verify_gas) = match transaction {
+        LeeTransaction::Public(public_tx) => {
+            let (charge, result) = lee::ValidatedStateDiff::from_public_transaction_metered(
+                public_tx, state, block_id, timestamp, gas_limit,
+            );
+            (charge, result, 0)
+        }
+        LeeTransaction::PrivacyPreserving(private_tx) => {
+            let budget = gas_limit
+                .checked_sub(market::PRIVATE_VERIFY_GAS)
+                .expect("classify holds a declared gas limit to the verification cost");
+            let (charge, result) =
+                match lee::ValidatedStateDiff::from_privacy_preserving_transaction_metered(
+                    private_tx, state, block_id, timestamp, budget,
+                ) {
+                    Ok((diff, charge)) => (charge, Ok(diff)),
+                    Err(err) => (lee::ExecutionCharge::FREE, Err(err)),
+                };
+            (charge, result, market::PRIVATE_VERIFY_GAS)
+        }
+    };
     let action_diff = result.map_err(|err| fee_validity(format!("fee action failed: {err}")))?;
     // r0 cycle count can overshoot, clamp to `gas_limit`
-    let charged_cycles = charge.cycles.min(gas_limit);
+    let charged_cycles = charge.cycles.saturating_add(verify_gas).min(gas_limit);
 
     summary.gas_used_exec =
         accumulate_exec_gas(summary.gas_used_exec, charged_cycles).map_err(|err| {
@@ -1719,10 +1741,44 @@ mod tests {
     /// that only pays `fee`, presented under [`ALIAS_OPENING`] and bound for refunds.
     fn public_root_private_tx(
         state: &V03State,
-        (keys, funded): &(TestPrivateKeys, lee::Account),
+        sender: &(TestPrivateKeys, lee::Account),
         scripted: Actor,
         fee: lee_core::FeeTransfer,
     ) -> LeeTransaction {
+        public_root_private_tx_paid(state, sender, scripted, Some(fee), None)
+    }
+
+    /// The public account that signs and declares the fee in [`publicly_paid_private_tx`].
+    fn public_payer_key() -> lee::PrivateKey {
+        initial_pub_accounts_private_keys()[1].pub_sign_key.clone()
+    }
+
+    /// [`public_root_private_tx`] paying no fee in its proof: its public signer
+    /// [`public_payer_key`] declares `fee` instead.
+    fn publicly_paid_private_tx(
+        state: &V03State,
+        sender: &(TestPrivateKeys, lee::Account),
+        scripted: Actor,
+        fee: lee::FeeDeclaration,
+    ) -> LeeTransaction {
+        public_root_private_tx_paid(
+            state,
+            sender,
+            scripted,
+            None,
+            Some(&(public_payer_key(), fee)),
+        )
+    }
+
+    fn public_root_private_tx_paid(
+        state: &V03State,
+        (keys, funded): &(TestPrivateKeys, lee::Account),
+        scripted: Actor,
+        fee: Option<lee_core::FeeTransfer>,
+        declared: Option<&(lee::PrivateKey, lee::FeeDeclaration)>,
+    ) -> LeeTransaction {
+        let signer =
+            declared.map(|(key, _)| AccountId::from(&lee::PublicKey::new_from_private_key(key)));
         let public_actors = vec![
             scripted,
             Actor::native_balance(system_accounts::fee_inbox_account_id()),
@@ -1750,8 +1806,8 @@ mod tests {
                     message: borsh::to_vec(&Script::default()).unwrap(),
                 }),
                 claims: Vec::new(),
-                fee: Some(fee),
-                public_context: lee::PublicExecutionContext::new(public_actors, []),
+                fee,
+                public_context: lee::PublicExecutionContext::new(public_actors, signer),
                 private_witnesses: vec![update_witness(keys, funded.clone(), membership_proof)],
                 dummy_inputs: Vec::new(),
                 ciphertext_padding: None,
@@ -1784,13 +1840,24 @@ mod tests {
             no_seal,
         )
         .expect("the scripted call proves");
-        let message = lee::privacy_preserving_transaction::Message::from_circuit_output(
-            BTreeMap::new(),
-            output,
-        );
+        let message = lee::privacy_preserving_transaction::Message {
+            fee: declared.map(|(_, declaration)| *declaration),
+            ..lee::privacy_preserving_transaction::Message::from_circuit_output(
+                signer
+                    .map(|signer| (signer, state.get_account_by_id(signer).nonce))
+                    .into_iter()
+                    .collect(),
+                output,
+            )
+        };
+        let signing_keys: Vec<&lee::PrivateKey> = declared.iter().map(|(key, _)| key).collect();
         LeeTransaction::PrivacyPreserving(lee::PrivacyPreservingTransaction::new(
-            message,
-            lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(vec![], proof),
+            message.clone(),
+            lee::privacy_preserving_transaction::WitnessSet::for_message(
+                &message,
+                proof,
+                &signing_keys,
+            ),
         ))
     }
 
@@ -2112,6 +2179,170 @@ mod tests {
             native_balance(&settled, system_accounts::fee_inbox_account_id()),
             reserve
         );
+    }
+
+    #[test]
+    fn a_private_transaction_declaring_its_fee_charges_its_public_signer() {
+        let (state, senders) = private_sender_state(&[0x5a]);
+        let state = state.with_programs(vec![event_emitter()]);
+        let scripted = Actor::new(
+            initial_pub_accounts_private_keys()[0].account_id,
+            AccountId::from_builtin_program(event_emitter().id()),
+        );
+        let payer = AccountId::from(&lee::PublicKey::new_from_private_key(&public_payer_key()));
+        let gas_limit = fee_core::market::PRIVATE_VERIFY_GAS + 1_000_000;
+        let tx = publicly_paid_private_tx(
+            &state,
+            &senders[0],
+            scripted,
+            lee::FeeDeclaration::new(payer, gas_limit, 3, u128::MAX),
+        );
+        let LeeTransaction::PrivacyPreserving(private_tx) = &tx else {
+            unreachable!("a privacy-preserving transaction was built");
+        };
+        let payer_pre = native_balance(&state, payer);
+        let nonce_pre = state.get_account_by_id(payer).nonce;
+
+        let mut settled = state;
+        let mut summary = BlockFeeSummary::default();
+        let (_, reverted) = settle_transaction(
+            &tx,
+            &mut settled,
+            &FeeState::genesis(),
+            1,
+            100,
+            0,
+            &mut summary,
+        )
+        .expect("a declared fee settles");
+        assert!(!reverted);
+        // Between the revert test's 5,000 and the verification gas, so the root runs out there
+        // only because the verification gas comes off its budget first.
+        let cycles = summary.gas_used_exec - fee_core::market::PRIVATE_VERIFY_GAS;
+        assert!(cycles > 5_000 && cycles < fee_core::market::PRIVATE_VERIFY_GAS);
+        let base = fee_core::assess::fee_for(summary.gas_used_exec, size_of(&tx), 0, 8, 8);
+        assert_eq!(summary.gas_used_stor, size_of(&tx));
+        assert_eq!(summary.revenue_base, base);
+        assert_eq!(summary.revenue_tip, 3);
+        // The signer pays the actual fee and its tip; the proof pays nothing.
+        assert_eq!(native_balance(&settled, payer), payer_pre - base - 3);
+        assert_eq!(
+            native_balance(&settled, system_accounts::fee_inbox_account_id()),
+            base + 3
+        );
+        assert_eq!(
+            settled.get_account_by_id(payer).nonce,
+            Nonce(nonce_pre.0 + 1)
+        );
+        for commitment in private_tx.message.execution.commitments() {
+            assert!(settled.get_proof_for_commitment(&commitment).is_some());
+        }
+    }
+
+    #[test]
+    fn a_declared_fee_pays_for_a_reverted_private_transaction_that_spends_no_note() {
+        let (state, senders) = private_sender_state(&[0x5b]);
+        let state = state.with_programs(vec![event_emitter()]);
+        let scripted = Actor::new(
+            initial_pub_accounts_private_keys()[0].account_id,
+            AccountId::from_builtin_program(event_emitter().id()),
+        );
+        let payer = AccountId::from(&lee::PublicKey::new_from_private_key(&public_payer_key()));
+        // The scripted public root runs out of the gas left after the proof's verification.
+        let gas_limit = fee_core::market::PRIVATE_VERIFY_GAS + 5_000;
+        let tx = publicly_paid_private_tx(
+            &state,
+            &senders[0],
+            scripted,
+            lee::FeeDeclaration::new(payer, gas_limit, 0, u128::MAX),
+        );
+        let LeeTransaction::PrivacyPreserving(private_tx) = &tx else {
+            unreachable!("a privacy-preserving transaction was built");
+        };
+        let payer_pre = native_balance(&state, payer);
+        let nonce_pre = state.get_account_by_id(payer).nonce;
+
+        let mut settled = state;
+        let mut summary = BlockFeeSummary::default();
+        let (events, reverted) = settle_transaction(
+            &tx,
+            &mut settled,
+            &FeeState::genesis(),
+            1,
+            100,
+            0,
+            &mut summary,
+        )
+        .expect("a failing public part is a charged revert");
+        assert!(reverted);
+        assert!(events.is_empty());
+        assert_eq!(summary.gas_used_exec, gas_limit);
+        let charged = fee_core::assess::fee_for(gas_limit, size_of(&tx), 0, 8, 8);
+        assert_eq!(native_balance(&settled, payer), payer_pre - charged);
+        assert_eq!(
+            settled.get_account_by_id(payer).nonce,
+            Nonce(nonce_pre.0 + 1)
+        );
+        // No proven note lands and the sender's note stays unspent.
+        for commitment in private_tx.message.execution.commitments() {
+            assert!(settled.get_proof_for_commitment(&commitment).is_none());
+        }
+        for (nullifier, _) in private_tx.message.execution.nullifiers() {
+            assert!(!settled.is_spent(&nullifier));
+        }
+        // The advanced nonce stops the proof from being replayed.
+        summary = BlockFeeSummary::default();
+        let err = settle_transaction(
+            &tx,
+            &mut settled,
+            &FeeState::genesis(),
+            2,
+            200,
+            0,
+            &mut summary,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, BlockIngestError::InvalidFeeClass { reason, .. } if reason.contains("Nonce mismatch")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_declared_fee_naming_a_payer_that_does_not_sign_is_rejected() {
+        let (state, senders) = private_sender_state(&[0x5c]);
+        let state = state.with_programs(vec![event_emitter()]);
+        let scripted = Actor::new(
+            initial_pub_accounts_private_keys()[0].account_id,
+            AccountId::from_builtin_program(event_emitter().id()),
+        );
+        let outsider = initial_pub_accounts_private_keys()[0].account_id;
+        let tx = publicly_paid_private_tx(
+            &state,
+            &senders[0],
+            scripted,
+            lee::FeeDeclaration::new(
+                outsider,
+                fee_core::market::PRIVATE_VERIFY_GAS + 1_000_000,
+                0,
+                u128::MAX,
+            ),
+        );
+
+        let mut settled = state;
+        let mut summary = BlockFeeSummary::default();
+        assert!(matches!(
+            settle_transaction(
+                &tx,
+                &mut settled,
+                &FeeState::genesis(),
+                1,
+                100,
+                0,
+                &mut summary,
+            ),
+            Err(BlockIngestError::InvalidFeeClass { reason, .. }) if reason.contains("authorization")
+        ));
     }
 
     #[test]

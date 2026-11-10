@@ -1003,10 +1003,12 @@ typedef struct FfiFeeParams {
   bool has_headroom_blocks;
   uint64_t headroom_blocks;
   /**
-   * Private: the owned private account paying every in-proof fee, else each send picks its
-   * payer.
+   * Privacy-preserving: the account paying every fee, else each send picks its payer. An owned
+   * private account pays inside the proof; with `payer_is_public`, a public account the
+   * transaction already signs with declares the fee.
    */
   bool has_payer;
+  bool payer_is_public;
   FfiAccountId payer;
   /**
    * Private: the public account the surplus is refunded to, else the payer's alias. Any
