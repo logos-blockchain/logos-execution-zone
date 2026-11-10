@@ -1123,9 +1123,6 @@ pub fn spawn_standalone_bedrock_actor(
 
     let mut storage = MockStorageActor::default();
     storage
-        .expect_handle_get_zone_anchor()
-        .returning(|_msg, _ctx| Ok(None));
-    storage
         .expect_handle_get_zone_checkpoint()
         .returning(|_msg, _ctx| Ok(None));
     let storage_ref = MockStorageActor::spawn(storage);

@@ -665,6 +665,9 @@ fn bedrock_actor_args(
     mock.expect_handle_check_channel_exists()
         .returning(|_msg, _ctx| Ok(false));
 
+    mock.expect_handle_follow_channel()
+        .returning(|_msg, _ctx| Ok(()));
+
     mock.expect_handle_get_channel_tip_slot()
         .returning(|_msg, _ctx| Ok(Some(Slot::from(0))));
 

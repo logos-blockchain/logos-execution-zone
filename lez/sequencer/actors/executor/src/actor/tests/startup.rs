@@ -195,6 +195,9 @@ async fn an_empty_store_does_not_create_a_channel_that_is_only_configured() {
                 // Any creation attempt is an unexpected call, failing the start with a panic.
                 let mut bedrock = MockBedrockActor::default();
                 bedrock
+                    .expect_handle_follow_channel()
+                    .returning(|_msg, _ctx| Ok(()));
+                bedrock
                     .expect_handle_get_channel_tip_slot()
                     .returning(|_msg, _ctx| Ok(Some(Slot::from(5))));
                 bedrock
@@ -335,6 +338,42 @@ async fn an_empty_chain_bootstraps_until_a_block_finalizes() -> Result<()> {
         matches!(online, ExecutorStatus::Online { height: 1, .. }),
         "{online:?}"
     );
+    Ok(())
+}
+
+/// The executor follows its channel from the anchor it stored, so a restart resumes the finalized
+/// history where the replay left off.
+#[test]
+async fn the_channel_is_followed_from_the_stored_anchor() -> Result<()> {
+    let (config, _home) = sequencer_config();
+    let channel_id = config.bedrock_config.channel_id;
+    let genesis = genesis();
+    let channel = CannedChannel {
+        tip_slot: Some(Slot::from(10)),
+        tip: Some(mock_msg_of(&genesis)),
+        ..CannedChannel::absent()
+    }
+    .share();
+    let store = SharedStore::default();
+
+    {
+        let executor = start(&config, &store, &channel).await?;
+        executor
+            .ask(ChannelEvent {
+                channel_id,
+                event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&genesis, 10))),
+            })
+            .await?;
+        executor.ask(finalized_up_to(channel_id, 10)).await?;
+        executor.stop_gracefully().await?;
+        executor.wait_for_shutdown().await;
+    }
+    let anchor = store.lock().anchor;
+    assert!(anchor.is_some(), "the replay stores an anchor");
+
+    let _executor = start(&config, &store, &channel).await?;
+
+    assert_eq!(channel.lock().follows, vec![None, anchor]);
     Ok(())
 }
 

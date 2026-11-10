@@ -19,10 +19,10 @@ use crate::{
     error::Error,
     protocol::{
         AccreditedKeys, ChangeChannelConfig, ChannelId, ChannelReadStream, ChannelSeq,
-        CheckChannelExists, CheckIsOurTurn, CreateChannel, GetAccreditedKeys, GetChannelNotes,
-        GetChannelTipMessageId, GetChannelTipSlot, InitializeChannelPublisher, MsgId, NoteId,
-        PrepareConfig, PreparePin, PreparedConfig, PreparedPin, PublishBlock, PublishOutcome,
-        PublishPin, ReadChannel, Slot,
+        CheckChannelExists, CheckIsOurTurn, CreateChannel, FollowChannel, GetAccreditedKeys,
+        GetChannelNotes, GetChannelTipMessageId, GetChannelTipSlot, InitializeChannelPublisher,
+        MsgId, NoteId, PrepareConfig, PreparePin, PreparedConfig, PreparedPin, PublishBlock,
+        PublishOutcome, PublishPin, ReadChannel, Slot,
     },
 };
 
@@ -62,6 +62,12 @@ impl ShardingKey for Replace {
 
 mockall::mock! {
     pub BedrockActor {
+        pub fn handle_follow_channel(
+            &mut self,
+            msg: FollowChannel,
+            ctx: &mut Context<Self, Result<()>>
+        ) -> Result<()>;
+
         pub fn handle_initialize_channel_publisher(
             &mut self,
             msg: InitializeChannelPublisher,
@@ -184,6 +190,18 @@ impl Message<Replace> for MockBedrockActor {
     ) -> Self::Reply {
         let old_mock = std::mem::replace(self, mock);
         ReplaceReply { old_mock }
+    }
+}
+
+impl Message<FollowChannel> for MockBedrockActor {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        msg: FollowChannel,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_follow_channel(msg, ctx)
     }
 }
 

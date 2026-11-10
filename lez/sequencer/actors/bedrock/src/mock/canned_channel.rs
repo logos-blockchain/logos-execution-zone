@@ -8,6 +8,7 @@ use std::{
 use anyhow::anyhow;
 use common::block::Block;
 use logos_blockchain_core::mantle::ledger::{Inputs, NoteId, Utxo};
+use sequencer_storage_actor::protocol::ZoneAnchorRecord;
 
 use super::MockBedrockActor;
 use crate::{
@@ -49,6 +50,9 @@ pub struct CannedChannel {
     pub seq: u64,
     /// [`InitializeChannelPublisher::replayed_up_to`] of the last publisher initialized.
     pub replayed_up_to: Option<Slot>,
+    /// [`FollowChannel::anchor`](crate::protocol::FollowChannel::anchor) of every follow, in
+    /// order.
+    pub follows: Vec<Option<ZoneAnchorRecord>>,
 }
 
 impl CannedChannel {
@@ -97,6 +101,13 @@ impl SharedChannel {
                     Ok(Some(ChannelSeq::mocked(channel.seq)))
                 }
             });
+        mock.expect_handle_follow_channel().returning({
+            let channel = self.clone();
+            move |msg, _ctx| {
+                channel.lock().follows.push(msg.anchor);
+                Ok(())
+            }
+        });
         mock.expect_handle_check_channel_exists().returning({
             let channel = self.clone();
             move |_msg, _ctx| Ok(channel.lock().tip_slot.is_some())

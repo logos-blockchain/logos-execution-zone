@@ -131,6 +131,9 @@ fn transfer_to(recipient: AccountId) -> NativeMessage {
 fn prepare_mock_bedrock_on_genesis(_channel_id: &ChannelId) -> MockBedrockActor {
     let mut mock_bedrock = MockBedrockActor::default();
     mock_bedrock
+        .expect_handle_follow_channel()
+        .returning(|_msg, _ctx| Ok(()));
+    mock_bedrock
         .expect_handle_get_channel_tip_slot()
         .returning(|_msg, _ctx| Ok(Some(Slot::from(0))));
     mock_bedrock
@@ -604,6 +607,9 @@ async fn a_publish_expects_the_sequence_the_publisher_started_at() -> Result<()>
         spawn_bedrock_pool(move |_channel_id| {
             let mut mock_bedrock = MockBedrockActor::default();
             mock_bedrock
+                .expect_handle_follow_channel()
+                .returning(|_msg, _ctx| Ok(()));
+            mock_bedrock
                 .expect_handle_get_channel_tip_slot()
                 .returning(|_msg, _ctx| Ok(Some(Slot::from(0))));
             mock_bedrock
@@ -667,6 +673,9 @@ async fn spawn_supervised_on_genesis(
     let (publisher_init_tx, publisher_inits) = mpsc::unbounded_channel();
     let bedrock_pool_ref = spawn_bedrock_pool(move |_channel_id| {
         let mut mock_bedrock = MockBedrockActor::default();
+        mock_bedrock
+            .expect_handle_follow_channel()
+            .returning(|_msg, _ctx| Ok(()));
         mock_bedrock
             .expect_handle_get_channel_tip_slot()
             .returning(|_msg, _ctx| Ok(Some(Slot::from(0))));

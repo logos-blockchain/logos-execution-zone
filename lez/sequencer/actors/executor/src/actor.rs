@@ -24,7 +24,7 @@ use lee_core::{
     program::Publication,
 };
 use log::{debug, warn};
-use sequencer_actors_common::Reply;
+use sequencer_actors_common::{Reply, SendErrorExt};
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
     protocol::{ChannelEvent, ChannelEventKind, Ed25519Key, PublisherEvent},
@@ -162,6 +162,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> kameo::Actor for ExecutorActor<
         if !bedrock_started {
             return Err(Error::BedrockActorStartFailed);
         }
+        let anchor = args
+            .storage_ref
+            .ask(sequencer_storage_actor::protocol::GetZoneAnchor)
+            .await?;
+        bedrock_pool_ref
+            .ask(sequencer_bedrock_actor::protocol::FollowChannel { channel_id, anchor })
+            .await
+            .map_err(SendErrorExt::flatten)?;
 
         let storage_ref = args.storage_ref.clone();
         let state = State::initialize(args).await?;

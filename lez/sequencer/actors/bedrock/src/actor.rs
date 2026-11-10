@@ -22,10 +22,7 @@ use logos_blockchain_zone_sdk::{
     adapter::{Node as _, NodeHttpClient},
     sequencer::{InscriptionInfo, PendingTx},
 };
-use sequencer_storage_actor::{
-    StorageActorTrait,
-    protocol::{GetZoneAnchor, GetZoneCheckpoint},
-};
+use sequencer_storage_actor::{StorageActorTrait, protocol::GetZoneCheckpoint};
 use tokio::select;
 
 #[cfg(feature = "test-utils")]
@@ -36,10 +33,10 @@ use crate::{
     protocol::{
         AccreditedKeys, ChangeChannelConfig, ChannelEvent, ChannelId, ChannelReadStream,
         ChannelSeq, CheckChannelExists, CheckIsOurTurn, CreateChannel, Ed25519PublicKey,
-        GetAccreditedKeys, GetChannelNotes, GetChannelTipMessageId, GetChannelTipSlot,
-        InitializeChannelPublisher, LiveChannelConfig, MsgId, PrepareConfig, PreparePin,
-        PreparedConfig, PreparedPin, PublishBlock, PublishOutcome, PublishPin, ReadChannel, Slot,
-        UnverifiedEd25519PublicKey,
+        FollowChannel, GetAccreditedKeys, GetChannelNotes, GetChannelTipMessageId,
+        GetChannelTipSlot, InitializeChannelPublisher, LiveChannelConfig, MsgId, PrepareConfig,
+        PreparePin, PreparedConfig, PreparedPin, PublishBlock, PublishOutcome, PublishPin,
+        ReadChannel, Slot, UnverifiedEd25519PublicKey,
     },
 };
 
@@ -68,14 +65,15 @@ pub struct Args<S: StorageActorTrait> {
 /// message, otherwise [`Error::ChannelPublisherIsNotInitialized`] will be returned.
 ///
 /// [`BedrockActor`] will post [`ChannelEvent`]s to the provided broker using the following topics:
-/// - `channel/<channel_id>/finalized_block`: for
-///   [`ChannelEventKind::FinalizedBlock`](crate::protocol::ChannelEventKind::FinalizedBlock).
-/// - `channel/<channel_id>/finalized_deposit`: for
-///   [`ChannelEventKind::FinalizedDeposit`](crate::protocol::ChannelEventKind::FinalizedDeposit).
-/// - `channel/<channel_id>/finalized_withdrawal`: for
-///   [`ChannelEventKind::FinalizedWithdrawal`](crate::protocol::ChannelEventKind::FinalizedWithdrawal).
-/// - `channel/<channel_id>/finalized_up_to`: for
-///   [`ChannelEventKind::FinalizedUpTo`](crate::protocol::ChannelEventKind::FinalizedUpTo).
+/// - If the channel is followed with [`FollowChannel`]:
+///   - `channel/<channel_id>/finalized_block`: for
+///     [`ChannelEventKind::FinalizedBlock`](crate::protocol::ChannelEventKind::FinalizedBlock).
+///   - `channel/<channel_id>/finalized_deposit`: for
+///     [`ChannelEventKind::FinalizedDeposit`](crate::protocol::ChannelEventKind::FinalizedDeposit).
+///   - `channel/<channel_id>/finalized_withdrawal`: for
+///     [`ChannelEventKind::FinalizedWithdrawal`](crate::protocol::ChannelEventKind::FinalizedWithdrawal).
+///   - `channel/<channel_id>/finalized_up_to`: for
+///     [`ChannelEventKind::FinalizedUpTo`](crate::protocol::ChannelEventKind::FinalizedUpTo).
 /// - If publisher was initialized with [`InitializeChannelPublisher`]:
 ///   - `channel/<channel_id>/publisher/update`: for
 ///     [`PublisherEvent::Update`](crate::protocol::PublisherEvent::Update)
@@ -89,7 +87,8 @@ pub struct BedrockActor<S: StorageActorTrait> {
     channel_id: ChannelId,
     backfill_batch_slots: NonZero<u64>,
     node: TimeoutNode<NodeHttpClient>,
-    node_stream: node_stream::NodeStream,
+    /// [`Some`] after [`FollowChannel`] has been handled.
+    node_stream: Option<node_stream::NodeStream>,
     /// [`Some`] after [`InitializeChannelPublisher`] has been handled.
     publisher: Option<publisher::Publisher>,
     broker_ref: ActorRef<Broker<ChannelEvent>>,
@@ -123,7 +122,6 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
             broker_ref,
             backfill_batch_slots,
         } = args;
-        let anchor = storage_ref.ask(GetZoneAnchor).await?;
 
         let node = TimeoutNode::new(NodeHttpClient::new(
             CommonHttpClient::new(basic_auth),
@@ -132,14 +130,7 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
 
         Ok(Self {
             channel_id,
-            node_stream: node_stream::NodeStream::new(
-                node.clone(),
-                channel_id,
-                anchor,
-                broker_ref.clone(),
-                backfill_batch_slots,
-            )
-            .await?,
+            node_stream: None,
             node,
             publisher: None,
             broker_ref,
@@ -159,8 +150,8 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
         )]
         loop {
             select! {
-                Some(item) = self.node_stream.next_item() => {
-                    self.node_stream.on_item(item?).await?;
+                Some(Some(item)) = OptionFuture::from(self.node_stream.as_mut().map(node_stream::NodeStream::next_item)) => {
+                    self.node_stream.as_mut().expect("Channel is followed").on_item(item?).await?;
                 }
                 Some(event) = OptionFuture::from(self.publisher.as_mut().map(publisher::Publisher::next_event)) => {
                     self.publisher().expect("Publisher is initialized").on_event(event).await?;
@@ -170,6 +161,30 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
                 }
             }
         }
+    }
+}
+
+impl<S: StorageActorTrait> Message<FollowChannel> for BedrockActor<S> {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        FollowChannel { channel_id, anchor }: FollowChannel,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.assert_channel_id(channel_id);
+
+        self.node_stream = Some(
+            node_stream::NodeStream::new(
+                self.node.clone(),
+                channel_id,
+                anchor,
+                self.broker_ref.clone(),
+                self.backfill_batch_slots,
+            )
+            .await?,
+        );
+        Ok(())
     }
 }
 

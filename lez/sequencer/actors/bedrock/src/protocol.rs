@@ -207,6 +207,24 @@ pub struct LiveChannelConfig {
     pub transfer_threshold: u16,
 }
 
+/// Start following the channel's finalized history, publishing it to the `finalized_*` topics.
+///
+/// Nothing is published before. Following again restarts the history at the new `anchor`.
+#[derive(Debug, Clone)]
+pub struct FollowChannel {
+    pub channel_id: ChannelId,
+    /// The last entry the follower holds. [`None`] reads from genesis.
+    pub anchor: Option<sequencer_storage_actor::protocol::ZoneAnchorRecord>,
+}
+
+impl ShardingKey for FollowChannel {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
+
 /// Initialize the channel publisher. This will make using messages like [`PublishBlock`] possible.
 ///
 /// If no previous channel publisher exists, this will initialize it and return channel sequence it

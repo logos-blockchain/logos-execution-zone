@@ -19,7 +19,7 @@ use kameo::{
 use sequencer_bedrock_actor::{
     BedrockActor,
     protocol::{
-        ChannelEntry, ChannelEvent, ChannelEventKind, ChannelId, CheckIsOurTurn,
+        ChannelEntry, ChannelEvent, ChannelEventKind, ChannelId, CheckIsOurTurn, FollowChannel,
         GetChannelTipMessageId, InitializeChannelPublisher, MsgId, PublishRawInscription,
         PublisherEvent, ViewChange,
     },
@@ -172,9 +172,6 @@ async fn main() -> Result<()> {
 
     let mut storage = MockStorageActor::default();
     storage
-        .expect_handle_get_zone_anchor()
-        .returning(|_msg, _ctx| Ok(None));
-    storage
         .expect_handle_get_zone_checkpoint()
         .returning(|_msg, _ctx| Ok(None));
     let storage_ref = MockStorageActor::spawn(storage);
@@ -187,6 +184,13 @@ async fn main() -> Result<()> {
         broker_ref,
         backfill_batch_slots: config.bedrock_config.backfill_batch_slots,
     });
+    bedrock_ref
+        .ask(FollowChannel {
+            channel_id,
+            anchor: None,
+        })
+        .await
+        .context("Failed to follow the channel")?;
     bedrock_ref
         .ask(InitializeChannelPublisher {
             channel_id,
