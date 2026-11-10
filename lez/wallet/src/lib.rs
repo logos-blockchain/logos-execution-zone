@@ -1771,6 +1771,10 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         let payer = acc_manager
             .private_fee_payer_account_id(
                 // The transaction is measured once its payer is known; its proof bounds it below.
+                //
+                // TODO: An account holding less than the measured reserve can be chosen over a
+                // richer one; measuring before choosing would fix that, as the size does not
+                // depend on which of these accounts pays.
                 self.reserve_pricing(&quote, cycles, fee_core::market::PROOF_BYTES)
                     .headroom_reserve,
             )
