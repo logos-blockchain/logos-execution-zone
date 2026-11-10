@@ -1540,38 +1540,6 @@ struct LastBlockIdResult sequencer_ffi_query_last_block(const struct SequencerSe
 struct ExecutorStatusResult sequencer_ffi_query_executor_status(const struct SequencerServiceFFI *sequencer);
 
 /**
- * Query the sequencer's current sync status as a JSON C-string.
- *
- * The JSON schema is owned by `sequencer_core` (`SequencerStatus`): an object with
- * `state` (`Starting`/`Syncing`/`CaughtUp`/`Error`/`Stalled`/`Halted`),
- * `indexed_block_id`, `last_error`, `stall_reason`, `cross_zone_halt`, and
- * `cross_zone_peers`. Each peer entry's `health` is one of
- * `Live`/`Lagging`/`Holed`/`Suspended`/`Halted`; treat a string you do not
- * know as not known healthy. Lets a client distinguish "still catching up"
- * from "something went wrong".
- *
- * Not supporded yet.
- *
- * TODO: Add support. Needs database modifications.
- *
- * # Arguments
- *
- * - `sequencer`: A pointer to the [`SequencerServiceFFI`] instance to be queried.
- *
- * # Returns
- *
- * A heap-allocated, null-terminated JSON string that the caller MUST free with
- * `free_cstring`. Returns null on error (null `sequencer` pointer or a
- * serialization failure).
- *
- * # Safety
- *
- * The caller must ensure that:
- * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
- */
-char *sequencer_ffi_query_status(const struct SequencerServiceFFI *sequencer);
-
-/**
  * Query the block by id from sequencer.
  *
  * # Arguments
