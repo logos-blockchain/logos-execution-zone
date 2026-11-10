@@ -340,7 +340,7 @@ mod tests {
         let bytes = borsh::to_vec(block).expect("serialize");
         ZoneMessage::Block(ZoneBlock {
             id: MsgId::from([0_u8; 32]),
-            data: Inscription::new_unchecked(bytes.clone()),
+            data: Inscription::new_unchecked(bytes),
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
         })
     }

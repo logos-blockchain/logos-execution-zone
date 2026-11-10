@@ -380,7 +380,7 @@ fn channel_message(block: &Block, slot: u64) -> (ZoneMessage, Slot) {
     let bytes = borsh::to_vec(block).expect("block serializes");
     let message = ZoneMessage::Block(ZoneBlock {
         id: MsgId::from(block.header.hash.0),
-        data: Inscription::new_unchecked(bytes.to_vec()),
+        data: Inscription::new_unchecked(bytes),
         signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
     });
     (message, Slot::from(slot))
