@@ -52,6 +52,7 @@ members = [
   "lez/programs/fee/core",
   "lez/programs/cross_zone_marker",
   "lez/programs/cross_zone_emission_core",
+  "lez/programs/cross_zone_receiver_core",
   "lez/programs/cross_zone_inbox",
   "lez/programs/cross_zone_outbox",
   "lez/programs/bridge_lock",
@@ -127,6 +128,7 @@ bridge_core = { path = "lez/programs/bridge/core" }
 cross_zone_inbox_core = { path = "lez/programs/cross_zone_inbox/core" }
 cross_zone_outbox_core = { path = "lez/programs/cross_zone_outbox/core" }
 cross_zone_emission_core = { path = "lez/programs/cross_zone_emission_core" }
+cross_zone_receiver_core = { path = "lez/programs/cross_zone_receiver_core" }
 bridge_lock_core = { path = "lez/programs/bridge_lock/core" }
 wrapped_token_core = { path = "lez/programs/wrapped_token/core" }
 ping_core = { path = "lez/programs/ping_core" }

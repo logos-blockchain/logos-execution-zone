@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     fmt::{self, Display, Formatter},
     num::{NonZeroU32, NonZeroU64},
     sync::{
@@ -22,13 +22,14 @@ use common::{
 use cross_zone::{
     CommitteeFloorState, EmissionSource, FloorVerdict, Link, OffChain, StallState, alerts_at,
     build_dispatch_from_emission, equivocation_report, extract_emission, link_to_tip,
-    screen_peer_block,
+    peer_emitter_set, screen_peer_block,
 };
 use cross_zone_inbox_core::{
     CrossZoneMessage, Message as InboxMessage, MessageKey, ZoneId, message_key,
 };
 use futures::{Stream, StreamExt as _};
 use lee::GENESIS_BLOCK_ID;
+use lee_core::account::AccountId;
 use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
@@ -742,6 +743,9 @@ pub struct CrossZoneVerifier {
     /// One-shot refetches attempted, successful or not. The retry cadence
     /// line in [`Self::wait_for_peer_block`] reports the running total.
     refetch_attempts: Arc<AtomicU64>,
+    /// Registered emitters per peer. Must match the watcher's set, or
+    /// re-derivation disagrees with it and ingestion halts as forged.
+    emitters: Arc<HashMap<ZoneId, BTreeSet<AccountId>>>,
     seen: Arc<RwLock<HashSet<SeenKey>>>,
     watch: PeerWatch,
 }
@@ -760,8 +764,10 @@ impl CrossZoneVerifier {
         let peers = PeerBlocks::new(config.peer_block_cache_window).with_genesis_pins(genesis_pins);
         let watch = PeerWatch::default();
         let mut refetch_clients = HashMap::new();
+        let mut emitters = HashMap::new();
 
         for peer in &cross_zone.peers {
+            emitters.insert(peer.channel_id, peer_emitter_set(peer));
             let node = TimeoutNode::new(NodeHttpClient::new(
                 CommonHttpClient::new(config.bedrock_config.auth.clone().map(Into::into)),
                 config.bedrock_config.addr.clone(),
@@ -793,6 +799,7 @@ impl CrossZoneVerifier {
             peers,
             refetch_clients,
             refetch_attempts: Arc::new(AtomicU64::new(0)),
+            emitters: Arc::new(emitters),
             seen: Arc::new(RwLock::new(HashSet::new())),
             watch,
         })
@@ -921,6 +928,7 @@ impl CrossZoneVerifier {
         msg: &CrossZoneMessage,
         local_slot: u64,
     ) -> Result<lee::PublicTransaction, CrossZoneVerifyError> {
+        static NO_EMITTERS: BTreeSet<AccountId> = BTreeSet::new();
         let peer_block = self
             .wait_for_peer_block(msg.src_zone, msg.src_block_id, local_slot)
             .await
@@ -957,7 +965,8 @@ impl CrossZoneVerifier {
                 "peer transaction at src_tx_index is not a recognized emitter".to_owned(),
             )
         };
-        let emission = extract_emission(emission_tx).ok_or_else(not_an_emitter)?;
+        let peer_emitters = self.emitters.get(&msg.src_zone).unwrap_or(&NO_EMITTERS);
+        let emission = extract_emission(emission_tx, peer_emitters).ok_or_else(not_an_emitter)?;
 
         if emission.target_zone != self.self_zone {
             return Err(forged(
@@ -1468,7 +1477,7 @@ where
 #[cfg(test)]
 mod tests {
     use common::{HashType, test_utils::produce_dummy_block};
-    use cross_zone::test_utils::{linked_chain_to, ping_emission};
+    use cross_zone::test_utils::{generic_emission, linked_chain_to, ping_emission};
     use futures::stream;
     use lee::Actor;
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
@@ -1485,6 +1494,10 @@ mod tests {
     const _: () = assert!(PEER_BLOCK_ID >= GENESIS_BLOCK_ID);
     /// The slot tests record blocks under when its value does not matter.
     const READ_SLOT: Slot = Slot::new(0);
+    /// A program registered for `PEER_ZONE` under the generic contract.
+    const GENERIC_EMITTER: AccountId = AccountId::new([8; 32]);
+    /// Where the generic emission tests aim their deliveries.
+    const GENERIC_TARGET: AccountId = AccountId::new([9; 32]);
 
     fn verifier() -> CrossZoneVerifier {
         CrossZoneVerifier {
@@ -1492,6 +1505,7 @@ mod tests {
             peers: PeerBlocks::default(),
             refetch_clients: HashMap::new(),
             refetch_attempts: Arc::new(AtomicU64::new(0)),
+            emitters: Arc::new(HashMap::new()),
             seen: Arc::new(RwLock::new(HashSet::new())),
             watch: PeerWatch::default(),
         }
@@ -1607,6 +1621,85 @@ mod tests {
             ],
             payload.to_vec(),
         ))
+    }
+
+    /// A verifier registering [`GENERIC_EMITTER`] for `PEER_ZONE`.
+    fn verifier_with_generic_emitter() -> CrossZoneVerifier {
+        CrossZoneVerifier {
+            emitters: Arc::new(HashMap::from([(
+                PEER_ZONE,
+                BTreeSet::from([GENERIC_EMITTER]),
+            )])),
+            ..verifier()
+        }
+    }
+
+    /// A run whose `PEER_BLOCK_ID` block carries a generic-contract emission of
+    /// `payload` from [`GENERIC_EMITTER`].
+    fn generic_peer_chain(payload: &[u8]) -> Vec<Block> {
+        linked_chain_to(PEER_BLOCK_ID, |block_id| {
+            vec![if block_id == PEER_BLOCK_ID {
+                generic_emission(GENERIC_EMITTER, SELF_ZONE, GENERIC_TARGET, payload)
+            } else {
+                emission(b"hi")
+            }]
+        })
+    }
+
+    /// The dispatch a watcher would inject for the [`generic_peer_chain`]
+    /// emission of `payload`.
+    fn generic_dispatch(payload: &[u8]) -> LeeTransaction {
+        let src_block_hash = generic_peer_chain(payload)
+            .last()
+            .expect("chain reaches PEER_BLOCK_ID")
+            .recompute_hash()
+            .0;
+        LeeTransaction::Public(build_dispatch_from_emission(
+            &EmissionSource {
+                src_zone: PEER_ZONE,
+                src_block_id: PEER_BLOCK_ID,
+                src_block_hash,
+                src_tx_index: 0,
+                src_account_id: GENERIC_EMITTER,
+            },
+            GENERIC_TARGET,
+            &[],
+            payload.to_vec(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn verifies_a_dispatch_from_a_registered_generic_emitter() {
+        let verifier = verifier_with_generic_emitter();
+        cache_chain(&verifier, generic_peer_chain(b"hi")).await;
+
+        let block = produce_dummy_block(9, None, vec![generic_dispatch(b"hi")]);
+        verifier
+            .verify_block(&block, Slot::from(0))
+            .await
+            .expect("a registered emitter's dispatch re-derives");
+    }
+
+    #[tokio::test]
+    async fn rejects_a_dispatch_whose_emitter_is_not_registered() {
+        // The same peer chain and dispatch, but this verifier registers no
+        // emitters for the zone, so re-derivation does not read the emission.
+        let verifier = verifier();
+        cache_chain(&verifier, generic_peer_chain(b"hi")).await;
+
+        let block = produce_dummy_block(9, None, vec![generic_dispatch(b"hi")]);
+        let err = verifier
+            .verify_block(&block, Slot::from(0))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, CrossZoneVerifyError::Forged(_)),
+            "an unregistered emitter's dispatch is forged, not transient: {err}"
+        );
+        assert!(
+            err.to_string().contains("not a recognized emitter"),
+            "rejected for the wrong reason: {err}"
+        );
     }
 
     #[tokio::test]

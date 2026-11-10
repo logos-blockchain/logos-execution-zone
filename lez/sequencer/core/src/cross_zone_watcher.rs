@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::BTreeSet, time::Duration};
 
 use anyhow::{Context as _, Result};
 use chain_state::{
@@ -13,11 +13,12 @@ use common::{
 use cross_zone::{
     CommitteeFloorState, EmissionSource, FloorVerdict, Link, StallState, alerts_at,
     build_dispatch_from_emission, equivocation_report, extract_emission, is_sequencer_only_program,
-    link_to_tip, screen_peer_block,
+    link_to_tip, peer_emitter_set, screen_peer_block,
 };
 use cross_zone_inbox_core::message_key;
 use futures::{Stream, StreamExt as _};
 use kameo::actor::ActorRef;
+use lee_core::account::AccountId;
 use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
@@ -47,6 +48,9 @@ struct PeerContext {
     min_committee_size: u32,
     /// Pin for the peer's genesis hash; `None` anchors on the first read.
     genesis_hash: Option<HashType>,
+    /// Registered emitters on this peer, recognized through the generic
+    /// contract alongside the builtin emitters.
+    emitters: BTreeSet<AccountId>,
     /// The watcher's own handle for the committee read; the connection inside
     /// `ZoneIndexer` is consumed by the message stream.
     node: TimeoutNode<NodeHttpClient>,
@@ -251,6 +255,7 @@ pub fn spawn_watchers<S: StorageActorTrait>(
                 self_zone,
                 min_committee_size: peer.min_committee_size,
                 genesis_hash: peer.genesis_hash,
+                emitters: peer_emitter_set(&peer),
                 node: floor_node,
             },
             poll_interval,
@@ -673,7 +678,7 @@ async fn record_block_deliveries<S: StorageActorTrait>(
         let LeeTransaction::Public(public_tx) = tx else {
             continue;
         };
-        let Some(emission) = extract_emission(public_tx) else {
+        let Some(emission) = extract_emission(public_tx, &peer.emitters) else {
             continue;
         };
 
@@ -796,6 +801,7 @@ mod tests {
             self_zone: SELF_ZONE,
             min_committee_size: 0,
             genesis_hash: None,
+            emitters: BTreeSet::new(),
             node: TimeoutNode::new(NodeHttpClient::new(
                 CommonHttpClient::new(None),
                 "http://127.0.0.1:0".parse().expect("valid url"),
@@ -1192,6 +1198,81 @@ mod tests {
             recorded_keys(&storage_ref).await.len(),
             1,
             "the watcher records it and lets the target refuse it"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_registered_generic_emitter_gets_its_delivery_recorded() {
+        let emitter = lee_core::account::AccountId::new([8; 32]);
+        let peer = PeerContext {
+            emitters: BTreeSet::from([emitter]),
+            ..peer_context()
+        };
+        let (_dir, storage_ref) = store().await;
+        let mut cursor = None;
+        let mut tip = None;
+
+        let block = produce_dummy_block(
+            1,
+            None,
+            vec![cross_zone::test_utils::generic_emission(
+                emitter,
+                SELF_ZONE,
+                programs::ping_receiver_account_id(),
+                b"hi",
+            )],
+        );
+        let outcome = consume_peer_stream(
+            stream::iter(vec![block_msg(&block, 0)]),
+            &peer,
+            &storage_ref,
+            &mut cursor,
+            &mut tip,
+        )
+        .await;
+
+        assert_eq!(outcome, PassOutcome::Drained);
+        assert_eq!(
+            recorded_keys(&storage_ref).await,
+            vec![message_key(&PEER_ZONE, 1, 0)],
+            "a registered emitter's emission is recorded like a builtin's"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unregistered_generic_emitter_is_never_recorded() {
+        let emitter = lee_core::account::AccountId::new([8; 32]);
+        let (_dir, storage_ref) = store().await;
+        let mut cursor = None;
+        let mut tip = None;
+
+        let block = produce_dummy_block(
+            1,
+            None,
+            vec![cross_zone::test_utils::generic_emission(
+                emitter,
+                SELF_ZONE,
+                programs::ping_receiver_account_id(),
+                b"hi",
+            )],
+        );
+        let outcome = consume_peer_stream(
+            stream::iter(vec![block_msg(&block, 0)]),
+            &peer_context(),
+            &storage_ref,
+            &mut cursor,
+            &mut tip,
+        )
+        .await;
+
+        assert_eq!(
+            outcome,
+            PassOutcome::Drained,
+            "a transaction the watcher does not read is not a failure"
+        );
+        assert!(
+            recorded_keys(&storage_ref).await.is_empty(),
+            "an unregistered emitter's transaction must not be recorded"
         );
     }
 

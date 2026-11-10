@@ -63,3 +63,13 @@ pub const fn live_payout() -> Program {
 
     Program::new_unchecked(LIVE_PAYOUT_ID, Cow::Borrowed(LIVE_PAYOUT_ELF))
 }
+
+#[must_use]
+#[inline]
+pub const fn zone_chat() -> Program {
+    use guests::{ZONE_CHAT_ELF, ZONE_CHAT_ID, ZONE_CHAT_PATH};
+
+    let _unused = ZONE_CHAT_PATH;
+
+    Program::new_unchecked(ZONE_CHAT_ID, Cow::Borrowed(ZONE_CHAT_ELF))
+}

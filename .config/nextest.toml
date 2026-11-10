@@ -10,9 +10,11 @@ fail-fast = false
 status-level = "slow"
 
 # Each slashing test runs a Bedrock node and three sequencers, so they run one at a time.
+# The any-program test deploys a guest through the loader before its delivery,
+# so it holds a node for several finality-bound minutes too.
 [test-groups]
 slashing = { max-threads = 1 }
 
 [[profile.default.overrides]]
-filter = 'binary(slashing)'
+filter = 'binary(slashing) + binary(cross_zone_any_program)'
 test-group = 'slashing'

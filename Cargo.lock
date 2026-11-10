@@ -2274,6 +2274,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cross_zone_receiver_core"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "cross_zone_marker_core",
+ "lee_core",
+]
+
+[[package]]
 name = "crossbeam-channel"
 version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4931,6 +4940,7 @@ dependencies = [
  "bridge_lock_core",
  "common",
  "core_ffi",
+ "cross_zone",
  "cross_zone_inbox_core",
  "cross_zone_outbox_core",
  "cucumber",
@@ -9366,6 +9376,7 @@ version = "0.1.0"
 dependencies = [
  "borsh",
  "cross_zone_emission_core",
+ "cross_zone_receiver_core",
  "lee_core",
  "risc0-zkvm",
 ]
@@ -12632,6 +12643,8 @@ name = "test_guest_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "cross_zone_emission_core",
+ "cross_zone_receiver_core",
  "lee_core",
  "risc0-zkvm",
 ]
@@ -12657,6 +12670,7 @@ dependencies = [
 name = "test_program_guests"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "clock_core",
  "lee_core",
  "risc0-zkvm",
