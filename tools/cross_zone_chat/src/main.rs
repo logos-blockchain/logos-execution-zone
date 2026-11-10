@@ -54,17 +54,17 @@ use axum::{
     routing::{get, post},
 };
 use common::{block::BedrockStatus, transaction::LeeTransaction};
-use cross_zone_inbox_core::{
-    CrossZoneConfig, CrossZonePeer, CrossZoneRoute, Message as InboxMessage, ZoneId,
-};
+use cross_zone::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
+use cross_zone_inbox_core::{Message as InboxMessage, ZoneId};
 use cross_zone_outbox_core::{outbox_pda, outbox_pda_seed};
 use lee::{
     AccountId, Actor, PublicAccountEvidence, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
+use lee_core::account::Nonce;
 use log::{info, warn};
 use ping_core::{
-    ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id,
+    CrossZoneEmission, ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id,
     sender_config_account_id,
 };
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
@@ -73,6 +73,7 @@ use test_fixtures::{
     config::{self, SequencerPartialConfig, UrlProtocol, bedrock_channel_id, bedrock_channel_id_b},
     setup::{SequencerSetup, setup_bedrock_node},
 };
+use testnet_initial_state::{PublicAccountPrivateInitialData, initial_pub_accounts_private_keys};
 
 const HTTP_PORT: u16 = 8088;
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -143,6 +144,10 @@ struct ZoneRuntime {
     /// with whatever the chain already holds. Seeded from a free slot found by
     /// [`next_free_ordinal`], then incremented per send.
     ordinal: AtomicU32,
+    /// Next payer nonce, seeded from the chain at startup and advanced only on
+    /// a successful submit. Held across the submit, so two sends in one block
+    /// interval cannot take the same nonce.
+    payer_nonce: tokio::sync::Mutex<u64>,
 }
 
 struct AppState {
@@ -327,16 +332,22 @@ async fn main() -> Result<()> {
         .context("Failed to find a free outbox ordinal for zone B")?;
     info!("Outbox ordinals start at A={ordinal_a} B={ordinal_b}");
 
+    let payer_id = initial_pub_accounts_private_keys()[0].account_id;
+    let payer_nonce_a = payer_nonce(&client_a, payer_id).await?;
+    let payer_nonce_b = payer_nonce(&client_b, payer_id).await?;
+
     let state = Arc::new(AppState {
         zone_a: ZoneRuntime {
             other_zone: zone_b,
             client: client_a,
             ordinal: AtomicU32::new(ordinal_a),
+            payer_nonce: tokio::sync::Mutex::new(payer_nonce_a),
         },
         zone_b: ZoneRuntime {
             other_zone: zone_a,
             client: client_b,
             ordinal: AtomicU32::new(ordinal_b),
+            payer_nonce: tokio::sync::Mutex::new(payer_nonce_b),
         },
         next_id: AtomicU64::new(1),
         messages: Mutex::new(Vec::new()),
@@ -377,6 +388,7 @@ fn watch_peer(peer: ZoneId, receiver_id: AccountId) -> CrossZoneConfig {
                 mint_cap: None,
             }],
             min_committee_size: 0,
+            genesis_hash: None,
         }],
         source_authority: None,
         source_governance: None,
@@ -389,6 +401,17 @@ fn sequencer_client(addr: SocketAddr) -> Result<SequencerClient> {
     SequencerClientBuilder::default()
         .build(url)
         .context("Failed to build sequencer client")
+}
+
+/// The payer's current nonce on this zone, the seed for the local counter.
+async fn payer_nonce(client: &SequencerClient, payer_id: AccountId) -> Result<u64> {
+    let nonce = client
+        .get_account(payer_id)
+        .await
+        .context("Failed to read the payer account")?
+        .unwrap_or_default()
+        .nonce;
+    u64::try_from(nonce.0).context("payer nonce exceeds u64")
 }
 
 /// A free outbox slot for this zone's `ping_sender` to start counting from: the
@@ -530,11 +553,11 @@ fn decode_inbox_text(message: &[u8]) -> Option<String> {
 
 /// Recovers the outbox ordinal from a `ping_sender::Send` tx's message.
 fn decode_send_ordinal(message: &[u8]) -> Option<u32> {
-    let SenderMessage::Send { ordinal, .. } = borsh::from_slice::<SenderMessage>(message).ok()?
+    let SenderMessage::Send { emission, .. } = borsh::from_slice::<SenderMessage>(message).ok()?
     else {
         return None;
     };
-    Some(ordinal)
+    Some(emission.ordinal)
 }
 
 /// Decodes a `ping_receiver::Record` payload (borsh bytes) to text.
@@ -547,9 +570,15 @@ fn decode_payload(payload: &[u8]) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// Builds the unsigned `ping_sender::Send` that carries `text` to `other_zone`,
-/// mirroring `integration_tests/tests/cross_zone_ping.rs`.
-fn build_send_tx(other_zone: ZoneId, ordinal: u32, text: &str) -> LeeTransaction {
+/// Builds the fee-paying `ping_sender::Send` that carries `text` to
+/// `other_zone`, mirroring `integration_tests/tests/cross_zone_ping.rs`.
+fn build_send_tx(
+    other_zone: ZoneId,
+    ordinal: u32,
+    text: &str,
+    payer: &PublicAccountPrivateInitialData,
+    payer_nonce: Nonce,
+) -> LeeTransaction {
     let receiver_id = programs::ping_receiver_account_id();
     let outbox_id = programs::cross_zone_outbox_account_id();
 
@@ -567,26 +596,32 @@ fn build_send_tx(other_zone: ZoneId, ordinal: u32, text: &str) -> LeeTransaction
     let outbox = Actor::new(slot.account_id(), outbox_id);
     let send = SenderMessage::Send {
         outbox,
-        target_zone: other_zone,
-        target_account_id: receiver_id,
-        target_accounts: vec![
-            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
-            Actor::new(ping_record_pda(receiver_id), receiver_id),
-        ],
-        payload,
-        ordinal,
+        emission: CrossZoneEmission {
+            target_zone: other_zone,
+            target_account_id: receiver_id,
+            target_accounts: vec![
+                Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+                Actor::new(ping_record_pda(receiver_id), receiver_id),
+            ],
+            payload,
+            ordinal,
+        },
     };
 
     let message = Message {
         admission_evidence: vec![slot],
-        ..Message::try_new(config, vec![config, outbox], BTreeMap::new(), send)
-            .expect("build ping_sender message")
+        ..Message::try_new_with_fees(
+            config,
+            vec![config, outbox],
+            BTreeMap::from([(payer.account_id, payer_nonce)]),
+            send,
+            common::test_utils::test_fee_declaration(payer.account_id),
+        )
+        .expect("build ping_sender message")
     };
 
-    LeeTransaction::Public(PublicTransaction::new(
-        message,
-        WitnessSet::from_raw_parts(vec![]),
-    ))
+    let witness_set = WitnessSet::for_message(&message, &[&payer.pub_sign_key]);
+    LeeTransaction::Public(PublicTransaction::new(message, witness_set))
 }
 
 async fn index() -> Html<&'static str> {
@@ -608,13 +643,22 @@ async fn send_handler(
     };
     let zone = state.zone(source_label).expect("zone runtime exists");
 
+    let mut next_nonce = zone.payer_nonce.lock().await;
     let ordinal = zone.ordinal.fetch_add(1, Ordering::SeqCst);
-    let tx = build_send_tx(zone.other_zone, ordinal, text);
-    let id = state.record_outbound(source_label, dest_label, ordinal, text.to_owned());
+    let payer = &initial_pub_accounts_private_keys()[0];
+    let tx = build_send_tx(
+        zone.other_zone,
+        ordinal,
+        text,
+        payer,
+        Nonce(u128::from(*next_nonce)),
+    );
     zone.client
         .send_transaction(tx)
         .await
         .map_err(|err| (StatusCode::BAD_GATEWAY, format!("submit failed: {err:#}")))?;
+    *next_nonce += 1;
+    let id = state.record_outbound(source_label, dest_label, ordinal, text.to_owned());
     Ok(Json(SendResponse { id }))
 }
 

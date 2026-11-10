@@ -2,7 +2,7 @@ use std::{path::Path, sync::Arc};
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
-pub use chain_state::{AcceptOutcome, BlockIngestError, StallReason};
+pub use chain_state::{AcceptOutcome, BlockIngestError, StallReason, timeout_node::TimeoutNode};
 use chain_state::{Anchor, ChainConsistency, zone_indexer::ZoneIndexer};
 use common::block::Block;
 // TODO: Remove after testnet
@@ -40,9 +40,9 @@ struct SlotProgress(Option<Slot>);
 
 #[derive(Clone)]
 pub struct IndexerCore {
-    pub zone_indexer: Arc<ZoneIndexer<NodeHttpClient>>,
+    pub zone_indexer: Arc<ZoneIndexer<TimeoutNode<NodeHttpClient>>>,
     /// Direct node handle for queries outside `ZoneIndexer`'s streaming API.
-    pub node: NodeHttpClient,
+    pub node: TimeoutNode<NodeHttpClient>,
     pub config: IndexerConfig,
     pub store: IndexerStore,
     /// Live ingestion status; updated by the ingest stream, read by `status`.
@@ -110,10 +110,10 @@ impl IndexerCore {
         let home = storage_dir.join(format!("rocksdb-{}", config.channel_id));
 
         let basic_auth = config.bedrock_config.auth.clone().map(Into::into);
-        let node = NodeHttpClient::new(
+        let node = TimeoutNode::new(NodeHttpClient::new(
             CommonHttpClient::new(basic_auth),
             config.bedrock_config.addr.clone(),
-        );
+        ));
         let zone_indexer = ZoneIndexer::new(config.channel_id, node.clone());
 
         // Option B verifier: re-derives each cross-zone dispatch from the peer's

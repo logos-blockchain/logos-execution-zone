@@ -67,9 +67,28 @@ impl FeeTxView {
 /// corrupt state it could wrap silently in release.
 #[must_use]
 pub fn fee_reserve(view: &FeeTxView, fee_state: &FeeState) -> Balance {
-    u128::from(view.gas_limit()) * u128::from(fee_state.base_fee_exec)
-        + u128::from(view.gas_stor()) * u128::from(fee_state.base_fee_stor)
-        + u128::from(view.tip())
+    fee_for(
+        view.gas_limit(),
+        view.gas_stor(),
+        view.tip(),
+        fee_state.base_fee_exec,
+        fee_state.base_fee_stor,
+    )
+}
+
+/// The fee of `gas_exec` execution and `gas_stor` storage gas at the given base fees, plus `tip`:
+/// `gas_exec·base_fee_exec + gas_stor·base_fee_stor + tip`, under [`fee_reserve`]'s bounds.
+#[must_use]
+pub fn fee_for(
+    gas_exec: Gas,
+    gas_stor: Gas,
+    tip: Fee,
+    base_fee_exec: Fee,
+    base_fee_stor: Fee,
+) -> Balance {
+    u128::from(gas_exec) * u128::from(base_fee_exec)
+        + u128::from(gas_stor) * u128::from(base_fee_stor)
+        + u128::from(tip)
 }
 
 /// The base fee actually owed after execution.
@@ -86,8 +105,13 @@ pub fn fee_actual_base(charged_cycles: Cycles, view: &FeeTxView, fee_state: &Fee
         FeeTxView::Public { gas_limit, .. } => charged_cycles.min(*gas_limit),
         FeeTxView::Private { .. } => market::PRIVATE_VERIFY_GAS,
     };
-    u128::from(gas_exec) * u128::from(fee_state.base_fee_exec)
-        + u128::from(view.gas_stor()) * u128::from(fee_state.base_fee_stor)
+    fee_for(
+        gas_exec,
+        view.gas_stor(),
+        0,
+        fee_state.base_fee_exec,
+        fee_state.base_fee_stor,
+    )
 }
 
 /// The base fee a private transaction owes at the given base fees:

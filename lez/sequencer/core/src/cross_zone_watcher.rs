@@ -1,7 +1,10 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use chain_state::zone_indexer::{ZoneIndexer, stop_at_read_error};
+use chain_state::{
+    timeout_node::TimeoutNode,
+    zone_indexer::{ZoneIndexer, stop_at_read_error},
+};
 use common::{
     HashType,
     block::{Block, PeerChainTip},
@@ -42,9 +45,11 @@ struct PeerContext {
     /// Below this live committee size the watcher suspends; 0 disables the
     /// floor and skips the committee read entirely.
     min_committee_size: u32,
+    /// Pin for the peer's genesis hash; `None` anchors on the first read.
+    genesis_hash: Option<HashType>,
     /// The watcher's own handle for the committee read; the connection inside
     /// `ZoneIndexer` is consumed by the message stream.
-    node: NodeHttpClient,
+    node: TimeoutNode<NodeHttpClient>,
 }
 
 /// Why one pass over a peer's stream ended.
@@ -182,6 +187,17 @@ async fn set_cross_zone_peer_floor<S: StorageActorTrait>(
     Ok(())
 }
 
+/// Says when a configured genesis pin cannot take effect: it is only checked
+/// when a chain tip is first established, and this watcher already holds one.
+fn warn_if_pin_unevaluated(peer: &PeerContext, tip: Option<&PeerChainTip>) {
+    if peer.genesis_hash.is_some() && tip.is_some() {
+        warn!(
+            "Watcher for peer {} has a genesis pin configured but is already anchored; the pin applies only if the watcher re-anchors.",
+            hex::encode(peer.peer_zone)
+        );
+    }
+}
+
 /// Drops the stored floor so the watcher reads `peer_zone`'s channel from the
 /// peer's genesis again.
 async fn clear_cross_zone_peer_floor<S: StorageActorTrait>(
@@ -216,10 +232,10 @@ pub fn spawn_watchers<S: StorageActorTrait>(
     let mut tasks = Vec::new();
 
     for peer in cross_zone.peers.clone() {
-        let node = NodeHttpClient::new(
+        let node = TimeoutNode::new(NodeHttpClient::new(
             CommonHttpClient::new(bedrock_config.auth.clone().map(Into::into)),
             bedrock_config.node_url.clone(),
-        );
+        ));
         // The indexer consumes `node` for its message stream; this clone is the
         // watcher's own handle for the committee-floor read.
         let floor_node = node.clone();
@@ -234,6 +250,7 @@ pub fn spawn_watchers<S: StorageActorTrait>(
                 peer_zone: peer.channel_id,
                 self_zone,
                 min_committee_size: peer.min_committee_size,
+                genesis_hash: peer.genesis_hash,
                 node: floor_node,
             },
             poll_interval,
@@ -249,7 +266,7 @@ pub fn spawn_watchers<S: StorageActorTrait>(
     reason = "the peer watcher runs for the lifetime of the sequencer process"
 )]
 async fn watch_peer<S: StorageActorTrait>(
-    zone_indexer: ZoneIndexer<NodeHttpClient>,
+    zone_indexer: ZoneIndexer<TimeoutNode<NodeHttpClient>>,
     peer: PeerContext,
     poll_interval: Duration,
     storage_ref: ActorRef<S>,
@@ -291,6 +308,7 @@ async fn watch_peer<S: StorageActorTrait>(
             return;
         }
     };
+    warn_if_pin_unevaluated(&peer, tip.as_ref());
     let resume = resume_from(tip, floor);
     if resume.clear_floor {
         error!(
@@ -431,7 +449,10 @@ async fn held_below_committee_floor(floor: &mut CommitteeFloorState, peer: &Peer
 /// failure or an absent channel, both unknown rather than zero. The indexer's
 /// verifier holds the twin of this helper; the policy folding it is
 /// [`CommitteeFloorState`].
-async fn peer_committee(node: &NodeHttpClient, peer_zone: [u8; 32]) -> Option<(usize, u64)> {
+async fn peer_committee(
+    node: &TimeoutNode<NodeHttpClient>,
+    peer_zone: [u8; 32],
+) -> Option<(usize, u64)> {
     let state = node
         .channel_state(ChannelId::from(peer_zone))
         .await
@@ -502,7 +523,9 @@ where
                 // treated as the end of the chain: the peer's own next honest
                 // block still links to the tip.
                 let link = match screen_peer_block(&block) {
-                    Ok(recomputed) => link_to_tip(tip.as_ref(), &block, recomputed),
+                    Ok(recomputed) => {
+                        link_to_tip(tip.as_ref(), &block, recomputed, peer.genesis_hash)
+                    }
                     Err(refusal) => {
                         skipped = skipped.saturating_add(1);
                         warn!(
@@ -643,6 +666,10 @@ async fn record_block_deliveries<S: StorageActorTrait>(
     // RocksDBIO::add_pending_cross_zone_dispatches.
     let mut deliveries = Vec::new();
     for (index, tx) in block.body.transactions.iter().enumerate() {
+        // Effects did not take; the verifier refuses the dispatch identically.
+        if block.body.is_reverted(index) {
+            continue;
+        }
         let LeeTransaction::Public(public_tx) = tx else {
             continue;
         };
@@ -748,6 +775,7 @@ mod tests {
     use cross_zone::test_utils::{linked_chain_to, ping_emission};
     use futures::stream;
     use kameo::actor::Spawn as _;
+    use lee::GENESIS_BLOCK_ID;
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
     use logos_blockchain_zone_sdk::{UnverifiedEd25519PublicKey, ZoneBlock};
     use sequencer_storage_actor::{
@@ -767,10 +795,11 @@ mod tests {
             peer_zone: PEER_ZONE,
             self_zone: SELF_ZONE,
             min_committee_size: 0,
-            node: NodeHttpClient::new(
+            genesis_hash: None,
+            node: TimeoutNode::new(NodeHttpClient::new(
                 CommonHttpClient::new(None),
                 "http://127.0.0.1:0".parse().expect("valid url"),
-            ),
+            )),
         }
     }
 
@@ -874,6 +903,18 @@ mod tests {
     /// A stream item carrying the peer's block `block_id`.
     fn peer_block_msg(block_id: u64, slot: u64) -> (ZoneMessage, Slot) {
         block_msg(&chain_block(block_id), slot)
+    }
+
+    /// A stream item carrying the peer's block `block_id`, its one emission reverted.
+    fn peer_block_msg_reverted(block_id: u64, slot: u64) -> (ZoneMessage, Slot) {
+        let prefix = chain_to(block_id.saturating_sub(1));
+        let block = common::test_utils::produce_dummy_block_with_reverted(
+            block_id,
+            prefix.last().map(|block| block.header.hash),
+            vec![emission()],
+            vec![0],
+        );
+        block_msg(&block, slot)
     }
 
     /// A stream item carrying a block whose one emission targets
@@ -1059,6 +1100,28 @@ mod tests {
         let mut expected = vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)];
         expected.sort_unstable();
         assert_eq!(recorded_keys(&storage_ref).await, expected);
+    }
+
+    #[tokio::test]
+    async fn a_reverted_emission_is_never_recorded() {
+        let (_dir, storage_ref) = store().await;
+        let mut cursor = None;
+        let mut tip = None;
+
+        let outcome = consume_peer_stream(
+            stream::iter(vec![peer_block_msg_reverted(1, 0)]),
+            &peer_context(),
+            &storage_ref,
+            &mut cursor,
+            &mut tip,
+        )
+        .await;
+
+        assert_eq!(outcome, PassOutcome::Drained);
+        assert!(
+            recorded_keys(&storage_ref).await.is_empty(),
+            "an emission whose transaction reverted must not be delivered"
+        );
     }
 
     #[tokio::test]
@@ -1562,6 +1625,50 @@ mod tests {
         );
         assert!(recorded_keys(&storage_ref).await.is_empty());
         assert_eq!(tip, None);
+    }
+
+    #[tokio::test]
+    async fn a_pinned_genesis_anchors_only_on_the_pinned_chain() {
+        let (_dir, storage_ref) = store().await;
+        let mut cursor = None;
+        let mut tip = None;
+        let pinned_elsewhere = PeerContext {
+            genesis_hash: Some(HashType([9; 32])),
+            ..peer_context()
+        };
+
+        let outcome = consume_peer_stream(
+            stream::iter(vec![peer_block_msg(GENESIS_BLOCK_ID, 0)]),
+            &pinned_elsewhere,
+            &storage_ref,
+            &mut cursor,
+            &mut tip,
+        )
+        .await;
+
+        assert_eq!(outcome, PassOutcome::Stranded);
+        assert!(recorded_keys(&storage_ref).await.is_empty());
+        assert_eq!(tip, None, "a genesis off the pin never anchors");
+
+        let pinned_here = PeerContext {
+            genesis_hash: Some(chain_hash(GENESIS_BLOCK_ID)),
+            ..peer_context()
+        };
+        let anchored = consume_peer_stream(
+            stream::iter(vec![peer_block_msg(GENESIS_BLOCK_ID, 1)]),
+            &pinned_here,
+            &storage_ref,
+            &mut cursor,
+            &mut tip,
+        )
+        .await;
+
+        assert_eq!(anchored, PassOutcome::Drained);
+        assert_eq!(
+            tip,
+            Some(tip_at(GENESIS_BLOCK_ID)),
+            "the pinned genesis anchors"
+        );
     }
 
     #[tokio::test]
