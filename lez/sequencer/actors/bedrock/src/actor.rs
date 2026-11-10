@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    num::NonZero,
     sync::Arc,
 };
 
@@ -493,10 +494,10 @@ impl Message<CreateChannel> for BedrockActor {
             &channel_params,
             configuration_threshold,
             transfer_threshold,
-        );
+        )?;
 
         let data = borsh::to_vec(&genesis).map_err(Error::BlockEncodingFailed)?;
-        let inscription: Inscription = data.try_into().map_err(|_rr| Error::BlockTooLarge)?;
+        let inscription = checked_inscription(&self.node, data, Error::BlockTooLarge).await?;
         // A config moves the config tip only, so the first block chains on the root.
         let inscribe_op = InscriptionOp {
             channel_id: self.config.channel_id,
@@ -553,7 +554,7 @@ impl Message<PublishBlock> for BedrockActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.check_seq(expected_seq)?;
-        let inscription = block_inscription(&block)?;
+        let inscription = block_inscription(&self.node, &block).await?;
         let data_byte_size = inscription.len();
 
         let published = if let Some(parent) = parent {
@@ -614,7 +615,7 @@ impl Message<PreparePin> for BedrockActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.check_seq(expected_seq)?;
-        let inscription = block_inscription(&block)?;
+        let inscription = block_inscription(&self.node, &block).await?;
         let block_size = inscription.len();
         let inscribe_op = self.inscription_op(inscription, parent);
         let msg_id = inscribe_op.id();
@@ -922,8 +923,7 @@ impl Message<PublishRawInscription> for BedrockActor {
         PublishRawInscription { data }: PublishRawInscription,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let inscription: Inscription =
-            data.try_into().map_err(|_err| Error::InscriptionTooLarge)?;
+        let inscription = checked_inscription(&self.node, data, Error::InscriptionTooLarge).await?;
 
         let (result, checkpoint) = self
             .sequencer
@@ -962,17 +962,22 @@ fn genesis_config_op(
     channel_params: &ChannelParams,
     configuration_threshold: u16,
     transfer_threshold: u16,
-) -> ChannelConfigOp {
-    ChannelConfigOp {
-        channel: channel_id,
+) -> Result<ChannelConfigOp> {
+    let threshold = |value: u16| {
+        NonZero::new(value)
+            .ok_or_else(|| Error::InvalidChannelConfig(anyhow!("a channel threshold of zero")))
+    };
+    ChannelConfigOp::new(
+        channel_id,
         // The channel does not exist yet, so the config lineage starts here.
-        parent: MsgId::root(),
+        MsgId::root(),
         keys,
-        posting_timeframe: SlotTimeframe::from(channel_params.posting_timeframe),
-        posting_timeout: SlotTimeout::from(channel_params.posting_timeout),
-        configuration_threshold,
-        transfer_threshold,
-    }
+        SlotTimeframe::from(channel_params.posting_timeframe),
+        SlotTimeout::from(channel_params.posting_timeout),
+        threshold(configuration_threshold)?,
+        threshold(transfer_threshold)?,
+    )
+    .map_err(|err| Error::InvalidChannelConfig(err.into()))
 }
 
 /// The proof a channel-creating config op carries. No key is accredited before
@@ -1042,18 +1047,40 @@ fn released_notes(tx: &PendingTx) -> Vec<NoteId> {
     }
 }
 
-/// `block` as the bytes of an inscription.
-fn block_inscription(block: &Block) -> Result<Inscription> {
-    let data = borsh::to_vec(block).map_err(Error::BlockEncodingFailed)?;
-
-    data.try_into().map_err(|_err| Error::BlockTooLarge)
-}
-
 /// Funds `ops` from the node's wallet, which appends a fee transfer (paid from
 /// `funding_key`, change back to it) and returns its proof.
 ///
 /// A timed-out call can leave the node's wallet holding its funding-note
 /// reservation until `pending_note_expiry_blocks` releases it.
+/// `data` as an inscription, or `too_large` if it exceeds what an operation may
+/// carry in the era of the node's current slot. The bound is per era, so it is
+/// asked of the node rather than fixed at build time.
+async fn checked_inscription(
+    node: &TimeoutNode<NodeHttpClient>,
+    data: Vec<u8>,
+    too_large: Error,
+) -> Result<Inscription> {
+    let max_op_data_size = node
+        .limits()
+        .await
+        .context("Failed to fetch the node's limits")
+        .map_err(Error::NodeRequestFailed)?
+        .max_op_data_size;
+    if u32::try_from(data.len()).map_or(true, |len| len > max_op_data_size) {
+        return Err(too_large);
+    }
+    Ok(Inscription::new_unchecked(data))
+}
+
+/// `block` as the bytes of an inscription.
+async fn block_inscription(
+    node: &TimeoutNode<NodeHttpClient>,
+    block: &Block,
+) -> Result<Inscription> {
+    let data = borsh::to_vec(block).map_err(Error::BlockEncodingFailed)?;
+    checked_inscription(node, data, Error::BlockTooLarge).await
+}
+
 async fn fund_ops(
     node: &TimeoutNode<NodeHttpClient>,
     config: &Config,

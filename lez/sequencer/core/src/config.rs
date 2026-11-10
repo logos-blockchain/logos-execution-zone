@@ -22,23 +22,20 @@ use url::Url;
 /// `max_block_size - BLOCK_OVERHEAD`.
 pub const BLOCK_OVERHEAD: u64 = 2_048;
 
+/// The bytes the L1 lets a block's transactions take. Bedrock sets this per era
+/// and serves the era's limits from the node (`/mantle/limits`); this is the
+/// value every era has carried so far, kept as the static ceiling that config
+/// validation and gossip need. Publishing checks the node's live limit.
+const BEDROCK_BLOCK_TRANSACTIONS_SIZE: u64 = 2 * 1024 * 1024;
+
 /// The largest usable `max_block_size`: an L2 block is published to Bedrock as
-/// a single inscription, which the L1 caps at this many bytes.
-#[expect(
-    clippy::as_conversions,
-    reason = "usize::try_from is not const & usize fits u64 on every supported target"
-)]
-pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 =
-    logos_blockchain_core::mantle::ops::channel::inscribe::MAX_BYTES as u64;
+/// a single inscription, which the L1 caps at seven eighths of a block's
+/// transaction bytes (an era's `max_op_data_size`).
+pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 = BEDROCK_BLOCK_TRANSACTIONS_SIZE * 7 / 8;
 
 /// The largest Bedrock transaction: the L1 caps a block's transactions at this
 /// many bytes.
-#[expect(
-    clippy::as_conversions,
-    reason = "usize::try_from is not const & usize fits u64 on every supported target"
-)]
-pub const MAX_BEDROCK_TX_SIZE: u64 =
-    logos_blockchain_core::block::MAX_BLOCK_TRANSACTIONS_SIZE as u64;
+pub const MAX_BEDROCK_TX_SIZE: u64 = BEDROCK_BLOCK_TRANSACTIONS_SIZE;
 
 /// Smallest nonzero `stale_refund_slots`, since a shorter window orphans blocks before L1 can
 /// mine them.

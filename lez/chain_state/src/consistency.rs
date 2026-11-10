@@ -340,7 +340,7 @@ mod tests {
         let bytes = borsh::to_vec(block).expect("serialize");
         ZoneMessage::Block(ZoneBlock {
             id: MsgId::from([0_u8; 32]),
-            data: Inscription::try_from(bytes.as_slice()).expect("inscription"),
+            data: Inscription::new_unchecked(bytes.clone()),
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
         })
     }
@@ -415,7 +415,7 @@ mod tests {
         let anchor = anchor_for(&tip, Slot::from(1_000));
         let garbage = ZoneMessage::Block(ZoneBlock {
             id: MsgId::from([0_u8; 32]),
-            data: Inscription::try_from(&[1_u8, 2, 3][..]).expect("inscription"),
+            data: Inscription::new_unchecked(vec![1_u8, 2, 3]),
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
         });
         assert!(matches!(
@@ -431,7 +431,7 @@ mod tests {
         let anchor = Anchor::new(Slot::from(1_000), None);
         let garbage = ZoneMessage::Block(ZoneBlock {
             id: MsgId::from([0_u8; 32]),
-            data: Inscription::try_from(&[1_u8, 2, 3][..]).expect("inscription"),
+            data: Inscription::new_unchecked(vec![1_u8, 2, 3]),
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
         });
         assert!(matches!(

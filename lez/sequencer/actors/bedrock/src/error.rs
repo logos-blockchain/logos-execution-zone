@@ -54,6 +54,9 @@ pub enum Error {
     #[error("Inscription exceeds maximum allowed size")]
     InscriptionTooLarge,
 
+    #[error("Invalid channel config")]
+    InvalidChannelConfig(#[source] anyhow::Error),
+
     #[error("Invalid channel key list")]
     InvalidChannelKeyList(#[source] anyhow::Error),
 

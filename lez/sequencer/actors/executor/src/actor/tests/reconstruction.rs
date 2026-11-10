@@ -380,7 +380,7 @@ fn channel_message(block: &Block, slot: u64) -> (ZoneMessage, Slot) {
     let bytes = borsh::to_vec(block).expect("block serializes");
     let message = ZoneMessage::Block(ZoneBlock {
         id: MsgId::from(block.header.hash.0),
-        data: Inscription::try_from(bytes.as_slice()).expect("block fits an inscription"),
+        data: Inscription::new_unchecked(bytes.to_vec()),
         signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
     });
     (message, Slot::from(slot))
@@ -479,7 +479,7 @@ async fn reconstruction_skips_an_undecodable_inscription() -> Result<()> {
     let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
     let junk = ZoneMessage::Block(ZoneBlock {
         id: MsgId::from([0xAA_u8; 32]),
-        data: Inscription::try_from(b"not a block".as_slice()).expect("fits an inscription"),
+        data: Inscription::new_unchecked(b"not a block".to_vec()),
         signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
     });
 
@@ -513,8 +513,7 @@ async fn reconstruction_pins_on_trailing_garbage() -> Result<()> {
         (
             ZoneMessage::Block(ZoneBlock {
                 id: MsgId::from([n; 32]),
-                data: Inscription::try_from(b"not a block".as_slice())
-                    .expect("fits an inscription"),
+                data: Inscription::new_unchecked(b"not a block".to_vec()),
                 signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
             }),
             Slot::from(slot),
@@ -629,7 +628,7 @@ fn final_through(block2: &Block, final_msg: Option<MsgId>, held: &[Block]) -> St
 fn garbage(id: MsgId, slot: u64) -> (ZoneMessage, Slot) {
     let message = ZoneMessage::Block(ZoneBlock {
         id,
-        data: Inscription::try_from(b"not a block".as_slice()).expect("fits an inscription"),
+        data: Inscription::new_unchecked(b"not a block".to_vec()),
         signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
     });
     (message, Slot::from(slot))

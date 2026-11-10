@@ -2877,7 +2877,7 @@ async fn follow_update_records_deposits_for_the_production_drain() {
         channel_id: ChannelId::from([0; 32]),
         inputs: Inputs::empty(),
         amount: 5,
-        metadata: Metadata::try_from(metadata).expect("deposit metadata fits"),
+        metadata: Metadata::new_unchecked(metadata),
         notes: DepositRecreatedNotes::default(),
     };
 
@@ -2918,7 +2918,7 @@ fn deposit_info(op_id: [u8; 32], amount: u64, notes: &[NoteId]) -> DepositInfo {
         channel_id: ChannelId::from([0; 32]),
         inputs: Inputs::empty(),
         amount,
-        metadata: Metadata::try_from(metadata).expect("deposit metadata fits"),
+        metadata: Metadata::new_unchecked(metadata),
         notes: DepositRecreatedNotes::try_from(notes).expect("deposit notes fit"),
     }
 }
@@ -3027,34 +3027,36 @@ async fn signs_peer_pin(
         .expect("the channel-signing actor should accept a publisher");
 
     let channel_id = sequencer.sequencer_config.bedrock_config.channel_id;
-    let pin = Ops::from([
-        Op::ChannelInscribe(InscriptionOp {
-            channel_id,
-            inscription: Inscription::try_from(borsh::to_vec(block).unwrap())
-                .expect("the block fits an inscription"),
-            parent: MsgId::root(),
-            signer: peer.public_key().into_unverified(),
-        }),
-        Op::ChannelTransfer(ChannelTransferOp {
-            channel_id,
-            inputs: Inputs::try_new(
-                deposit
-                    .notes
-                    .iter()
-                    .map(|note| note.note_id)
-                    .collect::<Vec<_>>(),
-            )
-            .expect("the deposit's notes fit"),
-            outputs: Outputs::try_new(
-                deposit
-                    .notes
-                    .iter()
-                    .map(|note| Note::new(note.value, note.pk))
-                    .collect::<Vec<_>>(),
-            )
-            .expect("the deposit's notes fit"),
-        }),
-    ]);
+    let pin = Ops::new(
+        logos_blockchain_core::era::ForkDigest::new([0; 32]),
+        [
+            Op::ChannelInscribe(InscriptionOp {
+                channel_id,
+                inscription: Inscription::new_unchecked(borsh::to_vec(block).unwrap()),
+                parent: MsgId::root(),
+                signer: peer.public_key().into_unverified(),
+            }),
+            Op::ChannelTransfer(ChannelTransferOp {
+                channel_id,
+                inputs: Inputs::try_new(
+                    deposit
+                        .notes
+                        .iter()
+                        .map(|note| note.note_id)
+                        .collect::<Vec<_>>(),
+                )
+                .expect("the deposit's notes fit"),
+                outputs: Outputs::try_new(
+                    deposit
+                        .notes
+                        .iter()
+                        .map(|note| Note::new(note.value, note.pk))
+                        .collect::<Vec<_>>(),
+                )
+                .expect("the deposit's notes fit"),
+            }),
+        ],
+    );
     signer
         .ask(sequencer_channel_signing_actor::Wire::Draft(
             sequencer_channel_signing_actor::Draft { tx: Box::new(pin) },
@@ -4399,7 +4401,7 @@ async fn a_foreign_block_below_the_final_tip_settles_no_deposit_record() {
         channel_id: ChannelId::from([0; 32]),
         inputs: Inputs::empty(),
         amount: 5,
-        metadata: Metadata::try_from(metadata).expect("deposit metadata fits"),
+        metadata: Metadata::new_unchecked(metadata),
         notes: DepositRecreatedNotes::default(),
     };
     sequencer

@@ -218,9 +218,12 @@ impl PreparedPin {
     /// A pin conjured outside the actor, for a mocked channel to serve.
     #[cfg(feature = "mock")]
     #[must_use]
-    pub const fn mocked(msg_id: MsgId, parent: MsgId) -> Self {
+    pub fn mocked(msg_id: MsgId, parent: MsgId) -> Self {
         Self {
-            tx: Ops::empty(),
+            tx: Ops::new(
+                logos_blockchain_core::era::ForkDigest::new([0; 32]),
+                logos_blockchain_core::mantle::transactions::TxList::new_unchecked(Vec::new()),
+            ),
             msg_id,
             parent,
             fee_proof: None,

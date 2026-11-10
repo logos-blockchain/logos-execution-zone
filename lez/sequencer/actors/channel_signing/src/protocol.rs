@@ -171,7 +171,15 @@ impl Wire {
         let (tag, payload) = bytes.split_first()?;
         match *tag {
             DRAFT => Some(Self::Draft(Draft {
-                tx: Box::new(Ops::decode_all(payload).ok()?),
+                // A draft is only signed once it matches this node's own target, so
+                // no op data bound is enforced here beyond the codec's own.
+                tx: Box::new(
+                    <Ops as logos_blockchain_binary_codec::canonical::BinaryDecode>::decode_all(
+                        payload,
+                        &u32::MAX,
+                    )
+                    .ok()?,
+                ),
             })),
             SIGNATURE => {
                 let (tx_hash, rest) = payload.split_at_checked(32)?;

@@ -1,6 +1,9 @@
+use std::num::NonZero;
+
 use kameo::actor::Spawn as _;
 use logos_blockchain_core::{
     crypto::ZkHash,
+    era::ForkDigest,
     events::DepositNote,
     mantle::{
         channel::{SlotTimeframe, SlotTimeout},
@@ -85,16 +88,17 @@ fn view(target: Option<ConfigTarget>) -> ChannelView {
 
 /// A transaction carrying exactly the config `target` asks for.
 fn draft_tx(target: &ConfigTarget) -> Ops {
-    let op = ChannelConfigOp {
-        channel: ChannelId::from(CHANNEL),
-        parent: target.parent,
-        keys: VerifiedChannelKeys::try_from(target.keys.clone()).expect("a non-empty key list"),
-        posting_timeframe: SlotTimeframe::from(target.posting_timeframe),
-        posting_timeout: SlotTimeout::from(target.posting_timeout),
-        configuration_threshold: target.configuration_threshold,
-        transfer_threshold: target.transfer_threshold,
-    };
-    Ops::from([Op::ChannelConfig(op)])
+    let op = ChannelConfigOp::new(
+        ChannelId::from(CHANNEL),
+        target.parent,
+        VerifiedChannelKeys::try_from(target.keys.clone()).expect("a non-empty key list"),
+        SlotTimeframe::from(target.posting_timeframe),
+        SlotTimeout::from(target.posting_timeout),
+        NonZero::new(target.configuration_threshold).expect("a non-zero threshold"),
+        NonZero::new(target.transfer_threshold).expect("a non-zero threshold"),
+    )
+    .expect("the target's threshold is reachable with its keys");
+    Ops::new(ForkDigest::new([0; 32]), [Op::ChannelConfig(op)])
 }
 
 fn actor(secret: [u8; 32]) -> ActorRef<ChannelSigningActor> {
@@ -765,7 +769,7 @@ fn deposit_note() -> DepositNote {
 fn pin_tx_of(signer: &Ed25519Key, inscription: Vec<u8>, inputs: Inputs, outputs: Outputs) -> Ops {
     let inscription = InscriptionOp {
         channel_id: ChannelId::from(CHANNEL),
-        inscription: Inscription::try_from(inscription).expect("a small inscription"),
+        inscription: Inscription::new_unchecked(inscription),
         parent: MsgId::root(),
         signer: signer.public_key().into_unverified(),
     };
@@ -774,10 +778,13 @@ fn pin_tx_of(signer: &Ed25519Key, inscription: Vec<u8>, inputs: Inputs, outputs:
         inputs,
         outputs,
     };
-    Ops::from([
-        Op::ChannelInscribe(inscription),
-        Op::ChannelTransfer(transfer),
-    ])
+    Ops::new(
+        ForkDigest::new([0; 32]),
+        [
+            Op::ChannelInscribe(inscription),
+            Op::ChannelTransfer(transfer),
+        ],
+    )
 }
 
 fn deposit_input() -> Inputs {
