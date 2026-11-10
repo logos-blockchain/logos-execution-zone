@@ -71,8 +71,8 @@ fn target() -> ConfigTarget {
         parent: MsgId::root(),
         posting_timeframe: 300,
         posting_timeout: 25,
-        configuration_threshold: 2,
-        transfer_threshold: 1,
+        configuration_threshold: NonZero::new(2).unwrap(),
+        transfer_threshold: NonZero::new(1).unwrap(),
     }
 }
 
@@ -94,8 +94,8 @@ fn draft_tx(target: &ConfigTarget) -> Ops {
         VerifiedChannelKeys::try_from(target.keys.clone()).expect("a non-empty key list"),
         SlotTimeframe::from(target.posting_timeframe),
         SlotTimeout::from(target.posting_timeout),
-        NonZero::new(target.configuration_threshold).expect("a non-zero threshold"),
-        NonZero::new(target.transfer_threshold).expect("a non-zero threshold"),
+        target.configuration_threshold,
+        target.transfer_threshold,
     )
     .expect("the target's threshold is reachable with its keys");
     Ops::new(ForkDigest::new([0; 32]), [Op::ChannelConfig(op)])
@@ -200,8 +200,8 @@ fn committee_target() -> ConfigTarget {
         parent: MsgId::root(),
         posting_timeframe: 300,
         posting_timeout: 25,
-        configuration_threshold: 4,
-        transfer_threshold: 1,
+        configuration_threshold: NonZero::new(4).unwrap(),
+        transfer_threshold: NonZero::new(1).unwrap(),
     }
 }
 
@@ -675,8 +675,8 @@ async fn a_peer_does_not_sign_a_config_it_did_not_ask_for() {
     let mut rogue = target();
     rogue.keys = vec![key(PEER_SECRET).public_key()];
     // Thresholds a one-key committee can reach, so the op itself is well formed.
-    rogue.configuration_threshold = 1;
-    rogue.transfer_threshold = 1;
+    rogue.configuration_threshold = NonZero::new(1).unwrap();
+    rogue.transfer_threshold = NonZero::new(1).unwrap();
     actor
         .ask(Wire::Draft(Draft {
             tx: Box::new(draft_tx(&rogue)),

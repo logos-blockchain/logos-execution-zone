@@ -648,8 +648,8 @@ fn matches(target: &ConfigTarget, op: &ChannelConfigOp) -> bool {
         && op.keys().iter().eq(target.keys.iter())
         && u32::from(op.posting_timeframe().clone()) == target.posting_timeframe
         && u32::from(op.posting_timeout().clone()) == target.posting_timeout
-        && op.configuration_threshold().get() == target.configuration_threshold
-        && op.transfer_threshold().get() == target.transfer_threshold
+        && op.configuration_threshold() == target.configuration_threshold
+        && op.transfer_threshold() == target.transfer_threshold
 }
 
 #[cfg(test)]

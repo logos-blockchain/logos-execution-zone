@@ -696,8 +696,8 @@ impl Message<PrepareConfig> for BedrockActor {
                 keys,
                 SlotTimeframe::from(target.posting_timeframe),
                 SlotTimeout::from(target.posting_timeout),
-                target.configuration_threshold,
-                target.transfer_threshold,
+                target.configuration_threshold.get(),
+                target.transfer_threshold.get(),
             )
             .await
             .map_err(Into::into)
@@ -960,13 +960,9 @@ fn genesis_config_op(
     channel_id: ChannelId,
     keys: VerifiedChannelKeys,
     channel_params: &ChannelParams,
-    configuration_threshold: u16,
-    transfer_threshold: u16,
+    configuration_threshold: NonZero<u16>,
+    transfer_threshold: NonZero<u16>,
 ) -> Result<ChannelConfigOp> {
-    let threshold = |value: u16| {
-        NonZero::new(value)
-            .ok_or_else(|| Error::InvalidChannelConfig(anyhow!("a channel threshold of zero")))
-    };
     ChannelConfigOp::new(
         channel_id,
         // The channel does not exist yet, so the config lineage starts here.
@@ -974,8 +970,8 @@ fn genesis_config_op(
         keys,
         SlotTimeframe::from(channel_params.posting_timeframe),
         SlotTimeout::from(channel_params.posting_timeout),
-        threshold(configuration_threshold)?,
-        threshold(transfer_threshold)?,
+        configuration_threshold,
+        transfer_threshold,
     )
     .map_err(|err| Error::InvalidChannelConfig(err.into()))
 }

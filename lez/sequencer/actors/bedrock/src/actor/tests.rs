@@ -1,3 +1,5 @@
+use std::num::NonZero;
+
 use common::{
     HashType,
     block::{Block, HashableBlockData},
@@ -101,8 +103,8 @@ fn the_genesis_config_op_and_its_proof_pass_bedrock_verification() {
             exit_delay: 10,
             max_block_size: 1 << 20,
         },
-        1,
-        1,
+        NonZero::<u16>::MIN,
+        NonZero::<u16>::MIN,
     )
     .expect("a one-key channel with thresholds of one is valid");
     let tx_hash_view = TxHashView::new(TxHash::from([7; 32]));
