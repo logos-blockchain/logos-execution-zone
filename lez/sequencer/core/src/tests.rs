@@ -2023,10 +2023,10 @@ async fn produce_block_with_correct_prev_meta_after_restart() {
     assert_block_tail(&new_block, std::slice::from_ref(&tx));
 }
 
-#[tokio::test]
-async fn user_tx_that_chain_calls_clock_is_dropped() {
-    let (mut sequencer, mempool_handle) = common_setup().await;
-
+async fn deploy_clock_reader(
+    sequencer: &mut SequencerCore<StorageActor, MockBedrockActor>,
+    mempool_handle: &MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
+) -> AccountId {
     let clock_reader = test_programs::clock_reader();
 
     // Deploy `clock_reader` at the header account `clock_reader_id`, which signs for its own
@@ -2100,6 +2100,120 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         .await
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
+
+    clock_reader_id
+}
+
+#[tokio::test]
+async fn clock_reads_current_block_values() {
+    let (mut sequencer, mempool_handle) = start_sequencer(setup_sequencer_config()).await;
+    let clock_reader_id = deploy_clock_reader(&mut sequencer, &mempool_handle).await;
+    let (parent_tip, parent_state) = {
+        let chain = sequencer.chain.lock().await;
+        (
+            chain
+                .head_tip()
+                .expect("deployment leaves a head tip")
+                .clone(),
+            chain.head_state().clone(),
+        )
+    };
+    let parent_block = block_at(&sequencer, parent_tip.block_id)
+        .await
+        .expect("deployment block is stored");
+    let timestamp = parent_block.header.timestamp.checked_add(1_000).unwrap();
+    let payer = &initial_pub_accounts_private_keys()[0];
+    let payer_nonce = parent_state.get_account_by_id(payer.account_id).nonce;
+    let readers = [
+        Actor::new(payer.account_id, clock_reader_id),
+        Actor::new(
+            initial_public_user_accounts()[1].account_id,
+            clock_reader_id,
+        ),
+    ];
+    let read_txs: Vec<_> = readers
+        .iter()
+        .zip([
+            clock_core::Message::ReadTimestamp { granularity: 1 },
+            clock_core::Message::ReadBlockId { granularity: 1 },
+        ])
+        .enumerate()
+        .map(|(index, (reader, clock_message))| {
+            let nonce = Nonce(
+                payer_nonce
+                    .0
+                    .checked_add(u128::try_from(index).unwrap())
+                    .unwrap(),
+            );
+            let message = lee::public_transaction::Message::try_new_with_fees(
+                *reader,
+                vec![*reader, system_accounts::clock_actor()],
+                signer_nonces(&[&payer.pub_sign_key], vec![nonce]),
+                clock_message,
+                common::test_utils::test_fee_declaration(payer.account_id),
+            )
+            .unwrap();
+            let witness_set =
+                lee::public_transaction::WitnessSet::for_message(&message, &[&payer.pub_sign_key]);
+            LeeTransaction::Public(PublicTransaction::new(message, witness_set))
+        })
+        .collect();
+    for tx in &read_txs {
+        mempool_handle
+            .push((TransactionOrigin::User, tx.clone()))
+            .await
+            .unwrap();
+    }
+
+    let (built, producer_state) = sequencer
+        .build_block_from_mempool_at(timestamp)
+        .await
+        .unwrap();
+    let block = built.block;
+    for tx in &read_txs {
+        assert!(
+            block.body.transactions.contains(tx),
+            "clock read must be included"
+        );
+    }
+    let replies = |state: &V03State| {
+        readers.map(|reader| {
+            borsh::from_slice::<clock_core::Reply>(
+                state
+                    .get_account_by_id(reader.account_id)
+                    .data
+                    .actor_state(clock_reader_id)
+                    .as_ref(),
+            )
+            .expect("reader must store the clock reply")
+        })
+    };
+    assert_eq!(
+        replies(&producer_state),
+        [
+            clock_core::Reply::Timestamp(block.header.timestamp),
+            clock_core::Reply::BlockId(block.header.block_id),
+        ],
+        "clock reads must return the produced block values; parent timestamp {}, parent block id {}",
+        parent_block.header.timestamp,
+        parent_tip.block_id,
+    );
+
+    let mut replay_state = parent_state;
+    chain_state::apply_block(Some(&parent_tip), &block, &mut replay_state)
+        .expect("the produced block must replay from its parent");
+    assert_eq!(replies(&replay_state), replies(&producer_state));
+    assert!(
+        replay_state == producer_state,
+        "replay must reproduce producer state"
+    );
+}
+
+#[tokio::test]
+async fn user_tx_that_chain_calls_clock_is_dropped() {
+    let (mut sequencer, mempool_handle) = common_setup().await;
+    let clock_reader_id = deploy_clock_reader(&mut sequencer, &mempool_handle).await;
+    let payer = &initial_pub_accounts_private_keys()[0];
 
     // A funded payer calls `clock_reader`, which forwards `clock_message` to the clock.
     let clock = system_accounts::clock_actor();

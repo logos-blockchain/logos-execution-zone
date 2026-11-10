@@ -1843,11 +1843,22 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         Some(reverted)
     }
 
+    async fn build_block_from_mempool(&mut self) -> Result<BlockWithMeta> {
+        let timestamp = u64::try_from(chrono::Utc::now().timestamp_millis())
+            .expect("Timestamp must be positive");
+        self.build_block_from_mempool_at(timestamp)
+            .await
+            .map(|(block, _state)| block)
+    }
+
     #[expect(
         clippy::cognitive_complexity,
         reason = "Slop has won the battle, but our war is not over"
     )]
-    async fn build_block_from_mempool(&mut self) -> Result<BlockWithMeta> {
+    async fn build_block_from_mempool_at(
+        &mut self,
+        new_block_timestamp: u64,
+    ) -> Result<(BlockWithMeta, lee::V03State)> {
         let now = Instant::now();
 
         // Decoded outside the chain lock, and read before it is taken: the usual
@@ -2028,9 +2039,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 .max_block_size,
         )
         .expect("`max_block_size` should fit into usize");
-
-        let new_block_timestamp = u64::try_from(chrono::Utc::now().timestamp_millis())
-            .expect("Timestamp must be positive");
 
         // Look up this sequencer's stake ownership account as the reward target.
         let own_sequencer_key = sequencer_stake_core::SequencerKey::new(
@@ -2280,13 +2288,16 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
         sequencer_core_metrics::record_block_creation_time(now.elapsed());
 
-        Ok(BlockWithMeta {
-            block,
-            withdrawals,
-            parent,
-            mempool_transactions,
-            pinned_deposit_notes,
-        })
+        Ok((
+            BlockWithMeta {
+                block,
+                withdrawals,
+                parent,
+                mempool_transactions,
+                pinned_deposit_notes,
+            },
+            working_state,
+        ))
     }
 
     /// Reads the current head state under the lock without cloning it, so callers
