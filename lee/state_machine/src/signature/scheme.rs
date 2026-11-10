@@ -9,10 +9,6 @@ use super::{Schnorr, SchnorrAuthData, Wots, WotsAuthData};
 /// Length of the initial key state that prefixes a nonce-0 entry's authentication data.
 const INITIAL_KEY_LEN: usize = 33;
 
-pub type PublicKeyOf<K> = <<K as KeyScheme>::Scheme as SignatureScheme>::PublicKey;
-pub type SecretKeyOf<K> = <<K as KeyScheme>::Scheme as SignatureScheme>::SecretKey;
-pub type SignatureOf<K> = <<K as KeyScheme>::Scheme as SignatureScheme>::Signature;
-
 #[derive(Error, Debug, Clone, Copy, PartialEq, Eq)]
 #[error("invalid signature")]
 pub struct SignatureError;
@@ -55,18 +51,17 @@ pub trait SignatureScheme {
 }
 
 /// LEE's commitment policy for a signature scheme.
-pub trait KeyScheme {
+pub trait KeyScheme: SignatureScheme {
     const TYPE: KeyType;
-    type Scheme: SignatureScheme;
     /// This scheme's authentication data: a fixed-size byte array.
     type AuthData: AsRef<[u8]> + for<'bytes> TryFrom<&'bytes [u8]>;
 
     /// The key's 32-byte commitment, as stored in the account and covered by signatures.
-    fn commit(pk: &PublicKeyOf<Self>) -> KeyCommitment;
+    fn commit(pk: &Self::PublicKey) -> KeyCommitment;
 
     /// The `SigningKeyState` for `pk`: what an account stores as its key, and what a witness
     /// commits as a signer's next key.
-    fn key_state(pk: &PublicKeyOf<Self>) -> SigningKeyState {
+    fn key_state(pk: &Self::PublicKey) -> SigningKeyState {
         SigningKeyState {
             key_type: Self::TYPE,
             key_commitment: Self::commit(pk),
@@ -74,22 +69,22 @@ pub trait KeyScheme {
     }
 
     /// The witness bytes for a signature: what `precheck` needs.
-    fn auth_data(pk: &PublicKeyOf<Self>, sig: &SignatureOf<Self>) -> Self::AuthData;
+    fn auth_data(pk: &Self::PublicKey, sig: &Self::Signature) -> Self::AuthData;
 
     /// Decodes the authentication data and checks it against the commitment (cheap).
     fn precheck(
         key_commitment: &KeyCommitment,
         auth_data: &Self::AuthData,
-    ) -> Result<(PublicKeyOf<Self>, SignatureOf<Self>), AuthError>;
+    ) -> Result<(Self::PublicKey, Self::Signature), AuthError>;
 
-    /// `precheck`, then `Scheme::verify`.
+    /// `precheck`, then `SignatureScheme::verify`.
     fn authenticate(
         key_commitment: &KeyCommitment,
         message_with_keys: &[u8; 32],
         auth_data: &Self::AuthData,
     ) -> Result<(), AuthError> {
         let (pk, sig) = Self::precheck(key_commitment, auth_data)?;
-        Self::Scheme::verify(&pk, message_with_keys, &sig).map_err(AuthError::from)
+        Self::verify(&pk, message_with_keys, &sig).map_err(AuthError::from)
     }
 }
 

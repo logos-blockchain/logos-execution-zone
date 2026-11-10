@@ -9,9 +9,7 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 use sha2::{Digest as _, Sha256};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use super::{
-    KeyScheme, PublicKeyOf, Schnorr, SecretKeyOf, SignatureScheme as _, Wots, WotsSecretKey,
-};
+use super::{KeyScheme, Schnorr, SignatureScheme as _, Wots, WotsSecretKey};
 use crate::{PrivateKey, PublicKey};
 
 const DS_KEY_SEED: &[u8; 32] =
@@ -187,9 +185,9 @@ fn key_seed(secret: &PublicAccountSecret, key_type: KeyType, nonce: Nonce) -> [u
 pub fn signing_key<K: KeyScheme>(
     secret: &PublicAccountSecret,
     nonce: Nonce,
-) -> (SecretKeyOf<K>, PublicKeyOf<K>) {
+) -> (K::SecretKey, K::PublicKey) {
     let mut seed = key_seed(secret, K::TYPE, nonce);
-    let keys = K::Scheme::keygen(&seed);
+    let keys = K::keygen(&seed);
     seed.zeroize();
     keys
 }

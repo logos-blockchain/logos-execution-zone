@@ -47,7 +47,6 @@ impl SignatureScheme for Schnorr {
 
 impl KeyScheme for Schnorr {
     type AuthData = SchnorrAuthData;
-    type Scheme = Self;
 
     const TYPE: KeyType = KeyType::Schnorr;
 

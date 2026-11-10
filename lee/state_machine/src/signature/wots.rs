@@ -71,7 +71,6 @@ impl SignatureScheme for Wots {
 
 impl KeyScheme for Wots {
     type AuthData = WotsAuthData;
-    type Scheme = Self;
 
     const TYPE: KeyType = KeyType::Wots;
 
