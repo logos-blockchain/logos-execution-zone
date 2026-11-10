@@ -355,8 +355,7 @@ impl V03State {
         diff: ValidatedStateDiff,
     ) -> Result<Vec<TransactionEvent>, LeeError> {
         let StateDiff {
-            signer_account_ids,
-            key_rotations,
+            signers,
             public_diff,
             new_commitments,
             new_nullifiers,
@@ -395,16 +394,13 @@ impl V03State {
         for (account_id, account) in public_diff {
             self.public_state.insert_mut(account_id, account);
         }
-        for account_id in signer_account_ids {
-            self.get_account_by_id_mut(account_id)
-                .nonce
-                .public_account_nonce_increment();
-        }
         // After `public_diff`, whose accounts carry their pre-transaction keys.
-        for (account_id, key) in key_rotations {
-            self.get_account_by_id_mut(account_id)
+        for (account_id, next) in signers {
+            let account = self.get_account_by_id_mut(account_id);
+            account.nonce.public_account_nonce_increment();
+            account
                 .data
-                .set_actor_state(SIGNATURE_PROGRAM_ID, key.into());
+                .set_actor_state(SIGNATURE_PROGRAM_ID, next.into());
         }
         let messages: Vec<Commitment> = published.iter().map(Publication::commitment).collect();
         let positions = self.private_state.0.append(&new_commitments, &messages);

@@ -206,8 +206,7 @@ pub const fn validated_state_diff_from_public_diff(
     public_diff: HashMap<AccountId, Account>,
 ) -> ValidatedStateDiff {
     ValidatedStateDiff::new_unchecked(StateDiff {
-        signer_account_ids: Vec::new(),
-        key_rotations: Vec::new(),
+        signers: Vec::new(),
         public_diff,
         new_commitments: Vec::new(),
         new_nullifiers: Vec::new(),
