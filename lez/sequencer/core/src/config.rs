@@ -26,12 +26,12 @@ pub const BLOCK_OVERHEAD: u64 = 2_048;
 /// and serves the era's limits from the node (`/mantle/limits`); this is the
 /// value every era has carried so far, kept as the static ceiling that config
 /// validation and gossip need. Publishing checks the node's live limit.
-const BEDROCK_BLOCK_TRANSACTIONS_SIZE: u64 = 2 * 1024 * 1024;
+const BEDROCK_BLOCK_TRANSACTIONS_SIZE: u64 = 2_097_152; // 2 MiB
 
 /// The largest usable `max_block_size`: an L2 block is published to Bedrock as
 /// a single inscription, which the L1 caps at seven eighths of a block's
-/// transaction bytes (an era's `max_op_data_size`).
-pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 = BEDROCK_BLOCK_TRANSACTIONS_SIZE * 7 / 8;
+/// transaction bytes (an era's `max_op_data_size`): 7/8 of 2 MiB.
+pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 = 1_835_008;
 
 /// The largest Bedrock transaction: the L1 caps a block's transactions at this
 /// many bytes.
