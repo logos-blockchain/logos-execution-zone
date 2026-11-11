@@ -26,9 +26,13 @@ use lee::{
 use lee_core::{account::Account, native_token::TransferError, program::SyncMessage};
 use ping_core::{
     CrossZoneEmission, ReceiverMessage, outbox_bytes, ping_record_pda, ping_record_seed,
-    read_outbox, receiver_config_account_id, sender_config_account_id, sender_config_seed,
+    read_outbox, receiver_config_account_id, receiver_config_seed, sender_config_account_id,
+    sender_config_seed,
 };
-use test_guest_core::Script;
+use test_guest_core::{
+    Script,
+    chat::{ChatLog, ChatMessage, chat_log_account_id, chat_log_seed},
+};
 
 /// Serializes a message to the borsh bytes the guests read.
 macro_rules! bytes_of {
@@ -2887,4 +2891,274 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
         shard_after.src_block_hash, SRC_BLOCK_HASH,
         "a shard stays bound to the block that claimed it"
     );
+}
+
+/// State registering the `zone_chat` test guest alongside the builtins: a
+/// receiver and generic emitter with no builtin privileges.
+fn chat_state(self_zone: [u8; 32]) -> (V03State, AccountId) {
+    let chat_id = AccountId::from_builtin_program(test_programs::zone_chat().id());
+    let mut state = base_state().with_named_programs([(chat_id, test_programs::zone_chat())]);
+    seed_inbox_config(&mut state, self_zone);
+    (state, chat_id)
+}
+
+/// The claim a deployer sends after deployment: the receiver contract's
+/// `InitConfig` to the config PDA, unsigned with the PDA's evidence.
+/// Writes the chat's receiver config straight into state: a claim needs the
+/// program account's key, which a program seeded from an image id has none of.
+fn seed_chat_config(state: &mut V03State, chat_id: AccountId, sources: Vec<([u8; 32], AccountId)>) {
+    let config = ping_core::ReceiverConfig {
+        deliverer: programs::cross_zone_inbox_account_id(),
+        governance: None,
+        authority: None,
+        sources,
+    };
+    *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
+        receiver_config_account_id(chat_id),
+        Account::default().with_actor_state(chat_id, config.to_bytes().into()),
+    )]);
+}
+
+/// An unsigned `InitConfig` aimed at `to`, the shape a front-runner would send.
+fn chat_init_config_tx(chat_id: AccountId, to: Actor) -> PublicTransaction {
+    let message = Message {
+        admission_evidence: vec![PublicAccountEvidence::Pda {
+            program: chat_id,
+            seed: receiver_config_seed(),
+        }],
+        ..Message::try_new(
+            to,
+            vec![to],
+            BTreeMap::new(),
+            ChatMessage::InitConfig(ping_core::ReceiverConfig {
+                deliverer: programs::cross_zone_inbox_account_id(),
+                governance: None,
+                authority: None,
+                sources: vec![],
+            }),
+        )
+        .expect("build InitConfig message")
+    };
+    PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
+}
+
+/// The inbox dispatch a watcher would build for a chat delivery of `text`.
+fn chat_dispatch_tx(
+    chat_id: AccountId,
+    src_zone: [u8; 32],
+    src_account_id: AccountId,
+    text: &[u8],
+) -> PublicTransaction {
+    let msg = CrossZoneMessage {
+        src_zone,
+        src_block_id: 5,
+        src_block_hash: SRC_BLOCK_HASH,
+        src_tx_index: 0,
+        src_account_id,
+        target_account_id: chat_id,
+        payload: text.to_vec(),
+        l1_inclusion_witness: None,
+    };
+    dispatch_tx(
+        programs::cross_zone_inbox_account_id(),
+        msg,
+        vec![
+            Actor::new(receiver_config_account_id(chat_id), chat_id),
+            Actor::new(chat_log_account_id(chat_id), chat_id),
+        ],
+    )
+}
+
+/// The receiver side of the any-program path, driven directly: the deployed
+/// receiver claims its config, then an authorized delivery lands in its log PDA.
+#[test]
+fn inbox_dispatch_delivers_to_the_chat_receiver() {
+    let src_zone = [2_u8; 32];
+    let source = AccountId::from_builtin_program([9_u32; 8]);
+    let (mut state, chat_id) = chat_state([1_u8; 32]);
+
+    seed_chat_config(&mut state, chat_id, vec![(src_zone, source)]);
+
+    let tx = chat_dispatch_tx(chat_id, src_zone, source, b"hello-chat");
+    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 2, 0)
+        .expect("dispatch must validate and execute");
+    let log = ChatLog::from_bytes(
+        diff.public_diff()[&chat_log_account_id(chat_id)]
+            .data
+            .actor_state(chat_id)
+            .as_ref(),
+    )
+    .expect("chat log decodes");
+    assert_eq!(log.entries, vec![(src_zone, b"hello-chat".to_vec())]);
+}
+
+/// The chat authorizes its own sources like the builtin receivers do.
+#[test]
+fn a_delivery_from_an_unauthorized_source_does_not_reach_the_chat_log() {
+    let src_zone = [2_u8; 32];
+    let (mut state, chat_id) = chat_state([1_u8; 32]);
+
+    seed_chat_config(
+        &mut state,
+        chat_id,
+        vec![(src_zone, AccountId::from_builtin_program([9_u32; 8]))],
+    );
+
+    let tx = chat_dispatch_tx(
+        chat_id,
+        src_zone,
+        AccountId::from_builtin_program([8_u32; 8]),
+        b"hello-chat",
+    );
+    rejects_at(&state, &tx, 2, "peer source this receiver authorizes");
+}
+
+/// The log is an internal shard: only the chat's own config writes it, so a
+/// user cannot forge an entry past the source check.
+#[test]
+fn a_direct_write_to_the_chat_log_is_refused() {
+    let (state, chat_id) = chat_state([1_u8; 32]);
+    let log = Actor::new(chat_log_account_id(chat_id), chat_id);
+    let message = Message {
+        admission_evidence: vec![PublicAccountEvidence::Pda {
+            program: chat_id,
+            seed: chat_log_seed(),
+        }],
+        ..Message::try_new(
+            log,
+            vec![log],
+            BTreeMap::new(),
+            ChatMessage::WriteLog {
+                src_zone: [2; 32],
+                text: b"forged".to_vec(),
+            },
+        )
+        .expect("build WriteLog message")
+    };
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+    rejects_at(&state, &tx, 1, "only written by this program's config");
+}
+
+/// The claim a deployer actually sends: signed by the program account's key,
+/// at the program account, forwarded from there to the config PDA.
+#[test]
+fn a_deployer_signed_claim_at_the_program_account_writes_the_config() {
+    let key = PrivateKey::try_new([77; 32]).expect("valid key");
+    let chat_id = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let mut state = base_state().with_named_programs([(chat_id, test_programs::zone_chat())]);
+    seed_inbox_config(&mut state, [1_u8; 32]);
+
+    let src_zone = [2_u8; 32];
+    let source = AccountId::from_builtin_program([9_u32; 8]);
+    let claimed = ping_core::ReceiverConfig {
+        deliverer: programs::cross_zone_inbox_account_id(),
+        governance: None,
+        authority: None,
+        sources: vec![(src_zone, source)],
+    };
+
+    let program = Actor::new(chat_id, chat_id);
+    let config = Actor::new(receiver_config_account_id(chat_id), chat_id);
+    let message = Message {
+        admission_evidence: vec![PublicAccountEvidence::Pda {
+            program: chat_id,
+            seed: receiver_config_seed(),
+        }],
+        ..Message::try_new(
+            program,
+            vec![program, config],
+            BTreeMap::from([(chat_id, 0_u128.into())]),
+            ChatMessage::InitConfig(claimed.clone()),
+        )
+        .expect("build InitConfig message")
+    };
+    let witness = WitnessSet::for_message(&message, &[&key]);
+    let tx = PublicTransaction::new(message, witness);
+
+    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
+        .expect("the deployer's signed claim writes the config");
+    assert_eq!(
+        ping_core::ReceiverConfig::from_bytes(
+            diff.public_diff()[&config.account_id]
+                .data
+                .actor_state(chat_id)
+                .as_ref()
+        ),
+        Some(claimed),
+        "the config PDA holds exactly what the deployer claimed"
+    );
+}
+
+/// The config PDA refuses a claim that did not come through the program
+/// account, which is what stops a front-runner hijacking the receiver.
+#[test]
+fn a_claim_sent_straight_to_the_config_pda_is_refused() {
+    let (state, chat_id) = chat_state([1_u8; 32]);
+    let config = Actor::new(receiver_config_account_id(chat_id), chat_id);
+    let tx = chat_init_config_tx(chat_id, config);
+    rejects_at(&state, &tx, 1, "only claimed through the program account");
+}
+
+/// And the program account refuses to forward one it did not authorize, so the
+/// claim needs the deployer's key either way.
+#[test]
+fn an_unauthorized_claim_at_the_program_account_is_refused() {
+    let (state, chat_id) = chat_state([1_u8; 32]);
+    let tx = chat_init_config_tx(chat_id, Actor::new(chat_id, chat_id));
+    rejects_at(&state, &tx, 1, "must authorize the receiver config claim");
+}
+
+/// A chained `Post` is refused and a top-level one executes without writing:
+/// emissions are recognized only at a transaction's top level, so a chained
+/// declaration would be a send that silently never leaves the zone.
+#[test]
+fn a_chained_post_is_refused_and_a_top_level_post_is_a_no_op() {
+    let chat_id = AccountId::from_builtin_program(test_programs::zone_chat().id());
+    let proxy_id = AccountId::from_builtin_program(test_programs::scripted().id());
+    let mut state = base_state().with_named_programs([
+        (chat_id, test_programs::zone_chat()),
+        (proxy_id, test_programs::scripted()),
+    ]);
+    seed_inbox_config(&mut state, [1_u8; 32]);
+
+    let emission = CrossZoneEmission {
+        target_zone: [2; 32],
+        target_account_id: AccountId::new([9; 32]),
+        target_accounts: vec![],
+        payload: b"hi".to_vec(),
+        ordinal: 0,
+    };
+    let entry = Actor::new(chat_id, chat_id);
+
+    let seed = lee_core::program::PdaSeed::new([3; 32]);
+    let caller = Actor::new(AccountId::for_public_pda(&proxy_id, &seed), proxy_id);
+    let script = Script::default().send(SyncMessage {
+        to: entry,
+        message: bytes_of!(&ChatMessage::post(emission.clone())),
+        pda_seeds: std::collections::BTreeSet::new(),
+    });
+    let message = Message {
+        admission_evidence: vec![PublicAccountEvidence::Pda {
+            program: proxy_id,
+            seed,
+        }],
+        ..Message::try_new(caller, vec![caller, entry], BTreeMap::new(), script)
+            .expect("build proxy message")
+    };
+    let chained = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+    // The delivery branch claims a program-origin call, so a chained Post dies
+    // at the Delivery decode rather than the Post arm's assert; refused either
+    // way, and a crafted delivery is stopped by the config's deliverer pin.
+    rejects_at(&state, &chained, 1, "a delivery decodes");
+
+    let post = Message::try_new(
+        entry,
+        vec![entry],
+        BTreeMap::new(),
+        ChatMessage::post(emission),
+    )
+    .expect("build Post message");
+    let top_level = PublicTransaction::new(post, WitnessSet::from_raw_parts(vec![]));
+    ValidatedStateDiff::from_public_transaction(&top_level, &state, 1, 0)
+        .expect("a top-level Post declares the emission and writes nothing");
 }

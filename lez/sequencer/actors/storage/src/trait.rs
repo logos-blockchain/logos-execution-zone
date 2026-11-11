@@ -14,13 +14,14 @@ use crate::{
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
         DropSettledCrossZoneDispatches, DumpDb, GetAccountTransactions, GetAllBlocks, GetBlock,
         GetBlockByHash, GetChannelViewBytes, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
-        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
-        GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
-        GetPendingDepositEvents, GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor,
-        GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        PutSlashRecordBytes, RecordDispatchFailure, RequeueDeadLetterDispatch,
-        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome,
-        UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
+        GetDeadLetterDispatchCount, GetDeadLetterDispatchRetainedCount, GetDeadLetterDispatches,
+        GetFinalSnapshot, GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
+        GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor, GetZoneCheckpoint,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutSlashRecordBytes,
+        RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
+        SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
+        ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
 
@@ -47,11 +48,13 @@ pub trait StorageActorTrait:
     + Message<GetPendingDepositEvents, Reply = Result<Vec<PendingDepositEventRecord>>>
     + Message<GetPendingCrossZoneDispatches, Reply = Result<Vec<PendingCrossZoneDispatchRecord>>>
     + Message<AddPendingCrossZoneDispatches, Reply = Result<usize>>
+    + Message<GetPendingCrossZoneDispatchCount, Reply = Result<usize>>
     + Message<DropSettledCrossZoneDispatches, Reply = Result<()>>
     + Message<RecordDispatchFailure, Reply = Result<DispatchFailure>>
     + Message<RequeueDeadLetterDispatch, Reply = Result<DeadLetterRequeue>>
     + Message<GetDeadLetterDispatches, Reply = Result<Vec<DeadLetterDispatch>>>
     + Message<GetDeadLetterDispatchCount, Reply = Result<u64>>
+    + Message<GetDeadLetterDispatchRetainedCount, Reply = Result<usize>>
     + Message<GetCrossZonePeerFloorBytes, Reply = Result<Option<Vec<u8>>>>
     + Message<SetCrossZonePeerFloorBytes, Reply = Result<()>>
     + Message<DeleteCrossZonePeerFloor, Reply = Result<()>>
