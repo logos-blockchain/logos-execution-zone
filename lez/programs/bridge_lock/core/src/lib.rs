@@ -26,8 +26,8 @@ pub enum Message {
     /// value for each: `cross_zone::extract_emission` reads them off the
     /// transaction, decoding every emitter through one shape.
     ///
-    /// The target zone is the caller's, so it is pinned against the config: a
-    /// lock to a zone this zone does not lock to is refused before anything moves.
+    /// The target zone is the caller's, so the config pins it: a lock to a zone
+    /// this zone does not lock to is refused.
     ///
     /// Sent to the holder's own actor under this program, signed by the holder;
     /// `outbox` is the outbox PDA actor the emission goes to. The trailing
@@ -37,9 +37,8 @@ pub enum Message {
         amount: u128,
         emission: CrossZoneEmission,
     },
-    /// Sets the outbox program, the mint target and the zones this zone may lock
-    /// to in the config actor state at genesis. Repeating the same configuration
-    /// is a no-op; a different one is rejected.
+    /// Written once into the config actor state at genesis. Repeating the same
+    /// configuration is a no-op; a different one is rejected.
     ///
     /// Sent to the config PDA.
     InitConfig {
@@ -91,8 +90,8 @@ pub fn holding_seed(holder: &[u8; 32]) -> PdaSeed {
 }
 
 /// PDA holding the outbox program id, the mint target and the zones this zone
-/// locks to, seeded at genesis so the guest pins the two programs without
-/// importing their image ids.
+/// locks to, seeded at genesis so the guest pins them without hardcoding any
+/// ids.
 #[must_use]
 pub fn config_account_id(bridge_lock_id: AccountId) -> AccountId {
     AccountId::for_public_pda(&bridge_lock_id, &config_seed())
@@ -103,8 +102,6 @@ pub const fn config_seed() -> PdaSeed {
     PdaSeed::new(CONFIG_SEED_DOMAIN)
 }
 
-/// Encodes the pinned outbox, mint target and lock target zones for the config
-/// account's data.
 #[must_use]
 pub fn config_bytes(
     outbox_account_id: AccountId,
@@ -121,8 +118,8 @@ pub fn config_bytes(
     bytes
 }
 
-/// Decodes the pinned outbox, mint target and lock target zones from the config
-/// account's data.
+/// `None` unless the tail is whole zone ids: a partial tail would silently drop
+/// a zone from the pinned list.
 #[must_use]
 pub fn read_config(data: &[u8]) -> Option<(AccountId, AccountId, Vec<ZoneId>)> {
     let (pinned, tail) = data.split_at_checked(64)?;
@@ -161,7 +158,6 @@ mod tests {
         }
     }
 
-    /// A partial tail would silently drop a zone from the pinned list.
     #[test]
     fn a_config_that_is_not_whole_zone_ids_is_refused() {
         let bytes = config_bytes(AccountId::new([3; 32]), AccountId::new([5; 32]), &[[7; 32]]);

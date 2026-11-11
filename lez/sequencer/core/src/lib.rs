@@ -2887,16 +2887,17 @@ fn build_genesis_state(
         });
 
     let cross_zone_declared = config.cross_zone.as_ref();
+    let seeds_bridge_lock = seeds_a_bridge_lock_account(&genesis_actions);
     assert!(
-        cross_zone_declared.is_some() || bridge_lock_holdings(&genesis_actions).next().is_none(),
-        "SupplyBridgeLockHolding requires cross_zone to be configured: bridge_lock is not registered on this zone"
+        cross_zone_declared.is_some() || !seeds_bridge_lock,
+        "seeding a bridge_lock account requires cross_zone to be configured: bridge_lock is not registered on this zone"
     );
     assert!(
         cross_zone_declared.is_some_and(|cross_zone| !cross_zone.lock_target_zones.is_empty())
-            || bridge_lock_holdings(&genesis_actions).next().is_none(),
-        "SupplyBridgeLockHolding requires cross_zone.lock_target_zones to name a zone: the seeded holdings could never be locked anywhere"
+            || !seeds_bridge_lock,
+        "seeding a bridge_lock account requires cross_zone.lock_target_zones to name a zone: the seeded holdings could never be locked anywhere"
     );
-    // No watcher reads its own channel, so a lock to this zone escrows with nothing to mint it.
+    // The inbox refuses a dispatch whose source is this zone, so nothing could ever mint it.
     assert!(
         !cross_zone_declared.is_some_and(|cross_zone| cross_zone
             .lock_target_zones
@@ -3250,15 +3251,19 @@ fn build_stake_genesis_transactions(
     txs
 }
 
-/// Bridge-lock holder balances configured for this zone's genesis.
-fn bridge_lock_holdings(
-    genesis: &[GenesisAction],
-) -> impl Iterator<Item = (lee::AccountId, BridgeAmount)> + '_ {
-    genesis.iter().filter_map(|action| match action {
-        GenesisAction::SupplyBridgeLockHolding { holder, amount } => Some((*holder, *amount)),
-        GenesisAction::SupplyAccount { .. }
-        | GenesisAction::SupplyPrivateAccount { .. }
-        | GenesisAction::StakeSequencer { .. } => None,
+/// Whether genesis funds an account under `bridge_lock`, under either spelling:
+/// a `SupplyAccount` at the holding PDA builds the transaction
+/// `SupplyBridgeLockHolding` builds, so reading one action leaves the other
+/// unguarded.
+fn seeds_a_bridge_lock_account(genesis: &[GenesisAction]) -> bool {
+    genesis.iter().any(|action| match action {
+        GenesisAction::SupplyBridgeLockHolding { .. } => true,
+        GenesisAction::SupplyAccount { recipient, .. } => matches!(
+            recipient,
+            DepositRecipient::Identified(PublicAccountEvidence::Pda { program, .. })
+                if *program == programs::bridge_lock_account_id()
+        ),
+        GenesisAction::SupplyPrivateAccount { .. } | GenesisAction::StakeSequencer { .. } => false,
     })
 }
 

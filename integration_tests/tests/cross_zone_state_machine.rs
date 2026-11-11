@@ -231,8 +231,7 @@ fn seed_holding(state: &mut V03State, holder_id: AccountId, balance: u128) {
         .with_public_accounts([(holding_id_of(holder_id), Account::funded(balance))]);
 }
 
-/// Seeds the bridge-lock config account pinning the real outbox, the wrapped
-/// token and [`LOCK_TARGET_ZONES`], matching what genesis seeds for a real zone.
+/// Matches what genesis seeds for a real zone.
 fn seed_bridge_lock_config(state: &mut V03State) {
     let bridge_lock_id = programs::bridge_lock_account_id();
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
@@ -1252,7 +1251,6 @@ fn a_lock_naming_another_target_program_is_rejected() {
     );
 }
 
-/// The refusal has to land before the custody transfer, not after.
 #[test]
 fn a_lock_to_an_unpinned_zone_is_rejected() {
     let unpinned = [0xAA_u8; 32];
@@ -1561,9 +1559,7 @@ fn the_bridge_pins_are_written_once_and_replayable() {
     )
     .expect("replaying the identical init is a no-op, not a failure");
 
-    // Any one of the three moving is a redirect: the outbox decides whether the
-    // emission is recorded, the target where the value lands, the zones where it
-    // may be carried at all.
+    // Any one of the three moving is a redirect.
     for (outbox, target, pinned, what) in [
         (
             AccountId::from_builtin_program([3; 8]),

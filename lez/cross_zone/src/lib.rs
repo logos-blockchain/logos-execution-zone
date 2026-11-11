@@ -126,17 +126,20 @@ pub struct CrossZoneConfig {
     pub peers: Vec<CrossZonePeer>,
     /// The zones `bridge_lock` may name as a lock target on this zone, the
     /// send-direction counterpart of `peers`, seeded into its config at genesis.
+    /// Empty means this zone locks to nobody, so a source-only zone that locks
+    /// outbound still has to list them here.
     ///
-    /// Empty means this zone locks to nobody. A source-only zone reads no peers
-    /// yet locks outbound, so this list is not the peer list.
+    /// Read by the sequencer alone, at genesis. Omitting it leaves `bridge_lock`
+    /// registered but unable to lock anywhere, and the config is written once, so
+    /// no later edit corrects it. Anyone may fund a holding by transferring to
+    /// its PDA, and only a lock moves it out, so a holding funded on such a zone
+    /// is stuck: nothing in `bridge_lock` releases an escrow. Genesis refuses to
+    /// seed one, which is the operator's path, not the runtime one.
     ///
-    /// Defaulted, so omitting it on a zone that declares `cross_zone` leaves
-    /// `bridge_lock` registered and unable to lock anywhere. The config is
-    /// written once, so that cannot be corrected later: a holding funded after
-    /// genesis, which anyone may do by transferring to its PDA, is then stuck.
-    /// Genesis refuses seeded holdings in that state, which covers the operator
-    /// path but not the runtime one; releasing an escrow needs an instruction
-    /// `bridge_lock` does not have.
+    /// Naming a zone asserts only that this zone may lock to it. Whether that
+    /// zone routes the lock back to a mint is its own config, unreadable from
+    /// here, and a lock to a pinned zone that refuses the mint strands the same
+    /// way.
     #[serde(default)]
     pub lock_target_zones: Vec<ZoneId>,
     /// Account allowed to change which peer sources each target program accepts,

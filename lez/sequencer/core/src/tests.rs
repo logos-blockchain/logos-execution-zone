@@ -6829,8 +6829,6 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
     }
 }
 
-/// Holdings seeded on a zone that locks to nobody could only ever be locked into
-/// a permanent debit.
 #[test]
 #[should_panic(expected = "could never be locked anywhere")]
 fn genesis_bridge_lock_holdings_without_a_lock_target_zone_are_refused() {
@@ -6848,6 +6846,35 @@ fn genesis_bridge_lock_holdings_without_a_lock_target_zone_are_refused() {
         actions: vec![config::GenesisAction::SupplyBridgeLockHolding {
             holder: AccountId::new([9; 32]),
             amount: 1_000,
+        }],
+    });
+    let key = test_bootstrap_sequencer_key(&config);
+    let _genesis = build_genesis_state(&config, Some(key));
+}
+
+/// `SupplyAccount` at the holding PDA builds what `SupplyBridgeLockHolding`
+/// builds, so the guard has to read both or the operator just spells it the
+/// other way.
+#[test]
+#[should_panic(expected = "could never be locked anywhere")]
+fn genesis_supplying_a_bridge_lock_pda_directly_is_refused_too() {
+    let temp_dir = tempdir().unwrap();
+    let mut config = setup_sequencer_config();
+    config.home = temp_dir.path().to_path_buf();
+    config.cross_zone = Some(config::CrossZoneConfig {
+        peers: Vec::new(),
+        lock_target_zones: Vec::new(),
+        source_authority: None,
+        source_governance: None,
+    });
+    config.genesis = Some(config::GenesisConfig {
+        channel_params: config::default_channel_params(),
+        actions: vec![config::GenesisAction::SupplyAccount {
+            recipient: config::DepositRecipient::Identified(lee::PublicAccountEvidence::Pda {
+                program: programs::bridge_lock_account_id(),
+                seed: bridge_lock_core::holding_seed(&[9; 32]),
+            }),
+            balance: 1_000,
         }],
     });
     let key = test_bootstrap_sequencer_key(&config);

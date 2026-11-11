@@ -458,7 +458,6 @@ pub const fn source_only_cross_zone() -> CrossZoneConfig {
     }
 }
 
-/// The same, naming the zones `bridge_lock` may lock to.
 #[must_use]
 pub fn source_only_cross_zone_locking_to(lock_target_zones: Vec<[u8; 32]>) -> CrossZoneConfig {
     CrossZoneConfig {
