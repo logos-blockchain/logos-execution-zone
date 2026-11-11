@@ -296,11 +296,12 @@ async fn submit_bedrock_deposit(
     }
     let note_id = note_id.context("The Bedrock wallet never held a note of the deposit amount")?;
 
-    let metadata = borsh::to_vec(&DepositMetadata {
-        recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(recipient)),
-    })?
-    .try_into()
-    .map_err(|_err| anyhow::anyhow!("deposit metadata is too big"))?;
+    // Bounded per era now; a recipient is far under any era's limit.
+    let metadata = logos_blockchain_core::mantle::ops::channel::deposit::Metadata::new_unchecked(
+        borsh::to_vec(&DepositMetadata {
+            recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(recipient)),
+        })?,
+    );
     let deposit = DepositOp {
         channel_id: bedrock_channel_id(),
         inputs: Inputs::new(note_id),

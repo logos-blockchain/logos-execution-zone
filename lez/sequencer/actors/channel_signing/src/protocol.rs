@@ -1,3 +1,5 @@
+use std::num::NonZero;
+
 use kameo::Reply;
 use logos_blockchain_binary_codec::canonical::{BinaryDecodeExt as _, BinaryEncode as _};
 use logos_blockchain_core::{
@@ -30,8 +32,8 @@ pub struct ConfigTarget {
     pub posting_timeframe: u32,
     pub posting_timeout: u32,
     /// Signatures the *next* config will have to carry, not this one.
-    pub configuration_threshold: u16,
-    pub transfer_threshold: u16,
+    pub configuration_threshold: NonZero<u16>,
+    pub transfer_threshold: NonZero<u16>,
 }
 
 /// What this node last saw of the live channel, plus the committee it should
@@ -171,7 +173,15 @@ impl Wire {
         let (tag, payload) = bytes.split_first()?;
         match *tag {
             DRAFT => Some(Self::Draft(Draft {
-                tx: Box::new(Ops::decode_all(payload).ok()?),
+                // A draft is only signed once it matches this node's own target, so
+                // no op data bound is enforced here beyond the codec's own.
+                tx: Box::new(
+                    <Ops as logos_blockchain_binary_codec::canonical::BinaryDecode>::decode_all(
+                        payload,
+                        &u32::MAX,
+                    )
+                    .ok()?,
+                ),
             })),
             SIGNATURE => {
                 let (tx_hash, rest) = payload.split_at_checked(32)?;
