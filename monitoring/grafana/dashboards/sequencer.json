@@ -546,8 +546,59 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 53 },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 53 },
       "id": 17,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "cross_zone_watcher_alive{sequencer=\"$sequencer\"}",
+          "legendFormat": "peer {{peer}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Peer watchers alive",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" }, "unit": "short", "decimals": 0 },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 53 },
+      "id": 18,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "cross_zone_pending_dispatches{sequencer=\"$sequencer\"}",
+          "legendFormat": "pending",
+          "refId": "A"
+        }
+      ],
+      "title": "Pending cross-zone dispatches",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "short",
+          "min": 0.0
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 53 },
+      "id": 19,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -567,7 +618,7 @@
       "datasource": { "type": "loki", "uid": "loki" },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [ ] },
       "gridPos": { "h": 12, "w": 24, "x": 0, "y": 61 },
-      "id": 18,
+      "id": 20,
       "links": [
         {
           "targetBlank": false,

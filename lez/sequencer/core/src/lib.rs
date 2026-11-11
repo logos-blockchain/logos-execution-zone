@@ -20,6 +20,7 @@ use common::{
     transaction::{FeePayee, LeeTransaction, TxEvents, clock_invocation, fee_invocation},
 };
 use config::{GenesisAction, SequencerConfig};
+pub use cross_zone::is_sequencer_only_program;
 use cross_zone_inbox_core::CrossZoneMessage;
 use futures::StreamExt as _;
 use kameo::actor::{ActorRef, Spawn as _};
@@ -53,17 +54,19 @@ use sequencer_storage_actor::{
     protocol::{
         AtomicUpdate, CrossZoneMessageKey, DeadLetterDispatch, DeadLetterRequeue, DispatchFailure,
         DispatchOrigin, DropSettledCrossZoneDispatches, GetAllBlocks, GetBlock,
-        GetChannelViewBytes, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
-        GetFirstBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
-        GetPendingDepositEvents, GetZoneAnchor, GetZoneCheckpoint, PendingCrossZoneDispatchRecord,
-        PendingDepositEventRecord, RecordDispatchFailure, RequeueDeadLetterDispatch,
-        WithdrawalReconciliationKey, ZoneAnchorRecord, ZoneCheckpointRecord,
+        GetChannelViewBytes, GetDeadLetterDispatchCount, GetDeadLetterDispatchRetainedCount,
+        GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLatestBlockMeta,
+        GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetZoneAnchor,
+        GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+        RecordDispatchFailure, RequeueDeadLetterDispatch, WithdrawalReconciliationKey,
+        ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
 use tokio::sync::Mutex;
 use tokio_retry::{Retry, strategy::FixedInterval};
 
 use crate::{
+    cross_zone_watcher::record_pending_dispatch_gauge,
     gossip::{
         AccreditedKeys, AccreditedKeysReceiver, AccreditedKeysSender, MaxBlockSizeReceiver,
         MaxBlockSizeSender, accredited_keys_channel,
@@ -639,6 +642,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
         sequencer_core_metrics::record_chain_height(sequencer_core.chain_height().await);
         sequencer_core.record_dead_letter_gauge().await;
+        record_pending_dispatch_gauge(&sequencer_core.storage_ref).await;
 
         Ok((sequencer_core, mempool_handle))
     }
@@ -902,6 +906,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// Feeds one channel update into the chain state and mirrors it to the
     /// store: finalized entries first, then the view change. Production builds
     /// on this same head.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "one pass folds finalized entries, the view change, and the gauges together"
+    )]
     pub async fn on_channel_update(
         &mut self,
         update: Arc<sequencer_bedrock_actor::protocol::ChannelUpdate>,
@@ -959,7 +967,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
         // The lock is held across the persist below so disk writes land in apply
         // order — the produce path persists under this same lock.
-        let (resubmit_txs, outcome, head_height) = {
+        let (resubmit_txs, outcome, head_height, settled_deliveries) = {
             let mut chain = self.chain.lock().await;
 
             let head_before: Vec<Block> = chain.head_blocks().cloned().collect();
@@ -1082,6 +1090,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 finalized_dispatch_keys
                     .extend(settled_dispatch_keys(&self.storage_ref, block).await);
             }
+            let settled_deliveries = !finalized_dispatch_keys.is_empty();
 
             let outcome = self
                 .storage_ref
@@ -1102,13 +1111,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     panic!("Failed to persist follow update: {:#}", anyhow!(err))
                 });
 
-            (resubmit_txs, outcome, head_tip_id)
+            (resubmit_txs, outcome, head_tip_id, settled_deliveries)
         };
 
         sequencer_core_metrics::record_chain_height(head_height);
         // The runtime reconcile path: finalizing another sequencer's block drops the
-        // dead letter of a delivery this node gave up on.
-        self.record_dead_letter_gauge().await;
+        // dead letter of a delivery this node gave up on; re-read only when one settled.
+        if settled_deliveries {
+            self.record_dead_letter_gauge().await;
+            record_pending_dispatch_gauge(&self.storage_ref).await;
+            record_pending_dispatch_gauge(&self.storage_ref).await;
+        }
 
         if outcome.accepted_deposits > 0 {
             log::info!(
@@ -1858,11 +1871,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // One that does not decode is dropped rather than kept, since nothing
         // will ever turn those bytes into a block transaction.
         let mut settled = Vec::new();
-        let recorded_dispatches: Vec<_> = self
+        let pending_records = self
             .storage_ref
             .ask(GetPendingCrossZoneDispatches)
             .await
-            .context("Failed to load pending cross-zone dispatches")?
+            .context("Failed to load pending cross-zone dispatches")?;
+        sequencer_core_metrics::record_cross_zone_pending_dispatches(pending_records.len());
+        let recorded_dispatches: Vec<_> = pending_records
             .into_iter()
             .filter_map(
                 |record| match borsh::from_slice::<LeeTransaction>(&record.transaction) {
@@ -2443,6 +2458,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             Ok(DispatchFailure::Retired(record)) => {
                 sequencer_core_metrics::increment_cross_zone_dispatches_retired_total();
                 self.record_dead_letter_gauge().await;
+                record_pending_dispatch_gauge(&self.storage_ref).await;
                 error!(
                     "Giving up on cross-zone delivery {} from peer zone {} block {} transaction {} ({} bytes) after {} failed attempts. This node will not retry it; unless another sequencer carries it, the message is not delivered. Kept in the dead letter; requeueCrossZoneDeadLetter restores it.",
                     hex::encode(key),
@@ -2488,10 +2504,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         &self,
         message_key: CrossZoneMessageKey,
     ) -> Result<DeadLetterRequeue> {
-        self.storage_ref
+        let outcome = self
+            .storage_ref
             .ask(RequeueDeadLetterDispatch { message_key })
-            .await
-            .map_err(Into::into)
+            .await?;
+        self.record_dead_letter_gauge().await;
+        record_pending_dispatch_gauge(&self.storage_ref).await;
+        Ok(outcome)
     }
 
     // TODO: Remove that
@@ -2513,9 +2532,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// reconciliation when a delivery settles elsewhere). Costs a read and a decode,
     /// so call it only where one of those can have happened.
     async fn record_dead_letter_gauge(&self) {
-        match self.storage_ref.ask(GetDeadLetterDispatches).await {
-            Ok(records) => {
-                sequencer_core_metrics::record_cross_zone_dead_letter_dispatches(records.len());
+        match self
+            .storage_ref
+            .ask(GetDeadLetterDispatchRetainedCount)
+            .await
+        {
+            Ok(count) => {
+                sequencer_core_metrics::record_cross_zone_dead_letter_dispatches(count);
             }
             Err(err) => {
                 warn!(
@@ -3250,18 +3273,6 @@ fn bridge_lock_holdings(
     })
 }
 
-/// Whether a program may only be invoked by sequencer-origin transactions.
-///
-/// The cross-zone inbox is injected solely by the watcher; a user-submitted call
-/// must be rejected at ingress, since `TransactionOrigin` is not carried in the
-/// block. The fee program is invoked solely by the forced per-block fee
-/// transaction.
-#[must_use]
-pub fn is_sequencer_only_program(program_account_id: AccountId) -> bool {
-    cross_zone::is_sequencer_only_program(program_account_id)
-        || program_account_id == programs::fee_account_id()
-}
-
 /// Op id of the `index`-th genesis allocation.
 ///
 /// Genesis allocations are `Deposit`s with no L1 event behind them, so their op
@@ -3499,18 +3510,19 @@ fn classify_settled_deliveries(
     recorded: &[PendingCrossZoneDispatchRecord],
     block: &Block,
 ) -> (HashSet<CrossZoneMessageKey>, Vec<CrossZoneMessageKey>) {
+    let recorded_by_key: HashMap<_, _> = recorded
+        .iter()
+        .map(|record| (record.message_key, record))
+        .collect();
     let mut keys = HashSet::new();
     let mut forged = Vec::new();
     for tx in &block.body.transactions {
         let Some(key) = extract_cross_zone_dispatch_key(tx) else {
             continue;
         };
-        let mismatched = recorded
-            .iter()
-            .find(|record| record.message_key == key)
-            .is_some_and(|record| {
-                borsh::to_vec(tx).is_ok_and(|encoded| encoded != record.transaction)
-            });
+        let mismatched = recorded_by_key.get(&key).is_some_and(|record| {
+            borsh::to_vec(tx).is_ok_and(|encoded| encoded != record.transaction)
+        });
         if mismatched {
             forged.push(key);
         }

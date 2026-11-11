@@ -135,7 +135,14 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
     }
 
     async fn check_health(&self) -> Result<(), ErrorObjectOwned> {
-        Ok(())
+        // A stopped executor means production halted while reads still answer.
+        if self.executor_ref.is_alive() {
+            Ok(())
+        } else {
+            Err(internal_error(
+                "Executor actor is stopped; block production has halted",
+            ))
+        }
     }
 
     async fn get_block(&self, block_id: BlockId) -> Result<Option<Block>, ErrorObjectOwned> {
@@ -418,7 +425,27 @@ fn internal_error(err: impl std::fmt::Display) -> ErrorObjectOwned {
 
 #[cfg(test)]
 mod tests {
+    use kameo::actor::Spawn as _;
+    use sequencer_executor_actor::mock::MockExecutorActor;
+    use sequencer_service_rpc::RpcServer as _;
+
     use super::*;
+
+    #[tokio::test]
+    async fn health_fails_once_the_executor_actor_is_stopped() {
+        let executor_ref = MockExecutorActor::spawn(MockExecutorActor::new());
+        let (_max_block_size_tx, max_block_size_rx) = tokio::sync::watch::channel(0);
+        let service = Service::new(executor_ref.clone(), max_block_size_rx, None);
+
+        assert!(service.check_health().await.is_ok());
+
+        executor_ref.stop_gracefully().await.expect("stop request");
+        executor_ref.wait_for_shutdown().await;
+        assert!(
+            service.check_health().await.is_err(),
+            "a stopped executor means no block production, so health must fail"
+        );
+    }
 
     #[test]
     fn a_reserve_below_the_head_fee_gets_the_reprice_code() {

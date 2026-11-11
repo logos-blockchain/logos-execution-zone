@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
 };
 
+use borsh::BorshDeserialize as _;
 use common::{
     HashType,
     block::{BedrockStatus, Block, BlockMeta, PeerChainTip},
@@ -31,8 +32,9 @@ use crate::{
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
         DropSettledCrossZoneDispatches, DumpDb, GetAccountTransactions, GetAllBlocks, GetBlock,
         GetBlockByHash, GetBlockEvents, GetChannelViewBytes, GetCrossZonePeerFloorBytes,
-        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetEventFilter,
-        GetFinalSnapshot, GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
+        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatchRetainedCount,
+        GetDeadLetterDispatches, GetEventFilter, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
+        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatchCount,
         GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,
         GetTransactionByHash, GetTxHashToBlockIdMapItem, GetZoneAnchor, GetZoneCheckpoint,
         PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutSlashRecordBytes,
@@ -1190,6 +1192,18 @@ impl Message<AddPendingCrossZoneDispatches> for StorageActor {
     }
 }
 
+impl Message<GetPendingCrossZoneDispatchCount> for StorageActor {
+    type Reply = Result<usize>;
+
+    async fn handle(
+        &mut self,
+        GetPendingCrossZoneDispatchCount: GetPendingCrossZoneDispatchCount,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self.db().count::<entities::PendingCrossZoneDispatch>())
+    }
+}
+
 impl Message<DropSettledCrossZoneDispatches> for StorageActor {
     type Reply = Result<()>;
 
@@ -1345,6 +1359,27 @@ impl Message<GetDeadLetterDispatchCount> for StorageActor {
             .db()
             .get::<entities::DeadLetterDispatches>(&encoding::SingletonKey)?
             .map_or(0, |dispatches| dispatches.total))
+    }
+}
+
+impl Message<GetDeadLetterDispatchRetainedCount> for StorageActor {
+    type Reply = Result<usize>;
+
+    async fn handle(
+        &mut self,
+        GetDeadLetterDispatchRetainedCount: GetDeadLetterDispatchRetainedCount,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        // `records` is the first field, so its borsh length prefix is the count.
+        let Some(bytes) = self
+            .db()
+            .get_bytes::<entities::DeadLetterDispatches>(&encoding::SingletonKey)?
+        else {
+            return Ok(0);
+        };
+        let retained = u32::deserialize(&mut bytes.as_slice())
+            .map_err(|err| Error::DatabaseError(anyhow::Error::from(err)))?;
+        Ok(usize::try_from(retained).expect("a u32 count fits usize"))
     }
 }
 
