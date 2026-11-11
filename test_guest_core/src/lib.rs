@@ -7,6 +7,7 @@ use lee_core::{
     program::{AsyncMessage, PdaSeed, Response, Sendable, SyncMessage},
 };
 
+pub mod chat;
 pub mod guests;
 
 // `live_payout` pays from the public PDA of its program under this seed.

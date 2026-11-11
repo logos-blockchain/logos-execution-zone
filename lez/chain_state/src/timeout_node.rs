@@ -9,6 +9,7 @@ use log::warn;
 use logos_blockchain_core::mantle::ledger::verification_mode::StandardMode;
 use logos_blockchain_zone_sdk::{
     adapter::{BoxStream, Node},
+    http_api_common::bodies::mantle::LimitsResponseBody,
     node_types::{
         ApiBlock, BlockInfo, ChainServiceInfo, ChannelId, ChannelState, Error, Events, HeaderId,
         ProcessedBlockEvent, SignedOps, Slot, TimeInfo, Unverified, WalletFundRequestBody,
@@ -42,6 +43,10 @@ impl<N: Node + Sync> Node for TimeoutNode<N> {
 
     async fn time_info(&self) -> Result<TimeInfo, Error> {
         bounded(self.inner.time_info()).await
+    }
+
+    async fn limits(&self) -> Result<LimitsResponseBody, Error> {
+        bounded(self.inner.limits()).await
     }
 
     async fn channel_state(&self, channel_id: ChannelId) -> Result<Option<ChannelState>, Error> {
@@ -129,6 +134,10 @@ mod tests {
         }
 
         async fn time_info(&self) -> Result<TimeInfo, Error> {
+            std::future::pending().await
+        }
+
+        async fn limits(&self) -> Result<LimitsResponseBody, Error> {
             std::future::pending().await
         }
 

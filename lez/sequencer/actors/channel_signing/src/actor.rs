@@ -18,7 +18,7 @@ use logos_blockchain_core::{
         traits::Hashable as _,
         transactions::Ops,
     },
-    proofs::channel_multi_sig_proof::IndexedSignature,
+    proofs::channel_multi_sig_proof::{IndexedSignature, IndexedSignatures},
 };
 use logos_blockchain_key_management_system_service::keys::{
     Ed25519Key, Ed25519PublicKey, Ed25519Signature,
@@ -190,12 +190,14 @@ impl ChannelSigningActor {
 
         // Bedrock wants exactly the threshold, never more, so take the lowest
         // indices and leave the rest.
-        let signatures = draft
-            .signatures
-            .iter()
-            .take(required)
-            .map(|(index, signature)| IndexedSignature::new(*index, *signature))
-            .collect();
+        let signatures = IndexedSignatures::try_from_iter(
+            draft
+                .signatures
+                .iter()
+                .take(required)
+                .map(|(index, signature)| (*index, *signature)),
+        )
+        .expect("a `u16` threshold of distinct indices fits `IndexedSignatures`");
 
         Action::Submit(Box::new(Submission {
             tx_hash: draft.tx_hash,
@@ -644,12 +646,12 @@ fn config_op(tx: &Ops) -> Option<&ChannelConfigOp> {
 
 /// Whether `op` installs exactly what this node wants installed.
 fn matches(target: &ConfigTarget, op: &ChannelConfigOp) -> bool {
-    op.parent == target.parent
-        && op.keys.iter().eq(target.keys.iter())
-        && u32::from(op.posting_timeframe.clone()) == target.posting_timeframe
-        && u32::from(op.posting_timeout.clone()) == target.posting_timeout
-        && op.configuration_threshold == target.configuration_threshold
-        && op.transfer_threshold == target.transfer_threshold
+    op.parent() == target.parent
+        && op.keys().iter().eq(target.keys.iter())
+        && u32::from(op.posting_timeframe().clone()) == target.posting_timeframe
+        && u32::from(op.posting_timeout().clone()) == target.posting_timeout
+        && op.configuration_threshold() == target.configuration_threshold
+        && op.transfer_threshold() == target.transfer_threshold
 }
 
 #[cfg(test)]

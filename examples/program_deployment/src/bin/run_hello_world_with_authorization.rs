@@ -5,7 +5,7 @@ use lee::{
     AccountId, Actor, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
-use program_deployment::deploy_program;
+use program_deployment::{deploy_program, fee_paid_by};
 use sequencer_service_rpc::RpcClient as _;
 use wallet::WalletCore;
 
@@ -45,7 +45,7 @@ async fn main() {
         .unwrap()
         .parse()
         .unwrap();
-    // Third argument is an existing, funded account to pay the deployment fee
+    // Third argument is an existing, funded account to pay the deployment and transaction fees
     let payer: AccountId = std::env::args_os()
         .nth(3)
         .unwrap()
@@ -73,16 +73,22 @@ async fn main() {
 
     // Construct the public transaction
     // Query the current nonce from the node
-    let nonces = BTreeMap::from([(
+    let mut nonces = BTreeMap::from([(
         account_id,
         wallet_core
             .get_accounts_nonces(&[account_id])
             .await
             .expect("Node should be reachable to query account data")[0],
     )]);
-    let signing_keys = [&signing_key];
+    let mut signing_keys = vec![&signing_key];
+    // The fee is charged to `payer`, which must also sign (unless it is `account_id` itself).
+    let (fee, payer_nonce, payer_key) = fee_paid_by(&wallet_core, payer).await.unwrap();
+    if payer != account_id {
+        nonces.insert(payer, payer_nonce);
+        signing_keys.push(&payer_key);
+    }
     let hello = Actor::new(account_id, program_account_id);
-    let message = Message::try_new(hello, vec![hello], nonces, greeting).unwrap();
+    let message = Message::try_new_with_fees(hello, vec![hello], nonces, greeting, fee).unwrap();
     // Pass the signing key to sign the message. This will be used by the node
     // to flag the pre_state as `is_authorized` when executing the program
     let witness_set = WitnessSet::for_message(&message, &signing_keys);

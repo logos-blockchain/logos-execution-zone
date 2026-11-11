@@ -1077,6 +1077,48 @@ mod tests {
     }
 
     #[test]
+    fn a_block_with_a_user_transaction_writing_the_clock_is_rejected() {
+        let mut state =
+            initial_state(true).with_public_accounts([common::test_utils::producer_seed()]);
+        let genesis = produce_dummy_block(1, None, vec![]);
+        apply_block(None, &genesis, &mut state).expect("genesis applies");
+        let tip = tip_of(&genesis);
+
+        let accounts = initial_pub_accounts_private_keys();
+        let payer = accounts[0].account_id;
+        let payer_key = accounts[0].pub_sign_key.clone();
+        let payer_nonce = state.get_account_by_id(payer).nonce;
+        let clock = system_accounts::clock_actor();
+        // A tick for block 2 passes the clock's own check, so only the restricted-account guard
+        // can reject the block.
+        let message = public_transaction::Message::try_new_with_fees(
+            clock,
+            vec![clock],
+            BTreeMap::from([(payer, payer_nonce)]),
+            clock_core::Message::Tick {
+                timestamp: 200,
+                block_id: 2,
+            },
+            test_fee_declaration(payer),
+        )
+        .expect("clock message builds");
+        let witness = public_transaction::WitnessSet::for_message(&message, &[&payer_key]);
+        let tick = LeeTransaction::Public(PublicTransaction::new(message, witness));
+        let tick_block = produce_dummy_block(2, Some(tip.hash), vec![tick]);
+        let err = apply_block(Some(&tip), &tick_block, &mut state)
+            .expect_err("a block writing the clock from a user transaction must be rejected");
+        let clock_id = system_accounts::clock_account_id().to_string();
+        assert!(
+            matches!(
+                &err,
+                BlockIngestError::RestrictedAccountModification { tx_index: 0, reason }
+                    if reason.contains(&clock_id)
+            ),
+            "expected RestrictedAccountModification on the clock, got {err:?}",
+        );
+    }
+
+    #[test]
     fn a_signed_public_transfer_without_a_fee_is_rejected_not_executed_for_free() {
         // Exempt means executed-and-included for free. If a fee-less public
         // transfer were classified exempt, any signer could opt out of fees by

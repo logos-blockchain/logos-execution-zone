@@ -1,5 +1,6 @@
+pub use sequencer_stake_core::SequencerStakeConfig;
 use sequencer_stake_core::{
-    SequencerKey, SequencerStakeConfig,
+    SequencerKey,
     ed25519_dalek::{Signature, VerifyingKey},
 };
 

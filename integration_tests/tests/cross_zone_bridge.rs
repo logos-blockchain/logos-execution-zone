@@ -36,15 +36,18 @@ use test_fixtures::{
 use tokio::test;
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(600);
-// LGO-scale: the holder's balance also pays the lock's fee (reserve ≈ 16M+ at
-// wallet-like gas limits), so the bridgeable seed must dwarf it.
+/// Enough for the lock plus the fees the holder pays for its other transactions.
 const INITIAL_BALANCE: u64 = 10_000_000_000;
 const LOCK_AMOUNT: u128 = 30;
 const RECIPIENT: [u8; 32] = [9; 32];
 
 #[test]
 async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
-    let partial = SequencerPartialConfig::default();
+    let partial = SequencerPartialConfig {
+        // Covers the storage price doubling at the devnet's first epoch rotations.
+        priority_fee_percent: 150,
+        ..SequencerPartialConfig::default()
+    };
     let channel_a = config::bedrock_channel_id();
     let channel_b = config::bedrock_channel_id_b();
     let zone_b: [u8; 32] = *channel_b.as_ref();
@@ -62,6 +65,8 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
                 mint_cap: None,
             }],
             min_committee_size: 0,
+            genesis_hash: None,
+            emitters: vec![],
         }],
         source_authority: None,
         source_governance: None,
@@ -216,11 +221,13 @@ fn build_lock_tx(
     let lock = bridge_lock_core::Message::Lock {
         outbox,
         amount: LOCK_AMOUNT,
-        target_zone,
-        target_account_id: wrapped_token_id,
-        target_accounts,
-        payload,
-        ordinal,
+        emission: bridge_lock_core::CrossZoneEmission {
+            target_zone,
+            target_account_id: wrapped_token_id,
+            target_accounts,
+            payload,
+            ordinal,
+        },
     };
 
     // The lock is received at the holder's own actor, which its signature authorizes; it

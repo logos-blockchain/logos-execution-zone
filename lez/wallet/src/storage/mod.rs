@@ -123,6 +123,7 @@ impl Storage {
     }
 
     pub fn check_label_availability(&self, label: &Label) -> Result<()> {
+        label.validate_for_account()?;
         if self.labels.contains_key(label) {
             Err(anyhow::anyhow!("Label `{label}` is already in use"))
         } else {
@@ -131,6 +132,7 @@ impl Storage {
     }
 
     pub fn add_label(&mut self, label: Label, account_id: AccountIdWithPrivacy) -> Result<()> {
+        label.validate_for_account()?;
         // Creating error beforehand to avoid cloning label.
         let err = anyhow::anyhow!("Label `{label}` is already in use");
 
@@ -535,6 +537,16 @@ mod tests {
             storage.labels_for_account(account_id).collect::<Vec<_>>(),
             vec![&another_label, &label]
         );
+    }
+
+    #[test]
+    fn labels_with_reserved_characters_are_rejected() {
+        let (mut storage, _) = Storage::new();
+        let account_id = AccountIdWithPrivacy::Public(lee::AccountId::default());
+        for bad in ["a@b", "x:sign", "pda:x", "a/b", "m/44'/0'"] {
+            assert!(storage.check_label_availability(&Label::new(bad)).is_err());
+            assert!(storage.add_label(Label::new(bad), account_id).is_err());
+        }
     }
 
     #[test]

@@ -9,7 +9,8 @@ use lee::{
 };
 use lee_core::account::{AccountId, Actor};
 use ping_core::{
-    SenderMessage, ping_record_pda, receiver_config_account_id, sender_config_account_id,
+    CrossZoneEmission, SenderMessage, ping_record_pda, receiver_config_account_id,
+    sender_config_account_id,
 };
 
 /// The peer's hash-linked chain from its genesis up to and including `last`,
@@ -22,6 +23,46 @@ pub fn linked_chain_to(last: u64, txs_at: impl Fn(u64) -> Vec<LeeTransaction>) -
         blocks.push(produce_dummy_block(block_id, prev, txs_at(block_id)));
     }
     blocks
+}
+
+/// A transaction whose root call sends `instruction` to `emitter`, the shape
+/// `extract_emission` reads a registered emitter's transactions through.
+#[must_use]
+pub fn emitter_instruction(emitter: AccountId, instruction: Vec<u8>) -> LeeTransaction {
+    let root = Actor::new(emitter, emitter);
+    let message = Message::new_preserialized(
+        root,
+        instruction,
+        vec![root],
+        std::collections::BTreeMap::new(),
+        None,
+    );
+    LeeTransaction::Public(PublicTransaction::new(
+        message,
+        WitnessSet::from_raw_parts(vec![]),
+    ))
+}
+
+/// A generic-contract emission from `emitter`, recognized only while `emitter`
+/// is in the peer's registered set.
+#[must_use]
+pub fn generic_emission(
+    emitter: AccountId,
+    target_zone: ZoneId,
+    target_account_id: AccountId,
+    payload: &[u8],
+) -> LeeTransaction {
+    let emission = cross_zone_emission_core::CrossZoneEmission {
+        target_zone,
+        target_account_id,
+        target_accounts: vec![],
+        payload: payload.to_vec(),
+        ordinal: 0,
+    };
+    emitter_instruction(
+        emitter,
+        cross_zone_emission_core::emitting_instruction_bytes(&emission),
+    )
 }
 
 /// A `ping_sender` emission aimed at `target_zone` and `target_program_id`,
@@ -44,14 +85,16 @@ pub fn ping_emission(
     let outbox = Actor::new(slot.account_id(), outbox_id);
     let send = SenderMessage::Send {
         outbox,
-        target_zone,
-        target_account_id,
-        target_accounts: vec![
-            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
-            Actor::new(ping_record_pda(receiver_id), receiver_id),
-        ],
-        payload: payload.to_vec(),
-        ordinal: 0,
+        emission: CrossZoneEmission {
+            target_zone,
+            target_account_id,
+            target_accounts: vec![
+                Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+                Actor::new(ping_record_pda(receiver_id), receiver_id),
+            ],
+            payload: payload.to_vec(),
+            ordinal: 0,
+        },
     };
     let message = Message {
         admission_evidence: vec![slot],

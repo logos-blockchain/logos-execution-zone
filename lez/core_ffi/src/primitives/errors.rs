@@ -4,6 +4,7 @@ pub enum PrimitiveOperationStatus {
     #[default]
     Ok = 0x0,
     CastError = 0x1,
+    NullPointer = 0x2,
 }
 
 impl PrimitiveOperationStatus {

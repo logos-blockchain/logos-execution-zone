@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt::{self, Display, Formatter},
     num::{NonZeroU32, NonZeroU64},
     sync::{
@@ -20,15 +20,16 @@ use common::{
     transaction::LeeTransaction,
 };
 use cross_zone::{
-    CommitteeFloorState, EmissionSource, FloorVerdict, Link, OffChain, StallState, alerts_at,
-    build_dispatch_from_emission, equivocation_report, extract_emission, link_to_tip,
-    screen_peer_block,
+    CommitteeFloorState, EmissionSource, FloorVerdict, Link, OffChain, RegisteredEmitter,
+    StallState, alerts_at, build_dispatch_from_emission, equivocation_report, extract_emission,
+    link_to_tip, peer_emitter_set, screen_peer_block,
 };
 use cross_zone_inbox_core::{
     CrossZoneMessage, Message as InboxMessage, MessageKey, ZoneId, message_key,
 };
 use futures::{Stream, StreamExt as _};
 use lee::GENESIS_BLOCK_ID;
+use lee_core::account::AccountId;
 use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
@@ -157,16 +158,23 @@ struct PeerChain {
     /// recomputes `header.hash` before anything is cached. Without that it compared two fields the
     /// peer wrote.
     verified_prefix: Option<PeerChainTip>,
+    /// Pin for the peer's genesis hash; `None` anchors on the first read.
+    genesis_hash: Option<HashType>,
+    /// A genesis read was refused by the pin. Meaningful only while nothing
+    /// has anchored; see [`PeerBlocks::pin_refused`].
+    pin_refused: bool,
 }
 
 impl PeerChain {
-    fn new(window: u64) -> Self {
+    fn new(window: u64, genesis_hash: Option<HashType>) -> Self {
         Self {
             blocks: HashMap::new(),
             evicted: HashMap::new(),
             next_to_evict: GENESIS_BLOCK_ID,
             window,
             verified_prefix: None,
+            genesis_hash,
+            pin_refused: false,
         }
     }
 
@@ -202,7 +210,12 @@ impl PeerChain {
     /// whose hash [`accept_peer_block`] proved is the recomputed one.
     fn extend_prefix(&mut self) {
         while let Some((next, _)) = self.blocks.get(&self.next_expected()) {
-            match link_to_tip(self.tip().as_ref(), next, next.header.hash) {
+            match link_to_tip(
+                self.tip().as_ref(),
+                next,
+                next.header.hash,
+                self.genesis_hash,
+            ) {
                 Link::Next(block_hash) => {
                     self.verified_prefix = Some(PeerChainTip {
                         block_id: next.header.block_id,
@@ -243,6 +256,8 @@ struct PeerBlocks {
     chains: Arc<RwLock<HashMap<ZoneId, PeerChain>>>,
     /// Bodies kept behind each peer's run tip.
     window: u64,
+    /// Per-peer genesis pins; an absent entry anchors on the first read.
+    genesis_pins: Arc<HashMap<ZoneId, HashType>>,
 }
 
 impl Default for PeerBlocks {
@@ -258,7 +273,13 @@ impl PeerBlocks {
         Self {
             chains: Arc::default(),
             window: NonZeroU64::from(configured).get(),
+            genesis_pins: Arc::default(),
         }
+    }
+
+    fn with_genesis_pins(mut self, pins: HashMap<ZoneId, HashType>) -> Self {
+        self.genesis_pins = Arc::new(pins);
+        self
     }
 
     /// Caches `block` if it is the next one this reader needs, and says whether
@@ -293,13 +314,27 @@ impl PeerBlocks {
         let mut chains = self.chains.write().await;
         let chain = chains
             .entry(zone)
-            .or_insert_with(|| PeerChain::new(self.window));
+            .or_insert_with(|| PeerChain::new(self.window, self.genesis_pins.get(&zone).copied()));
 
         // `block` was screened on the way in, so `header.hash` is its
         // recomputed hash and is what the synthesized tip pins.
-        let link = link_to_tip(chain.tip().as_ref(), &block, block.header.hash);
+        let link = link_to_tip(
+            chain.tip().as_ref(),
+            &block,
+            block.header.hash,
+            chain.genesis_hash,
+        );
         let continues_the_run = matches!(link, Link::Next(_));
         match link {
+            Link::OffChain(off @ OffChain::WrongGenesis { .. }) => {
+                chain.pin_refused = true;
+                // Error, not debug: this peer verifies nothing until it is fixed.
+                error!(
+                    "Peer reader for {} refused to anchor: {off}",
+                    hex::encode(zone)
+                );
+                false
+            }
             // Ahead of the run, or a first read that is not the peer's genesis.
             Link::OffChain(OffChain::NotTheGenesis { .. } | OffChain::SkipsAhead { .. }) => {
                 debug!(
@@ -444,6 +479,15 @@ impl PeerBlocks {
             .and_then(|chain| chain.verified_prefix)
             .map(|tip| tip.block_id)
     }
+
+    /// False again once a genesis matching the pin anchors the run.
+    async fn pin_refused(&self, zone: ZoneId) -> bool {
+        self.chains
+            .read()
+            .await
+            .get(&zone)
+            .is_some_and(|chain| chain.pin_refused && chain.verified_prefix.is_none())
+    }
 }
 
 /// The evidence backing a verified-absence verdict.
@@ -466,6 +510,19 @@ struct PassReport {
     drained_at_tip: Option<u64>,
     /// The endpoint's LIB slot, read only on an at-tip pass.
     lib_slot: Option<u64>,
+    /// The genesis pin refused the only anchor offered so far.
+    pin_refused: bool,
+}
+
+/// Why a reader's last pass extended no trust. Always one pass fresh: exactly
+/// one report call happens per pass.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum ReaderHold {
+    #[default]
+    None,
+    /// Skipped on the committee floor.
+    Suspended,
+    PinRefused,
 }
 
 /// One peer reader's live diagnostics.
@@ -476,28 +533,30 @@ struct PeerDiagnostics {
     stuck: Option<(u64, u32)>,
     last_pass_drained: bool,
     halted: bool,
-    /// The last pass was skipped on the committee floor. Always one pass
-    /// fresh: exactly one report call happens per pass, and only the
-    /// suspended kind sets this.
-    suspended: bool,
+    hold: ReaderHold,
     evidence: TipEvidence,
 }
 
 impl PeerDiagnostics {
-    /// Halted outranks Suspended: an issued verdict is the graver, sticky
-    /// fact. Suspended outranks Holed: a stall observed before the dip is
-    /// stale information about a channel no longer being read.
+    /// Halted outranks a hold: an issued verdict is the graver, sticky fact.
+    /// A hold outranks Holed: a stall observed before it is stale information
+    /// about a channel no longer being read, or not anchorable.
     const fn health(&self) -> PeerHealth {
         if self.halted {
-            PeerHealth::Halted
-        } else if self.suspended {
-            PeerHealth::Suspended
-        } else if self.stuck.is_some() {
-            PeerHealth::Holed
-        } else if self.last_pass_drained && self.evidence.since.is_some() {
-            PeerHealth::Live
-        } else {
-            PeerHealth::Lagging
+            return PeerHealth::Halted;
+        }
+        match self.hold {
+            ReaderHold::PinRefused => PeerHealth::PinMismatch,
+            ReaderHold::Suspended => PeerHealth::Suspended,
+            ReaderHold::None => {
+                if self.stuck.is_some() {
+                    PeerHealth::Holed
+                } else if self.last_pass_drained && self.evidence.since.is_some() {
+                    PeerHealth::Live
+                } else {
+                    PeerHealth::Lagging
+                }
+            }
         }
     }
 }
@@ -523,10 +582,13 @@ impl PeerWatch {
     ) -> Option<AbsenceEvidence> {
         let peers = self.lock();
         let entry = peers.get(&zone)?;
-        // A suspended peer proves nothing: a pass admitted just before the
-        // committee dipped can extend the run with post-dip reads, so the
-        // flag, not only the evidence reset, is what keeps a verdict off it.
-        if entry.suspended {
+        // A held reader proves nothing. Suspended: a pass admitted just before
+        // the committee dipped can extend the run with post-dip reads, so the
+        // hold, not only the evidence reset, is what keeps a verdict off it.
+        // Pin refused: the reader drains at the tip of a chain it refuses to
+        // verify, and a verdict off that would blame the peer for a local
+        // config mismatch.
+        if entry.hold != ReaderHold::None {
             return None;
         }
         let evidence = entry.evidence;
@@ -552,7 +614,9 @@ impl PeerWatch {
     /// Whether the peer's reader last skipped its pass on the committee
     /// floor, so waiters can say why a block is not arriving.
     fn is_suspended(&self, zone: ZoneId) -> bool {
-        self.lock().get(&zone).is_some_and(|entry| entry.suspended)
+        self.lock()
+            .get(&zone)
+            .is_some_and(|entry| entry.hold == ReaderHold::Suspended)
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<ZoneId, PeerDiagnostics>> {
@@ -580,7 +644,7 @@ impl PeerWatch {
     fn report_failed_pass(&self, zone: ZoneId) {
         let mut peers = self.lock();
         let entry = peers.entry(zone).or_default();
-        entry.suspended = false;
+        entry.hold = ReaderHold::None;
         entry.last_pass_drained = false;
         entry.evidence = TipEvidence::default();
     }
@@ -592,7 +656,7 @@ impl PeerWatch {
     fn report_suspended(&self, zone: ZoneId) {
         let mut peers = self.lock();
         let entry = peers.entry(zone).or_default();
-        entry.suspended = true;
+        entry.hold = ReaderHold::Suspended;
         entry.last_pass_drained = false;
         entry.evidence = TipEvidence::default();
     }
@@ -600,12 +664,22 @@ impl PeerWatch {
     fn report_pass(&self, zone: ZoneId, report: &PassReport) {
         let mut peers = self.lock();
         let entry = peers.entry(zone).or_default();
-        entry.suspended = false;
+        entry.hold = if report.pin_refused {
+            ReaderHold::PinRefused
+        } else {
+            ReaderHold::None
+        };
         entry.cursor_slot = report.cursor_slot;
         entry.verified_tip = report.verified_tip;
         entry.stuck = report.stuck;
         entry.last_pass_drained = report.drained;
         if let Some(tip_slot) = report.drained_at_tip {
+            // A pass under a refused pin drains a chain it verifies nothing of,
+            // so like a suspension it breaks the run rather than extending it.
+            if report.pin_refused {
+                entry.evidence = TipEvidence::default();
+                return;
+            }
             let now = Instant::now();
             if entry.evidence.since.is_none() {
                 entry.evidence.since = Some(now);
@@ -669,6 +743,9 @@ pub struct CrossZoneVerifier {
     /// One-shot refetches attempted, successful or not. The retry cadence
     /// line in [`Self::wait_for_peer_block`] reports the running total.
     refetch_attempts: Arc<AtomicU64>,
+    /// Registered emitters per peer. Must match the watcher's set, or
+    /// re-derivation disagrees with it and ingestion halts as forged.
+    emitters: Arc<HashMap<ZoneId, BTreeMap<AccountId, RegisteredEmitter>>>,
     seen: Arc<RwLock<HashSet<SeenKey>>>,
     watch: PeerWatch,
 }
@@ -679,11 +756,18 @@ impl CrossZoneVerifier {
     pub fn start(config: &IndexerConfig) -> Option<Self> {
         let cross_zone = config.cross_zone.as_ref()?;
         let self_zone: ZoneId = *config.channel_id.as_ref();
-        let peers = PeerBlocks::new(config.peer_block_cache_window);
+        let genesis_pins = cross_zone
+            .peers
+            .iter()
+            .filter_map(|peer| peer.genesis_hash.map(|pinned| (peer.channel_id, pinned)))
+            .collect();
+        let peers = PeerBlocks::new(config.peer_block_cache_window).with_genesis_pins(genesis_pins);
         let watch = PeerWatch::default();
         let mut refetch_clients = HashMap::new();
+        let mut emitters = HashMap::new();
 
         for peer in &cross_zone.peers {
+            emitters.insert(peer.channel_id, peer_emitter_set(peer));
             let node = TimeoutNode::new(NodeHttpClient::new(
                 CommonHttpClient::new(config.bedrock_config.auth.clone().map(Into::into)),
                 config.bedrock_config.addr.clone(),
@@ -696,11 +780,16 @@ impl CrossZoneVerifier {
                 Arc::new(ZoneIndexer::new(
                     ChannelId::from(peer.channel_id),
                     node.clone(),
+                    config.backfill_batch_slots,
                 )),
             );
             watch.register(peer.channel_id);
             tokio::spawn(read_peer(
-                ZoneIndexer::new(ChannelId::from(peer.channel_id), node),
+                ZoneIndexer::new(
+                    ChannelId::from(peer.channel_id),
+                    node,
+                    config.backfill_batch_slots,
+                ),
                 tip_node,
                 peer.channel_id,
                 peer.min_committee_size,
@@ -715,6 +804,7 @@ impl CrossZoneVerifier {
             peers,
             refetch_clients,
             refetch_attempts: Arc::new(AtomicU64::new(0)),
+            emitters: Arc::new(emitters),
             seen: Arc::new(RwLock::new(HashSet::new())),
             watch,
         })
@@ -843,6 +933,7 @@ impl CrossZoneVerifier {
         msg: &CrossZoneMessage,
         local_slot: u64,
     ) -> Result<lee::PublicTransaction, CrossZoneVerifyError> {
+        static NO_EMITTERS: BTreeMap<AccountId, RegisteredEmitter> = BTreeMap::new();
         let peer_block = self
             .wait_for_peer_block(msg.src_zone, msg.src_block_id, local_slot)
             .await
@@ -857,10 +948,14 @@ impl CrossZoneVerifier {
 
         // Everything below is a property of the peer block just read, so a
         // mismatch is the dispatch lying about it, not a transient condition.
+        let src_tx_index = usize::try_from(msg.src_tx_index).expect("u32 index fits in usize");
+        if peer_block.body.is_reverted(src_tx_index) {
+            return Err(forged(msg, "peer emission transaction reverted".to_owned()));
+        }
         let emission_tx = peer_block
             .body
             .transactions
-            .get(usize::try_from(msg.src_tx_index).expect("u32 index fits in usize"))
+            .get(src_tx_index)
             .ok_or_else(|| forged(msg, "src_tx_index out of range in peer block".to_owned()))?;
 
         let LeeTransaction::Public(emission_tx) = emission_tx else {
@@ -875,7 +970,9 @@ impl CrossZoneVerifier {
                 "peer transaction at src_tx_index is not a recognized emitter".to_owned(),
             )
         };
-        let emission = extract_emission(emission_tx).ok_or_else(not_an_emitter)?;
+        let peer_emitters = self.emitters.get(&msg.src_zone).unwrap_or(&NO_EMITTERS);
+        let emission = extract_emission(emission_tx, peer_emitters, msg.src_block_id)
+            .ok_or_else(not_an_emitter)?;
 
         if emission.target_zone != self.self_zone {
             return Err(forged(
@@ -1246,6 +1343,7 @@ async fn read_peer(
                         drained,
                         drained_at_tip,
                         lib_slot,
+                        pin_refused: peers.pin_refused(peer_zone).await,
                     },
                 );
             }
@@ -1385,7 +1483,7 @@ where
 #[cfg(test)]
 mod tests {
     use common::{HashType, test_utils::produce_dummy_block};
-    use cross_zone::test_utils::{linked_chain_to, ping_emission};
+    use cross_zone::test_utils::{generic_emission, linked_chain_to, ping_emission};
     use futures::stream;
     use lee::Actor;
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
@@ -1402,6 +1500,10 @@ mod tests {
     const _: () = assert!(PEER_BLOCK_ID >= GENESIS_BLOCK_ID);
     /// The slot tests record blocks under when its value does not matter.
     const READ_SLOT: Slot = Slot::new(0);
+    /// A program registered for `PEER_ZONE` under the generic contract.
+    const GENERIC_EMITTER: AccountId = AccountId::new([8; 32]);
+    /// Where the generic emission tests aim their deliveries.
+    const GENERIC_TARGET: AccountId = AccountId::new([9; 32]);
 
     fn verifier() -> CrossZoneVerifier {
         CrossZoneVerifier {
@@ -1409,6 +1511,7 @@ mod tests {
             peers: PeerBlocks::default(),
             refetch_clients: HashMap::new(),
             refetch_attempts: Arc::new(AtomicU64::new(0)),
+            emitters: Arc::new(HashMap::new()),
             seen: Arc::new(RwLock::new(HashSet::new())),
             watch: PeerWatch::default(),
         }
@@ -1446,7 +1549,7 @@ mod tests {
         (
             ZoneMessage::Block(ZoneBlock {
                 id: MsgId::from([0; 32]),
-                data: Inscription::try_from(data).expect("test inscription is within bounds"),
+                data: Inscription::new_unchecked(data),
                 signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
             }),
             Slot::from(slot),
@@ -1526,6 +1629,125 @@ mod tests {
         ))
     }
 
+    /// A verifier registering [`GENERIC_EMITTER`] for `PEER_ZONE`.
+    fn verifier_with_generic_emitter() -> CrossZoneVerifier {
+        CrossZoneVerifier {
+            emitters: Arc::new(HashMap::from([(
+                PEER_ZONE,
+                BTreeMap::from([(
+                    GENERIC_EMITTER,
+                    RegisteredEmitter {
+                        account_id: GENERIC_EMITTER,
+                        until_src_block: None,
+                    },
+                )]),
+            )])),
+            ..verifier()
+        }
+    }
+
+    /// A run whose `PEER_BLOCK_ID` block carries a generic-contract emission of
+    /// `payload` from [`GENERIC_EMITTER`].
+    fn generic_peer_chain(payload: &[u8]) -> Vec<Block> {
+        linked_chain_to(PEER_BLOCK_ID, |block_id| {
+            vec![if block_id == PEER_BLOCK_ID {
+                generic_emission(GENERIC_EMITTER, SELF_ZONE, GENERIC_TARGET, payload)
+            } else {
+                emission(b"hi")
+            }]
+        })
+    }
+
+    /// The dispatch a watcher would inject for the [`generic_peer_chain`]
+    /// emission of `payload`.
+    fn generic_dispatch(payload: &[u8]) -> LeeTransaction {
+        let src_block_hash = generic_peer_chain(payload)
+            .last()
+            .expect("chain reaches PEER_BLOCK_ID")
+            .recompute_hash()
+            .0;
+        LeeTransaction::Public(build_dispatch_from_emission(
+            &EmissionSource {
+                src_zone: PEER_ZONE,
+                src_block_id: PEER_BLOCK_ID,
+                src_block_hash,
+                src_tx_index: 0,
+                src_account_id: GENERIC_EMITTER,
+            },
+            GENERIC_TARGET,
+            &[],
+            payload.to_vec(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn verifies_a_dispatch_from_a_registered_generic_emitter() {
+        let verifier = verifier_with_generic_emitter();
+        cache_chain(&verifier, generic_peer_chain(b"hi")).await;
+
+        let block = produce_dummy_block(9, None, vec![generic_dispatch(b"hi")]);
+        verifier
+            .verify_block(&block, Slot::from(0))
+            .await
+            .expect("a registered emitter's dispatch re-derives");
+    }
+
+    /// The cutoff is compared against the dispatch's source block, 5, not the
+    /// local block carrying it, 9. A verifier comparing the local id would read
+    /// a cutoff of 5 as exceeded.
+    #[tokio::test]
+    async fn a_cutoff_is_read_against_the_source_block_not_the_local_one() {
+        for (until_src_block, covered) in [
+            (Some(PEER_BLOCK_ID), true),
+            (Some(PEER_BLOCK_ID - 1), false),
+        ] {
+            let verifier = CrossZoneVerifier {
+                emitters: Arc::new(HashMap::from([(
+                    PEER_ZONE,
+                    BTreeMap::from([(
+                        GENERIC_EMITTER,
+                        RegisteredEmitter {
+                            account_id: GENERIC_EMITTER,
+                            until_src_block,
+                        },
+                    )]),
+                )])),
+                ..verifier()
+            };
+            cache_chain(&verifier, generic_peer_chain(b"hi")).await;
+
+            let block = produce_dummy_block(9, None, vec![generic_dispatch(b"hi")]);
+            let result = verifier.verify_block(&block, Slot::from(0)).await;
+            assert_eq!(
+                result.is_ok(),
+                covered,
+                "cutoff {until_src_block:?} against source block {PEER_BLOCK_ID}: {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_a_dispatch_whose_emitter_is_not_registered() {
+        // The same peer chain and dispatch, but this verifier registers no
+        // emitters for the zone, so re-derivation does not read the emission.
+        let verifier = verifier();
+        cache_chain(&verifier, generic_peer_chain(b"hi")).await;
+
+        let block = produce_dummy_block(9, None, vec![generic_dispatch(b"hi")]);
+        let err = verifier
+            .verify_block(&block, Slot::from(0))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, CrossZoneVerifyError::Forged(_)),
+            "an unregistered emitter's dispatch is forged, not transient: {err}"
+        );
+        assert!(
+            err.to_string().contains("not a recognized emitter"),
+            "rejected for the wrong reason: {err}"
+        );
+    }
+
     #[tokio::test]
     async fn verifies_dispatch_matching_a_peer_emission() {
         let verifier = verifier();
@@ -1553,6 +1775,38 @@ mod tests {
                 Err(CrossZoneVerifyError::Forged(_))
             ),
             "a delivery claiming a source block hash the peer block does not have is forged"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_a_dispatch_whose_source_transaction_reverted() {
+        let verifier = verifier();
+        let mut chain = peer_chain(b"hi");
+        chain.pop().expect("chain reaches PEER_BLOCK_ID");
+        let reverted = common::test_utils::produce_dummy_block_with_reverted(
+            PEER_BLOCK_ID,
+            chain.last().map(|block| block.header.hash),
+            vec![emission(b"hi")],
+            vec![0],
+        );
+        chain.push(reverted.clone());
+        cache_chain(&verifier, chain).await;
+
+        let block = produce_dummy_block(
+            9,
+            None,
+            vec![dispatch_naming_block_hash(
+                b"hi",
+                reverted.recompute_hash().0,
+            )],
+        );
+        let err = verifier
+            .verify_block(&block, Slot::from(0))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, CrossZoneVerifyError::Forged(_)) && err.to_string().contains("reverted"),
+            "unexpected error: {err}"
         );
     }
 
@@ -2199,6 +2453,7 @@ mod tests {
             drained: true,
             drained_at_tip: Some(tip_slot),
             lib_slot,
+            pin_refused: false,
         }
     }
 
@@ -2257,6 +2512,52 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_pinned_genesis_refusal_latches_until_the_pinned_chain_anchors() {
+        let honest = linked_chain_to(GENESIS_BLOCK_ID, |_| vec![]);
+        let pinned = honest[0].header.hash;
+        let peers =
+            PeerBlocks::new(window(1)).with_genesis_pins(HashMap::from([(PEER_ZONE, pinned)]));
+
+        let fabricated = produce_dummy_block(GENESIS_BLOCK_ID, Some(HashType([7; 32])), vec![]);
+        assert!(!peers.insert(PEER_ZONE, fabricated, READ_SLOT).await);
+        assert!(peers.pin_refused(PEER_ZONE).await);
+
+        assert!(peers.insert(PEER_ZONE, honest[0].clone(), READ_SLOT).await);
+        assert!(
+            !peers.pin_refused(PEER_ZONE).await,
+            "the pinned genesis anchoring clears the refusal"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_pin_refusal_blocks_absence_evidence_and_surfaces_in_health() {
+        let watch = PeerWatch::default();
+        let start = Instant::now();
+        let refused = PassReport {
+            verified_tip: None,
+            pin_refused: true,
+            ..at_tip_report(2, 7)
+        };
+        watch.report_pass(PEER_ZONE, &refused);
+        watch.report_pass(PEER_ZONE, &refused);
+        assert!(
+            watch.confirmed_absence(PEER_ZONE, start, 0).is_none(),
+            "a reader draining a chain it refuses to verify proves no absence"
+        );
+        assert_eq!(watch.statuses()[0].health, PeerHealth::PinMismatch);
+
+        watch.report_pass(PEER_ZONE, &at_tip_report(2, 7));
+        let evidence = watch
+            .confirmed_absence(PEER_ZONE, start, 0)
+            .expect("a fresh at-tip run is evidence again");
+        assert_eq!(
+            evidence.drained_passes, 1,
+            "the run restarts from scratch after the pin anchors"
+        );
+        assert_eq!(watch.statuses()[0].health, PeerHealth::Live);
+    }
+
     /// The precedence pairs the classification test cannot show one at a
     /// time: a verdict outranks a suspension, a suspension outranks a stall,
     /// and an ordinary pass clears the suspension again.
@@ -2278,6 +2579,7 @@ mod tests {
                 drained: false,
                 drained_at_tip: None,
                 lib_slot: None,
+                pin_refused: false,
             },
         );
         watch.report_suspended(PEER_ZONE);
@@ -2311,6 +2613,7 @@ mod tests {
                 drained: true,
                 drained_at_tip: None,
                 lib_slot: None,
+                pin_refused: false,
             },
         );
         assert!(watch.confirmed_absence(PEER_ZONE, start, 0).is_none());
@@ -2326,6 +2629,7 @@ mod tests {
                 drained: false,
                 drained_at_tip: None,
                 lib_slot: None,
+                pin_refused: false,
             },
         );
         assert!(watch.confirmed_absence(PEER_ZONE, start, 0).is_none());
@@ -2612,6 +2916,7 @@ mod tests {
                     drained: false,
                     drained_at_tip: None,
                     lib_slot: None,
+                    pin_refused: false,
                 },
             );
             for _ in 0_u32..40 {
@@ -2736,6 +3041,7 @@ mod tests {
                 drained: false,
                 drained_at_tip: None,
                 lib_slot: None,
+                pin_refused: false,
             },
         );
         watch.report_pass(
@@ -2747,6 +3053,7 @@ mod tests {
                 drained: true,
                 drained_at_tip: None,
                 lib_slot: None,
+                pin_refused: false,
             },
         );
         watch.mark_halted([5; 32]);
