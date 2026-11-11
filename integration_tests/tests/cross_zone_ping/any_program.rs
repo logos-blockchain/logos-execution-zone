@@ -204,6 +204,7 @@ async fn a_registered_program_sends_and_receives_across_zones() -> Result<()> {
     // The route seeds (zone_a, chat_a) into the receiver's sources at genesis,
     // exactly as it would for a builtin emitter.
     let cross_zone_b = CrossZoneConfig {
+        lock_target_zones: Vec::new(),
         peers: vec![CrossZonePeer {
             channel_id: zone_a,
             allowed_routes: vec![CrossZoneRoute {
