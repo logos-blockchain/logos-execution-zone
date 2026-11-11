@@ -68,3 +68,4 @@ program_loader_core.workspace = true
 lee = { workspace = true, features = ["test-utils"] }
 key_protocol.workspace = true
 ping_core.workspace = true
+logos-blockchain-node.workspace = true
