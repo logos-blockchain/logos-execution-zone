@@ -34,6 +34,9 @@ use test_fixtures::{
 use testnet_initial_state::{PublicAccountPrivateInitialData, initial_pub_accounts_private_keys};
 use tokio::test;
 
+mod any_program;
+mod three_zones;
+
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(480);
 const PING_PAYLOAD: &[u8] = b"hello-cross-zone";
 
@@ -58,6 +61,7 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
             }],
             min_committee_size: 0,
             genesis_hash: None,
+            emitters: vec![],
         }],
         source_authority: None,
         source_governance: None,
