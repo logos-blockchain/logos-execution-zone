@@ -559,10 +559,12 @@ jobs:
       # A stalled wait cannot show the node's own view of finality.
       - name: Bedrock node logs
         if: failure()
+        env:
+          TAIL_LINES: 2000
         run: |
           for id in $(docker ps -aq); do
             echo "::group::$(docker inspect --format '{{.Name}}' "$id")"
-            docker logs --tail 2000 "$id" 2>&1 || true
+            docker logs --tail "$TAIL_LINES" "$id" 2>&1 || true
             echo "::endgroup::"
           done
 
