@@ -108,7 +108,7 @@ pub struct SequencerConfig {
     pub genesis: Option<GenesisConfig>,
     /// Presence selects the genesis program set, must match the indexer's, and
     /// cannot change on an existing chain. A source-only zone declares
-    /// `"cross_zone": {}`.
+    /// `"cross_zone": {"lock_target_zones": []}`.
     #[serde(default)]
     pub cross_zone: Option<CrossZoneConfig>,
     /// Address the Prometheus metrics exporter binds to.

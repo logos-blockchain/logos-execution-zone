@@ -102,6 +102,7 @@ pub const fn config_seed() -> PdaSeed {
     PdaSeed::new(CONFIG_SEED_DOMAIN)
 }
 
+/// Laid out as outbox ‖ mint target ‖ zone id*.
 #[must_use]
 pub fn config_bytes(
     outbox_account_id: AccountId,

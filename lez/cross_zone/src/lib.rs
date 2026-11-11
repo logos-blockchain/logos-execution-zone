@@ -121,7 +121,7 @@ pub struct CrossZonePeer {
 pub struct CrossZoneConfig {
     /// Read once at startup by the watchers and the verifier, so adding a peer
     /// zone needs a config change and a restart on both sequencer and indexer.
-    /// Defaulted so a source-only zone declares `"cross_zone": {}`.
+    /// Defaulted, so a source-only zone names only its lock targets.
     #[serde(default)]
     pub peers: Vec<CrossZonePeer>,
     /// The zones `bridge_lock` may name as a lock target on this zone, the
@@ -129,18 +129,17 @@ pub struct CrossZoneConfig {
     /// Empty means this zone locks to nobody, so a source-only zone that locks
     /// outbound still has to list them here.
     ///
-    /// Read by the sequencer alone, at genesis. Omitting it leaves `bridge_lock`
-    /// registered but unable to lock anywhere, and the config is written once, so
-    /// no later edit corrects it. Anyone may fund a holding by transferring to
-    /// its PDA, and only a lock moves it out, so a holding funded on such a zone
-    /// is stuck: nothing in `bridge_lock` releases an escrow. Genesis refuses to
-    /// seed one, which is the operator's path, not the runtime one.
+    /// Read by the sequencer alone, at genesis. Not defaulted: an empty list
+    /// leaves `bridge_lock` registered but unable to lock anywhere, and the
+    /// config is written once, so no later edit corrects it. Anyone may fund a
+    /// holding by transferring to its PDA and only a lock moves it out, so a
+    /// holding funded on such a zone is stuck. Genesis refuses to seed one,
+    /// which is the operator's path, not the runtime one.
     ///
     /// Naming a zone asserts only that this zone may lock to it. Whether that
     /// zone routes the lock back to a mint is its own config, unreadable from
     /// here, and a lock to a pinned zone that refuses the mint strands the same
     /// way.
-    #[serde(default)]
     pub lock_target_zones: Vec<ZoneId>,
     /// Account allowed to change which peer sources each target program accepts,
     /// seeded into every target's own config at genesis.
