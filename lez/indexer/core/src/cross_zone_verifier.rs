@@ -1529,7 +1529,7 @@ mod tests {
         (
             ZoneMessage::Block(ZoneBlock {
                 id: MsgId::from([0; 32]),
-                data: Inscription::try_from(data).expect("test inscription is within bounds"),
+                data: Inscription::new_unchecked(data),
                 signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
             }),
             Slot::from(slot),
