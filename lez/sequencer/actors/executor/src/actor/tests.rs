@@ -262,6 +262,14 @@ fn prepare_mock_storage_with_stake(
         .returning(|_, _| Ok(vec![]));
 
     mock_storage
+        .expect_handle_get_dead_letter_dispatch_retained_count()
+        .returning(|_, _| Ok(0));
+
+    mock_storage
+        .expect_handle_get_pending_cross_zone_dispatch_count()
+        .returning(|_, _| Ok(0));
+
+    mock_storage
 }
 
 /// A publish refused because the channel moved under the block costs nothing

@@ -667,6 +667,7 @@ fn cross_zone_test_config() -> SequencerConfig {
                 }],
                 min_committee_size: 0,
                 genesis_hash: None,
+                emitters: vec![],
             }],
             lock_target_zones: Vec::new(),
             source_authority: None,

@@ -25,13 +25,14 @@ use crate::{
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
         DropSettledCrossZoneDispatches, DumpDb, GetAccountTransactions, GetAllBlocks, GetBlock,
         GetBlockByHash, GetChannelViewBytes, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
-        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetEventFilter, GetFinalSnapshot,
-        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,
-        GetTransactionByHash, GetZoneAnchor, GetZoneCheckpoint, PendingCrossZoneDispatchRecord,
-        PendingDepositEventRecord, PutSlashRecordBytes, RecordDispatchFailure,
-        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
-        StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
+        GetDeadLetterDispatchCount, GetDeadLetterDispatchRetainedCount, GetDeadLetterDispatches,
+        GetEventFilter, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta,
+        GetLeeState, GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches,
+        GetPendingDepositEvents, GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor,
+        GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+        PutSlashRecordBytes, RecordDispatchFailure, RequeueDeadLetterDispatch,
+        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome,
+        UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
 
@@ -157,6 +158,12 @@ mockall::mock! {
             ctx: &mut Context<Self, Result<Vec<PendingCrossZoneDispatchRecord>>>
         ) -> Result<Vec<PendingCrossZoneDispatchRecord>>;
 
+        pub fn handle_get_pending_cross_zone_dispatch_count(
+            &mut self,
+            msg: GetPendingCrossZoneDispatchCount,
+            ctx: &mut Context<Self, Result<usize>>
+        ) -> Result<usize>;
+
         pub fn handle_add_pending_cross_zone_dispatches(
             &mut self,
             msg: AddPendingCrossZoneDispatches,
@@ -192,6 +199,12 @@ mockall::mock! {
             msg: GetDeadLetterDispatchCount,
             ctx: &mut Context<Self, Result<u64>>
         ) -> Result<u64>;
+
+        pub fn handle_get_dead_letter_dispatch_retained_count(
+            &mut self,
+            msg: GetDeadLetterDispatchRetainedCount,
+            ctx: &mut Context<Self, Result<usize>>
+        ) -> Result<usize>;
 
         pub fn handle_get_cross_zone_peer_floor_bytes(
             &mut self,
@@ -523,6 +536,18 @@ impl Message<GetPendingCrossZoneDispatches> for MockStorageActor {
     }
 }
 
+impl Message<GetPendingCrossZoneDispatchCount> for MockStorageActor {
+    type Reply = Result<usize>;
+
+    async fn handle(
+        &mut self,
+        msg: GetPendingCrossZoneDispatchCount,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_pending_cross_zone_dispatch_count(msg, ctx)
+    }
+}
+
 impl Message<AddPendingCrossZoneDispatches> for MockStorageActor {
     type Reply = Result<usize>;
 
@@ -592,6 +617,18 @@ impl Message<GetDeadLetterDispatchCount> for MockStorageActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_dead_letter_dispatch_count(msg, ctx)
+    }
+}
+
+impl Message<GetDeadLetterDispatchRetainedCount> for MockStorageActor {
+    type Reply = Result<usize>;
+
+    async fn handle(
+        &mut self,
+        msg: GetDeadLetterDispatchRetainedCount,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_dead_letter_dispatch_retained_count(msg, ctx)
     }
 }
 

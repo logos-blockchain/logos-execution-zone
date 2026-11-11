@@ -103,6 +103,7 @@ impl StoredChain {
                 }],
                 min_committee_size: 0,
                 genesis_hash: None,
+                emitters: vec![],
             }],
             lock_target_zones: Vec::new(),
             source_authority: None,
@@ -223,6 +224,10 @@ impl StoredChain {
             .returning(move |_msg, _ctx| Ok(pending_dispatches.clone()));
         mock.expect_handle_get_dead_letter_dispatches()
             .returning(|_msg, _ctx| Ok(Vec::new()));
+        mock.expect_handle_get_dead_letter_dispatch_retained_count()
+            .returning(|_msg, _ctx| Ok(0));
+        mock.expect_handle_get_pending_cross_zone_dispatch_count()
+            .returning(|_msg, _ctx| Ok(0));
         // A replayed entry that stores no block and moves no anchor.
         let view = Arc::new(Mutex::new(None));
         mock.expect_handle_apply_store_update()

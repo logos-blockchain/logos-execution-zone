@@ -12,9 +12,8 @@
 use std::collections::BTreeMap;
 
 pub use acceptance::{
-    CommitteeFloorState, FloorVerdict, KEPT_FLOOR_READ_FAILURES, Link, OffChain,
-    STUCK_SLOT_ALERT_PASSES, ScreenRefusal, StallState, alerts_at, equivocation_report,
-    link_to_tip, screen_peer_block,
+    CommitteeFloorState, FloorVerdict, Link, OffChain, ScreenRefusal, StallState, alerts_at,
+    equivocation_report, link_to_tip, screen_peer_block,
 };
 use borsh::{BorshDeserialize, BorshSerialize};
 use common::HashType;
@@ -24,7 +23,8 @@ use cross_zone_inbox_core::{
 };
 use lee_core::{
     account::{AccountId, Actor, Balance},
-    program::PdaSeed,
+    native_token::NATIVE_TOKEN_PROGRAM_ID,
+    program::{PROGRAM_LOADER_ACCOUNT_ID, PdaSeed},
 };
 use serde::{Deserialize, Serialize};
 
@@ -97,6 +97,16 @@ pub struct CrossZonePeer {
     /// own config. A route naming a program that does not authorize cross-zone
     /// sources is refused there, at genesis.
     pub allowed_routes: Vec<CrossZoneRoute>,
+    /// Programs on this peer, beyond the builtins, read for emissions under the
+    /// generic contract (see `cross_zone_emission_core::declared_emission`).
+    ///
+    /// Listing one asserts, unverifiably, that it honors that contract, that it
+    /// panics on any tag-0 call it does not intend delivered (an abort is its
+    /// only veto, from any of its actors), and that its code will not be
+    /// swapped. Retire one with [`RegisteredEmitter::until_src_block`], never by
+    /// deleting the entry.
+    #[serde(default)]
+    pub emitters: Vec<RegisteredEmitter>,
     /// Minimum live committee size (accredited keys on the peer's channel)
     /// below which reading from this peer is suspended, by the sequencer's
     /// watcher and the indexer's verifier alike. 0, the default, disables the
@@ -111,6 +121,30 @@ pub struct CrossZonePeer {
     /// as-is. A production peer should set it.
     #[serde(default)]
     pub genesis_hash: Option<HashType>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegisteredEmitter {
+    pub account_id: AccountId,
+    /// Last peer block whose emissions from this program are recognized, unset
+    /// for no cutoff.
+    ///
+    /// Set it below the peer block that repointed the program's header, since a
+    /// `WriteSegment` and a call to the swapped code can share one block, and at
+    /// or above the newest source block already dispatched.
+    #[serde(default)]
+    pub until_src_block: Option<u64>,
+}
+
+impl RegisteredEmitter {
+    /// Applied to history too, so a cutoff excluding a block already dispatched
+    /// halts the indexer as `Forged`.
+    #[must_use]
+    pub fn covers(&self, src_block_id: u64) -> bool {
+        self.until_src_block
+            .is_none_or(|until| src_block_id <= until)
+    }
 }
 
 /// Cross-zone configuration shared by a zone's sequencer (watcher) and indexer
@@ -174,21 +208,27 @@ pub struct EmissionSource {
 
 /// Whether a program may only be invoked by sequencer-origin transactions.
 ///
-/// The cross-zone inbox is injected solely by the watcher; a user-submitted call
-/// must be rejected at ingress, since `TransactionOrigin` is not carried in the
-/// block.
+/// The cross-zone inbox is injected solely by the watcher and the fee program
+/// solely by the forced per-block fee transaction; a user-submitted call must be
+/// rejected at ingress, since `TransactionOrigin` is not carried in the block.
 #[must_use]
 pub fn is_sequencer_only_program(account_id: AccountId) -> bool {
     account_id == programs::cross_zone_inbox_account_id()
+        || account_id == programs::fee_account_id()
 }
 
 /// Extracts the cross-zone emission from a source transaction.
 ///
-/// Recognizes the known emitter programs (`ping_sender`, `bridge_lock`). The
-/// watcher and verifier both use this so they agree on what a given source tx
-/// emits.
+/// Recognizes the builtin emitters through their own decoders and any program
+/// in `peer_emitters` whose cutoff covers `src_block_id` through the generic
+/// contract. The watcher and verifier share this, so both must pass the same
+/// set, built with [`peer_emitter_set`], and the same `src_block_id`.
 #[must_use]
-pub fn extract_emission(tx: &lee::PublicTransaction) -> Option<Emission> {
+pub fn extract_emission(
+    tx: &lee::PublicTransaction,
+    peer_emitters: &BTreeMap<AccountId, RegisteredEmitter>,
+    src_block_id: u64,
+) -> Option<Emission> {
     let lee::RootCall { to, message } = &tx.message().execution.root;
     if to.program_account_id == programs::ping_sender_account_id() {
         // Not every transaction to an emitter emits: `InitConfig` is one of its
@@ -203,9 +243,53 @@ pub fn extract_emission(tx: &lee::PublicTransaction) -> Option<Emission> {
             return None;
         };
         Some(Emission::from_wire(to.program_account_id, emission))
+    } else if peer_emitters
+        .get(&to.program_account_id)
+        .is_some_and(|emitter| emitter.covers(src_block_id))
+    {
+        let emission = cross_zone_emission_core::declared_emission(message)?;
+        Some(Emission::from_wire(to.program_account_id, emission))
     } else {
         None
     }
+}
+
+/// The validated registered-emitter set for one peer.
+///
+/// Panics on a builtin id: builtins are recognized by their own decoders, and
+/// their encodings were never written against the generic contract, so their
+/// ordinary transactions could be misread as emissions (the loader's tag-0
+/// `WriteSegment` carries attacker-chosen bytes). A config typo must not cost
+/// a channel silently.
+#[must_use]
+pub fn peer_emitter_set(peer: &CrossZonePeer) -> BTreeMap<AccountId, RegisteredEmitter> {
+    let builtins = programs::builtin_program_account_ids();
+    for emitter in &peer.emitters {
+        let refused = builtins.contains(&emitter.account_id)
+            || emitter.account_id == PROGRAM_LOADER_ACCOUNT_ID
+            || emitter.account_id == NATIVE_TOKEN_PROGRAM_ID;
+        assert!(
+            !refused,
+            "cross-zone peer {} lists builtin program {:?} as a registered emitter; builtins are recognized by their own decoders and must not be listed",
+            hex::encode(peer.channel_id),
+            emitter.account_id
+        );
+    }
+    let mut set = BTreeMap::new();
+    for emitter in &peer.emitters {
+        // Merged config templates repeat an entry. Differing cutoffs for one
+        // account have no answer, and collecting would keep the last.
+        if let Some(held) = set.insert(emitter.account_id, *emitter) {
+            assert_eq!(
+                held,
+                *emitter,
+                "cross-zone peer {} lists emitter {:?} twice with different cutoffs",
+                hex::encode(peer.channel_id),
+                emitter.account_id
+            );
+        }
+    }
+    set
 }
 
 /// Builds the sequencer-origin dispatch transaction. Pure for fixed inputs, so
@@ -476,6 +560,184 @@ fn genesis_public_tx<M: borsh::BorshSerialize>(
 mod tests {
     use super::*;
 
+    /// Unwraps the public transaction the test emissions are built as.
+    fn public(tx: common::transaction::LeeTransaction) -> lee::PublicTransaction {
+        let common::transaction::LeeTransaction::Public(tx) = tx else {
+            panic!("test emissions are public transactions");
+        };
+        tx
+    }
+
+    fn registered(account_id: AccountId) -> RegisteredEmitter {
+        RegisteredEmitter {
+            account_id,
+            until_src_block: None,
+        }
+    }
+
+    fn emitter_set<const N: usize>(ids: [AccountId; N]) -> BTreeMap<AccountId, RegisteredEmitter> {
+        ids.into_iter().map(|id| (id, registered(id))).collect()
+    }
+
+    fn peer_with_emitters(emitters: Vec<RegisteredEmitter>) -> CrossZonePeer {
+        CrossZonePeer {
+            channel_id: [2; 32],
+            allowed_routes: vec![],
+            min_committee_size: 0,
+            genesis_hash: None,
+            emitters,
+        }
+    }
+
+    #[test]
+    fn a_registered_emitter_is_recognized_through_the_generic_contract() {
+        let emitter = AccountId::new([8; 32]);
+        let target = AccountId::new([9; 32]);
+        let tx = public(test_utils::generic_emission(
+            emitter, [2; 32], target, b"hi",
+        ));
+
+        let emission = extract_emission(&tx, &emitter_set([emitter]), 0)
+            .expect("a registered emitter's tag-0 instruction is an emission");
+        assert_eq!(emission.source, emitter);
+        assert_eq!(emission.target_zone, [2; 32]);
+        assert_eq!(emission.target_account_id, target);
+        assert_eq!(emission.payload, b"hi".to_vec());
+
+        assert!(
+            extract_emission(&tx, &BTreeMap::new(), 0).is_none(),
+            "the same transaction is invisible while the emitter is unregistered"
+        );
+    }
+
+    fn wire_emission() -> cross_zone_emission_core::CrossZoneEmission {
+        cross_zone_emission_core::CrossZoneEmission {
+            target_zone: [2; 32],
+            target_account_id: AccountId::new([9; 32]),
+            target_accounts: vec![],
+            payload: vec![0xAA],
+            ordinal: 0,
+        }
+    }
+
+    #[test]
+    fn trailing_program_fields_do_not_hide_a_registered_emission() {
+        let emitter = AccountId::new([8; 32]);
+        let mut instruction =
+            cross_zone_emission_core::emitting_instruction_bytes(&wire_emission());
+        instruction.extend_from_slice(&[0xDE, 0xAD]);
+        let tx = public(test_utils::emitter_instruction(emitter, instruction));
+
+        let emission = extract_emission(&tx, &emitter_set([emitter]), 0)
+            .expect("trailing fields are the emitter's own");
+        assert_eq!(emission.payload, vec![0xAA]);
+    }
+
+    #[test]
+    fn a_non_zero_tag_from_a_registered_emitter_is_not_an_emission() {
+        let emitter = AccountId::new([8; 32]);
+        let mut instruction =
+            cross_zone_emission_core::emitting_instruction_bytes(&wire_emission());
+        instruction[0] = 1;
+        let tx = public(test_utils::emitter_instruction(emitter, instruction));
+
+        assert!(extract_emission(&tx, &emitter_set([emitter]), 0).is_none());
+    }
+
+    #[test]
+    fn the_builtin_ping_sender_arm_ignores_the_registered_set() {
+        let tx = public(test_utils::ping_emission(
+            [2; 32],
+            programs::ping_receiver_account_id(),
+            b"hi",
+        ));
+        for set in [BTreeMap::new(), emitter_set([AccountId::new([8; 32])])] {
+            let emission = extract_emission(&tx, &set, 0)
+                .expect("ping_sender is recognized by its own decoder");
+            assert_eq!(emission.source, programs::ping_sender_account_id());
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "must not be listed")]
+    fn a_builtin_listed_as_a_registered_emitter_is_refused() {
+        let _set = peer_emitter_set(&peer_with_emitters(vec![registered(
+            programs::ping_sender_account_id(),
+        )]));
+    }
+
+    #[test]
+    fn a_retired_emitter_is_recognized_up_to_its_cutoff_and_not_past_it() {
+        let emitter = AccountId::new([8; 32]);
+        let tx = public(test_utils::generic_emission(
+            emitter,
+            [2; 32],
+            AccountId::new([9; 32]),
+            b"hi",
+        ));
+        let set = BTreeMap::from([(
+            emitter,
+            RegisteredEmitter {
+                account_id: emitter,
+                until_src_block: Some(100),
+            },
+        )]);
+
+        for src_block_id in [0, 99, 100] {
+            assert!(
+                extract_emission(&tx, &set, src_block_id).is_some(),
+                "block {src_block_id} is covered by the cutoff"
+            );
+        }
+        assert!(extract_emission(&tx, &set, 101).is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "twice with different cutoffs")]
+    fn an_emitter_listed_twice_with_differing_cutoffs_is_refused() {
+        let emitter = AccountId::new([8; 32]);
+        let _set = peer_emitter_set(&peer_with_emitters(vec![
+            registered(emitter),
+            RegisteredEmitter {
+                account_id: emitter,
+                until_src_block: Some(5),
+            },
+        ]));
+    }
+
+    #[test]
+    fn an_emitter_listed_twice_identically_is_accepted() {
+        let emitter = AccountId::new([8; 32]);
+        let set = peer_emitter_set(&peer_with_emitters(vec![
+            registered(emitter),
+            registered(emitter),
+        ]));
+        assert_eq!(set, emitter_set([emitter]));
+    }
+
+    #[test]
+    #[should_panic(expected = "must not be listed")]
+    fn the_program_loader_listed_as_a_registered_emitter_is_refused() {
+        let _set = peer_emitter_set(&peer_with_emitters(vec![registered(
+            PROGRAM_LOADER_ACCOUNT_ID,
+        )]));
+    }
+
+    #[test]
+    fn the_registered_emitter_set_is_the_peers_list() {
+        let emitters = vec![
+            registered(AccountId::new([8; 32])),
+            registered(AccountId::new([9; 32])),
+        ];
+        assert_eq!(
+            peer_emitter_set(&peer_with_emitters(emitters.clone())),
+            emitters
+                .into_iter()
+                .map(|emitter| (emitter.account_id, emitter))
+                .collect::<BTreeMap<_, _>>()
+        );
+    }
+
     /// A route naming a program that never opted into cross-zone sources is an
     /// operator typo that nothing downstream would report: the fan-out would drop
     /// it, the watcher no longer filters targets, and every delivery would be
@@ -493,6 +755,7 @@ mod tests {
                 }],
                 min_committee_size: 0,
                 genesis_hash: None,
+                emitters: vec![],
             }],
             lock_target_zones: Vec::new(),
             source_authority: None,
@@ -517,6 +780,7 @@ mod tests {
                 }],
                 min_committee_size: 0,
                 genesis_hash: None,
+                emitters: vec![],
             }],
             lock_target_zones: Vec::new(),
             source_authority: None,
@@ -541,6 +805,7 @@ mod tests {
                 allowed_routes: vec![route.clone(), route],
                 min_committee_size: 0,
                 genesis_hash: None,
+                emitters: vec![],
             }],
             lock_target_zones: Vec::new(),
             source_authority: None,

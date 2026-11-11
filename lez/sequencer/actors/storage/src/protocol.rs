@@ -83,6 +83,9 @@ pub struct AddPendingCrossZoneDispatches {
     pub dispatches: Vec<PendingCrossZoneDispatchRecord>,
 }
 
+/// How many dispatches are pending, counted without decoding any of them.
+pub struct GetPendingCrossZoneDispatchCount;
+
 pub struct DropSettledCrossZoneDispatches {
     pub message_keys: HashSet<CrossZoneMessageKey>,
 }
@@ -102,6 +105,9 @@ pub struct RequeueDeadLetterDispatch {
 }
 
 pub struct GetDeadLetterDispatchCount;
+
+/// Retained dead-letter count, without shipping bodies across the actor boundary.
+pub struct GetDeadLetterDispatchRetainedCount;
 
 pub struct GetCrossZonePeerFloorBytes {
     pub peer_zone: PeerZoneKey,

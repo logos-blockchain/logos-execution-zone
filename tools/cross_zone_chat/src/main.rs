@@ -389,6 +389,7 @@ fn watch_peer(peer: ZoneId, receiver_id: AccountId) -> CrossZoneConfig {
             }],
             min_committee_size: 0,
             genesis_hash: None,
+            emitters: vec![],
         }],
         lock_target_zones: Vec::new(),
         source_authority: None,

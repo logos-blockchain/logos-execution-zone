@@ -57,6 +57,7 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
             }],
             min_committee_size: 0,
             genesis_hash: None,
+            emitters: vec![],
         }],
         lock_target_zones: Vec::new(),
         source_authority: None,
