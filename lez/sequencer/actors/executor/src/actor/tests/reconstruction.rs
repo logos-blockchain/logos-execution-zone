@@ -346,7 +346,7 @@ fn assert_refused(started: Result<()>, reason: &str) {
     );
 }
 
-/// Genesis the way a stakeless node seeds it: only the fee and clock tail.
+/// Genesis the way a stakeless node seeds it: only the clock and fee transactions.
 fn genesis() -> Block {
     block_at(1, HashType([0; 32]), 0)
 }
@@ -359,12 +359,12 @@ fn block_at(id: u64, prev: HashType, timestamp: u64) -> Block {
         prev_block_hash: prev,
         timestamp,
         transactions: vec![
+            LeeTransaction::Public(clock_invocation(id, timestamp)),
             LeeTransaction::Public(fee_invocation(
                 fee_core::BlockFeeSummary::default(),
                 0,
                 FeePayee::Present(producer_account_for_testing()),
             )),
-            LeeTransaction::Public(clock_invocation(id, timestamp)),
         ],
     }
     .into_pending_block()

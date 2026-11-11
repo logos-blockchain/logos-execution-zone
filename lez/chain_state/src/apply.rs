@@ -146,10 +146,10 @@ pub fn apply_block_to_state(
     block: &Block,
     state: &mut V03State,
 ) -> Result<Vec<TxEvents>, BlockIngestError> {
-    let (clock_entry, front) = block
+    let (clock_entry, rest) = block
         .body
         .transactions
-        .split_last()
+        .split_first()
         .ok_or(BlockIngestError::EmptyBlock)?;
 
     let LeeTransaction::Public(clock_tx) = clock_entry else {
@@ -159,7 +159,7 @@ pub fn apply_block_to_state(
         return Err(BlockIngestError::InvalidClockTransaction);
     }
 
-    let (fee_entry, user_txs) = front
+    let (fee_entry, user_txs) = rest
         .split_last()
         .ok_or(BlockIngestError::InvalidFeeTransaction)?;
     let LeeTransaction::Public(fee_tx) = fee_entry else {
@@ -173,8 +173,17 @@ pub fn apply_block_to_state(
     let mut block_events = Vec::new();
     let mut reverted = Vec::new();
 
+    let clock_events = state
+        .transition_from_public_transaction(clock_tx, block.header.block_id, block.header.timestamp)
+        .map_err(|err| BlockIngestError::StateTransition {
+            tx_index: 0,
+            reason: format!("{:#}", anyhow::Error::from(err)),
+        })?;
+    collect_tx_events(&mut block_events, 0, clock_entry, clock_events);
+
     let is_genesis = block.header.block_id == GENESIS_BLOCK_ID;
-    for (tx_index, transaction) in user_txs.iter().enumerate() {
+    for (user_index, transaction) in user_txs.iter().enumerate() {
+        let tx_index = user_index + 1;
         let tx_index_u64 = u64::try_from(tx_index).expect("tx index fits in u64");
         let state_transition = |err: anyhow::Error| BlockIngestError::StateTransition {
             tx_index: tx_index_u64,
@@ -233,30 +242,14 @@ pub fn apply_block_to_state(
     common::transaction::validate_reward_target(payee.producer())
         .map_err(|reason| BlockIngestError::InvalidRewardTarget { reason })?;
 
+    let fee_index = user_txs.len() + 1;
     let fee_events = state
         .transition_from_public_transaction(fee_tx, block.header.block_id, block.header.timestamp)
         .map_err(|err| BlockIngestError::StateTransition {
-            tx_index: user_txs.len().try_into().expect("tx index fits in u64"),
+            tx_index: fee_index.try_into().expect("tx index fits in u64"),
             reason: format!("{:#}", anyhow::Error::from(err)),
         })?;
-    collect_tx_events(&mut block_events, user_txs.len(), fee_entry, fee_events);
-
-    // Clock events are collected separately. The clock program currently emits
-    // none; this future-proofs the design with no bearing on current semantics.
-    let clock_events = state
-        .transition_from_public_transaction(clock_tx, block.header.block_id, block.header.timestamp)
-        .map_err(|err| BlockIngestError::StateTransition {
-            tx_index: (user_txs.len().saturating_add(1))
-                .try_into()
-                .expect("tx index fits in u64"),
-            reason: format!("{:#}", anyhow::Error::from(err)),
-        })?;
-    collect_tx_events(
-        &mut block_events,
-        user_txs.len().saturating_add(1),
-        clock_entry,
-        clock_events,
-    );
+    collect_tx_events(&mut block_events, fee_index, fee_entry, fee_events);
 
     Ok(block_events)
 }
@@ -304,8 +297,8 @@ pub fn block_payout(opening: &FeeState, summary: &BlockFeeSummary) -> u128 {
     opening.clone().apply_block(summary)
 }
 
-/// The fee summary, producer payout and reverted transaction indices a block of `transactions`
-/// settles to on `state`.
+/// The fee summary, producer payout and physical reverted indices for user `transactions`.
+/// Applies the block's clock tick before settling the users on a scratch state.
 pub fn derive_block_summary(
     state: &V03State,
     transactions: &[LeeTransaction],
@@ -314,10 +307,20 @@ pub fn derive_block_summary(
 ) -> Result<(BlockFeeSummary, u128, Vec<u64>), BlockIngestError> {
     let mut scratch = state.clone();
     let opening = opening_fee_state(&scratch);
+    scratch
+        .transition_from_public_transaction(
+            &clock_invocation(block_id, timestamp),
+            block_id,
+            timestamp,
+        )
+        .map_err(|err| BlockIngestError::StateTransition {
+            tx_index: 0,
+            reason: format!("{:#}", anyhow::Error::from(err)),
+        })?;
     let mut summary = BlockFeeSummary::default();
     let mut reverted = Vec::new();
-    for (tx_index, transaction) in transactions.iter().enumerate() {
-        let tx_index = u64::try_from(tx_index).expect("tx index fits in u64");
+    for (user_index, transaction) in transactions.iter().enumerate() {
+        let tx_index = u64::try_from(user_index + 1).expect("tx index fits in u64");
         let (_events, tx_reverted) = settle_transaction(
             transaction,
             &mut scratch,
@@ -878,15 +881,15 @@ mod tests {
     #[test]
     fn missing_fee_tx_is_invalid_fee() {
         let mut state = initial_state(true);
-        // Correct clock tail but no fee tx before it.
+        // Correct clock prefix, but the final transaction is not a fee invocation.
         let block = HashableBlockData {
             reverted: Vec::new(),
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
             timestamp: 100,
             transactions: vec![
-                produce_dummy_empty_transaction(),
                 LeeTransaction::Public(clock_invocation(1, 100)),
+                produce_dummy_empty_transaction(),
             ],
         }
         .into_pending_block();
@@ -907,12 +910,12 @@ mod tests {
             prev_block_hash: HashType([0_u8; 32]),
             timestamp: 100,
             transactions: vec![
+                LeeTransaction::Public(clock_invocation(1, 100)),
                 LeeTransaction::Public(fee_invocation(
                     bad_summary,
                     0,
                     FeePayee::Present(producer_account_for_testing()),
                 )),
-                LeeTransaction::Public(clock_invocation(1, 100)),
             ],
         }
         .into_pending_block();
@@ -921,9 +924,9 @@ mod tests {
     }
 
     #[test]
-    fn missing_clock_tail_is_invalid_clock() {
+    fn missing_clock_prefix_is_invalid_clock() {
         let mut state = initial_state(true);
-        // Last tx is not the expected clock invocation for the timestamp.
+        // The first transaction is not the header-derived clock invocation.
         let block = HashableBlockData {
             reverted: Vec::new(),
             block_id: 1,
@@ -934,6 +937,32 @@ mod tests {
         .into_pending_block();
         let err = apply_block(None, &block, &mut state).expect_err("should reject");
         assert!(matches!(err, BlockIngestError::InvalidClockTransaction));
+    }
+
+    #[test]
+    fn clock_last_layout_is_rejected() {
+        let mut state = initial_state(true);
+        let mut data = HashableBlockData::from(produce_dummy_block(1, None, vec![]));
+        data.transactions.rotate_left(1);
+        let block = data.into_pending_block();
+        assert!(matches!(
+            apply_block(None, &block, &mut state),
+            Err(BlockIngestError::InvalidClockTransaction)
+        ));
+    }
+
+    #[test]
+    fn clock_tick_must_match_the_header() {
+        for (block_id, timestamp) in [(2, 100), (1, 101)] {
+            let mut state = initial_state(true);
+            let mut data = HashableBlockData::from(produce_dummy_block(1, None, vec![]));
+            data.transactions[0] = LeeTransaction::Public(clock_invocation(block_id, timestamp));
+            let block = data.into_pending_block();
+            assert!(matches!(
+                apply_block(None, &block, &mut state),
+                Err(BlockIngestError::InvalidClockTransaction)
+            ));
+        }
     }
 
     #[test]
@@ -1089,15 +1118,14 @@ mod tests {
         let payer_key = accounts[0].pub_sign_key.clone();
         let payer_nonce = state.get_account_by_id(payer).nonce;
         let clock = system_accounts::clock_actor();
-        // A tick for block 2 passes the clock's own check, so only the restricted-account guard
-        // can reject the block.
+        // The forced tick has reached block 2, so block 3 passes the clock's own check.
         let message = public_transaction::Message::try_new_with_fees(
             clock,
             vec![clock],
             BTreeMap::from([(payer, payer_nonce)]),
             clock_core::Message::Tick {
                 timestamp: 200,
-                block_id: 2,
+                block_id: 3,
             },
             test_fee_declaration(payer),
         )
@@ -1111,7 +1139,7 @@ mod tests {
         assert!(
             matches!(
                 &err,
-                BlockIngestError::RestrictedAccountModification { tx_index: 0, reason }
+                BlockIngestError::RestrictedAccountModification { tx_index: 1, reason }
                     if reason.contains(&clock_id)
             ),
             "expected RestrictedAccountModification on the clock, got {err:?}",
@@ -1264,6 +1292,51 @@ mod tests {
     }
 
     #[test]
+    fn reverted_first_user_has_physical_index_one_and_pays_fees() {
+        let mut state =
+            initial_state(true).with_public_accounts([common::test_utils::producer_seed()]);
+        let genesis = produce_dummy_block(1, None, vec![]);
+        apply_block(None, &genesis, &mut state).expect("genesis applies");
+        let accounts = initial_pub_accounts_private_keys();
+        let payer = accounts[0].account_id;
+        let recipient = accounts[1].account_id;
+        let payer_before = native_balance(&state, payer);
+        let recipient_before = native_balance(&state, recipient);
+        let nonce_before = state.get_account_by_id(payer).nonce;
+        let tx = create_transaction_native_token_transfer(
+            payer,
+            u128::from(nonce_before),
+            recipient,
+            payer_before.checked_add(1).expect("balance + 1 fits u128"),
+            &accounts[0].pub_sign_key,
+        );
+        let block = settled_block(2, genesis.header.hash, vec![tx], &state);
+        assert_eq!(block.body.reverted, vec![1]);
+        assert!(!block.body.is_reverted(0));
+        assert!(block.body.is_reverted(1));
+        assert!(!block.body.is_reverted(2));
+        let events = apply_block(Some(&tip_of(&genesis)), &block, &mut state)
+            .expect("charged revert applies");
+        assert!(events.is_empty());
+        assert_eq!(native_balance(&state, recipient), recipient_before);
+        assert!(native_balance(&state, payer) < payer_before);
+        assert_eq!(
+            u128::from(state.get_account_by_id(payer).nonce),
+            u128::from(nonce_before) + 1
+        );
+        assert_eq!(
+            native_balance(&state, system_accounts::fee_inbox_account_id()),
+            0
+        );
+        let fees_paid = payer_before - native_balance(&state, payer);
+        assert_eq!(
+            fees_paid,
+            native_balance(&state, system_accounts::fee_escrow_account_id())
+                + native_balance(&state, producer_account_for_testing())
+        );
+    }
+
+    #[test]
     fn a_non_genesis_block_rewarding_a_system_account_is_rejected() {
         let mut state = initial_state(true);
         let genesis = produce_dummy_block(1, None, vec![]);
@@ -1358,6 +1431,8 @@ mod tests {
         let events = apply_block(Some(&tip), &block, &mut state).expect("transfer applies");
 
         assert_eq!(events.len(), 1, "There should be exactly one event emitted");
+        assert_eq!(events[0].tx_index, 1);
+        assert_eq!(events[0].tx_hash, block.body.transactions[1].hash());
         assert_eq!(
             events[0].events.len(),
             1,
@@ -1894,17 +1969,19 @@ mod tests {
         apply_block(None, &genesis, &mut state).expect("genesis applies");
         let tip = tip_of(&genesis);
 
-        let block = HashableBlockData {
-            reverted: vec![0],
-            ..HashableBlockData::from(settled_block(2, tip.hash, vec![], &state))
-        }
-        .into_pending_block();
+        for forced_index in [0, 1] {
+            let block = HashableBlockData {
+                reverted: vec![forced_index],
+                ..HashableBlockData::from(settled_block(2, tip.hash, vec![], &state))
+            }
+            .into_pending_block();
 
-        assert!(matches!(
-            apply_block(Some(&tip), &block, &mut state),
-            Err(BlockIngestError::RevertMismatch { listed, settled })
-                if listed == vec![0] && settled.is_empty()
-        ));
+            assert!(matches!(
+                apply_block(Some(&tip), &block, &mut state.clone()),
+                Err(BlockIngestError::RevertMismatch { listed, settled })
+                    if listed == vec![forced_index] && settled.is_empty()
+            ));
+        }
     }
 
     #[test]
@@ -2018,7 +2095,7 @@ mod tests {
         transactions.push(LeeTransaction::Public(fee_invocation(
             summary, payout, reward,
         )));
-        transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
+        transactions.insert(0, LeeTransaction::Public(clock_invocation(id, timestamp)));
         HashableBlockData {
             block_id: id,
             prev_block_hash: prev_hash,

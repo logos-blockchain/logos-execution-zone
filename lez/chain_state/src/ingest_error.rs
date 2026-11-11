@@ -24,9 +24,9 @@ pub enum BlockIngestError {
     },
     #[error("Block has no transactions")]
     EmptyBlock,
-    #[error("Last transaction must be the public clock invocation for the block timestamp")]
+    #[error("First transaction must be the public clock invocation for the block ID and timestamp")]
     InvalidClockTransaction,
-    #[error("Second-to-last transaction must be the canonical public fee invocation")]
+    #[error("Last transaction must be the canonical public fee invocation")]
     InvalidFeeTransaction,
     #[error("Block reward target is not a spendable account: {reason}")]
     InvalidRewardTarget {

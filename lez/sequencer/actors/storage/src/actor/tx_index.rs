@@ -114,7 +114,7 @@ mod tests {
     }
 
     fn create_test_block(block_id: u64, tx_count: usize) -> Block {
-        // -2 for the auto-inserted fee and clock tail transactions
+        // Exclude the auto-inserted clock and fee transactions.
         let transactions = std::iter::repeat_with(produce_dummy_empty_transaction)
             .take(tx_count.saturating_sub(2))
             .collect();

@@ -221,7 +221,7 @@ impl FeePayee {
     }
 }
 
-/// Builds the clock transaction required exactly once, at the end of each block.
+/// Builds the clock transaction required exactly once, at the start of each block.
 ///
 /// Uses the header's ID and timestamp so followers reconstruct the same transaction.
 /// The clock checks that the proposed block ID advances its stored ID by one.
@@ -317,8 +317,7 @@ pub fn is_sequencer_stake_operation(tx: &LeeTransaction) -> bool {
 /// Returns the canonical Fee Program invocation transaction for the given block fee summary.
 ///
 /// Every valid block must contain exactly one occurrence of this transaction as its
-/// second-to-last transaction, immediately before the clock invocation. The producer
-/// account rides in the message so the guest can pay it.
+/// last transaction. The producer account rides in the message so the guest can pay it.
 ///
 /// `payout` is the producer's smoothed share, proposed here and required by the fee-state
 /// effect to equal what the real state's own market update returns; derive it with

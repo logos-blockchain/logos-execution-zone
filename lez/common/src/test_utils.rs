@@ -60,17 +60,17 @@ pub fn state_and_diff(
 
 // Dummy producers
 
-/// Produce dummy block from the provided transactions, appending the fee and
-/// clock tail transactions at the end (in that order).
+/// Produce a dummy block with the clock first, the provided user transactions,
+/// and the fee transaction last.
 ///
 /// The fee tail carries `BlockFeeSummary::default()`, so this helper is only
 /// valid for blocks whose `transactions` settle to the default summary — i.e.
 /// fee-exempt txs. Passing charged transactions builds a block that fails the
 /// byte-for-byte fee-summary check in `apply_block_to_state`.
 ///
-/// - `id`: block id, provide zero for genesis.
+/// - `id`: block id, provide `lee::GENESIS_BLOCK_ID` (1) for genesis.
 /// - `prev_hash`: hash of previous block, provide None for genesis.
-/// - `transactions`: vector of `EncodedTransaction` objects.
+/// - `transactions`: user transactions, without the forced clock and fee entries.
 #[must_use]
 pub fn produce_dummy_block(
     id: u64,
@@ -88,14 +88,14 @@ pub fn produce_dummy_block_with_reverted(
     mut transactions: Vec<LeeTransaction>,
     reverted: Vec<u64>,
 ) -> Block {
+    transactions.insert(
+        0,
+        LeeTransaction::Public(clock_invocation(id, id.saturating_mul(100))),
+    );
     transactions.push(LeeTransaction::Public(fee_invocation(
         fee_core::BlockFeeSummary::default(),
         0,
         FeePayee::Present(producer_account_for_testing()),
-    )));
-    transactions.push(LeeTransaction::Public(clock_invocation(
-        id,
-        id.saturating_mul(100),
     )));
 
     let block_data = HashableBlockData {

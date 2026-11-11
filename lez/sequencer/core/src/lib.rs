@@ -1846,11 +1846,22 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         Some(reverted)
     }
 
+    async fn build_block_from_mempool(&mut self) -> Result<BlockWithMeta> {
+        let timestamp = u64::try_from(chrono::Utc::now().timestamp_millis())
+            .expect("Timestamp must be positive");
+        self.build_block_from_mempool_at(timestamp)
+            .await
+            .map(|(block, _state)| block)
+    }
+
     #[expect(
         clippy::cognitive_complexity,
         reason = "Slop has won the battle, but our war is not over"
     )]
-    async fn build_block_from_mempool(&mut self) -> Result<BlockWithMeta> {
+    async fn build_block_from_mempool_at(
+        &mut self,
+        new_block_timestamp: u64,
+    ) -> Result<(BlockWithMeta, lee::V03State)> {
         let now = Instant::now();
 
         // Decoded outside the chain lock, and read before it is taken: the usual
@@ -2050,9 +2061,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         )
         .expect("`max_block_size` should fit into usize");
 
-        let new_block_timestamp = u64::try_from(chrono::Utc::now().timestamp_millis())
-            .expect("Timestamp must be positive");
-
         // Look up this sequencer's stake ownership account as the reward target.
         let own_sequencer_key = sequencer_stake_core::SequencerKey::new(
             self.channel_signing_key.public_key().to_bytes(),
@@ -2072,6 +2080,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         ));
         let clock_tx = clock_invocation(new_block_height, new_block_timestamp);
         let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
+        working_state
+            .transition_from_public_transaction(&clock_tx, new_block_height, new_block_timestamp)
+            .context("Clock transaction failed. Aborting block production.")?;
+        valid_transactions.push(clock_lee_tx.clone());
 
         sequencer_core_metrics::record_mempool_size(self.mempool.len());
         // Everything drained from the store first, then user work. `from_store`
@@ -2110,7 +2122,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 valid_transactions.as_slice(),
                 std::slice::from_ref(&tx),
                 std::slice::from_ref(&placeholder_fee_lee_tx),
-                std::slice::from_ref(&clock_lee_tx),
             ]
             .concat();
             let temp_hashable_data = HashableBlockData {
@@ -2122,7 +2133,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // it does, its index joins the list and the block grows by one `u64`. Size the
                 // worst case now, with a placeholder index, so a revert doesn't push the block
                 // over the limit.
-                reverted: reverted.iter().copied().chain([0]).collect(),
+                reverted: reverted
+                    .iter()
+                    .copied()
+                    .chain([u64::try_from(valid_transactions.len()).expect("fits u64")])
+                    .collect(),
             };
 
             let block_size = borsh::to_vec(&temp_hashable_data)
@@ -2142,7 +2157,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // merely does not fit *today* is the ordinary deferral below.
                 if !Self::fits_in_an_empty_block(
                     &tx,
-                    &[placeholder_fee_lee_tx.clone(), clock_lee_tx.clone()],
+                    &clock_lee_tx,
+                    &placeholder_fee_lee_tx,
                     max_block_size,
                     new_block_height,
                     prev_block_hash,
@@ -2259,7 +2275,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 self.count_dispatch_failure(&tx).await;
             }
 
-            if valid_transactions.len() >= self.sequencer_config.max_num_tx_in_block {
+            if valid_transactions.len() - 1 >= self.sequencer_config.max_num_tx_in_block {
                 break;
             }
         }
@@ -2277,10 +2293,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .context("Fee transaction failed. Aborting block production.")?;
         valid_transactions.push(LeeTransaction::Public(fee_tx));
 
-        working_state
-            .transition_from_public_transaction(&clock_tx, new_block_height, new_block_timestamp)
-            .context("Clock transaction failed. Aborting block production.")?;
-        valid_transactions.push(clock_lee_tx);
         sequencer_core_metrics::record_transactions_per_block(valid_transactions.len());
 
         let hashable_data = HashableBlockData {
@@ -2301,13 +2313,16 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
         sequencer_core_metrics::record_block_creation_time(now.elapsed());
 
-        Ok(BlockWithMeta {
-            block,
-            withdrawals,
-            parent,
-            mempool_transactions,
-            pinned_deposit_notes,
-        })
+        Ok((
+            BlockWithMeta {
+                block,
+                withdrawals,
+                parent,
+                mempool_transactions,
+                pinned_deposit_notes,
+            },
+            working_state,
+        ))
     }
 
     /// Reads the current head state under the lock without cloning it, so callers
@@ -2380,8 +2395,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .collect())
     }
 
-    /// Whether a block carrying nothing but `tx` and the appended system
-    /// transactions (fee and clock) would be within the size limit.
+    /// Whether a block carrying only `tx` and the system transactions
+    /// (clock and fee) would be within the size limit.
     ///
     /// Distinguishes "does not fit in this block" from "does not fit in any
     /// block". The first is an ordinary deferral; the second, for a transaction
@@ -2389,7 +2404,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// on.
     fn fits_in_an_empty_block(
         tx: &LeeTransaction,
-        system_txs: &[LeeTransaction],
+        clock_tx: &LeeTransaction,
+        fee_tx: &LeeTransaction,
         max_block_size: usize,
         block_id: u64,
         prev_block_hash: HashType,
@@ -2397,9 +2413,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     ) -> Result<bool> {
         let alone = HashableBlockData {
             // A placeholder index: the size if the transaction reverts.
-            reverted: vec![0],
+            reverted: vec![1],
             block_id,
-            transactions: [std::slice::from_ref(tx), system_txs].concat(),
+            transactions: vec![clock_tx.clone(), tx.clone(), fee_tx.clone()],
             prev_block_hash,
             timestamp,
         };
@@ -2961,21 +2977,21 @@ fn build_genesis_state(
 
     let genesis_summary = fee_core::BlockFeeSummary::default();
     let genesis_payout = chain_state::apply::block_payout(&genesis_opening, &genesis_summary);
-    let genesis_txs: Vec<_> = std::iter::once(build_init_channel_params_transaction(
-        channel_params,
-        *config.bedrock_config.channel_id.as_ref(),
-    ))
-    .chain(cross_zone_config_txs)
-    .chain(inbox_config_tx)
-    .chain(supply_txs)
-    .chain(bootstrap_stake_txs)
-    .chain(std::iter::once(fee_invocation(
-        genesis_summary,
-        genesis_payout,
-        FeePayee::Present(producer),
-    )))
-    .chain(std::iter::once(clock_invocation(GENESIS_BLOCK_ID, 0)))
-    .collect();
+    let genesis_txs: Vec<_> = std::iter::once(clock_invocation(GENESIS_BLOCK_ID, 0))
+        .chain(std::iter::once(build_init_channel_params_transaction(
+            channel_params,
+            *config.bedrock_config.channel_id.as_ref(),
+        )))
+        .chain(cross_zone_config_txs)
+        .chain(inbox_config_tx)
+        .chain(supply_txs)
+        .chain(bootstrap_stake_txs)
+        .chain(std::iter::once(fee_invocation(
+            genesis_summary,
+            genesis_payout,
+            FeePayee::Present(producer),
+        )))
+        .collect();
 
     for (idx, tx) in genesis_txs.iter().enumerate() {
         let tx_events = state
@@ -3410,15 +3426,17 @@ fn build_finalize_unstake_tx(
 }
 
 /// User transactions of an orphaned block to return to the mempool: everything
-/// except the trailing clock tx, sequencer-generated bridge deposits (replayed
-/// from their own bedrock events) and sequencer-only txs — cross-zone dispatches
-/// (replayed by the watcher) and the fee tx (regenerated every block; the
-/// ingress guard rejects them as `User`).
+/// between the clock and fee except sequencer-generated bridge deposits and
+/// sequencer-only transactions, which are rebuilt from their source records.
 fn resubmittable_txs(block: &Block) -> Vec<LeeTransaction> {
-    let Some((_clock, rest)) = block.body.transactions.split_last() else {
+    let Some((_clock, rest)) = block.body.transactions.split_first() else {
         return Vec::new();
     };
-    rest.iter()
+    let Some((_fee, user_txs)) = rest.split_last() else {
+        return Vec::new();
+    };
+    user_txs
+        .iter()
         .filter(|tx| extract_bridge_deposit_id(tx).is_none() && !is_sequencer_only_tx(tx))
         .cloned()
         .collect()
