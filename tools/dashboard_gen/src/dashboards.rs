@@ -1,6 +1,7 @@
 //! One module per dashboard, each exposing a `dashboard()` builder.
 
 pub mod actors;
+pub mod messages;
 pub mod network;
 pub mod sequencer;
 

@@ -204,6 +204,52 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "An arrow from what sent messages to the actor that handled them, at messages per second; a circle per actor, at all it handled. A sender is the actor whose code sent the message, else the span it was sent in, e.g. `rpc` for an RPC call; `none` outside any span, e.g. the scheduler's timer.",
+      "fieldConfig": { "defaults": { "unit": "msg/s", "decimals": 2 }, "overrides": [ ] },
+      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 8 },
+      "id": 5,
+      "options": {
+        "edges": { "mainStatUnit": "msg/s" },
+        "nodes": { "mainStatUnit": "msg/s" },
+        "zoomMode": "cooperative"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "label_replace(sum by (id) (label_replace(rate(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\"}[$__range]), \"id\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\")) or (sum by (id) (label_replace(rate(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\"}[$__range]), \"id\", \"$1\", \"sender\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\")) > 0) * 0, \"title\", \"$1\", \"id\", \"(.*)\")",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "",
+          "range": false,
+          "refId": "nodes"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "label_join(sum by (source, target) (label_replace(label_replace(rate(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\"}[$__range]), \"source\", \"$1\", \"sender\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"), \"target\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\")) > 0, \"id\", \"->\", \"source\", \"target\")",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "",
+          "range": false,
+          "refId": "edges"
+        }
+      ],
+      "title": "All actors · who sends messages to whom over the time range",
+      "transformations": [
+        {
+          "id": "calculateField",
+          "options": {
+            "alias": "mainstat",
+            "mode": "reduceRow",
+            "reduce": { "reducer": "sum" },
+            "replaceFields": false,
+            "timeSeries": false
+          }
+        }
+      ],
+      "type": "nodeGraph"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "description": "Running, stopped, restarting by its supervisor, or failed by a panic or error; empty while the actor does not exist, e.g. the sequencer is down. A state shorter than a scrape may not show; restarts are counted under Restarts.",
       "fieldConfig": {
         "defaults": {
@@ -229,8 +275,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
-      "id": 5,
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 22 },
+      "id": 6,
       "options": {
         "alignValue": "left",
         "legend": { "displayMode": "list", "placement": "bottom", "calcs": [ ] },
@@ -267,8 +313,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 16 },
-      "id": 6,
+      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 30 },
+      "id": 7,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -302,8 +348,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 9, "w": 8, "x": 8, "y": 16 },
-      "id": 7,
+      "gridPos": { "h": 9, "w": 8, "x": 8, "y": 30 },
+      "id": 8,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -337,8 +383,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 16 },
-      "id": 8,
+      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 30 },
+      "id": 9,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -360,8 +406,8 @@
         "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" }, "unit": "short", "decimals": 0 },
         "overrides": [ ]
       },
-      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 25 },
-      "id": 9,
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 39 },
+      "id": 10,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -384,8 +430,8 @@
         "defaults": { "color": { "mode": "fixed", "fixedColor": "green" }, "unit": "short", "decimals": 2 },
         "overrides": [ ]
       },
-      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 25 },
-      "id": 10,
+      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 39 },
+      "id": 11,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -409,8 +455,8 @@
         "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" }, "unit": "short", "decimals": 0 },
         "overrides": [ ]
       },
-      "gridPos": { "h": 5, "w": 4, "x": 8, "y": 25 },
-      "id": 11,
+      "gridPos": { "h": 5, "w": 4, "x": 8, "y": 39 },
+      "id": 12,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -441,8 +487,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 5, "w": 4, "x": 12, "y": 25 },
-      "id": 12,
+      "gridPos": { "h": 5, "w": 4, "x": 12, "y": 39 },
+      "id": 13,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -477,8 +523,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 25 },
-      "id": 13,
+      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 39 },
+      "id": 14,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -509,8 +555,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 25 },
-      "id": 14,
+      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 39 },
+      "id": 15,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -547,8 +593,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 30 },
-      "id": 15,
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 44 },
+      "id": 16,
       "options": {
         "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
         "showThresholdLabels": false,
@@ -588,8 +634,8 @@
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 30 },
-      "id": 16,
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 44 },
+      "id": 17,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -618,8 +664,8 @@
         "defaults": { "color": { "mode": "fixed", "fixedColor": "purple" }, "unit": "s", "min": 0.0 },
         "overrides": [ ]
       },
-      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 38 },
-      "id": 17,
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 52 },
+      "id": 18,
       "options": {
         "displayMode": "basic",
         "maxVizHeight": 300,
@@ -657,8 +703,15 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 38 },
-      "id": 18,
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 52 },
+      "id": 19,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Each message, with what it sent",
+          "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}"
+        }
+      ],
       "options": {
         "displayMode": "basic",
         "maxVizHeight": 300,
@@ -691,8 +744,8 @@
         "defaults": { "color": { "mode": "fixed", "fixedColor": "purple" }, "unit": "s", "min": 0.0 },
         "overrides": [ ]
       },
-      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 38 },
-      "id": 19,
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 52 },
+      "id": 20,
       "options": {
         "displayMode": "basic",
         "maxVizHeight": 300,
@@ -725,8 +778,8 @@
         "defaults": { "color": { "mode": "fixed", "fixedColor": "purple" }, "unit": "s", "min": 0.0 },
         "overrides": [ ]
       },
-      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 38 },
-      "id": 20,
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 52 },
+      "id": 21,
       "options": {
         "displayMode": "basic",
         "maxVizHeight": 300,
@@ -769,8 +822,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 46 },
-      "id": 21,
+      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 60 },
+      "id": 22,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -803,8 +856,8 @@
           }
         ]
       },
-      "gridPos": { "h": 9, "w": 8, "x": 8, "y": 46 },
-      "id": 22,
+      "gridPos": { "h": 9, "w": 8, "x": 8, "y": 60 },
+      "id": 23,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -843,8 +896,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 46 },
-      "id": 23,
+      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 60 },
+      "id": 24,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -859,6 +912,229 @@
       ],
       "title": "${actor} · busy per message",
       "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "description": "Messages the actor sent over the time range, newest first. Only the newest 200, counted under the table. The link in the header opens all of them, up to the newest 10 000, on the Messages dashboard. A click on one selects it on the Messages dashboard, with the messages it sent in turn.",
+      "fieldConfig": {
+        "defaults": { },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Start time" },
+            "properties": [ { "id": "unit", "value": "time:HH:mm:ss.SSS" }, { "id": "custom.width", "value": 110 } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Duration" },
+            "properties": [ { "id": "custom.width", "value": 90 } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Message" },
+            "properties": [
+              { "id": "custom.width", "value": 260 },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Select this message",
+                    "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}&var-trace=${__data.fields.traceIdHidden}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Sent from" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Select the message it was sent from",
+                    "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}&var-trace=${__data.fields.sentFromTrace}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "traceIdHidden" },
+            "properties": [ { "id": "custom.hidden", "value": true } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "sentFromTrace" },
+            "properties": [ { "id": "custom.hidden", "value": true } ]
+          }
+        ]
+      },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 69 },
+      "id": 25,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "All of them",
+          "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}"
+        }
+      ],
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": true, "fields": "", "reducer": [ "count" ], "show": true },
+        "showHeader": true,
+        "sortBy": [ { "desc": true, "displayName": "Start time" } ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "limit": 200,
+          "query": "{ span.sequencer = \"$sequencer\" && span.sender = \"$actor\" } | select(span.sender, span.cause, link:traceID) with(most_recent=true)",
+          "queryType": "traceql",
+          "refId": "A",
+          "spss": 1,
+          "tableType": "spans"
+        }
+      ],
+      "title": "${actor} · messages sent, newest 200",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Name": true,
+              "Span ID": true,
+              "Trace Service": true,
+              "actor": true,
+              "nestedSetParent": true,
+              "sender": true,
+              "sequencer": true
+            },
+            "indexByName": {
+              "Duration": 4,
+              "Start time": 0,
+              "Trace Name": 1,
+              "cause": 3,
+              "link:traceID": 5,
+              "sender": 2
+            },
+            "renameByName": {
+              "Trace Name": "Message",
+              "cause": "Sent from",
+              "link:traceID": "sentFromTrace",
+              "sender": "Sender"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "description": "Messages the actor handled over the time range, newest first. Only the newest 200, counted under the table. The link in the header opens all of them, up to the newest 10 000, on the Messages dashboard. A click on one selects it on the Messages dashboard, with the messages it sent in turn.",
+      "fieldConfig": {
+        "defaults": { },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Start time" },
+            "properties": [ { "id": "unit", "value": "time:HH:mm:ss.SSS" }, { "id": "custom.width", "value": 110 } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Duration" },
+            "properties": [ { "id": "custom.width", "value": 90 } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Message" },
+            "properties": [
+              { "id": "custom.width", "value": 260 },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Select this message",
+                    "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}&var-trace=${__data.fields.traceIdHidden}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Sent from" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Select the message it was sent from",
+                    "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}&var-trace=${__data.fields.sentFromTrace}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "traceIdHidden" },
+            "properties": [ { "id": "custom.hidden", "value": true } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "sentFromTrace" },
+            "properties": [ { "id": "custom.hidden", "value": true } ]
+          }
+        ]
+      },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 69 },
+      "id": 26,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "All of them",
+          "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}"
+        }
+      ],
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": true, "fields": "", "reducer": [ "count" ], "show": true },
+        "showHeader": true,
+        "sortBy": [ { "desc": true, "displayName": "Start time" } ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "limit": 200,
+          "query": "{ span.sequencer = \"$sequencer\" && span.actor = \"$actor\" } | select(span.sender, span.cause, link:traceID) with(most_recent=true)",
+          "queryType": "traceql",
+          "refId": "A",
+          "spss": 1,
+          "tableType": "spans"
+        }
+      ],
+      "title": "${actor} · messages handled, newest 200",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Name": true,
+              "Span ID": true,
+              "Trace Service": true,
+              "actor": true,
+              "nestedSetParent": true,
+              "sequencer": true
+            },
+            "indexByName": {
+              "Duration": 4,
+              "Start time": 0,
+              "Trace Name": 1,
+              "cause": 3,
+              "link:traceID": 5,
+              "sender": 2
+            },
+            "renameByName": {
+              "Trace Name": "Message",
+              "cause": "Sent from",
+              "link:traceID": "sentFromTrace",
+              "sender": "Sender"
+            }
+          }
+        }
+      ],
+      "type": "table"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -881,8 +1157,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 55 },
-      "id": 24,
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 79 },
+      "id": 27,
       "options": {
         "alignValue": "left",
         "legend": { "displayMode": "list", "placement": "bottom", "calcs": [ ] },
@@ -922,8 +1198,8 @@
           }
         ]
       },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 55 },
-      "id": 25,
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 79 },
+      "id": 28,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -949,8 +1225,8 @@
       "datasource": { "type": "loki", "uid": "loki" },
       "description": "Lines logged while the actor ran, from its own crate or from code it calls, e.g. the sequencer core. Tasks it spawns log without it.",
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [ ] },
-      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 62 },
-      "id": 26,
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 86 },
+      "id": 29,
       "links": [
         {
           "targetBlank": false,
@@ -969,6 +1245,151 @@
       ],
       "title": "${actor} · warnings and errors",
       "type": "logs"
+    },
+    {
+      "collapsed": true,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 98 },
+      "id": 33,
+      "panels": [
+        {
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "description": "At the percentile picked above. From taking a message off the mailbox to its handler returning, awaits included. A handler that replies from a background task counts only until it hands the work off. Read from the traces, one span per message: exact rather than from histogram buckets. The points are exemplars, single messages; a click on one offers its trace in Explore. A click on a line offers the messages around that moment on the Messages dashboard.",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+              "unit": "s",
+              "min": 0.0,
+              "links": [
+                {
+                  "title": "These messages around this moment",
+                  "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&time=${__value.time}&time.window=60000&var-message=${__field.displayName}"
+                }
+              ]
+            },
+            "overrides": [ ]
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 99 },
+          "id": 30,
+          "options": {
+            "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "tempo", "uid": "tempo" },
+              "query": "{ span.sequencer = \"$sequencer\" && span.actor = \"$actor\" } | quantile_over_time(duration, $percentile) by (name)",
+              "queryType": "traceql",
+              "refId": "A",
+              "step": "30s"
+            }
+          ],
+          "title": "${actor} · ${percentile:text} handling time per message, from traces",
+          "transformations": [
+            {
+              "id": "renameByRegex",
+              "options": { "regex": "^\\{[^=]+=\"?([^\",}]*)\"?.*\\}$", "renamePattern": "$1" }
+            }
+          ],
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "description": "Who keeps the actor busy. Read from the traces, one span per message: exact rather than from histogram buckets. The points are exemplars, single messages; a click on one offers its trace in Explore. A click on a line offers the messages around that moment on the Messages dashboard.",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "stacking": { "mode": "normal", "group": "A" }
+              },
+              "unit": "msg/s",
+              "min": 0.0,
+              "links": [
+                {
+                  "title": "The messages around this moment",
+                  "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&time=${__value.time}&time.window=60000"
+                }
+              ]
+            },
+            "overrides": [ ]
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 99 },
+          "id": 31,
+          "options": {
+            "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "tempo", "uid": "tempo" },
+              "query": "{ span.sequencer = \"$sequencer\" && span.actor = \"$actor\" } | rate() by (span.sender)",
+              "queryType": "traceql",
+              "refId": "A",
+              "step": "30s"
+            }
+          ],
+          "title": "${actor} · handled per second by sender, from traces",
+          "transformations": [
+            {
+              "id": "renameByRegex",
+              "options": { "regex": "^\\{[^=]+=\"?([^\",}]*)\"?.*\\}$", "renamePattern": "$1" }
+            }
+          ],
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "description": "What the actor asks of others. Read from the traces, one span per message: exact rather than from histogram buckets. The points are exemplars, single messages; a click on one offers its trace in Explore. A click on a line offers the messages around that moment on the Messages dashboard.",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "stacking": { "mode": "normal", "group": "A" }
+              },
+              "unit": "msg/s",
+              "min": 0.0,
+              "links": [
+                {
+                  "title": "These messages around this moment",
+                  "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&time=${__value.time}&time.window=60000&var-message=${__field.displayName}"
+                }
+              ]
+            },
+            "overrides": [ ]
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 99 },
+          "id": 32,
+          "options": {
+            "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "tempo", "uid": "tempo" },
+              "query": "{ span.sequencer = \"$sequencer\" && span.sender = \"$actor\" } | rate() by (name)",
+              "queryType": "traceql",
+              "refId": "A",
+              "step": "30s"
+            }
+          ],
+          "title": "${actor} · sent per second, from traces",
+          "transformations": [
+            {
+              "id": "renameByRegex",
+              "options": { "regex": "^\\{[^=]+=\"?([^\",}]*)\"?.*\\}$", "renamePattern": "$1" }
+            }
+          ],
+          "type": "timeseries"
+        }
+      ],
+      "title": "${actor} · from traces",
+      "type": "row"
     }
   ],
   "refresh": "5s",

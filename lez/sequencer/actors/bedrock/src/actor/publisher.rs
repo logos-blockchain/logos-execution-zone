@@ -777,6 +777,16 @@ async fn block_inscription(
     checked_inscription(node, data).await
 }
 
+/// The name of the span `event` is handled in, which roots the trace of what it
+/// sets off.
+pub const fn span_name(event: &Event) -> &'static str {
+    match event {
+        Event::BlocksProcessed { .. } => "bedrock.blocks_processed",
+        Event::TurnNotification { .. } => "bedrock.turn_notification",
+        Event::Ready => "bedrock.ready",
+    }
+}
+
 /// Whether `checkpoint` records messages published to or observed on the channel.
 fn has_channel_activity(checkpoint: &SequencerCheckpoint) -> bool {
     checkpoint.last_msg_id != MsgId::root() || !checkpoint.pending_txs.is_empty()

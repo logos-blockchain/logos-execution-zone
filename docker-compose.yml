@@ -1,6 +1,6 @@
 # The local stack: a dev Bedrock node, the four-sequencer committee devnet, the indexer and the
-# explorer. `--profile monitoring` adds Prometheus, Loki (with Alloy shipping container logs) and
-# Grafana.
+# explorer. `--profile monitoring` adds Prometheus, Loki and Tempo (with Alloy shipping container
+# logs and receiving traces) and Grafana.
 #
 # Bedrock, sequencer and indexer state live in volumes, so the stack resumes where it stopped,
 # rebuilds included. `docker compose down -v` (or `just clean`) starts over from a fresh chain.
@@ -30,6 +30,9 @@ x-sequencer-environment: &sequencer_environment
   SEQUENCER_CHANNEL_SIGNING_KEY_FILE: /run/secrets/channel_signing_key
   SEQUENCER_FUNDING_PUBLIC_KEY: ${LEZ_COMPOSE_FUNDING_PUBLIC_KEY:-2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26}
   SEQUENCER_BEDROCK_NODE_URL: ${LEZ_COMPOSE_SEQUENCER_BEDROCK_NODE_URL:-http://logos-blockchain-node-0:18080}
+  # Traces go to Alloy, which runs with `--profile monitoring`. Without it, a sequencer warns once
+  # that it cannot export, and drops them. Empty turns exporting off.
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${LEZ_COMPOSE_SEQUENCER_OTLP_ENDPOINT-http://alloy:4318}
 
 # Only seq-0 keeps the config's genesis and creates the channel. The others drop it, so one
 # starting before the channel exists waits for it instead of creating a second one.
@@ -62,6 +65,8 @@ services:
     environment:
       <<: *sequencer_environment
       SEQUENCER_CREATE_CHANNEL: "true"
+      # Names the node in its traces, as the `sequencer` label does in metrics and logs.
+      OTEL_RESOURCE_ATTRIBUTES: service.instance.id=sequencer_0
     ports:
       - "${LEZ_COMPOSE_SEQ_0_RPC_PORT:-3040}:3040"
       - "${LEZ_COMPOSE_SEQ_0_METRICS_PORT:-9000}:9000"
@@ -74,7 +79,9 @@ services:
     <<: *sequencer
     container_name: sequencer_service_1
     pull_policy: never
-    environment: *follower_environment
+    environment:
+      <<: *follower_environment
+      OTEL_RESOURCE_ATTRIBUTES: service.instance.id=sequencer_1
     depends_on:
       sequencer_service_0: { condition: service_healthy }
     ports:
@@ -89,7 +96,9 @@ services:
     <<: *sequencer
     container_name: sequencer_service_2
     pull_policy: never
-    environment: *follower_environment
+    environment:
+      <<: *follower_environment
+      OTEL_RESOURCE_ATTRIBUTES: service.instance.id=sequencer_2
     depends_on:
       sequencer_service_0: { condition: service_healthy }
     ports:
@@ -104,7 +113,9 @@ services:
     <<: *sequencer
     container_name: sequencer_service_3
     pull_policy: never
-    environment: *follower_environment
+    environment:
+      <<: *follower_environment
+      OTEL_RESOURCE_ATTRIBUTES: service.instance.id=sequencer_3
     depends_on:
       sequencer_service_0: { condition: service_healthy }
     ports:
@@ -178,6 +189,7 @@ services:
     depends_on:
       - prometheus
       - loki
+      - tempo
 
   loki:
     image: grafana/loki:3.7.9
@@ -191,7 +203,22 @@ services:
       - ./monitoring/loki/loki.yml:/etc/loki/loki.yml:ro
       - loki_data:/loki
 
-  # Reads every container's output through the Docker socket and ships this project's to Loki.
+  # Stores the traces Alloy forwards.
+  tempo:
+    image: grafana/tempo:3.1.1
+    container_name: tempo
+    profiles: [monitoring]
+    command:
+      - -target=all
+      - -config.file=/etc/tempo/tempo.yml
+    ports:
+      - "${LEZ_COMPOSE_TEMPO_PORT:-3200}:3200"
+    volumes:
+      - ./monitoring/tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempo_data:/var/tempo
+
+  # Reads every container's output through the Docker socket and ships this project's to Loki, and
+  # forwards the traces services send it over OTLP to Tempo.
   alloy:
     image: grafana/alloy:v1.21.3
     container_name: alloy
@@ -202,12 +229,16 @@ services:
       - /etc/alloy/config.alloy
     environment:
       LEZ_COMPOSE_ALLOY_PROJECT_NAME: ${COMPOSE_PROJECT_NAME}
+    ports:
+      # OTLP over HTTP, for a natively run sequencer: `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`.
+      - "${LEZ_COMPOSE_OTLP_PORT:-4318}:4318"
     volumes:
       - ./monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - alloy_data:/var/lib/alloy/data
     depends_on:
       - loki
+      - tempo
 
 volumes:
   sequencer_data_0:
@@ -217,5 +248,6 @@ volumes:
   indexer_data:
   prometheus_data:
   loki_data:
+  tempo_data:
   alloy_data:
   grafana_data:

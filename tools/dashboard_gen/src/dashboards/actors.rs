@@ -12,16 +12,20 @@
 
 use dashboard_gen::{
     Color, Dashboard, FieldOverride, Panel, Selector, StackingMode, Target, Thresholds, Unit,
-    explore_logs_url, label_values_variable, percentile_legend, percentile_variable,
-    selected_percentile_expr,
+    Variable, explore_logs_url, label_values_variable, percentile_legend, percentile_variable,
+    selected_percentile_expr, selected_quantile,
 };
-use sequencer_service_metrics::names::{
-    ACTOR_MAILBOX_CAPACITY, ACTOR_MESSAGE_HANDLING_TIME, ACTOR_NAME_LABEL, ACTOR_START_TIME,
-    ACTOR_STATE, ActorState, KAMEO_LIFECYCLE_RECEIVED_TOTAL, KAMEO_LINK_DIED_RECEIVED_TOTAL,
-    KAMEO_MESSAGES_RECEIVED_TOTAL, KAMEO_MESSAGES_SENT_TOTAL, MESSAGE_NAME_LABEL, SEQUENCER_LABEL,
+use sequencer_service_metrics::{
+    names::{
+        ACTOR_MAILBOX_CAPACITY, ACTOR_MESSAGE_HANDLING_TIME, ACTOR_NAME_LABEL, ACTOR_START_TIME,
+        ACTOR_STATE, ActorState, KAMEO_LIFECYCLE_RECEIVED_TOTAL, KAMEO_LINK_DIED_RECEIVED_TOTAL,
+        KAMEO_MESSAGES_RECEIVED_TOTAL, KAMEO_MESSAGES_SENT_TOTAL, MESSAGE_NAME_LABEL, NO_SENDER,
+        SENDER_LABEL, SEQUENCER_LABEL,
+    },
+    traces::{ACTOR_ATTRIBUTE, SENDER_ATTRIBUTE},
 };
 
-use super::sequencer::SEQUENCER_VAR;
+use super::{messages, sequencer::SEQUENCER_VAR};
 
 pub const UID: &str = "sequencer-actors";
 
@@ -29,7 +33,7 @@ const PERCENTILES: &[u32] = &[50, 90, 95, 99];
 const DEFAULT_PERCENTILE: u32 = 95;
 
 /// Dashboard variable holding the type name of the actor the detail panels show.
-const ACTOR_VAR: &str = "actor";
+pub const ACTOR_VAR: &str = "actor";
 
 /// Label the overview queries put each actor's type name in.
 const ACTOR_LABEL: &str = "actor";
@@ -65,6 +69,21 @@ const BUSY_DESCRIPTION: &str = "Share of the time the actor spends handling mess
 const RESTARTS_DESCRIPTION: &str =
     "Starts after the first, over the time range: a restart of the sequencer or by a supervisor.";
 
+/// What a `TraceQL` metrics query counts each point over. Over a few seconds,
+/// spans jump about; over half a minute, they read like the metrics' rates.
+const TRACES_STEP: &str = "30s";
+
+/// The time around a point of a `TraceQL` metrics query that a click on it
+/// shows the messages of: twice [`TRACES_STEP`], covering the step on either
+/// side of the point's timestamp.
+const TRACES_WINDOW_MS: u32 = 60_000;
+
+const FROM_TRACES_DESCRIPTION: &str = "Read from the traces, one span per message: exact rather than from histogram buckets. The points are exemplars, single messages; a click on one offers its trace in Explore. A click on a line offers the messages around that moment on the Messages dashboard.";
+
+/// The value of the first label in a `TraceQL` metrics series name, e.g.
+/// `ProduceBlock` of `{name="ProduceBlock", p=0.95}`.
+const SERIES_LABEL_VALUE: &str = r#"^\{[^=]+="?([^",}]*)"?.*\}$"#;
+
 const LIFECYCLE_DESCRIPTION: &str = "Running, stopped, restarting by its supervisor, or failed by a panic or error; empty while the actor does not exist, e.g. the sequencer is down. A state shorter than a scrape may not show; restarts are counted under Restarts.";
 
 /// `metric`'s series from every actor of the selected sequencer.
@@ -80,18 +99,49 @@ fn actor(metric: &str) -> Selector {
     )
 }
 
+/// `expr`'s series with the type name in their `from` label put in `into`.
+/// A name with no module path, e.g. a [`SENDER_LABEL`] of `rpc`, stays as is.
+fn type_name(expr: &str, into: &str, from: &str) -> String {
+    format!(r#"label_replace({expr}, "{into}", "$1", "{from}", "{MODULE_PATH}({TYPE_NAME}).*")"#)
+}
+
 /// `expr`'s series with their actor's type name in [`ACTOR_LABEL`].
 fn short_names(expr: &str) -> String {
-    format!(
-        r#"label_replace({expr}, "{ACTOR_LABEL}", "$1", "{ACTOR_NAME_LABEL}", "{MODULE_PATH}({TYPE_NAME}).*")"#
-    )
+    type_name(expr, ACTOR_LABEL, ACTOR_NAME_LABEL)
 }
 
 /// `expr`'s series with their message's type name in [`MESSAGE_LABEL`].
 fn short_message_names(expr: &str) -> String {
+    type_name(expr, MESSAGE_LABEL, MESSAGE_NAME_LABEL)
+}
+
+/// Messages handled per second over the time range, by every actor.
+fn handled_per_second() -> String {
+    format!("rate({}[$__range])", handled_messages(all_actors))
+}
+
+/// The [`Panel::node_graph`] nodes: each actor, at the messages it handled per
+/// second over the time range, and each sender that is no actor, e.g. `rpc`,
+/// at zero, so that its edges have a start. A node's title is its id.
+fn flow_nodes() -> String {
+    let rate = handled_per_second();
     format!(
-        r#"label_replace({expr}, "{MESSAGE_LABEL}", "$1", "{MESSAGE_NAME_LABEL}", "{MODULE_PATH}({TYPE_NAME}).*")"#
+        r#"label_replace(sum by (id) ({actors}) or (sum by (id) ({senders}) > 0) * 0, "title", "$1", "id", "(.*)")"#,
+        actors = type_name(&rate, "id", ACTOR_NAME_LABEL),
+        senders = type_name(&rate, "id", SENDER_LABEL),
     )
+}
+
+/// The [`Panel::node_graph`] edges: from each sender to each actor it sent
+/// messages to over the time range, at how many per second.
+fn flow_edges() -> String {
+    let rate = handled_per_second();
+    let ends = type_name(
+        &type_name(&rate, "source", SENDER_LABEL),
+        "target",
+        ACTOR_NAME_LABEL,
+    );
+    format!(r#"label_join(sum by (source, target) ({ends}) > 0, "id", "->", "source", "target")"#)
 }
 
 /// `expr` summed down to one series per message, its type name in
@@ -202,6 +252,34 @@ fn lifecycle(panel: Panel) -> Panel {
         .description(LIFECYCLE_DESCRIPTION)
 }
 
+/// A `TraceQL` metrics query, counting at [`TRACES_STEP`].
+fn traces(traceql: String) -> Target {
+    Target::trace_metrics(traceql).step(TRACES_STEP)
+}
+
+/// A panel of a `TraceQL` metrics query, its series named by the value they
+/// are grouped by. A click on a point opens the actor's messages around it,
+/// only the ones named as its series if `by_message`.
+fn from_traces(panel: Panel, by_message: bool) -> Panel {
+    let (title, url) = if by_message {
+        (
+            "These messages around this moment",
+            messages::around_point_of_series(TRACES_WINDOW_MS),
+        )
+    } else {
+        (
+            "The messages around this moment",
+            messages::around_point(TRACES_WINDOW_MS),
+        )
+    };
+    panel
+        .width(8)
+        .min(0.0)
+        .color(Color::palette_classic())
+        .rename_series(SERIES_LABEL_VALUE, "$1")
+        .link(title, url)
+}
+
 /// A panel with one series per actor; a click shows that actor below.
 fn per_actor_panel(panel: Panel) -> Panel {
     panel.link(
@@ -212,25 +290,33 @@ fn per_actor_panel(panel: Panel) -> Panel {
     )
 }
 
+/// The dropdown of the sequencers running actors.
+pub fn sequencer_variable() -> Variable {
+    label_values_variable(
+        SEQUENCER_VAR,
+        "Sequencer",
+        KAMEO_MESSAGES_RECEIVED_TOTAL,
+        SEQUENCER_LABEL,
+    )
+}
+
+/// The dropdown of the selected sequencer's actors, by type name.
+pub fn actor_variable() -> Variable {
+    label_values_variable(
+        ACTOR_VAR,
+        "Actor",
+        &all_actors(KAMEO_MESSAGES_RECEIVED_TOTAL).to_string(),
+        ACTOR_NAME_LABEL,
+    )
+    .regex(format!("/^{MODULE_PATH}({TYPE_NAME})/"))
+}
+
 pub fn dashboard() -> Dashboard {
     Dashboard::new("Actors", UID)
         .tag(super::TAG)
         .link_tagged("Dashboards", super::TAG)
-        .variable(label_values_variable(
-            SEQUENCER_VAR,
-            "Sequencer",
-            KAMEO_MESSAGES_RECEIVED_TOTAL,
-            SEQUENCER_LABEL,
-        ))
-        .variable(
-            label_values_variable(
-                ACTOR_VAR,
-                "Actor",
-                &all_actors(KAMEO_MESSAGES_RECEIVED_TOTAL).to_string(),
-                ACTOR_NAME_LABEL,
-            )
-            .regex(format!("/^{MODULE_PATH}({TYPE_NAME})/")),
-        )
+        .variable(sequencer_variable())
+        .variable(actor_variable())
         .variable(percentile_variable(PERCENTILES, DEFAULT_PERCENTILE))
         .row(
             8,
@@ -303,6 +389,16 @@ pub fn dashboard() -> Dashboard {
                         .instant(),
                     ),
             ],
+        )
+        .row(
+            14,
+            [Panel::node_graph("All actors · who sends messages to whom over the time range")
+                .description(format!("An arrow from what sent messages to the actor that handled them, at messages per second; a circle per actor, at all it handled. A sender is the actor whose code sent the message, else the span it was sent in, e.g. `rpc` for an RPC call; `{NO_SENDER}` outside any span, e.g. the scheduler's timer."))
+                .width(24)
+                .unit(Unit::custom("msg/s"))
+                .decimals(2)
+                .target(Target::new(flow_nodes()).table("nodes"))
+                .target(Target::new(flow_edges()).table("edges"))],
         )
         .row(
             8,
@@ -463,6 +559,7 @@ pub fn dashboard() -> Dashboard {
                     ),
                 Panel::bar_gauge("${actor} · messages handled over the time range")
                     .description(HANDLED_DESCRIPTION)
+                    .header_link("Each message, with what it sent", super::messages::url())
                     .width(6)
                     .decimals(0)
                     .min(0.0)
@@ -554,6 +651,7 @@ pub fn dashboard() -> Dashboard {
                     ),
             ],
         )
+        .row(10, messages::newest_actor_messages())
         .row(
             7,
             [
@@ -581,6 +679,40 @@ pub fn dashboard() -> Dashboard {
             ],
         )
         .row(12, [warnings_and_errors()])
+        // Last, as panels after a folded row fold into it once it is open.
+        .folded(
+            "${actor} · from traces",
+            8,
+            [
+                from_traces(Panel::timeseries(format!(
+                    "${{actor}} · {} handling time per message, from traces",
+                    percentile_legend()
+                )), true)
+                .description(format!("At the percentile picked above. {HANDLING_TIME_DESCRIPTION} {FROM_TRACES_DESCRIPTION}"))
+                .unit(Unit::Seconds)
+                .target(traces(format!(
+                    "{} | quantile_over_time(duration, {}) by (name)",
+                    messages::of_actor(ACTOR_ATTRIBUTE),
+                    selected_quantile(),
+                ))),
+                from_traces(Panel::timeseries("${actor} · handled per second by sender, from traces"), false)
+                    .description(format!("Who keeps the actor busy. {FROM_TRACES_DESCRIPTION}"))
+                    .unit(Unit::custom("msg/s"))
+                    .stacking(StackingMode::Normal)
+                    .target(traces(format!(
+                        "{} | rate() by (span.{SENDER_ATTRIBUTE})",
+                        messages::of_actor(ACTOR_ATTRIBUTE)
+                    ))),
+                from_traces(Panel::timeseries("${actor} · sent per second, from traces"), true)
+                    .description(format!("What the actor asks of others. {FROM_TRACES_DESCRIPTION}"))
+                    .unit(Unit::custom("msg/s"))
+                    .stacking(StackingMode::Normal)
+                    .target(traces(format!(
+                        "{} | rate() by (name)",
+                        messages::of_actor(SENDER_ATTRIBUTE)
+                    ))),
+            ],
+        )
 }
 
 /// The selected actor's warnings and errors; the header links to all its logs

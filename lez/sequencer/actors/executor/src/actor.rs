@@ -36,7 +36,7 @@ use sharding_pool_actor::{
     ShardingPoolActor,
     protocol::{Link, Reset, Unlink},
 };
-use tracing::{debug, warn};
+use tracing::{Instrument as _, debug, warn};
 
 use crate::{
     ExecutorActorTrait, Result,
@@ -412,6 +412,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetBlockRange> for Exec
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let storage_ref = self.storage_ref.clone();
+        // Not inside the handler's span, which would stay open, and timed,
+        // until the reads end.
+        let reads = tracing::info_span!(parent: None, "block_range_reads");
+        reads.follows_from(tracing::Span::current());
 
         ctx.spawn(async move {
             stream::iter(range.into_inner())
@@ -425,6 +429,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetBlockRange> for Exec
                 .try_take_while(|block_opt| ready(Ok(block_opt.is_some())))
                 .try_filter_map(|block_opt| ready(Ok(block_opt)))
                 .try_collect()
+                .instrument(reads)
                 .await
         })
     }

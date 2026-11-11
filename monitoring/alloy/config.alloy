@@ -1,4 +1,5 @@
-// Ships this compose project's container logs to Loki.
+// Ships this compose project's container logs to Loki, and the traces services send it over
+// OTLP to Tempo.
 //
 // Each stream is labelled `service_name` (the compose service), and a sequencer's also
 // `sequencer` (`sequencer_service_0` → `sequencer_0`), matching Prometheus' label so a
@@ -6,11 +7,13 @@
 // `level` it was logged at.
 //
 // Our services log one JSON object per line (`LOG_FORMAT=json`): the message, the event's
-// fields, the emitting module's `target` and the span it ran in. Its `timestamp` becomes the
-// entry's; its `level` and, for a sequencer's line, the `actor` it ran in become labels. The
-// actor is its type name, `ExecutorActor`, as the actors dashboard names it. Those are then cut
-// from the line, which Grafana shows next to them anyway; `| json` reaches the rest. `target`
-// stays in the line: with a hundred or so values it would multiply the streams as a label.
+// fields, the emitting module's `target`, the fields of the spans it ran in and, while it exports
+// traces, the ids of its trace and span. Its `timestamp` becomes the entry's; its `level` and, for
+// a sequencer's line, the `actor` it ran in become labels. The actor is its type name,
+// `ExecutorActor`, as the actors dashboard names it. The ids become structured metadata,
+// `trace_id` and `span_id`, which Grafana links to the trace in Tempo. Those are then cut from the
+// line, which Grafana shows next to them anyway; `| json` reaches the rest. `target` stays in the
+// line: with a hundred or so values it would multiply the streams as a label.
 
 discovery.docker "containers" {
 	host = "unix:///var/run/docker.sock"
@@ -48,10 +51,17 @@ loki.source.docker "containers" {
 }
 
 loki.process "levels" {
-	// Ours: `{"timestamp":…,"level":"INFO","message":…,"target":"sequencer_core",
-	// "span":{"actor.name":"sequencer_executor_actor::actor::ExecutorActor<…>",…}}`.
+	// Ours: `{"level":"INFO","message":…,"openTelemetry":{"spanId":…,"traceId":…},
+	// "span":{"actor.name":"sequencer_executor_actor::actor::ExecutorActor<…>",…},
+	// "target":"sequencer_core","timestamp":…,…the event's other fields}`.
 	stage.json {
-		expressions = {timestamp = "", level = "", actor = "span.\"actor.name\""}
+		expressions = {
+			timestamp = "",
+			level     = "",
+			actor     = "span.\"actor.name\"",
+			trace_id  = "openTelemetry.traceId",
+			span_id   = "openTelemetry.spanId",
+		}
 	}
 
 	stage.regex {
@@ -79,14 +89,29 @@ loki.process "levels" {
 		values = {level = "", actor = ""}
 	}
 
+	stage.structured_metadata {
+		values = {trace_id = "", span_id = ""}
+	}
+
 	// Values are JSON-escaped, so a quoted key can only be one of the line's own.
 	stage.replace {
 		expression = "(\"(?:timestamp|level)\":\"[^\"]*\",)"
 		replace    = ""
 	}
 
+	// Last when the event has no fields but its message.
+	stage.replace {
+		expression = "(,\"timestamp\":\"[^\"]*\")\\}\\s*$"
+		replace    = ""
+	}
+
 	stage.replace {
 		expression = "(\"actor\\.name\":\"[^\"]*\",)"
+		replace    = ""
+	}
+
+	stage.replace {
+		expression = "(\"openTelemetry\":\\{[^}]*\\},)"
 		replace    = ""
 	}
 
@@ -96,5 +121,43 @@ loki.process "levels" {
 loki.write "local" {
 	endpoint {
 		url = "http://loki:3100/loki/api/v1/push"
+	}
+}
+
+otelcol.receiver.otlp "services" {
+	http {
+		endpoint = "0.0.0.0:4318"
+	}
+
+	output {
+		traces = [otelcol.processor.transform.sequencer.input]
+	}
+}
+
+// A sequencer puts its public key in every span's `sequencer`. As in Prometheus and the logs,
+// the node's name, here its `service.instance.id`, takes its place, so the dashboards' Sequencer
+// dropdown finds its traces too.
+otelcol.processor.transform "sequencer" {
+	error_mode = "ignore"
+
+	trace_statements {
+		context    = "span"
+		statements = [
+			`set(attributes["sequencer"], resource.attributes["service.instance.id"]) where resource.attributes["service.instance.id"] != nil`,
+		]
+	}
+
+	output {
+		traces = [otelcol.exporter.otlp.tempo.input]
+	}
+}
+
+otelcol.exporter.otlp "tempo" {
+	client {
+		endpoint = "tempo:4317"
+
+		tls {
+			insecure = true
+		}
 	}
 }

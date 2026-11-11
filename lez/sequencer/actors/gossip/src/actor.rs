@@ -32,6 +32,7 @@ use sequencer_core::{
 };
 use sequencer_slasher_actor::protocol::Approval;
 use tokio::select;
+use tracing::Instrument as _;
 
 use self::seen_cache::SeenCache;
 use crate::protocol::{GetConnectedPeers, PublishConfig, PublishTransaction, RetryBootstrap};
@@ -387,17 +388,30 @@ impl GossipActor {
                 message_id,
                 message,
             }) => {
+                // Each roots the trace of what the message sets off.
+                let span = |name: &'static str| {
+                    tracing::info_span!(
+                        "gossip_message",
+                        otel.name = name,
+                        peer = %propagation_source,
+                    )
+                };
                 if message.topic == self.approvals_topic.hash() {
-                    self.on_approval_message(propagation_source, &message_id, &message.data);
+                    span("gossip.approval").in_scope(|| {
+                        self.on_approval_message(propagation_source, &message_id, &message.data);
+                    });
                 } else if message.topic == self.config_topic.hash() {
-                    self.on_config_message(
-                        propagation_source,
-                        message.source.as_ref(),
-                        &message_id,
-                        &message.data,
-                    );
+                    span("gossip.config").in_scope(|| {
+                        self.on_config_message(
+                            propagation_source,
+                            message.source.as_ref(),
+                            &message_id,
+                            &message.data,
+                        );
+                    });
                 } else {
                     self.on_gossip_message(propagation_source, &message_id, &message.data)
+                        .instrument(span("gossip.transaction"))
                         .await;
                 }
             }

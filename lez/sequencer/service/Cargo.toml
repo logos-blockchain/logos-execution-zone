@@ -35,11 +35,15 @@ kameo = { workspace = true, features = ["metrics"] }
 kameo_actors.workspace = true
 hex.workspace = true
 libp2p.workspace = true
-logging.workspace = true
+logging = { workspace = true, features = ["otel"] }
 metrics-exporter-prometheus.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-otlp.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
+tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 futures.workspace = true
 glob.workspace = true
@@ -47,6 +51,7 @@ serde_json.workspace = true
 
 [dev-dependencies]
 metrics.workspace = true
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 
 [[bin]]
 name = "sequencer_service"

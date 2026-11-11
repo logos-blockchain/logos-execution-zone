@@ -30,14 +30,25 @@ pub const KAMEO_LINK_DIED_RECEIVED_TOTAL: &str = "kameo_link_died_received_total
 pub const ACTOR_MAILBOX_CAPACITY: &str = "actor_mailbox_capacity";
 
 /// Time the actor spent handling one message, from taking it off the mailbox
-/// to its handler returning. Labelled with [`ACTOR_NAME_LABEL`] and
-/// [`MESSAGE_NAME_LABEL`].
+/// to its handler returning. Labelled with [`ACTOR_NAME_LABEL`],
+/// [`MESSAGE_NAME_LABEL`] and [`SENDER_LABEL`].
 pub const ACTOR_MESSAGE_HANDLING_TIME: &str = "actor_message_handling_time_seconds";
 
 /// Label on [`ACTOR_MESSAGE_HANDLING_TIME`]: kameo's name for the message, by
 /// default its type name with the module path, e.g.
 /// `sequencer_storage_actor::messages::GetBlock`.
 pub const MESSAGE_NAME_LABEL: &str = "message_name";
+
+/// Label on [`ACTOR_MESSAGE_HANDLING_TIME`]: what sent the message.
+///
+/// That is the type name of the actor whose code sent it, as in
+/// [`ACTOR_NAME_LABEL`]; outside any actor, the name of the outermost `info`
+/// or higher span it was sent in, e.g. `rpc`, whatever the log level; and
+/// [`NO_SENDER`] outside any such span, e.g. from a scheduler's timer.
+pub const SENDER_LABEL: &str = "sender";
+
+/// [`SENDER_LABEL`] of a message sent outside any span.
+pub const NO_SENDER: &str = "none";
 
 /// What the actor is doing, one of [`ActorState`]'s values.
 pub const ACTOR_STATE: &str = "actor_state";

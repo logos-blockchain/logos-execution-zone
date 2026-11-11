@@ -33,6 +33,9 @@ use tracing::{Instrument as _, debug, error, info, warn};
 
 use crate::{config::CrossZoneConfig, task_group::TaskGroup};
 
+/// The span a watcher runs in for as long as it watches its peer.
+pub const WATCHER_SPAN: &str = "cross_zone_watcher";
+
 /// The per-peer settings one watcher pass needs.
 struct PeerContext {
     peer_zone: [u8; 32],
@@ -234,10 +237,7 @@ pub fn spawn_watchers<S: StorageActorTrait, B: BedrockActorTrait>(
             false,
         );
         sequencer_core_metrics::record_cross_zone_watcher_alive(hex::encode(peer.channel_id), true);
-        let span = tracing::error_span!(
-            "cross_zone_watcher",
-            peer_zone = %hex::encode(peer.channel_id)
-        );
+        let span = tracing::error_span!(WATCHER_SPAN, peer_zone = %hex::encode(peer.channel_id));
         tasks.push(tokio::spawn(
             watch_peer(
                 PeerContext {
@@ -344,30 +344,36 @@ async fn watch_peer<S: StorageActorTrait, B: BedrockActorTrait>(
             tokio::time::sleep(poll_interval).await;
             continue;
         }
+        let pass = tracing::info_span!("cross_zone_pass");
         let read = bedrock_pool_ref
             .ask(ReadChannel {
                 channel_id: peer_channel_id,
                 after: cursor,
             })
+            .into_future()
+            .instrument(pass.clone())
             .await;
         let stream = match read {
             Ok(stream) => stream,
             Err(err) => {
-                error!(
-                    error = format_args!("{err:#}"),
-                    "Watcher failed to read the peer channel"
-                );
+                pass.in_scope(|| {
+                    error!(
+                        error = format_args!("{err:#}"),
+                        "Watcher failed to read the peer channel"
+                    );
+                });
                 tokio::time::sleep(poll_interval).await;
                 continue;
             }
         };
-        let stream = stop_at_read_error(
-            stream.map_err(anyhow::Error::from),
-            tracing::Span::current(),
-        );
-        let outcome = consume_peer_stream(stream, &peer, &storage_ref, &mut cursor, &mut tip).await;
-
-        report_pass_alerts(&mut state, outcome, cursor, tip, peer_zone, &storage_ref).await;
+        let stream = stop_at_read_error(stream.map_err(anyhow::Error::from), pass.clone());
+        async {
+            let outcome =
+                consume_peer_stream(stream, &peer, &storage_ref, &mut cursor, &mut tip).await;
+            report_pass_alerts(&mut state, outcome, cursor, tip, peer_zone, &storage_ref).await;
+        }
+        .instrument(pass)
+        .await;
 
         // Stream ended (caught up to the peer's last finalized block); poll again.
         tokio::time::sleep(poll_interval).await;

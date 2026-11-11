@@ -45,6 +45,17 @@ pub enum StreamItem {
     ReadUpTo(FinalizedUpTo),
 }
 
+impl StreamItem {
+    /// The name of the span the item is handled in, which roots the trace of
+    /// what it sets off.
+    pub const fn span_name(&self) -> &'static str {
+        match self {
+            Self::Message(..) => "bedrock.channel_message",
+            Self::ReadUpTo(_) => "bedrock.channel_read_up_to",
+        }
+    }
+}
+
 /// Follows the channel's finalized history from the stored anchor on, publishing it to the
 /// `channel/<channel_id>/finalized_*` topics.
 pub struct NodeStream {

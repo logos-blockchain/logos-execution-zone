@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use bytesize::ByteSize;
-use jsonrpsee::server::ServerHandle;
+use jsonrpsee::server::{ServerHandle, middleware::rpc::RpcServiceBuilder};
 use kameo::{
     Actor,
     actor::{ActorRef, Recipient, WeakActorRef},
@@ -17,6 +17,7 @@ use tracing::info;
 use crate::{Result, error::Error};
 
 mod service;
+mod spans;
 
 const REQUEST_BODY_MAX_SIZE: ByteSize = ByteSize::mib(10);
 
@@ -39,6 +40,7 @@ impl RpcServerActor {
                 )
                 .build(),
         )
+        .set_rpc_middleware(RpcServiceBuilder::new().layer_fn(spans::RpcSpans))
         .build(listen_addr)
         .await
         .map_err(Error::RpcServerSetupFailed)?;

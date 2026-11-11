@@ -31,6 +31,7 @@ pub fn record_mailbox_capacity(actor_name: &'static str, capacity: Option<usize>
 pub fn record_message_handling_time(
     actor_name: impl Into<SharedString>,
     message_name: impl Into<SharedString>,
+    sender: impl Into<SharedString>,
     duration: Duration,
 ) {
     histogram!(
@@ -38,7 +39,8 @@ pub fn record_message_handling_time(
         unit: Unit::Seconds,
         names::ACTOR_MESSAGE_HANDLING_TIME,
         names::ACTOR_NAME_LABEL => actor_name,
-        names::MESSAGE_NAME_LABEL => message_name
+        names::MESSAGE_NAME_LABEL => message_name,
+        names::SENDER_LABEL => sender
     )
     .record(duration.as_secs_f64());
 }

@@ -23,7 +23,7 @@ use logos_blockchain_zone_sdk::{
 };
 use sequencer_storage_actor::{StorageActorTrait, protocol::GetZoneCheckpoint};
 use tokio::select;
-use tracing::warn;
+use tracing::{Instrument as _, info_span, warn};
 
 #[cfg(feature = "test-utils")]
 use crate::protocol::PublishRawInscription;
@@ -151,10 +151,13 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
         loop {
             select! {
                 Some(Some(item)) = OptionFuture::from(self.node_stream.as_mut().map(node_stream::NodeStream::next_item)) => {
-                    self.node_stream.as_mut().expect("Channel is followed").on_item(item?).await?;
+                    let item = item?;
+                    let span = info_span!("bedrock_event", otel.name = item.span_name());
+                    self.node_stream.as_mut().expect("Channel is followed").on_item(item).instrument(span).await?;
                 }
                 Some(event) = OptionFuture::from(self.publisher.as_mut().map(publisher::Publisher::next_event)) => {
-                    self.publisher().expect("Publisher is initialized").on_event(event).await?;
+                    let span = info_span!("bedrock_event", otel.name = publisher::span_name(&event));
+                    self.publisher().expect("Publisher is initialized").on_event(event).instrument(span).await?;
                 }
                 signal = mailbox_rx.recv() => {
                     return Ok(signal)

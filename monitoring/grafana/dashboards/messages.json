@@ -1,0 +1,507 @@
+{
+  "annotations": { "list": [ ] },
+  "editable": true,
+  "graphTooltip": 1,
+  "links": [
+    {
+      "asDropdown": false,
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [ "sequencer" ],
+      "title": "Dashboards",
+      "type": "dashboards"
+    }
+  ],
+  "panels": [
+    {
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "description": "The message selected by a click on it below. A click on what it was sent from selects that one instead.",
+      "fieldConfig": {
+        "defaults": { },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Start time" },
+            "properties": [ { "id": "unit", "value": "time:HH:mm:ss.SSS" }, { "id": "custom.width", "value": 110 } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Duration" },
+            "properties": [ { "id": "custom.width", "value": 90 } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Message" },
+            "properties": [
+              { "id": "custom.width", "value": 260 },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Select this message",
+                    "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}&var-trace=${__data.fields.traceIdHidden}&var-message=${message}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Sent from" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Select the message it was sent from",
+                    "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}&var-trace=${__data.fields.sentFromTrace}&var-message=${message}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "traceIdHidden" },
+            "properties": [ { "id": "custom.hidden", "value": true } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "sentFromTrace" },
+            "properties": [ { "id": "custom.hidden", "value": true } ]
+          }
+        ]
+      },
+      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": true, "fields": "", "reducer": [ "count" ], "show": true },
+        "showHeader": true,
+        "sortBy": [ { "desc": true, "displayName": "Start time" } ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "limit": 200,
+          "query": "{ trace:id = \"$trace\" && nestedSetParent = -1 } | select(span.sender, span.cause, link:traceID) with(most_recent=true)",
+          "queryType": "traceql",
+          "refId": "A",
+          "spss": 1,
+          "tableType": "spans"
+        }
+      ],
+      "title": "Selected message",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Name": true,
+              "Span ID": true,
+              "Trace Service": true,
+              "actor": true,
+              "nestedSetParent": true,
+              "sequencer": true
+            },
+            "indexByName": {
+              "Duration": 4,
+              "Start time": 0,
+              "Trace Name": 1,
+              "cause": 3,
+              "link:traceID": 5,
+              "sender": 2
+            },
+            "renameByName": {
+              "Trace Name": "Message",
+              "cause": "Sent from",
+              "link:traceID": "sentFromTrace",
+              "sender": "Sender"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "description": "The messages sent while the selected one was handled. A click on one selects it.",
+      "fieldConfig": {
+        "defaults": { },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Start time" },
+            "properties": [ { "id": "unit", "value": "time:HH:mm:ss.SSS" }, { "id": "custom.width", "value": 110 } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Duration" },
+            "properties": [ { "id": "custom.width", "value": 90 } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Message" },
+            "properties": [
+              { "id": "custom.width", "value": 260 },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Select this message",
+                    "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}&var-trace=${__data.fields.traceIdHidden}&var-message=${message}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Sent from" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Select the message it was sent from",
+                    "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}&var-trace=${__data.fields.sentFromTrace}&var-message=${message}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "traceIdHidden" },
+            "properties": [ { "id": "custom.hidden", "value": true } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "sentFromTrace" },
+            "properties": [ { "id": "custom.hidden", "value": true } ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 5 },
+      "id": 2,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": true, "fields": "", "reducer": [ "count" ], "show": true },
+        "showHeader": true,
+        "sortBy": [ { "desc": true, "displayName": "Start time" } ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "limit": 200,
+          "query": "{ link:traceID = \"$trace\" } | select(span.sender, span.cause, link:traceID) with(most_recent=true)",
+          "queryType": "traceql",
+          "refId": "A",
+          "spss": 1,
+          "tableType": "spans"
+        }
+      ],
+      "title": "Messages it sent",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Name": true,
+              "Span ID": true,
+              "Trace Service": true,
+              "actor": true,
+              "nestedSetParent": true,
+              "sequencer": true
+            },
+            "indexByName": {
+              "Duration": 4,
+              "Start time": 0,
+              "Trace Name": 1,
+              "cause": 3,
+              "link:traceID": 5,
+              "sender": 2
+            },
+            "renameByName": {
+              "Trace Name": "Message",
+              "cause": "Sent from",
+              "link:traceID": "sentFromTrace",
+              "sender": "Sender"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "collapsed": true,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 },
+      "id": 4,
+      "panels": [
+        {
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "description": "The selected message's handler: its spans, with their timings.",
+          "fieldConfig": { "defaults": { }, "overrides": [ ] },
+          "gridPos": { "h": 12, "w": 24, "x": 0, "y": 14 },
+          "id": 3,
+          "options": { },
+          "targets": [
+            {
+              "datasource": { "type": "tempo", "uid": "tempo" },
+              "query": "$trace",
+              "queryType": "traceql",
+              "refId": "A"
+            }
+          ],
+          "title": "What the selected message did",
+          "type": "traces"
+        }
+      ],
+      "title": "What the selected message did",
+      "type": "row"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "id": 5,
+      "panels": [ ],
+      "title": "${actor} · messages",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "description": "Messages the actor sent over the time range, newest first. Only the ones whose name has the Message field's text in it, all of them if it is empty. All of them, up to the newest 10 000, counted under the table. A count of 10 000 means there are more: narrow the time range to see the older ones. A click on one selects it on the Messages dashboard, with the messages it sent in turn.",
+      "fieldConfig": {
+        "defaults": { },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Start time" },
+            "properties": [ { "id": "unit", "value": "time:HH:mm:ss.SSS" }, { "id": "custom.width", "value": 110 } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Duration" },
+            "properties": [ { "id": "custom.width", "value": 90 } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Message" },
+            "properties": [
+              { "id": "custom.width", "value": 260 },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Select this message",
+                    "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}&var-trace=${__data.fields.traceIdHidden}&var-message=${message}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Sent from" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Select the message it was sent from",
+                    "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}&var-trace=${__data.fields.sentFromTrace}&var-message=${message}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "traceIdHidden" },
+            "properties": [ { "id": "custom.hidden", "value": true } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "sentFromTrace" },
+            "properties": [ { "id": "custom.hidden", "value": true } ]
+          }
+        ]
+      },
+      "gridPos": { "h": 12, "w": 12, "x": 0, "y": 15 },
+      "id": 6,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": true, "fields": "", "reducer": [ "count" ], "show": true },
+        "showHeader": true,
+        "sortBy": [ { "desc": true, "displayName": "Start time" } ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "limit": 10000,
+          "query": "{ span.sequencer = \"$sequencer\" && span.sender = \"$actor\" && name =~ \".*$message.*\" } | select(span.sender, span.cause, link:traceID) with(most_recent=true)",
+          "queryType": "traceql",
+          "refId": "A",
+          "spss": 1,
+          "tableType": "spans"
+        }
+      ],
+      "title": "${actor} · messages sent, newest 10 000",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Name": true,
+              "Span ID": true,
+              "Trace Service": true,
+              "actor": true,
+              "nestedSetParent": true,
+              "sender": true,
+              "sequencer": true
+            },
+            "indexByName": {
+              "Duration": 4,
+              "Start time": 0,
+              "Trace Name": 1,
+              "cause": 3,
+              "link:traceID": 5,
+              "sender": 2
+            },
+            "renameByName": {
+              "Trace Name": "Message",
+              "cause": "Sent from",
+              "link:traceID": "sentFromTrace",
+              "sender": "Sender"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "description": "Messages the actor handled over the time range, newest first. Only the ones whose name has the Message field's text in it, all of them if it is empty. All of them, up to the newest 10 000, counted under the table. A count of 10 000 means there are more: narrow the time range to see the older ones. A click on one selects it on the Messages dashboard, with the messages it sent in turn.",
+      "fieldConfig": {
+        "defaults": { },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Start time" },
+            "properties": [ { "id": "unit", "value": "time:HH:mm:ss.SSS" }, { "id": "custom.width", "value": 110 } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Duration" },
+            "properties": [ { "id": "custom.width", "value": 90 } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Message" },
+            "properties": [
+              { "id": "custom.width", "value": 260 },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Select this message",
+                    "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}&var-trace=${__data.fields.traceIdHidden}&var-message=${message}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Sent from" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Select the message it was sent from",
+                    "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}&var-trace=${__data.fields.sentFromTrace}&var-message=${message}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "traceIdHidden" },
+            "properties": [ { "id": "custom.hidden", "value": true } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "sentFromTrace" },
+            "properties": [ { "id": "custom.hidden", "value": true } ]
+          }
+        ]
+      },
+      "gridPos": { "h": 12, "w": 12, "x": 12, "y": 15 },
+      "id": 7,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": true, "fields": "", "reducer": [ "count" ], "show": true },
+        "showHeader": true,
+        "sortBy": [ { "desc": true, "displayName": "Start time" } ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "limit": 10000,
+          "query": "{ span.sequencer = \"$sequencer\" && span.actor = \"$actor\" && name =~ \".*$message.*\" } | select(span.sender, span.cause, link:traceID) with(most_recent=true)",
+          "queryType": "traceql",
+          "refId": "A",
+          "spss": 1,
+          "tableType": "spans"
+        }
+      ],
+      "title": "${actor} · messages handled, newest 10 000",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Name": true,
+              "Span ID": true,
+              "Trace Service": true,
+              "actor": true,
+              "nestedSetParent": true,
+              "sequencer": true
+            },
+            "indexByName": {
+              "Duration": 4,
+              "Start time": 0,
+              "Trace Name": 1,
+              "cause": 3,
+              "link:traceID": 5,
+              "sender": 2
+            },
+            "renameByName": {
+              "Trace Name": "Message",
+              "cause": "Sent from",
+              "link:traceID": "sentFromTrace",
+              "sender": "Sender"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 39,
+  "tags": [ "sequencer" ],
+  "templating": {
+    "list": [
+      {
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(kameo_messages_received_total, sequencer)",
+        "includeAll": false,
+        "label": "Sequencer",
+        "multi": false,
+        "name": "sequencer",
+        "query": "label_values(kameo_messages_received_total, sequencer)",
+        "refresh": 2,
+        "sort": 7
+      },
+      {
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(kameo_messages_received_total{sequencer=\"$sequencer\"}, actor_name)",
+        "includeAll": false,
+        "label": "Actor",
+        "multi": false,
+        "name": "actor",
+        "query": "label_values(kameo_messages_received_total{sequencer=\"$sequencer\"}, actor_name)",
+        "refresh": 2,
+        "regex": "/^(?:[a-z0-9_]+::)*([A-Za-z0-9_]+)/",
+        "sort": 7
+      },
+      { "type": "textbox", "label": "Message", "name": "message", "query": "" },
+      { "type": "textbox", "label": "Selected message's trace", "name": "trace", "query": "" }
+    ]
+  },
+  "time": { "from": "now-15m", "to": "now" },
+  "timezone": "",
+  "title": "Messages",
+  "uid": "sequencer-messages"
+}
