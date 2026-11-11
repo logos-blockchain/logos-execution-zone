@@ -152,6 +152,21 @@ typedef enum FfiOperationError {
 } FfiOperationError;
 
 /**
+ * The state the executor is in.
+ */
+typedef enum FfiExecutorState {
+  /**
+   * Replaying the channel's finalized history up to the last slot the Bedrock node has
+   * finalized. State queries fail until it is done.
+   */
+  FfiExecutorState_Bootstrapping = 0,
+  /**
+   * Following the channel and producing blocks on its turns.
+   */
+  FfiExecutorState_Online,
+} FfiExecutorState;
+
+/**
  * Which part of an `FfiDeclaredFee` is set.
  */
 typedef enum FfiFeeKind {
@@ -685,6 +700,40 @@ typedef struct LastBlockIdResult {
   bool is_some;
   enum FfiOperationError error;
 } LastBlockIdResult;
+
+/**
+ * Result of [`sequencer_ffi_query_executor_status`], returned **inline** (no
+ * heap allocation, so there is no corresponding `free_*` to call).
+ *
+ * The other fields are only meaningful when `error` is `Ok`.
+ */
+typedef struct ExecutorStatusResult {
+  enum FfiExecutorState state;
+  /**
+   * Height of the chain so far. Only meaningful when `has_height` is `true`,
+   * which it always is when `Online`.
+   */
+  FfiBlockId height;
+  bool has_height;
+  /**
+   * `Bootstrapping` only: the Bedrock slot bootstrapping completes at, the last one the
+   * node had finalized as of the latest batch. Only meaningful when `has_target_slot` is
+   * `true`.
+   */
+  uint64_t target_slot;
+  bool has_target_slot;
+  /**
+   * `Bootstrapping` only: the Bedrock slot the finalized history is replayed
+   * up to. Only meaningful when `has_replayed_up_to_slot` is `true`.
+   */
+  uint64_t replayed_up_to_slot;
+  bool has_replayed_up_to_slot;
+  /**
+   * `Online` only: whether it is this sequencer's turn to produce blocks.
+   */
+  bool is_our_turn;
+  enum FfiOperationError error;
+} ExecutorStatusResult;
 
 /**
  * Simple wrapper around a pointer to a value or an error.
@@ -1472,19 +1521,7 @@ void sequencer_ffi_init_logger(const char *level);
 struct LastBlockIdResult sequencer_ffi_query_last_block(const struct SequencerServiceFFI *sequencer);
 
 /**
- * Query the sequencer's current sync status as a JSON C-string.
- *
- * The JSON schema is owned by `sequencer_core` (`SequencerStatus`): an object with
- * `state` (`Starting`/`Syncing`/`CaughtUp`/`Error`/`Stalled`/`Halted`),
- * `indexed_block_id`, `last_error`, `stall_reason`, `cross_zone_halt`, and
- * `cross_zone_peers`. Each peer entry's `health` is one of
- * `Live`/`Lagging`/`Holed`/`Suspended`/`Halted`; treat a string you do not
- * know as not known healthy. Lets a client distinguish "still catching up"
- * from "something went wrong".
- *
- * Not supporded yet.
- *
- * TODO: Add support. Needs database modifications.
+ * Query the state the executor is in: bootstrapping from the channel or online.
  *
  * # Arguments
  *
@@ -1492,16 +1529,15 @@ struct LastBlockIdResult sequencer_ffi_query_last_block(const struct SequencerSe
  *
  * # Returns
  *
- * A heap-allocated, null-terminated JSON string that the caller MUST free with
- * `free_cstring`. Returns null on error (null `sequencer` pointer or a
- * serialization failure).
+ * An [`ExecutorStatusResult`] indicating success or failure. It is returned
+ * inline; nothing needs to be freed.
  *
  * # Safety
  *
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-char *sequencer_ffi_query_status(const struct SequencerServiceFFI *sequencer);
+struct ExecutorStatusResult sequencer_ffi_query_executor_status(const struct SequencerServiceFFI *sequencer);
 
 /**
  * Query the block by id from sequencer.

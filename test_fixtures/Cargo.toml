@@ -15,8 +15,10 @@ key_protocol.workspace = true
 lee.workspace = true
 lee_core = { workspace = true, features = ["host"] }
 sequencer_core.workspace = true
+sequencer_genesis.workspace = true
 sequencer_service = { workspace = true, features = ["rpc"] }
 sequencer_stake_core.workspace = true
+sequencer_service_protocol.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 sequencer_bedrock_actor = { workspace = true, features = ["actor"] }
 sequencer_storage_actor = { workspace = true, features = [
@@ -40,7 +42,7 @@ num-bigint.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
-testcontainers = { version = "0.27.3", features = ["docker-compose"] }
+testcontainers = { version = "0.28", features = ["docker-compose"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tokio-util.workspace = true
 url.workspace = true
