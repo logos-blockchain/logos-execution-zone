@@ -124,6 +124,21 @@ pub struct CrossZoneConfig {
     /// Defaulted so a source-only zone declares `"cross_zone": {}`.
     #[serde(default)]
     pub peers: Vec<CrossZonePeer>,
+    /// The zones `bridge_lock` may name as a lock target on this zone, the
+    /// send-direction counterpart of `peers`, seeded into its config at genesis.
+    ///
+    /// Empty means this zone locks to nobody. A source-only zone reads no peers
+    /// yet locks outbound, so this list is not the peer list.
+    ///
+    /// Defaulted, so omitting it on a zone that declares `cross_zone` leaves
+    /// `bridge_lock` registered and unable to lock anywhere. The config is
+    /// written once, so that cannot be corrected later: a holding funded after
+    /// genesis, which anyone may do by transferring to its PDA, is then stuck.
+    /// Genesis refuses seeded holdings in that state, which covers the operator
+    /// path but not the runtime one; releasing an escrow needs an instruction
+    /// `bridge_lock` does not have.
+    #[serde(default)]
+    pub lock_target_zones: Vec<ZoneId>,
     /// Account allowed to change which peer sources each target program accepts,
     /// seeded into every target's own config at genesis.
     ///
@@ -387,16 +402,21 @@ pub fn build_ping_sender_init_config_tx() -> lee::PublicTransaction {
     )
 }
 
-/// The genesis transaction that pins the outbox `bridge_lock` emits through and the
-/// wrapped token it mints, without importing either id into the guest.
+/// The genesis transaction that pins the outbox `bridge_lock` emits through, the
+/// wrapped token it mints and the zones it may lock to, without importing any of
+/// their ids into the guest.
+///
+/// The config is seeded even with an empty list, so its PDA cannot be claimed by
+/// a first initializer.
 #[must_use]
-pub fn build_bridge_lock_init_config_tx() -> lee::PublicTransaction {
+pub fn build_bridge_lock_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::PublicTransaction {
     genesis_public_tx(
         programs::bridge_lock_account_id(),
         bridge_lock_core::config_seed(),
         bridge_lock_core::Message::InitConfig {
             outbox_account_id: programs::cross_zone_outbox_account_id(),
             target_account_id: programs::wrapped_token_account_id(),
+            lock_target_zones: cross_zone.lock_target_zones.clone(),
         },
     )
 }
@@ -472,6 +492,7 @@ mod tests {
                 min_committee_size: 0,
                 genesis_hash: None,
             }],
+            lock_target_zones: Vec::new(),
             source_authority: None,
             source_governance: None,
         };
@@ -495,6 +516,7 @@ mod tests {
                 min_committee_size: 0,
                 genesis_hash: None,
             }],
+            lock_target_zones: Vec::new(),
             source_authority: None,
             source_governance: None,
         };
@@ -518,6 +540,7 @@ mod tests {
                 min_committee_size: 0,
                 genesis_hash: None,
             }],
+            lock_target_zones: Vec::new(),
             source_authority: None,
             source_governance: None,
         };
@@ -528,6 +551,7 @@ mod tests {
     fn a_genesis_init_config_carries_the_evidence_deriving_its_root() {
         let cross_zone = CrossZoneConfig {
             peers: Vec::new(),
+            lock_target_zones: Vec::new(),
             source_authority: None,
             source_governance: None,
         };
@@ -535,7 +559,7 @@ mod tests {
             build_inbox_init_config_tx([1; 32]),
             build_wrapped_token_init_config_tx(&cross_zone),
             build_ping_sender_init_config_tx(),
-            build_bridge_lock_init_config_tx(),
+            build_bridge_lock_init_config_tx(&cross_zone),
             build_ping_receiver_init_config_tx(&cross_zone),
         ] {
             let root = tx.message.execution.root.to;
@@ -550,6 +574,26 @@ mod tests {
                 tx.message.admission_evidence
             );
         }
+    }
+
+    #[test]
+    fn a_genesis_bridge_lock_config_carries_the_zones_it_may_lock_to() {
+        let cross_zone = CrossZoneConfig {
+            peers: Vec::new(),
+            lock_target_zones: vec![[7; 32], [8; 32]],
+            source_authority: None,
+            source_governance: None,
+        };
+        let tx = build_bridge_lock_init_config_tx(&cross_zone);
+        assert_eq!(
+            borsh::from_slice::<bridge_lock_core::Message>(&tx.message.execution.root.message)
+                .expect("the init config decodes"),
+            bridge_lock_core::Message::InitConfig {
+                outbox_account_id: programs::cross_zone_outbox_account_id(),
+                target_account_id: programs::wrapped_token_account_id(),
+                lock_target_zones: vec![[7; 32], [8; 32]],
+            }
+        );
     }
 
     #[test]

@@ -2891,13 +2891,25 @@ fn build_genesis_state(
         cross_zone_declared.is_some() || bridge_lock_holdings(&genesis_actions).next().is_none(),
         "SupplyBridgeLockHolding requires cross_zone to be configured: bridge_lock is not registered on this zone"
     );
+    assert!(
+        cross_zone_declared.is_some_and(|cross_zone| !cross_zone.lock_target_zones.is_empty())
+            || bridge_lock_holdings(&genesis_actions).next().is_none(),
+        "SupplyBridgeLockHolding requires cross_zone.lock_target_zones to name a zone: the seeded holdings could never be locked anywhere"
+    );
+    // No watcher reads its own channel, so a lock to this zone escrows with nothing to mint it.
+    assert!(
+        !cross_zone_declared.is_some_and(|cross_zone| cross_zone
+            .lock_target_zones
+            .contains(config.bedrock_config.channel_id.as_ref())),
+        "cross_zone.lock_target_zones must not name this zone: a lock to it could never be delivered"
+    );
     let cross_zone_config_txs = cross_zone_declared
         .map(|cross_zone| {
             [
                 cross_zone::build_wrapped_token_init_config_tx(cross_zone),
                 cross_zone::build_ping_sender_init_config_tx(),
                 cross_zone::build_ping_receiver_init_config_tx(cross_zone),
-                cross_zone::build_bridge_lock_init_config_tx(),
+                cross_zone::build_bridge_lock_init_config_tx(cross_zone),
             ]
         })
         .into_iter()

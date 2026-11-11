@@ -669,6 +669,7 @@ fn cross_zone_test_config() -> SequencerConfig {
                 min_committee_size: 0,
                 genesis_hash: None,
             }],
+            lock_target_zones: Vec::new(),
             source_authority: None,
             source_governance: None,
         }),
@@ -6815,6 +6816,7 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
     config.home = temp_dir.path().to_path_buf();
     config.cross_zone = Some(config::CrossZoneConfig {
         peers: Vec::new(),
+        lock_target_zones: Vec::new(),
         source_authority: None,
         source_governance: None,
     });
@@ -6839,6 +6841,47 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
     for account_id in cross_zone_ids {
         assert!(state.get_builtin_program(account_id).is_some());
     }
+}
+
+/// Holdings seeded on a zone that locks to nobody could only ever be locked into
+/// a permanent debit.
+#[test]
+#[should_panic(expected = "could never be locked anywhere")]
+fn genesis_bridge_lock_holdings_without_a_lock_target_zone_are_refused() {
+    let temp_dir = tempdir().unwrap();
+    let mut config = setup_sequencer_config();
+    config.home = temp_dir.path().to_path_buf();
+    config.cross_zone = Some(config::CrossZoneConfig {
+        peers: Vec::new(),
+        lock_target_zones: Vec::new(),
+        source_authority: None,
+        source_governance: None,
+    });
+    config.genesis = Some(config::GenesisConfig {
+        channel_params: config::default_channel_params(),
+        actions: vec![config::GenesisAction::SupplyBridgeLockHolding {
+            holder: AccountId::new([9; 32]),
+            amount: 1_000,
+        }],
+    });
+    let key = test_bootstrap_sequencer_key(&config);
+    let _genesis = build_genesis_state(&config, Some(key));
+}
+
+#[test]
+#[should_panic(expected = "must not name this zone")]
+fn genesis_pinning_this_zone_as_a_lock_target_is_refused() {
+    let temp_dir = tempdir().unwrap();
+    let mut config = setup_sequencer_config();
+    config.home = temp_dir.path().to_path_buf();
+    config.cross_zone = Some(config::CrossZoneConfig {
+        peers: Vec::new(),
+        lock_target_zones: vec![*config.bedrock_config.channel_id.as_ref()],
+        source_authority: None,
+        source_governance: None,
+    });
+    let key = test_bootstrap_sequencer_key(&config);
+    let _genesis = build_genesis_state(&config, Some(key));
 }
 
 /// Whether the slasher has recorded any offence.

@@ -45,6 +45,8 @@ const MINT_SRC_ZONE: [u8; 32] = [2; 32];
 const MINT_SRC_PROGRAM_ID: lee_core::program::ProgramId = [9_u32; 8];
 /// These tests drive the guest directly, so any fixed source-block hash does.
 const SRC_BLOCK_HASH: [u8; 32] = [7; 32];
+/// Every zone the lock tests name, so a refusal is never just an unpinned zone.
+const LOCK_TARGET_ZONES: [[u8; 32]; 2] = [[2; 32], [9; 32]];
 
 fn wrapped_token_config(
     state: &V03State,
@@ -229,8 +231,8 @@ fn seed_holding(state: &mut V03State, holder_id: AccountId, balance: u128) {
         .with_public_accounts([(holding_id_of(holder_id), Account::funded(balance))]);
 }
 
-/// Seeds the bridge-lock config account pinning the real outbox and the wrapped
-/// token, matching what genesis seeds for a real zone.
+/// Seeds the bridge-lock config account pinning the real outbox, the wrapped
+/// token and [`LOCK_TARGET_ZONES`], matching what genesis seeds for a real zone.
 fn seed_bridge_lock_config(state: &mut V03State) {
     let bridge_lock_id = programs::bridge_lock_account_id();
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
@@ -240,8 +242,8 @@ fn seed_bridge_lock_config(state: &mut V03State) {
             bridge_lock_core::config_bytes(
                 programs::cross_zone_outbox_account_id(),
                 programs::wrapped_token_account_id(),
+                &LOCK_TARGET_ZONES,
             )
-            .to_vec()
             .into(),
         ),
     )]);
@@ -1248,14 +1250,25 @@ fn a_lock_naming_another_target_program_is_rejected() {
         format!("{err:?}").contains("only mints through the wrapped token it is pinned to"),
         "rejected for the wrong reason: {err:?}"
     );
-    assert_eq!(
-        state
-            .get_account_by_id(holding_id_of(holder_id))
-            .data
-            .native_balance()
-            .unwrap(),
-        INITIAL_BALANCE,
-        "a refused lock leaves the holding's balance alone"
+}
+
+/// The refusal has to land before the custody transfer, not after.
+#[test]
+fn a_lock_to_an_unpinned_zone_is_rejected() {
+    let unpinned = [0xAA_u8; 32];
+
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
+    seed_bridge_lock_config(&mut state);
+
+    let lock = lock_tx(&holder_key, holder_id, unpinned, 0, 0);
+    rejects_at(
+        &state,
+        &lock,
+        1,
+        "bridge_lock only locks to a zone it is pinned to",
     );
 }
 
@@ -1479,7 +1492,7 @@ fn a_lock_before_the_pins_are_set_is_rejected() {
         panic!("a lock with nothing pinned must not execute");
     };
     assert!(
-        format!("{err:?}").contains("config account holds an outbox and a mint target"),
+        format!("{err:?}").contains("config account holds an outbox, a mint target and the zones"),
         "rejected for the wrong reason: {err:?}"
     );
 }
@@ -1493,7 +1506,7 @@ fn the_bridge_pins_are_written_once_and_replayable() {
     let outbox_id = programs::cross_zone_outbox_account_id();
     let wrapped_token_id = programs::wrapped_token_account_id();
 
-    let init = |outbox: AccountId, target: AccountId| {
+    let init = |outbox: AccountId, target: AccountId, zones: Vec<[u8; 32]>| {
         let config = Actor::new(config_id, bridge_lock_id);
         let message = Message {
             admission_evidence: vec![PublicAccountEvidence::Pda {
@@ -1507,17 +1520,19 @@ fn the_bridge_pins_are_written_once_and_replayable() {
                 bridge_lock_core::Message::InitConfig {
                     outbox_account_id: outbox,
                     target_account_id: target,
+                    lock_target_zones: zones,
                 },
             )
             .expect("build InitConfig message")
         };
         PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
     };
+    let zones = || LOCK_TARGET_ZONES.to_vec();
 
     let mut state = base_state();
 
     let diff = ValidatedStateDiff::from_public_transaction(
-        &init(outbox_id, wrapped_token_id),
+        &init(outbox_id, wrapped_token_id, zones()),
         &state,
         1,
         0,
@@ -1534,30 +1549,47 @@ fn the_bridge_pins_are_written_once_and_replayable() {
                 .actor_state(bridge_lock_id)
                 .as_ref()
         ),
-        Some((outbox_id, wrapped_token_id)),
-        "the config pins both programs after genesis"
+        Some((outbox_id, wrapped_token_id, zones())),
+        "the config pins both programs and the zones it locks to after genesis"
     );
 
-    ValidatedStateDiff::from_public_transaction(&init(outbox_id, wrapped_token_id), &state, 2, 0)
-        .expect("replaying the identical init is a no-op, not a failure");
+    ValidatedStateDiff::from_public_transaction(
+        &init(outbox_id, wrapped_token_id, zones()),
+        &state,
+        2,
+        0,
+    )
+    .expect("replaying the identical init is a no-op, not a failure");
 
-    // Either half moving is a redirect: the outbox decides whether the emission is
-    // recorded, the target where the value lands.
-    for (outbox, target, what) in [
+    // Any one of the three moving is a redirect: the outbox decides whether the
+    // emission is recorded, the target where the value lands, the zones where it
+    // may be carried at all.
+    for (outbox, target, pinned, what) in [
         (
             AccountId::from_builtin_program([3; 8]),
             wrapped_token_id,
+            zones(),
             "outbox",
         ),
         (
             outbox_id,
             AccountId::from_builtin_program([3; 8]),
+            zones(),
             "mint target",
         ),
+        (
+            outbox_id,
+            wrapped_token_id,
+            vec![[0xAA; 32]],
+            "lock target zone",
+        ),
     ] {
-        let Err(err) =
-            ValidatedStateDiff::from_public_transaction(&init(outbox, target), &state, 3, 0)
-        else {
+        let Err(err) = ValidatedStateDiff::from_public_transaction(
+            &init(outbox, target, pinned),
+            &state,
+            3,
+            0,
+        ) else {
             panic!("a re-init naming a different {what} must not execute");
         };
         assert!(

@@ -104,6 +104,7 @@ impl StoredChain {
                 min_committee_size: 0,
                 genesis_hash: None,
             }],
+            lock_target_zones: Vec::new(),
             source_authority: None,
             source_governance: None,
         };
@@ -113,7 +114,7 @@ impl StoredChain {
             cross_zone::build_wrapped_token_init_config_tx(&cross_zone),
             cross_zone::build_ping_sender_init_config_tx(),
             cross_zone::build_ping_receiver_init_config_tx(&cross_zone),
-            cross_zone::build_bridge_lock_init_config_tx(),
+            cross_zone::build_bridge_lock_init_config_tx(&cross_zone),
             cross_zone::build_inbox_init_config_tx([0; 32]),
         ] {
             state
