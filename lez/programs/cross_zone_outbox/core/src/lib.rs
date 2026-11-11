@@ -1,4 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+pub use cross_zone_emission_core::ZoneId;
 use lee_core::{
     account::{AccountId, Actor},
     program::PdaSeed,
@@ -11,9 +12,6 @@ use lee_core::{
 const OUTBOX_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneOutbox/00001/";
 
 pub const CROSS_ZONE_OUTBOX_NAME: [u8; 17] = *b"cross_zone_outbox";
-
-/// Raw 32-byte zone (channel) id; the host maps it to the zone-sdk `ChannelId`.
-pub type ZoneId = [u8; 32];
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Message {

@@ -1294,6 +1294,7 @@ name = "bridge_lock_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "cross_zone_emission_core",
  "lee_core",
  "risc0-zkvm",
 ]
@@ -2178,6 +2179,7 @@ dependencies = [
  "borsh",
  "bridge_lock_core",
  "common",
+ "cross_zone_emission_core",
  "cross_zone_inbox_core",
  "cross_zone_outbox_core",
  "hex",
@@ -2185,6 +2187,7 @@ dependencies = [
  "lee_core",
  "ping_core",
  "programs",
+ "serde",
  "wrapped_token_core",
 ]
 
@@ -2196,10 +2199,12 @@ dependencies = [
  "axum 0.8.9",
  "borsh",
  "common",
+ "cross_zone",
  "cross_zone_inbox_core",
  "cross_zone_outbox_core",
  "env_logger",
  "lee",
+ "lee_core",
  "log",
  "ping_core",
  "programs",
@@ -2207,7 +2212,16 @@ dependencies = [
  "sequencer_service_rpc",
  "serde",
  "test_fixtures",
+ "testnet_initial_state",
  "tokio",
+]
+
+[[package]]
+name = "cross_zone_emission_core"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "lee_core",
 ]
 
 [[package]]
@@ -2215,6 +2229,7 @@ name = "cross_zone_inbox_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "cross_zone_emission_core",
  "cross_zone_marker_core",
  "lee_core",
  "risc0-zkvm",
@@ -2235,6 +2250,7 @@ name = "cross_zone_marker_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "cross_zone_emission_core",
  "lee_core",
  "risc0-zkvm",
 ]
@@ -2244,6 +2260,7 @@ name = "cross_zone_outbox_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "cross_zone_emission_core",
  "lee_core",
  "risc0-zkvm",
 ]
@@ -9349,6 +9366,7 @@ name = "ping_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "cross_zone_emission_core",
  "lee_core",
  "risc0-zkvm",
 ]
@@ -9674,6 +9692,7 @@ dependencies = [
  "lee_core",
  "risc0-binfmt",
  "risc0-zkos-v1compat",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -14684,6 +14703,7 @@ name = "wrapped_token_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "cross_zone_emission_core",
  "lee_core",
  "risc0-zkvm",
 ]
