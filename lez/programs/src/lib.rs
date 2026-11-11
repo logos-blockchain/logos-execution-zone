@@ -1049,7 +1049,7 @@ mod inner {
                 refused_schedule(
                     approvals_for(&schedule_proposal(CLOCK_NAME, ids[0]), &[1, 2], 3),
                     4,
-                    "",
+                    "outside of the validity window",
                 );
             }
 
