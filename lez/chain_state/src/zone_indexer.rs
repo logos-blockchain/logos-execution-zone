@@ -136,7 +136,7 @@ mod tests {
     use futures::StreamExt as _;
     use logos_blockchain_core::mantle::ledger::verification_mode::StandardMode;
     use logos_blockchain_zone_sdk::{
-        ZoneBlock,
+        UnverifiedEd25519PublicKey, ZoneBlock,
         node_types::{
             ApiBlock, BlockInfo, ChainServiceInfo, ChannelState, Events, HeaderId, Inscription,
             MsgId, ProcessedBlockEvent, SignedOps, TimeInfo, Unverified, WalletFundRequestBody,
@@ -263,6 +263,7 @@ mod tests {
         ZoneMessage::Block(ZoneBlock {
             id: MsgId::root(),
             data: Inscription::try_from(vec![tag]).expect("one byte is under the inscription cap"),
+            signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
         })
     }
 

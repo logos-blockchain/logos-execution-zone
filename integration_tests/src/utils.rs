@@ -233,7 +233,10 @@ pub async fn assert_private_commitment_in_state(
 pub async fn sync_private(ctx: &mut TestContext) -> anyhow::Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::SyncPrivate { rescan: false }),
+        Command::Account(AccountSubcommand::SyncPrivate {
+            rescan: false,
+            yes: true,
+        }),
     )
     .await?;
     Ok(())

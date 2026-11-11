@@ -3,6 +3,8 @@
     reason = "`handle*` prefix is used for convenience with `Message` trait"
 )]
 
+use std::collections::HashSet;
+
 use kameo::{
     Actor,
     actor::ActorRef,
@@ -15,9 +17,10 @@ use crate::{
     error::Error,
     protocol::{
         AccreditedKeys, ChangeChannelConfig, ChannelReadStream, CheckChannelExists, CheckIsOurTurn,
-        CreateChannel, GetAccreditedKeys, GetChannelId, GetChannelIdReply, GetChannelTipMessageId,
-        GetChannelTipSlot, MsgId, PrepareConfig, PreparedChannelConfig, PublishBlock,
-        PublishOutcome, ReadChannel, Slot,
+        CreateChannel, GetAccreditedKeys, GetChannelId, GetChannelIdReply, GetChannelNotes,
+        GetChannelTipMessageId, GetChannelTipSlot, MsgId, NoteId, PrepareConfig, PreparePin,
+        PreparedChannelConfig, PreparedPin, PublishBlock, PublishOutcome, PublishPin, ReadChannel,
+        Slot,
     },
 };
 
@@ -32,6 +35,18 @@ mockall::mock! {
         pub fn handle_publish_block(
             &mut self,
             msg: PublishBlock,
+            ctx: &mut Context<Self, Result<PublishOutcome>>
+        ) -> Result<PublishOutcome>;
+
+        pub fn handle_prepare_pin(
+            &mut self,
+            msg: PreparePin,
+            ctx: &mut Context<Self, Result<PreparedPin>>
+        ) -> Result<PreparedPin>;
+
+        pub fn handle_publish_pin(
+            &mut self,
+            msg: PublishPin,
             ctx: &mut Context<Self, Result<PublishOutcome>>
         ) -> Result<PublishOutcome>;
 
@@ -70,6 +85,12 @@ mockall::mock! {
             msg: GetAccreditedKeys,
             ctx: &mut Context<Self, Result<Option<AccreditedKeys>>>
         ) -> Result<Option<AccreditedKeys>>;
+
+        pub fn handle_get_channel_notes(
+            &mut self,
+            msg: GetChannelNotes,
+            ctx: &mut Context<Self, HashSet<NoteId>>
+        ) -> HashSet<NoteId>;
 
         pub fn handle_get_channel_tip_slot(
             &mut self,
@@ -151,6 +172,30 @@ impl Message<PublishBlock> for MockBedrockActor {
     }
 }
 
+impl Message<PreparePin> for MockBedrockActor {
+    type Reply = Result<PreparedPin>;
+
+    async fn handle(
+        &mut self,
+        msg: PreparePin,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_prepare_pin(msg, ctx)
+    }
+}
+
+impl Message<PublishPin> for MockBedrockActor {
+    type Reply = Result<PublishOutcome>;
+
+    async fn handle(
+        &mut self,
+        msg: PublishPin,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_publish_pin(msg, ctx)
+    }
+}
+
 impl Message<PrepareConfig> for MockBedrockActor {
     type Reply = Result<PreparedChannelConfig>;
 
@@ -220,6 +265,18 @@ impl Message<GetAccreditedKeys> for MockBedrockActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_accredited_keys(msg, ctx)
+    }
+}
+
+impl Message<GetChannelNotes> for MockBedrockActor {
+    type Reply = HashSet<NoteId>;
+
+    async fn handle(
+        &mut self,
+        msg: GetChannelNotes,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_channel_notes(msg, ctx)
     }
 }
 

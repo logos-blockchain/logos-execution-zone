@@ -9,17 +9,17 @@ use lee::{
 use lee_core::program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader};
 use program_loader_core::{MAX_PROGRAM_SEGMENTS, MAX_SEGMENT_DATA_LEN, Message};
 
-use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
+use crate::{AccountIdentity, ExecutionFailureKind, WalletCore, WalletSequencerClient};
 
 /// Facade for `program_loader`'s `WriteSegment`/`CreateHeader`/`UpdateHeader` messages.
 ///
 /// Every account (segment, header) is caller-supplied — no key generation happens here. Callers
 /// create accounts first via the ordinary `account new public` flow, the same way every other
 /// program-facing command takes accounts as `AccountId`s rather than conjuring them.
-pub struct ProgramLoader<'wallet>(pub &'wallet WalletCore);
+pub struct ProgramLoader<'wallet, C: WalletSequencerClient>(pub &'wallet WalletCore<C>);
 
-impl ProgramLoader<'_> {
-    /// Sends a `program_loader` message to `target`'s loader actor, paid by `payer` if given.
+impl<C: WalletSequencerClient> ProgramLoader<'_, C> {
+    /// Sends a `program_loader` instruction over `accounts`, paid by `payer` if given.
     ///
     /// A deploy's actor is a brand-new account it is claiming, so there is never a funded account
     /// for self-pay to find: `payer` names a separately-funded account that co-signs without

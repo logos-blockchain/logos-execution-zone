@@ -12,6 +12,11 @@ use serde::{Deserialize, Serialize};
 use crate::HashType;
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "both variants are whole transactions whose bulk is on the heap; the inline \
+              difference is a few hundred bytes, and boxing one would touch every match"
+)]
 pub enum LeeTransaction {
     Public(lee::PublicTransaction),
     PrivacyPreserving(lee::PrivacyPreservingTransaction),
@@ -85,7 +90,7 @@ impl LeeTransaction {
         timestamp: Timestamp,
     ) -> Result<ValidatedStateDiff, lee::error::LeeError> {
         let diff = self.compute_state_diff(state, block_id, timestamp)?;
-        validate_no_restricted_account_modification(state, &diff)?;
+        validate_no_restricted_account_modification(self, state, &diff)?;
         validate_bridge_account_modification(state, &diff, matches!(self, Self::Public(_)))?;
         Ok(diff)
     }
@@ -435,14 +440,33 @@ pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_tra
 /// The fee refund: return `amount` from the fee inbox to `payer`.
 #[must_use]
 pub fn fee_refund_invocation(payer: AccountId, amount: u128) -> lee::public_transaction::Message {
+    refund_invocation(payer, amount, Some(Actor::native_balance(payer)))
+}
+
+/// A refund to a private payer: its native actor is left undeclared, so the
+/// inbox's credit is published as a message the payer's wallet consumes.
+#[must_use]
+pub fn private_fee_refund_invocation(
+    payer: AccountId,
+    amount: u128,
+) -> lee::public_transaction::Message {
+    refund_invocation(payer, amount, None)
+}
+
+fn refund_invocation(
+    payer: AccountId,
+    amount: u128,
+    payee: Option<Actor>,
+) -> lee::public_transaction::Message {
     let fee_state = fee_state_actor();
     lee::public_transaction::Message::try_new(
         fee_state,
-        vec![
+        [
             fee_state,
             Actor::native_balance(system_accounts::fee_inbox_account_id()),
-            Actor::native_balance(payer),
-        ],
+        ]
+        .into_iter()
+        .chain(payee),
         BTreeMap::new(),
         fee_core::Message::Refund { amount, payer },
     )
@@ -456,19 +480,63 @@ pub fn fee_refund_invocation(payer: AccountId, amount: u128) -> lee::public_tran
 /// transaction. Enforcing this on the apply/settlement path as well as the
 /// builder is what stops a block author from draining the fee inbox/escrow with a
 /// user-section fee-program invocation that honest followers would otherwise
-/// apply. The bridge account has its own increase-only rule
-/// ([`validate_bridge_account_modification`]) and is not included here.
+/// apply.
+///
+/// The one exception is a private transaction's in-proof fee, which may only raise the inbox's
+/// native balance; settlement holds the raise to the proof's reserve
+/// ([`validate_private_fee_credit`]).
+///
+/// The bridge account has its own increase-only rule ([`validate_bridge_account_modification`]) and
+/// is not included here.
 fn validate_no_restricted_account_modification(
+    tx: &LeeTransaction,
     state: &V03State,
     diff: &ValidatedStateDiff,
 ) -> Result<(), lee::error::LeeError> {
+    let fee_inbox = system_accounts::fee_inbox_account_id();
     let restricted_modification_accounts = system_accounts::clock_account_ids()
         .into_iter()
         .chain(system_accounts::fee_account_ids());
     for account_id in restricted_modification_accounts {
-        validate_doesnt_modify_account(state, diff, account_id)?;
+        let in_proof_fee = account_id == fee_inbox
+            && matches!(tx, LeeTransaction::PrivacyPreserving(_))
+            && diff.public_diff().get(&account_id).is_some_and(|post| {
+                native_balance_only_increased(&state.get_account_by_id(account_id), post)
+            });
+        if !in_proof_fee {
+            validate_doesnt_modify_account(state, diff, account_id)?;
+        }
     }
     Ok(())
+}
+
+/// Rejects a private transaction's diff unless it raises the fee inbox by exactly `reserve`.
+///
+/// Classify reads the reserve off the proof's one crossing into the inbox, but the public part may
+/// also credit the inbox from public execution, which no crossing records. Any such extra would
+/// leave the inbox above the block's revenue, which the fee distribution refuses.
+pub fn validate_private_fee_credit(
+    state: &V03State,
+    diff: &ValidatedStateDiff,
+    reserve: Balance,
+) -> Result<(), lee::error::LeeError> {
+    let fee_inbox = system_accounts::fee_inbox_account_id();
+    let balance = |account: &lee::Account| account.data.native_balance().ok();
+    let pre = state.get_account_by_id(fee_inbox);
+    let credited = diff
+        .public_diff()
+        .get(&fee_inbox)
+        .and_then(balance)
+        .zip(balance(&pre))
+        .and_then(|(after, before)| after.checked_sub(before));
+    if credited == Some(reserve) {
+        Ok(())
+    } else {
+        Err(lee::error::LeeError::InvalidInput(format!(
+            "Private transaction credits the fee inbox {credited:?} instead of its reserve \
+             {reserve}"
+        )))
+    }
 }
 
 fn validate_doesnt_modify_account(
@@ -506,7 +574,7 @@ fn validate_bridge_account_modification(
         )));
     }
 
-    if bridge_balance_only_increased(&pre, post) {
+    if native_balance_only_increased(&pre, post) {
         Ok(())
     } else {
         Err(lee::error::LeeError::InvalidInput(format!(
@@ -523,7 +591,7 @@ pub fn validate_user_state_modification(
     state: &V03State,
     diff: &ValidatedStateDiff,
 ) -> Result<(), lee::error::LeeError> {
-    validate_no_restricted_account_modification(state, diff)?;
+    validate_no_restricted_account_modification(tx, state, diff)?;
     let injected_program = tx
         .public_call()
         .filter(|_| is_system_injection(tx))
@@ -560,13 +628,14 @@ fn validate_no_inbox_state_modification(
     }
 }
 
-/// Whether the bridge escrow went from `pre` to `post` by a pure balance
-/// increase (only bridge modification a public transaction may make).
+/// Whether `pre` became `post` by a pure native balance increase: nonce and
+/// every other shard unchanged.
 ///
-/// Legit deposits debit the escrow, but they are sequencer-injected, never
-/// user-submitted, so a user transaction that fails this is a forgery attempt.
+/// The only change a user transaction may make to the bridge escrow (legit
+/// deposits debit it, but they are sequencer-injected) or, for a private
+/// transaction, to the fee inbox.
 #[must_use]
-fn bridge_balance_only_increased(pre: &lee::Account, post: &lee::Account) -> bool {
+fn native_balance_only_increased(pre: &lee::Account, post: &lee::Account) -> bool {
     fn non_native(
         account: &lee::Account,
     ) -> impl Iterator<Item = (&lee::AccountId, &lee::ActorState)> {
@@ -595,7 +664,7 @@ mod tests {
 
     use super::{
         validate_bridge_account_modification, validate_doesnt_modify_account,
-        validate_reward_target, validate_user_state_modification,
+        validate_private_fee_credit, validate_reward_target, validate_user_state_modification,
     };
     use crate::test_utils::{create_transaction_native_token_transfer, state_and_diff};
 
@@ -857,6 +926,23 @@ mod tests {
             lee::ActorState::from(vec![1]),
         );
         state_and_diff(AccountId::new([5; 32]), pre, post)
+    }
+
+    #[test]
+    fn a_private_transaction_credits_the_inbox_its_reserve_and_nothing_more() {
+        let credit = |amount: u128| {
+            let pre = Account::funded(1_000);
+            let mut post = pre.clone();
+            post.data
+                .set_actor_state(NATIVE_TOKEN_PROGRAM_ID, encode_balance(1_000 + amount));
+            state_and_diff(system_accounts::fee_inbox_account_id(), pre, post)
+        };
+
+        let (state, diff) = credit(50);
+        validate_private_fee_credit(&state, &diff, 50).unwrap();
+        // A public part crediting the inbox beside the reserve, or less than the reserve.
+        assert!(validate_private_fee_credit(&state, &diff, 49).is_err());
+        assert!(validate_private_fee_credit(&state, &diff, 51).is_err());
     }
 
     #[test]

@@ -37,7 +37,9 @@ fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
         ownership_id,
         sequencer_ffi: sequencer_ffi_res,
         sequencer_home: _sequencer_home,
-    } = sequencer_ffi_helpers::joining_setup()?;
+    } = sequencer_ffi_helpers::joining_setup(true)?;
+
+    let ownership_id = ownership_id.expect("Must be Some on staked join");
 
     let sequencer_ffi =
     // SAFETY: sequencer_ffi_helpers::joining_setup guarantees validity.
@@ -177,7 +179,9 @@ fn sequencer_ffi_acc_id_to_tx_map() -> Result<()> {
         ownership_id: owner_id,
         sequencer_ffi: sequencer_ffi_res,
         sequencer_home: _sequencer_home,
-    } = sequencer_ffi_helpers::joining_setup()?;
+    } = sequencer_ffi_helpers::joining_setup(true)?;
+
+    let owner_id = owner_id.expect("Must be Some on staked join");
 
     let sequencer_ffi =
     // SAFETY: sequencer_ffi_helpers::joining_setup guarantees validity.
@@ -433,7 +437,7 @@ fn sequencer_ffi_starting_events_produced_correctly() -> Result<()> {
         ownership_id: _,
         sequencer_ffi: sequencer_ffi_res,
         sequencer_home: _sequencer_home,
-    } = sequencer_ffi_helpers::joining_setup()?;
+    } = sequencer_ffi_helpers::joining_setup(true)?;
 
     let sequencer_ffi =
     // SAFETY: sequencer_ffi_helpers::joining_setup guarantees validity.

@@ -511,7 +511,7 @@ pub fn setup_wallet(
     initial_public_accounts: &[(PrivateKey, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     config_overrides: WalletConfigOverrides,
-) -> Result<(WalletCore, TempDir, String)> {
+) -> Result<(WalletCore<SequencerClient>, TempDir, String)> {
     let temp_wallet_dir =
         tempfile::tempdir().context("Failed to create temp dir for wallet home")?;
     let (wallet, _state_dir, password) = setup_wallet_at(
@@ -532,7 +532,7 @@ pub fn setup_wallet_at(
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     config_overrides: WalletConfigOverrides,
     home: &Path,
-) -> Result<(WalletCore, PathBuf, String)> {
+) -> Result<(WalletCore<SequencerClient>, PathBuf, String)> {
     let config = config::wallet_config(sequencer_addr).context("Failed to create Wallet config")?;
     let config_serialized =
         serde_json::to_string_pretty(&config).context("Failed to serialize Wallet config")?;
@@ -580,7 +580,7 @@ pub fn setup_wallet_at(
 
 /// Funds each of the wallet's private accounts from one of its public accounts.
 pub async fn fund_private_accounts(
-    wallet: &mut WalletCore,
+    wallet: &mut WalletCore<SequencerClient>,
     initial_public_accounts: &[(PrivateKey, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
 ) -> Result<()> {
@@ -589,7 +589,10 @@ pub async fn fund_private_accounts(
     ));
 
     for private_account in initial_private_accounts {
-        wallet::cli::execute_subcommand(
+        // The recipient pays the shielding's in-proof fee out of what it receives, so it is
+        // shielded the fee on top of its balance.
+        wallet.set_private_fee_payer(Some(private_account.account_id()));
+        let funded = wallet::cli::execute_subcommand(
             wallet,
             Command::AuthTransfer(AuthTransferSubcommand::Send {
                 from: public_mention(funder_id),
@@ -598,11 +601,15 @@ pub async fn fund_private_accounts(
                 to_vpk: None,
                 to_keys: None,
                 to_pk: None,
-                amount: private_account.balance,
+                amount: private_account
+                    .balance
+                    .checked_add(config::min_private_fee())
+                    .expect("private funding overflow"),
             }),
         )
-        .await
-        .with_context(|| {
+        .await;
+        wallet.set_private_fee_payer(None);
+        funded.with_context(|| {
             format!(
                 "Failed to fund private account {}",
                 private_account.account_id()
@@ -618,7 +625,7 @@ pub async fn fund_private_accounts(
     Ok(())
 }
 
-pub async fn sync_wallet_from_prebuilt(wallet: &mut WalletCore) -> Result<()> {
+pub async fn sync_wallet_from_prebuilt(wallet: &mut WalletCore<SequencerClient>) -> Result<()> {
     wallet
         .sync_to_latest_block()
         .await

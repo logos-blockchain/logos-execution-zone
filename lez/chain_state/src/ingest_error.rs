@@ -58,6 +58,8 @@ pub enum BlockIngestError {
     },
     #[error("Genesis block must contain only public transactions")]
     NonPublicGenesisTransaction,
+    #[error("the block lists transactions {listed:?} as reverted, settlement reverted {settled:?}")]
+    RevertMismatch { listed: Vec<u64>, settled: Vec<u64> },
     #[error("State transition failed at transaction {tx_index}: {reason}")]
     StateTransition {
         /// Index of the failing transaction within the block body.
@@ -97,6 +99,7 @@ impl BlockIngestError {
             | Self::GasCapExceeded { .. }
             | Self::RestrictedAccountModification { .. }
             | Self::NonPublicGenesisTransaction
+            | Self::RevertMismatch { .. }
             | Self::StateTransition { .. } => true,
         }
     }

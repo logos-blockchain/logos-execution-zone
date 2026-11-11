@@ -1,7 +1,9 @@
 use lee::{AccountId, FeeDeclaration, PrivateKey};
 use lee_core::account::Nonce;
 use program_loader_core::MAX_SEGMENT_DATA_LEN;
-use wallet::{WalletCore, max_fee_for, program_facades::program_loader::ProgramLoader};
+use wallet::{
+    WalletCore, WalletSequencerClient, max_fee_for, program_facades::program_loader::ProgramLoader,
+};
 
 /// Deploys `bytecode` through `program_loader`, returning the header's `AccountId`.
 ///
@@ -14,8 +16,8 @@ use wallet::{WalletCore, max_fee_for, program_facades::program_loader::ProgramLo
     clippy::print_stdout,
     reason = "This is an example program, it's fine to print to stdout"
 )]
-pub async fn deploy_program(
-    wallet_core: &mut WalletCore,
+pub async fn deploy_program<C: WalletSequencerClient>(
+    wallet_core: &mut WalletCore<C>,
     bytecode: Vec<u8>,
     payer: AccountId,
 ) -> anyhow::Result<AccountId> {
@@ -45,8 +47,8 @@ pub async fn deploy_program(
 /// Returns the fee declaration together with the payer's current nonce and signing key: the
 /// transaction must list that nonce and be signed with that key, or the sequencer rejects it with
 /// "Incorrect fee".
-pub async fn fee_paid_by(
-    wallet_core: &WalletCore,
+pub async fn fee_paid_by<C: WalletSequencerClient>(
+    wallet_core: &WalletCore<C>,
     payer: AccountId,
 ) -> anyhow::Result<(FeeDeclaration, Nonce, PrivateKey)> {
     let signing_key = wallet_core

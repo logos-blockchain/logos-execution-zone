@@ -1,6 +1,7 @@
 use std::ffi::c_void;
 
 use kameo::actor::ActorRef;
+use sequencer_gossip_actor::GossipActor;
 use sequencer_service::{ExecutorActor, SequencerHandle};
 use sequencer_storage_actor::StorageActor;
 
@@ -30,6 +31,12 @@ impl SequencerServiceFFI {
     #[must_use]
     pub const fn executor_ref(&self) -> &ActorRef<ExecutorActor> {
         self.handle().executor_ref()
+    }
+
+    /// Borrow the gossip handle for specific gossip requests.
+    #[must_use]
+    pub fn gossip_ref(&self) -> Option<&ActorRef<GossipActor>> {
+        self.handle().gossip_ref()
     }
 
     /// Borrow the [`Storage`] to run a query against the node's db.

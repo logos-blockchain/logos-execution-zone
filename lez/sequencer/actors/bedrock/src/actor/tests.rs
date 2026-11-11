@@ -50,6 +50,7 @@ fn inscribing_tx(channel: ChannelId, block: &Block) -> SignedOps<Unverified, Sta
 fn a_custom_tx_yields_its_block() {
     let channel = ChannelId::from([1; 32]);
     let block = HashableBlockData {
+        reverted: Vec::new(),
         block_id: 7,
         prev_block_hash: HashType([0; 32]),
         timestamp: 700,
@@ -95,6 +96,7 @@ fn the_genesis_config_op_and_its_proof_pass_bedrock_verification() {
             exit_delay: 10,
             max_block_size: 1 << 20,
         },
+        1,
         1,
     );
     let tx_hash_view = TxHashView::new(TxHash::from([7; 32]));

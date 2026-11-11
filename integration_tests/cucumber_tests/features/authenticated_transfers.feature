@@ -71,7 +71,7 @@ Feature: Authenticated transfers
   Scenario: Transfer funds between configured private accounts
     Given a LEZ stack with configured private accounts
     When I transfer 100 from the first configured private account to the second as "PRIVATE_TRANSFER"
-    Then the sender private balance for transfer "PRIVATE_TRANSFER" decreases by 100
+    Then the sender private balance for transfer "PRIVATE_TRANSFER" decreases by 100 plus the fee
     And the receiver private balance for transfer "PRIVATE_TRANSFER" increases by 100
     And the sender private commitment for transfer "PRIVATE_TRANSFER" is in sequencer state
     And the receiver private commitment for transfer "PRIVATE_TRANSFER" is in sequencer state

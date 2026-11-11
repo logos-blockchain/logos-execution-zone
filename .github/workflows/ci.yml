@@ -103,7 +103,7 @@ jobs:
       group: cucumber-${{ github.event.pull_request.number || github.sha }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-  bedrock-resolver-tests:
+  ci-python-scripts-tests:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
@@ -120,6 +120,9 @@ jobs:
 
       - name: Test integration test target discovery
         run: python3 .github/scripts/test_discover_integration_test_targets.py -v
+
+      - name: Test CODEOWNERS and its pull request comment
+        run: python3 .github/scripts/test_codeowners_comment.py -v
 
   fmt-rs:
     needs: ci-image
@@ -217,8 +220,9 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-container
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
+          shared-key: ci-container-tests
+          # Read-only; `unit-tests` is the only writer.
+          save-if: false
 
       - name: Lint workspace
         env:
@@ -247,7 +251,8 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-container
+          shared-key: ci-container-tests
+          # Only writer of this cache.
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
       - name: Run tests
@@ -321,6 +326,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       targets: ${{ steps.discover-targets.outputs.targets }}
+      archive_mib: ${{ steps.archive-size.outputs.mib }}
+      archive_total_mib: ${{ steps.archive-size.outputs.total_mib }}
+      test_binaries: ${{ steps.archive-size.outputs.binaries }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -345,7 +353,7 @@ jobs:
           # Only writer of this cache.
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
-      - name: Build integration test archive
+      - name: Build the integration tests
         uses: ./.github/actions/run-in-ci-image
         with:
           image: ${{ needs.ci-image.outputs.image }}
@@ -355,28 +363,20 @@ jobs:
             RISC0_DEV_MODE=1
             CARGO_PROFILE_DEV_DEBUG=0
             CARGO_PROFILE_TEST_DEBUG=0
-          # Listed from the build just archived: unpacking the archive again
-          # overflows the runner's disk.
           run: |
               source .github/scripts/with_retry.sh
-              with_retry 'cargo nextest archive -p integration_tests --archive-file integration-tests.tar.zst --no-pager' 2
-              cargo nextest list -p integration_tests \
-                --message-format json \
-                --no-pager > integration-tests-binaries.json
-
-      - name: Upload integration test archive
-        uses: actions/upload-artifact@v4
-        with:
-          name: integration-tests-archive
-          path: integration-tests.tar.zst
+              with_retry 'cargo nextest list -p integration_tests --message-format json --no-pager > integration-tests-binaries.json' 2
 
       # $GITHUB_OUTPUT is outside the mounted workspace, so the container cannot
       # write to it. Discover targets on the runner from the full nextest test
       # inventory so binaries containing only ignored tests are not scheduled.
-      - name: Discover integration test targets from archive
+      # The group filters go to a file, which the container can read.
+      - name: Discover integration test targets and their archive groups
         id: discover-targets
         run: |
-          targets_json="$(python3 .github/scripts/discover_integration_test_targets.py integration-tests-binaries.json)"
+          targets_json="$(python3 .github/scripts/discover_integration_test_targets.py \
+            integration-tests-binaries.json \
+            --emit-group-filters group-filters.tsv)"
 
           if [[ "$targets_json" == "[]" ]]; then
             echo "No integration test targets were discovered." >&2
@@ -385,6 +385,112 @@ jobs:
 
           echo "targets=$targets_json" >> "$GITHUB_OUTPUT"
           echo "Discovered integration targets: $targets_json"
+          cat group-filters.tsv
+
+      # A shard downloads only its own group.
+      - name: Build one archive per group
+        uses: ./.github/actions/run-in-ci-image
+        with:
+          image: ${{ needs.ci-image.outputs.image }}
+          env: |
+            RISC0_DEV_MODE=1
+            CARGO_PROFILE_DEV_DEBUG=0
+            CARGO_PROFILE_TEST_DEBUG=0
+          run: |
+              source .github/scripts/with_retry.sh
+              while IFS=$'\t' read -r group filter; do
+                [[ -z "$group" ]] && continue
+                with_retry "cargo nextest archive -p integration_tests --no-pager \
+                  -E '$filter' --archive-file integration-tests-$group.tar.zst" 2
+              done < group-filters.tsv
+              ls -l --block-size=M integration-tests-*.tar.zst
+
+      - name: Measure the archives
+        id: archive-size
+        run: |
+          largest="$(du -m integration-tests-g*.tar.zst | cut -f1 | sort -rn | head -1)"
+          total="$(du -mc integration-tests-g*.tar.zst | tail -1 | cut -f1)"
+          binaries="$(jq '[.["rust-suites"][] | select(.kind == "test")] | length' \
+            integration-tests-binaries.json)"
+
+          echo "mib=$largest" >> "$GITHUB_OUTPUT"
+          echo "total_mib=$total" >> "$GITHUB_OUTPUT"
+          echo "binaries=$binaries" >> "$GITHUB_OUTPUT"
+          echo "Largest group $largest MiB, $total MiB total across $binaries test binaries."
+
+      # One step per group; steps cannot be generated.
+      - name: Upload group archives
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-tests-archive-g1
+          path: integration-tests-g1.tar.zst
+      - uses: actions/upload-artifact@v4
+        with:
+          name: integration-tests-archive-g2
+          path: integration-tests-g2.tar.zst
+      - uses: actions/upload-artifact@v4
+        with:
+          name: integration-tests-archive-g3
+          path: integration-tests-g3.tar.zst
+      - uses: actions/upload-artifact@v4
+        with:
+          name: integration-tests-archive-g4
+          path: integration-tests-g4.tar.zst
+      - uses: actions/upload-artifact@v4
+        with:
+          name: integration-tests-archive-g5
+          path: integration-tests-g5.tar.zst
+      - uses: actions/upload-artifact@v4
+        with:
+          name: integration-tests-archive-g6
+          path: integration-tests-g6.tar.zst
+      - uses: actions/upload-artifact@v4
+        with:
+          name: integration-tests-archive-g7
+          path: integration-tests-g7.tar.zst
+      - uses: actions/upload-artifact@v4
+        with:
+          name: integration-tests-archive-g8
+          path: integration-tests-g8.tar.zst
+
+  # Every shard downloads the whole archive, so its size is paid once per
+  # shard. Its own job so a regression reports without skipping those shards.
+  archive-size-budget:
+    needs: integration-tests-prebuild
+    runs-on: ubuntu-latest
+    env:
+      # The largest group, which is what one shard downloads.
+      BUDGET_MIB: 800
+    steps:
+      - name: Compare the archives against their budget
+        run: |
+          mib="${{ needs.integration-tests-prebuild.outputs.archive_mib }}"
+          total="${{ needs.integration-tests-prebuild.outputs.archive_total_mib }}"
+          binaries="${{ needs.integration-tests-prebuild.outputs.test_binaries }}"
+
+          # An empty output would be 0 to `((` and pass silently.
+          if ! [[ "$mib" =~ ^[0-9]+$ ]]; then
+            echo "::error::The prebuild reported no archive size (got '$mib')."
+            exit 1
+          fi
+
+          {
+            echo "### Integration test archives"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| largest group | ${mib} MiB |"
+            echo "| budget | ${BUDGET_MIB} MiB |"
+            echo "| all groups | ${total} MiB |"
+            echo "| test binaries | ${binaries} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if (( mib > BUDGET_MIB )); then
+            echo "::error::The largest archive group is ${mib} MiB, over the ${BUDGET_MIB} MiB budget, and every shard in that group downloads all of it. Each of the ${binaries} test targets statically links the whole workspace, so a new one costs ~100 MiB in its group. Grouping tests as modules of an existing target costs nothing. Otherwise raise GROUP_COUNT, adding an upload step per group, or raise BUDGET_MIB."
+            exit 1
+          fi
+
+          echo "Largest group ${mib} MiB of ${total} MiB total across ${binaries} test binaries, within the ${BUDGET_MIB} MiB budget."
 
   integration-tests:
     needs: [ci-image, bedrock-node, integration-tests-prebuild]
@@ -394,7 +500,7 @@ jobs:
       fail-fast: false
       matrix:
         target: ${{ fromJson(needs.integration-tests-prebuild.outputs.targets) }}
-    name: integration-tests (${{ matrix.target }})
+    name: integration-tests (${{ matrix.target.name }})
     steps:
       - uses: actions/checkout@v5
         with:
@@ -407,11 +513,35 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # `download-artifact` can return a truncated file and still succeed, so
+      # verify before the corrupt stream surfaces as a test failure.
       - name: Download integration test archive
+        id: archive
+        timeout-minutes: 12
+        continue-on-error: true
+        uses: actions/download-artifact@v5
+        with:
+          name: integration-tests-archive-${{ matrix.target.group }}
+
+      - name: Verify the archive
+        id: verify
+        continue-on-error: true
+        run: zstd -t integration-tests-${{ matrix.target.group }}.tar.zst
+
+      - name: Discard a bad archive
+        if: steps.archive.outcome == 'failure' || steps.verify.outcome == 'failure'
+        run: rm -f integration-tests-${{ matrix.target.group }}.tar.zst
+
+      - name: Download integration test archive, second attempt
+        if: steps.archive.outcome == 'failure' || steps.verify.outcome == 'failure'
         timeout-minutes: 20
         uses: actions/download-artifact@v5
         with:
-          name: integration-tests-archive
+          name: integration-tests-archive-${{ matrix.target.group }}
+
+      - name: Verify the archive after the second attempt
+        if: steps.archive.outcome == 'failure' || steps.verify.outcome == 'failure'
+        run: zstd -t integration-tests-${{ matrix.target.group }}.tar.zst
 
       - name: Download resolved Bedrock node
         timeout-minutes: 20
@@ -426,8 +556,8 @@ jobs:
       # A shard that runs out of room reports only "error writing file to disk".
       - name: Report disk headroom before extraction
         run: |
-          ls -l --block-size=M integration-tests.tar.zst
-          zstd -l integration-tests.tar.zst || true
+          ls -l --block-size=M integration-tests-${{ matrix.target.group }}.tar.zst
+          zstd -l integration-tests-${{ matrix.target.group }}.tar.zst
           df -h / /tmp /mnt || true
 
       - name: Run tests
@@ -439,11 +569,8 @@ jobs:
             RUST_LOG=info,kameo=warn
             LOGOS_BLOCKCHAIN_NODE_BIN=${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
           run: |
-            # `--retries` names the flaky test, `with_retry` covers a bad runner.
-            source .github/scripts/with_retry.sh
-
             # A `binary::test` target is one test alone on this runner.
-            target='${{ matrix.target }}'
+            target='${{ matrix.target.name }}'
             binary="${target%%::*}"
             if [[ "$target" == *::* ]]; then
               filter="binary($binary) and test(=${target#*::})"
@@ -451,6 +578,8 @@ jobs:
               filter="binary($binary)"
             fi
 
+            # Four attempts as before, but inside nextest, which names the
+            # flaky test and reruns only it rather than the whole command.
             if [[ "$binary" == "tf_bedrock_builder" || \
                   "$binary" == "tf_app_deployments" ]]; then
               # The nextest archive contains the absolute Cargo git checkout
@@ -459,9 +588,13 @@ jobs:
               # allowing TF to use its local build provider.
               cargo fetch --locked
 
-              with_retry "env -u GITHUB_ACTIONS -u CI cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E '$filter'" 2
+              env -u GITHUB_ACTIONS -u CI cargo nextest run --retries 3 \
+                --archive-file integration-tests-${{ matrix.target.group }}.tar.zst \
+                -E "$filter"
             else
-              with_retry "cargo nextest run --retries 1 --archive-file integration-tests.tar.zst -E '$filter'" 2
+              cargo nextest run --retries 3 \
+                --archive-file integration-tests-${{ matrix.target.group }}.tar.zst \
+                -E "$filter"
             fi
 
       - name: Report disk headroom after the tests
@@ -552,7 +685,7 @@ jobs:
       - ci-image
       - bedrock-node
       - cucumber
-      - bedrock-resolver-tests
+      - ci-python-scripts-tests
       - fmt-rs
       - fmt-toml
       - machete
@@ -561,6 +694,7 @@ jobs:
       - unit-tests
       - test-fixtures-tests
       - integration-tests-prebuild
+      - archive-size-budget
       - integration-tests
       - artifacts
       - dashboards

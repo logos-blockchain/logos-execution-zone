@@ -6,7 +6,7 @@ use lee::{AccountId, PublicKey};
 use lee_core::program::PdaSeed;
 
 use crate::{
-    AccountIdentity, AccountMention, WalletCore,
+    AccountIdentity, AccountMention, WalletCore, WalletSequencerClient,
     account::{AccountIdWithPrivacy, Label},
     cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
     storage::Storage,
@@ -45,9 +45,9 @@ pub enum ProgramSubcommand {
 }
 
 impl WalletSubcommand for ProgramSubcommand {
-    async fn handle_subcommand(
+    async fn handle_subcommand<C: WalletSequencerClient>(
         self,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::Call {
