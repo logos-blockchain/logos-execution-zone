@@ -1,3 +1,8 @@
+#![expect(
+    clippy::print_stdout,
+    reason = "This is an example program, it's fine to print to stdout"
+)]
+
 use std::collections::HashMap;
 
 use clap::{Parser, Subcommand};
@@ -7,26 +12,27 @@ use lee::{
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
     public_transaction,
 };
-use program_deployment::deploy_program;
+use program_deployment::{deploy_program, fee_paid_by};
 use sequencer_service_rpc::RpcClient as _;
 use wallet::{AccountIdentity, WalletCore};
 
 // Before running this example, compile the `hello_world_with_move_function.rs` guest program with:
 //
-//   cargo risczero build --manifest-path examples/program_deployment/methods/guest/Cargo.toml
+//   RISC0_DOCKER_CONTAINER_TAG=r0.1.91.1 cargo risczero build \
+//     --manifest-path examples/program_deployment/methods/guest/Cargo.toml
 //
 // Note: you must run the above command from the root of the `logos-execution-zone` repository.
 // Note: The compiled binary file is stored in
-// methods/guest/target/riscv32im-risc0-zkvm-elf/docker/hello_world_with_move_function.bin
+// target/riscv32im-risc0-zkvm-elf/docker/hello_world_with_move_function.bin
 //
 //
 // Usage:
 //   cargo run --bin run_hello_world_with_move_function \
-//     /path/to/guest/binary <payer_account_id> <function> <params>
+//     /path/to/guest/binary <payer_account_id> [--program-id <id>] <function> <params>
 //
 // Example:
 //   cargo run --bin run_hello_world_with_move_function \
-//     methods/guest/target/riscv32im-risc0-zkvm-elf/docker/hello_world_with_move_function.bin \
+//     $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world_with_move_function.bin \
 //     <funded payer account_id> \
 //     write-public Ds8q5PjLcKwwV97Zi7duhRVF9uwA2PuYMoLL7FwCzsXE Hola
 
@@ -40,8 +46,13 @@ struct Cli {
     /// Path to program binary.
     program_path: String,
 
-    /// An existing, funded account to pay the deployment fee.
+    /// An existing, funded account to pay the deployment and call fees.
     payer: AccountId,
+
+    /// Call the instance of this program deployed by an earlier run, instead of deploying a new
+    /// one. Each run prints the program account ID it calls.
+    #[arg(long)]
+    program_id: Option<AccountId>,
 
     #[command(subcommand)]
     command: Command,
@@ -91,13 +102,17 @@ async fn main() {
     // Initialize wallet
     let mut wallet_core = WalletCore::from_env().unwrap();
 
-    // Deploy the program through `program_loader`; `program` is also needed directly below, as
-    // the local proving bundle for the private-tx arms.
+    // Deploy the program through `program_loader`, unless an earlier run already did; `program`
+    // is also needed directly below, as the local proving bundle for the private-tx arms.
     let bytecode: Vec<u8> = std::fs::read(cli.program_path).unwrap();
     let program = Program::new(bytecode.clone().into()).unwrap();
-    let program_account_id = deploy_program(&mut wallet_core, bytecode, cli.payer)
-        .await
-        .unwrap();
+    let program_account_id = match cli.program_id {
+        Some(program_account_id) => program_account_id,
+        None => deploy_program(&mut wallet_core, bytecode, cli.payer)
+            .await
+            .unwrap(),
+    };
+    println!("Program account ID: {program_account_id}");
     let program_with_dependencies =
         ProgramWithDependencies::new(program, program_account_id, HashMap::new());
 
@@ -108,15 +123,18 @@ async fn main() {
         } => {
             let instruction: Instruction = (WRITE_FUNCTION_ID, greeting.into_bytes());
             let account_id = account_id.parse().unwrap();
-            let nonces = vec![];
-            let message = public_transaction::Message::try_new(
+            // The fee payer is the only signer
+            let (fee, payer_nonce, payer_key) = fee_paid_by(&wallet_core, cli.payer).await.unwrap();
+            let nonces = vec![payer_nonce];
+            let message = public_transaction::Message::try_new_with_fees(
                 program_account_id,
                 vec![ProgramShardSelector::new(account_id, program_account_id)],
                 nonces,
                 instruction,
+                fee,
             )
             .unwrap();
-            let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+            let witness_set = public_transaction::WitnessSet::for_message(&message, &[&payer_key]);
             let tx = PublicTransaction::new(message, witness_set);
 
             // Submit the transaction
@@ -150,8 +168,10 @@ async fn main() {
             let to = to.parse().unwrap();
             let moved = shard_bytes(&wallet_core, from, program_account_id).await;
             let instruction: Instruction = (MOVE_DATA_FUNCTION_ID, moved);
-            let nonces = vec![];
-            let message = public_transaction::Message::try_new(
+            // The fee payer is the only signer
+            let (fee, payer_nonce, payer_key) = fee_paid_by(&wallet_core, cli.payer).await.unwrap();
+            let nonces = vec![payer_nonce];
+            let message = public_transaction::Message::try_new_with_fees(
                 program_account_id,
                 vec![
                     ProgramShardSelector::new(from, program_account_id),
@@ -159,9 +179,10 @@ async fn main() {
                 ],
                 nonces,
                 instruction,
+                fee,
             )
             .unwrap();
-            let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+            let witness_set = public_transaction::WitnessSet::for_message(&message, &[&payer_key]);
             let tx = PublicTransaction::new(message, witness_set);
 
             // Submit the transaction

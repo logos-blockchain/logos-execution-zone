@@ -3,17 +3,18 @@ use lee::{
     AccountId, ProgramShardSelector, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
-use program_deployment::deploy_program;
+use program_deployment::{deploy_program, fee_paid_by};
 use sequencer_service_rpc::RpcClient as _;
 use wallet::WalletCore;
 
 // Before running this example, compile the `hello_world_with_authorization.rs` guest program with:
 //
-//   cargo risczero build --manifest-path examples/program_deployment/methods/guest/Cargo.toml
+//   RISC0_DOCKER_CONTAINER_TAG=r0.1.91.1 cargo risczero build \
+//     --manifest-path examples/program_deployment/methods/guest/Cargo.toml
 //
 // Note: you must run the above command from the root of the `logos-execution-zone` repository.
 // Note: The compiled binary file is stored in
-// methods/guest/target/riscv32im-risc0-zkvm-elf/docker/hello_world_with_authorization.bin
+// target/riscv32im-risc0-zkvm-elf/docker/hello_world_with_authorization.bin
 //
 //
 // Usage:
@@ -23,7 +24,7 @@ use wallet::WalletCore;
 //
 // Example:
 //   cargo run --bin run_hello_world_with_authorization \
-//      methods/guest/target/riscv32im-risc0-zkvm-elf/docker/hello_world_with_authorization.bin \
+//      $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world_with_authorization.bin \
 //      Ds8q5PjLcKwwV97Zi7duhRVF9uwA2PuYMoLL7FwCzsXE \
 //      <funded payer account_id>
 
@@ -43,7 +44,7 @@ async fn main() {
         .unwrap()
         .parse()
         .unwrap();
-    // Third argument is an existing, funded account to pay the deployment fee
+    // Third argument is an existing, funded account to pay the deployment and call fees
     let payer: AccountId = std::env::args_os()
         .nth(3)
         .unwrap()
@@ -71,20 +72,27 @@ async fn main() {
 
     // Construct the public transaction
     // Query the current nonce from the node
-    let nonces = wallet_core
+    let mut nonces = wallet_core
         .get_accounts_nonces(&[account_id])
         .await
         .expect("Node should be reachable to query account data");
-    let signing_keys = [&signing_key];
-    let message = Message::try_new(
+    let mut signing_keys = vec![&signing_key];
+    // The fee payer signs too, with its own nonce, unless it is the account itself
+    let (fee, payer_nonce, payer_key) = fee_paid_by(&wallet_core, payer).await.unwrap();
+    if payer != account_id {
+        nonces.push(payer_nonce);
+        signing_keys.push(&payer_key);
+    }
+    let message = Message::try_new_with_fees(
         program_account_id,
         vec![ProgramShardSelector::new(account_id, program_account_id)],
         nonces,
         greeting,
+        fee,
     )
     .unwrap();
-    // Pass the signing key to sign the message. This will be used by the node
-    // to flag the pre_state as `is_authorized` when executing the program
+    // Pass the signing keys to sign the message. The account's signature will be used by the
+    // node to flag the pre_state as `is_authorized` when executing the program
     let witness_set = WitnessSet::for_message(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 

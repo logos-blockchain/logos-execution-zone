@@ -8,11 +8,12 @@ use wallet::{AccountIdentity, WalletCore};
 
 // Before running this example, compile the `hello_world.rs` guest program with:
 //
-//   cargo risczero build --manifest-path examples/program_deployment/methods/guest/Cargo.toml
+//   RISC0_DOCKER_CONTAINER_TAG=r0.1.91.1 cargo risczero build \
+//     --manifest-path examples/program_deployment/methods/guest/Cargo.toml
 //
 // Note: you must run the above command from the root of the `logos-execution-zone` repository.
 // Note: The compiled binary file is stored in
-// methods/guest/target/riscv32im-risc0-zkvm-elf/docker/hello_world.bin
+// target/riscv32im-risc0-zkvm-elf/docker/hello_world.bin
 //
 //
 // Usage:
@@ -22,7 +23,7 @@ use wallet::{AccountIdentity, WalletCore};
 //
 // Example:
 //   cargo run --bin run_hello_world_private \
-//     methods/guest/target/riscv32im-risc0-zkvm-elf/docker/hello_world.bin \
+//     $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world.bin \
 //     Ds8q5PjLcKwwV97Zi7duhRVF9uwA2PuYMoLL7FwCzsXE \
 //     <funded payer account_id>
 

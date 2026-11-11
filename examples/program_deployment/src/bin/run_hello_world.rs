@@ -3,17 +3,18 @@ use lee::{
     AccountId, ProgramShardSelector, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
-use program_deployment::deploy_program;
+use program_deployment::{deploy_program, fee_paid_by};
 use sequencer_service_rpc::RpcClient as _;
 use wallet::WalletCore;
 
 // Before running this example, compile the `hello_world.rs` guest program with:
 //
-//   cargo risczero build --manifest-path examples/program_deployment/methods/guest/Cargo.toml
+//   RISC0_DOCKER_CONTAINER_TAG=r0.1.91.1 cargo risczero build \
+//     --manifest-path examples/program_deployment/methods/guest/Cargo.toml
 //
 // Note: you must run the above command from the root of the `logos-execution-zone` repository.
 // Note: The compiled binary file is stored in
-// methods/guest/target/riscv32im-risc0-zkvm-elf/docker/hello_world.bin
+// target/riscv32im-risc0-zkvm-elf/docker/hello_world.bin
 //
 //
 // Usage:
@@ -21,7 +22,7 @@ use wallet::WalletCore;
 //
 // Example:
 //   cargo run --bin run_hello_world \
-//     methods/guest/target/riscv32im-risc0-zkvm-elf/docker/hello_world.bin \
+//     $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world.bin \
 //     Ds8q5PjLcKwwV97Zi7duhRVF9uwA2PuYMoLL7FwCzsXE \
 //     <funded payer account_id>
 
@@ -41,7 +42,7 @@ async fn main() {
         .unwrap()
         .parse()
         .unwrap();
-    // Third argument is an existing, funded account to pay the deployment fee
+    // Third argument is an existing, funded account to pay the deployment and call fees
     let payer: AccountId = std::env::args_os()
         .nth(3)
         .unwrap()
@@ -60,15 +61,18 @@ async fn main() {
     let greeting: Vec<u8> = vec![72, 111, 108, 97, 32, 109, 117, 110, 100, 111, 33];
 
     // Construct the public transaction
-    // No nonces nor signing keys are needed for this example. Check out the
-    // `run_hello_world_with_authorization` on how to use them.
-    let nonces = vec![];
-    let signing_keys = [];
-    let message = Message::try_new(
+    // Hello World needs no authorization from `account_id`, so the only signer is the fee
+    // payer: the message lists the payer's nonce and the payer signs it. Check out
+    // `run_hello_world_with_authorization` for a transaction the account itself signs.
+    let (fee, payer_nonce, payer_key) = fee_paid_by(&wallet_core, payer).await.unwrap();
+    let nonces = vec![payer_nonce];
+    let signing_keys = [&payer_key];
+    let message = Message::try_new_with_fees(
         program_account_id,
         vec![ProgramShardSelector::new(account_id, program_account_id)],
         nonces,
         greeting,
+        fee,
     )
     .unwrap();
     let witness_set = WitnessSet::for_message(&message, &signing_keys);
