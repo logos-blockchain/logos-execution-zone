@@ -210,10 +210,19 @@ mod inner {
             }
 
             fn schedule_proposal(name: SystemProgramName, first_segment: AccountId) -> Proposal {
+                schedule_proposal_for(name, first_segment, false)
+            }
+
+            fn schedule_proposal_for(
+                name: SystemProgramName,
+                first_segment: AccountId,
+                immutable: bool,
+            ) -> Proposal {
                 Proposal::Schedule {
                     name,
                     first_segment,
                     image_id: ping_receiver().id(),
+                    immutable,
                     activation_height: ACTIVATION_HEIGHT,
                 }
             }
@@ -303,20 +312,52 @@ mod inner {
                 first_segment: AccountId,
                 approvals: Vec<Approval>,
             ) -> PublicTransaction {
+                schedule_tx_for(name, first_segment, false, approvals)
+            }
+
+            fn schedule_tx_for(
+                name: SystemProgramName,
+                first_segment: AccountId,
+                immutable: bool,
+                approvals: Vec<Approval>,
+            ) -> PublicTransaction {
                 let upgrade = ScheduledUpgrade {
                     first_segment,
                     image_id: ping_receiver().id(),
+                    immutable,
                     activation_height: ACTIVATION_HEIGHT,
                 };
                 system_upgrader_tx(
-                    &[committee_actor(), staging_actor(&name, &upgrade)],
+                    &[
+                        committee_actor(),
+                        loader_actor(&name),
+                        staging_actor(&name, &upgrade),
+                    ],
                     &Message::Schedule {
                         name,
                         first_segment,
                         image_id: ping_receiver().id(),
+                        immutable,
                         activation_height: ACTIVATION_HEIGHT,
                         approvals,
                     },
+                )
+            }
+
+            /// An approved `Schedule` of `clock`'s upgrade to the chain at `first_segment`.
+            fn approved_schedule_tx_for(
+                first_segment: AccountId,
+                immutable: bool,
+            ) -> PublicTransaction {
+                schedule_tx_for(
+                    CLOCK_NAME,
+                    first_segment,
+                    immutable,
+                    approvals_for(
+                        &schedule_proposal_for(CLOCK_NAME, first_segment, immutable),
+                        &[1, 2],
+                        VALID_UNTIL,
+                    ),
                 )
             }
 
@@ -328,20 +369,27 @@ mod inner {
                 let upgrade = ScheduledUpgrade {
                     first_segment,
                     image_id: ping_receiver().id(),
+                    immutable: false,
                     activation_height,
                 };
                 let proposal = Proposal::Schedule {
                     name: CLOCK_NAME,
                     first_segment,
                     image_id: ping_receiver().id(),
+                    immutable: false,
                     activation_height,
                 };
                 system_upgrader_tx(
-                    &[committee_actor(), staging_actor(&CLOCK_NAME, &upgrade)],
+                    &[
+                        committee_actor(),
+                        loader_actor(&CLOCK_NAME),
+                        staging_actor(&CLOCK_NAME, &upgrade),
+                    ],
                     &Message::Schedule {
                         name: CLOCK_NAME,
                         first_segment,
                         image_id: ping_receiver().id(),
+                        immutable: false,
                         activation_height,
                         approvals: approvals_for(&proposal, &[1, 2], VALID_UNTIL),
                     },
@@ -391,10 +439,19 @@ mod inner {
             }
 
             fn install_tx(name: SystemProgramName, first_segment: AccountId) -> PublicTransaction {
+                install_tx_for(name, first_segment, false)
+            }
+
+            fn install_tx_for(
+                name: SystemProgramName,
+                first_segment: AccountId,
+                immutable: bool,
+            ) -> PublicTransaction {
                 let proposal = Proposal::Install {
                     name,
                     first_segment,
                     image_id: ping_receiver().id(),
+                    immutable,
                 };
                 system_upgrader_tx(
                     &[committee_actor(), loader_actor(&name)],
@@ -402,6 +459,7 @@ mod inner {
                         name,
                         first_segment,
                         image_id: ping_receiver().id(),
+                        immutable,
                         approvals: approvals_for(&proposal, &[1, 2], VALID_UNTIL),
                     },
                 )
@@ -427,6 +485,14 @@ mod inner {
                 .unwrap()
             }
 
+            fn has_mirror(state: &V03State, program: AccountId) -> bool {
+                let commitment = lee_core::program::immutable_mirror_commitment(
+                    program,
+                    &header(state, program),
+                );
+                state.get_proof_for_commitment(&commitment).is_some()
+            }
+
             fn schedule(state: &V03State) -> Option<ScheduledUpgrade> {
                 registry(state).scheduled(&CLOCK_NAME)
             }
@@ -435,6 +501,7 @@ mod inner {
                 Some(ScheduledUpgrade {
                     first_segment: ids[0],
                     image_id: ping_receiver().id(),
+                    immutable: false,
                     activation_height: ACTIVATION_HEIGHT,
                 })
             }
@@ -472,6 +539,47 @@ mod inner {
                     Some(ping_receiver().id())
                 );
                 assert_eq!(schedule(&state), None, "applying clears the schedule");
+                assert!(!header(&state, clock_account_id()).immutable);
+            }
+
+            #[test]
+            fn an_immutable_upgrade_freezes_the_program() {
+                let (mut state, ids) = staged();
+                state
+                    .transition_from_public_transaction(
+                        &approved_schedule_tx_for(ids[0], true),
+                        1,
+                        0,
+                    )
+                    .expect("scheduling an immutable upgrade succeeds");
+
+                state
+                    .transition_from_public_transaction(
+                        &apply_tx(ACTIVATION_HEIGHT),
+                        ACTIVATION_HEIGHT,
+                        0,
+                    )
+                    .expect("the upgrade applies at its height");
+                assert_eq!(
+                    state.get_program_image_id(clock_account_id()),
+                    Some(ping_receiver().id())
+                );
+                assert!(header(&state, clock_account_id()).immutable);
+                assert!(has_mirror(&state, clock_account_id()));
+
+                let err = state
+                    .transition_from_public_transaction(
+                        &schedule_tx_at(ids[0], ACTIVATION_HEIGHT + 10),
+                        ACTIVATION_HEIGHT + 1,
+                        0,
+                    )
+                    .expect_err("an immutable system program can't be scheduled");
+                assert!(
+                    err.to_string()
+                        .contains("AssertMutable target is immutable"),
+                    "got: {err}"
+                );
+                assert_eq!(schedule(&state), None);
             }
 
             #[test]
@@ -500,48 +608,32 @@ mod inner {
             }
 
             #[test]
-            fn applying_to_a_system_program_without_a_header_is_refused() {
+            fn scheduling_a_system_program_without_a_header_is_refused() {
                 let (mut state, ids) = staged_with([]);
-                state
-                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
-                    .unwrap();
 
                 let err = state
-                    .transition_from_public_transaction(
-                        &apply_tx(ACTIVATION_HEIGHT),
-                        ACTIVATION_HEIGHT,
-                        0,
-                    )
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
                     .expect_err("there is no clock header to upgrade");
                 assert!(
-                    err.to_string().contains("must already hold a valid header"),
-                    "got: {err}"
+                    format!("{err:?}").contains("UnadmittedPublicActor"),
+                    "got: {err:?}"
                 );
-                assert_eq!(schedule(&state), scheduled_at(&ids), "the schedule is kept");
+                assert_eq!(schedule(&state), None);
             }
 
             #[test]
-            fn applying_to_an_immutable_system_program_is_refused() {
+            fn scheduling_an_immutable_system_program_is_refused() {
                 let (mut state, ids) = staged_with([(clock_account_id(), clock(), true)]);
-                state
-                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
-                    .unwrap();
 
                 let err = state
-                    .transition_from_public_transaction(
-                        &apply_tx(ACTIVATION_HEIGHT),
-                        ACTIVATION_HEIGHT,
-                        0,
-                    )
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
                     .expect_err("an immutable system program can't be upgraded");
                 assert!(
-                    err.to_string().contains("immutable and cannot be updated"),
+                    err.to_string()
+                        .contains("AssertMutable target is immutable"),
                     "got: {err}"
                 );
-                assert_eq!(
-                    state.get_program_image_id(clock_account_id()),
-                    Some(clock().id())
-                );
+                assert_eq!(schedule(&state), None);
             }
 
             /// `system_upgrader`'s header is mutable, but no signer or PDA can authorize its
@@ -706,20 +798,27 @@ mod inner {
                 let upgrade = ScheduledUpgrade {
                     first_segment: ids[0],
                     image_id,
+                    immutable: false,
                     activation_height: ACTIVATION_HEIGHT,
                 };
                 let proposal = Proposal::Schedule {
                     name: CLOCK_NAME,
                     first_segment: ids[0],
                     image_id,
+                    immutable: false,
                     activation_height: ACTIVATION_HEIGHT,
                 };
                 let tx = system_upgrader_tx(
-                    &[committee_actor(), staging_actor(&CLOCK_NAME, &upgrade)],
+                    &[
+                        committee_actor(),
+                        loader_actor(&CLOCK_NAME),
+                        staging_actor(&CLOCK_NAME, &upgrade),
+                    ],
                     &Message::Schedule {
                         name: CLOCK_NAME,
                         first_segment: ids[0],
                         image_id,
+                        immutable: false,
                         activation_height: ACTIVATION_HEIGHT,
                         approvals: approvals_for(&proposal, &[1, 2], VALID_UNTIL),
                     },
@@ -745,6 +844,7 @@ mod inner {
                     name,
                     first_segment: ids[0],
                     image_id,
+                    immutable: false,
                 };
                 let tx = system_upgrader_tx(
                     &[committee_actor(), loader_actor(&name)],
@@ -752,6 +852,7 @@ mod inner {
                         name,
                         first_segment: ids[0],
                         image_id,
+                        immutable: false,
                         approvals: approvals_for(&proposal, &[1, 2], VALID_UNTIL),
                     },
                 );
@@ -875,6 +976,7 @@ mod inner {
                         name: CLOCK_NAME,
                         first_segment: ids[0],
                         image_id: ping_receiver().id(),
+                        immutable: false,
                         activation_height: ACTIVATION_HEIGHT,
                         approvals: approvals_for(
                             &schedule_proposal(CLOCK_NAME, ids[0]),
@@ -934,6 +1036,42 @@ mod inner {
                     registry(&state).programs.get(&name),
                     Some(&None),
                     "an installed system program is registered, with nothing pending"
+                );
+            }
+
+            #[test]
+            fn installing_a_system_program_immutable_freezes_it() {
+                let (mut state, ids) = staged();
+                let name = SystemProgramName::new(b"new_system_program");
+                let program = AccountId::from_system_program_name(&name);
+
+                state
+                    .transition_from_public_transaction(&install_tx_for(name, ids[0], true), 1, 0)
+                    .expect("a new system program installs immutable");
+                assert_eq!(
+                    state.get_program_image_id(program),
+                    Some(ping_receiver().id())
+                );
+                assert!(header(&state, program).immutable);
+                assert!(has_mirror(&state, program));
+                assert_eq!(registry(&state).programs.get(&name), Some(&None));
+
+                let err = state
+                    .transition_from_public_transaction(
+                        &schedule_tx_for(
+                            name,
+                            ids[0],
+                            false,
+                            approvals_for(&schedule_proposal(name, ids[0]), &[1, 2], VALID_UNTIL),
+                        ),
+                        2,
+                        0,
+                    )
+                    .expect_err("an immutable system program can't be scheduled");
+                assert!(
+                    err.to_string()
+                        .contains("AssertMutable target is immutable"),
+                    "got: {err}"
                 );
             }
 

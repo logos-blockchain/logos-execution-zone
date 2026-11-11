@@ -163,6 +163,7 @@ async fn schedule_bridge_upgrade(
         name: programs::BRIDGE_NAME,
         first_segment,
         image_id,
+        immutable: false,
         activation_height,
     };
     let approvals =
@@ -172,16 +173,22 @@ async fn schedule_bridge_upgrade(
         &system_upgrader_core::ScheduledUpgrade {
             first_segment,
             image_id,
+            immutable: false,
             activation_height,
         },
     );
     submit_system_change(
         ctx,
-        [system_upgrader_core::committee_actor(), staging],
+        [
+            system_upgrader_core::committee_actor(),
+            system_upgrader_core::loader_actor(&programs::BRIDGE_NAME),
+            staging,
+        ],
         system_upgrader_core::Message::Schedule {
             name: programs::BRIDGE_NAME,
             first_segment,
             image_id,
+            immutable: false,
             activation_height,
             approvals,
         },
@@ -366,6 +373,7 @@ async fn an_approved_system_program_installs_and_runs() -> Result<()> {
         name,
         first_segment: segment_ids[0],
         image_id: new_code.id(),
+        immutable: false,
     };
     let approvals =
         committee_approvals(&ctx, &proposal, now.saturating_add(APPROVAL_LIFETIME)).await?;
@@ -379,6 +387,7 @@ async fn an_approved_system_program_installs_and_runs() -> Result<()> {
             name,
             first_segment: segment_ids[0],
             image_id: new_code.id(),
+            immutable: false,
             approvals,
         },
     )

@@ -285,7 +285,7 @@ impl<C: WalletSequencerClient> ProgramLoader<'_, C> {
                 | Message::CreateHeaderOf { first_segment, .. }
                 | Message::UpdateHeader { first_segment, .. },
             ) => self.segments(first_segment).await,
-            Ok(Message::WriteSegment { .. }) | Err(_) => Ok(Vec::new()),
+            Ok(Message::WriteSegment { .. } | Message::AssertMutable) | Err(_) => Ok(Vec::new()),
         }
     }
 

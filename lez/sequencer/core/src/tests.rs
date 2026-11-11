@@ -2553,6 +2553,7 @@ fn resubmittable_txs_keeps_an_approved_system_change_and_drops_apply() {
         name: programs::CLOCK_NAME,
         first_segment: AccountId::new([1; 32]),
         image_id: [0; 8],
+        immutable: false,
         activation_height: 5,
         approvals: vec![],
     });
@@ -7223,6 +7224,7 @@ fn state_with_clock_upgrade_due_at(activation_height: lee_core::BlockId) -> lee:
         Some(ScheduledUpgrade {
             first_segment: AccountId::new([0x51; 32]),
             image_id: [0; 8],
+            immutable: false,
             activation_height,
         }),
     );

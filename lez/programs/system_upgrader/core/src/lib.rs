@@ -31,6 +31,7 @@ pub enum Message {
         name: SystemProgramName,
         first_segment: AccountId,
         image_id: ProgramId,
+        immutable: bool,
         activation_height: BlockId,
         approvals: Vec<Approval>,
     },
@@ -51,6 +52,7 @@ pub enum Message {
         name: SystemProgramName,
         first_segment: AccountId,
         image_id: ProgramId,
+        immutable: bool,
         approvals: Vec<Approval>,
     },
 }
@@ -64,6 +66,7 @@ impl Message {
                 name,
                 first_segment,
                 image_id,
+                immutable,
                 activation_height,
                 approvals,
             } => Some((
@@ -71,6 +74,7 @@ impl Message {
                     name: *name,
                     first_segment: *first_segment,
                     image_id: *image_id,
+                    immutable: *immutable,
                     activation_height: *activation_height,
                 },
                 approvals,
@@ -92,12 +96,14 @@ impl Message {
                 name,
                 first_segment,
                 image_id,
+                immutable,
                 approvals,
             } => Some((
                 Proposal::Install {
                     name: *name,
                     first_segment: *first_segment,
                     image_id: *image_id,
+                    immutable: *immutable,
                 },
                 approvals,
             )),
@@ -114,6 +120,7 @@ pub enum Proposal {
         name: SystemProgramName,
         first_segment: AccountId,
         image_id: ProgramId,
+        immutable: bool,
         activation_height: BlockId,
     },
     Cancel {
@@ -125,6 +132,7 @@ pub enum Proposal {
         name: SystemProgramName,
         first_segment: AccountId,
         image_id: ProgramId,
+        immutable: bool,
     },
 }
 
@@ -142,6 +150,8 @@ pub struct ScheduledUpgrade {
     pub first_segment: AccountId,
     /// What the chain at `first_segment` computes to, checked by the loader at `Schedule`.
     pub image_id: ProgramId,
+    /// Whether `Apply` leaves the header immutable.
+    pub immutable: bool,
     pub activation_height: BlockId,
 }
 

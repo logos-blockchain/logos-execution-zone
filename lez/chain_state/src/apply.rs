@@ -1012,6 +1012,7 @@ mod tests {
             Some(ScheduledUpgrade {
                 first_segment: AccountId::new([9; 32]),
                 image_id: [0; 8],
+                immutable: false,
                 activation_height: 1,
             }),
         );
