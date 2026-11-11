@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt::{self, Display, Formatter},
     num::{NonZeroU32, NonZeroU64},
     sync::{
@@ -20,9 +20,9 @@ use common::{
     transaction::LeeTransaction,
 };
 use cross_zone::{
-    CommitteeFloorState, EmissionSource, FloorVerdict, Link, OffChain, StallState, alerts_at,
-    build_dispatch_from_emission, equivocation_report, extract_emission, link_to_tip,
-    peer_emitter_set, screen_peer_block,
+    CommitteeFloorState, EmissionSource, FloorVerdict, Link, OffChain, RegisteredEmitter,
+    StallState, alerts_at, build_dispatch_from_emission, equivocation_report, extract_emission,
+    link_to_tip, peer_emitter_set, screen_peer_block,
 };
 use cross_zone_inbox_core::{
     CrossZoneMessage, Message as InboxMessage, MessageKey, ZoneId, message_key,
@@ -745,7 +745,7 @@ pub struct CrossZoneVerifier {
     refetch_attempts: Arc<AtomicU64>,
     /// Registered emitters per peer. Must match the watcher's set, or
     /// re-derivation disagrees with it and ingestion halts as forged.
-    emitters: Arc<HashMap<ZoneId, BTreeSet<AccountId>>>,
+    emitters: Arc<HashMap<ZoneId, BTreeMap<AccountId, RegisteredEmitter>>>,
     seen: Arc<RwLock<HashSet<SeenKey>>>,
     watch: PeerWatch,
 }
@@ -928,7 +928,7 @@ impl CrossZoneVerifier {
         msg: &CrossZoneMessage,
         local_slot: u64,
     ) -> Result<lee::PublicTransaction, CrossZoneVerifyError> {
-        static NO_EMITTERS: BTreeSet<AccountId> = BTreeSet::new();
+        static NO_EMITTERS: BTreeMap<AccountId, RegisteredEmitter> = BTreeMap::new();
         let peer_block = self
             .wait_for_peer_block(msg.src_zone, msg.src_block_id, local_slot)
             .await
@@ -966,7 +966,8 @@ impl CrossZoneVerifier {
             )
         };
         let peer_emitters = self.emitters.get(&msg.src_zone).unwrap_or(&NO_EMITTERS);
-        let emission = extract_emission(emission_tx, peer_emitters).ok_or_else(not_an_emitter)?;
+        let emission = extract_emission(emission_tx, peer_emitters, msg.src_block_id)
+            .ok_or_else(not_an_emitter)?;
 
         if emission.target_zone != self.self_zone {
             return Err(forged(
@@ -1628,7 +1629,13 @@ mod tests {
         CrossZoneVerifier {
             emitters: Arc::new(HashMap::from([(
                 PEER_ZONE,
-                BTreeSet::from([GENERIC_EMITTER]),
+                BTreeMap::from([(
+                    GENERIC_EMITTER,
+                    RegisteredEmitter {
+                        account_id: GENERIC_EMITTER,
+                        until_src_block: None,
+                    },
+                )]),
             )])),
             ..verifier()
         }
@@ -1678,6 +1685,40 @@ mod tests {
             .verify_block(&block, Slot::from(0))
             .await
             .expect("a registered emitter's dispatch re-derives");
+    }
+
+    /// The cutoff is compared against the dispatch's source block, 5, not the
+    /// local block carrying it, 9. A verifier comparing the local id would read
+    /// a cutoff of 5 as exceeded.
+    #[tokio::test]
+    async fn a_cutoff_is_read_against_the_source_block_not_the_local_one() {
+        for (until_src_block, covered) in [
+            (Some(PEER_BLOCK_ID), true),
+            (Some(PEER_BLOCK_ID - 1), false),
+        ] {
+            let verifier = CrossZoneVerifier {
+                emitters: Arc::new(HashMap::from([(
+                    PEER_ZONE,
+                    BTreeMap::from([(
+                        GENERIC_EMITTER,
+                        RegisteredEmitter {
+                            account_id: GENERIC_EMITTER,
+                            until_src_block,
+                        },
+                    )]),
+                )])),
+                ..verifier()
+            };
+            cache_chain(&verifier, generic_peer_chain(b"hi")).await;
+
+            let block = produce_dummy_block(9, None, vec![generic_dispatch(b"hi")]);
+            let result = verifier.verify_block(&block, Slot::from(0)).await;
+            assert_eq!(
+                result.is_ok(),
+                covered,
+                "cutoff {until_src_block:?} against source block {PEER_BLOCK_ID}: {result:?}"
+            );
+        }
     }
 
     #[tokio::test]

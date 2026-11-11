@@ -213,7 +213,10 @@ async fn a_registered_program_sends_and_receives_across_zones() -> Result<()> {
             }],
             min_committee_size: 0,
             genesis_hash: None,
-            emitters: vec![chat_a],
+            emitters: vec![cross_zone::RegisteredEmitter {
+                account_id: chat_a,
+                until_src_block: None,
+            }],
         }],
         source_authority: None,
         source_governance: None,
@@ -282,8 +285,14 @@ async fn the_real_post_transaction_is_recognized_as_an_emission() {
         panic!("post_tx builds a public transaction");
     };
 
-    let registered = std::collections::BTreeSet::from([chat_id]);
-    let emission = cross_zone::extract_emission(&tx, &registered)
+    let registered = std::collections::BTreeMap::from([(
+        chat_id,
+        cross_zone::RegisteredEmitter {
+            account_id: chat_id,
+            until_src_block: None,
+        },
+    )]);
+    let emission = cross_zone::extract_emission(&tx, &registered, 0)
         .expect("a registered emitter's Post is an emission");
     assert_eq!(emission.source, chat_id);
     assert_eq!(emission.target_zone, zone_b);
@@ -300,7 +309,7 @@ async fn the_real_post_transaction_is_recognized_as_an_emission() {
     );
 
     assert!(
-        cross_zone::extract_emission(&tx, &std::collections::BTreeSet::new()).is_none(),
+        cross_zone::extract_emission(&tx, &std::collections::BTreeMap::new(), 0).is_none(),
         "the same transaction is nothing to a zone that did not register the emitter"
     );
 }

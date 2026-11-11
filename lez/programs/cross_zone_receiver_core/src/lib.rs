@@ -16,7 +16,6 @@
 //! write happens once, so the only remedy is redeploying at a fresh account.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use cross_zone_marker_core::inbox_source_marker_account_id;
 pub use cross_zone_marker_core::{Delivery, ZoneId};
 use lee_core::{account::AccountId, program::PdaSeed};
 
@@ -62,21 +61,11 @@ impl ReceiverConfig {
     /// Whether a delivery from `(src_zone, src_account_id)` is one this config
     /// authorizes.
     ///
-    /// Compares the pair directly. The marker address derived from a pair is
-    /// injective in it under one deliverer, so a receiver that prefers
-    /// comparing marker ids gets the identical answer for more guest cycles;
-    /// see [`source_marker`]. The caller must already have pinned the delivery's
-    /// origin to `self.deliverer`; this only answers the source half.
+    /// The caller must already have pinned the delivery's origin to
+    /// `self.deliverer`; this only answers the source half.
     #[must_use]
     pub fn authorizes(&self, src_zone: &ZoneId, src_account_id: AccountId) -> bool {
         self.sources.contains(&(*src_zone, src_account_id))
-    }
-
-    /// The marker address the inbox passes for `(src_zone, src_account_id)`,
-    /// for a receiver that authenticates on the address rather than the pair.
-    #[must_use]
-    pub fn source_marker(&self, src_zone: &ZoneId, src_account_id: AccountId) -> AccountId {
-        inbox_source_marker_account_id(self.deliverer, src_zone, src_account_id)
     }
 }
 
@@ -95,8 +84,9 @@ pub const fn receiver_config_seed() -> PdaSeed {
 /// The instruction bytes that initialize a conforming receiver's config:
 /// [`INIT_CONFIG_TAG`], then the config.
 ///
-/// Sent to the config PDA, at genesis for a builtin or by the deployer for a
-/// runtime-deployed receiver.
+/// A builtin's genesis sends these straight to the config PDA. A
+/// runtime-deployed receiver must take them at its program account and forward
+/// them, per the claim rule above.
 #[must_use]
 pub fn init_config_instruction_bytes(config: &ReceiverConfig) -> Vec<u8> {
     let mut bytes = vec![INIT_CONFIG_TAG];
