@@ -34,6 +34,8 @@ const PHASE_TIMEOUT: Duration = Duration::from_secs(360);
 /// Bound on the indexer's status snapshot: it goes into an error message, so it cannot wait long.
 const INDEXER_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// Maximum time two sequencers may disagree at their unfinalized tips.
+const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub fn no_seal(_body: &MessageBody) -> Result<RecipientEncryption, lee::error::LeeError> {
     Err(lee::error::LeeError::InvalidInput(
@@ -115,6 +117,21 @@ pub async fn assert_same_chain(a: &SequencerClient, b: &SequencerClient) -> Resu
         );
     }
     Ok(())
+}
+
+/// Waits for A and B to agree over their common prefix, since both may build the same height at a
+/// turn boundary until Bedrock keeps one of them.
+pub async fn wait_for_same_chain(a: &SequencerClient, b: &SequencerClient) -> Result<()> {
+    let started = tokio::time::Instant::now();
+    loop {
+        match assert_same_chain(a, b).await {
+            Ok(()) => return Ok(()),
+            Err(err) if started.elapsed() >= CONVERGENCE_TIMEOUT => {
+                return Err(err.context("A and B never converged on one chain"));
+            }
+            Err(_) => tokio::time::sleep(POLL_INTERVAL).await,
+        }
+    }
 }
 
 /// Create a private or public account at the given chain index and return its ID.
