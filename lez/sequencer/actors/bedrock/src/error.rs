@@ -48,11 +48,11 @@ pub enum Error {
     #[error("Block encoding failed")]
     BlockEncodingFailed(#[source] std::io::Error),
 
-    #[error("Block exceeds maximum allowed size")]
-    BlockTooLarge,
-
     #[error("Inscription exceeds maximum allowed size")]
     InscriptionTooLarge,
+
+    #[error("Invalid channel config")]
+    InvalidChannelConfig(#[source] anyhow::Error),
 
     #[error("Invalid channel key list")]
     InvalidChannelKeyList(#[source] anyhow::Error),
