@@ -87,12 +87,6 @@ impl<P> TransactionMessage<P> {
         }
         Ok(())
     }
-
-    /// The designated fee payer, if the message declares a fee.
-    #[must_use]
-    pub fn payer(&self) -> Option<AccountId> {
-        self.fee.map(|fee| fee.payer)
-    }
 }
 
 impl From<InvalidTransaction> for LeeError {

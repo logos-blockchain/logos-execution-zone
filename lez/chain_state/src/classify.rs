@@ -16,7 +16,7 @@ use common::transaction::{
     LeeTransaction, is_cross_zone_lock, is_sequencer_stake_operation, validate_reward_target,
 };
 use fee_core::{assess::FeeTxView, market};
-use lee::privacy_preserving_transaction::Message as PrivateMessage;
+use lee::{FeeDeclaration, privacy_preserving_transaction::Message as PrivateMessage};
 use lee_core::{
     account::{AccountId, Actor, Balance},
     execution_state::{BoundaryStep, Delivery},
@@ -81,16 +81,14 @@ pub enum ClassifyError {
     OversizedProof { size: usize },
 }
 
-/// The reserve a private transaction credits to the fee inbox inside its proof,
-/// the address it came from and the crossing carrying it, if the boundary
-/// carries exactly one crossing into the inbox and it is a native credit.
-fn private_fee_reserve(message: &PrivateMessage) -> Option<(AccountId, Balance, &Delivery<Actor>)> {
+/// The crossings of a private transaction's boundary into the fee inbox.
+fn inbox_crossings(message: &PrivateMessage) -> impl Iterator<Item = &Delivery<Actor>> {
     let inbox = Actor::native_balance(system_accounts::fee_inbox_account_id());
-    let mut crossings = message
+    message
         .execution
         .boundary
         .iter()
-        .filter_map(|step| match step {
+        .filter_map(move |step| match step {
             BoundaryStep::PrivateToPublic(delivery) if delivery.envelope.to == inbox => {
                 Some(delivery)
             }
@@ -98,7 +96,25 @@ fn private_fee_reserve(message: &PrivateMessage) -> Option<(AccountId, Balance, 
             | BoundaryStep::PublicToPrivate(_)
             | BoundaryStep::EndPrivateSubtree
             | BoundaryStep::EndPublicSubtree => None,
-        });
+        })
+}
+
+/// The view a declared fee is priced and settled by.
+const fn declared_view(fee: FeeDeclaration, data_bytes: u64) -> FeeTxView {
+    FeeTxView::Public {
+        payer: fee.payer,
+        gas_limit: fee.gas_limit,
+        data_bytes,
+        tip: fee.tip,
+        max_fee: fee.max_fee,
+    }
+}
+
+/// The reserve a private transaction credits to the fee inbox inside its proof,
+/// the address it came from and the crossing carrying it, if the boundary
+/// carries exactly one crossing into the inbox and it is a native credit.
+fn private_fee_reserve(message: &PrivateMessage) -> Option<(AccountId, Balance, &Delivery<Actor>)> {
+    let mut crossings = inbox_crossings(message);
     let delivery = crossings.next()?;
     if crossings.next().is_some() {
         return None;
@@ -153,11 +169,8 @@ pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, Class
             // A public signer's declaration pays like a public transaction whose gas limit also
             // covers the proof's verification.
             if let Some(fee) = private_tx.message().fee {
-                let inbox = Actor::native_balance(system_accounts::fee_inbox_account_id());
                 if execution.proven_fee.is_some()
-                    || execution.boundary.iter().any(|step| {
-                        matches!(step, BoundaryStep::PrivateToPublic(delivery) if delivery.envelope.to == inbox)
-                    })
+                    || inbox_crossings(private_tx.message()).next().is_some()
                 {
                     return Err(ClassifyError::DoubleFee);
                 }
@@ -166,13 +179,7 @@ pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, Class
                         gas_limit: fee.gas_limit,
                     });
                 }
-                return Ok(FeeClass::Charged(FeeTxView::Public {
-                    payer: fee.payer,
-                    gas_limit: fee.gas_limit,
-                    data_bytes: tx.charged_bytes()?,
-                    tip: fee.tip,
-                    max_fee: fee.max_fee,
-                }));
+                return Ok(FeeClass::Charged(declared_view(fee, tx.charged_bytes()?)));
             }
             let Some((payer, reserve, crossing)) = private_fee_reserve(private_tx.message()) else {
                 return Err(ClassifyError::MissingPrivateFee);
@@ -227,14 +234,7 @@ pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, Class
         return Err(ClassifyError::MissingFeeDeclaration);
     };
 
-    let data_bytes = tx.charged_bytes()?;
-    Ok(FeeClass::Charged(FeeTxView::Public {
-        payer: fee.payer,
-        gas_limit: fee.gas_limit,
-        data_bytes,
-        tip: fee.tip,
-        max_fee: fee.max_fee,
-    }))
+    Ok(FeeClass::Charged(declared_view(fee, tx.charged_bytes()?)))
 }
 
 #[cfg(test)]

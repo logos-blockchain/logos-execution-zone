@@ -1611,23 +1611,23 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .get_fee_state()
             .await
             .map_err(Into::into)?;
-        // A public payer declares the fee in place of the proof; it must sign the transaction.
-        let (named_payer, public_payer) = match (fee_payer, self.fee_params.payer) {
-            (Some(payer), _) | (None, Some(AccountIdWithPrivacy::Private(payer))) => {
-                (Some(payer), None)
-            }
-            (None, Some(AccountIdWithPrivacy::Public(payer))) => (None, Some(payer)),
-            (None, None) => (None, None),
+        // A public payer declares the fee in place of the proof.
+        let (named_payer, public_payer) = match fee_payer
+            .map(AccountIdWithPrivacy::Private)
+            .or(self.fee_params.payer)
+        {
+            Some(AccountIdWithPrivacy::Private(payer)) => (Some(payer), None),
+            Some(AccountIdWithPrivacy::Public(payer)) => (None, Some(payer)),
+            None => (None, None),
         };
-        let fee_payer = named_payer.or_else(|| {
-            public_payer.is_none().then(|| {
-                self.auto_fee_payer(
-                    &accounts,
-                    self.reserve_pricing(&quote, 0, fee_core::market::PROOF_BYTES)
-                        .headroom_reserve,
-                )
-            })?
-        });
+        let fee_payer = match (named_payer, public_payer) {
+            (None, None) => self.auto_fee_payer(
+                &accounts,
+                self.reserve_pricing(&quote, 0, fee_core::market::PROOF_BYTES)
+                    .headroom_reserve,
+            ),
+            (named_payer, _) => named_payer,
+        };
         // Pending native credits to the transaction's private accounts are claimed before the
         // root, so they count as balance; they take the action slots its accounts and root leave.
         let private_states: HashSet<AccountId> = accounts
@@ -1663,6 +1663,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
 
         tx_pre_check(&acc_manager.selected_actor_states())?;
 
+        // Its signature authorizes the declaration.
         if let Some(payer) = public_payer
             && !acc_manager.signs_for(payer)
         {
@@ -1846,10 +1847,10 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .await
         };
 
-        // A public signer's declared fee is paid as a public transaction's, its gas limit covering
-        // the proof's verification. The declaration lies outside the proof, so the transaction is
-        // measured unproven and priced before it is proven and signed.
+        // A public signer's declared fee lies outside the proof, so the transaction is measured
+        // unproven and priced before it is proven and signed.
         let send_publicly_paid = async |payer: AccountId, mut input: ProvingInput| {
+            // Only the in-proof reserve crosses to the inbox.
             input.public_context.actors.remove(&inbox_actor);
             let FeeParams {
                 gas_limit,
@@ -1870,15 +1871,10 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                     lee::privacy_preserving_transaction::circuit::Proof::from_inner(Vec::new()),
                 ),
             );
-            let witness_bytes =
-                size_of::<lee::Signature>().saturating_add(size_of::<lee::PublicKey>());
-            let wire_bytes = LeeTransaction::PrivacyPreserving(unsigned)
-                .charged_bytes()
-                .expect("a transaction serializes")
-                .saturating_add(
-                    u64::try_from(acc_manager.signers().len().saturating_mul(witness_bytes))
-                        .expect("the signatures' size fits u64"),
-                );
+            let wire_bytes = signed_wire_bytes(
+                &LeeTransaction::PrivacyPreserving(unsigned),
+                acc_manager.signers().len(),
+            )?;
             let verify_gas = fee_core::market::PRIVATE_VERIFY_GAS;
             let (exec_ceiling, stor_ceiling) = self.base_fee_ceilings(&quote);
             // Given cross messages the public part is unmeasured, so it gets what an in-proof
@@ -1896,9 +1892,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                     quote.base_fee_exec,
                     quote.base_fee_stor,
                 ),
-                (None, None) => cycles
-                    .saturating_mul(self.config.public_gas_margin_percent.saturating_add(100))
-                    .div_ceil(100),
+                (None, None) => self.with_gas_margin(cycles),
             }
             .saturating_add(verify_gas)
             .min(fee_core::market::MAX_GAS_EXEC);
@@ -1958,13 +1952,11 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                     },
                 )));
             }
-            // A failed action is charged its whole gas limit.
-            if let Some(reason) = revert_reason {
-                if !self.allow_revert {
-                    return Err(ExecutionFailureKind::SimulatedRevert(reason));
-                }
-                warn!("The transaction reverts when simulated, and still pays its fee: {reason}");
+            // The sequencer drops a payer short of the reserve; fail before the proof.
+            if acc_manager.native_balance(payer) < reserve {
+                return Err(ExecutionFailureKind::InsufficientFundsError);
             }
+            self.gate_revert(revert_reason)?;
 
             let (output, proof) = run_proven(input, acc_manager.presenter(None)).await??;
             let message = declared(fee, output);
@@ -1984,12 +1976,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 .await
                 .map_err(Into::into)?;
             self.declare_fee(DeclaredFee::Public(fee));
-            if !claims.is_empty() {
-                self.swept
-                    .lock()
-                    .expect("the swept set is not poisoned")
-                    .insert(tx_hash, claims.iter().map(|claim| claim.receipt).collect());
-            }
+            self.record_swept(tx_hash, &claims);
             Ok((tx_hash, shared_secrets.clone()))
         };
 
@@ -2208,12 +2195,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             {
                 Ok(tx_hash) => {
                     self.declare_fee(DeclaredFee::Private(fee));
-                    if !claims.is_empty() {
-                        self.swept
-                            .lock()
-                            .expect("the swept set is not poisoned")
-                            .insert(tx_hash, claims.iter().map(|claim| claim.receipt).collect());
-                    }
+                    self.record_swept(tx_hash, &claims);
                     return Ok((tx_hash, shared_secrets));
                 }
                 Err(ExecutionFailureKind::PrivateFeeBelowHead(_)) if reprices < MAX_REPRICES => {
@@ -2287,6 +2269,35 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             fee_core::market::BASE_FEE_STOR_MAX,
         );
         (exec_ceiling, stor_ceiling)
+    }
+
+    /// A measured cycle count padded by the configured margin.
+    const fn with_gas_margin(&self, cycles: u64) -> u64 {
+        cycles
+            .saturating_mul(self.config.public_gas_margin_percent.saturating_add(100))
+            .div_ceil(100)
+    }
+
+    /// Refuses a simulated revert unless reverts are allowed; a failed action is charged its whole
+    /// gas limit.
+    fn gate_revert(&self, revert_reason: Option<String>) -> Result<(), ExecutionFailureKind> {
+        if let Some(reason) = revert_reason {
+            if !self.allow_revert {
+                return Err(ExecutionFailureKind::SimulatedRevert(reason));
+            }
+            warn!("The transaction reverts when simulated, and still pays its fee: {reason}");
+        }
+        Ok(())
+    }
+
+    /// Holds the claims `tx_hash` sweeps out of the pending messages until it is seen included.
+    fn record_swept(&self, tx_hash: HashType, claims: &[PendingMessage]) {
+        if !claims.is_empty() {
+            self.swept
+                .lock()
+                .expect("the swept set is not poisoned")
+                .insert(tx_hash, claims.iter().map(|claim| claim.receipt).collect());
+        }
     }
 
     /// Gives the claims of `tx_hash` back to the pending messages: it reverted or was not
@@ -2511,10 +2522,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         let gas_limit = gas_limit.map_or_else(
             || {
                 let cycles = measured.as_ref().map_or(budget, |measured| measured.cycles);
-                cycles
-                    .saturating_mul(self.config.public_gas_margin_percent.saturating_add(100))
-                    .div_ceil(100)
-                    .min(budget)
+                self.with_gas_margin(cycles).min(budget)
             },
             // Held to the protocol cap, which admission enforces.
             |_| budget,
@@ -2611,13 +2619,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             )));
         }
 
-        // A failed action is charged its whole gas limit.
-        if let Some(reason) = measured.and_then(|measured| measured.revert_reason) {
-            if !self.allow_revert {
-                return Err(ExecutionFailureKind::SimulatedRevert(reason));
-            }
-            warn!("The transaction reverts when simulated, and still pays its fee: {reason}");
-        }
+        self.gate_revert(measured.and_then(|measured| measured.revert_reason))?;
         let tx_hash = self
             .sequencer_client
             .send_transaction(LeeTransaction::Public(tx))
@@ -2685,15 +2687,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             message.clone(),
             lee::public_transaction::WitnessSet::from_raw_parts(Vec::new()),
         );
-        // Storage gas is the wire size settlement sees: the whole signed `LeeTransaction`.
-        let witness_bytes = size_of::<lee::Signature>().saturating_add(size_of::<lee::PublicKey>());
-        let wire_bytes = u64::try_from(
-            borsh::to_vec(&LeeTransaction::Public(tx.clone()))
-                .map_err(|err| ExecutionFailureKind::SignError(err.into()))?
-                .len()
-                .saturating_add(signers.saturating_mul(witness_bytes)),
-        )
-        .expect("transaction size fits u64");
+        let wire_bytes = signed_wire_bytes(&LeeTransaction::Public(tx.clone()), signers)?;
         let run = PublicRun {
             tx,
             simulation,
@@ -3128,6 +3122,21 @@ impl WalletCore<SequencerClient> {
 )]
 pub const fn max_fee_for(gas_limit: u64) -> u128 {
     (gas_limit as u128 + ASSUMED_DATA_BYTES) * ASSUMED_BASE_FEE
+}
+
+/// The bytes settlement charges `unsigned` once `signers` sign it.
+fn signed_wire_bytes(
+    unsigned: &LeeTransaction,
+    signers: usize,
+) -> Result<u64, ExecutionFailureKind> {
+    let witness_bytes = size_of::<lee::Signature>().saturating_add(size_of::<lee::PublicKey>());
+    let unsigned = unsigned
+        .charged_bytes()
+        .map_err(|err| ExecutionFailureKind::SignError(err.into()))?;
+    Ok(unsigned.saturating_add(
+        u64::try_from(signers.saturating_mul(witness_bytes))
+            .expect("the signatures' size fits u64"),
+    ))
 }
 
 /// The nullifiers `block` spends: a reverted transaction's fee fallback alone, every private

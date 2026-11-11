@@ -1748,26 +1748,34 @@ mod tests {
         public_root_private_tx_paid(state, sender, scripted, Some(fee), None)
     }
 
-    /// The public account that signs and declares the fee in [`publicly_paid_private_tx`].
-    fn public_payer_key() -> lee::PrivateKey {
-        initial_pub_accounts_private_keys()[1].pub_sign_key.clone()
+    /// A state holding one private sender and the scripted program, which it calls.
+    fn publicly_paid_setup(seed: u8) -> (V03State, (TestPrivateKeys, lee::Account), Actor) {
+        let (state, mut senders) = private_sender_state(&[seed]);
+        let scripted = Actor::new(
+            initial_pub_accounts_private_keys()[0].account_id,
+            AccountId::from_builtin_program(event_emitter().id()),
+        );
+        (
+            state.with_programs(vec![event_emitter()]),
+            senders.remove(0),
+            scripted,
+        )
     }
 
-    /// [`public_root_private_tx`] paying no fee in its proof: its public signer
-    /// [`public_payer_key`] declares `fee` instead.
+    /// The public account that signs [`publicly_paid_private_tx`].
+    fn public_payer() -> AccountId {
+        initial_pub_accounts_private_keys()[1].account_id
+    }
+
+    /// [`public_root_private_tx`] paying no fee in its proof: [`public_payer`] signs it and `fee`
+    /// is declared instead.
     fn publicly_paid_private_tx(
         state: &V03State,
         sender: &(TestPrivateKeys, lee::Account),
         scripted: Actor,
         fee: lee::FeeDeclaration,
     ) -> LeeTransaction {
-        public_root_private_tx_paid(
-            state,
-            sender,
-            scripted,
-            None,
-            Some(&(public_payer_key(), fee)),
-        )
+        public_root_private_tx_paid(state, sender, scripted, None, Some(fee))
     }
 
     fn public_root_private_tx_paid(
@@ -1775,10 +1783,11 @@ mod tests {
         (keys, funded): &(TestPrivateKeys, lee::Account),
         scripted: Actor,
         fee: Option<lee_core::FeeTransfer>,
-        declared: Option<&(lee::PrivateKey, lee::FeeDeclaration)>,
+        declared: Option<lee::FeeDeclaration>,
     ) -> LeeTransaction {
-        let signer =
-            declared.map(|(key, _)| AccountId::from(&lee::PublicKey::new_from_private_key(key)));
+        let signer_key =
+            declared.map(|_| initial_pub_accounts_private_keys()[1].pub_sign_key.clone());
+        let signer = declared.map(|_| public_payer());
         let public_actors = vec![
             scripted,
             Actor::native_balance(system_accounts::fee_inbox_account_id()),
@@ -1841,7 +1850,7 @@ mod tests {
         )
         .expect("the scripted call proves");
         let message = lee::privacy_preserving_transaction::Message {
-            fee: declared.map(|(_, declaration)| *declaration),
+            fee: declared,
             ..lee::privacy_preserving_transaction::Message::from_circuit_output(
                 signer
                     .map(|signer| (signer, state.get_account_by_id(signer).nonce))
@@ -1850,7 +1859,7 @@ mod tests {
                 output,
             )
         };
-        let signing_keys: Vec<&lee::PrivateKey> = declared.iter().map(|(key, _)| key).collect();
+        let signing_keys: Vec<&lee::PrivateKey> = signer_key.iter().collect();
         LeeTransaction::PrivacyPreserving(lee::PrivacyPreservingTransaction::new(
             message.clone(),
             lee::privacy_preserving_transaction::WitnessSet::for_message(
@@ -2183,17 +2192,12 @@ mod tests {
 
     #[test]
     fn a_private_transaction_declaring_its_fee_charges_its_public_signer() {
-        let (state, senders) = private_sender_state(&[0x5a]);
-        let state = state.with_programs(vec![event_emitter()]);
-        let scripted = Actor::new(
-            initial_pub_accounts_private_keys()[0].account_id,
-            AccountId::from_builtin_program(event_emitter().id()),
-        );
-        let payer = AccountId::from(&lee::PublicKey::new_from_private_key(&public_payer_key()));
+        let (state, sender, scripted) = publicly_paid_setup(0x5a);
+        let payer = public_payer();
         let gas_limit = fee_core::market::PRIVATE_VERIFY_GAS + 1_000_000;
         let tx = publicly_paid_private_tx(
             &state,
-            &senders[0],
+            &sender,
             scripted,
             lee::FeeDeclaration::new(payer, gas_limit, 3, u128::MAX),
         );
@@ -2216,8 +2220,7 @@ mod tests {
         )
         .expect("a declared fee settles");
         assert!(!reverted);
-        // Between the revert test's 5,000 and the verification gas, so the root runs out there
-        // only because the verification gas comes off its budget first.
+        // The root needs more than the 5,000 cycles the revert test leaves it.
         let cycles = summary.gas_used_exec - fee_core::market::PRIVATE_VERIFY_GAS;
         assert!(cycles > 5_000 && cycles < fee_core::market::PRIVATE_VERIFY_GAS);
         let base = fee_core::assess::fee_for(summary.gas_used_exec, size_of(&tx), 0, 8, 8);
@@ -2241,18 +2244,13 @@ mod tests {
 
     #[test]
     fn a_declared_fee_pays_for_a_reverted_private_transaction_that_spends_no_note() {
-        let (state, senders) = private_sender_state(&[0x5b]);
-        let state = state.with_programs(vec![event_emitter()]);
-        let scripted = Actor::new(
-            initial_pub_accounts_private_keys()[0].account_id,
-            AccountId::from_builtin_program(event_emitter().id()),
-        );
-        let payer = AccountId::from(&lee::PublicKey::new_from_private_key(&public_payer_key()));
+        let (state, sender, scripted) = publicly_paid_setup(0x5b);
+        let payer = public_payer();
         // The scripted public root runs out of the gas left after the proof's verification.
         let gas_limit = fee_core::market::PRIVATE_VERIFY_GAS + 5_000;
         let tx = publicly_paid_private_tx(
             &state,
-            &senders[0],
+            &sender,
             scripted,
             lee::FeeDeclaration::new(payer, gas_limit, 0, u128::MAX),
         );
@@ -2310,16 +2308,11 @@ mod tests {
 
     #[test]
     fn a_declared_fee_naming_a_payer_that_does_not_sign_is_rejected() {
-        let (state, senders) = private_sender_state(&[0x5c]);
-        let state = state.with_programs(vec![event_emitter()]);
-        let scripted = Actor::new(
-            initial_pub_accounts_private_keys()[0].account_id,
-            AccountId::from_builtin_program(event_emitter().id()),
-        );
+        let (state, sender, scripted) = publicly_paid_setup(0x5c);
         let outsider = initial_pub_accounts_private_keys()[0].account_id;
         let tx = publicly_paid_private_tx(
             &state,
-            &senders[0],
+            &sender,
             scripted,
             lee::FeeDeclaration::new(
                 outsider,

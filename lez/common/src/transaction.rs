@@ -60,12 +60,16 @@ impl LeeTransaction {
     #[must_use]
     pub fn is_fee_authorized(&self) -> bool {
         match self {
-            Self::Public(tx) => {
-                lee::is_fee_authorized(tx.message(), tx.witness_set().signatures_and_public_keys())
-            }
-            Self::PrivacyPreserving(tx) => {
-                lee::is_fee_authorized(tx.message(), tx.witness_set().signatures_and_public_keys())
-            }
+            Self::Public(tx) => lee::is_fee_authorized(
+                tx.message().fee,
+                &tx.message().hash(),
+                tx.witness_set().signatures_and_public_keys(),
+            ),
+            Self::PrivacyPreserving(tx) => lee::is_fee_authorized(
+                tx.message().fee,
+                &tx.message().hash(),
+                tx.witness_set().signatures_and_public_keys(),
+            ),
         }
     }
 

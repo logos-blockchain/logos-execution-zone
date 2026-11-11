@@ -470,8 +470,8 @@ impl ValidatedStateDiff {
                 )?;
                 (diff, Some(err.to_string()))
             }
-            // A fee declared by a public signer is paid outside the proof, so the revert keeps
-            // only the public payer nonce advances, the proven notes are not spent
+            // A declared fee is paid outside the proof: the revert keeps only the signers' nonce
+            // advances.
             (Err(err), None) if err.is_chargeable() && message.fee.is_some() => (
                 StateDiff {
                     signer_account_ids,

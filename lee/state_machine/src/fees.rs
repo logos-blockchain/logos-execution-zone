@@ -2,7 +2,7 @@
 
 use borsh::{BorshDeserialize, BorshSerialize};
 
-use crate::{AccountId, Balance, Fee, Gas, PublicKey, Signature, TransactionMessage};
+use crate::{AccountId, Balance, Fee, Gas, PublicKey, Signature};
 
 /// The signed fee fields of a charged transaction.
 ///
@@ -31,34 +31,23 @@ impl FeeDeclaration {
     }
 }
 
-/// A message kind signed under a domain-separated hash.
-pub trait SignedMessage {
-    fn signing_hash(&self) -> [u8; 32];
-}
-
-/// Whether the transaction's fee is authorized: a fee-exempt message always is;
-/// a charged message requires a valid signature by its designated payer.
+/// Whether a fee is authorized: an exempt message's always is; a declared one requires a valid
+/// signature over `message_hash` by its payer.
 ///
-/// Scans for the payer's signature directly — checking the account id before
-/// verifying the signature, so only the payer's signature is verified, not
-/// every signer's.
+/// Checks the account id before verifying, so only the payer's signature is verified.
 #[must_use]
-pub fn is_fee_authorized<P>(
-    message: &TransactionMessage<P>,
+pub fn is_fee_authorized(
+    fee: Option<FeeDeclaration>,
+    message_hash: &[u8; 32],
     signatures_and_public_keys: &[(Signature, PublicKey)],
-) -> bool
-where
-    TransactionMessage<P>: SignedMessage,
-{
-    let Some(payer) = message.payer() else {
+) -> bool {
+    let Some(FeeDeclaration { payer, .. }) = fee else {
         return true;
     };
-    let message_hash = message.signing_hash();
     signatures_and_public_keys
         .iter()
         .any(|(signature, public_key)| {
-            AccountId::from(public_key) == payer
-                && signature.is_valid_for(&message_hash, public_key)
+            AccountId::from(public_key) == payer && signature.is_valid_for(message_hash, public_key)
         })
 }
 
@@ -118,7 +107,8 @@ mod tests {
         let message = charged_message(account_id_of(&signer_key));
         let witness_set = WitnessSet::for_message(&message, &[&signer_key]);
         assert!(is_fee_authorized(
-            &message,
+            message.fee,
+            &message.hash(),
             witness_set.signatures_and_public_keys()
         ));
     }
@@ -130,7 +120,8 @@ mod tests {
         let message = charged_message(account_id_of(&payer_key));
         let witness_set = WitnessSet::for_message(&message, &[&signer_key, &payer_key]);
         assert!(is_fee_authorized(
-            &message,
+            message.fee,
+            &message.hash(),
             witness_set.signatures_and_public_keys()
         ));
     }
@@ -143,7 +134,8 @@ mod tests {
         let message = charged_message(account_id_of(&payer_key));
         let witness_set = WitnessSet::for_message(&message, &[&signer_key]);
         assert!(!is_fee_authorized(
-            &message,
+            message.fee,
+            &message.hash(),
             witness_set.signatures_and_public_keys()
         ));
     }
@@ -155,7 +147,8 @@ mod tests {
         assert_eq!(message.fee, None);
         let witness_set = WitnessSet::for_message(&message, &[&signer_key]);
         assert!(is_fee_authorized(
-            &message,
+            message.fee,
+            &message.hash(),
             witness_set.signatures_and_public_keys()
         ));
     }
@@ -176,7 +169,8 @@ mod tests {
             .gas_limit = 999_999;
         assert!(!witness_set.is_valid_for(&tampered));
         assert!(!is_fee_authorized(
-            &tampered,
+            tampered.fee,
+            &tampered.hash(),
             witness_set.signatures_and_public_keys()
         ));
     }

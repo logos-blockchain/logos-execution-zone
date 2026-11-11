@@ -45,12 +45,6 @@ impl Message {
     }
 }
 
-impl crate::fees::SignedMessage for Message {
-    fn signing_hash(&self) -> [u8; 32] {
-        self.hash()
-    }
-}
-
 #[cfg(test)]
 pub mod tests {
     use std::collections::BTreeMap;
