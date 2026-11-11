@@ -104,13 +104,8 @@ pub struct CrossZonePeer {
     /// Listing one asserts, unverifiably, that it honors that contract, that it
     /// panics on any tag-0 call it does not intend delivered (an abort is its
     /// only veto, from any of its actors), and that its code will not be
-    /// swapped, since the id pins an account rather than code and a mutable
-    /// header can be repointed. Retire one with
-    /// [`RegisteredEmitter::until_src_block`], never by deleting the entry.
-    ///
-    /// Must match the indexer's copy, cutoffs included: the set is applied to
-    /// history, so an entry the indexer lacks halts it as `Forged`. Builtin ids
-    /// are refused at startup.
+    /// swapped. Retire one with [`RegisteredEmitter::until_src_block`], never by
+    /// deleting the entry.
     #[serde(default)]
     pub emitters: Vec<RegisteredEmitter>,
     /// Minimum live committee size (accredited keys on the peer's channel)
@@ -137,15 +132,15 @@ pub struct RegisteredEmitter {
     /// for no cutoff.
     ///
     /// Set it below the peer block that repointed the program's header, since a
-    /// `WriteSegment` and a call to the swapped code can share one block. It
-    /// must also stay at or above the newest source block already dispatched, or
-    /// the indexer halts exactly as deleting the entry would. When those pull
-    /// apart, the emitter was already trusted and no cutoff repairs it.
+    /// `WriteSegment` and a call to the swapped code can share one block, and at
+    /// or above the newest source block already dispatched.
     #[serde(default)]
     pub until_src_block: Option<u64>,
 }
 
 impl RegisteredEmitter {
+    /// Applied to history too, so a cutoff excluding a block already dispatched
+    /// halts the indexer as `Forged`.
     #[must_use]
     pub fn covers(&self, src_block_id: u64) -> bool {
         self.until_src_block
