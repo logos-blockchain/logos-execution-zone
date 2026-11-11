@@ -46,6 +46,16 @@ pub const fn cooldown() -> Program {
 
 #[must_use]
 #[inline]
+pub const fn clock_reader() -> Program {
+    use guests::{CLOCK_READER_ELF, CLOCK_READER_ID, CLOCK_READER_PATH};
+
+    let _unused = CLOCK_READER_PATH;
+
+    Program::new_unchecked(CLOCK_READER_ID, Cow::Borrowed(CLOCK_READER_ELF))
+}
+
+#[must_use]
+#[inline]
 pub const fn listener() -> Program {
     use guests::{LISTENER_ELF, LISTENER_ID, LISTENER_PATH};
 

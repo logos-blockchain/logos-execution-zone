@@ -189,6 +189,15 @@ mod tests {
                 .expect("the fixture matches the node's wire shape"))
         }
 
+        async fn limits(
+            &self,
+        ) -> Result<
+            logos_blockchain_zone_sdk::http_api_common::bodies::mantle::LimitsResponseBody,
+            NodeError,
+        > {
+            unreachable!("the zone indexer never asks for the node's limits")
+        }
+
         async fn zone_messages_in_blocks(
             &self,
             slot_from: Slot,
@@ -262,7 +271,7 @@ mod tests {
     fn message(tag: u8) -> ZoneMessage {
         ZoneMessage::Block(ZoneBlock {
             id: MsgId::root(),
-            data: Inscription::try_from(vec![tag]).expect("one byte is under the inscription cap"),
+            data: Inscription::new_unchecked(vec![tag]),
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
         })
     }
