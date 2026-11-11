@@ -230,7 +230,7 @@ pub fn apply_block_to_state(
     }
 
     // The block an upgrade activates in must carry its `Apply`.
-    if let Some(name) = common::system_upgrades::due_at(state, block.header.block_id) {
+    if let Some(name) = common::system_upgrades::due_at(state, block.header.block_id)? {
         return Err(BlockIngestError::MissedSystemUpgrade {
             name: String::from_utf8_lossy(name.as_bytes())
                 .trim_end_matches('\0')
@@ -1006,7 +1006,7 @@ mod tests {
             Registry, ScheduledUpgrade, SystemProgramName, registry_account_id,
         };
 
-        let mut registry = common::system_upgrades::registry(&initial_state(true));
+        let mut registry = common::system_upgrades::registry(&initial_state(true)).unwrap();
         registry.programs.insert(
             SystemProgramName::new(b"clock"),
             Some(ScheduledUpgrade {
@@ -1029,6 +1029,19 @@ mod tests {
             err,
             BlockIngestError::MissedSystemUpgrade { name } if name == "clock"
         ));
+    }
+
+    #[test]
+    fn a_block_over_an_undecodable_registry_parks_without_blaming_its_producer() {
+        let mut state = initial_state(true).with_public_accounts([(
+            system_upgrader_core::registry_account_id(),
+            lee::Account::default().with_actor_state(SYSTEM_UPGRADER_ACCOUNT_ID, vec![0xFF].into()),
+        )]);
+
+        let err = apply_block(None, &block_with(vec![]), &mut state).expect_err("should reject");
+        assert!(matches!(err, BlockIngestError::UndecodableSystemRegistry));
+        assert!(!err.blames_producer());
+        assert!(!err.is_invalid_block());
     }
 
     #[test]

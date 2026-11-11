@@ -7218,7 +7218,7 @@ fn state_with_clock_upgrade_due_at(activation_height: lee_core::BlockId) -> lee:
     use system_upgrader_core::{Registry, ScheduledUpgrade, registry_account_id};
 
     let genesis = testnet_initial_state::initial_state(false);
-    let mut registry = common::system_upgrades::registry(&genesis);
+    let mut registry = common::system_upgrades::registry(&genesis).unwrap();
     registry.programs.insert(
         programs::CLOCK_NAME,
         Some(ScheduledUpgrade {
@@ -7255,7 +7255,7 @@ fn a_due_system_upgrade_gets_an_apply() {
 
     assert_eq!(
         super::build_due_apply_tx(&state, 4),
-        None,
+        Ok(None),
         "nothing is due before the upgrade's height"
     );
     let expected = LeeTransaction::Public(lee::PublicTransaction::new(
@@ -7271,10 +7271,10 @@ fn a_due_system_upgrade_gets_an_apply() {
         .unwrap(),
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     ));
-    assert_eq!(super::build_due_apply_tx(&state, 5), Some(expected));
+    assert_eq!(super::build_due_apply_tx(&state, 5), Ok(Some(expected)));
     assert_eq!(
         super::build_due_apply_tx(&state, 6),
-        None,
+        Ok(None),
         "an upgrade activates only at its height"
     );
 }

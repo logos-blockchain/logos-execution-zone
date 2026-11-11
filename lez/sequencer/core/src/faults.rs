@@ -27,7 +27,7 @@ pub fn judge(
         let AcceptOutcome::Parked(err) = &entry.outcome else {
             return None;
         };
-        if !entry.next {
+        if !entry.next || !err.blames_producer() {
             return None;
         }
         let fault = if err.is_invalid_block() {
@@ -106,6 +106,16 @@ mod tests {
                 offence(msg(5), signer(), Fault::MisplacedBlock),
             ]
         );
+    }
+
+    #[test]
+    fn a_block_parked_on_this_nodes_own_state_is_no_offence() {
+        let finalized = [finalized(
+            1,
+            AcceptOutcome::Parked(BlockIngestError::UndecodableSystemRegistry),
+            true,
+        )];
+        assert!(judge(&[], &finalized, &[(msg(1), signer())]).is_empty());
     }
 
     #[test]

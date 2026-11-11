@@ -1146,6 +1146,9 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
             indexer_core::BlockIngestError::StateTransition { tx_index, reason } => {
                 Self::StateTransition { tx_index, reason }
             }
+            indexer_core::BlockIngestError::UndecodableSystemRegistry => {
+                Self::UndecodableSystemRegistry
+            }
         }
     }
 }

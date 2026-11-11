@@ -2074,7 +2074,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
         // The block an upgrade activates in must carry its `Apply`, so its room is held from the
         // start, with the fee's and the clock's.
-        let due_apply = build_due_apply_tx(&working_state, new_block_height);
+        let due_apply = build_due_apply_tx(&working_state, new_block_height)?;
         let trailing: Vec<LeeTransaction> = due_apply
             .iter()
             .cloned()
@@ -2345,7 +2345,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             }
         }
         // Peers reject a block that leaves its due upgrade pending, so never publish one.
-        if let Some(name) = common::system_upgrades::due_at(&working_state, new_block_height) {
+        if let Some(name) = common::system_upgrades::due_at(&working_state, new_block_height)? {
             anyhow::bail!(
                 "Block {new_block_height} would leave system program {}'s upgrade unapplied; \
                  aborting block production",
@@ -3456,9 +3456,11 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
 fn build_due_apply_tx(
     state: &lee::V03State,
     block_id: lee_core::BlockId,
-) -> Option<LeeTransaction> {
-    let name = common::system_upgrades::due_at(state, block_id)?;
-    system_upgrader_tx(
+) -> Result<Option<LeeTransaction>, common::system_upgrades::UndecodableRegistry> {
+    let Some(name) = common::system_upgrades::due_at(state, block_id)? else {
+        return Ok(None);
+    };
+    Ok(system_upgrader_tx(
         [system_upgrader_core::loader_actor(&name)],
         system_upgrader_core::Message::Apply {
             name,
@@ -3471,7 +3473,7 @@ fn build_due_apply_tx(
             String::from_utf8_lossy(name.as_bytes()).trim_end_matches('\0')
         );
     })
-    .ok()
+    .ok())
 }
 
 /// An unsigned, fee-exempt `system_upgrader` transaction to its registry, also declaring
