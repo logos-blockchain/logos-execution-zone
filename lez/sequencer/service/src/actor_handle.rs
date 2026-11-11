@@ -60,7 +60,19 @@ impl<T: kameo::Actor> ActorHandle<T> {
         let full_name = self.full_name();
 
         match res {
-            Ok(reason) => anyhow!("{full_name} actor has been stopped: {reason}"),
+            Ok(reason) => {
+                let causes = std::iter::successors(Some(reason), |reason| {
+                    if let kameo::error::ActorStopReason::LinkDied { reason, .. } = reason {
+                        Some(reason.as_ref())
+                    } else {
+                        None
+                    }
+                })
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(": ");
+                anyhow!("{full_name} actor has been stopped: {causes}")
+            }
             Err(kameo::error::HookError::Panicked(err)) => {
                 anyhow!(err).context(format!("{full_name} actor has been stopped due to panic"))
             }

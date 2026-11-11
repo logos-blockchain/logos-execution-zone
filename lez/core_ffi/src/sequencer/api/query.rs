@@ -1,7 +1,5 @@
-use std::ffi::{CString, c_char};
-
 use sequencer_executor_actor::protocol::{
-    GetAccountTransactions, GetBlockByHash, MAX_BLOCK_RANGE_LEN,
+    ExecutorStatus, GetAccountTransactions, GetBlockByHash, GetStatus, MAX_BLOCK_RANGE_LEN, Slot,
 };
 use sequencer_storage_actor::{
     actor::event_filter::{EventRecord, MAX_EVENT_QUERY_RESPONSE_BYTES, Selector, record_charge},
@@ -64,6 +62,94 @@ impl LastBlockIdResult {
     }
 }
 
+/// The state the executor is in.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiExecutorState {
+    /// Replaying the channel's finalized history up to the last slot the Bedrock node has
+    /// finalized. State queries fail until it is done.
+    Bootstrapping = 0x0,
+    /// Following the channel and producing blocks on its turns.
+    Online,
+}
+
+/// Result of [`sequencer_ffi_query_executor_status`], returned **inline** (no
+/// heap allocation, so there is no corresponding `free_*` to call).
+///
+/// The other fields are only meaningful when `error` is `Ok`.
+#[repr(C)]
+pub struct ExecutorStatusResult {
+    pub state: FfiExecutorState,
+    /// Height of the chain so far. Only meaningful when `has_height` is `true`,
+    /// which it always is when `Online`.
+    pub height: FfiBlockId,
+    pub has_height: bool,
+    /// `Bootstrapping` only: the Bedrock slot bootstrapping completes at, the last one the
+    /// node had finalized as of the latest batch. Only meaningful when `has_target_slot` is
+    /// `true`.
+    pub target_slot: u64,
+    pub has_target_slot: bool,
+    /// `Bootstrapping` only: the Bedrock slot the finalized history is replayed
+    /// up to. Only meaningful when `has_replayed_up_to_slot` is `true`.
+    pub replayed_up_to_slot: u64,
+    pub has_replayed_up_to_slot: bool,
+    /// `Online` only: whether it is this sequencer's turn to produce blocks.
+    pub is_our_turn: bool,
+    pub error: FfiOperationError,
+}
+
+impl ExecutorStatusResult {
+    const fn error(error: FfiOperationError) -> Self {
+        Self {
+            state: FfiExecutorState::Bootstrapping,
+            height: 0,
+            has_height: false,
+            target_slot: 0,
+            has_target_slot: false,
+            replayed_up_to_slot: 0,
+            has_replayed_up_to_slot: false,
+            is_our_turn: false,
+            error,
+        }
+    }
+}
+
+impl From<ExecutorStatus> for ExecutorStatusResult {
+    fn from(status: ExecutorStatus) -> Self {
+        match status {
+            ExecutorStatus::Bootstrapping {
+                target,
+                replayed_up_to,
+                height,
+            } => Self {
+                state: FfiExecutorState::Bootstrapping,
+                height: height.unwrap_or_default(),
+                has_height: height.is_some(),
+                target_slot: target.map(Slot::into_inner).unwrap_or_default(),
+                has_target_slot: target.is_some(),
+                replayed_up_to_slot: replayed_up_to.map(Slot::into_inner).unwrap_or_default(),
+                has_replayed_up_to_slot: replayed_up_to.is_some(),
+                is_our_turn: false,
+                error: FfiOperationError::Success,
+            },
+            ExecutorStatus::Online {
+                height,
+                is_our_turn,
+            } => Self {
+                state: FfiExecutorState::Online,
+                height,
+                has_height: true,
+                target_slot: 0,
+                has_target_slot: false,
+                replayed_up_to_slot: 0,
+                has_replayed_up_to_slot: false,
+                is_our_turn,
+                error: FfiOperationError::Success,
+            },
+        }
+    }
+}
+
 /// Query the last block id from sequencer.
 ///
 /// # Arguments
@@ -110,19 +196,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_last_block(
     )
 }
 
-/// Query the sequencer's current sync status as a JSON C-string.
-///
-/// The JSON schema is owned by `sequencer_core` (`SequencerStatus`): an object with
-/// `state` (`Starting`/`Syncing`/`CaughtUp`/`Error`/`Stalled`/`Halted`),
-/// `indexed_block_id`, `last_error`, `stall_reason`, `cross_zone_halt`, and
-/// `cross_zone_peers`. Each peer entry's `health` is one of
-/// `Live`/`Lagging`/`Holed`/`Suspended`/`Halted`; treat a string you do not
-/// know as not known healthy. Lets a client distinguish "still catching up"
-/// from "something went wrong".
-///
-/// Not supporded yet.
-///
-/// TODO: Add support. Needs database modifications.
+/// Query the state the executor is in: bootstrapping from the channel or online.
 ///
 /// # Arguments
 ///
@@ -130,40 +204,34 @@ pub unsafe extern "C" fn sequencer_ffi_query_last_block(
 ///
 /// # Returns
 ///
-/// A heap-allocated, null-terminated JSON string that the caller MUST free with
-/// `free_cstring`. Returns null on error (null `sequencer` pointer or a
-/// serialization failure).
+/// An [`ExecutorStatusResult`] indicating success or failure. It is returned
+/// inline; nothing needs to be freed.
 ///
 /// # Safety
 ///
 /// The caller must ensure that:
 /// - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sequencer_ffi_query_status(
+pub unsafe extern "C" fn sequencer_ffi_query_executor_status(
     sequencer: *const SequencerServiceFFI,
-) -> *mut c_char {
+) -> ExecutorStatusResult {
     if sequencer.is_null() {
-        log::error!(
-            "Attempted to query status on a null sequencer pointer. This is a bug. Aborting."
-        );
-        return std::ptr::null_mut();
+        log::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
+        return ExecutorStatusResult::error(FfiOperationError::NullPointer);
     }
 
-    let json = match serde_json::to_string("Not yet supported") {
-        Ok(json) => json,
-        Err(e) => {
-            log::error!("Failed to serialize sequencer status: {e}");
-            return std::ptr::null_mut();
-        }
-    };
+    let sequencer = unsafe { &*sequencer };
 
-    CString::new(json).map_or_else(
-        |e| {
-            log::error!("Sequencer status JSON contained an interior nul byte: {e}");
-            std::ptr::null_mut()
-        },
-        CString::into_raw,
-    )
+    sequencer
+        .runtime()
+        .block_on(sequencer.executor_ref().ask(GetStatus).send())
+        .map_or_else(
+            |e| {
+                log::error!("Failed to query executor status: {e:#}");
+                ExecutorStatusResult::error(FfiOperationError::QueryError)
+            },
+            ExecutorStatusResult::from,
+        )
 }
 
 /// Query the block by id from sequencer.
