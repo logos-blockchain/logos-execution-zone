@@ -4,34 +4,62 @@ This guide walks you through running the sequencer, compiling example programs, 
 
 You'll find:
 - Programs: example LEZ programs under `methods/guest/src/bin`.
-- Runners: scripts to create and submit transactions to invoke these programs publicly and privately under `src/bin`.
+- Runners: scripts under `src/bin` that deploy these programs, then create and submit transactions to invoke them publicly and privately.
 
 # 0. Install the wallet
 From the project’s root directory:
 ```bash
-cargo install --path wallet --force
+cargo install --path lez/wallet --force
 ```
 
 # 1. Run the sequencer
 From the project’s root directory, start the sequencer by following [these instructions](https://github.com/logos-blockchain/logos-execution-zone#run-the-sequencer-and-node).
 
 ## Checking and setting up the wallet
-For sanity let's check that the wallet can connect to it.
+A new wallet points at the public testnet, so switch it to your local sequencer:
+
+```bash
+wallet change-network local
+```
+
+If this is your first time, the wallet will ask for a password, then print a recovery phrase. The recovery phrase restores all account keys (public and private), so write it down.
+
+For sanity let's check that the wallet can connect to the sequencer.
 
 ```bash
 wallet check-health
 ```
 
-If this is your first time, the wallet will ask for a password. This is used as seed to deterministically generate all account keys (public and private).
-For this tutorial, use: `program-tutorial`
-
 You should see `✅All looks good!` if everything went well.
 
-# 2. Compile the example programs
-In a second terminal, from the `logos-execution-zone` root directory, compile the example Risc0 programs:
+## Import a funded account
+Deploying a program and sending a public transaction both cost fees, and a new account has no balance to pay them. The local sequencer's genesis funds a test account, so import it:
+
 ```bash
-cargo risczero build --manifest-path examples/program_deployment/methods/guest/Cargo.toml
+wallet account import public --private-key 7f273098f25b71e6c005a9519f2678da8d1c7f01f6a27778e2d9948abdf901fb
 ```
+
+Output:
+```
+Imported public account Public/CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r
+```
+
+Every runner takes this account as its fee payer. For convenience, export it:
+```bash
+export PAYER=CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r
+```
+
+On another network, use a funded public account of your own wallet instead.
+
+# 2. Compile the example programs
+In the same terminal, from the `logos-execution-zone` root directory, compile the example Risc0 programs:
+```bash
+RISC0_DOCKER_CONTAINER_TAG=r0.1.91.1 cargo risczero build --manifest-path examples/program_deployment/methods/guest/Cargo.toml
+```
+
+> [!NOTE]
+> The tag pins the Docker image that builds the programs to the one the [`Justfile`](../../Justfile) uses. Without it, `cargo risczero build` uses the image of your `cargo-risczero` version, whose Rust toolchain can be too old for the programs' dependencies (for example `ruint requires rustc 1.90`).
+
 Because this repository is organized as a Cargo workspace, build artifacts are written to the
 shared `target/` directory at the workspace root by default. The compiled `.bin` files will
 appear under:
@@ -56,12 +84,11 @@ All remaining commands must be run from:
 cd examples/program_deployment
 ```
 
-## Deploy the Program
+## How programs get deployed
 
-Use the wallet’s built-in program deployment command:
-```bash
-wallet deploy-program $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world.bin
-```
+You don't deploy the programs by hand in this tutorial: each runner deploys the `.bin` files it is given through the `program_loader` program, paying with `$PAYER`, and then calls the program. `$PAYER` also pays the fee of every public call.
+
+A deployed program is addressed by its program account ID, the account that holds its header. Every run deploys a **new instance** of the program, with a new program account ID, even from the same `.bin`. Each instance writes its own shard, so a run doesn't see what an earlier run wrote. Section 11 shows how to call the same instance across runs.
 
 # 4. Public execution of the Hello world example
 
@@ -97,10 +124,11 @@ Run the example:
 ```bash
 cargo run --bin run_hello_world \
     $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world.bin \
-    BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9
+    BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9 \
+    $PAYER
 ```
 > [!NOTE]
-> - Passing the `.bin` lets the script compute the program ID and build the transaction.
+> - The runner deploys `hello_world.bin` first, then calls the new program instance.
 > - Because this program executes publicly, the node performs the execution.
 > - The program will write data into the account.
 
@@ -114,7 +142,6 @@ wallet account get --raw --scope all --account-id Public/BzdBoL4JRa5M873cuWb9rbY
 Example output:
 ```json
 {
-  "balance": 0,
   "shards": {
     "<hello_world program account ID>": "486f6c61206d756e646f21"
   },
@@ -154,21 +181,27 @@ ProgramOutput::new(
 
 # 6. Understanding `run_hello_world.rs`
 
-The [public runner](src/bin/run_hello_world.rs) loads the wallet and guest binary, selects the program's shard on the supplied account, and submits a public transaction:
+The [public runner](src/bin/run_hello_world.rs) loads the wallet, deploys the guest binary, selects the program's shard on the supplied account, and submits a public transaction paid by `$PAYER`:
 
 ```rust
-let message = Message::try_new(
-    program.id().into(),
-    vec![ProgramShardSelector::new(account_id, program.id().into())],
-    vec![],
+let (fee, payer_nonce, payer_key) = fee_paid_by(&wallet_core, payer).await.unwrap();
+let nonces = vec![payer_nonce];
+let signing_keys = [&payer_key];
+let message = Message::try_new_with_fees(
+    program_account_id,
+    vec![ProgramShardSelector::new(account_id, program_account_id)],
+    nonces,
     greeting,
+    fee,
 )
 .unwrap();
-let witness_set = WitnessSet::for_message(&message, &[]);
+let witness_set = WitnessSet::for_message(&message, &signing_keys);
 let tx = PublicTransaction::new(message, witness_set);
 ```
 
-The runner supplies no signatures or nonces. Hello World writes its own shard without checking account authorization.
+Every user public transaction declares its fee: `fee_paid_by` (in [lib.rs](src/lib.rs)) names the payer and its gas limit and fee cap, and returns the payer's current nonce and signing key. The payer signs the message, and the message lists the payer's nonce. Without the declaration, or the payer's signature, the sequencer rejects the transaction with `Incorrect fee`. `Message::try_new` builds a message without a fee declaration, which only system transactions may send.
+
+The payer is the only signer. Hello World writes its own shard without checking account authorization, so the account itself doesn't sign.
 
 # 7. Private execution of the Hello world example
 
@@ -203,11 +236,13 @@ Run the example:
 ```bash
 cargo run --bin run_hello_world_private \
     $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world.bin \
-    7EDHyxejuynBpmbLuiEym9HMUyCYxZDuF8X3B89ADeMr
+    7EDHyxejuynBpmbLuiEym9HMUyCYxZDuF8X3B89ADeMr \
+    $PAYER
 ```
 > [!NOTE]
 > - This command may take a few minutes to complete. A ZK proof of the Hello world program execution and the privacy preserving circuit are being generated. Depending on the machine this can take from 30 seconds to 4 minutes.
 > - We are passing the same `hello_world.bin` binary as in the previous case with public executions. This is because the program is the same, it is the privacy context of the input account that's different.
+> - `$PAYER` pays for the deployment. The private transaction itself pays no fee.
 > - Because this program executes privately, the local machine runs the program and generate the proof of execution.
 > - The program writes to its own shard on the private account.
 
@@ -234,7 +269,6 @@ wallet account get --raw --scope all --account-id Private/7EDHyxejuynBpmbLuiEym9
 should show something similar to
 ```json
 {
-  "balance": 0,
   "shards": {
     "<hello_world program account ID>": "486f6c61206d756e646f21"
   },
@@ -279,11 +313,6 @@ if !pre_state.is_authorized {
 # 9. Public execution of the Hello world with authorization example
 The workflow to execute it publicly is very similar:
 
-### Deploy the program
-```bash
-wallet deploy-program $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world_with_authorization.bin
-```
-
 ### Create a new public account
 Create a new account for this example. You can also reuse the previous account: each program writes its own shard.
 ```bash
@@ -300,7 +329,8 @@ Generated new account with account_id Public/9Ppqqf8NeCX58pnr8ZqKoHvSoYGqH79dSik
 ```bash
 cargo run --bin run_hello_world_with_authorization \
     $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world_with_authorization.bin \
-    9Ppqqf8NeCX58pnr8ZqKoHvSoYGqH79dSikZAtLxKgXE
+    9Ppqqf8NeCX58pnr8ZqKoHvSoYGqH79dSikZAtLxKgXE \
+    $PAYER
 ```
 
 # 10. Understanding `run_hello_world_with_authorization.rs`
@@ -308,8 +338,10 @@ cargo run --bin run_hello_world_with_authorization \
 The [authorized runner](src/bin/run_hello_world_with_authorization.rs) selects the program's shard as before. It also:
 
 - loads the account's signing key;
-- includes the account's current nonce in the message;
-- passes the key to `WitnessSet::for_message` to sign the transaction.
+- includes the account's current nonce in the message, followed by the fee payer's;
+- passes both keys to `WitnessSet::for_message` to sign the transaction.
+
+The account's signature authorizes it, and the payer's signature authorizes the fee. If the account is also the payer, it signs once.
 
 ## Seeing the mechanism in action
 If everything went well you won't notice any difference with the first Hello world, because the runner takes care of signing the transaction to provide authorization and the program just succeeds.
@@ -317,14 +349,14 @@ Try using the `run_hello_world.rs` runner with the `hello_world_with_authorizati
 ```bash
 cargo run --bin run_hello_world \
     $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world_with_authorization.bin \
-    9Ppqqf8NeCX58pnr8ZqKoHvSoYGqH79dSikZAtLxKgXE
+    9Ppqqf8NeCX58pnr8ZqKoHvSoYGqH79dSikZAtLxKgXE \
+    $PAYER
 ```
 
 You should see something like the following **on the node logs**.
 ```bash
-[2025-12-11T13:43:22Z WARN  sequencer_core] Error at transition ProgramExecutionFailed(
-        "Guest panicked: Missing required authorization",
-    )
+thread 'main' (1) panicked at examples/program_deployment/methods/guest/src/bin/hello_world_with_authorization.rs:33:5:
+Missing required authorization
 ```
 
 # 11. Public and private account interaction example
@@ -339,12 +371,9 @@ This example moves data between the program's shards on public and private accou
 > See `methods/guest/src/bin/hello_world_with_move_function.rs`. The program just reads the instruction bytes and updates the accounts state.
 > All privacy handling happens on the runner side. When constructing the transaction, the runner decides which accounts are public or private and prepares the appropriate proofs. The program itself can't differentiate between privacy modes.
 
-Let's start by deploying the program
-```bash
-wallet deploy-program $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world_with_move_function.bin
-```
+This example takes several runs, and they all have to call the same instance of the program. The first run deploys it and prints its program account ID. The later runs pass that ID with `--program-id` instead of deploying a new instance.
 
-Let's also create a new public account
+Let's create a new public account
 ```bash
 wallet account new public
 ```
@@ -359,7 +388,18 @@ Let's execute the write function
 ```bash
 cargo run --bin run_hello_world_with_move_function \
     $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world_with_move_function.bin \
+    $PAYER \
     write-public 95iNQMbmxMRY6jULiHYkCzCkYKPEuysvBh5kEHayDxLs mundo!
+```
+
+Output:
+```
+Program account ID: FHND94YQn8a7ogkrVE24yiy8JttbmJAGAEB5K5JcfcwY
+```
+
+Export it for the next runs:
+```bash
+export MOVE_PROGRAM=FHND94YQn8a7ogkrVE24yiy8JttbmJAGAEB5K5JcfcwY
 ```
 
 Let's crate a new private account.
@@ -378,6 +418,7 @@ Let's execute the write function
 ```bash
 cargo run --bin run_hello_world_with_move_function \
     $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world_with_move_function.bin \
+    $PAYER --program-id $MOVE_PROGRAM \
     write-private 8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU Hola
 ```
 
@@ -399,6 +440,7 @@ Now move the program's shard data from the public account to the private account
 ```bash
 cargo run --bin run_hello_world_with_move_function \
     $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world_with_move_function.bin \
+    $PAYER --program-id $MOVE_PROGRAM \
     move-data-public-to-private 95iNQMbmxMRY6jULiHYkCzCkYKPEuysvBh5kEHayDxLs 8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU
 ```
 
@@ -407,25 +449,18 @@ After succeeding, repeat the get and sync commands. The program's shard should b
 # 12. Program composition: tail calls
 Programs can chain calls to other programs when they return. This is the tail call or chained call mechanism. It is used by programs that depend on other programs.
 
-The examples include a `guest/src/bin/simple_tail_call.rs` program that shows how to trigger this mechanism. It internally calls the first Hello World program with a fixed greeting: `Hello from tail call`.
+The examples include a `guest/src/bin/simple_tail_call.rs` program that shows how to trigger this mechanism. It calls a Hello World program with a fixed greeting: `Hello from tail call`. It takes the Hello World program account ID as its instruction data, so the runner needs both binaries: it deploys both programs, then calls `simple_tail_call` with the new Hello World's ID.
 
-> [!NOTE]
-> This program hardcodes the ID of the Hello World program. If something fails, check that this ID matches the one produced when building the Hello World program. You can see it in the output of `cargo risczero build` from the earlier sections of this tutorial. If it differs, update the ID in `simple_tail_call.rs` and build again.
-
-As before, let's start by deploying the program
-
-```bash
-wallet deploy-program $EXAMPLE_PROGRAMS_BUILD_DIR/simple_tail_call.bin
-```
-
-We'll reuse public account `BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9`; its Hello World shard contains `Hola mundo!`.
+We'll reuse public account `BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9`.
 
 Let's run the tail call program
 
 ```bash
 cargo run --bin run_hello_world_through_tail_call \
     $EXAMPLE_PROGRAMS_BUILD_DIR/simple_tail_call.bin \
-    BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9
+    $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world.bin \
+    BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9 \
+    $PAYER
 ```
 
 Once the transaction is processed, query the account values with:
@@ -438,22 +473,22 @@ You should se an output similar to
 
 ```json
 {
-  "balance": 0,
   "shards": {
-    "<hello_world program account ID>": "486f6c61206d756e646f2148656c6c6f2066726f6d207461696c2063616c6c"
+    "<hello_world program account ID from section 4>": "486f6c61206d756e646f21",
+    "<new hello_world program account ID>": "48656c6c6f2066726f6d207461696c2063616c6c"
   },
   "nonce": 0
 }
 ```
 
-Decoding the data
+The account now has two Hello World shards: the one section 4 wrote, and one for the instance this run deployed. Decoding the new one:
 ```bash
-echo 486f6c61206d756e646f2148656c6c6f2066726f6d207461696c2063616c6c | xxd -r -p
+echo 48656c6c6f2066726f6d207461696c2063616c6c | xxd -r -p
 ```
 
 Output:
 ```
-Hola mundo!Hello from tail call
+Hello from tail call
 ```
 ## Private tail-calls
 There's support for tail calls in privacy preserving executions too. The `run_hello_world_through_tail_call_private.rs` runner walks you through the process of invoking such an execution.
@@ -466,7 +501,8 @@ You can test the privacy tail calls with
 cargo run --bin run_hello_world_through_tail_call_private \
     $EXAMPLE_PROGRAMS_BUILD_DIR/simple_tail_call.bin \
     $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world.bin \
-    8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU
+    8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU \
+    $PAYER
 ```
 
 >[!NOTE]
@@ -495,22 +531,22 @@ Public and private PDAs are bound to an authority account and a seed. During a c
 ## Running the example
 [tail_call_with_pda.rs](methods/guest/src/bin/tail_call_with_pda.rs) calls Hello World with Authorization on its PDA, passing the seed to authorize the account. The callee writes its own shard; `tail_call_with_pda` remains the PDA's authority.
 
-Deploy the program:
-```bash
-wallet deploy-program $EXAMPLE_PROGRAMS_BUILD_DIR/tail_call_with_pda.bin
-```
+The runner deploys both `tail_call_with_pda` and Hello World with Authorization, which `tail_call_with_pda` takes as its callee.
 
 There is no need to create a new account for this example, because we simply use one of the PDA accounts belonging to the `tail_call_with_pda` program.
 
 Execute the program
 ```bash
-cargo run --bin run_hello_world_with_authorization_through_tail_call_with_pda $EXAMPLE_PROGRAMS_BUILD_DIR/tail_call_with_pda.bin
+cargo run --bin run_hello_world_with_authorization_through_tail_call_with_pda \
+    $EXAMPLE_PROGRAMS_BUILD_DIR/tail_call_with_pda.bin \
+    $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world_with_authorization.bin \
+    $PAYER
 ```
 
 You'll see an output like the following:
 
 ```bash
-The program derived account ID is: 3tfTPPuxj3eSE1cLVuNBEk8eSHzpnYS1oqEdeH3Nfsks
+The program derived account id is: 3tfTPPuxj3eSE1cLVuNBEk8eSHzpnYS1oqEdeH3Nfsks
 ```
 
 Then check the status of that account
@@ -522,7 +558,6 @@ wallet account get --raw --scope all --account-id Public/3tfTPPuxj3eSE1cLVuNBEk8
 Output:
 ```json
 {
-  "balance": 0,
   "shards": {
     "<hello_world_with_authorization program account ID>": "48656c6c6f2066726f6d207461696c2063616c6c20776974682050726f6772616d2044657269766564204163636f756e74204944"
   },
