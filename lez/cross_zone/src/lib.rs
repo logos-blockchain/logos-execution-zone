@@ -12,9 +12,8 @@
 use std::collections::BTreeMap;
 
 pub use acceptance::{
-    CommitteeFloorState, FloorVerdict, KEPT_FLOOR_READ_FAILURES, Link, OffChain,
-    STUCK_SLOT_ALERT_PASSES, ScreenRefusal, StallState, alerts_at, equivocation_report,
-    link_to_tip, screen_peer_block,
+    CommitteeFloorState, FloorVerdict, Link, OffChain, ScreenRefusal, StallState, alerts_at,
+    equivocation_report, link_to_tip, screen_peer_block,
 };
 use borsh::{BorshDeserialize, BorshSerialize};
 use common::HashType;
@@ -192,12 +191,13 @@ pub struct EmissionSource {
 
 /// Whether a program may only be invoked by sequencer-origin transactions.
 ///
-/// The cross-zone inbox is injected solely by the watcher; a user-submitted call
-/// must be rejected at ingress, since `TransactionOrigin` is not carried in the
-/// block.
+/// The cross-zone inbox is injected solely by the watcher and the fee program
+/// solely by the forced per-block fee transaction; a user-submitted call must be
+/// rejected at ingress, since `TransactionOrigin` is not carried in the block.
 #[must_use]
 pub fn is_sequencer_only_program(account_id: AccountId) -> bool {
     account_id == programs::cross_zone_inbox_account_id()
+        || account_id == programs::fee_account_id()
 }
 
 /// Extracts the cross-zone emission from a source transaction.
