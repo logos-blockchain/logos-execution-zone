@@ -267,7 +267,7 @@ mod inner {
                 let state = V03State::new()
                     .with_programs_at(
                         [
-                            (system_upgrader_account_id(), system_upgrader(), false),
+                            (system_upgrader_account_id(), system_upgrader(), true),
                             (sequencer_stake_account_id(), sequencer_stake(), false),
                         ]
                         .into_iter()
@@ -636,8 +636,7 @@ mod inner {
                 assert_eq!(schedule(&state), None);
             }
 
-            /// `system_upgrader`'s header is mutable, but no signer or PDA can authorize its
-            /// address, so only a protocol upgrade can repoint it.
+            /// `system_upgrader`'s header is immutable, so only a protocol upgrade can repoint it.
             #[test]
             fn system_upgrader_header_cannot_be_updated() {
                 let (mut state, ids) = staged();
@@ -663,8 +662,11 @@ mod inner {
                         1,
                         0,
                     )
-                    .expect_err("nobody can authorize system_upgrader's header");
-                assert!(err.to_string().contains("must be authorized"), "got: {err}");
+                    .expect_err("system_upgrader's header is immutable");
+                assert!(
+                    err.to_string().contains("immutable and cannot be updated"),
+                    "got: {err}"
+                );
                 assert_eq!(
                     state.get_account_by_id(system_upgrader_account_id()),
                     header_before

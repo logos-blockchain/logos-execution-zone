@@ -185,8 +185,8 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
         .collect()
 }
 
-/// System programs changed only by a protocol upgrade: `system_upgrader`, the root of system
-/// program upgrades.
+/// System programs changed only by a protocol upgrade, seeded immutable: `system_upgrader`, the
+/// root of system program upgrades.
 fn protocol_upgradable_programs() -> Vec<(AccountId, Program)> {
     vec![(
         programs::system_upgrader_account_id(),
@@ -253,7 +253,7 @@ pub fn initial_state(cross_zone: bool) -> V03State {
         .with_programs_at(
             protocol_upgradable_programs()
                 .into_iter()
-                .map(|(account_id, program)| (account_id, program, false))
+                .map(|(account_id, program)| (account_id, program, true))
                 .chain(system_upgradable_programs(cross_zone).into_iter().map(
                     |(name, program)| (AccountId::from_system_program_name(&name), program, false),
                 )),
@@ -476,6 +476,24 @@ mod tests {
                 without.get_builtin_program(id).is_none(),
                 "absent when not declared"
             );
+        }
+    }
+
+    #[test]
+    fn system_upgrader_is_seeded_immutable_with_its_mirror() {
+        for cross_zone in [false, true] {
+            let state = initial_state(cross_zone);
+            let program = programs::system_upgrader_account_id();
+            let header = lee_core::program::ProgramHeader::from_loader_actor_state(
+                state
+                    .get_account_by_id(program)
+                    .data
+                    .actor_state(lee_core::program::PROGRAM_LOADER_ACCOUNT_ID),
+            )
+            .unwrap();
+            assert!(header.immutable);
+            let mirror = lee_core::program::immutable_mirror_commitment(program, &header);
+            assert!(state.get_proof_for_commitment(&mirror).is_some());
         }
     }
 

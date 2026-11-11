@@ -59,7 +59,7 @@ pub fn staged(committee_size: usize, new_code: &Program) -> Upgrade {
             (
                 programs::system_upgrader_account_id(),
                 programs::system_upgrader(),
-                false,
+                true,
             ),
             (
                 sequencer_stake_account_id(),
