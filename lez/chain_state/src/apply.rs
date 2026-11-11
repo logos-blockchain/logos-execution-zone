@@ -169,7 +169,8 @@ pub fn apply_block_to_state(
     // settled: its summary is derived from their execution.
 
     // At most one `system_upgrader` transaction, directly before the fee: a change takes effect
-    // after every other transaction in its block.
+    // after every transaction in its block except the fee and clock transactions, which already
+    // run the new code.
     let last_index = user_txs.len().checked_sub(1);
     if let Some(tx_index) = user_txs.iter().enumerate().position(|(index, tx)| {
         common::system_upgrades::is_system_upgrader_tx(tx) && Some(index) != last_index
@@ -1029,6 +1030,69 @@ mod tests {
             err,
             BlockIngestError::MissedSystemUpgrade { name } if name == "clock"
         ));
+    }
+
+    #[test]
+    fn a_clock_upgrade_runs_its_own_activation_blocks_tick() {
+        use program_loader_core::LoaderActorState as _;
+        use system_upgrader_core::{
+            Message, Registry, ScheduledUpgrade, loader_actor, registry_account_id, registry_actor,
+        };
+
+        // `ping_receiver` can't handle the clock's tick, so the first tick it runs fails.
+        let new_code = programs::ping_receiver();
+        let user_elf = new_code.user_elf().unwrap();
+        let ids: Vec<AccountId> = (0..program_loader_core::segment_count(&user_elf))
+            .map(|i| AccountId::new([0x40_u8.wrapping_add(u8::try_from(i).unwrap()); 32]))
+            .collect();
+        let segments = program_loader_core::build_segments(&user_elf, &ids).unwrap();
+        let mut registry = common::system_upgrades::registry(&initial_state(true)).unwrap();
+        registry.programs.insert(
+            clock_core::CLOCK_NAME,
+            Some(ScheduledUpgrade {
+                first_segment: ids[0],
+                image_id: new_code.id(),
+                immutable: false,
+                activation_height: 1,
+            }),
+        );
+        let mut state = initial_state(true)
+            .with_public_accounts([(
+                registry_account_id(),
+                lee::Account::default().with_actor_state(
+                    SYSTEM_UPGRADER_ACCOUNT_ID,
+                    Registry::to_bytes(&registry).into(),
+                ),
+            )])
+            .with_public_accounts(ids.iter().zip(segments).map(|(id, segment)| {
+                (
+                    *id,
+                    lee::Account::default().with_actor_state(
+                        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+                        segment.to_loader_actor_state().into(),
+                    ),
+                )
+            }));
+        let apply = LeeTransaction::Public(PublicTransaction::new(
+            public_transaction::Message::try_new(
+                registry_actor(),
+                [registry_actor(), loader_actor(&clock_core::CLOCK_NAME)],
+                BTreeMap::new(),
+                Message::Apply {
+                    name: clock_core::CLOCK_NAME,
+                    activation_height: 1,
+                },
+            )
+            .unwrap(),
+            public_transaction::WitnessSet::from_raw_parts(vec![]),
+        ));
+
+        let err =
+            apply_block(None, &block_with(vec![apply]), &mut state).expect_err("should reject");
+        assert!(
+            matches!(err, BlockIngestError::StateTransition { tx_index: 2, .. }),
+            "the Apply and the fee settle; the clock's tick fails: {err:?}"
+        );
     }
 
     #[test]
