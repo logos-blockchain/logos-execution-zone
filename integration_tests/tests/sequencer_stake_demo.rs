@@ -8,8 +8,12 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use common::HashType;
-use integration_tests::{account_balance, get_account, new_account};
+use common::{
+    HashType,
+    block::Block,
+    transaction::{FeePayee, LeeTransaction, fee_invocation_payee},
+};
+use integration_tests::{account_balance, get_account, new_account, wait_for_same_chain};
 use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey, program::Program};
 use log::info;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, UnsecuredEd25519Key};
@@ -180,44 +184,29 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     .await?;
     info!("Joining sequencer synced to block {joined_at}");
 
-    // A tip past `joined_at` under the demo key is a block this node built.
-    poll_until("the joining sequencer to build a block on its turn", 180, {
-        let observer = &observer;
-        let ctx = &ctx;
+    // A block's fee transaction pays its producer's ownership account, and the leader holds the
+    // joiner's blocks only once Bedrock carries them.
+    poll_until("a block built by the joining sequencer to land", 180, {
+        let leader_client = ctx.sequencer_client();
         move || async move {
-            let Some(accredited) = observer.ask(GetAccreditedKeys { channel_id }).await? else {
-                return Ok(false);
-            };
-            Ok(accredited.whose_turn() == Some(demo_sequencer_key)
-                && ctx.sequencer_client().get_last_block_id().await? > joined_at)
+            let tip = leader_client.get_last_block_id().await?;
+            for id in joined_at.saturating_add(1)..=tip {
+                let block = leader_client.get_block(id).await?;
+                if block.as_ref().and_then(producer_account) == Some(ownership_id) {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
         }
     })
     .await?;
-    info!("Joining sequencer produced a block on its round-robin turn");
+    info!("A block built by the joining sequencer landed on the leader's chain");
 
     // Both nodes agree, block for block, over everything they share.
-    let leader_client = ctx.sequencer_client();
-    let common = leader_client
-        .get_last_block_id()
-        .await?
-        .min(joiner_client.get_last_block_id().await?);
-    for id in 1..=common {
-        let leader_block = leader_client
-            .get_block(id)
-            .await?
-            .with_context(|| format!("Leader is missing block {id}"))?;
-        let joiner_block = joiner_client
-            .get_block(id)
-            .await?
-            .with_context(|| format!("Joining sequencer is missing block {id}"))?;
-        anyhow::ensure!(
-            leader_block.header.hash == joiner_block.header.hash,
-            "Chain divergence at block {id}: leader {:?} vs joiner {:?}",
-            leader_block.header.hash,
-            joiner_block.header.hash
-        );
-    }
-    info!("Leader and joining sequencer agree on all {common} shared blocks");
+    wait_for_same_chain(ctx.sequencer_client(), &joiner_client)
+        .await
+        .context("Leader (A) and joining sequencer (B) disagree on the chain")?;
+    info!("Leader and joining sequencer agree on their shared blocks");
 
     // Exit flow: full UnstakeRequest, wait for the committee removal to land on
     // Bedrock, then check the sequencer's own FinalizeUnstake releases the stake.
@@ -340,6 +329,16 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     );
 
     Ok(())
+}
+
+/// The account `block` pays its producer, read from its fee transaction, which is second to last.
+fn producer_account(block: &Block) -> Option<AccountId> {
+    let transactions = &block.body.transactions;
+    let LeeTransaction::Public(fee_tx) = transactions.get(transactions.len().checked_sub(2)?)?
+    else {
+        return None;
+    };
+    fee_invocation_payee(fee_tx).map(FeePayee::producer)
 }
 
 /// The `sequencer_stake` config entry for `sequencer_key`, or `None` if the key
