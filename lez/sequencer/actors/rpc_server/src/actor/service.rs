@@ -16,7 +16,7 @@ use sequencer_service_protocol::{
     CommitmentSetDigest, CrossZoneDeadLetter, CrossZoneDeadLetterReport,
     CrossZoneDeadLetterRequeue, EncryptedNote, FeeStateQuote, HashType, HexBytes, MembershipProof,
     Nonce, PageLimit, ProgramId, Publication, SequencerPublicKey, SequencerStatus, SystemProposal,
-    SystemProposalApproval, SystemProposalReport,
+    SystemProposalApproval, SystemProposalReport, TransactionReceipt,
 };
 use tracing::debug;
 
@@ -169,6 +169,16 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
     ) -> Result<Option<(LeeTransaction, BlockId)>, ErrorObjectOwned> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetTransaction { tx_hash })
+            .await
+            .map_err(map_executor_error)
+    }
+
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: HashType,
+    ) -> Result<Option<TransactionReceipt>, ErrorObjectOwned> {
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::GetTransactionReceipt { tx_hash })
             .await
             .map_err(map_executor_error)
     }

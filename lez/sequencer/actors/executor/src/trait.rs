@@ -1,4 +1,7 @@
-use common::{block::Block, transaction::LeeTransaction};
+use common::{
+    block::{Block, TransactionReceipt},
+    transaction::LeeTransaction,
+};
 use kameo::{Actor, message::Message, reply::DelegatedReply};
 use lee::Account;
 use lee_core::{
@@ -16,9 +19,9 @@ use crate::{
         GetAccountView, GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
         GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetMessagePath,
         GetProofsAndRoot, GetProofsAndRootReply, GetPublications, GetRecoveryBinding, GetStatus,
-        GetSystemProposals, GetSystemProposalsReply, GetTransaction, ProduceBlock,
-        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, SubmitSystemApproval,
-        Transaction,
+        GetSystemProposals, GetSystemProposalsReply, GetTransaction, GetTransactionReceipt,
+        ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
+        SubmitSystemApproval, Transaction,
     },
 };
 
@@ -31,6 +34,7 @@ pub trait ExecutorActorTrait:
     + Message<GetLastBlockId, Reply = Result<BlockId>>
     + Message<GetAccountBalance, Reply = Result<Balance>>
     + Message<GetTransaction, Reply = Result<Option<(LeeTransaction, BlockId)>>>
+    + Message<GetTransactionReceipt, Reply = Result<Option<TransactionReceipt>>>
     + Message<GetAccountNonces, Reply = Result<Vec<Nonce>>>
     + Message<GetProofsAndRoot, Reply = Result<GetProofsAndRootReply>>
     + Message<GetAccount, Reply = Result<Option<Account>>>
