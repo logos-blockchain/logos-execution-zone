@@ -8,7 +8,7 @@ use crate::{
     HeadAuthError, ValidatedStateDiff, authenticate_privacy_transaction_at_head,
     authenticate_public_transaction_at_head,
     public_transaction::WitnessEntry,
-    signature::{AuthError, authenticate, current_key},
+    signature::{AuthError, WOTS_LEAVES, authenticate, current_key},
 };
 
 const FEE: Balance = 5;
@@ -48,7 +48,7 @@ fn tampered_reason(auth_data: &[u8], position: usize) -> &'static str {
             "malformed authentication data"
         };
     }
-    if position == INITIAL_KEY_LEN && auth_data[position] >= wots_tree::LEAVES {
+    if position == INITIAL_KEY_LEN && auth_data[position] >= WOTS_LEAVES {
         return "malformed authentication data";
     }
     "invalid signature"

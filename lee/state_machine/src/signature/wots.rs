@@ -1,12 +1,14 @@
 use std::fmt;
 
 use lee_core::signing_key::{KeyCommitment, KeyType};
-use wots_tree::{AUTH_LEN, PUBLIC_KEY_LEN, Tree};
 
+use self::tree::{AUTH_LEN, PUBLIC_KEY_LEN, Tree};
 use super::{AuthError, KeyScheme, SignatureError, SignatureScheme};
 
+mod tree;
+
 /// Leaves in each nonce's tree: one-time keys an account may sign with at that nonce.
-pub const WOTS_LEAVES: u8 = wots_tree::LEAVES;
+pub const WOTS_LEAVES: u8 = tree::LEAVES;
 
 /// A tree of WOTS+ one-time keys in direct mode: the account stores the tree's public key
 /// `PK.seed || root` as is, and the witness carries the signature alone.
@@ -36,10 +38,10 @@ impl WotsSecretKey {
     ///
     /// # Panics
     ///
-    /// If `leaf` is not below [`wots_tree::LEAVES`].
+    /// If `leaf` is not below [`WOTS_LEAVES`].
     #[must_use]
     pub fn with_leaf(mut self, leaf: u8) -> Self {
-        assert!(leaf < wots_tree::LEAVES, "leaf index out of range");
+        assert!(leaf < WOTS_LEAVES, "leaf index out of range");
         self.leaf = leaf;
         self
     }
@@ -65,7 +67,7 @@ impl SignatureScheme for Wots {
         message: &[u8; 32],
         sig: &WotsAuthData,
     ) -> Result<(), SignatureError> {
-        wots_tree::verify(pk, message, sig).map_err(|_err| SignatureError)
+        tree::verify(pk, message, sig).map_err(|_err| SignatureError)
     }
 }
 
@@ -86,7 +88,7 @@ impl KeyScheme for Wots {
         key_commitment: &KeyCommitment,
         auth_data: &WotsAuthData,
     ) -> Result<(WotsPublicKey, WotsAuthData), AuthError> {
-        wots_tree::precheck(auth_data).map_err(|_err| AuthError::Malformed)?;
+        tree::precheck(auth_data).map_err(|_err| AuthError::Malformed)?;
         Ok((*key_commitment, *auth_data))
     }
 }
@@ -134,7 +136,7 @@ mod tests {
     fn precheck_rejects_an_out_of_range_leaf_before_verification() {
         let (sk, pk) = Wots::keygen(&[7; 32]);
         let mut auth = Wots::sign(&sk, &[1; 32]);
-        auth[0] = wots_tree::LEAVES;
+        auth[0] = WOTS_LEAVES;
         assert_eq!(Wots::precheck(&pk, &auth), Err(AuthError::Malformed));
     }
 }

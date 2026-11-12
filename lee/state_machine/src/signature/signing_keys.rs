@@ -132,7 +132,7 @@ impl Signer {
     ///
     /// # Panics
     ///
-    /// If `leaf` is not below [`wots_tree::LEAVES`].
+    /// If `leaf` is not below [`WOTS_LEAVES`](super::WOTS_LEAVES).
     #[must_use]
     pub fn with_leaf(mut self, leaf: u8) -> Self {
         if let SigningSecret::Wots(sk) = self.secret {

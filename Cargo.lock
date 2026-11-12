@@ -1062,7 +1062,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdd35008169921d80bc60d3d0ab416eecb028c4cd653352907921d95084790be"
 dependencies = [
  "hybrid-array",
- "zeroize",
 ]
 
 [[package]]
@@ -2715,7 +2714,6 @@ dependencies = [
  "block-buffer 0.12.0",
  "crypto-common 0.2.2",
  "ctutils",
- "zeroize",
 ]
 
 [[package]]
@@ -5549,11 +5547,11 @@ dependencies = [
  "serde",
  "serde_with",
  "sha2 0.10.9",
+ "slh-dsa",
  "test-case",
  "test_guest_core",
  "test_methods",
  "thiserror 2.0.18",
- "wots_tree",
  "zeroize",
 ]
 
@@ -11710,7 +11708,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 [[package]]
 name = "slh-dsa"
 version = "0.2.0-rc.5"
-source = "git+https://github.com/jonesmarvin8/signatures.git?rev=9cd435e884b808ce05a8204cd098ed70ab9b53ef#9cd435e884b808ce05a8204cd098ed70ab9b53ef"
+source = "git+https://github.com/jonesmarvin8/signatures.git?rev=af82a5d4d0f9a15489389135cc813ff1b6750b99#af82a5d4d0f9a15489389135cc813ff1b6750b99"
 dependencies = [
  "const-oid 0.10.2",
  "digest 0.11.3",
@@ -14396,16 +14394,6 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
-]
-
-[[package]]
-name = "wots_tree"
-version = "0.1.0"
-source = "git+https://github.com/jonesmarvin8/signatures.git?rev=9cd435e884b808ce05a8204cd098ed70ab9b53ef#9cd435e884b808ce05a8204cd098ed70ab9b53ef"
-dependencies = [
- "sha2 0.11.1",
- "slh-dsa",
- "zeroize",
 ]
 
 [[package]]
