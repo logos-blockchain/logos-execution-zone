@@ -534,7 +534,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         if settled_deliveries {
             self.record_dead_letter_gauge().await;
             record_pending_dispatch_gauge(&self.storage_ref).await;
-            record_pending_dispatch_gauge(&self.storage_ref).await;
         }
 
         log_recorded_deposits(&outcome);
