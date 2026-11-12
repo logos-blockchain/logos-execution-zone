@@ -46,8 +46,6 @@ struct Ingest {
     chain: ChainState,
     /// The last slot whose messages are all folded.
     read: Option<Slot>,
-    /// The last message folded, which the next one chains on.
-    parent: MsgId,
     /// The stored message a restart resumes after, until it is re-read.
     resume: Option<(MsgId, Slot)>,
     /// Settled blocks not yet stored, in order.
@@ -98,9 +96,6 @@ impl Ingest {
     /// Folds the finalized `entries` with the L1 LIB at `lib`, and queues the
     /// blocks that settle. Every finalized entry up to `lib` must be folded by then.
     fn fold(&mut self, entries: &[ChannelEntry], lib: Slot) {
-        if let Some(last) = entries.last() {
-            self.parent = last.msg;
-        }
         let folded = self.chain.apply_finalized(entries, lib);
         for outcome in &folded.judged {
             let block_id = outcome.block.header.block_id;
@@ -468,7 +463,6 @@ impl IndexerCore {
         };
         Ok(Ingest {
             read: resume.and_then(|(_, slot)| slot.checked_sub(Slot::from(1))),
-            parent: chain.final_msg(),
             resume,
             chain,
             settled: VecDeque::new(),
@@ -671,6 +665,7 @@ impl IndexerCore {
 
                     let mut read = Some(batch.watermark);
                     let mut entries: Vec<ChannelEntry> = Vec::new();
+                    let final_msg = ingest.chain.final_msg();
                     for (msg, slot) in batch.messages {
                         let zone_block = match msg {
                             ZoneMessage::Block(b) => b,
@@ -697,7 +692,7 @@ impl IndexerCore {
                         };
                         entries.push(ChannelEntry {
                             msg: zone_block.id,
-                            parent: entries.last().map_or(ingest.parent, |entry| entry.msg),
+                            parent: entries.last().map_or(final_msg, |entry| entry.msg),
                             signer: (!zone_block.signer.is_weak())
                                 .then(|| zone_block.signer.to_bytes()),
                             slot: Some(slot),
