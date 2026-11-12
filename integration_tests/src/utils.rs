@@ -34,6 +34,8 @@ const PHASE_TIMEOUT: Duration = Duration::from_secs(360);
 /// Bound on the indexer's status snapshot: it goes into an error message, so it cannot wait long.
 const INDEXER_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// Maximum time two sequencers may disagree at their unfinalized tips.
+const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub fn no_seal(_body: &MessageBody) -> Result<RecipientEncryption, lee::error::LeeError> {
     Err(lee::error::LeeError::InvalidInput(
@@ -117,6 +119,21 @@ pub async fn assert_same_chain(a: &SequencerClient, b: &SequencerClient) -> Resu
     Ok(())
 }
 
+/// Waits for A and B to agree over their common prefix, since both may build the same height at a
+/// turn boundary until Bedrock keeps one of them.
+pub async fn wait_for_same_chain(a: &SequencerClient, b: &SequencerClient) -> Result<()> {
+    let started = tokio::time::Instant::now();
+    loop {
+        match assert_same_chain(a, b).await {
+            Ok(()) => return Ok(()),
+            Err(err) if started.elapsed() >= CONVERGENCE_TIMEOUT => {
+                return Err(err.context("A and B never converged on one chain"));
+            }
+            Err(_) => tokio::time::sleep(POLL_INTERVAL).await,
+        }
+    }
+}
+
 /// Create a private or public account at the given chain index and return its ID.
 /// Pass `cci: None` to use the wallet's next available chain index.
 pub async fn new_account(
@@ -146,7 +163,7 @@ pub async fn send(
     from: CliAccountMention,
     to: CliAccountMention,
     amount: u128,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<HashType> {
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
         from,
         to: Some(to),
@@ -156,8 +173,12 @@ pub async fn send(
         to_pk: None,
         amount,
     });
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-    Ok(())
+    let SubcommandReturnValue::TransactionExecuted { tx_hash } =
+        wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?
+    else {
+        anyhow::bail!("a send returns its transaction hash");
+    };
+    Ok(tx_hash)
 }
 
 /// A fresh private account holding `amount`, funded from the context's first public account and
@@ -260,6 +281,15 @@ pub async fn receive_pending(ctx: &mut TestContext) -> anyhow::Result<()> {
         .await?;
     }
     Ok(())
+}
+
+/// The bytes the included privacy-preserving transaction `tx_hash` is charged storage for.
+pub async fn charged_bytes(ctx: &TestContext, tx_hash: HashType) -> u64 {
+    common::transaction::LeeTransaction::PrivacyPreserving(
+        test_fixtures::fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await,
+    )
+    .charged_bytes()
+    .expect("a transaction serializes")
 }
 
 /// Look up a restored private account for `account_id`, panicking with `label` if absent.

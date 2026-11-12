@@ -131,9 +131,21 @@ pub fn build_genesis_state(
     // config actor state would be left for whoever calls it first. The inbox's is
     // receiving-zones-only.
     let cross_zone_declared = spec.cross_zone.as_ref();
+    let seeds_bridge_lock = seeds_a_bridge_lock_account(&spec.actions);
     assert!(
-        cross_zone_declared.is_some() || bridge_lock_holdings(&spec.actions).next().is_none(),
-        "SupplyBridgeLockHolding requires cross_zone to be configured: bridge_lock is not registered on this zone"
+        cross_zone_declared.is_some() || !seeds_bridge_lock,
+        "seeding a bridge_lock account requires cross_zone to be configured: bridge_lock is not registered on this zone"
+    );
+    assert!(
+        cross_zone_declared.is_some_and(|cross_zone| !cross_zone.lock_target_zones.is_empty())
+            || !seeds_bridge_lock,
+        "seeding a bridge_lock account requires cross_zone.lock_target_zones to name a zone: the seeded holdings could never be locked anywhere"
+    );
+    // The inbox refuses a dispatch whose source is this zone, so nothing could ever mint it.
+    assert!(
+        !cross_zone_declared
+            .is_some_and(|cross_zone| cross_zone.lock_target_zones.contains(&spec.channel_id)),
+        "cross_zone.lock_target_zones must not name this zone: a lock to it could never be delivered"
     );
     let cross_zone_config_txs = cross_zone_declared
         .map(|cross_zone| {
@@ -141,7 +153,7 @@ pub fn build_genesis_state(
                 cross_zone::build_wrapped_token_init_config_tx(cross_zone),
                 cross_zone::build_ping_sender_init_config_tx(),
                 cross_zone::build_ping_receiver_init_config_tx(cross_zone),
-                cross_zone::build_bridge_lock_init_config_tx(),
+                cross_zone::build_bridge_lock_init_config_tx(cross_zone),
             ]
         })
         .into_iter()
@@ -349,15 +361,19 @@ pub fn sign_genesis_stake(
     Signature::new(ownership_key, &message.hash())
 }
 
-/// Bridge-lock holder balances configured for this zone's genesis.
-fn bridge_lock_holdings(
-    genesis: &[GenesisAction],
-) -> impl Iterator<Item = (AccountId, BridgeAmount)> + '_ {
-    genesis.iter().filter_map(|action| match action {
-        GenesisAction::SupplyBridgeLockHolding { holder, amount } => Some((*holder, *amount)),
-        GenesisAction::SupplyAccount { .. }
-        | GenesisAction::SupplyPrivateAccount { .. }
-        | GenesisAction::StakeSequencer { .. } => None,
+/// Whether genesis funds an account under `bridge_lock`, under either spelling:
+/// a `SupplyAccount` at the holding PDA builds the transaction
+/// `SupplyBridgeLockHolding` builds, so reading one action leaves the other
+/// unguarded.
+fn seeds_a_bridge_lock_account(genesis: &[GenesisAction]) -> bool {
+    genesis.iter().any(|action| match action {
+        GenesisAction::SupplyBridgeLockHolding { .. } => true,
+        GenesisAction::SupplyAccount { recipient, .. } => matches!(
+            recipient,
+            DepositRecipient::Identified(PublicAccountEvidence::Pda { program, .. })
+                if *program == programs::bridge_lock_account_id()
+        ),
+        GenesisAction::SupplyPrivateAccount { .. } | GenesisAction::StakeSequencer { .. } => false,
     })
 }
 
@@ -489,4 +505,73 @@ fn founding_stakes(genesis: &[GenesisAction]) -> Vec<FoundingStake> {
             | GenesisAction::SupplyBridgeLockHolding { .. } => None,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec(cross_zone: CrossZoneConfig, actions: Vec<GenesisAction>) -> GenesisSpec {
+        GenesisSpec {
+            channel_id: [1; 32],
+            channel_params: ChannelParams {
+                minimum_sequencer_stake: system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE,
+                posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
+                posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
+                exit_delay: system_accounts::DEFAULT_SEQUENCER_EXIT_DELAY,
+                max_block_size: system_accounts::DEFAULT_MAX_BLOCK_SIZE,
+            },
+            cross_zone: Some(cross_zone),
+            actions,
+        }
+    }
+
+    fn locks_nowhere() -> CrossZoneConfig {
+        CrossZoneConfig {
+            peers: Vec::new(),
+            lock_target_zones: Vec::new(),
+            source_authority: None,
+            source_governance: None,
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "could never be locked anywhere")]
+    fn seeding_a_holding_without_a_lock_target_zone_is_refused() {
+        let _genesis = build_genesis_state(&spec(
+            locks_nowhere(),
+            vec![GenesisAction::SupplyBridgeLockHolding {
+                holder: AccountId::new([9; 32]),
+                amount: 1_000,
+            }],
+        ));
+    }
+
+    /// `SupplyAccount` at the holding PDA builds what `SupplyBridgeLockHolding`
+    /// builds, so the guard has to read both or the operator just spells it the
+    /// other way.
+    #[test]
+    #[should_panic(expected = "could never be locked anywhere")]
+    fn supplying_a_bridge_lock_pda_directly_is_refused_too() {
+        let _genesis = build_genesis_state(&spec(
+            locks_nowhere(),
+            vec![GenesisAction::SupplyAccount {
+                recipient: DepositRecipient::Identified(PublicAccountEvidence::Pda {
+                    program: programs::bridge_lock_account_id(),
+                    seed: bridge_lock_core::holding_seed(&[9; 32]),
+                }),
+                balance: 1_000,
+            }],
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "must not name this zone")]
+    fn pinning_this_zone_as_a_lock_target_is_refused() {
+        let cross_zone = CrossZoneConfig {
+            lock_target_zones: vec![[1; 32]],
+            ..locks_nowhere()
+        };
+        let _genesis = build_genesis_state(&spec(cross_zone, Vec::new()));
+    }
 }

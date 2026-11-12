@@ -37,7 +37,7 @@ pub struct IndexerConfig {
     pub channel_id: ChannelId,
     /// Presence selects the genesis program set, must match the sequencer's, and
     /// cannot change on an existing chain. `None` also disables the verifier; a
-    /// source-only zone declares `"cross_zone": {}`.
+    /// source-only zone declares `"cross_zone": {"lock_target_zones": []}`.
     #[serde(default)]
     pub cross_zone: Option<CrossZoneConfig>,
     /// Hex hashes of local blocks accepted without cross-zone verification: a

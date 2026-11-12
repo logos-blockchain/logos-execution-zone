@@ -1,4 +1,8 @@
-use std::{fmt::Display, time::Duration};
+use std::{
+    fmt::Display,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use kameo::{
     Actor, Reply,
@@ -214,6 +218,56 @@ async fn spawn_is_rejected_for_a_key_already_routed_to() {
 
     assert!(!pool.ask(Spawn { key: 1 }).await.expect("Failed to spawn"));
     assert_eq!(increment(&pool, 1).await, Observed { key: 1, count: 2 });
+}
+
+#[tokio::test]
+async fn the_spawn_hook_sees_a_worker_per_key() {
+    let spawned = Arc::new(Mutex::new(Vec::new()));
+    let spawned_clone = Arc::clone(&spawned);
+    let pool = ShardingPoolActor::spawn(
+        ShardingPoolActor::new(
+            RestartConfig {
+                policy: RestartPolicy::Never,
+                limit: 0,
+                within: Duration::ZERO,
+            },
+            Counter::fresh,
+        )
+        .with_on_worker_spawned(move |worker| spawned_clone.lock().unwrap().push(worker.id())),
+    );
+
+    increment(&pool, 1).await;
+    increment(&pool, 1).await;
+    increment(&pool, 2).await;
+
+    let spawned = spawned.lock().unwrap();
+    assert_eq!(spawned.len(), 2, "{spawned:?}");
+    assert_ne!(spawned[0], spawned[1]);
+}
+
+#[tokio::test]
+async fn the_spawn_hook_skips_a_restarted_worker() {
+    let _err = env_logger::try_init();
+
+    let spawned = Arc::new(Mutex::new(0_u32));
+    let spawned_clone = Arc::clone(&spawned);
+    let pool = ShardingPoolActor::spawn(
+        ShardingPoolActor::<TickingBomb, TickShardingKey>::new(
+            RestartConfig {
+                policy: RestartPolicy::Permanent,
+                limit: 1,
+                within: Duration::from_mins(1),
+            },
+            |TickShardingKey| 2,
+        )
+        .with_on_worker_spawned(move |_worker| *spawned_clone.lock().unwrap() += 1),
+    );
+
+    assert_eq!(pool.ask(Tick).await, Ok(()));
+    // Explodes, and is restarted.
+    assert_eq!(pool.ask(Tick).await, Ok(()));
+
+    assert_eq!(*spawned.lock().unwrap(), 1);
 }
 
 #[tokio::test]

@@ -1,9 +1,12 @@
 //! One module per dashboard, each exposing a `dashboard()` builder.
 
+pub mod actors;
 pub mod network;
 pub mod sequencer;
 
-/// Tag on every sequencer dashboard, which their top-bar links list.
+/// Tag on every dashboard, which their top-bar links list. Titles go without
+/// a "Sequencer" prefix; this tag and the uids carry it instead, keeping our
+/// dashboards apart in a Grafana shared with others.
 const TAG: &str = "sequencer";
 
 /// Matchers picking warnings and errors out of the logs, by the `level` label

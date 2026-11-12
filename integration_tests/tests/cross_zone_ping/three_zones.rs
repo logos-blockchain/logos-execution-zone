@@ -57,6 +57,7 @@ fn ping_route_peer(channel: [u8; 32]) -> CrossZonePeer {
 const fn watching(peers: Vec<CrossZonePeer>) -> CrossZoneConfig {
     CrossZoneConfig {
         peers,
+        lock_target_zones: Vec::new(),
         source_authority: None,
         source_governance: None,
     }
