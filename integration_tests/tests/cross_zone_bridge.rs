@@ -31,7 +31,7 @@ use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute, Gen
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder,
-    config::{MultiNodeTestContextConfig, source_only_cross_zone},
+    config::{MultiNodeTestContextConfig, source_only_cross_zone_locking_to},
 };
 use tokio::test;
 
@@ -43,7 +43,11 @@ const RECIPIENT: [u8; 32] = [9; 32];
 
 #[test]
 async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
-    let partial = SequencerPartialConfig::default();
+    let partial = SequencerPartialConfig {
+        // Covers the storage price doubling at the devnet's first epoch rotations.
+        priority_fee_percent: 150,
+        ..SequencerPartialConfig::default()
+    };
     let channel_a = config::bedrock_channel_id();
     let channel_b = config::bedrock_channel_id_b();
     let zone_b: [u8; 32] = *channel_b.as_ref();
@@ -64,6 +68,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
             genesis_hash: None,
             emitters: vec![],
         }],
+        lock_target_zones: Vec::new(),
         source_authority: None,
         source_governance: None,
     };
@@ -84,7 +89,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
             .disable_wallet()
             .with_sequencer_partial_config(partial)
             .with_genesis(genesis_a)
-            .with_cross_zone(Some(source_only_cross_zone())),
+            .with_cross_zone(Some(source_only_cross_zone_locking_to(vec![zone_b]))),
         )
         .with_zone(
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig {

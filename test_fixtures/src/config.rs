@@ -6,13 +6,11 @@ use key_protocol::key_management::{KeyChain, secret_holders::SeedHolder};
 use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey};
 use logos_blockchain_key_management_system_service::keys::{UnsecuredEd25519Key, ZkPublicKey};
 use num_bigint::BigUint;
-use sequencer_core::{
-    config::{
-        BedrockConfig, ChannelParams, CrossZoneConfig, DepositRecipient, GenesisAction,
-        GenesisConfig, GossipConfig, SequencerConfig,
-    },
-    sign_genesis_stake,
+use sequencer_core::config::{
+    BedrockConfig, ChannelParams, CrossZoneConfig, DepositRecipient, GenesisAction, GenesisConfig,
+    GossipConfig, SequencerConfig,
 };
+use sequencer_genesis::sign_genesis_stake;
 use sequencer_stake_core::SequencerKey;
 use url::Url;
 use wallet::config::{SequencerConnectionData, WalletConfig};
@@ -176,6 +174,7 @@ pub fn sequencer_config(
             auth: None,
             priority_fee_percent,
             stale_refund_slots: 0,
+            backfill_batch_slots: sequencer_core::config::default_backfill_batch_slots(),
         },
         cross_zone,
         metrics_listen_address: Some(SequencerConfig::DEFAULT_METRICS_LISTEN_ADDRESS),
@@ -342,6 +341,7 @@ pub fn indexer_config(
         channel_id,
         cross_zone,
         peer_block_cache_window: NonZeroU32::new(1024).expect("1024 is nonzero"),
+        backfill_batch_slots: indexer_service::default_backfill_batch_slots(),
         allow_chain_reset: false,
         event_filter: EventFilterConfig::Archival,
     })
@@ -462,13 +462,23 @@ pub const fn bedrock_funding_key_id() -> &'static str {
     BEDROCK_FUNDING_KEY_HEX
 }
 
-/// A source-only zone: programs registered, `InitConfig`s emitted, nobody watched.
+/// A source-only zone: programs registered, `InitConfig`s emitted, nobody
+/// watched and nowhere to lock to.
 #[must_use]
 pub const fn source_only_cross_zone() -> CrossZoneConfig {
     CrossZoneConfig {
         peers: Vec::new(),
+        lock_target_zones: Vec::new(),
         source_authority: None,
         source_governance: None,
+    }
+}
+
+#[must_use]
+pub fn source_only_cross_zone_locking_to(lock_target_zones: Vec<[u8; 32]>) -> CrossZoneConfig {
+    CrossZoneConfig {
+        lock_target_zones,
+        ..source_only_cross_zone()
     }
 }
 

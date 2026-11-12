@@ -45,6 +45,8 @@ api:
   backend:
     listen_address: 0.0.0.0:18080
     cors_origins: []
+    # The compose service name, which the other containers reach the node by.
+    allowed_hosts: [logos-blockchain-node-0]
     timeout: 30s
     max_body_size: 10485760
     max_concurrent_requests: 500
