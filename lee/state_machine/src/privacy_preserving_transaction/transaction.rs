@@ -4,18 +4,22 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::account::AccountId;
 use sha2::{Digest as _, digest::FixedOutput as _};
 
-use super::{message::Message, witness_set::WitnessSet};
+use super::{
+    circuit::{Proof, ProofDigest},
+    message::Message,
+    witness_set::WitnessSet,
+};
 use crate::InvalidTransaction;
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct PrivacyPreservingTransaction {
+pub struct PrivacyPreservingTransaction<P = Proof> {
     pub message: Message,
-    pub witness_set: WitnessSet,
+    pub witness_set: WitnessSet<P>,
 }
 
-impl PrivacyPreservingTransaction {
+impl<P> PrivacyPreservingTransaction<P> {
     #[must_use]
-    pub const fn new(message: Message, witness_set: WitnessSet) -> Self {
+    pub const fn new(message: Message, witness_set: WitnessSet<P>) -> Self {
         Self {
             message,
             witness_set,
@@ -28,16 +32,8 @@ impl PrivacyPreservingTransaction {
     }
 
     #[must_use]
-    pub const fn witness_set(&self) -> &WitnessSet {
+    pub const fn witness_set(&self) -> &WitnessSet<P> {
         &self.witness_set
-    }
-
-    #[must_use]
-    pub fn hash(&self) -> [u8; 32] {
-        let bytes = self.to_bytes();
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(&bytes);
-        hasher.finalize_fixed().into()
     }
 
     pub fn check_stateless(&self) -> Result<Vec<AccountId>, InvalidTransaction> {
@@ -66,6 +62,34 @@ impl PrivacyPreservingTransaction {
         acc_set.extend(self.message.public_account_ids());
 
         acc_set.into_iter().collect()
+    }
+}
+
+impl PrivacyPreservingTransaction<ProofDigest> {
+    #[must_use]
+    pub fn hash(&self) -> [u8; 32] {
+        let bytes = borsh::to_vec(self).expect("Autoderived borsh serialization failure");
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(&bytes);
+        hasher.finalize_fixed().into()
+    }
+}
+
+impl PrivacyPreservingTransaction {
+    #[must_use]
+    pub fn digested(&self) -> PrivacyPreservingTransaction<ProofDigest> {
+        PrivacyPreservingTransaction {
+            message: self.message.clone(),
+            witness_set: WitnessSet {
+                signatures_and_public_keys: self.witness_set.signatures_and_public_keys.clone(),
+                proof: self.witness_set.proof.digest(),
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn hash(&self) -> [u8; 32] {
+        self.digested().hash()
     }
 }
 

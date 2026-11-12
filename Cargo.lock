@@ -6096,6 +6096,7 @@ dependencies = [
  "libp2p-mdns",
  "libp2p-metrics",
  "libp2p-quic",
+ "libp2p-request-response",
  "libp2p-swarm",
  "libp2p-tcp",
  "libp2p-upnp",
@@ -11416,6 +11417,7 @@ name = "sequencer_gossip_actor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "borsh",
  "common",
  "futures",

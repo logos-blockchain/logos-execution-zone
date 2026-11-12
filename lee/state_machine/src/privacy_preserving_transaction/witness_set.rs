@@ -6,14 +6,14 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct WitnessSet {
+pub struct WitnessSet<P = Proof> {
     pub(crate) signatures_and_public_keys: Vec<(Signature, PublicKey)>,
-    pub(crate) proof: Proof,
+    pub(crate) proof: P,
 }
 
-impl WitnessSet {
+impl<P> WitnessSet<P> {
     #[must_use]
-    pub fn for_message(message: &Message, proof: Proof, private_keys: &[&PrivateKey]) -> Self {
+    pub fn for_message(message: &Message, proof: P, private_keys: &[&PrivateKey]) -> Self {
         let message_hash = message.hash();
         let signatures_and_public_keys = private_keys
             .iter()
@@ -47,19 +47,19 @@ impl WitnessSet {
     }
 
     #[must_use]
-    pub const fn proof(&self) -> &Proof {
+    pub const fn proof(&self) -> &P {
         &self.proof
     }
 
     #[must_use]
-    pub fn into_raw_parts(self) -> (Vec<(Signature, PublicKey)>, Proof) {
+    pub fn into_raw_parts(self) -> (Vec<(Signature, PublicKey)>, P) {
         (self.signatures_and_public_keys, self.proof)
     }
 
     #[must_use]
     pub const fn from_raw_parts(
         signatures_and_public_keys: Vec<(Signature, PublicKey)>,
-        proof: Proof,
+        proof: P,
     ) -> Self {
         Self {
             signatures_and_public_keys,

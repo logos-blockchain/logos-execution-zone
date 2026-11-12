@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee::{AccountId, Actor, V03State, ValidatedStateDiff};
+use lee::{
+    AccountId, Actor, V03State, ValidatedStateDiff,
+    privacy_preserving_transaction::circuit::{Proof, ProofDigest},
+};
 use lee_core::{
     BlockId, Timestamp, account::Balance, native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::TransactionEvent,
@@ -17,10 +20,12 @@ use crate::HashType;
     reason = "both variants are whole transactions whose bulk is on the heap; the inline \
               difference is a few hundred bytes, and boxing one would touch every match"
 )]
-pub enum LeeTransaction {
+pub enum LeeTransactionWith<P> {
     Public(lee::PublicTransaction),
-    PrivacyPreserving(lee::PrivacyPreservingTransaction),
+    PrivacyPreserving(lee::PrivacyPreservingTransaction<P>),
 }
+
+pub type LeeTransaction = LeeTransactionWith<Proof>;
 
 impl Serialize for LeeTransaction {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -50,6 +55,14 @@ impl LeeTransaction {
             Self::Public(tx) => tx.hash(),
             Self::PrivacyPreserving(tx) => tx.hash(),
         })
+    }
+
+    #[must_use]
+    pub fn digested(&self) -> LeeTransactionWith<ProofDigest> {
+        match self {
+            Self::Public(tx) => LeeTransactionWith::Public(tx.clone()),
+            Self::PrivacyPreserving(tx) => LeeTransactionWith::PrivacyPreserving(tx.digested()),
+        }
     }
 
     #[must_use]

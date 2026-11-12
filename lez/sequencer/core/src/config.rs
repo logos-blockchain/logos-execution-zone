@@ -40,6 +40,9 @@ pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 =
 pub const MAX_BEDROCK_TX_SIZE: u64 =
     logos_blockchain_core::block::MAX_BLOCK_TRANSACTIONS_SIZE as u64;
 
+/// Bytes of transaction proofs a node keeps in memory.
+pub const PROOF_STORE_CAPACITY: usize = 256 * 1024 * 1024;
+
 /// Smallest nonzero `stale_refund_slots`, since a shorter window orphans blocks before L1 can
 /// mine them.
 const MIN_STALE_REFUND_SLOTS: u64 = 50;

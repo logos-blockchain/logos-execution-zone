@@ -197,6 +197,7 @@ libp2p = { version = "0.56", features = [
   "macros",
   "mdns",
   "quic",
+  "request-response",
   "tokio",
 ] }
 aes-gcm = { version = "0.10.3", features = ["zeroize"] }

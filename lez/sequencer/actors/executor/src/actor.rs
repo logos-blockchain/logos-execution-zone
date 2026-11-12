@@ -23,8 +23,9 @@ use sequencer_actors_common::EraseMessage as _;
 use sequencer_bedrock_actor::BedrockActorTrait;
 use sequencer_core::{
     ChannelSigningActor, SequencerCore, SubmitConfig, TransactionOrigin,
-    config::SequencerConfig,
+    config::{PROOF_STORE_CAPACITY, SequencerConfig},
     gossip::{AccreditedKeysReceiver, MaxBlockSizeReceiver},
+    proof_store::ProofStore,
     task_group::TaskGroup,
 };
 use sequencer_slasher_actor::SlasherActor;
@@ -58,6 +59,7 @@ pub struct ExecutorActor<S: StorageActorTrait, B: BedrockActorTrait> {
     sequencer: SequencerCore<S, B>,
     storage_ref: ActorRef<S>,
     bedrock_ref: ActorRef<B>,
+    proofs: ProofStore,
 
     /// Whose turn it is to write: blocks are only produced in ours.
     turn: Turn,
@@ -109,6 +111,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
                 sequencer,
                 storage_ref,
                 bedrock_ref,
+                proofs: ProofStore::new(PROOF_STORE_CAPACITY),
                 turn: Turn::new(is_our_turn),
                 background_task,
                 failed_attempts: 0,
@@ -144,6 +147,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
     #[must_use]
     pub fn max_block_size_watch(&self) -> MaxBlockSizeReceiver {
         self.sequencer.max_block_size_watch()
+    }
+
+    /// The proofs the gossip mesh serves to peers.
+    #[must_use]
+    pub fn proof_store(&self) -> ProofStore {
+        self.proofs.clone()
     }
 }
 
@@ -255,6 +264,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
         }: Transaction,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        // Kept even if the screen below turns the transaction away: a peer's block may carry it.
+        if let LeeTransaction::PrivacyPreserving(tx) = &transaction {
+            self.proofs.insert(tx.witness_set().proof());
+        }
+
         // Fee admission against the head state, before the mempool sees it.
         // Advisory (base fees and balances move), but everything it turns
         // away would have been refused by the block builder anyway.

@@ -21,6 +21,9 @@ pub type MaxBlockSizeSender = watch::Sender<u64>;
 
 pub type MaxBlockSizeReceiver = watch::Receiver<u64>;
 
+/// Fetch a proof missing from the store from the connected peers.
+pub struct FetchProof(pub lee::privacy_preserving_transaction::circuit::ProofDigest);
+
 /// The mesh's accredited-key channel: `None` filters nothing, `Some` of an
 /// empty set filters everything.
 #[must_use]

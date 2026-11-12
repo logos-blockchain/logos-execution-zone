@@ -15,7 +15,12 @@ use logos_blockchain_core::proofs::channel_multi_sig_proof::IndexedSignature;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
 use mempool::{MemPool, MemPoolHandle};
 use sequencer_channel_signing_actor::{Signature, Wire};
-use sequencer_core::{TransactionOrigin, config::GossipConfig, gossip::accredited_keys_channel};
+use sequencer_core::{
+    TransactionOrigin,
+    config::{GossipConfig, PROOF_STORE_CAPACITY},
+    gossip::accredited_keys_channel,
+    proof_store::ProofStore,
+};
 use sequencer_slasher_actor::{Approval, Offence};
 use sequencer_stake_core::SequencerKey;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
@@ -221,6 +226,7 @@ async fn start_node(secret: [u8; 32], bootstrap: Vec<libp2p::Multiaddr>) -> (Tes
         sink_ref.recipient(),
         tokio::sync::watch::channel(TEST_MAX_BLOCK_SIZE).1,
         unscreened_mempool_submit(mempool_handle),
+        ProofStore::new(PROOF_STORE_CAPACITY),
         accredited_keys_channel().1,
         accredited_keys_channel().1,
         config_sink_ref.recipient(),
@@ -295,6 +301,7 @@ async fn new_binds_and_reports_listen_addr() {
         test_approval_sink(),
         tokio::sync::watch::channel(TEST_MAX_BLOCK_SIZE).1,
         unscreened_mempool_submit(test_mempool_handle()),
+        ProofStore::new(PROOF_STORE_CAPACITY),
         accredited_keys_channel().1,
         accredited_keys_channel().1,
         test_config_sink(),
@@ -316,6 +323,7 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         test_approval_sink(),
         tokio::sync::watch::channel(TEST_MAX_BLOCK_SIZE).1,
         unscreened_mempool_submit(test_mempool_handle()),
+        ProofStore::new(PROOF_STORE_CAPACITY),
         accredited_keys_channel().1,
         accredited_keys_channel().1,
         test_config_sink(),
@@ -343,6 +351,7 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         test_approval_sink(),
         tokio::sync::watch::channel(TEST_MAX_BLOCK_SIZE).1,
         unscreened_mempool_submit(test_mempool_handle()),
+        ProofStore::new(PROOF_STORE_CAPACITY),
         accredited_keys_channel().1,
         accredited_keys_channel().1,
         test_config_sink(),

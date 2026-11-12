@@ -1,10 +1,14 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+use lee::privacy_preserving_transaction::circuit::{Proof, ProofDigest};
 use lee_core::BlockId;
 pub use lee_core::Timestamp;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256, digest::FixedOutput as _};
 
-use crate::{HashType, transaction::LeeTransaction};
+use crate::{
+    HashType,
+    transaction::{LeeTransaction, LeeTransactionWith},
+};
 pub type BlockHash = HashType;
 
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
@@ -95,11 +99,16 @@ impl Block {
     /// against the value stored in `header.hash`.
     #[must_use]
     pub fn recompute_hash(&self) -> BlockHash {
-        HashableBlockData {
+        HashableBlockDataWith {
             block_id: self.header.block_id,
             prev_block_hash: self.header.prev_block_hash,
             timestamp: self.header.timestamp,
-            transactions: self.body.transactions.clone(),
+            transactions: self
+                .body
+                .transactions
+                .iter()
+                .map(LeeTransaction::digested)
+                .collect(),
             reverted: self.body.reverted.clone(),
         }
         .compute_hash()
@@ -127,16 +136,18 @@ impl<'de> Deserialize<'de> for Block {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct HashableBlockData {
+pub struct HashableBlockDataWith<P> {
     pub block_id: BlockId,
     pub prev_block_hash: BlockHash,
     pub timestamp: Timestamp,
-    pub transactions: Vec<LeeTransaction>,
+    pub transactions: Vec<LeeTransactionWith<P>>,
     /// See [`BlockBody::reverted`].
     pub reverted: Vec<u64>,
 }
 
-impl HashableBlockData {
+pub type HashableBlockData = HashableBlockDataWith<Proof>;
+
+impl HashableBlockDataWith<ProofDigest> {
     /// Domain-separated hash of the block contents:
     /// `SHA256(PREFIX || borsh(self))`. The single source of truth for both
     /// producing and verifying a block hash.
@@ -154,6 +165,24 @@ impl HashableBlockData {
         bytes.extend_from_slice(PREFIX);
         bytes.extend_from_slice(&data_bytes);
         OwnHasher::hash(&bytes)
+    }
+}
+
+impl HashableBlockData {
+    #[must_use]
+    pub fn compute_hash(&self) -> BlockHash {
+        HashableBlockDataWith {
+            block_id: self.block_id,
+            prev_block_hash: self.prev_block_hash,
+            timestamp: self.timestamp,
+            transactions: self
+                .transactions
+                .iter()
+                .map(LeeTransaction::digested)
+                .collect(),
+            reverted: self.reverted.clone(),
+        }
+        .compute_hash()
     }
 
     #[must_use]

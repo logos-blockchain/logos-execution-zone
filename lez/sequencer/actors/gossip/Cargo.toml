@@ -11,6 +11,7 @@ workspace = true
 # Adds actor implementation.
 actor = [
   "dep:anyhow",
+  "dep:async-trait",
   "dep:borsh",
   "dep:futures",
   "dep:hex",
@@ -38,6 +39,7 @@ sequencer_slasher_actor = { workspace = true, optional = true }
 logos-blockchain-key-management-system-service = { workspace = true, optional = true }
 
 anyhow = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
 borsh = { workspace = true, optional = true }
 kameo = { workspace = true, optional = true }
 log = { workspace = true, optional = true }

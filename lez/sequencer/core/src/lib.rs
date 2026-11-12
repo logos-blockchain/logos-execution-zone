@@ -79,6 +79,7 @@ mod faults;
 pub mod fees;
 pub mod gossip;
 pub mod logging;
+pub mod proof_store;
 pub mod task_group;
 
 /// Failed production attempts before a cross-zone dispatch is given up on.

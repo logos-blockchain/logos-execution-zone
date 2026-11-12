@@ -20,6 +20,7 @@ use lee_core::{
 use risc0_zkvm::{
     ExecutorEnv, ExecutorEnvBuilder, InnerReceipt, ProverOpts, Receipt, default_prover,
 };
+use sha2::{Digest as _, Sha256};
 
 use crate::{
     PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID, PublicTransaction,
@@ -49,6 +50,18 @@ impl Proof {
         Self(inner)
     }
 
+    #[must_use]
+    pub fn digest(&self) -> ProofDigest {
+        const PREFIX: &[u8; 32] = b"/LEE/v0.3/ProofDigest/\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+        ProofDigest(
+            Sha256::new()
+                .chain_update(PREFIX)
+                .chain_update(&self.0)
+                .finalize()
+                .into(),
+        )
+    }
+
     pub(crate) fn is_valid_for(
         &self,
         public_context: &PublicExecutionContext,
@@ -64,6 +77,9 @@ impl Proof {
         receipt.verify(PRIVACY_PRESERVING_CIRCUIT_ID).is_ok()
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize)]
+pub struct ProofDigest([u8; 32]);
 
 #[derive(Clone)]
 pub enum ProgramKind {

@@ -17,6 +17,7 @@ pub use sequencer_core::config::*;
 use sequencer_core::{
     gossip::{AccreditedKeysReceiver, MaxBlockSizeReceiver},
     load_or_create_signing_key,
+    proof_store::ProofStore,
 };
 use sequencer_gossip_actor::{
     GossipActor,
@@ -301,6 +302,7 @@ pub fn run(
         let accredited_keys_rx = executor.accredited_keys_watch();
         let staked_keys_rx = executor.staked_keys_watch();
         let max_block_size_rx = executor.max_block_size_watch();
+        let proof_store = executor.proof_store();
         let executor_ref = executor_prepared.actor_ref().clone();
         executor_prepared.spawn(executor);
         info!("Executor Actor spawned");
@@ -326,6 +328,7 @@ pub fn run(
                     max_block_size_rx.clone(),
                     accredited_keys_rx,
                     staked_keys_rx,
+                    proof_store,
                     &executor_ref,
                     &slasher_ref,
                     &channel_signer_ref,
@@ -392,6 +395,7 @@ pub async fn setup_gossip(
     max_block_size_rx: MaxBlockSizeReceiver,
     accredited_keys_rx: AccreditedKeysReceiver,
     staked_keys_rx: AccreditedKeysReceiver,
+    proof_store: ProofStore,
     executor_ref: &ActorRef<ExecutorActor>,
     slasher_ref: &ActorRef<SlasherActor>,
     channel_signer_ref: &ActorRef<ChannelSigningActor>,
@@ -428,6 +432,7 @@ pub async fn setup_gossip(
         slasher_ref.clone().recipient(),
         max_block_size_rx,
         submit,
+        proof_store,
         accredited_keys_rx,
         staked_keys_rx,
         // Screened inbound channel-config messages go straight to the actor.

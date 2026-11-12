@@ -15,6 +15,7 @@ use kameo::{
     mailbox::{MailboxReceiver, Signal},
     message::{Context, Message},
 };
+use lee::privacy_preserving_transaction::circuit::{Proof, ProofDigest};
 #[cfg(feature = "mdns")]
 use libp2p::mdns;
 use libp2p::{
@@ -22,20 +23,26 @@ use libp2p::{
     identity::Keypair,
     kad,
     multiaddr::Protocol,
+    request_response,
     swarm::{NetworkBehaviour, Swarm, SwarmEvent},
 };
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
 use sequencer_channel_signing_actor::Wire;
 use sequencer_core::{
     config::{GossipConfig, MAX_BEDROCK_TX_SIZE, MAX_PUBLISHABLE_BLOCK_SIZE},
-    gossip::{AccreditedKeysReceiver, MaxBlockSizeReceiver},
+    gossip::{AccreditedKeysReceiver, FetchProof, MaxBlockSizeReceiver},
+    proof_store::ProofStore,
 };
 use sequencer_slasher_actor::Approval;
 use tokio::select;
 
-use self::seen_cache::SeenCache;
+use self::{
+    proof_exchange::{ProofCodec, protocol_for_channel},
+    seen_cache::SeenCache,
+};
 use crate::protocol::{GetConnectedPeers, PublishConfig, PublishTransaction, RetryBootstrap};
 
+mod proof_exchange;
 mod seen_cache;
 #[cfg(test)]
 mod tests;
@@ -66,6 +73,7 @@ struct GossipBehaviour {
     gossipsub: gossipsub::Behaviour,
     identify: identify::Behaviour,
     kademlia: kad::Behaviour<kad::store::MemoryStore>,
+    proof_exchange: request_response::Behaviour<ProofCodec>,
     #[cfg(feature = "mdns")]
     mdns: mdns::tokio::Behaviour,
 }
@@ -98,6 +106,8 @@ pub struct GossipActor {
     seen: SeenCache,
     max_block_size_rx: MaxBlockSizeReceiver,
     submit: IngestSubmit,
+    proof_store: ProofStore,
+    proof_fetches: HashMap<request_response::OutboundRequestId, (ProofDigest, HashSet<PeerId>)>,
     /// Configured bootstrap peers, re-dialed while the node is isolated.
     bootstrap: Vec<Multiaddr>,
     /// Local transactions whose publish failed, retried when a peer
@@ -137,6 +147,7 @@ impl GossipActor {
         approval_sink: Recipient<Approval>,
         max_block_size_rx: MaxBlockSizeReceiver,
         submit: IngestSubmit,
+        proof_store: ProofStore,
         accredited_keys_rx: AccreditedKeysReceiver,
         staked_keys_rx: AccreditedKeysReceiver,
         config_sink: Recipient<Wire>,
@@ -203,6 +214,14 @@ impl GossipActor {
             kademlia.set_mode(Some(kad::Mode::Server));
             kademlia
         };
+        let proof_exchange_behaviour = request_response::Behaviour::with_codec(
+            ProofCodec,
+            [(
+                protocol_for_channel(channel_id),
+                request_response::ProtocolSupport::Full,
+            )],
+            request_response::Config::default(),
+        );
         #[cfg(feature = "mdns")]
         let mdns_behaviour = mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)
             .map_err(|err| anyhow!("Failed to build mdns behaviour: {err}"))?;
@@ -216,6 +235,7 @@ impl GossipActor {
                 gossipsub: gossipsub_behaviour,
                 identify: identify_behaviour,
                 kademlia: kademlia_behaviour,
+                proof_exchange: proof_exchange_behaviour,
                 #[cfg(feature = "mdns")]
                 mdns: mdns_behaviour,
             })
@@ -291,6 +311,8 @@ impl GossipActor {
             seen: SeenCache::new(SEEN_CACHE_CAPACITY),
             max_block_size_rx,
             submit,
+            proof_store,
+            proof_fetches: HashMap::new(),
             bootstrap,
             pending_publish: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
             pending_approvals: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
@@ -437,6 +459,39 @@ impl GossipActor {
                         .kademlia
                         .add_address(&peer_id, addr);
                 }
+            }
+            GossipBehaviourEvent::ProofExchange(request_response::Event::Message {
+                peer,
+                message,
+                ..
+            }) => match message {
+                request_response::Message::Request {
+                    request, channel, ..
+                } => {
+                    let proof = self.proof_store.get(&request);
+                    if self
+                        .swarm_mut()
+                        .behaviour_mut()
+                        .proof_exchange
+                        .send_response(channel, proof)
+                        .is_err()
+                    {
+                        log::debug!("Failed to answer a proof request from {peer}");
+                    }
+                }
+                request_response::Message::Response {
+                    request_id,
+                    response,
+                } => self.on_proof_response(request_id, response),
+            },
+            GossipBehaviourEvent::ProofExchange(request_response::Event::OutboundFailure {
+                peer,
+                request_id,
+                error,
+                ..
+            }) => {
+                log::debug!("Proof request to {peer} failed: {error}");
+                self.on_proof_response(request_id, None);
             }
             #[cfg(feature = "mdns")]
             GossipBehaviourEvent::Mdns(mdns::Event::Discovered(peers)) => {
@@ -682,6 +737,44 @@ impl GossipActor {
         }
         _ = self.swarm_mut().behaviour_mut().kademlia.bootstrap();
     }
+
+    fn fetch_proof(&mut self, digest: ProofDigest, mut tried: HashSet<PeerId>) {
+        if self.proof_store.contains(&digest)
+            || self
+                .proof_fetches
+                .values()
+                .any(|(in_flight, _)| *in_flight == digest)
+        {
+            return;
+        }
+        let Some(peer) = self.connected.difference(&tried).next().copied() else {
+            log::debug!("No connected peer left to fetch proof {digest:?} from");
+            return;
+        };
+        tried.insert(peer);
+        let request_id = self
+            .swarm_mut()
+            .behaviour_mut()
+            .proof_exchange
+            .send_request(&peer, digest);
+        self.proof_fetches.insert(request_id, (digest, tried));
+    }
+
+    fn on_proof_response(
+        &mut self,
+        request_id: request_response::OutboundRequestId,
+        proof: Option<Proof>,
+    ) {
+        let Some((digest, tried)) = self.proof_fetches.remove(&request_id) else {
+            return;
+        };
+        match proof {
+            Some(proof) if proof.digest() == digest => {
+                self.proof_store.insert(&proof);
+            }
+            _ => self.fetch_proof(digest, tried),
+        }
+    }
 }
 
 impl Actor for GossipActor {
@@ -783,6 +876,18 @@ impl Message<RetryBootstrap> for GossipActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.retry_bootstrap();
+    }
+}
+
+impl Message<FetchProof> for GossipActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        FetchProof(digest): FetchProof,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.fetch_proof(digest, HashSet::new());
     }
 }
 
