@@ -1054,9 +1054,10 @@ mod tests {
                     private_actions: Vec::new(),
                     validity: lee_core::program::ValidityWindows::new_unbounded(),
                     program_image_claims: Vec::new(),
-                    fee: None,
+                    proven_fee: None,
                 },
                 nonces: BTreeMap::new(),
+                fee: None,
                 admission_evidence: Vec::new(),
             },
             witness_set: lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(
