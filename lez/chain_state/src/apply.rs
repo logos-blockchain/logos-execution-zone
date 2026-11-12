@@ -670,9 +670,8 @@ fn settle_charged_transaction(
             (charge, result, 0)
         }
         LeeTransaction::PrivacyPreserving(private_tx) => {
-            let budget = gas_limit
-                .checked_sub(market::PRIVATE_VERIFY_GAS)
-                .expect("classify holds a declared gas limit to the verification cost");
+            // Classify holds a declared gas limit to the verification cost.
+            let budget = gas_limit.saturating_sub(market::PRIVATE_VERIFY_GAS);
             let (charge, result) =
                 match lee::ValidatedStateDiff::from_privacy_preserving_transaction_metered(
                     private_tx, state, block_id, timestamp, budget,
@@ -1745,7 +1744,7 @@ mod tests {
         scripted: Actor,
         fee: lee_core::FeeTransfer,
     ) -> LeeTransaction {
-        public_root_private_tx_paid(state, sender, scripted, Some(fee), None)
+        public_root_private_tx_paid(state, sender, scripted_call(scripted), Some(fee), None)
     }
 
     /// A state holding one private sender and the scripted program, which it calls.
@@ -1775,13 +1774,21 @@ mod tests {
         scripted: Actor,
         fee: lee::FeeDeclaration,
     ) -> LeeTransaction {
-        public_root_private_tx_paid(state, sender, scripted, None, Some(fee))
+        public_root_private_tx_paid(state, sender, scripted_call(scripted), None, Some(fee))
+    }
+
+    /// A call of the scripted program at `scripted` that keeps its state.
+    fn scripted_call(scripted: Actor) -> RootCall {
+        RootCall {
+            to: scripted,
+            message: borsh::to_vec(&Script::default()).unwrap(),
+        }
     }
 
     fn public_root_private_tx_paid(
         state: &V03State,
         (keys, funded): &(TestPrivateKeys, lee::Account),
-        scripted: Actor,
+        root: RootCall,
         fee: Option<lee_core::FeeTransfer>,
         declared: Option<lee::FeeDeclaration>,
     ) -> LeeTransaction {
@@ -1789,7 +1796,7 @@ mod tests {
             declared.map(|_| initial_pub_accounts_private_keys()[1].pub_sign_key.clone());
         let signer = declared.map(|_| public_payer());
         let public_actors = vec![
-            scripted,
+            root.to,
             Actor::native_balance(system_accounts::fee_inbox_account_id()),
         ];
         let public_actor_states = public_actors
@@ -1810,10 +1817,7 @@ mod tests {
             .expect("the sender's commitment is in state");
         let (output, proof) = lee::execute_and_prove(
             lee::ProvingInput {
-                root: TransactionEntry::Sync(RootCall {
-                    to: scripted,
-                    message: borsh::to_vec(&Script::default()).unwrap(),
-                }),
+                root: TransactionEntry::Sync(root),
                 claims: Vec::new(),
                 fee,
                 public_context: lee::PublicExecutionContext::new(public_actors, signer),
@@ -1837,7 +1841,7 @@ mod tests {
             },
             &ProgramCatalog {
                 programs: HashMap::from([(
-                    scripted.program_account_id,
+                    AccountId::from_builtin_program(event_emitter().id()),
                     Dependency {
                         program: event_emitter(),
                         kind: ProgramKind::Disclosed,
@@ -2335,6 +2339,48 @@ mod tests {
                 &mut summary,
             ),
             Err(BlockIngestError::InvalidFeeClass { reason, .. }) if reason.contains("authorization")
+        ));
+    }
+
+    #[test]
+    fn a_declared_fee_cannot_credit_the_fee_inbox_from_its_public_part() {
+        // Only an in-proof fee may raise the inbox; a declared one is reserved from its payer.
+        let (state, sender, _) = publicly_paid_setup(0x5d);
+        let payer = public_payer();
+        let inbox = system_accounts::fee_inbox_account_id();
+        let tx = public_root_private_tx_paid(
+            &state,
+            &sender,
+            RootCall {
+                to: Actor::native_balance(payer),
+                message: borsh::to_vec(&native_token::Message::Transfer {
+                    to: inbox,
+                    amount: 1,
+                })
+                .unwrap(),
+            },
+            None,
+            Some(lee::FeeDeclaration::new(
+                payer,
+                fee_core::market::PRIVATE_VERIFY_GAS + 1_000_000,
+                0,
+                u128::MAX,
+            )),
+        );
+
+        let mut settled = state;
+        let mut summary = BlockFeeSummary::default();
+        assert!(matches!(
+            settle_transaction(
+                &tx,
+                &mut settled,
+                &FeeState::genesis(),
+                1,
+                100,
+                0,
+                &mut summary,
+            ),
+            Err(BlockIngestError::RestrictedAccountModification { .. })
         ));
     }
 
