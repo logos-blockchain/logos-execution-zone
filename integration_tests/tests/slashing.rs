@@ -12,7 +12,7 @@ use std::{collections::BTreeSet, future::Future, time::Duration};
 
 use anyhow::{Context as _, Result, ensure};
 use common::{block::Block, transaction::LeeTransaction};
-use integration_tests::{assert_same_chain, committee, get_account, init_logger, wait_until};
+use integration_tests::{committee, get_account, init_logger, wait_for_same_chain, wait_until};
 use lee::AccountId;
 use log::info;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
@@ -306,7 +306,7 @@ async fn assert_offender_is_slashed(payload: impl Fn(&Block) -> Vec<u8>) -> Resu
         signers.iter().any(|signer| *signer != leader_stake_key),
         "every approval was the leader's own, so none of them came over gossip"
     );
-    assert_same_chain(leader_client, follower_client)
+    wait_for_same_chain(leader_client, follower_client)
         .await
         .context("The two sequencers disagree about the chain after the slash")?;
 
