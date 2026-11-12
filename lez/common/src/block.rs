@@ -82,7 +82,9 @@ impl<P> BlockBodyWith<P> {
     }
 
     pub fn proofs(&self) -> impl Iterator<Item = &P> {
-        self.transactions.iter().filter_map(LeeTransactionWith::proof)
+        self.transactions
+            .iter()
+            .filter_map(LeeTransactionWith::proof)
     }
 }
 

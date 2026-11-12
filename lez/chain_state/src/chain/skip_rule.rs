@@ -152,7 +152,7 @@ fn fixture() -> Fixture {
         private_tx(state, &senders[0], accounts[0].account_id, 10, Some(fee))
     };
     let private = paying(required_for(0, paying));
-    let proof = private.proof().expect("a privacy-preserving transaction was built").clone();
+    let proof = private.proof().cloned().expect("a private transaction");
     let x = settled_block(2, genesis.header.hash, vec![private], state);
     let mut on_x = state.clone();
     apply_block(Some(&tip_of(genesis)), &x, &mut on_x).expect("x applies");
@@ -179,7 +179,7 @@ fn deshield(state: &V03State, amount: u128) -> (LeeTransaction, Proof) {
         )
     };
     let private = paying(required_for(0, paying));
-    let proof = private.proof().expect("a privacy-preserving transaction was built").clone();
+    let proof = private.proof().cloned().expect("a private transaction");
     (private, proof)
 }
 

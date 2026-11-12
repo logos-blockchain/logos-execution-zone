@@ -42,7 +42,7 @@ fn channel() -> Channel {
     let genesis = settled_test_block(&mut state, 1, None, vec![]);
     let plain = settled_test_block(&mut state.clone(), 2, Some(genesis.header.hash), vec![]);
     let transfer = private_transfer(&state);
-    let proof = transfer.proof().expect("a private transfer was built").clone();
+    let proof = transfer.proof().cloned().expect("a private transfer");
     let private = settled_test_block(&mut state, 2, Some(genesis.header.hash), vec![transfer]);
     let on_private = settled_test_block(&mut state, 3, Some(private.header.hash), vec![]);
     Channel {
