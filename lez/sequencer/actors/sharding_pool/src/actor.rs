@@ -69,7 +69,11 @@ pub struct ShardingPoolActor<A: Actor<Error: Display>, K: Key> {
     /// Keys restarted differently from [`Self::restart_config`].
     key_restart_configs: HashMap<K, RestartConfig>,
     ctr: Arc<dyn Fn(K) -> A::Args + Send + Sync + 'static>,
+    on_worker_spawned: Option<WorkerHook<A>>,
 }
+
+/// Called with a worker, see [`ShardingPoolActor::with_on_worker_spawned`].
+type WorkerHook<A> = Box<dyn Fn(&ActorRef<A>) + Send + Sync + 'static>;
 
 impl<A, K> ShardingPoolActor<A, K>
 where
@@ -92,6 +96,7 @@ where
             restart_config,
             key_restart_configs: HashMap::new(),
             ctr: Arc::new(ctr),
+            on_worker_spawned: None,
         }
     }
 
@@ -99,6 +104,17 @@ where
     #[must_use]
     pub fn with_restart_config(mut self, key: K, restart_config: RestartConfig) -> Self {
         self.key_restart_configs.insert(key, restart_config);
+        self
+    }
+
+    /// Calls `hook` with every worker the pool spawns, once: a restarted worker keeps its
+    /// [`ActorRef`] and mailbox, while a reset key gets a new worker.
+    #[must_use]
+    pub fn with_on_worker_spawned<F>(mut self, hook: F) -> Self
+    where
+        F: Fn(&ActorRef<A>) + Send + Sync + 'static,
+    {
+        self.on_worker_spawned = Some(Box::new(hook));
         self
     }
 
@@ -132,6 +148,9 @@ where
                     .restart_limit(restart_config.limit, restart_config.within)
                     .spawn()
                     .await;
+                if let Some(on_worker_spawned) = &self.on_worker_spawned {
+                    on_worker_spawned(&actor);
+                }
                 let actor = vacant.insert(actor);
 
                 self.workers_meta.insert(
