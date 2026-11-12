@@ -743,9 +743,18 @@ impl IndexerCore {
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU32, time::Duration};
+    use std::{collections::HashMap, num::NonZeroU32, time::Duration};
 
-    use common::{HashType, block::HashableBlockData};
+    use common::{HashType, block::HashableBlockData, transaction::LeeTransaction};
+    use jsonrpsee::{
+        RpcModule,
+        server::{Server, ServerHandle},
+        types::ErrorObjectOwned,
+    };
+    use lee::{
+        PrivacyPreservingTransaction,
+        privacy_preserving_transaction::{Message, WitnessSet, circuit::Proof},
+    };
     use logos_blockchain_zone_sdk::Slot;
 
     use super::*;
@@ -753,6 +762,8 @@ mod tests {
         block_store::store_block,
         config::{ChannelId, ClientConfig, EventFilterConfig, IndexerConfig},
     };
+
+    mod settlement;
 
     fn unreachable_core(dir: &std::path::Path) -> IndexerCore {
         unreachable_core_accepting(dir, Vec::new())
@@ -1027,5 +1038,76 @@ mod tests {
         core.clear_halt_for_block(&different, &mut pending);
         assert!(core.store.get_cross_zone_halt().expect("get").is_none());
         assert!(pending.is_none());
+    }
+
+    fn private_transaction(proof: &Proof) -> LeeTransaction {
+        LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+            Message::default(),
+            WitnessSet::from_raw_parts(vec![], proof.clone()),
+        ))
+    }
+
+    /// A sequencer that serves only `getProof`, from `proofs`.
+    async fn proof_source(proofs: HashMap<ProofDigest, Proof>) -> (SequencerClient, ServerHandle) {
+        let mut sequencer = RpcModule::new(proofs);
+        sequencer
+            .register_method("getProof", |params, held, _| {
+                let digest = params.one::<sequencer_service_protocol::ProofDigest>()?;
+                Ok::<_, ErrorObjectOwned>(
+                    held.get(&digest.0)
+                        .cloned()
+                        .map(sequencer_service_protocol::Proof),
+                )
+            })
+            .unwrap();
+        let server = Server::builder().build("127.0.0.1:0").await.unwrap();
+        let address = server.local_addr().unwrap();
+        let client = SequencerClientBuilder::default()
+            .build(format!("http://{address}"))
+            .unwrap();
+        (client, server.start(sequencer))
+    }
+
+    /// `block` hydrated from the proof store once the proofs it lacks are fetched.
+    async fn hydrate(core: &IndexerCore, block: &DigestedBlock) -> Result<Block, Vec<ProofDigest>> {
+        if let Err(missing) = block.hydrate(|digest| core.proofs.get(digest)) {
+            core.fetch_proofs(&missing).await;
+        }
+        block.hydrate(|digest| core.proofs.get(digest))
+    }
+
+    #[tokio::test]
+    async fn wrong_bytes_do_not_satisfy_a_digest_a_later_source_does_and_unserved_ones_are_named() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let proof = Proof::from_inner(vec![1; 32]);
+        let missing = Proof::from_inner(vec![2; 32]);
+        let block =
+            common::test_utils::produce_dummy_block(1, None, vec![private_transaction(&proof)]);
+        let with_missing = common::test_utils::produce_dummy_block(
+            1,
+            None,
+            vec![private_transaction(&proof), private_transaction(&missing)],
+        );
+        let wrong_bytes = HashMap::from([(proof.digest(), Proof::from_inner(vec![3; 32]))]);
+        let (wrong, _wrong_sequencer) = proof_source(wrong_bytes).await;
+        let (right, _right_sequencer) =
+            proof_source(HashMap::from([(proof.digest(), proof.clone())])).await;
+        let mut core = unreachable_core(dir.path());
+
+        core.proof_sources = vec![wrong.clone()];
+        assert_eq!(
+            hydrate(&core, &block.digested()).await.err(),
+            Some(vec![proof.digest()])
+        );
+
+        core.proof_sources = vec![wrong, right];
+        assert_eq!(
+            hydrate(&core, &with_missing.digested()).await.err(),
+            Some(vec![missing.digest()])
+        );
+        let hydrated = hydrate(&core, &block.digested())
+            .await
+            .expect("the later source holds the proof");
+        assert_eq!(hydrated.body, block.body);
     }
 }

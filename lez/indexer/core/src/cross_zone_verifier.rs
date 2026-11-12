@@ -1412,11 +1412,11 @@ where
 #[cfg(test)]
 mod tests {
     use common::{HashType, test_utils::produce_dummy_block};
-    use cross_zone::test_utils::{linked_chain_to, ping_emission};
+    use cross_zone::test_utils::{linked_chain_to, ping_emission, private_transaction};
     use futures::stream;
     use lee::Actor;
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
-    use logos_blockchain_zone_sdk::{UnverifiedEd25519PublicKey, ZoneBlock};
+    use logos_blockchain_zone_sdk::{UnverifiedEd25519PublicKey, ZoneBlock, sequencer::Ed25519Key};
     use ping_core::{ping_record_pda, receiver_config_account_id};
 
     use super::*;
@@ -1424,7 +1424,6 @@ mod tests {
     const SELF_ZONE: ZoneId = [1; 32];
     const PEER_ZONE: ZoneId = [2; 32];
     const PEER_BLOCK_ID: u64 = 5;
-
     const SKIP_WINDOW: u32 = 10;
     /// The peer's run has to start at its genesis, or every test built on
     /// [`peer_chain`] stalls for the full peer-block timeout before failing.
@@ -3091,5 +3090,84 @@ mod tests {
             messages,
             watermark,
         })])
+    }
+
+    /// A peer-stream item carrying `block`, inscribed by the writer whose key `seed` derives.
+    fn signed_block_msg(block: &Block, slot: u64, seed: u8) -> (ZoneMessage, Slot) {
+        (
+            ZoneMessage::Block(ZoneBlock {
+                id: MsgId::from([0; 32]),
+                data: Inscription::try_from(
+                    block.digested().to_inscription().expect("block serializes"),
+                )
+                .expect("test inscription is within bounds"),
+                signer: Ed25519Key::from_bytes(&[seed; 32])
+                    .public_key()
+                    .into_unverified(),
+            }),
+            Slot::from(slot),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_cut_private_block_is_never_served_and_its_replacement_is() {
+        let verifier = verifier();
+        let mut chain = peer_chain(b"hi");
+        let replacement = chain.pop().expect("chain reaches PEER_BLOCK_ID");
+        let cut = produce_dummy_block(
+            PEER_BLOCK_ID,
+            Some(replacement.header.prev_block_hash),
+            vec![emission(b"cut"), private_transaction()],
+        );
+        let mut messages: Vec<_> = chain
+            .iter()
+            .zip(0..)
+            .map(|(block, slot)| signed_block_msg(block, slot, 1))
+            .collect();
+        messages.push(signed_block_msg(&cut, PEER_BLOCK_ID, 1));
+        messages.push(signed_block_msg(&replacement, PEER_BLOCK_ID + 1, 2));
+
+        consume_peer_stream(
+            batch(
+                messages,
+                Some(Slot::from(
+                    PEER_BLOCK_ID.saturating_add(u64::from(SKIP_WINDOW)),
+                )),
+            ),
+            PEER_ZONE,
+            &mut StructuralChain::new(SKIP_WINDOW, None),
+            &verifier.peers,
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            verifier
+                .peers
+                .get(PEER_ZONE, PEER_BLOCK_ID)
+                .await
+                .map(|block| block.header.hash),
+            Some(replacement.header.hash)
+        );
+        let from_cut = produce_dummy_block(
+            9,
+            None,
+            vec![dispatch_naming_block_hash(b"cut", cut.recompute_hash().0)],
+        );
+        assert!(
+            matches!(
+                verifier.verify_block(&from_cut, Slot::from(0)).await,
+                Err(CrossZoneVerifyError::Forged(ForgedDispatch { verdict, .. }))
+                    if verdict == "re-derivation mismatch"
+            ),
+            "the cut block is not the peer's block at that id"
+        );
+        verifier
+            .verify_block(
+                &produce_dummy_block(9, None, vec![dispatch(b"hi")]),
+                Slot::from(0),
+            )
+            .await
+            .expect("a dispatch from the replacement verifies");
     }
 }

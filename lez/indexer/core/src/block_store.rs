@@ -1492,3 +1492,168 @@ mod accept_tests {
         assert_eq!(reopened.last_block().unwrap(), Some(101));
     }
 }
+
+#[cfg(test)]
+mod settlement_tests {
+    use common::test_utils::{create_transaction_native_token_transfer, produce_dummy_block};
+    use testnet_initial_state::initial_pub_accounts_private_keys;
+
+    use super::*;
+
+    /// `block` settled on `state`, as the fold hands it over.
+    fn settlement(mut state: V03State, block: &Block) -> SettledBlock {
+        let events = chain_state::apply::apply_block_to_state(block, &mut state)
+            .expect("the block applies on the state");
+        SettledBlock::new(
+            MsgId::root(),
+            Some(Slot::from(0)),
+            block.clone(),
+            state,
+            events,
+        )
+    }
+
+    #[tokio::test]
+    async fn a_replayed_settlement_writes_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = open_default(dir.path());
+        let accounts = initial_pub_accounts_private_keys();
+        let (from, to) = (accounts[0].account_id, accounts[1].account_id);
+        let sign_key = &accounts[0].pub_sign_key;
+
+        let mut build_state = claimed_build_state();
+        let genesis = produce_dummy_block(1, None, vec![]);
+        chain_state::apply::apply_block_to_state(&genesis, &mut build_state)
+            .expect("genesis applies");
+        store_block(&store, &genesis, Slot::from(0)).await;
+        let block2 = settled_test_block(
+            &mut build_state,
+            2,
+            Some(genesis.header.hash),
+            vec![create_transaction_native_token_transfer(
+                from, 0, to, 10, sign_key,
+            )],
+        );
+        let older = settlement(store.current_state.read().await.clone(), &block2);
+        assert_eq!(
+            store.put_settled_block(&older).await.unwrap(),
+            Stored::Written
+        );
+        let block3 = settled_test_block(
+            &mut build_state,
+            3,
+            Some(block2.header.hash),
+            vec![create_transaction_native_token_transfer(
+                from, 1, to, 10, sign_key,
+            )],
+        );
+        store_block(&store, &block3, Slot::from(0)).await;
+        let indexed = store
+            .get_transactions_by_account(to.into_value(), 0, 10)
+            .unwrap()
+            .len();
+        let at_tip = store.account_current_state(&to).await.unwrap();
+        assert_eq!(indexed, 2);
+        assert_ne!(older.state().get_account_by_id_ref(to), at_tip.as_ref());
+
+        assert_eq!(
+            store.put_settled_block(&older).await.unwrap(),
+            Stored::Replayed
+        );
+        assert_eq!(
+            store
+                .get_transactions_by_account(to.into_value(), 0, 10)
+                .unwrap()
+                .len(),
+            indexed
+        );
+        assert_eq!(store.account_current_state(&to).await.unwrap(), at_tip);
+    }
+
+    #[tokio::test]
+    async fn a_settlement_off_the_stored_tip_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = open_default(dir.path());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        store_block(&store, &genesis, Slot::from(0)).await;
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        store_block(&store, &block2, Slot::from(0)).await;
+
+        let off_tip = settlement(
+            store.current_state.read().await.clone(),
+            &produce_dummy_block(3, Some(genesis.header.hash), vec![]),
+        );
+        assert!(matches!(
+            store.put_settled_block(&off_tip).await,
+            Err(PutSettledError::Parent(BlockIngestError::BrokenChainLink {
+                expected_prev,
+                got_prev,
+            })) if expected_prev == block2.header.hash && got_prev == genesis.header.hash
+        ));
+        let past_tip = settlement(
+            off_tip.state().clone(),
+            &produce_dummy_block(4, Some(block2.header.hash), vec![]),
+        );
+        assert!(matches!(
+            store.put_settled_block(&past_tip).await,
+            Err(PutSettledError::Parent(
+                BlockIngestError::UnexpectedBlockId {
+                    expected: 3,
+                    got: 4
+                }
+            ))
+        ));
+        assert_eq!(store.get_last_block_id().unwrap(), Some(2));
+    }
+
+    #[tokio::test]
+    async fn a_different_block_at_a_stored_id_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = open_default(dir.path());
+        let accounts = initial_pub_accounts_private_keys();
+        let (from, to) = (accounts[0].account_id, accounts[1].account_id);
+
+        let mut build_state = claimed_build_state();
+        let genesis = produce_dummy_block(1, None, vec![]);
+        chain_state::apply::apply_block_to_state(&genesis, &mut build_state)
+            .expect("genesis applies");
+        store_block(&store, &genesis, Slot::from(0)).await;
+        let on_genesis = store.current_state.read().await.clone();
+        let block2 = settled_test_block(
+            &mut build_state,
+            2,
+            Some(genesis.header.hash),
+            vec![create_transaction_native_token_transfer(
+                from,
+                0,
+                to,
+                10,
+                &accounts[0].pub_sign_key,
+            )],
+        );
+        store_block(&store, &block2, Slot::from(0)).await;
+        let at_tip = store.account_current_state(&to).await.unwrap();
+        let other = settlement(
+            on_genesis,
+            &produce_dummy_block(2, Some(genesis.header.hash), vec![]),
+        );
+        assert_ne!(other.state().get_account_by_id_ref(to), at_tip.as_ref());
+
+        assert!(matches!(
+            store.put_settled_block(&other).await,
+            Err(PutSettledError::Identity {
+                block_id: 2,
+                stored,
+                settled,
+            }) if stored == block2.header.hash && settled == other.block().header.hash
+        ));
+        assert_eq!(
+            store
+                .get_block_at_id(2)
+                .unwrap()
+                .map(|block| block.header.hash),
+            Some(block2.header.hash)
+        );
+        assert_eq!(store.account_current_state(&to).await.unwrap(), at_tip);
+    }
+}

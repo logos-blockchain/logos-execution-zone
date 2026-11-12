@@ -844,11 +844,12 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use common::{block::Block, test_utils::produce_dummy_block};
-    use cross_zone::test_utils::{linked_chain_to, ping_emission};
+    use cross_zone::test_utils::{linked_chain_to, ping_emission, private_transaction};
     use futures::stream;
     use kameo::actor::Spawn as _;
     use lee::GENESIS_BLOCK_ID;
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
+    use logos_blockchain_key_management_system_service::keys::Ed25519Key;
     use logos_blockchain_zone_sdk::{UnverifiedEd25519PublicKey, ZoneBlock};
     use sequencer_storage_actor::{
         StorageActor,
@@ -861,7 +862,6 @@ mod tests {
 
     const SELF_ZONE: [u8; 32] = [1; 32];
     const PEER_ZONE: [u8; 32] = [2; 32];
-
     const SKIP_WINDOW: u32 = 10;
 
     fn peer_context() -> PeerContext {
@@ -1893,6 +1893,68 @@ mod tests {
                 .unwrap(),
             None,
             "and a crash mid-rebuild resumes from genesis too, not from slot 5000"
+        );
+    }
+
+    /// A stream item carrying `block`, inscribed by the writer whose key `seed` derives.
+    fn signed_block_msg(block: &Block, slot: u64, seed: u8) -> (ZoneMessage, Slot) {
+        (
+            ZoneMessage::Block(ZoneBlock {
+                id: MsgId::from([0; 32]),
+                data: Inscription::try_from(
+                    block.digested().to_inscription().expect("block serializes"),
+                )
+                .expect("test inscription is within bounds"),
+                signer: Ed25519Key::from_bytes(&[seed; 32])
+                    .public_key()
+                    .into_unverified(),
+            }),
+            Slot::from(slot),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_cut_private_block_is_never_delivered_from_and_its_replacement_is() {
+        let (_dir, storage_ref) = store().await;
+        let genesis = chain_block(GENESIS_BLOCK_ID);
+        let cut = produce_dummy_block(
+            GENESIS_BLOCK_ID + 1,
+            Some(genesis.header.hash),
+            vec![private_transaction(), emission()],
+        );
+        let mut cursor = None;
+        let mut tip = None;
+        let mut chain = structural_chain(&peer_context(), None);
+
+        let outcome = consume_peer_stream(
+            batch(
+                vec![
+                    signed_block_msg(&genesis, 0, 1),
+                    signed_block_msg(&cut, 1, 1),
+                    signed_block_msg(&chain_block(GENESIS_BLOCK_ID + 1), 2, 2),
+                ],
+                Some(Slot::from(u64::from(1 + SKIP_WINDOW))),
+            ),
+            &peer_context(),
+            &mut chain,
+            &storage_ref,
+            &mut cursor,
+            &mut tip,
+        )
+        .await;
+
+        assert_eq!(outcome, PassOutcome::Drained);
+        let mut expected = vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)];
+        expected.sort_unstable();
+        assert_eq!(
+            recorded_keys(&storage_ref).await,
+            expected,
+            "the cut block's emission sits at index 1, and is never recorded"
+        );
+        assert_eq!(
+            tip,
+            Some(tip_at(GENESIS_BLOCK_ID + 1)),
+            "the replacement is delivered from"
         );
     }
 }
