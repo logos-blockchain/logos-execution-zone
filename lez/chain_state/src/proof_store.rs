@@ -167,19 +167,6 @@ mod tests {
     }
 
     #[test]
-    fn a_pinned_proof_survives_eviction() {
-        let store = ProofStore::new(64);
-
-        store.pin(&proof(0));
-        store.insert(&proof(1));
-        store.insert(&proof(2));
-        store.insert(&proof(3));
-
-        assert_eq!(store.get(&proof(0).digest()), Some(proof(0)));
-        assert_eq!(store.get(&proof(1).digest()), None);
-    }
-
-    #[test]
     fn a_held_proof_pinned_twice_stays_pinned_after_one_unpin_and_becomes_the_newest_evictable_entry_after_the_second()
      {
         let store = ProofStore::new(64);

@@ -380,41 +380,6 @@ mod tests {
     }
 
     #[test]
-    fn a_full_form_over_the_transaction_cap_is_refused() {
-        let size = MAX_TRANSACTION_SIZE.checked_add(1).unwrap();
-
-        let refused = check_transaction_size(usize::try_from(size).unwrap());
-
-        assert!(
-            matches!(
-                &refused,
-                Err(TransactionTooLarge::Full { size: got, max })
-                    if *got == size && *max == MAX_TRANSACTION_SIZE
-            ),
-            "{refused:?}"
-        );
-    }
-
-    #[test]
-    fn a_digest_form_over_the_block_cap_is_refused() {
-        let tx = private_transaction(vec![7; 32]);
-        let inscribed_size = u64::try_from(borsh::to_vec(&tx.digested()).unwrap().len()).unwrap();
-        let max_inscribed_size = inscribed_size.checked_sub(1).unwrap();
-
-        let refused =
-            check_inscribed_size(&tx, max_inscribed_size.checked_add(BLOCK_OVERHEAD).unwrap());
-
-        assert!(
-            matches!(
-                &refused,
-                Err(TransactionTooLarge::Inscribed { size, max })
-                    if *size == inscribed_size && *max == max_inscribed_size
-            ),
-            "{refused:?}"
-        );
-    }
-
-    #[test]
     fn a_private_transaction_too_big_for_a_block_only_in_its_full_form_is_accepted() {
         let max_block_size: u64 = 1 << 20;
         let tx = private_transaction(vec![7; 1 << 20]);

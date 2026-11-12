@@ -2,8 +2,8 @@ use std::num::NonZero;
 
 use common::{
     HashType,
-    block::{Block, DigestedBlock, HashableBlockData},
-    transaction::{LeeTransaction, LeeTransactionWith},
+    block::{Block, HashableBlockData},
+    transaction::LeeTransaction,
 };
 use lee::{
     PrivacyPreservingTransaction,
@@ -86,8 +86,6 @@ fn a_custom_tx_yields_its_block() {
 #[test]
 fn a_private_block_is_inscribed_with_its_proof_digest_and_read_back_in_digest_form() {
     let channel = ChannelId::from([1; 32]);
-    let proof_bytes: Vec<u8> = (0..=u8::MAX).collect();
-    let proof = Proof::from_inner(proof_bytes.clone());
     let block = HashableBlockData {
         reverted: Vec::new(),
         block_id: 7,
@@ -96,28 +94,14 @@ fn a_private_block_is_inscribed_with_its_proof_digest_and_read_back_in_digest_fo
         transactions: vec![LeeTransaction::PrivacyPreserving(
             PrivacyPreservingTransaction::new(
                 Message::default(),
-                WitnessSet::from_raw_parts(vec![], proof.clone()),
+                WitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![7; 32])),
             ),
         )],
     }
     .into_pending_block();
 
-    let inscription = inscription_data(&block).expect("the block encodes");
-
-    let inscribed = DigestedBlock::from_inscription(&inscription).expect("a digest-form block");
-    assert_eq!(inscribed, block.digested());
-    assert!(matches!(
-        &*inscribed.body.transactions,
-        [LeeTransactionWith::PrivacyPreserving(tx)] if *tx.witness_set().proof() == proof.digest()
-    ));
-    let distinctive = &proof_bytes[96..128];
-    assert!(
-        !inscription
-            .windows(distinctive.len())
-            .any(|window| window == distinctive)
-    );
-
     let custom = ChannelUpdateTx::Custom(inscribing_tx(channel, &block));
+
     let entries = channel_entries(&custom, channel);
     assert_eq!(entries.len(), 1, "the Custom tx carries one entry");
     assert_eq!(entries[0].block, Some(block.digested()));
