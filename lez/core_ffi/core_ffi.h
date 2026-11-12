@@ -590,9 +590,39 @@ typedef struct FfiVec_FfiTransaction {
 
 typedef struct FfiVec_FfiTransaction FfiBlockBody;
 
+/**
+ * The fee one transaction paid; all zeros for a fee-exempt one.
+ */
+typedef struct FfiFeeReceipt {
+  uint64_t gas_exec;
+  uint64_t gas_stor;
+  struct FfiU128 fee_base;
+  struct FfiU128 tip;
+  struct FfiU128 refund;
+} FfiFeeReceipt;
+
+typedef struct FfiTransactionReceipt {
+  /**
+   * `true`: applied; `false`: the action reverted, and its fee was still charged.
+   */
+  bool success;
+  struct FfiFeeReceipt fee;
+} FfiTransactionReceipt;
+
+typedef struct FfiVec_FfiTransactionReceipt {
+  struct FfiTransactionReceipt *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiTransactionReceipt;
+
 typedef struct FfiBlock {
   struct FfiBlockHeader header;
   FfiBlockBody body;
+  /**
+   * One per user transaction, parallel to `body`; the trailing fee and clock transactions
+   * have none.
+   */
+  struct FfiVec_FfiTransactionReceipt receipts;
   enum FfiBedrockStatus bedrock_status;
 } FfiBlock;
 
@@ -1300,8 +1330,8 @@ void primitves_ffi_free_ffi_account_opt(struct FfiOption_FfiAccount *val);
 /**
  * Frees the resources owned by an `FfiBlock` value.
  *
- * This frees the block's transaction bodies (the only heap-owning field); the
- * header/status fields are `Copy`. It operates on the struct by value because
+ * This frees the block's transaction bodies and receipts (the only heap-owning
+ * fields); the header/status fields are `Copy`. It operates on the struct by value because
  * it is an element-level helper, used both for the vector path
  * ([`free_ffi_block_vec`]) and the optional path ([`free_ffi_block_opt`]) — in
  * neither case is an `FfiBlock` itself wrapped in its own outer box.

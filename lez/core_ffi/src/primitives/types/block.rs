@@ -1,7 +1,9 @@
-use common::block::{BedrockStatus, Block, BlockHeader};
+use common::block::{
+    BedrockStatus, Block, BlockBody, BlockHeader, FeeReceipt, TransactionReceipt,
+};
 
 use crate::primitives::types::{
-    FfiBlockId, FfiHashType, FfiOption, FfiTimestamp, FfiVec,
+    FfiBlockId, FfiHashType, FfiOption, FfiTimestamp, FfiU128, FfiVec,
     transaction::primitives_ffi_free_transaction_vec_value, vectors::FfiBlockBody,
 };
 
@@ -9,6 +11,9 @@ use crate::primitives::types::{
 pub struct FfiBlock {
     pub header: FfiBlockHeader,
     pub body: FfiBlockBody,
+    /// One per user transaction, parallel to `body`; the trailing fee and clock transactions
+    /// have none.
+    pub receipts: FfiVec<FfiTransactionReceipt>,
     pub bedrock_status: FfiBedrockStatus,
 }
 
@@ -16,19 +21,72 @@ impl From<Block> for FfiBlock {
     fn from(value: Block) -> Self {
         let Block {
             header,
-            body,
+            body:
+                BlockBody {
+                    transactions,
+                    receipts,
+                },
             bedrock_status,
         } = value;
 
         Self {
             header: header.into(),
-            body: body
-                .transactions
+            body: transactions
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
+            receipts: receipts
                 .into_iter()
                 .map(Into::into)
                 .collect::<Vec<_>>()
                 .into(),
             bedrock_status: bedrock_status.into(),
+        }
+    }
+}
+
+/// The fee one transaction paid; all zeros for a fee-exempt one.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FfiFeeReceipt {
+    pub gas_exec: u64,
+    pub gas_stor: u64,
+    pub fee_base: FfiU128,
+    pub tip: FfiU128,
+    pub refund: FfiU128,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FfiTransactionReceipt {
+    /// `true`: applied; `false`: the action reverted, and its fee was still charged.
+    pub success: bool,
+    pub fee: FfiFeeReceipt,
+}
+
+impl From<TransactionReceipt> for FfiTransactionReceipt {
+    fn from(value: TransactionReceipt) -> Self {
+        let TransactionReceipt {
+            success,
+            fee:
+                FeeReceipt {
+                    gas_exec,
+                    gas_stor,
+                    fee_base,
+                    tip,
+                    refund,
+                },
+        } = value;
+        Self {
+            success,
+            fee: FfiFeeReceipt {
+                gas_exec,
+                gas_stor,
+                fee_base: fee_base.into(),
+                tip: tip.into(),
+                refund: refund.into(),
+            },
         }
     }
 }
@@ -90,8 +148,8 @@ impl From<FfiBedrockStatus> for BedrockStatus {
 
 /// Frees the resources owned by an `FfiBlock` value.
 ///
-/// This frees the block's transaction bodies (the only heap-owning field); the
-/// header/status fields are `Copy`. It operates on the struct by value because
+/// This frees the block's transaction bodies and receipts (the only heap-owning
+/// fields); the header/status fields are `Copy`. It operates on the struct by value because
 /// it is an element-level helper, used both for the vector path
 /// ([`free_ffi_block_vec`]) and the optional path ([`free_ffi_block_opt`]) — in
 /// neither case is an `FfiBlock` itself wrapped in its own outer box.
@@ -113,6 +171,7 @@ pub unsafe extern "C" fn primitives_ffi_free_ffi_block(val: FfiBlock) {
     let ffi_tx_ffi_vec = val.body;
 
     primitives_ffi_free_transaction_vec_value(ffi_tx_ffi_vec);
+    drop(Vec::<FfiTransactionReceipt>::from(val.receipts));
 }
 
 /// Frees the resources associated with the given ffi block option.
