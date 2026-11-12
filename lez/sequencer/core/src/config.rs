@@ -326,3 +326,67 @@ pub const fn default_channel_params() -> ChannelParams {
         max_block_size: system_accounts::DEFAULT_MAX_BLOCK_SIZE,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use lee::{
+        PrivacyPreservingTransaction,
+        privacy_preserving_transaction::{Message, WitnessSet, circuit::Proof},
+    };
+
+    use super::*;
+
+    fn private_transaction(proof: Vec<u8>) -> LeeTransaction {
+        LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+            Message::default(),
+            WitnessSet::from_raw_parts(vec![], Proof::from_inner(proof)),
+        ))
+    }
+
+    #[test]
+    fn a_full_form_over_the_transaction_cap_is_refused() {
+        let size = MAX_TRANSACTION_SIZE.checked_add(1).unwrap();
+
+        let refused = check_transaction_size(usize::try_from(size).unwrap());
+
+        assert!(
+            matches!(
+                &refused,
+                Err(TransactionTooLarge::Full { size: got, max })
+                    if *got == size && *max == MAX_TRANSACTION_SIZE
+            ),
+            "{refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_digest_form_over_the_block_cap_is_refused() {
+        let tx = private_transaction(vec![7; 32]);
+        let inscribed_size = u64::try_from(borsh::to_vec(&tx.digested()).unwrap().len()).unwrap();
+        let max_inscribed_size = inscribed_size.checked_sub(1).unwrap();
+
+        let refused =
+            check_inscribed_size(&tx, max_inscribed_size.checked_add(BLOCK_OVERHEAD).unwrap());
+
+        assert!(
+            matches!(
+                &refused,
+                Err(TransactionTooLarge::Inscribed { size, max })
+                    if *size == inscribed_size && *max == max_inscribed_size
+            ),
+            "{refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_private_transaction_too_big_for_a_block_only_in_its_full_form_is_accepted() {
+        let max_block_size: u64 = 1 << 20;
+        let tx = private_transaction(vec![7; 1 << 20]);
+        let full_size = borsh::to_vec(&tx).unwrap().len();
+        let max_inscribed_size = max_block_size.checked_sub(BLOCK_OVERHEAD).unwrap();
+        assert!(u64::try_from(full_size).unwrap() > max_inscribed_size);
+
+        assert!(check_transaction_size(full_size).is_ok());
+        assert!(check_inscribed_size(&tx, max_block_size).is_ok());
+    }
+}

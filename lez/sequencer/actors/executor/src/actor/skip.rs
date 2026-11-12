@@ -116,3 +116,126 @@ impl SkipPolicy {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use tokio::time::advance;
+
+    use super::*;
+
+    const OWN: [u8; 32] = [1; 32];
+    const PEER: [u8; 32] = [2; 32];
+    /// The slot the block past the head tip finalized in.
+    const BLOCKER_SLOT: u64 = 5;
+    /// Slots after a private block within which another writer may skip it.
+    const SKIP_WINDOW: u32 = 10;
+    /// Two slots, so a producer waits one second for a missing proof.
+    const POSTING_TIMEOUT: u32 = 2;
+    const WAIT: Duration = Duration::from_secs(1);
+    const PARAMS: ChannelParams = ChannelParams {
+        minimum_sequencer_stake: 0,
+        posting_timeframe: 30,
+        posting_timeout: POSTING_TIMEOUT,
+        skip_window: SKIP_WINDOW,
+        exit_delay: 0,
+        max_block_size: 0,
+    };
+
+    /// A private block of the unconfirmed run, final at [`BLOCKER_SLOT`]: failed if `dead`, else
+    /// missing its proofs.
+    fn blocker(signer: [u8; 32], dead: bool) -> Blocker {
+        Blocker {
+            msg: MsgId::from([7; 32]),
+            signer: Some(signer),
+            private: true,
+            slot: Some(Slot::from(BLOCKER_SLOT)),
+            dead,
+            in_run: true,
+        }
+    }
+
+    /// Our turn, which Bedrock reports started at `slot` just now.
+    fn turn_from(slot: u64) -> Turn {
+        let mut turn = Turn::new(false);
+        turn.update(true, Some(Slot::from(slot)));
+        turn
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_block_missing_its_proofs_holds_the_turn_until_the_wait_has_passed() {
+        let mut policy = SkipPolicy::default();
+        let missing = blocker(PEER, false);
+        let turn = turn_from(BLOCKER_SLOT + 1);
+
+        assert_eq!(
+            policy.hold(&missing, false, OWN, &PARAMS, &turn),
+            Err("waiting for its proofs")
+        );
+        advance(WAIT.saturating_sub(Duration::from_millis(1))).await;
+        assert_eq!(
+            policy.hold(&missing, false, OWN, &PARAMS, &turn),
+            Err("waiting for its proofs")
+        );
+        advance(Duration::from_millis(1)).await;
+        assert_eq!(policy.hold(&missing, false, OWN, &PARAMS, &turn), Ok(()));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_block_another_writer_built_on_holds_the_turn_past_the_wait() {
+        let mut policy = SkipPolicy::default();
+        let built_on = Blocker {
+            in_run: false,
+            ..blocker(PEER, false)
+        };
+        let turn = turn_from(BLOCKER_SLOT + 1);
+
+        assert_eq!(
+            policy.hold(&built_on, false, OWN, &PARAMS, &turn),
+            Err("not a private block of the unconfirmed run")
+        );
+        advance(WAIT).await;
+        assert_eq!(
+            policy.hold(&built_on, false, OWN, &PARAMS, &turn),
+            Err("not a private block of the unconfirmed run")
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_block_missing_its_proofs_holds_the_turn_once_a_skip_could_land_past_its_window() {
+        let mut policy = SkipPolicy::default();
+        let missing = blocker(PEER, false);
+        let last = BLOCKER_SLOT + u64::from(SKIP_WINDOW - POSTING_TIMEOUT);
+
+        assert_eq!(
+            policy.hold(&missing, false, OWN, &PARAMS, &turn_from(last)),
+            Err("waiting for its proofs")
+        );
+        advance(WAIT).await;
+        let (in_time, late) = (turn_from(last), turn_from(last.saturating_add(1)));
+        assert_eq!(policy.hold(&missing, false, OWN, &PARAMS, &in_time), Ok(()));
+        assert_eq!(
+            policy.hold(&missing, false, OWN, &PARAMS, &late),
+            Err("too late in its skip window")
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn only_a_failed_block_stops_holding_the_turn_once_past_its_window() {
+        let mut policy = SkipPolicy::default();
+        let end = BLOCKER_SLOT + u64::from(SKIP_WINDOW);
+        let past = turn_from(end.saturating_add(1));
+
+        assert_eq!(
+            policy.hold(&blocker(OWN, true), false, OWN, &PARAMS, &turn_from(end)),
+            Err("our own block")
+        );
+        assert_eq!(
+            policy.hold(&blocker(OWN, true), false, OWN, &PARAMS, &past),
+            Ok(())
+        );
+        assert_eq!(
+            policy.hold(&blocker(OWN, false), false, OWN, &PARAMS, &past),
+            Err("our own block")
+        );
+    }
+}

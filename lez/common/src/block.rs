@@ -310,9 +310,9 @@ mod tests {
 
     use crate::{
         HashType,
-        block::{HashableBlockData, HashableBlockDataWith, OwnHasher},
+        block::{DigestedBlock, HashableBlockData, HashableBlockDataWith, OwnHasher},
         test_utils,
-        transaction::LeeTransaction,
+        transaction::{LeeTransaction, LeeTransactionWith},
     };
 
     fn private_transaction(proof: Vec<u8>) -> LeeTransaction {
@@ -320,6 +320,12 @@ mod tests {
             Message::default(),
             WitnessSet::from_raw_parts(vec![], Proof::from_inner(proof)),
         ))
+    }
+
+    fn non_repeating_proof() -> Vec<u8> {
+        (0..=u8::MAX)
+            .flat_map(|n| OwnHasher::hash(&[n]).0)
+            .collect()
     }
 
     fn block_data_with(transactions: Vec<LeeTransaction>) -> HashableBlockData {
@@ -390,25 +396,6 @@ mod tests {
     }
 
     #[test]
-    fn inscription_len_is_the_length_of_the_inscribed_block() {
-        let data = HashableBlockData {
-            block_id: 1,
-            prev_block_hash: HashType([0; 32]),
-            timestamp: 0,
-            transactions: vec![test_utils::produce_dummy_empty_transaction()],
-            reverted: vec![0],
-        };
-        let inscribed = data
-            .clone()
-            .into_pending_block()
-            .digested()
-            .to_inscription()
-            .unwrap();
-
-        assert_eq!(data.inscription_len().unwrap(), inscribed.len());
-    }
-
-    #[test]
     fn the_block_hash_is_the_tagged_sha256_of_the_digest_form() {
         let data = block_data_with(vec![
             private_transaction(vec![0; 32]),
@@ -445,5 +432,51 @@ mod tests {
         let (other_tx_hash, other_block_hash) = hashes_with(vec![1; 32]);
         assert_ne!(tx_hash, other_tx_hash);
         assert_ne!(block_hash, other_block_hash);
+    }
+
+    #[test]
+    fn a_private_blocks_inscription_round_trips_carrying_its_proof_digest_and_none_of_its_bytes() {
+        let proof = non_repeating_proof();
+        let digest = Proof::from_inner(proof.clone()).digest();
+        let block = block_data_with(vec![
+            private_transaction(proof.clone()),
+            test_utils::produce_dummy_empty_transaction(),
+        ])
+        .into_pending_block()
+        .digested();
+
+        let inscription = block.to_inscription().unwrap();
+
+        let decoded = DigestedBlock::from_inscription(&inscription).unwrap();
+        assert_eq!(decoded, block);
+        assert!(matches!(
+            &*decoded.body.transactions,
+            [LeeTransactionWith::PrivacyPreserving(tx), _] if *tx.witness_set().proof() == digest
+        ));
+        assert!(inscription.len() < proof.len());
+        let distinctive = &proof[4096..4128];
+        assert!(
+            !inscription
+                .windows(distinctive.len())
+                .any(|window| window == distinctive)
+        );
+    }
+
+    #[test]
+    fn inscription_len_is_the_length_of_the_inscribed_block_not_of_its_full_form() {
+        let data = HashableBlockData {
+            reverted: vec![0],
+            ..block_data_with(vec![
+                private_transaction(non_repeating_proof()),
+                test_utils::produce_dummy_empty_transaction(),
+            ])
+        };
+        let block = data.clone().into_pending_block();
+        let inscribed = block.digested().to_inscription().unwrap();
+
+        let measured = data.inscription_len().unwrap();
+
+        assert_eq!(measured, inscribed.len());
+        assert!(measured < borsh::to_vec(&block).unwrap().len());
     }
 }

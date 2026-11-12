@@ -132,10 +132,14 @@ pub fn evaluate_config_message(
 
 #[cfg(test)]
 mod tests {
-
+    use lee::{
+        PrivacyPreservingTransaction,
+        privacy_preserving_transaction::{Message, WitnessSet, circuit::Proof},
+    };
     use logos_blockchain_core::proofs::channel_multi_sig_proof::IndexedSignature;
     use logos_blockchain_key_management_system_service::keys::Ed25519Key;
     use sequencer_channel_signing_actor::Signature;
+    use sequencer_core::config::{BLOCK_OVERHEAD, MAX_TRANSACTION_SIZE};
     use sequencer_slasher_actor::Offence;
     use sequencer_stake_core::SequencerKey;
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
@@ -237,6 +241,44 @@ mod tests {
             evaluate_transaction(&bytes, 1),
             TxEvaluation::Reject(_)
         ));
+    }
+
+    fn private_transaction(proof: Vec<u8>) -> LeeTransaction {
+        LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+            Message::default(),
+            WitnessSet::from_raw_parts(vec![], Proof::from_inner(proof)),
+        ))
+    }
+
+    #[test]
+    fn a_digest_form_over_the_block_cap_is_refused_as_too_large_for_a_block() {
+        let tx = private_transaction(vec![7; 32]);
+        let inscribed_size = u64::try_from(borsh::to_vec(&tx.digested()).unwrap().len()).unwrap();
+        let max_inscribed_size = inscribed_size.checked_sub(1).unwrap();
+        let max_block_size = max_inscribed_size.checked_add(BLOCK_OVERHEAD).unwrap();
+
+        let evaluation = evaluate_transaction(&borsh::to_vec(&tx).unwrap(), max_block_size);
+
+        let expected =
+            format!("transaction too large for a block: {inscribed_size} > {max_inscribed_size}");
+        assert!(
+            matches!(&evaluation, TxEvaluation::Reject(reason) if *reason == expected),
+            "{evaluation:?}"
+        );
+    }
+
+    #[test]
+    fn bytes_over_the_transaction_cap_are_refused_as_too_large_before_decoding() {
+        let size = MAX_TRANSACTION_SIZE.checked_add(1).unwrap();
+        let bytes = vec![0xff; usize::try_from(size).unwrap()];
+
+        let evaluation = evaluate_transaction(&bytes, 1 << 20);
+
+        let expected = format!("transaction too large: {size} > {MAX_TRANSACTION_SIZE}");
+        assert!(
+            matches!(&evaluation, TxEvaluation::Reject(reason) if *reason == expected),
+            "{evaluation:?}"
+        );
     }
 
     /// A channel-config signature as it goes on the wire.

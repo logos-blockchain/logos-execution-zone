@@ -9,7 +9,10 @@ use std::{
 
 use bridge_core::{DepositMetadata, DepositRecipient};
 use canned_channel::CannedChannel;
-use chain_state::{ChainState, ChannelEntry};
+use chain_state::{
+    ChainState, ChannelEntry,
+    test_utils::{private_transfer, with_private_sender},
+};
 use common::{
     HashType,
     block::{BedrockStatus, Block, HashableBlockData},
@@ -44,7 +47,9 @@ use logos_blockchain_core::{
 use logos_blockchain_key_management_system_service::keys::{
     Ed25519Key, Ed25519PublicKey, ZkPublicKey,
 };
-use logos_blockchain_zone_sdk::{Slot, sequencer::DepositInfo};
+use logos_blockchain_zone_sdk::{
+    Slot, UnverifiedEd25519PublicKey, ZoneBlock, ZoneMessage, sequencer::DepositInfo,
+};
 use mempool::MemPoolHandle;
 use ping_core::{ReceiverMessage, ping_record_pda, receiver_config_account_id};
 use sequencer_bedrock_actor::{
@@ -90,6 +95,8 @@ const TEST_INSCRIPTION: [u8; 32] = [0xA1; 32];
 const TEST_CHANNEL_ID: [u8; 32] = [0xC1; 32];
 /// The tips the fee distribution tests pay out.
 const TIPS: u128 = 7;
+/// Slots after a private block within which the skip tests let another writer skip it.
+const SKIP_WINDOW: u32 = 10;
 
 /// The `MsgId` the canned channel gives a published block, derived from its
 /// hash so tests can recompute it.
@@ -7253,4 +7260,379 @@ fn a_peer_genesis_hash_round_trips_as_hex() {
             .expect("peer serializes")
             .contains("\"0202020202020202020202020202020202020202020202020202020202020202\"")
     );
+}
+
+/// A genesis under which another writer may skip a private block within [`SKIP_WINDOW`] slots.
+fn skip_window_config() -> SequencerConfig {
+    let mut config = setup_sequencer_config();
+    config.genesis.as_mut().unwrap().channel_params.skip_window = SKIP_WINDOW;
+    config
+}
+
+/// `block` as the peer with `seed` inscribes it, chained on `parent`.
+fn peer_entry(block: &Block, parent: MsgId, seed: u8) -> ChannelEntry {
+    ChannelEntry {
+        signer: Some(Ed25519Key::from_bytes(&[seed; 32]).public_key().to_bytes()),
+        ..entry_of(block, parent)
+    }
+}
+
+/// Finalizes `entries`, each at the slot beside it, and moves the LIB to `lib_slot`.
+async fn finalize_at(
+    sequencer: &mut SequencerCore<StorageActor, MockBedrockActor>,
+    entries: &[(&ChannelEntry, u64)],
+    lib_slot: u64,
+) {
+    sequencer
+        .on_channel_update(Arc::new(ChannelUpdate {
+            checkpoint: Checkpoint {
+                lib_slot: Slot::from(lib_slot),
+                ..mock_checkpoint()
+            },
+            finalized: entries
+                .iter()
+                .map(|&(entry, slot)| ChannelEntry {
+                    slot: Some(Slot::from(slot)),
+                    ..entry.clone()
+                })
+                .collect(),
+            ..empty_channel_update()
+        }))
+        .await;
+}
+
+/// The hash of `sequencer`'s final tip.
+async fn final_tip_hash(
+    sequencer: &SequencerCore<StorageActor, MockBedrockActor>,
+) -> Option<HashType> {
+    sequencer
+        .chain()
+        .lock()
+        .await
+        .final_tip()
+        .map(|tip| tip.hash)
+}
+
+/// Funds the private sender in `sequencer`'s head state, and returns that state.
+async fn fund_private_sender(
+    sequencer: &SequencerCore<StorageActor, MockBedrockActor>,
+) -> V03State {
+    let chain = sequencer.chain();
+    let mut chain = chain.lock().await;
+    let state = chain.head_state_mut();
+    *state = with_private_sender(state.clone());
+    state.clone()
+}
+
+fn is_private(block: &Block) -> bool {
+    block
+        .body
+        .transactions
+        .iter()
+        .any(|tx| matches!(tx, LeeTransaction::PrivacyPreserving(_)))
+}
+
+/// The proof of `block`'s leading private transaction.
+fn proof_of(block: &Block) -> lee::privacy_preserving_transaction::circuit::Proof {
+    let LeeTransaction::PrivacyPreserving(private) = &block.body.transactions[0] else {
+        unreachable!("the block leads with a private transaction");
+    };
+    private.witness_set().proof().clone()
+}
+
+/// A peer's block on `genesis` carrying the private transfer, and another peer's block on
+/// `genesis` that skips it, both over `state`.
+fn private_block_and_skip(genesis: &Block, state: &V03State) -> (Block, Block) {
+    let producer = initial_public_user_accounts()[1].account_id;
+    (
+        settled_peer_block(
+            state,
+            2,
+            genesis.header.hash,
+            vec![private_transfer(state)],
+            producer,
+        ),
+        settled_peer_block(state, 2, genesis.header.hash, vec![], producer),
+    )
+}
+
+#[tokio::test]
+async fn nodes_with_and_without_the_proof_of_a_skipped_private_block_converge_on_the_skip_unreported()
+ {
+    let (mut lacking, _lacking_mempool) = start_sequencer(skip_window_config()).await;
+    let (mut holding, _holding_mempool) = start_sequencer_bare(skip_window_config()).await;
+    let genesis = block_at(&lacking, GENESIS_BLOCK_ID).await.unwrap();
+    let genesis_entry = finalized_as_held(&lacking.chain(), &genesis).await;
+    adopt(&mut holding, genesis_entry.clone()).await;
+    let state = fund_private_sender(&lacking).await;
+    assert!(fund_private_sender(&holding).await == state);
+    let (private, skip) = private_block_and_skip(&genesis, &state);
+    let private_entry = peer_entry(&private, genesis_entry.msg, 5);
+    let skip_entry = peer_entry(&skip, private_entry.msg, 6);
+
+    holding.proof_store().insert(&proof_of(&private));
+    adopt(&mut holding, private_entry.clone()).await;
+    adopt(&mut lacking, private_entry.clone()).await;
+    assert_eq!(
+        holding.chain().lock().await.head_tip().map(|tip| tip.hash),
+        Some(private.header.hash),
+        "the holding node executes the private block"
+    );
+    assert_eq!(
+        lacking.chain().lock().await.missing_proofs(),
+        vec![proof_of(&private).digest()]
+    );
+    for node in [&mut holding, &mut lacking] {
+        adopt(node, skip_entry.clone()).await;
+        finalize_at(
+            node,
+            &[(&genesis_entry, 1), (&private_entry, 2), (&skip_entry, 3)],
+            3,
+        )
+        .await;
+    }
+
+    for node in [&holding, &lacking] {
+        let stored = block_at(node, 2).await.unwrap();
+        assert_eq!(stored.header.hash, skip.header.hash);
+        assert!(matches!(stored.bedrock_status, BedrockStatus::Finalized));
+    }
+    assert!(
+        !slash_recorded(&holding).await,
+        "cutting a block it executed is no offence"
+    );
+    assert!(
+        !slash_recorded(&lacking).await,
+        "neither the skipped block nor its skip is an offence"
+    );
+}
+
+#[tokio::test]
+async fn a_finalized_skip_of_a_plain_block_is_reported() {
+    let (mut sequencer, _mempool_handle) = start_sequencer(skip_window_config()).await;
+    let (approvals_tx, mut approvals) = tokio::sync::mpsc::channel(8);
+    sequencer
+        .slasher_ref()
+        .tell(sequencer_slasher_actor::SetApprovalPublisher(approvals_tx))
+        .await
+        .expect("the slasher takes a publisher");
+    let genesis = block_at(&sequencer, GENESIS_BLOCK_ID).await.unwrap();
+    let state = sequencer.with_state(Clone::clone).await;
+    let producer = initial_public_user_accounts()[1].account_id;
+    let transfer = common::test_utils::create_transaction_native_token_transfer(
+        initial_public_user_accounts()[0].account_id,
+        0,
+        producer,
+        10,
+        &create_signing_key_for_account1(),
+    );
+    let plain = settled_peer_block(&state, 2, genesis.header.hash, vec![transfer], producer);
+    let skip = settled_peer_block(&state, 2, genesis.header.hash, vec![], producer);
+    let genesis_entry = finalized_as_held(&sequencer.chain(), &genesis).await;
+    let plain_entry = peer_entry(&plain, genesis_entry.msg, 5);
+    let skip_entry = peer_entry(&skip, plain_entry.msg, 6);
+
+    adopt(&mut sequencer, plain_entry.clone()).await;
+    adopt(&mut sequencer, skip_entry.clone()).await;
+    finalize_at(
+        &mut sequencer,
+        &[(&genesis_entry, 1), (&plain_entry, 2), (&skip_entry, 3)],
+        3,
+    )
+    .await;
+
+    assert_eq!(
+        final_tip_hash(&sequencer).await,
+        Some(plain.header.hash),
+        "a plain block cannot be skipped"
+    );
+    let reported: Vec<_> = std::iter::from_fn(|| approvals.try_recv().ok())
+        .map(|approval| approval.offence)
+        .collect();
+    assert_eq!(
+        reported,
+        vec![sequencer_slasher_actor::Offence {
+            offender: test_sequencer_key(6),
+            inscription: skip_entry.msg.into(),
+        }]
+    );
+}
+
+/// `entry` as the channel's finalized history serves it at `slot`.
+fn history_message(entry: &ChannelEntry, slot: u64) -> (ZoneMessage, Slot) {
+    let payload = entry.block.as_ref().map_or_else(
+        || b"not a block".to_vec(),
+        |block| block.to_inscription().expect("the block serializes"),
+    );
+    let message = ZoneMessage::Block(ZoneBlock {
+        id: entry.msg,
+        data: Inscription::try_from(payload.as_slice()).expect("the payload fits an inscription"),
+        signer: UnverifiedEd25519PublicKey::from_bytes(&entry.signer.unwrap_or_default())
+            .expect("an unverified key takes any bytes"),
+    });
+    (message, Slot::from(slot))
+}
+
+#[tokio::test]
+async fn replay_cuts_a_block_skipped_in_the_last_slot_of_its_window_as_a_live_node_does() {
+    let config = skip_window_config();
+    let (state, private, skip, entries, storage) = {
+        let (mut sequencer, _mempool_handle) = start_sequencer(config.clone()).await;
+        let genesis = block_at(&sequencer, GENESIS_BLOCK_ID).await.unwrap();
+        let state = fund_private_sender(&sequencer).await;
+        let (private, skip) = private_block_and_skip(&genesis, &state);
+        let genesis_entry = finalized_as_held(&sequencer.chain(), &genesis).await;
+        finalize_at(&mut sequencer, &[(&genesis_entry, 1)], 1).await;
+        sequencer.proof_store().insert(&proof_of(&private));
+        let private_entry = peer_entry(&private, genesis_entry.msg, 5);
+        adopt(&mut sequencer, private_entry.clone()).await;
+        let gap_entry = ChannelEntry {
+            msg: MsgId::from([0xAA; 32]),
+            parent: private_entry.msg,
+            signer: None,
+            slot: None,
+            block: None,
+        };
+        let skip_entry = peer_entry(&skip, gap_entry.msg, 6);
+        let entries = [genesis_entry, private_entry, gap_entry, skip_entry];
+        (
+            state,
+            private,
+            skip,
+            entries,
+            sequencer.storage_ref.downgrade(),
+        )
+    };
+    storage.wait_for_shutdown_with_result(|_| ()).await;
+    let [genesis_entry, private_entry, gap_entry, skip_entry] = &entries;
+
+    let (replayed, _replayed_mempool) = start_sequencer_bare_on(
+        config,
+        CannedChannel {
+            tip_slot: Some(Slot::from(20)),
+            messages: vec![
+                history_message(genesis_entry, 1),
+                history_message(private_entry, 10),
+                history_message(gap_entry, 20),
+                history_message(skip_entry, 20),
+            ],
+            ..CannedChannel::empty()
+        },
+    )
+    .await;
+    let (mut live, _live_mempool) = start_sequencer_bare(skip_window_config()).await;
+    adopt(&mut live, genesis_entry.clone()).await;
+    assert!(fund_private_sender(&live).await == state);
+    live.proof_store().insert(&proof_of(&private));
+    finalize_at(&mut live, &[(genesis_entry, 1), (private_entry, 10)], 10).await;
+    finalize_at(&mut live, &[(gap_entry, 20), (skip_entry, 20)], 20).await;
+
+    assert_eq!(final_tip_hash(&live).await, Some(skip.header.hash));
+    let (replayed_chain, live_chain) = (replayed.chain(), live.chain());
+    let (replayed_chain, live_chain) = (replayed_chain.lock().await, live_chain.lock().await);
+    assert_eq!(replayed_chain.final_tip(), live_chain.final_tip());
+    assert!(replayed_chain.final_state() == live_chain.final_state());
+}
+
+/// Whether the deposit `op_id` still has its pending record.
+async fn deposit_recorded(
+    sequencer: &SequencerCore<StorageActor, MockBedrockActor>,
+    op_id: [u8; 32],
+) -> bool {
+    sequencer
+        .storage_ref
+        .ask(GetPendingDepositEvents)
+        .await
+        .unwrap()
+        .iter()
+        .any(|record| record.deposit_op_id == HashType(op_id))
+}
+
+#[tokio::test]
+async fn a_deposit_minted_in_a_cut_block_is_minted_again_once_and_recorded_until_that_settles() {
+    let op_id = [0x68; 32];
+    let (mut sequencer, mempool_handle) = start_sequencer(skip_window_config()).await;
+    let balance_before = native_balance(&sequencer, deposit_recipient()).await;
+    let state = fund_private_sender(&sequencer).await;
+    mempool_handle
+        .push((TransactionOrigin::User, private_transfer(&state)))
+        .await
+        .unwrap();
+    sequencer
+        .on_channel_update(Arc::new(ChannelUpdate {
+            deposits: vec![deposit_info(op_id, 5, &[])],
+            ..empty_channel_update()
+        }))
+        .await;
+    let cut = sequencer.run_production_turn().await.unwrap();
+    let cut = block_at(&sequencer, cut)
+        .await
+        .expect("produced block is stored");
+    assert_eq!(mint_count(&cut, op_id, 5), 1);
+    assert!(is_private(&cut), "only a private block can be skipped");
+
+    let genesis = block_at(&sequencer, GENESIS_BLOCK_ID).await.unwrap();
+    let skip = settled_peer_block(
+        &state,
+        2,
+        genesis.header.hash,
+        vec![],
+        initial_public_user_accounts()[1].account_id,
+    );
+    let genesis_entry = finalized_as_held(&sequencer.chain(), &genesis).await;
+    let cut_entry = finalized_as_held(&sequencer.chain(), &cut).await;
+    let skip_entry = peer_entry(&skip, cut_entry.msg, 6);
+    adopt(&mut sequencer, skip_entry.clone()).await;
+    finalize_at(
+        &mut sequencer,
+        &[(&genesis_entry, 1), (&cut_entry, 2), (&skip_entry, 3)],
+        3,
+    )
+    .await;
+    assert_eq!(final_tip_hash(&sequencer).await, Some(skip.header.hash));
+    serve_channel(
+        &sequencer,
+        CannedChannel {
+            tip: Some(skip_entry.msg),
+            ..CannedChannel::empty()
+        },
+    )
+    .await;
+    assert!(
+        !sequencer
+            .with_state(|state| deposit_already_minted(state, HashType(op_id)))
+            .await,
+        "the receipt goes with the cut block"
+    );
+    assert!(
+        deposit_recorded(&sequencer, op_id).await,
+        "a cut mint settles nothing"
+    );
+
+    let again = sequencer.run_production_turn().await.unwrap();
+    let again = block_at(&sequencer, again)
+        .await
+        .expect("produced block is stored");
+    assert_eq!(mint_count(&again, op_id, 5), 1);
+    assert_eq!(
+        native_balance(&sequencer, deposit_recipient()).await,
+        balance_before + 5,
+        "the recipient is credited once across the cut"
+    );
+    assert!(
+        is_private(&again),
+        "the cut block's private transfer is requeued, so the new mint settles late"
+    );
+    assert!(deposit_recorded(&sequencer, op_id).await);
+    let again_entry = finalized_as_held(&sequencer.chain(), &again).await;
+    finalize_at(&mut sequencer, &[(&again_entry, 4)], 4).await;
+    assert_ne!(final_tip_hash(&sequencer).await, Some(again.header.hash));
+    assert!(
+        deposit_recorded(&sequencer, op_id).await,
+        "a final mint keeps its record until it settles"
+    );
+
+    finalize_at(&mut sequencer, &[], 4 + u64::from(SKIP_WINDOW)).await;
+    assert_eq!(final_tip_hash(&sequencer).await, Some(again.header.hash));
+    assert!(!deposit_recorded(&sequencer, op_id).await);
 }

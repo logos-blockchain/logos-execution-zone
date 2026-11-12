@@ -130,6 +130,7 @@ pub(crate) fn clock_block_id(state: &lee::V03State) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+
     use lee_core::account::Account;
     use logos_blockchain_key_management_system_service::keys::Ed25519Key;
     use sequencer_stake_core::{PendingUnstake, SequencerEntry, SequencerStakeConfig};

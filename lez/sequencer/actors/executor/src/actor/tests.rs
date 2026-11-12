@@ -32,6 +32,7 @@ use crate::{
 };
 
 mod reconstruction;
+mod skipping;
 
 fn sequencer_config() -> (SequencerConfig, TempDir) {
     let home = TempDir::new().expect("Failed to create temporary home directory");

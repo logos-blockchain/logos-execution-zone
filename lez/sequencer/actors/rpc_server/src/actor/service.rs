@@ -421,8 +421,37 @@ fn internal_error(err: impl std::fmt::Display) -> ErrorObjectOwned {
 
 #[cfg(test)]
 mod tests {
+    use kameo::actor::Spawn as _;
+    use lee::{
+        PrivacyPreservingTransaction,
+        privacy_preserving_transaction::{Message, WitnessSet, circuit},
+    };
+    use sequencer_core::config::{BLOCK_OVERHEAD, MAX_TRANSACTION_SIZE};
+    use sequencer_executor_actor::mock::MockExecutorActor;
+    use sequencer_service_rpc::RpcServer as _;
 
     use super::*;
+
+    fn spawn_service(
+        max_block_size: u64,
+        executor: MockExecutorActor,
+        proof_store: ProofStore,
+    ) -> Service<MockExecutorActor> {
+        let (_, max_block_size_rx) = tokio::sync::watch::channel(max_block_size);
+        Service::new(
+            MockExecutorActor::spawn(executor),
+            max_block_size_rx,
+            None,
+            proof_store,
+        )
+    }
+
+    fn private_transaction(proof: Vec<u8>) -> LeeTransaction {
+        LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+            Message::default(),
+            WitnessSet::from_raw_parts(vec![], circuit::Proof::from_inner(proof)),
+        ))
+    }
 
     #[test]
     fn a_reserve_below_the_head_fee_gets_the_reprice_code() {
@@ -437,5 +466,61 @@ mod tests {
             sequencer_service_rpc::PRIVATE_FEE_BELOW_HEAD_ERROR_CODE
         );
         assert!(below.message().contains("below the 2 required"));
+    }
+
+    #[tokio::test]
+    async fn get_proof_serves_a_held_proof_by_its_digest_and_nothing_for_an_unknown_one() {
+        let store = ProofStore::new(usize::MAX);
+        let service = spawn_service(1 << 20, MockExecutorActor::new(), store.clone());
+        let held = circuit::Proof::from_inner(vec![1; 32]);
+        let unknown = circuit::Proof::from_inner(vec![2; 32]);
+        store.insert(&held);
+
+        assert_eq!(
+            service.get_proof(ProofDigest(held.digest())).await.unwrap(),
+            Some(Proof(held))
+        );
+        assert_eq!(
+            service
+                .get_proof(ProofDigest(unknown.digest()))
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn send_transaction_refuses_a_full_form_over_the_transaction_cap() {
+        let service = spawn_service(1 << 20, MockExecutorActor::new(), ProofStore::new(0));
+        let tx = private_transaction(vec![7; usize::try_from(MAX_TRANSACTION_SIZE).unwrap()]);
+        let size = borsh::to_vec(&tx).unwrap().len();
+
+        let refused = service.send_transaction(tx).await.unwrap_err();
+
+        assert_eq!(refused.code(), ErrorCode::InvalidParams.code());
+        assert_eq!(
+            refused.message(),
+            format!("transaction too large: {size} > {MAX_TRANSACTION_SIZE}")
+        );
+    }
+
+    #[tokio::test]
+    async fn send_transaction_refuses_a_digest_form_over_the_block_cap() {
+        let tx = private_transaction(vec![7; 32]);
+        let inscribed_size = u64::try_from(borsh::to_vec(&tx.digested()).unwrap().len()).unwrap();
+        let max_inscribed_size = inscribed_size.checked_sub(1).unwrap();
+        let service = spawn_service(
+            max_inscribed_size.checked_add(BLOCK_OVERHEAD).unwrap(),
+            MockExecutorActor::new(),
+            ProofStore::new(0),
+        );
+
+        let refused = service.send_transaction(tx).await.unwrap_err();
+
+        assert_eq!(refused.code(), ErrorCode::InvalidParams.code());
+        assert_eq!(
+            refused.message(),
+            format!("transaction too large for a block: {inscribed_size} > {max_inscribed_size}")
+        );
     }
 }
