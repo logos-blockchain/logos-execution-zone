@@ -82,6 +82,8 @@
 /lez/src/                                     @arjentix @schouhy
 /lez/Cargo.toml                               @arjentix @schouhy
 /lez/sequencer/core/                          @schouhy @erhant @arjentix
+/lez/sequencer/genesis/                       @schouhy @erhant @arjentix
+/lez/sequencer/bridge/                        @schouhy @erhant @arjentix
 /lez/sequencer/service/                       @arjentix @schouhy @erhant
 /lez/mempool/                                 @arjentix @erhant
 
@@ -89,7 +91,6 @@
 /lez/sequencer/core/src/cross_zone_watcher.rs @moudyellaz @schouhy
 
 ## Sequencer gossip
-/lez/sequencer/core/src/gossip/               @erhant @schouhy
 /lez/sequencer/actors/gossip/                 @erhant @schouhy
 
 ## Sequencer actors

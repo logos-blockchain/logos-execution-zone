@@ -8,7 +8,12 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use integration_tests::{account_balance, get_account, new_account};
+use common::{
+    HashType,
+    block::Block,
+    transaction::{FeePayee, LeeTransaction, fee_invocation_payee},
+};
+use integration_tests::{account_balance, get_account, new_account, wait_for_same_chain};
 use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey, program::Program};
 use log::info;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, UnsecuredEd25519Key};
@@ -87,7 +92,6 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
 
     let config_id = system_accounts::sequencer_stake_config_account_id();
     let stake_id = programs::sequencer_stake_account_id();
-    let ownership = AccountIdentity::Public(ownership_id).select_program_actor_state(stake_id);
 
     info!(
         "Submitting Stake transaction for sequencer key {}",
@@ -136,14 +140,15 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         hex::encode(record.sequencer_key)
     );
 
-    let observer = spawn_channel_observer(ctx.bedrock_addr(), bedrock_channel_id()).await?;
+    let channel_id = bedrock_channel_id();
+    let observer = spawn_channel_observer(ctx.bedrock_addr(), channel_id)?;
 
     // The committee-config update is a separate tx from the block's own
     // publish, so it may land a moment later — poll a few times before failing.
     let mut committee = None;
     for _ in 0..10 {
         let accredited = observer
-            .ask(GetAccreditedKeys)
+            .ask(GetAccreditedKeys { channel_id })
             .await
             .context("Failed to read the channel's accredited keys")?
             .context("Bedrock channel does not exist")?;
@@ -163,7 +168,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
 
     // Only now start a node behind the key, against a channel that already has a chain.
     let (joiner, _joiner_home) = SequencerSetup::new(fast_blocks(), ctx.bedrock_addr())
-        .with_channel_id(bedrock_channel_id())
+        .with_channel_id(channel_id)
         .with_channel_signing_key(UnsecuredEd25519Key::from_bytes(&JOINER_SIGNING_KEY))
         .joining_existing_channel()
         .setup()
@@ -179,44 +184,29 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     .await?;
     info!("Joining sequencer synced to block {joined_at}");
 
-    // A tip past `joined_at` under the demo key is a block this node built.
-    poll_until("the joining sequencer to build a block on its turn", 180, {
-        let observer = &observer;
-        let ctx = &ctx;
+    // A block's fee transaction pays its producer's ownership account, and the leader holds the
+    // joiner's blocks only once Bedrock carries them.
+    poll_until("a block built by the joining sequencer to land", 180, {
+        let leader_client = ctx.sequencer_client();
         move || async move {
-            let Some(accredited) = observer.ask(GetAccreditedKeys).await? else {
-                return Ok(false);
-            };
-            Ok(accredited.whose_turn() == Some(demo_sequencer_key)
-                && ctx.sequencer_client().get_last_block_id().await? > joined_at)
+            let tip = leader_client.get_last_block_id().await?;
+            for id in joined_at.saturating_add(1)..=tip {
+                let block = leader_client.get_block(id).await?;
+                if block.as_ref().and_then(producer_account) == Some(ownership_id) {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
         }
     })
     .await?;
-    info!("Joining sequencer produced a block on its round-robin turn");
+    info!("A block built by the joining sequencer landed on the leader's chain");
 
     // Both nodes agree, block for block, over everything they share.
-    let leader_client = ctx.sequencer_client();
-    let common = leader_client
-        .get_last_block_id()
-        .await?
-        .min(joiner_client.get_last_block_id().await?);
-    for id in 1..=common {
-        let leader_block = leader_client
-            .get_block(id)
-            .await?
-            .with_context(|| format!("Leader is missing block {id}"))?;
-        let joiner_block = joiner_client
-            .get_block(id)
-            .await?
-            .with_context(|| format!("Joining sequencer is missing block {id}"))?;
-        anyhow::ensure!(
-            leader_block.header.hash == joiner_block.header.hash,
-            "Chain divergence at block {id}: leader {:?} vs joiner {:?}",
-            leader_block.header.hash,
-            joiner_block.header.hash
-        );
-    }
-    info!("Leader and joining sequencer agree on all {common} shared blocks");
+    wait_for_same_chain(ctx.sequencer_client(), &joiner_client)
+        .await
+        .context("Leader (A) and joining sequencer (B) disagree on the chain")?;
+    info!("Leader and joining sequencer agree on their shared blocks");
 
     // Exit flow: full UnstakeRequest, wait for the committee removal to land on
     // Bedrock, then check the sequencer's own FinalizeUnstake releases the stake.
@@ -225,36 +215,65 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     let destination_id = funding_id;
     let destination_balance = account_balance(&ctx, destination_id).await?;
 
-    let requested_at = ctx
-        .sequencer_client()
-        .get_last_block_id()
-        .await?
-        .saturating_add(sequencer_stake_core::UNSTAKE_REQUEST_WINDOW);
-    let unstake_request_message =
-        Program::serialize_message(sequencer_stake_core::Message::UnstakeRequest {
-            sequencer_key: demo_stake_key,
-            amount: u128::from(funding_balance),
-            destination: destination_id,
-            requested_at,
-        })
-        .context("Failed to serialize UnstakeRequest message")?;
-    ctx.wallet()
-        .send_pub_tx(
-            vec![
-                ownership,
-                AccountIdentity::PublicNoSign(config_id).select_program_actor_state(stake_id),
-            ],
-            0,
-            unstake_request_message,
-        )
-        .await
-        .map_err(|err| anyhow::anyhow!("Failed to submit UnstakeRequest transaction: {err:?}"))?;
-    info!("Submitted full UnstakeRequest for the demo sequencer key");
+    let submit_unstake_request = async |requested_at: u64| -> Result<HashType> {
+        let unstake_request_message =
+            Program::serialize_message(sequencer_stake_core::Message::UnstakeRequest {
+                sequencer_key: demo_stake_key,
+                amount: u128::from(funding_balance),
+                destination: destination_id,
+                requested_at,
+            })
+            .context("Failed to serialize UnstakeRequest message")?;
+        let tx_hash = ctx
+            .wallet()
+            .send_pub_tx(
+                vec![
+                    AccountIdentity::Public(ownership_id).select_program_actor_state(stake_id),
+                    AccountIdentity::PublicNoSign(config_id).select_program_actor_state(stake_id),
+                ],
+                0,
+                unstake_request_message,
+            )
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!("Failed to submit UnstakeRequest transaction: {err:?}")
+            })?;
+        info!(
+            "Submitted full UnstakeRequest for the demo sequencer key, valid up to block {requested_at}"
+        );
+        Ok(tx_hash)
+    };
 
+    // The request expires `UNSTAKE_REQUEST_WINDOW` blocks on, and without gossip
+    // only the sequencer it was sent to includes it, so a request sent while the
+    // joiner holds the turn can expire unseen: send a fresh one once it has.
+    let mut request: Option<(HashType, u64)> = None;
+    let mut included = false;
     let mut removed = false;
     for _ in 0..60 {
+        if !included {
+            let last_block_id = ctx.sequencer_client().get_last_block_id().await?;
+            match request {
+                Some((tx_hash, _))
+                    if ctx
+                        .sequencer_client()
+                        .get_transaction(tx_hash)
+                        .await?
+                        .is_some() =>
+                {
+                    included = true;
+                }
+                Some((_, requested_at)) if last_block_id <= requested_at => {}
+                _ => {
+                    let requested_at =
+                        last_block_id.saturating_add(sequencer_stake_core::UNSTAKE_REQUEST_WINDOW);
+                    request = Some((submit_unstake_request(requested_at).await?, requested_at));
+                }
+            }
+        }
+
         let accredited = observer
-            .ask(GetAccreditedKeys)
+            .ask(GetAccreditedKeys { channel_id })
             .await
             .context("Failed to read the channel's accredited keys")?
             .context("Bedrock channel does not exist")?;
@@ -310,6 +329,16 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     );
 
     Ok(())
+}
+
+/// The account `block` pays its producer, read from its fee transaction, which is second to last.
+fn producer_account(block: &Block) -> Option<AccountId> {
+    let transactions = &block.body.transactions;
+    let LeeTransaction::Public(fee_tx) = transactions.get(transactions.len().checked_sub(2)?)?
+    else {
+        return None;
+    };
+    fee_invocation_payee(fee_tx).map(FeePayee::producer)
 }
 
 /// The `sequencer_stake` config entry for `sequencer_key`, or `None` if the key

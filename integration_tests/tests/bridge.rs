@@ -39,8 +39,8 @@ use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder,
     config::{
-        MultiNodeTestContextConfig, UrlProtocol, addr_to_url, bedrock_channel_id,
-        bedrock_funding_key,
+        MultiNodeTestContextConfig, SequencerPartialConfig, UrlProtocol, addr_to_url,
+        bedrock_channel_id, bedrock_funding_key,
     },
 };
 use tokio::test;
@@ -296,11 +296,12 @@ async fn submit_bedrock_deposit(
     }
     let note_id = note_id.context("The Bedrock wallet never held a note of the deposit amount")?;
 
-    let metadata = borsh::to_vec(&DepositMetadata {
-        recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(recipient)),
-    })?
-    .try_into()
-    .map_err(|_err| anyhow::anyhow!("deposit metadata is too big"))?;
+    // Bounded per era now; a recipient is far under any era's limit.
+    let metadata = logos_blockchain_core::mantle::ops::channel::deposit::Metadata::new_unchecked(
+        borsh::to_vec(&DepositMetadata {
+            recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(recipient)),
+        })?,
+    );
     let deposit = DepositOp {
         channel_id: bedrock_channel_id(),
         inputs: Inputs::new(note_id),
@@ -350,9 +351,14 @@ fn pins_note(block: &ApiBlock, note: NoteId) -> bool {
 async fn a_bedrock_deposit_seen_before_finality_is_minted_in_a_block_pinned_on_it_and_only_once()
 -> anyhow::Result<()> {
     let ctx = MultiZoneTestContextBuilder::default()
-        .with_zone(ZoneTestContextBuilder::new(
-            MultiNodeTestContextConfig::default(),
-        ))
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
+                .with_sequencer_partial_config(SequencerPartialConfig {
+                    // Covers the storage price doubling at the devnet's first epoch rotations.
+                    priority_fee_percent: 150,
+                    ..SequencerPartialConfig::default()
+                }),
+        )
         .with_bedrock_settings("deployment-settings-slow-finality.yaml")
         .build()
         .await?;

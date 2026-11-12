@@ -3,7 +3,7 @@
 //! cross-zone message minting the wrapped token on the target zone.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-pub use cross_zone_emission_core::CrossZoneEmission;
+pub use cross_zone_emission_core::{CrossZoneEmission, ZoneId};
 use lee_core::{
     account::{AccountId, Actor},
     program::PdaSeed,
@@ -27,8 +27,8 @@ pub enum Message {
     /// value for each: `cross_zone::extract_emission` reads them off the
     /// transaction, decoding every emitter through one shape.
     ///
-    /// The target zone is the caller's, so a lock to a zone that will not route
-    /// it escrows and never mints. TODO: bound it source-side.
+    /// The target zone is the caller's, so the config pins it: a lock to a zone
+    /// this zone does not lock to is refused.
     ///
     /// Sent to the holder's own actor under this program, signed by the holder;
     /// `outbox` is the outbox PDA actor the emission goes to. The trailing
@@ -38,17 +38,19 @@ pub enum Message {
         amount: u128,
         emission: CrossZoneEmission,
     },
-    /// Sets the outbox program and mint target in the config actor state at genesis.
-    /// Repeating the same configuration is a no-op; a different one is rejected.
+    /// Written once into the config actor state at genesis. Repeating the same
+    /// configuration is a no-op; a different one is rejected.
     ///
     /// Sent to the config PDA.
     InitConfig {
         outbox_account_id: AccountId,
         target_account_id: AccountId,
+        lock_target_zones: Vec<ZoneId>,
     },
     CheckRoute {
         outbox_account_id: AccountId,
         target_account_id: AccountId,
+        target_zone: ZoneId,
     },
 }
 
@@ -88,8 +90,9 @@ pub fn holding_seed(holder: &[u8; 32]) -> PdaSeed {
     PdaSeed::new(seed)
 }
 
-/// PDA holding the outbox program id and the mint target, seeded at genesis so
-/// the guest can pin both without importing their image ids.
+/// PDA holding the outbox program id, the mint target and the zones this zone
+/// locks to, seeded at genesis so the guest pins them without hardcoding any
+/// ids.
 #[must_use]
 pub fn config_account_id(bridge_lock_id: AccountId) -> AccountId {
     AccountId::for_public_pda(&bridge_lock_id, &config_seed())
@@ -100,25 +103,39 @@ pub const fn config_seed() -> PdaSeed {
     PdaSeed::new(CONFIG_SEED_DOMAIN)
 }
 
-/// Encodes the pinned outbox and mint target for the config account's data.
+/// Laid out as outbox ‖ mint target ‖ zone id*.
 #[must_use]
-pub fn config_bytes(outbox_account_id: AccountId, target_account_id: AccountId) -> [u8; 64] {
-    let mut bytes = [0_u8; 64];
-    bytes[..32].copy_from_slice(outbox_account_id.as_ref());
-    bytes[32..].copy_from_slice(target_account_id.as_ref());
+pub fn config_bytes(
+    outbox_account_id: AccountId,
+    target_account_id: AccountId,
+    lock_target_zones: &[ZoneId],
+) -> Vec<u8> {
+    let mut bytes =
+        Vec::with_capacity(64_usize.saturating_add(lock_target_zones.len().saturating_mul(32)));
+    bytes.extend_from_slice(outbox_account_id.as_ref());
+    bytes.extend_from_slice(target_account_id.as_ref());
+    for zone in lock_target_zones {
+        bytes.extend_from_slice(zone);
+    }
     bytes
 }
 
-/// Decodes the pinned outbox and mint target from the config account's data.
+/// `None` unless the tail is whole zone ids: a partial tail would silently drop
+/// a zone from the pinned list.
 #[must_use]
-pub fn read_config(data: &[u8]) -> Option<(AccountId, AccountId)> {
-    if data.len() < 64 {
+pub fn read_config(data: &[u8]) -> Option<(AccountId, AccountId, Vec<ZoneId>)> {
+    let (pinned, tail) = data.split_at_checked(64)?;
+    let (zones, remainder) = tail.as_chunks::<32>();
+    if !remainder.is_empty() {
         return None;
     }
-    assert!(data.len() >= 64, "checked above");
-    let outbox: [u8; 32] = data[..32].try_into().unwrap_or_else(|_| unreachable!());
-    let target: [u8; 32] = data[32..64].try_into().unwrap_or_else(|_| unreachable!());
-    Some((AccountId::new(outbox), AccountId::new(target)))
+    let outbox: [u8; 32] = pinned[..32].try_into().unwrap_or_else(|_| unreachable!());
+    let target: [u8; 32] = pinned[32..].try_into().unwrap_or_else(|_| unreachable!());
+    Some((
+        AccountId::new(outbox),
+        AccountId::new(target),
+        zones.to_vec(),
+    ))
 }
 
 #[cfg(test)]
@@ -135,10 +152,19 @@ mod tests {
     fn config_ids_round_trip() {
         let outbox = AccountId::new([3; 32]);
         let target = AccountId::new([5; 32]);
-        assert_eq!(
-            read_config(&config_bytes(outbox, target)),
-            Some((outbox, target))
-        );
+        for zones in [Vec::new(), vec![[7; 32]], vec![[7; 32], [8; 32], [9; 32]]] {
+            assert_eq!(
+                read_config(&config_bytes(outbox, target, &zones)),
+                Some((outbox, target, zones))
+            );
+        }
+    }
+
+    #[test]
+    fn a_config_that_is_not_whole_zone_ids_is_refused() {
+        let bytes = config_bytes(AccountId::new([3; 32]), AccountId::new([5; 32]), &[[7; 32]]);
+        assert_eq!(read_config(&bytes[..bytes.len().saturating_sub(1)]), None);
+        assert_eq!(read_config(&bytes[..63]), None);
     }
 
     #[test]

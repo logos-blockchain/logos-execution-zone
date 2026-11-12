@@ -23,6 +23,7 @@ struct Args {
 enum DashboardKind {
     Sequencer,
     Network,
+    Actors,
 }
 
 impl DashboardKind {
@@ -30,6 +31,7 @@ impl DashboardKind {
         match self {
             Self::Sequencer => dashboards::sequencer::dashboard(),
             Self::Network => dashboards::network::dashboard(),
+            Self::Actors => dashboards::actors::dashboard(),
         }
     }
 }

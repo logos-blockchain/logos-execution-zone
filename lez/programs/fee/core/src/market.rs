@@ -38,24 +38,21 @@ pub const SMOOTHING_WINDOW: usize = 50;
 
 /// A private reserve surplus at or below this is kept as tip instead of being
 /// refunded: a refund costs a publication, a note and a later nullifier.
-// TODO: agree the value with the tokenomics team.
 pub const MIN_PRIVATE_REFUND: Balance = 1_000_000;
 
-// FIXME: Provisional: re-pin with the LEZ wire-format numbers (spec Parameters TODO).
 /// Execution gas charged to every private transaction: succinct receipt verification.
 ///
 /// RISC Zero 3.0.5, `G_verify` ≈ 12.2 ms at 33,546 cycles/ms (`docs/benchmarks/cycle_bench.md`).
-/// Independent of the circuit's contents; re-pin on a RISC Zero bump.
+/// A flat charge because verification only accepts a succinct receipt, a STARK of RISC Zero's
+/// fixed recursion circuit: its work does not depend on the execution it proves.
+/// Re-pin on a RISC Zero bump.
 pub const PRIVATE_VERIFY_GAS: u64 = 409_764;
-/// Proof bytes inside every private transaction: the fixed succinct receipt size.
-pub const PROOF_BYTES: u64 = 223_551;
-/// Payload size every private transaction is padded to.
-pub const PRIVATE_PAD_BYTES: u64 = 512;
-/// Canonical serialized size of every private transaction. Derived from its
-/// parts so the relationship cannot drift silently on a re-pin.
-pub const PRIVATE_GAS_STOR: u64 = PROOF_BYTES + PRIVATE_PAD_BYTES;
-/// The most private actions one private transaction may carry: its storage is priced flat, so
-/// the count is capped instead of metered.
+/// The bytes a private transaction's proof is charged at, and the most it may carry: a succinct
+/// receipt with its claim pruned to a digest, whatever the transaction proves.
+///
+/// RISC Zero 3.0.5, measured with `cycle_bench --ppe` (`proof_bytes`); re-pin on a RISC Zero bump.
+pub const PROOF_BYTES: u64 = 223_047;
+/// The most private actions one private transaction may carry.
 pub const MAX_PRIVATE_ACTIONS: usize = 8;
 
 /// One base-fee update.

@@ -196,29 +196,10 @@ fn protocol_upgradable_programs() -> Vec<(AccountId, Program)> {
 
 /// System programs, owned by `system_upgrader` and upgradable through it, by name.
 fn system_upgradable_programs(cross_zone: bool) -> Vec<(SystemProgramName, Program)> {
-    let mut programs = vec![
-        (programs::CLOCK_NAME, programs::clock()),
-        (programs::FEE_NAME, programs::fee()),
-        (programs::BRIDGE_NAME, programs::bridge()),
-        (programs::SEQUENCER_STAKE_NAME, programs::sequencer_stake()),
-    ];
+    let mut programs = programs::builtin_core_programs().to_vec();
     if cross_zone {
-        // System programs baked into every node (genesis-block ELFs would exceed the
-        // inscription size limit); registered only on cross_zone zones.
-        programs.extend([
-            (
-                programs::CROSS_ZONE_INBOX_NAME,
-                programs::cross_zone_inbox(),
-            ),
-            (
-                programs::CROSS_ZONE_OUTBOX_NAME,
-                programs::cross_zone_outbox(),
-            ),
-            (programs::PING_SENDER_NAME, programs::ping_sender()),
-            (programs::PING_RECEIVER_NAME, programs::ping_receiver()),
-            (programs::BRIDGE_LOCK_NAME, programs::bridge_lock()),
-            (programs::WRAPPED_TOKEN_NAME, programs::wrapped_token()),
-        ]);
+        // Baked into every node: genesis-block ELFs would exceed the inscription size limit.
+        programs.extend(programs::builtin_cross_zone_programs());
     }
     programs
 }

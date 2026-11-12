@@ -21,8 +21,9 @@ use crate::{
         DeleteCrossZonePeerFloor, DispatchFailure, DispatchOrigin, DropSettledCrossZoneDispatches,
         GetAccountTransactions, GetBlock, GetBlockByHash, GetBlockEvents, GetChannelViewBytes,
         GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
-        GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
-        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        GetDeadLetterDispatchRetainedCount, GetDeadLetterDispatches, GetFinalSnapshot,
+        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
+        GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
         GetTransactionByHash, GetZoneCheckpoint, PendingCrossZoneDispatchRecord,
         PendingDepositEventRecord, RecordDispatchFailure, RequeueDeadLetterDispatch,
         SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, UpdateZoneCheckpoint,
@@ -876,6 +877,14 @@ async fn settled_dispatch_reconciles_its_dead_letter_but_not_the_count() {
             .expect("Failed to read the dead letter count"),
         1,
         "This node still gave up once, and the count says how often that happened"
+    );
+    assert_eq!(
+        storage_ref
+            .ask(GetDeadLetterDispatchRetainedCount)
+            .await
+            .expect("Failed to read the retained count"),
+        0,
+        "and the retained count reads the emptied list, not an absent one"
     );
 }
 
@@ -1822,6 +1831,77 @@ async fn one_delivery_that_always_fails_takes_one_dead_letter_slot() {
     );
 }
 
+/// The watcher's read, so the gauge follows the list between production turns.
+#[tokio::test]
+async fn the_pending_count_follows_the_stored_dispatches() {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
+
+    assert_eq!(
+        storage_ref
+            .ask(GetPendingCrossZoneDispatchCount)
+            .await
+            .expect("Failed to read the pending count"),
+        0
+    );
+
+    storage_ref
+        .ask(AddPendingCrossZoneDispatches {
+            dispatches: vec![
+                PendingCrossZoneDispatchRecord::recorded(key_from_index(1), vec![1]),
+                PendingCrossZoneDispatchRecord::recorded(key_from_index(2), vec![2]),
+            ],
+        })
+        .await
+        .expect("Failed to record dispatches");
+
+    assert_eq!(
+        storage_ref
+            .ask(GetPendingCrossZoneDispatchCount)
+            .await
+            .expect("Failed to read the pending count"),
+        2
+    );
+}
+
+/// The gauge's read: retained length only, cheap enough for the follow path.
+#[tokio::test]
+async fn retained_count_follows_the_retained_list_not_the_total() {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
+
+    assert_eq!(
+        storage_ref
+            .ask(GetDeadLetterDispatchRetainedCount)
+            .await
+            .expect("Failed to read the retained count"),
+        0,
+        "An empty store retains nothing"
+    );
+
+    retire_dispatch(&storage_ref, key_from_index(2), 2).await;
+    for _ in 0..5 {
+        retire_dispatch(&storage_ref, key_from_index(1), 1).await;
+    }
+
+    assert_eq!(
+        storage_ref
+            .ask(GetDeadLetterDispatchRetainedCount)
+            .await
+            .expect("Failed to read the retained count"),
+        2,
+        "One retained entry per delivery, however often it was given up on"
+    );
+    assert_eq!(
+        storage_ref
+            .ask(GetDeadLetterDispatchCount)
+            .await
+            .expect("Failed to read the dead letter count"),
+        6,
+        "The total keeps counting give-ups past the retained list"
+    );
+}
+
 /// What eviction must not do is hide that the evicted ones happened: a node
 /// that lost hundreds of deliveries would otherwise look like one that lost the
 /// cap.
@@ -2109,4 +2189,14 @@ async fn an_oversized_dead_letter_is_listed_but_not_requeueable() {
         "The record stays listed for the operator to trace"
     );
     assert!(pending_dispatch_keys(&storage_ref).await.is_empty());
+}
+
+#[test]
+fn opening_fails_when_the_db_path_is_a_file() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db_path = temp_dir.path().join("db");
+    // Force RocksDB open to fail with an IO error by placing a file at DB path.
+    std::fs::write(&db_path, b"not-a-directory").unwrap();
+
+    assert!(StorageActor::new(&db_path).is_err());
 }

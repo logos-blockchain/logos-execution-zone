@@ -15,7 +15,8 @@ mod inner {
         SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID, SYSTEM_UPGRADER_ELF, SYSTEM_UPGRADER_ID,
         WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
     };
-    use lee::program::Program;
+    use lee::{AccountId, program::Program};
+    use system_upgrader_core::SystemProgramName;
 
     mod guests {
         include!(concat!(env!("OUT_DIR"), "/lez/programs/mod.rs"));
@@ -118,6 +119,62 @@ mod inner {
     }
 
     pub use sequencer_stake_core::sequencer_stake_account_id;
+
+    /// System programs every zone registers at genesis, by name.
+    #[must_use]
+    pub fn builtin_core_programs() -> [(SystemProgramName, Program); 4] {
+        [
+            (CLOCK_NAME, clock()),
+            (FEE_NAME, fee()),
+            (BRIDGE_NAME, bridge()),
+            (SEQUENCER_STAKE_NAME, sequencer_stake()),
+        ]
+    }
+
+    #[must_use]
+    pub fn builtin_cross_zone_programs() -> [(SystemProgramName, Program); 6] {
+        [
+            (CROSS_ZONE_INBOX_NAME, cross_zone_inbox()),
+            (CROSS_ZONE_OUTBOX_NAME, cross_zone_outbox()),
+            (PING_SENDER_NAME, ping_sender()),
+            (PING_RECEIVER_NAME, ping_receiver()),
+            (BRIDGE_LOCK_NAME, bridge_lock()),
+            (WRAPPED_TOKEN_NAME, wrapped_token()),
+        ]
+    }
+
+    /// `system_upgrader`, then the system programs at their name-derived addresses.
+    ///
+    /// The refusal list and the elf check derive from this, genesis from its parts. The fixed
+    /// lengths are the enforcement: adding to either half fails to compile until every length
+    /// here is updated too.
+    #[must_use]
+    pub fn builtin_programs() -> [(AccountId, Program); 11] {
+        let at_name = |(name, program): (SystemProgramName, Program)| {
+            (AccountId::from_system_program_name(&name), program)
+        };
+        let [clock, fee, bridge, stake] = builtin_core_programs().map(at_name);
+        let [inbox, outbox, sender, receiver, lock, wrapped] =
+            builtin_cross_zone_programs().map(at_name);
+        [
+            (system_upgrader_account_id(), system_upgrader()),
+            clock,
+            fee,
+            bridge,
+            stake,
+            inbox,
+            outbox,
+            sender,
+            receiver,
+            lock,
+            wrapped,
+        ]
+    }
+
+    #[must_use]
+    pub fn builtin_program_account_ids() -> [AccountId; 11] {
+        builtin_programs().map(|(account_id, _)| account_id)
+    }
 
     #[cfg(test)]
     mod tests {
@@ -1314,7 +1371,7 @@ mod inner {
         }
 
         #[test]
-        fn builtin_programs() {
+        fn builtin_constructors_carry_their_ids_and_elfs() {
             let bridge_program = bridge();
             let sequencer_stake_program = sequencer_stake();
 
@@ -1326,23 +1383,40 @@ mod inner {
 
         #[test]
         fn builtin_program_ids_match_elfs() {
-            let cases: &[(&[u8], [u32; 8])] = &[
-                (SYSTEM_UPGRADER_ELF, SYSTEM_UPGRADER_ID),
-                (CLOCK_ELF, CLOCK_ID),
-                (FEE_ELF, FEE_ID),
-                (BRIDGE_ELF, BRIDGE_ID),
-                (CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID),
-                (CROSS_ZONE_INBOX_ELF, CROSS_ZONE_INBOX_ID),
-                (PING_SENDER_ELF, PING_SENDER_ID),
-                (PING_RECEIVER_ELF, PING_RECEIVER_ID),
-                (BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID),
-                (WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID),
-                (SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID),
-            ];
-            for (elf, expected_id) in cases {
-                let program = Program::new((*elf).into()).unwrap();
-                assert_eq!(program.id(), *expected_id);
+            for (_, program) in builtin_programs() {
+                let rebuilt = Program::new(program.elf().to_vec().into()).unwrap();
+                assert_eq!(rebuilt.id(), program.id());
             }
+        }
+
+        #[test]
+        fn builtin_account_ids_are_distinct() {
+            let ids = builtin_program_account_ids();
+            let unique: std::collections::BTreeSet<_> = ids.iter().collect();
+            assert_eq!(unique.len(), ids.len());
+        }
+
+        /// Genesis registers in this order and each registration takes the next
+        /// merkle leaf, so reordering either half moves every later builtin's
+        /// leaf and with it the genesis fingerprint.
+        #[test]
+        fn builtin_registration_order_is_pinned() {
+            assert_eq!(
+                builtin_program_account_ids(),
+                [
+                    system_upgrader_account_id(),
+                    clock_account_id(),
+                    fee_account_id(),
+                    bridge_account_id(),
+                    sequencer_stake_account_id(),
+                    cross_zone_inbox_account_id(),
+                    cross_zone_outbox_account_id(),
+                    ping_sender_account_id(),
+                    ping_receiver_account_id(),
+                    bridge_lock_account_id(),
+                    wrapped_token_account_id(),
+                ]
+            );
         }
     }
 }
