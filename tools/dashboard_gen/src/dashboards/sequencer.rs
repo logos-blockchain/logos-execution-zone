@@ -31,7 +31,7 @@ fn seq(metric: &str) -> Selector {
 pub fn dashboard() -> Dashboard {
     Dashboard::new("Sequencer", UID)
         .tag(super::TAG)
-        .link_tagged("Sequencer dashboards", super::TAG)
+        .link_tagged("Dashboards", super::TAG)
         .variable(label_values_variable(
             SEQUENCER_VAR,
             "Sequencer",
