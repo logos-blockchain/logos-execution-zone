@@ -168,6 +168,18 @@ pub fn apply_block_to_state(
     // The fee tx is byte-compared only after the user transactions have been
     // settled: its summary is derived from their execution.
 
+    // At most one `system_upgrader` transaction, directly before the fee: a change takes effect
+    // after every transaction in its block except the fee and clock transactions, which already
+    // run the new code.
+    let last_index = user_txs.len().checked_sub(1);
+    if let Some(tx_index) = user_txs.iter().enumerate().position(|(index, tx)| {
+        common::system_upgrades::is_system_upgrader_tx(tx) && Some(index) != last_index
+    }) {
+        return Err(BlockIngestError::MisplacedSystemUpgraderTransaction {
+            tx_index: tx_index.try_into().expect("tx index fits in u64"),
+        });
+    }
+
     let opening = opening_fee_state(state);
     let mut summary = BlockFeeSummary::default();
     let mut block_events = Vec::new();
@@ -215,6 +227,15 @@ pub fn apply_block_to_state(
         return Err(BlockIngestError::RevertMismatch {
             listed: block.body.reverted.clone(),
             settled: reverted,
+        });
+    }
+
+    // The block an upgrade activates in must carry its `Apply`.
+    if let Some(name) = common::system_upgrades::due_at(state, block.header.block_id)? {
+        return Err(BlockIngestError::MissedSystemUpgrade {
+            name: String::from_utf8_lossy(name.as_bytes())
+                .trim_end_matches('\0')
+                .to_owned(),
         });
     }
 
@@ -737,7 +758,7 @@ mod tests {
         EphemeralSecretKey, PrivateAccountKind, Recipient, RecipientEncryption, SenderPresentation,
         account::Nonce,
         native_token,
-        program::{ProgramEvent, Publication, Response},
+        program::{ProgramEvent, Publication, Response, SYSTEM_UPGRADER_ACCOUNT_ID},
     };
     use test_guest_core::Script;
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_state};
@@ -930,6 +951,173 @@ mod tests {
         .into_pending_block();
         let err = apply_block(None, &block, &mut state).expect_err("should reject");
         assert!(matches!(err, BlockIngestError::InvalidFeeTransaction));
+    }
+
+    fn system_upgrader_tx() -> LeeTransaction {
+        LeeTransaction::Public(PublicTransaction::new(
+            public_transaction::Message::new_preserialized(
+                Actor::new(AccountId::new([1; 32]), SYSTEM_UPGRADER_ACCOUNT_ID),
+                vec![],
+                [],
+                BTreeMap::new(),
+                None,
+            ),
+            public_transaction::WitnessSet::from_raw_parts(vec![]),
+        ))
+    }
+
+    fn block_with(transactions: Vec<LeeTransaction>) -> Block {
+        let fee = LeeTransaction::Public(fee_invocation(
+            fee_core::BlockFeeSummary::default(),
+            0,
+            FeePayee::Present(producer_account_for_testing()),
+        ));
+        HashableBlockData {
+            block_id: 1,
+            prev_block_hash: HashType([0_u8; 32]),
+            timestamp: 100,
+            transactions: [
+                transactions,
+                vec![fee, LeeTransaction::Public(clock_invocation(1, 100))],
+            ]
+            .concat(),
+            reverted: Vec::new(),
+        }
+        .into_pending_block()
+    }
+
+    #[test]
+    fn a_system_upgrader_tx_before_other_transactions_is_misplaced() {
+        let mut state = initial_state(true);
+        let block = block_with(vec![
+            system_upgrader_tx(),
+            produce_dummy_empty_transaction(),
+        ]);
+
+        let err = apply_block(None, &block, &mut state).expect_err("should reject");
+        assert!(matches!(
+            err,
+            BlockIngestError::MisplacedSystemUpgraderTransaction { tx_index: 0 }
+        ));
+    }
+
+    #[test]
+    fn a_second_system_upgrader_tx_is_misplaced() {
+        let mut state = initial_state(true);
+        let block = block_with(vec![system_upgrader_tx(), system_upgrader_tx()]);
+
+        let err = apply_block(None, &block, &mut state).expect_err("should reject");
+        assert!(matches!(
+            err,
+            BlockIngestError::MisplacedSystemUpgraderTransaction { tx_index: 0 }
+        ));
+    }
+
+    #[test]
+    fn a_block_missing_its_due_apply_is_invalid() {
+        use system_upgrader_core::{
+            Registry, ScheduledUpgrade, SystemProgramName, registry_account_id,
+        };
+
+        let mut registry = common::system_upgrades::registry(&initial_state(true)).unwrap();
+        registry.programs.insert(
+            SystemProgramName::new(b"clock"),
+            Some(ScheduledUpgrade {
+                first_segment: AccountId::new([9; 32]),
+                image_id: [0; 8],
+                immutable: false,
+                activation_height: 1,
+            }),
+        );
+        let mut state = initial_state(true).with_public_accounts([(
+            registry_account_id(),
+            lee::Account::default().with_actor_state(
+                SYSTEM_UPGRADER_ACCOUNT_ID,
+                Registry::to_bytes(&registry).into(),
+            ),
+        )]);
+
+        let err = apply_block(None, &block_with(vec![]), &mut state).expect_err("should reject");
+        assert!(matches!(
+            err,
+            BlockIngestError::MissedSystemUpgrade { name } if name == "clock"
+        ));
+    }
+
+    #[test]
+    fn a_clock_upgrade_runs_its_own_activation_blocks_tick() {
+        use program_loader_core::LoaderActorState as _;
+        use system_upgrader_core::{
+            Message, Registry, ScheduledUpgrade, loader_actor, registry_account_id, registry_actor,
+        };
+
+        // `ping_receiver` can't handle the clock's tick, so the first tick it runs fails.
+        let new_code = programs::ping_receiver();
+        let user_elf = new_code.user_elf().unwrap();
+        let ids: Vec<AccountId> = (0..program_loader_core::segment_count(&user_elf))
+            .map(|i| AccountId::new([0x40_u8.wrapping_add(u8::try_from(i).unwrap()); 32]))
+            .collect();
+        let segments = program_loader_core::build_segments(&user_elf, &ids).unwrap();
+        let mut registry = common::system_upgrades::registry(&initial_state(true)).unwrap();
+        registry.programs.insert(
+            clock_core::CLOCK_NAME,
+            Some(ScheduledUpgrade {
+                first_segment: ids[0],
+                image_id: new_code.id(),
+                immutable: false,
+                activation_height: 1,
+            }),
+        );
+        let mut state = initial_state(true)
+            .with_public_accounts([(
+                registry_account_id(),
+                lee::Account::default().with_actor_state(
+                    SYSTEM_UPGRADER_ACCOUNT_ID,
+                    Registry::to_bytes(&registry).into(),
+                ),
+            )])
+            .with_public_accounts(ids.iter().zip(segments).map(|(id, segment)| {
+                (
+                    *id,
+                    lee::Account::default().with_actor_state(
+                        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+                        segment.to_loader_actor_state().into(),
+                    ),
+                )
+            }));
+        let apply = LeeTransaction::Public(PublicTransaction::new(
+            public_transaction::Message::try_new(
+                registry_actor(),
+                [registry_actor(), loader_actor(&clock_core::CLOCK_NAME)],
+                BTreeMap::new(),
+                Message::Apply {
+                    name: clock_core::CLOCK_NAME,
+                    activation_height: 1,
+                },
+            )
+            .unwrap(),
+            public_transaction::WitnessSet::from_raw_parts(vec![]),
+        ));
+
+        let err =
+            apply_block(None, &block_with(vec![apply]), &mut state).expect_err("should reject");
+        assert!(
+            matches!(err, BlockIngestError::StateTransition { tx_index: 2, .. }),
+            "the Apply and the fee settle; the clock's tick fails: {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_block_over_an_undecodable_registry_parks_without_blaming_its_producer() {
+        let mut state = initial_state(true).with_public_accounts([(
+            system_upgrader_core::registry_account_id(),
+            lee::Account::default().with_actor_state(SYSTEM_UPGRADER_ACCOUNT_ID, vec![0xFF].into()),
+        )]);
+
+        let err = apply_block(None, &block_with(vec![]), &mut state).expect_err("should reject");
+        assert!(matches!(err, BlockIngestError::UndecodableSystemRegistry));
+        assert!(!err.blames_producer());
+        assert!(!err.is_invalid_block());
     }
 
     #[test]

@@ -28,6 +28,7 @@ bridge_core = { workspace = true, features = ["host"] }
 programs.workspace = true
 clock_core.workspace = true
 system_accounts.workspace = true
+system_upgrader_core.workspace = true
 cross_zone.workspace = true
 cross_zone_inbox_core.workspace = true
 sequencer_stake_core.workspace = true

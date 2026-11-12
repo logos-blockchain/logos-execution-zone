@@ -65,13 +65,13 @@ fn the_genesis_fingerprint_changes_when_a_nullifier_is_added() {
 }
 
 #[test]
-fn insert_program() {
+fn a_seeded_program_reconstructs_from_its_segment_chain() {
     let mut state = V03State::new();
     let program_to_insert = crate::test_methods::scripted();
     let account_id = AccountId::from_builtin_program(program_to_insert.id());
     assert!(!state.public_state.contains_key(&account_id));
 
-    state.insert_program(&program_to_insert, true);
+    state = state.with_programs([program_to_insert.clone()]);
 
     // Walks the full segment chain regardless of how many chunks the elf split into,
     // exercising the same reconstruction a real caller uses.
@@ -102,10 +102,13 @@ fn genesis_immutable_program_lands_immutable_mirror_commitment() {
 
 #[test]
 fn genesis_mutable_program_lands_no_immutable_mirror_commitment() {
-    let state =
-        V03State::new().with_genesis_programs([(crate::test_methods::forges_echo(), false)]);
     let header_account_id =
         lee_core::account::AccountId::from_builtin_program(crate::test_methods::forges_echo().id());
+    let state = V03State::new().with_programs_at([(
+        header_account_id,
+        crate::test_methods::forges_echo(),
+        false,
+    )]);
     let program_header = lee_core::program::ProgramHeader::from_loader_actor_state(
         state.public_state[&header_account_id]
             .data

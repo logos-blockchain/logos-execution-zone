@@ -20,6 +20,8 @@ use wallet::{
     config::WalletConfigOverrides,
 };
 
+mod system_upgrade;
+
 #[test]
 async fn deploy_and_execute_program() -> Result<()> {
     let mut ctx = TestContext::new().await?;

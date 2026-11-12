@@ -586,6 +586,12 @@ pub enum BlockIngestError {
     InvalidRewardTarget {
         reason: String,
     },
+    MisplacedSystemUpgraderTransaction {
+        tx_index: u64,
+    },
+    MissedSystemUpgrade {
+        name: String,
+    },
     InvalidFeeClass {
         tx_index: u64,
         reason: String,
@@ -611,6 +617,7 @@ pub enum BlockIngestError {
         tx_index: u64,
         reason: String,
     },
+    UndecodableSystemRegistry,
 }
 
 /// Diagnostic record of the first block that broke the L2 chain.

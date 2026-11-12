@@ -20,6 +20,7 @@ rocksdb.workspace = true
 tempfile.workspace = true
 
 [dev-dependencies]
+lee = { workspace = true, features = ["test-utils"] }
 lee_core = { workspace = true, features = ["host"] }
 programs.workspace = true
 system_accounts.workspace = true

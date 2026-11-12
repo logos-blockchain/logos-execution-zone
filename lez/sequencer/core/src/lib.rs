@@ -1484,6 +1484,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         ));
         let clock_tx = clock_invocation(new_block_height, new_block_timestamp);
         let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
+        // The block an upgrade activates in must carry its `Apply`, so its room is held from the
+        // start, with the fee's and the clock's.
+        let due_apply = build_due_apply_tx(&working_state, new_block_height)?;
+        let trailing: Vec<LeeTransaction> = due_apply
+            .iter()
+            .cloned()
+            .chain([placeholder_fee_lee_tx.clone(), clock_lee_tx.clone()])
+            .collect();
 
         sequencer_core_metrics::record_mempool_size(self.mempool.len());
         // Everything drained from the store first, then user work. `from_store`
@@ -1491,6 +1499,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // record behind it and so needs no requeue, where the origin only says
         // it was not submitted by a user.
         let mut mempool_transactions = Vec::new();
+        // `system_upgrader` transactions handed to the node wait for the one slot before the fee.
+        let mut upgrade_candidates = Vec::new();
         let mut pending_from_store = pending_deposits;
         pending_from_store.extend(pending_dispatches);
         pending_from_store.extend(slash_txs);
@@ -1501,6 +1511,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .or_else(|| self.mempool.pop().map(|(origin, tx)| (origin, tx, false)))
         {
             let tx_hash = tx.hash();
+
+            if common::system_upgrades::is_system_upgrader_tx(&tx) {
+                upgrade_candidates.push((origin, tx));
+                continue;
+            }
 
             // A deposit whose notes would take the pin past Bedrock's input limit waits for the
             // next block.
@@ -1521,8 +1536,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             let temp_valid_transactions = [
                 valid_transactions.as_slice(),
                 std::slice::from_ref(&tx),
-                std::slice::from_ref(&placeholder_fee_lee_tx),
-                std::slice::from_ref(&clock_lee_tx),
+                trailing.as_slice(),
             ]
             .concat();
             let temp_hashable_data = HashableBlockData {
@@ -1554,7 +1568,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // merely does not fit *today* is the ordinary deferral below.
                 if !Self::fits_in_an_empty_block(
                     &tx,
-                    &[placeholder_fee_lee_tx.clone(), clock_lee_tx.clone()],
+                    &trailing,
                     max_block_size,
                     new_block_height,
                     prev_block_hash,
@@ -1677,6 +1691,78 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
         for (origin, tx) in deferred_withdrawals.into_iter().rev() {
             self.mempool.push_front((origin, tx));
+        }
+
+        // At most one `system_upgrader` transaction, directly before the fee: the due `Apply`
+        // first, then approved changes handed to the node, the first that fits and applies.
+        // Untried changes go back to the mempool.
+        let mut candidates = due_apply
+            .into_iter()
+            .map(|tx| (TransactionOrigin::Sequencer, tx))
+            .chain(upgrade_candidates)
+            .collect::<VecDeque<_>>();
+        while let Some((origin, tx)) = candidates.pop_front() {
+            let block_size = borsh::to_vec(&HashableBlockData {
+                block_id: new_block_height,
+                transactions: [
+                    valid_transactions.as_slice(),
+                    &[
+                        tx.clone(),
+                        placeholder_fee_lee_tx.clone(),
+                        clock_lee_tx.clone(),
+                    ],
+                ]
+                .concat(),
+                prev_block_hash,
+                timestamp: new_block_timestamp,
+                reverted: reverted.clone(),
+            })
+            .context("Failed to serialize block for size check")?
+            .len();
+            if block_size > max_block_size {
+                warn!(
+                    "system_upgrader transaction {} deferred: block is full",
+                    tx.hash()
+                );
+                if !matches!(origin, TransactionOrigin::Sequencer) {
+                    self.mempool.push_front((origin, tx));
+                }
+                continue;
+            }
+            if let Some(tx_reverted) = Self::apply_mempool_transaction(
+                &mut working_state,
+                origin,
+                &tx,
+                new_block_height,
+                new_block_timestamp,
+                &mut withdrawals,
+                &opening,
+                valid_transactions.len().try_into().expect("fits u64"),
+                &mut summary,
+            ) {
+                if tx_reverted {
+                    reverted.push(u64::try_from(valid_transactions.len()).expect("fits u64"));
+                }
+                if !matches!(origin, TransactionOrigin::Sequencer) {
+                    mempool_transactions.push((origin, tx.clone()));
+                }
+                valid_transactions.push(tx);
+                break;
+            }
+            warn!("system_upgrader transaction {} failed to apply", tx.hash());
+        }
+        for (origin, tx) in candidates {
+            if !matches!(origin, TransactionOrigin::Sequencer) {
+                self.mempool.push_front((origin, tx));
+            }
+        }
+        // Peers reject a block that leaves its due upgrade pending, so never publish one.
+        if let Some(name) = common::system_upgrades::due_at(&working_state, new_block_height)? {
+            anyhow::bail!(
+                "Block {new_block_height} would leave system program {}'s upgrade unapplied; \
+                 aborting block production",
+                String::from_utf8_lossy(name.as_bytes()).trim_end_matches('\0')
+            );
         }
 
         let fee_tx = fee_invocation(
@@ -2255,6 +2341,51 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
     ))
 }
 
+/// The `Apply` of the upgrade that activates in block `block_id`, if any.
+fn build_due_apply_tx(
+    state: &lee::V03State,
+    block_id: lee_core::BlockId,
+) -> Result<Option<LeeTransaction>, common::system_upgrades::UndecodableRegistry> {
+    let Some(name) = common::system_upgrades::due_at(state, block_id)? else {
+        return Ok(None);
+    };
+    Ok(system_upgrader_tx(
+        [system_upgrader_core::loader_actor(&name)],
+        system_upgrader_core::Message::Apply {
+            name,
+            activation_height: block_id,
+        },
+    )
+    .map_err(|err| {
+        error!(
+            "Failed to build the due Apply of system program {}: {err:#}",
+            String::from_utf8_lossy(name.as_bytes()).trim_end_matches('\0')
+        );
+    })
+    .ok())
+}
+
+/// An unsigned, fee-exempt `system_upgrader` transaction to its registry, also declaring
+/// `actors`.
+fn system_upgrader_tx(
+    actors: impl IntoIterator<Item = Actor>,
+    message: system_upgrader_core::Message,
+) -> Result<LeeTransaction> {
+    let registry = system_upgrader_core::registry_actor();
+    let message = Message::try_new(
+        registry,
+        std::iter::once(registry).chain(actors),
+        BTreeMap::new(),
+        message,
+    )
+    .context("Failed to build system_upgrader message")?;
+    let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![]);
+    Ok(LeeTransaction::Public(PublicTransaction::new(
+        message,
+        witness_set,
+    )))
+}
+
 /// A `FinalizeUnstake` for every release whose exit delay has passed in `state`.
 fn build_finalize_unstake_txs(state: &lee::V03State) -> VecDeque<LeeTransaction> {
     committee_discovery::finalize_unstake_candidates(state)
@@ -2303,16 +2434,32 @@ fn build_finalize_unstake_tx(
 /// User transactions of an orphaned block to return to the mempool: everything
 /// except the trailing clock tx, sequencer-generated bridge deposits (replayed
 /// from their own bedrock events) and sequencer-only txs — cross-zone dispatches
-/// (replayed by the watcher) and the fee tx (regenerated every block; the
-/// ingress guard rejects them as `User`).
+/// (replayed by the watcher), the fee tx (regenerated every block; the ingress
+/// guard rejects them as `User`) and `system_upgrader`'s `Apply` (rebuilt from
+/// the registry). An approved `system_upgrader` change can't be rebuilt, so it
+/// is returned.
 fn resubmittable_txs(block: &Block) -> Vec<LeeTransaction> {
     let Some((_clock, rest)) = block.body.transactions.split_last() else {
         return Vec::new();
     };
     rest.iter()
-        .filter(|tx| extract_bridge_deposit_id(tx).is_none() && !is_sequencer_only_tx(tx))
+        .filter(|tx| {
+            extract_bridge_deposit_id(tx).is_none()
+                && (!is_sequencer_only_tx(tx) || is_approved_system_change(tx))
+        })
         .cloned()
         .collect()
+}
+
+/// Whether `tx` is a `system_upgrader` change other than `Apply`.
+fn is_approved_system_change(tx: &LeeTransaction) -> bool {
+    common::system_upgrades::is_system_upgrader_tx(tx)
+        && tx.public_call().is_some_and(|(_, message)| {
+            !matches!(
+                borsh::from_slice(message),
+                Ok(system_upgrader_core::Message::Apply { .. }) | Err(_)
+            )
+        })
 }
 
 #[must_use]
