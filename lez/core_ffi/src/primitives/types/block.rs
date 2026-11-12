@@ -1,6 +1,4 @@
-use common::block::{
-    BedrockStatus, Block, BlockBody, BlockHeader, FeeReceipt, TransactionReceipt,
-};
+use common::block::{BedrockStatus, Block, BlockBody, BlockHeader, FeeReceipt, TransactionReceipt};
 
 use crate::primitives::types::{
     FfiBlockId, FfiHashType, FfiOption, FfiTimestamp, FfiU128, FfiVec,
@@ -21,11 +19,10 @@ impl From<Block> for FfiBlock {
     fn from(value: Block) -> Self {
         let Block {
             header,
-            body:
-                BlockBody {
-                    transactions,
-                    receipts,
-                },
+            body: BlockBody {
+                transactions,
+                receipts,
+            },
             bedrock_status,
         } = value;
 
