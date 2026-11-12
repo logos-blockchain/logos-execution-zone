@@ -231,6 +231,26 @@ pub struct TransactionReceipt {
     pub fee: FeeReceipt,
 }
 
+impl TransactionReceipt {
+    #[must_use]
+    pub const fn is_exempt(&self) -> bool {
+        let FeeReceipt {
+            gas_exec,
+            gas_stor,
+            fee_base,
+            tip,
+            refund,
+        } = self.fee;
+        gas_exec == 0 && gas_stor == 0 && fee_base == 0 && tip == 0 && refund == 0
+    }
+
+    /// What the payer paid: the base fee and the tip.
+    #[must_use]
+    pub const fn fee_paid(&self) -> u128 {
+        self.fee.fee_base.saturating_add(self.fee.tip)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[expect(
     clippy::large_enum_variant,

@@ -1,4 +1,6 @@
-use indexer_service_protocol::{AccountId, AccountSummary, Block, BlockId, HashType, Transaction};
+use indexer_service_protocol::{
+    AccountId, AccountSummary, Block, BlockId, HashType, Transaction, TransactionReceipt,
+};
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -123,6 +125,19 @@ pub async fn get_transaction(tx_hash: HashType) -> Result<Transaction, ServerFnE
         .and_then(|opt| {
             opt.ok_or_else(|| ServerFnError::ServerError("Transaction not found".to_owned()))
         })
+}
+
+/// Get a transaction's receipt by its hash; `None` for a block's fee and clock transactions.
+#[server]
+pub async fn get_transaction_receipt(
+    tx_hash: HashType,
+) -> Result<Option<TransactionReceipt>, ServerFnError> {
+    use indexer_service_rpc::RpcClient as _;
+    let client = expect_context::<IndexerRpcClient>();
+    client
+        .get_transaction_receipt(tx_hash)
+        .await
+        .map_err(|e| ServerFnError::ServerError(format!("RPC error: {e}")))
 }
 
 /// Get blocks with pagination

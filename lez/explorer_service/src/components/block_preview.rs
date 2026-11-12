@@ -26,12 +26,18 @@ pub fn BlockPreview(block: Block) -> impl IntoView {
             },
         body: BlockBody {
             transactions,
-            receipts: _,
+            receipts,
         },
         bedrock_status,
     } = block;
 
     let tx_count = transactions.len();
+    let reverted_count = receipts.iter().filter(|receipt| !receipt.success).count();
+    let tx_count_str = if reverted_count == 0 {
+        tx_count.to_string()
+    } else {
+        format!("{tx_count} ({reverted_count} reverted)")
+    };
 
     let hash_str = hash.to_string();
     let prev_hash_str = prev_block_hash.to_string();
@@ -69,7 +75,7 @@ pub fn BlockPreview(block: Block) -> impl IntoView {
                     </div>
                     <div class="block-field">
                         <span class="field-label">"Transactions: "</span>
-                        <span class="field-value">{tx_count}</span>
+                        <span class="field-value">{tx_count_str}</span>
                     </div>
                 </div>
             </A>
