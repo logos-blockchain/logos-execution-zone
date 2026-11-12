@@ -556,6 +556,18 @@ jobs:
         if: always()
         run: df -h / /tmp /mnt || true
 
+      # A stalled wait cannot show the node's own view of finality.
+      - name: Bedrock node logs
+        if: failure()
+        env:
+          TAIL_LINES: 2000
+        run: |
+          for id in $(docker ps -aq); do
+            echo "::group::$(docker inspect --format '{{.Name}}' "$id")"
+            docker logs --tail "$TAIL_LINES" "$id" 2>&1 || true
+            echo "::endgroup::"
+          done
+
   # Two generations of the Rust caches exceed the 10 GiB cap, where GitHub
   # evicts by LRU, so a stale one costs the live one. Outside `ci-ok`.
   cache-prune:
