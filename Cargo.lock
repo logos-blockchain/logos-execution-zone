@@ -12682,6 +12682,7 @@ dependencies = [
  "sequencer_actors_common",
  "tokio",
  "tracing",
+ "tracing-subscriber 0.3.23",
 ]
 
 [[package]]

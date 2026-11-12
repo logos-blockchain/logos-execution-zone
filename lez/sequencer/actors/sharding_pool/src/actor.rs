@@ -16,7 +16,7 @@ use kameo::{
     reply::DelegatedReply,
     supervision::RestartPolicy,
 };
-use tracing::{info, warn};
+use tracing::{Instrument as _, info, warn};
 
 use crate::{
     ShardingKey,
@@ -25,6 +25,9 @@ use crate::{
 
 #[cfg(test)]
 mod tests;
+
+/// The span a message is passed on to its worker in.
+const FORWARD_SPAN: &str = "sharding_pool_forward";
 
 #[derive(Clone, Copy)]
 pub struct RestartConfig {
@@ -411,8 +414,12 @@ where
             .expect("Worker meta must exist")
             .restart_sender
             .subscribe();
+        // Not inside the handler's span, which would stay open, and timed,
+        // until the worker answers.
+        let forward = tracing::info_span!(parent: None, FORWARD_SPAN);
+        forward.follows_from(tracing::Span::current());
 
-        ctx.spawn(async move {
+        let reply = async move {
             loop {
                 match actor.ask(msg.clone()).await {
                     Ok(resp) => return Ok(resp),
@@ -446,6 +453,7 @@ where
                     ) => return Err(err),
                 }
             }
-        })
+        };
+        ctx.spawn(reply.instrument(forward))
     }
 }

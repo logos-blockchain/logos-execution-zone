@@ -236,6 +236,8 @@ What is exported is what `RUST_LOG` lets through, plus every span kameo opens fo
 | `gossip.transaction`, `gossip.approval`, `gossip.config` | the gossip actor handling a message from a peer |
 | `rpc.<method>`, e.g. `rpc.sendTransaction` | an RPC call; a batch is one `rpc.batch` |
 | `cross_zone_pass` | one pass of a cross-zone watcher over its peer's channel |
+| `sharding_pool_forward` | the sharding pool passing a message on to the worker for its key, e.g. the Bedrock actor for a channel, after its handler returned |
+| `block_range_reads` | the executor reading a block range from storage, after its handler returned |
 | `ExecutorActor.ProduceBlock` and others with no link | a message sent in no span: the scheduler's timer, or setup at startup |
 
 A handled message's span carries attributes to search by, their names in `sequencer_service_metrics::traces`:

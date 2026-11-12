@@ -17,8 +17,14 @@ use kameo::{
     supervision::RestartPolicy,
 };
 use sequencer_actors_common::SendErrorExt;
-use tracing::info;
+use tracing::{
+    Subscriber,
+    field::{Field, Visit},
+    info, span,
+};
+use tracing_subscriber::{Layer, layer::SubscriberExt as _, registry::LookupSpan};
 
+use super::FORWARD_SPAN;
 use crate::{
     RestartConfig, ShardingKey, ShardingPoolActor,
     protocol::{Link, Reset, Spawn, Unlink},
@@ -154,6 +160,71 @@ impl Message<TriggeredTick> for TickingBomb {
             .await
             .expect("Trigger must not be dropped before firing");
         <Self as Message<Tick>>::handle(self, Tick, ctx).await;
+    }
+}
+
+/// Records which span follows from which, each by the actor it runs in, or
+/// else by its name.
+#[derive(Clone, Default)]
+struct FollowsFrom(Arc<Mutex<Vec<(String, String)>>>);
+
+/// A span's name as [`FollowsFrom`] records it.
+struct SpanName(String);
+
+/// The `actor.name` field kameo puts on its spans.
+#[derive(Default)]
+struct ActorName(Option<String>);
+
+impl Visit for ActorName {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "actor.name" {
+            self.0 = Some(value.to_owned());
+        }
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "actor.name" {
+            self.0 = Some(format!("{value:?}"));
+        }
+    }
+}
+
+impl<S: Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for FollowsFrom {
+    fn on_new_span(
+        &self,
+        attrs: &span::Attributes<'_>,
+        id: &span::Id,
+        ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let mut actor = ActorName::default();
+        attrs.record(&mut actor);
+        let name = actor
+            .0
+            .unwrap_or_else(|| attrs.metadata().name().to_owned());
+        if let Some(span) = ctx.span(id) {
+            span.extensions_mut().insert(SpanName(name));
+        }
+    }
+
+    fn on_follows_from(
+        &self,
+        id: &span::Id,
+        follows: &span::Id,
+        ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let name = |span_id| {
+            let span = ctx.span(span_id)?;
+            let extensions = span.extensions();
+            extensions
+                .get::<SpanName>()
+                .map(|SpanName(name)| name.clone())
+        };
+        if let (Some(span), Some(cause)) = (name(id), name(follows)) {
+            self.0
+                .lock()
+                .expect("Follows-from lock poisoned")
+                .push((span, cause));
+        }
     }
 }
 
@@ -615,4 +686,28 @@ async fn pool_with_full_mailbox_will_still_restart_failed_actor() {
         waiting_sender.await.expect("Waiting sender panicked"),
         "Waiting sender must eventually be served"
     );
+}
+
+#[tokio::test]
+async fn a_message_passed_on_follows_from_the_pool_handling_it() {
+    let follows = FollowsFrom::default();
+    let _subscriber =
+        tracing::subscriber::set_default(tracing_subscriber::registry().with(follows.clone()));
+
+    let pool = spawn_pool();
+    increment(&pool, 1).await;
+
+    let follows = follows
+        .0
+        .lock()
+        .expect("Follows-from lock poisoned")
+        .clone();
+    let pool_name = <ShardingPoolActor<Counter, u32> as Actor>::name();
+    let worker_name = <Counter as Actor>::name();
+    for (span, cause) in [(worker_name, FORWARD_SPAN), (FORWARD_SPAN, pool_name)] {
+        assert!(
+            follows.contains(&(span.to_owned(), cause.to_owned())),
+            "{span} does not follow from {cause}: {follows:?}"
+        );
+    }
 }
