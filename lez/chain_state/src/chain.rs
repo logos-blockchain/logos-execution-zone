@@ -1381,6 +1381,9 @@ pub(crate) fn cut(record: &mut Record, at: usize) -> Vec<(MsgId, Option<BlockIng
 }
 
 #[cfg(test)]
+mod skip_rule;
+
+#[cfg(test)]
 mod tests {
     use common::{
         HashType,

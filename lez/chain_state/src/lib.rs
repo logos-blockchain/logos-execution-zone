@@ -21,5 +21,7 @@ pub mod proof_store;
 pub mod stake_config;
 pub mod stall_reason;
 pub mod structural;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils;
 pub mod timeout_node;
 pub mod zone_indexer;

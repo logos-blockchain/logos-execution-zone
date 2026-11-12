@@ -14,6 +14,7 @@ lee.workspace = true
 lee_core = { workspace = true, features = ["host"] }
 sequencer_stake_core.workspace = true
 system_accounts.workspace = true
+testnet_initial_state = { workspace = true, optional = true }
 logos-blockchain-core.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 
@@ -30,8 +31,8 @@ tokio.workspace = true
 default = []
 # In-process guest execution with a memoized memory image, via `lee`.
 prove = ["lee/prove"]
-# Mutable access to the head state, for other crates' tests.
-test-utils = []
+# Mutable access to the head state, a private sender's transfers and channel entries, for other crates' tests.
+test-utils = ["lee/test-utils", "dep:testnet_initial_state"]
 
 [dev-dependencies]
 lee = { workspace = true, features = ["test-utils"] }

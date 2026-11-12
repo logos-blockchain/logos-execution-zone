@@ -117,3 +117,160 @@ impl StructuralChain {
         self.blocks.drain(..settling).collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use common::{
+        HashType,
+        block::{Block, HashableBlockData},
+        test_utils::{produce_dummy_block, produce_dummy_empty_transaction},
+        transaction::LeeTransaction,
+    };
+    use lee::{
+        PrivacyPreservingTransaction, V03State,
+        privacy_preserving_transaction::{Message, WitnessSet, circuit::Proof},
+    };
+
+    use super::*;
+    use crate::{BlockIngestError, apply_block, test_utils::lineage};
+
+    const SKIP_WINDOW: u32 = 10;
+    const WRITER: [u8; 32] = [1; 32];
+    const OTHER: [u8; 32] = [2; 32];
+
+    fn genesis() -> Block {
+        produce_dummy_block(1, None, vec![])
+    }
+
+    fn private_on(genesis: &Block) -> Block {
+        produce_dummy_block(
+            2,
+            Some(genesis.header.hash),
+            vec![LeeTransaction::PrivacyPreserving(
+                PrivacyPreservingTransaction::new(
+                    Message::default(),
+                    WitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![7; 32])),
+                ),
+            )],
+        )
+    }
+
+    fn plain_on(genesis: &Block) -> Block {
+        produce_dummy_block(
+            2,
+            Some(genesis.header.hash),
+            vec![produce_dummy_empty_transaction()],
+        )
+    }
+
+    fn skip_of(genesis: &Block) -> Block {
+        produce_dummy_block(2, Some(genesis.header.hash), vec![])
+    }
+
+    fn hashes(settled: &[(DigestedBlock, Slot)]) -> Vec<HashType> {
+        settled.iter().map(|(block, _)| block.header.hash).collect()
+    }
+
+    #[test]
+    fn a_skip_cuts_only_a_private_block_within_its_window_and_for_good() {
+        let genesis = genesis();
+        let (private, plain, skip) = (private_on(&genesis), plain_on(&genesis), skip_of(&genesis));
+        let late = u64::from(2 + SKIP_WINDOW + 1);
+        for (target, slot, kept) in [
+            (&private, 3, &skip),
+            (&private, late, &private),
+            (&plain, 3, &plain),
+        ] {
+            let mut chain = StructuralChain::new(SKIP_WINDOW, None);
+
+            let settled = chain.apply_finalized(
+                &lineage(&[
+                    (&genesis, WRITER, 1),
+                    (target, WRITER, 2),
+                    (&skip, OTHER, slot),
+                ]),
+                Slot::from(slot),
+            );
+
+            assert_eq!(
+                hashes(&settled),
+                vec![genesis.header.hash, kept.header.hash]
+            );
+            assert!(chain.apply_finalized(&[], Slot::from(100)).is_empty());
+            assert_eq!(chain.settled_tip(), Some(Tip::from(kept)));
+        }
+    }
+
+    #[test]
+    fn a_private_block_settles_once_another_signer_builds_on_it() {
+        let genesis = genesis();
+        let private = private_on(&genesis);
+        let on_private = produce_dummy_block(3, Some(private.header.hash), vec![]);
+        let all = lineage(&[
+            (&genesis, WRITER, 1),
+            (&private, WRITER, 2),
+            (&on_private, OTHER, 3),
+        ]);
+        let mut chain = StructuralChain::new(SKIP_WINDOW, None);
+
+        assert_eq!(
+            hashes(&chain.apply_finalized(&all[..2], Slot::from(2))),
+            vec![genesis.header.hash]
+        );
+        assert_eq!(
+            hashes(&chain.apply_finalized(&all[2..], Slot::from(3))),
+            vec![private.header.hash, on_private.header.hash]
+        );
+    }
+
+    #[test]
+    fn a_block_whose_hash_does_not_match_its_contents_is_dropped() {
+        let genesis = genesis();
+        let plain = plain_on(&genesis);
+        let mut tampered = plain.clone();
+        tampered.header.hash = HashType([9; 32]);
+        let mut chain = StructuralChain::new(SKIP_WINDOW, None);
+
+        let settled = chain.apply_finalized(
+            &lineage(&[
+                (&genesis, WRITER, 1),
+                (&tampered, WRITER, 2),
+                (&plain, WRITER, 3),
+            ]),
+            Slot::from(3),
+        );
+
+        assert_eq!(
+            hashes(&settled),
+            vec![genesis.header.hash, plain.header.hash]
+        );
+    }
+
+    #[test]
+    fn a_private_block_that_would_fail_execution_is_taken_as_valid_and_settles_by_timeout() {
+        let genesis = genesis();
+        let mut without_clock_tail = HashableBlockData::from(private_on(&genesis));
+        without_clock_tail.transactions.pop();
+        let failing = without_clock_tail.into_pending_block();
+        assert!(matches!(
+            apply_block(Some(&Tip::from(&genesis)), &failing, &mut V03State::new()),
+            Err(BlockIngestError::InvalidClockTransaction)
+        ));
+        let mut chain = StructuralChain::new(SKIP_WINDOW, None);
+
+        chain.apply_finalized(
+            &lineage(&[(&genesis, WRITER, 1), (&failing, WRITER, 2)]),
+            Slot::from(2),
+        );
+
+        assert!(
+            chain
+                .apply_finalized(&[], Slot::from(u64::from(1 + SKIP_WINDOW)))
+                .is_empty()
+        );
+        assert_eq!(
+            hashes(&chain.apply_finalized(&[], Slot::from(u64::from(2 + SKIP_WINDOW)))),
+            vec![failing.header.hash]
+        );
+    }
+}

@@ -135,19 +135,22 @@ mod tests {
     }
 
     #[test]
-    fn inserting_a_held_proof_again_neither_counts_its_bytes_twice_nor_refreshes_it() {
+    fn inserting_a_held_or_pinned_proof_again_neither_counts_its_bytes_twice_nor_refreshes_it() {
         let store = ProofStore::new(64);
 
-        store.insert(&proof(0));
-        store.insert(&proof(0));
+        store.pin(&proof(0));
         store.insert(&proof(1));
-        assert_eq!(store.get(&proof(0).digest()), Some(proof(0)));
-        assert_eq!(store.get(&proof(1).digest()), Some(proof(1)));
-
+        store.insert(&proof(1));
         store.insert(&proof(0));
         store.insert(&proof(2));
-        assert_eq!(store.get(&proof(0).digest()), None);
+        assert_eq!(store.get(&proof(0).digest()), Some(proof(0)));
         assert_eq!(store.get(&proof(1).digest()), Some(proof(1)));
+        assert_eq!(store.get(&proof(2).digest()), Some(proof(2)));
+
+        store.insert(&proof(1));
+        store.insert(&proof(3));
+        assert_eq!(store.get(&proof(1).digest()), None);
+        assert_eq!(store.get(&proof(2).digest()), Some(proof(2)));
     }
 
     #[test]
@@ -161,5 +164,43 @@ mod tests {
         assert_eq!(digest, oversized.digest());
         assert_eq!(store.get(&digest), None);
         assert_eq!(store.get(&proof(0).digest()), Some(proof(0)));
+    }
+
+    #[test]
+    fn a_pinned_proof_survives_eviction() {
+        let store = ProofStore::new(64);
+
+        store.pin(&proof(0));
+        store.insert(&proof(1));
+        store.insert(&proof(2));
+        store.insert(&proof(3));
+
+        assert_eq!(store.get(&proof(0).digest()), Some(proof(0)));
+        assert_eq!(store.get(&proof(1).digest()), None);
+    }
+
+    #[test]
+    fn a_held_proof_pinned_twice_stays_pinned_after_one_unpin_and_becomes_the_newest_evictable_entry_after_the_second()
+     {
+        let store = ProofStore::new(64);
+
+        store.insert(&proof(1));
+        store.insert(&proof(0));
+        store.pin(&proof(0));
+        store.pin(&proof(0));
+        store.unpin(&proof(0).digest());
+        store.insert(&proof(2));
+        assert_eq!(store.get(&proof(1).digest()), Some(proof(1)));
+        store.insert(&proof(3));
+        assert_eq!(store.get(&proof(1).digest()), None);
+        assert_eq!(store.get(&proof(0).digest()), Some(proof(0)));
+
+        store.unpin(&proof(0).digest());
+        assert_eq!(store.get(&proof(2).digest()), None);
+        assert_eq!(store.get(&proof(0).digest()), Some(proof(0)));
+        assert_eq!(store.get(&proof(3).digest()), Some(proof(3)));
+        store.insert(&proof(4));
+        store.insert(&proof(5));
+        assert_eq!(store.get(&proof(0).digest()), None);
     }
 }
