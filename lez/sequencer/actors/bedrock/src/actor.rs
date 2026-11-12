@@ -130,7 +130,7 @@ impl<S: StorageActorTrait> BedrockActor<S> {
             return;
         };
         if let Err(err) = self.storage_ref.ask(PutFinalConfigsBytes { bytes }).await {
-            warn!("Failed to store the channel's final configs: {err}");
+            warn!(error = %err, "Failed to store the channel's final configs");
         }
     }
 }
@@ -585,7 +585,7 @@ impl<S: StorageActorTrait> Message<FilterFinallyAbsent> for BedrockActor<S> {
             .unwrap_or(Err(Error::VerdictTimedOut));
         self.store_config_index().await;
         if verdict.is_ok() && self.block_summary_cache.len() >= NodeReader::CACHE_CAPACITY {
-            self.block_summary_cache.clear();
+            keep_newest_block_summaries(&mut self.block_summary_cache);
         }
         verdict
     }
@@ -599,8 +599,12 @@ struct NodeReader<'actor> {
 }
 
 impl NodeReader<'_> {
-    /// Block summaries cached before a walk that returns a verdict empties the cache.
+    /// Block summaries cached before a walk that returns a verdict drops all but the newest
+    /// [`Self::CACHE_KEPT`].
     const CACHE_CAPACITY: usize = 4096;
+    /// Block summaries a full cache keeps, the newest by slot, so a walk over fewer blocks stays
+    /// cached.
+    const CACHE_KEPT: usize = 2048;
 
     fn summarize(&self, block: &logos_blockchain_zone_sdk::node_types::ApiBlock) -> BlockSummary {
         BlockSummary::new(
@@ -758,6 +762,19 @@ impl TryFrom<&logos_blockchain_zone_sdk::node_types::ChannelState> for LiveChann
             transfer_threshold: state.transfer_threshold,
         })
     }
+}
+
+/// Drops all but the newest [`NodeReader::CACHE_KEPT`] summaries of `cache` by slot.
+fn keep_newest_block_summaries(cache: &mut HashMap<HeaderId, BlockSummary>) {
+    let mut slots: Vec<u64> = cache
+        .values()
+        .map(|block_summary| block_summary.slot)
+        .collect();
+    let Some(oldest_kept) = slots.len().checked_sub(NodeReader::CACHE_KEPT) else {
+        return;
+    };
+    let (_, &mut cutoff, _) = slots.select_nth_unstable(oldest_kept);
+    cache.retain(|_, block_summary| block_summary.slot >= cutoff);
 }
 
 /// Deserialize an inscription payload into `(this_msg, Block)`. Bad payloads are

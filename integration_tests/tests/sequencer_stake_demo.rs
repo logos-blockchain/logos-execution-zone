@@ -21,7 +21,9 @@ use sequencer_core::config::{DepositRecipient, GenesisAction};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, TestContext, ZoneTestContextBuilder,
-    config::{MultiNodeTestContextConfig, SequencerPartialConfig, bedrock_channel_id},
+    config::{
+        MultiNodeTestContextConfig, SequencerPartialConfig, TEST_FINALITY_DEPTH, bedrock_channel_id,
+    },
     setup::{SequencerSetup, sequencer_client},
     spawn_channel_observer,
 };
@@ -31,6 +33,9 @@ use wallet::{AccountIdentity, program_facades::sequencer_stake::SequencerStake};
 
 /// Channel signing key of the sequencer that stakes its way in.
 const JOINER_SIGNING_KEY: [u8; 32] = [0x42; 32];
+
+/// Seconds the release may take: `2 * TEST_FINALITY_DEPTH - 1` L1 blocks at up to 12 s each.
+const RELEASE_WAIT_SECS: u64 = (2 * TEST_FINALITY_DEPTH - 1) * 12;
 
 /// Short block cadence for the demo.
 fn fast_blocks() -> SequencerPartialConfig {
@@ -263,7 +268,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     // never submits one.
     poll_until(
         "FinalizeUnstake to drain the stake funds account",
-        90,
+        u32::try_from(RELEASE_WAIT_SECS)?,
         || async { Ok(account_balance(&ctx, funds_id).await? == 0) },
     )
     .await?;
