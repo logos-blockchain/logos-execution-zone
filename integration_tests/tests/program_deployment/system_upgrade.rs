@@ -1,8 +1,3 @@
-#![expect(
-    clippy::tests_outside_test_module,
-    reason = "We don't care about these in tests"
-)]
-
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
@@ -188,6 +183,7 @@ async fn schedule_bridge_upgrade(
             name: programs::BRIDGE_NAME,
             first_segment,
             image_id,
+            immutable: false,
             activation_height,
         },
     )
@@ -195,6 +191,7 @@ async fn schedule_bridge_upgrade(
     let expected = system_upgrader_core::ScheduledUpgrade {
         first_segment,
         image_id,
+        immutable: false,
         activation_height,
     };
     wait_until("the upgrade to be scheduled", || async {
@@ -376,6 +373,7 @@ async fn an_approved_system_program_installs_and_runs() -> Result<()> {
             name,
             first_segment: segment_ids[0],
             image_id: new_code.id(),
+            immutable: false,
         },
     )
     .await?;

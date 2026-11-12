@@ -617,6 +617,7 @@ pub enum BlockIngestError {
         tx_index: u64,
         reason: String,
     },
+    UndecodableSystemRegistry,
 }
 
 /// Diagnostic record of the first block that broke the L2 chain.

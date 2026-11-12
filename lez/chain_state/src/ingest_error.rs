@@ -83,6 +83,14 @@ pub enum BlockIngestError {
         /// cannot store it directly.
         reason: String,
     },
+    #[error("system_upgrader's registry in this node's state does not decode")]
+    UndecodableSystemRegistry,
+}
+
+impl From<common::system_upgrades::UndecodableRegistry> for BlockIngestError {
+    fn from(_: common::system_upgrades::UndecodableRegistry) -> Self {
+        Self::UndecodableSystemRegistry
+    }
 }
 
 impl BlockIngestError {
@@ -96,11 +104,19 @@ impl BlockIngestError {
         matches!(self, Self::StateTransition { .. })
     }
 
+    /// Whether the failure is the block's producer's doing, rather than this node's own state.
+    #[must_use]
+    pub const fn blames_producer(&self) -> bool {
+        !matches!(self, Self::UndecodableSystemRegistry)
+    }
+
     /// Whether the block is invalid in itself, rather than out of place on the tip.
     #[must_use]
     pub const fn is_invalid_block(&self) -> bool {
         match self {
-            Self::UnexpectedBlockId { .. } | Self::BrokenChainLink { .. } => false,
+            Self::UnexpectedBlockId { .. }
+            | Self::BrokenChainLink { .. }
+            | Self::UndecodableSystemRegistry => false,
             Self::Deserialize(_)
             | Self::HashMismatch { .. }
             | Self::EmptyBlock

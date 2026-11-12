@@ -54,6 +54,9 @@ enum ProposalArgs {
         /// The chain's image ID, from a reproducible build, as 64 hex digits.
         #[clap(long, value_parser = parse_image_id)]
         image_id: ProgramId,
+        /// Freeze the program once the upgrade applies.
+        #[clap(long)]
+        immutable: bool,
         #[clap(long)]
         activation_height: BlockId,
     },
@@ -76,6 +79,9 @@ enum ProposalArgs {
         /// The chain's image ID, from a reproducible build, as 64 hex digits.
         #[clap(long, value_parser = parse_image_id)]
         image_id: ProgramId,
+        /// Install the program frozen.
+        #[clap(long)]
+        immutable: bool,
     },
 }
 
@@ -86,11 +92,13 @@ impl From<ProposalArgs> for Proposal {
                 name,
                 first_segment,
                 image_id,
+                immutable,
                 activation_height,
             } => Self::Schedule {
                 name,
                 first_segment,
                 image_id,
+                immutable,
                 activation_height,
             },
             ProposalArgs::Cancel {
@@ -106,10 +114,12 @@ impl From<ProposalArgs> for Proposal {
                 name,
                 first_segment,
                 image_id,
+                immutable,
             } => Self::Install {
                 name,
                 first_segment,
                 image_id,
+                immutable,
             },
         }
     }
@@ -227,6 +237,7 @@ mod tests {
             name: SystemProgramName::new(b"clock"),
             first_segment: AccountId::new([1; 32]),
             image_id: [2; 8],
+            immutable: false,
             activation_height,
         }
     }
@@ -267,6 +278,7 @@ mod tests {
             name: SystemProgramName::new(b"clock"),
             first_segment: AccountId::new([1; 32]),
             image_id: [2; 8],
+            immutable: false,
         };
         assert!(valid_until(&install, 100, None, 100).is_err(), "none");
         assert_eq!(valid_until(&install, 100, Some(120), 100).unwrap(), 120);

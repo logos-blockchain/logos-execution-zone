@@ -17,6 +17,7 @@ sequencer_executor_actor = { workspace = true, features = ["actor"] }
 sequencer_slasher_actor.workspace = true
 sequencer_storage_actor = { workspace = true, features = ["actor"] }
 sequencer_bedrock_actor = { workspace = true, features = ["actor"] }
+sharding_pool_actor = { workspace = true, features = ["actor"] }
 lee.workspace = true
 lee_core = { workspace = true, optional = true }
 common.workspace = true
@@ -26,14 +27,14 @@ system_accounts.workspace = true
 wallet.workspace = true
 sequencer_stake_core.workspace = true
 sequencer_service_rpc.workspace = true
-sequencer_service_metrics.workspace = true
+sequencer_service_metrics = { workspace = true, features = ["record"] }
 system_upgrader_core = { workspace = true, optional = true }
 
 clap = { workspace = true, features = ["derive", "env"] }
 anyhow.workspace = true
 axum.workspace = true
 env_logger.workspace = true
-kameo.workspace = true
+kameo = { workspace = true, features = ["metrics"] }
 kameo_actors.workspace = true
 hex.workspace = true
 libp2p.workspace = true
@@ -41,9 +42,14 @@ log.workspace = true
 metrics-exporter-prometheus.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 futures.workspace = true
 glob.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+metrics.workspace = true
 
 [[bin]]
 name = "sequencer_service"
@@ -78,4 +84,8 @@ inscribe_garbage = [
   "dep:borsh",
 ]
 # Needed only by the approve_system_change bin.
-approve_system_change = ["dep:lee_core", "dep:borsh", "dep:system_upgrader_core"]
+approve_system_change = [
+  "dep:lee_core",
+  "dep:borsh",
+  "dep:system_upgrader_core",
+]

@@ -4,11 +4,25 @@
 )]
 
 use anyhow::Result;
-use integration_tests::{TestContext, wait_for_indexer_to_catch_up};
+use integration_tests::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder,
+    config::{MultiNodeTestContextConfig, SequencerPartialConfig},
+    wait_for_indexer_to_catch_up,
+};
 
 #[tokio::test]
 async fn indexer_test_run() -> Result<()> {
-    let ctx = TestContext::new().await?;
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
+                .with_sequencer_partial_config(SequencerPartialConfig {
+                    // Covers the storage price doubling at the devnet's first epoch rotations.
+                    priority_fee_percent: 150,
+                    ..SequencerPartialConfig::default()
+                }),
+        )
+        .build()
+        .await?;
 
     let last_block_indexer = wait_for_indexer_to_catch_up(&ctx).await?;
 

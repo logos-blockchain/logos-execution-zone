@@ -1,5 +1,8 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use cross_zone_emission_core::{CrossZoneEmission, ZoneId};
+pub use cross_zone_receiver_core::{
+    ReceiverConfig, receiver_config_account_id, receiver_config_seed,
+};
 use lee_core::{
     account::{AccountId, Actor},
     program::PdaSeed,
@@ -7,7 +10,6 @@ use lee_core::{
 
 const PING_RECORD_SEED: [u8; 32] = *b"/LEZ/v0.3/PingRecord/0000000000/";
 const SENDER_CONFIG_SEED: [u8; 32] = *b"/LEZ/v0.3/PingSenderCfg/0000000/";
-const RECEIVER_CONFIG_SEED: [u8; 32] = *b"/LEZ/v0.3/PingReceiverCfg/00000/";
 
 pub const PING_SENDER_NAME: lee_core::program::SystemProgramName =
     lee_core::program::SystemProgramName::new(b"ping_sender");
@@ -65,38 +67,6 @@ pub enum ReceiverMessage {
     WriteRecord(Vec<u8>),
 }
 
-/// Who may deliver to this receiver, and which peer sources they may deliver from.
-///
-/// `ping_receiver` holds nothing worth stealing, so this is not about value. It is
-/// about the record meaning something: without it any program on any configured
-/// peer can overwrite the record, and a delivery proves only that some peer sent
-/// it.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct ReceiverConfig {
-    /// The program allowed to deliver `Record`: the cross-zone inbox.
-    pub deliverer: AccountId,
-    /// The program allowed to send the authority messages on the authority's
-    /// behalf, or `None` for top-level only. See `WrappedTokenConfig::governance`.
-    pub governance: Option<AccountId>,
-    /// The account allowed to change `sources`, or `None` for a list fixed at
-    /// genesis. Seeded unset; see `WrappedTokenConfig::authority` for why.
-    pub authority: Option<AccountId>,
-    /// The `(src_zone, src_account_id)` pairs a delivery may originate from.
-    pub sources: Vec<(ZoneId, AccountId)>,
-}
-
-impl ReceiverConfig {
-    #[must_use]
-    pub fn to_bytes(&self) -> Vec<u8> {
-        borsh::to_vec(self).expect("receiver config serializes")
-    }
-
-    #[must_use]
-    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        borsh::from_slice(bytes).ok()
-    }
-}
-
 /// Message to `ping_sender`'s config PDA. `Send`'s emission is forwarded
 /// verbatim into `cross_zone_outbox_core::Message::Emit`.
 ///
@@ -148,17 +118,6 @@ pub fn sender_config_account_id(sender_id: AccountId) -> AccountId {
 #[must_use]
 pub const fn sender_config_seed() -> PdaSeed {
     PdaSeed::new(SENDER_CONFIG_SEED)
-}
-
-/// PDA holding the sources `ping_receiver` accepts a delivery from.
-#[must_use]
-pub fn receiver_config_account_id(receiver_id: AccountId) -> AccountId {
-    AccountId::for_public_pda(&receiver_id, &receiver_config_seed())
-}
-
-#[must_use]
-pub const fn receiver_config_seed() -> PdaSeed {
-    PdaSeed::new(RECEIVER_CONFIG_SEED)
 }
 
 /// Encodes the pinned outbox account id for the config account's data.
@@ -221,6 +180,23 @@ mod tests {
     #[test]
     fn an_empty_receiver_config_does_not_decode() {
         assert_eq!(ReceiverConfig::from_bytes(&[]), None);
+    }
+
+    /// `ping_receiver` is the reference receiver, so its `InitConfig` encoding
+    /// must be exactly the shared contract's: the tag, then the config.
+    #[test]
+    fn init_config_matches_the_receiver_contract_encoding() {
+        let config = ReceiverConfig {
+            deliverer: AccountId::new([1; 32]),
+            governance: None,
+            authority: None,
+            sources: vec![([7; 32], AccountId::new([9; 32]))],
+        };
+        assert_eq!(
+            borsh::to_vec(&ReceiverMessage::InitConfig(config.clone()))
+                .expect("InitConfig serializes"),
+            cross_zone_receiver_core::init_config_instruction_bytes(&config)
+        );
     }
 
     #[test]

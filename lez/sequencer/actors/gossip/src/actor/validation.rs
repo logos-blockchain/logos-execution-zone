@@ -3,10 +3,12 @@
 //! The same stateless admission the RPC performs, minus mempool/seen-cache
 //! side effects (those live in the gossip actor). Testable without a swarm.
 
+use std::collections::HashSet;
+
 use common::transaction::LeeTransaction;
-use sequencer_channel_signing_actor::Wire;
-use sequencer_core::{config::BLOCK_OVERHEAD, gossip::AccreditedKeys};
-use sequencer_slasher_actor::Approval;
+use sequencer_channel_signing_actor::protocol::Wire;
+use sequencer_core::config::BLOCK_OVERHEAD;
+use sequencer_slasher_actor::protocol::Approval;
 use system_upgrader_core::SignedApproval;
 
 #[derive(Debug)]
@@ -89,7 +91,7 @@ pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
 pub fn evaluate_approval(
     data: &[u8],
     channel_id: [u8; 32],
-    accredited_keys: Option<&AccreditedKeys>,
+    accredited_keys: Option<&HashSet<[u8; 32]>>,
 ) -> ApprovalEvaluation {
     let approval: Approval = match borsh::from_slice(data) {
         Ok(approval) => approval,
@@ -114,7 +116,7 @@ pub fn evaluate_approval(
 pub fn evaluate_system_approval(
     data: &[u8],
     channel_id: [u8; 32],
-    accredited_keys: Option<&AccreditedKeys>,
+    accredited_keys: Option<&HashSet<[u8; 32]>>,
 ) -> SystemApprovalEvaluation {
     let signed: SignedApproval = match borsh::from_slice(data) {
         Ok(signed) => signed,
@@ -146,7 +148,7 @@ pub fn evaluate_system_approval(
 pub fn evaluate_config_message(
     data: &[u8],
     origin: Option<[u8; 32]>,
-    staked_keys: Option<&AccreditedKeys>,
+    staked_keys: Option<&HashSet<[u8; 32]>>,
 ) -> ConfigEvaluation {
     let Some(message) = Wire::decode(data) else {
         return ConfigEvaluation::Reject("undecodable channel-config message".to_owned());
@@ -166,8 +168,8 @@ pub fn evaluate_config_message(
 mod tests {
     use logos_blockchain_core::proofs::channel_multi_sig_proof::IndexedSignature;
     use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-    use sequencer_channel_signing_actor::Signature;
-    use sequencer_slasher_actor::Offence;
+    use sequencer_channel_signing_actor::protocol::Signature;
+    use sequencer_slasher_actor::protocol::Offence;
     use sequencer_stake_core::SequencerKey;
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 
@@ -199,7 +201,7 @@ mod tests {
     #[test]
     fn an_unaccredited_signer_is_ignored_without_verifying() {
         let (bytes, _) = signed_approval([5; 32]);
-        let accredited_keys = AccreditedKeys::from([[1; 32]]);
+        let accredited_keys = HashSet::from([[1; 32]]);
         // Correctly signed, so only the accreditation check can drop it.
         assert!(matches!(
             evaluate_approval(&bytes, CHANNEL, Some(&accredited_keys)),
@@ -218,6 +220,7 @@ mod tests {
             name: SystemProgramName::new(b"new"),
             first_segment: lee::AccountId::new([9; 32]),
             image_id: [7; 8],
+            immutable: false,
         };
         let signed = SignedApproval {
             proposal,
@@ -237,15 +240,15 @@ mod tests {
     fn system_approvals_are_screened_by_accreditation_then_signature() {
         let (bytes, signer) = signed_system_approval([5; 32], 40);
         assert!(matches!(
-            evaluate_system_approval(&bytes, CHANNEL, Some(&AccreditedKeys::from([signer]))),
+            evaluate_system_approval(&bytes, CHANNEL, Some(&HashSet::from([signer]))),
             SystemApprovalEvaluation::Accept(_)
         ));
         assert!(matches!(
-            evaluate_system_approval(&bytes, CHANNEL, Some(&AccreditedKeys::from([[1; 32]]))),
+            evaluate_system_approval(&bytes, CHANNEL, Some(&HashSet::from([[1; 32]]))),
             SystemApprovalEvaluation::Ignore(_)
         ));
         assert!(matches!(
-            evaluate_system_approval(&bytes, [6; 32], Some(&AccreditedKeys::from([signer]))),
+            evaluate_system_approval(&bytes, [6; 32], Some(&HashSet::from([signer]))),
             SystemApprovalEvaluation::Reject(_)
         ));
         assert!(matches!(
@@ -257,7 +260,7 @@ mod tests {
     #[test]
     fn an_accredited_signer_is_accepted() {
         let (bytes, signer) = signed_approval([5; 32]);
-        let accredited_keys = AccreditedKeys::from([signer]);
+        let accredited_keys = HashSet::from([signer]);
         assert!(matches!(
             evaluate_approval(&bytes, CHANNEL, Some(&accredited_keys)),
             ApprovalEvaluation::Accept(_)
@@ -277,7 +280,7 @@ mod tests {
     fn a_committee_accrediting_nobody_filters_everything() {
         let (bytes, _) = signed_approval([5; 32]);
         assert!(matches!(
-            evaluate_approval(&bytes, CHANNEL, Some(&AccreditedKeys::new())),
+            evaluate_approval(&bytes, CHANNEL, Some(&HashSet::new())),
             ApprovalEvaluation::Ignore(_)
         ));
     }
@@ -353,7 +356,7 @@ mod tests {
 
     #[test]
     fn a_config_message_from_a_staked_key_is_accepted() {
-        let staked_keys = AccreditedKeys::from([[1; 32], [2; 32]]);
+        let staked_keys = HashSet::from([[1; 32], [2; 32]]);
         assert!(matches!(
             evaluate_config_message(&config_bytes(), Some([2; 32]), Some(&staked_keys)),
             ConfigEvaluation::Accept(_)
@@ -362,7 +365,7 @@ mod tests {
 
     #[test]
     fn a_config_message_from_a_key_without_stake_is_ignored() {
-        let staked_keys = AccreditedKeys::from([[1; 32]]);
+        let staked_keys = HashSet::from([[1; 32]]);
         assert!(matches!(
             evaluate_config_message(&config_bytes(), Some([9; 32]), Some(&staked_keys)),
             ConfigEvaluation::Ignore(_)
@@ -371,7 +374,7 @@ mod tests {
 
     #[test]
     fn an_anonymous_config_message_is_ignored_once_stake_is_known() {
-        let staked_keys = AccreditedKeys::from([[1; 32]]);
+        let staked_keys = HashSet::from([[1; 32]]);
         assert!(matches!(
             evaluate_config_message(&config_bytes(), None, Some(&staked_keys)),
             ConfigEvaluation::Ignore(_)
@@ -388,7 +391,7 @@ mod tests {
 
     #[test]
     fn an_undecodable_config_message_is_rejected() {
-        let staked_keys = AccreditedKeys::from([[1; 32]]);
+        let staked_keys = HashSet::from([[1; 32]]);
         assert!(matches!(
             evaluate_config_message(&[99, 1, 2], Some([1; 32]), Some(&staked_keys)),
             ConfigEvaluation::Reject(_)

@@ -227,6 +227,7 @@ mod tests {
             name: SystemProgramName::new(b"clock"),
             first_segment: AccountId::new([9; 32]),
             image_id: [7; 8],
+            immutable: false,
             activation_height: ACTIVATION_HEIGHT,
         }
     }
@@ -254,6 +255,7 @@ mod tests {
             name: SystemProgramName::new(&[b'p', index]),
             first_segment: AccountId::new([index; 32]),
             image_id: [7; 8],
+            immutable: false,
         }
     }
 

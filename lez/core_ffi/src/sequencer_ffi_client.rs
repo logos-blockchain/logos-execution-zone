@@ -84,8 +84,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
             .executor_ref()
             .ask(GetAccount { account_id })
             .send()
-            .await?
-            .account)
+            .await?)
     }
 
     async fn get_account_balance(&self, account_id: lee::AccountId) -> Result<u128, Self::Error> {
@@ -204,8 +203,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
                 actor_state_selector,
             })
             .send()
-            .await?
-            .account)
+            .await?)
     }
 
     async fn get_program_ids(
@@ -232,7 +230,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
         ),
         Self::Error,
     > {
-        Ok(self
+        let reply = self
             .0
             .executor_ref()
             .ask(GetProofsAndRoot {
@@ -240,7 +238,8 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
                 message_positions,
             })
             .send()
-            .await?)
+            .await?;
+        Ok((reply.proofs, reply.message_paths, reply.root))
     }
 
     async fn get_fee_state(&self) -> Result<wallet::FeeStateQuote, Self::Error> {

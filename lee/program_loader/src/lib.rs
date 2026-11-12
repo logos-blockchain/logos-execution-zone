@@ -51,6 +51,8 @@ pub enum Message {
         image_id: ProgramId,
         immutable: bool,
     },
+    /// Fails unless the target holds a mutable header. Changes nothing.
+    AssertMutable,
 }
 
 /// One link in a program's bytecode chain: a chunk of the ELF plus where the next chunk lives,
@@ -265,6 +267,12 @@ pub fn handle_message<'state>(
                 "UpdateHeader target must be authorized by the signer"
             );
             header_write(input, first_segment, immutable, None, &actor_state)
+        }
+        Message::AssertMutable => {
+            let header = ProgramHeader::from_loader_actor_state(&input.pre_state)
+                .expect("AssertMutable target must hold a valid header");
+            assert!(!header.immutable, "AssertMutable target is immutable");
+            return (Response::keep_state().into_transition(input.clone()), None);
         }
     };
 

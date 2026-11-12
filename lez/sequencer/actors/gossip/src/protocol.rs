@@ -15,7 +15,7 @@ pub enum Publish {
 
 /// Publish one of this node's own channel-config messages to the mesh.
 #[cfg(feature = "actor")]
-pub struct PublishConfig(pub sequencer_channel_signing_actor::Wire);
+pub struct PublishConfig(pub sequencer_channel_signing_actor::protocol::Wire);
 
 /// Re-dial the configured bootstrap peers if the node has no connected
 /// peers; sent periodically by the scheduler.

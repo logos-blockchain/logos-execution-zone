@@ -1,45 +1,79 @@
 //! Core data structures and constants for the Clock Program.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::{Timestamp, account::AccountId};
+use lee_core::{
+    Timestamp,
+    account::{AccountId, Actor},
+};
 
-pub const CLOCK_01_PROGRAM_ACCOUNT_ID: AccountId =
-    AccountId::new(*b"/LEZ/ClockProgramAccount/0000001");
-
-pub const CLOCK_10_PROGRAM_ACCOUNT_ID: AccountId =
-    AccountId::new(*b"/LEZ/ClockProgramAccount/0000010");
-
-pub const CLOCK_50_PROGRAM_ACCOUNT_ID: AccountId =
-    AccountId::new(*b"/LEZ/ClockProgramAccount/0000050");
-
-/// All clock program account IDs, from the every-block one to the coarsest.
-pub const CLOCK_PROGRAM_ACCOUNT_IDS: [AccountId; 3] = [
-    CLOCK_01_PROGRAM_ACCOUNT_ID,
-    CLOCK_10_PROGRAM_ACCOUNT_ID,
-    CLOCK_50_PROGRAM_ACCOUNT_ID,
-];
+pub const CLOCK_PROGRAM_ACCOUNT_ID: AccountId =
+    AccountId::new(*b"/LEZ/ClockProgramAccount/0000000");
 
 pub const CLOCK_NAME: lee_core::program::SystemProgramName =
     lee_core::program::SystemProgramName::new(b"clock");
 
-/// The message type for the Clock Program. The sequencer ticks the every-block account with the
-/// current block timestamp and block ID; that account records it into the coarser ones.
+/// The message type for the Clock Program. The sequencer ticks the clock as the last transaction
+/// of every block, so every other transaction sees the previous block's ID and timestamp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Message {
     Tick {
         timestamp: Timestamp,
         block_id: u64,
     },
-    Record(ClockAccountData),
-    /// Read-only: any clock account may answer it, asserting its own timestamp falls in
-    /// `[at_least, at_most]` (`at_least == at_most` pins an exact timestamp).
-    AssertTimestamp {
-        at_least: Timestamp,
-        at_most: Timestamp,
+    /// Read-only: rounds the clock's block ID down to a multiple of `granularity`, and sends it
+    /// back to the sender as [`Reply::BlockId`]. Only an actor can read the clock: a transaction
+    /// that sends this straight to the clock fails.
+    ///
+    /// Example: with a granularity of 50 and the clock at block 57, the sender receives
+    /// `Reply::BlockId(50)`.
+    ///
+    /// A private transaction that reads the clock stays valid only while the rounded value is the
+    /// one it read, so a fine granularity makes it expire quickly.
+    ReadBlockId {
+        /// The rounding step in blocks, at least 1.
+        granularity: u64,
+    },
+    /// Read-only: rounds the clock's timestamp down to a multiple of `granularity`, and sends it
+    /// back to the sender as [`Reply::Timestamp`]. Only an actor can read the clock: a transaction
+    /// that sends this straight to the clock fails.
+    ///
+    /// Example: with a granularity of 60,000 ms (one minute) and the clock at 125,000 ms, the
+    /// sender receives `Reply::Timestamp(120_000)`.
+    ///
+    /// A private transaction that reads the clock stays valid only while the rounded value is the
+    /// one it read, so a fine granularity makes it expire quickly.
+    ReadTimestamp {
+        /// The rounding step in milliseconds, at least 1.
+        granularity: Timestamp,
     },
 }
 
-/// The data stored in a clock account.
+/// The messages the Clock Program sends. A reader needs `actor_entrypoint!(raw ..)`, because the
+/// typed entrypoint decodes every message, a reply included, as the reader's own message type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum Reply {
+    /// The answer to [`Message::ReadBlockId`]: the block ID rounded down to the read's
+    /// granularity.
+    BlockId(u64),
+    /// The answer to [`Message::ReadTimestamp`]: the timestamp in milliseconds rounded down to the
+    /// read's granularity.
+    Timestamp(Timestamp),
+}
+
+impl Reply {
+    /// Decodes the reply in `message` without checking who sent it: check that the sender is
+    /// [`clock_actor`] first.
+    ///
+    /// # Panics
+    ///
+    /// If `message` is not a reply.
+    #[must_use]
+    pub fn from_message(message: &[u8]) -> Self {
+        borsh::from_slice(message).expect("A clock reply must decode")
+    }
+}
+
+/// The data stored in the clock account.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ClockAccountData {
     pub block_id: u64,
@@ -61,4 +95,10 @@ impl ClockAccountData {
 #[must_use]
 pub fn clock_account_id() -> AccountId {
     AccountId::from_system_program_name(&CLOCK_NAME)
+}
+
+/// The clock's actor, which sends every [`Reply`].
+#[must_use]
+pub fn clock_actor() -> Actor {
+    Actor::new(CLOCK_PROGRAM_ACCOUNT_ID, clock_account_id())
 }

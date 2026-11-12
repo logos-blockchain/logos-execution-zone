@@ -122,6 +122,34 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_accounts() {
     .unwrap();
 
     assert!(proof.is_valid_for(&output.public_context, &output.execution));
+    // The same receipt with its claim unpruned verifies, but is not the one encoding accepted.
+    let journal = lee_core::to_borsh_frame(&(&output.public_context, &output.execution));
+    let claim = MaybePruned::Value(risc0_zkvm::ReceiptClaim::ok(
+        PRIVACY_PRESERVING_CIRCUIT_ID,
+        journal.clone(),
+    ));
+    let unpruned = match borsh::from_slice::<InnerReceipt>(&proof.0).unwrap() {
+        InnerReceipt::Succinct(mut receipt) => {
+            receipt.claim = claim;
+            InnerReceipt::Succinct(receipt)
+        }
+        InnerReceipt::Fake(mut receipt) => {
+            receipt.claim = claim;
+            InnerReceipt::Fake(receipt)
+        }
+        InnerReceipt::Composite(_) | InnerReceipt::Groth16(_) | _ => {
+            unreachable!("the prover emits a succinct or fake receipt")
+        }
+    };
+    assert!(
+        Receipt::new(unpruned.clone(), journal)
+            .verify(PRIVACY_PRESERVING_CIRCUIT_ID)
+            .is_ok()
+    );
+    assert!(
+        !Proof::from_inner(borsh::to_vec(&unpruned).unwrap())
+            .is_valid_for(&output.public_context, &output.execution)
+    );
     // A native transfer runs no guest, so it claims no program image.
     assert!(output.execution.program_image_claims.is_empty());
 

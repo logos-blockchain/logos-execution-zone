@@ -253,6 +253,54 @@ fn update_header_rejects_an_immutable_header() {
 }
 
 #[test]
+fn assert_mutable_accepts_a_mutable_header_and_changes_nothing() {
+    let target_id = AccountId::new([1; 32]);
+    let actor_states = ActorStates::default().header(target_id, &linked_header());
+    let pre_state = actor_states.read()(target_id).clone();
+
+    let (transition, new_commitment) = handle_message(
+        &input(target_id, false, pre_state, &Message::AssertMutable),
+        actor_states.read(),
+    );
+
+    assert_eq!(transition.response.post_state, None);
+    assert!(new_commitment.is_none());
+}
+
+#[test]
+#[should_panic(expected = "AssertMutable target is immutable")]
+fn assert_mutable_rejects_an_immutable_header() {
+    let target_id = AccountId::new([1; 32]);
+    let actor_states = ActorStates::default().header(
+        target_id,
+        &ProgramHeader {
+            immutable: true,
+            ..linked_header()
+        },
+    );
+    let pre_state = actor_states.read()(target_id).clone();
+
+    let _transition = handle_message(
+        &input(target_id, false, pre_state, &Message::AssertMutable),
+        actor_states.read(),
+    );
+}
+
+#[test]
+#[should_panic(expected = "AssertMutable target must hold a valid header")]
+fn assert_mutable_rejects_a_target_with_no_header() {
+    let _transition = handle_message(
+        &input(
+            AccountId::new([1; 32]),
+            false,
+            ActorState::empty(),
+            &Message::AssertMutable,
+        ),
+        ActorStates::default().read(),
+    );
+}
+
+#[test]
 #[should_panic(expected = "must be authorized by the signer")]
 fn update_header_rejects_an_unauthorized_caller() {
     let target_id = AccountId::new([1; 32]);
@@ -514,9 +562,9 @@ fn loader_entry_decoders_reject_the_other_variant() {
     assert_eq!(ProgramHeader::from_loader_actor_state(&segment_bytes), None);
 }
 
-/// `system_upgrader` changes only by protocol upgrade and encodes `UpdateHeader` (for `Apply`) and
-/// `CreateHeaderOf` (for `Schedule` and `Install`) itself, so these encodings are fixed for as long
-/// as it is deployed.
+/// `system_upgrader` changes only by protocol upgrade and encodes `UpdateHeader` (for `Apply`),
+/// `CreateHeaderOf` (for `Schedule` and `Install`) and `AssertMutable` (for `Schedule`) itself, so
+/// these encodings are fixed for as long as it is deployed.
 #[test]
 fn system_upgrader_loader_message_encodings_are_pinned() {
     let first_segment = AccountId::new([9; 32]);
@@ -548,4 +596,6 @@ fn system_upgrader_loader_message_encodings_are_pinned() {
         .unwrap(),
         create_of
     );
+
+    assert_eq!(borsh::to_vec(&Message::AssertMutable).unwrap(), vec![4]);
 }

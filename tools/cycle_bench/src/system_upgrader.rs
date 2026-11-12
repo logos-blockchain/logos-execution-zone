@@ -59,7 +59,7 @@ pub fn staged(committee_size: usize, new_code: &Program) -> Upgrade {
             (
                 programs::system_upgrader_account_id(),
                 programs::system_upgrader(),
-                false,
+                true,
             ),
             (
                 sequencer_stake_account_id(),
@@ -106,7 +106,11 @@ pub fn scheduled(committee_size: usize, new_code: &Program) -> Upgrade {
 #[must_use]
 pub fn schedule_tx(upgrade: &Upgrade, committee_size: usize) -> PublicTransaction {
     producer_tx(
-        &[committee_actor(), staging(upgrade)],
+        &[
+            committee_actor(),
+            loader_actor(&programs::CLOCK_NAME),
+            staging(upgrade),
+        ],
         &schedule_message(upgrade, committee_size),
     )
 }
@@ -123,9 +127,10 @@ pub fn apply_tx() -> PublicTransaction {
     )
 }
 
-/// `Schedule`'s guest input: the actor states it reads (the registry, the committee its approvals
-/// go to, the staging header and `new_code`'s segment chain, which the loader validates) and its
-/// message.
+/// `Schedule`'s guest input: the actor states it reads, and its message.
+///
+/// It reads the registry, the committee its approvals go to, the target's header the loader checks
+/// is mutable, the staging header and `new_code`'s segment chain, which the loader validates.
 #[must_use]
 pub fn schedule_guest_input(
     committee_size: usize,
@@ -135,6 +140,15 @@ pub fn schedule_guest_input(
     let mut actor_states = vec![
         registry(),
         committee_config(committee_size),
+        (
+            loader_actor(&programs::CLOCK_NAME),
+            upgrade
+                .state
+                .get_account_by_id(programs::clock_account_id())
+                .data
+                .actor_state(PROGRAM_LOADER_ACCOUNT_ID)
+                .clone(),
+        ),
         (staging(&upgrade), ActorState::empty()),
     ];
     actor_states.extend(upgrade.segments.iter().map(|id| {
@@ -158,6 +172,7 @@ fn staging(upgrade: &Upgrade) -> Actor {
         &ScheduledUpgrade {
             first_segment: upgrade.segments[0],
             image_id: upgrade.image_id,
+            immutable: false,
             activation_height: ACTIVATION_HEIGHT,
         },
     )
@@ -183,12 +198,14 @@ fn schedule_message(upgrade: &Upgrade, committee_size: usize) -> Message {
         name: programs::CLOCK_NAME,
         first_segment: upgrade.segments[0],
         image_id: upgrade.image_id,
+        immutable: false,
         activation_height: ACTIVATION_HEIGHT,
     };
     Message::Schedule {
         name: programs::CLOCK_NAME,
         first_segment: upgrade.segments[0],
         image_id: upgrade.image_id,
+        immutable: false,
         activation_height: ACTIVATION_HEIGHT,
         approvals: approvals(&proposal, committee_size),
     }

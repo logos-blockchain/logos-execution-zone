@@ -14,9 +14,9 @@ use kameo::{
 use logos_blockchain_core::proofs::channel_multi_sig_proof::IndexedSignature;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
 use mempool::{MemPool, MemPoolHandle};
-use sequencer_channel_signing_actor::{Signature, Wire};
-use sequencer_core::{TransactionOrigin, config::GossipConfig, gossip::accredited_keys_channel};
-use sequencer_slasher_actor::{Approval, Offence};
+use sequencer_channel_signing_actor::protocol::{Signature, Wire};
+use sequencer_core::{TransactionOrigin, config::GossipConfig};
+use sequencer_slasher_actor::protocol::{Approval, Offence};
 use sequencer_stake_core::SequencerKey;
 use system_upgrader_core::SignedApproval;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
@@ -28,7 +28,6 @@ use super::{
 use crate::protocol::{GetConnectedPeers, Publish, PublishConfig};
 
 const CHANNEL: [u8; 32] = [1; 32];
-const TEST_MAX_BLOCK_SIZE: u64 = 1 << 20;
 
 /// A spawned gossip actor plus the identity captured before spawning.
 struct TestNode {
@@ -190,7 +189,7 @@ fn test_config() -> GossipConfig {
 }
 
 fn test_mempool_handle() -> MemPoolHandle<(TransactionOrigin, LeeTransaction)> {
-    MemPool::new(1000).1
+    MemPool::new(1000).handle().clone()
 }
 
 fn test_approval_sink() -> kameo::actor::Recipient<Approval> {
@@ -231,7 +230,8 @@ async fn start_node(secret: [u8; 32], bootstrap: Vec<libp2p::Multiaddr>) -> (Tes
         listen_addr: "/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap(),
         bootstrap_peers: bootstrap,
     };
-    let (mempool, mempool_handle) = MemPool::new(1000);
+    let mempool = MemPool::new(1000);
+    let mempool_handle = mempool.handle().clone();
     let (approval_tx, approvals) = mpsc::unbounded_channel();
     let (config_tx, configs) = mpsc::unbounded_channel();
     let (system_approval_tx, system_approvals) = mpsc::unbounded_channel();
@@ -242,10 +242,7 @@ async fn start_node(secret: [u8; 32], bootstrap: Vec<libp2p::Multiaddr>) -> (Tes
         CHANNEL,
         Ed25519Key::from_bytes(&secret),
         sink_ref.recipient(),
-        tokio::sync::watch::channel(TEST_MAX_BLOCK_SIZE).1,
         unscreened_mempool_submit(mempool_handle),
-        accredited_keys_channel().1,
-        accredited_keys_channel().1,
         config_sink_ref.recipient(),
         channel_system_approval_submit(system_approval_tx),
     )
@@ -318,10 +315,7 @@ async fn new_binds_and_reports_listen_addr() {
         [1; 32],
         Ed25519Key::from_bytes(&[9; 32]),
         test_approval_sink(),
-        tokio::sync::watch::channel(TEST_MAX_BLOCK_SIZE).1,
         unscreened_mempool_submit(test_mempool_handle()),
-        accredited_keys_channel().1,
-        accredited_keys_channel().1,
         test_config_sink(),
         channel_system_approval_submit(mpsc::unbounded_channel().0),
     )
@@ -340,10 +334,7 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         [1; 32],
         Ed25519Key::from_bytes(&[9; 32]),
         test_approval_sink(),
-        tokio::sync::watch::channel(TEST_MAX_BLOCK_SIZE).1,
         unscreened_mempool_submit(test_mempool_handle()),
-        accredited_keys_channel().1,
-        accredited_keys_channel().1,
         test_config_sink(),
         channel_system_approval_submit(mpsc::unbounded_channel().0),
     )
@@ -368,10 +359,7 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         [1; 32],
         Ed25519Key::from_bytes(&[10; 32]),
         test_approval_sink(),
-        tokio::sync::watch::channel(TEST_MAX_BLOCK_SIZE).1,
         unscreened_mempool_submit(test_mempool_handle()),
-        accredited_keys_channel().1,
-        accredited_keys_channel().1,
         test_config_sink(),
         channel_system_approval_submit(mpsc::unbounded_channel().0),
     )
@@ -561,6 +549,7 @@ async fn a_system_approval_published_by_one_node_reaches_the_others() {
         name: SystemProgramName::new(b"clock"),
         first_segment: lee::AccountId::new([9; 32]),
         image_id: [7; 8],
+        immutable: false,
         activation_height: 50,
     };
     let key = SigningKey::from_bytes(&[62; 32]);

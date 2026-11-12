@@ -46,6 +46,7 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
             name,
             first_segment,
             image_id,
+            immutable,
             activation_height,
             ..
         } => {
@@ -65,13 +66,18 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
             let upgrade = ScheduledUpgrade {
                 first_segment,
                 image_id,
+                immutable,
                 activation_height,
             };
             *pending = Some(upgrade);
-            // The loader validates the chain and checks its image ID is the approved one now, so
-            // `Apply` can't fail.
+            // The loader checks the header is mutable, validates the chain and checks its image ID
+            // is the approved one now, so `Apply` can't fail.
             Response::set_state(registry.to_bytes())
                 .block_window(..activation_height)
+                .send(SyncMessage::new(
+                    loader_actor(&name),
+                    &LoaderMessage::AssertMutable,
+                ))
                 .send(
                     SyncMessage::new(
                         staging_actor(&name, &upgrade),
@@ -102,7 +108,7 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
                     &name,
                     &LoaderMessage::UpdateHeader {
                         first_segment: upgrade.first_segment,
-                        immutable: false,
+                        immutable: upgrade.immutable,
                     },
                 ))
         }
@@ -126,6 +132,7 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
             name,
             first_segment,
             image_id,
+            immutable,
             ..
         } => {
             assert!(
@@ -137,7 +144,7 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
                 &LoaderMessage::CreateHeaderOf {
                     first_segment,
                     image_id,
-                    immutable: false,
+                    immutable,
                 },
             ))
         }

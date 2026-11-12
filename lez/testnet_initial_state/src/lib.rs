@@ -166,11 +166,10 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
             system_accounts::bridge_account_id(),
             system_accounts::bridge_account(),
         )])
-        .chain(
-            system_accounts::clock_account_ids()
-                .into_iter()
-                .map(|clock_id| (clock_id, system_accounts::clock_account())),
-        )
+        .chain([(
+            system_accounts::clock_account_id(),
+            system_accounts::clock_account(),
+        )])
         .chain([(
             system_accounts::sequencer_stake_config_account_id(),
             system_accounts::sequencer_stake_config_account(None, None),
@@ -186,8 +185,8 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
         .collect()
 }
 
-/// System programs changed only by a protocol upgrade: `system_upgrader`, the root of system
-/// program upgrades.
+/// System programs changed only by a protocol upgrade, seeded immutable: `system_upgrader`, the
+/// root of system program upgrades.
 fn protocol_upgradable_programs() -> Vec<(AccountId, Program)> {
     vec![(
         programs::system_upgrader_account_id(),
@@ -197,29 +196,10 @@ fn protocol_upgradable_programs() -> Vec<(AccountId, Program)> {
 
 /// System programs, owned by `system_upgrader` and upgradable through it, by name.
 fn system_upgradable_programs(cross_zone: bool) -> Vec<(SystemProgramName, Program)> {
-    let mut programs = vec![
-        (programs::CLOCK_NAME, programs::clock()),
-        (programs::FEE_NAME, programs::fee()),
-        (programs::BRIDGE_NAME, programs::bridge()),
-        (programs::SEQUENCER_STAKE_NAME, programs::sequencer_stake()),
-    ];
+    let mut programs = programs::builtin_core_programs().to_vec();
     if cross_zone {
-        // System programs baked into every node (genesis-block ELFs would exceed the
-        // inscription size limit); registered only on cross_zone zones.
-        programs.extend([
-            (
-                programs::CROSS_ZONE_INBOX_NAME,
-                programs::cross_zone_inbox(),
-            ),
-            (
-                programs::CROSS_ZONE_OUTBOX_NAME,
-                programs::cross_zone_outbox(),
-            ),
-            (programs::PING_SENDER_NAME, programs::ping_sender()),
-            (programs::PING_RECEIVER_NAME, programs::ping_receiver()),
-            (programs::BRIDGE_LOCK_NAME, programs::bridge_lock()),
-            (programs::WRAPPED_TOKEN_NAME, programs::wrapped_token()),
-        ]);
+        // Baked into every node: genesis-block ELFs would exceed the inscription size limit.
+        programs.extend(programs::builtin_cross_zone_programs());
     }
     programs
 }
@@ -254,7 +234,7 @@ pub fn initial_state(cross_zone: bool) -> V03State {
         .with_programs_at(
             protocol_upgradable_programs()
                 .into_iter()
-                .map(|(account_id, program)| (account_id, program, false))
+                .map(|(account_id, program)| (account_id, program, true))
                 .chain(system_upgradable_programs(cross_zone).into_iter().map(
                     |(name, program)| (AccountId::from_system_program_name(&name), program, false),
                 )),
@@ -477,6 +457,24 @@ mod tests {
                 without.get_builtin_program(id).is_none(),
                 "absent when not declared"
             );
+        }
+    }
+
+    #[test]
+    fn system_upgrader_is_seeded_immutable_with_its_mirror() {
+        for cross_zone in [false, true] {
+            let state = initial_state(cross_zone);
+            let program = programs::system_upgrader_account_id();
+            let header = lee_core::program::ProgramHeader::from_loader_actor_state(
+                state
+                    .get_account_by_id(program)
+                    .data
+                    .actor_state(lee_core::program::PROGRAM_LOADER_ACCOUNT_ID),
+            )
+            .unwrap();
+            assert!(header.immutable);
+            let mirror = lee_core::program::immutable_mirror_commitment(program, &header);
+            assert!(state.get_proof_for_commitment(&mirror).is_some());
         }
     }
 

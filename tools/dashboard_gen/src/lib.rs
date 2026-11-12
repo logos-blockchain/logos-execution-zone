@@ -14,15 +14,15 @@
 // Styling vocabularies passed to the optional `styling` setters are part of the
 // public API (and are used by this module's `Panel` fields and `finalize`).
 use schema::{
-    AlignValue, BarGaugeDisplay, BarGaugeOptions, BarGaugeValueMode, Calc, Custom, CustomConfig,
-    CustomVariable, DashboardLink, DashboardLinkKind, DataLink, Datasource, Defaults, DrawStyle,
-    EmptyList, FieldConfig, Fill, GaugeOptions, GraphMode, GridPos, Legend, LegendDisplay,
-    LineStyle, LogsOptions, LogsSortOrder, Matcher, MatcherKind, Options, Orientation,
-    OverrideProperty, PanelLink, PanelModel, PanelType, Placement, PropertyId, PropertyValue,
-    QueryVariable, ReduceOptions, ShowValue, SortOrder, Stacking, StatColorMode, StatOptions,
-    StateTimelineOptions, StatusHistoryOptions, Templating, TimeRange, TimeSeriesOptions,
-    TimelineCustom, Tooltip, TooltipMode, ValueMapping, ValueMappingKind, ValueMappingResult,
-    VariableOption, VariableRefresh, VariableSort,
+    AlignValue, BarGaugeDisplay, BarGaugeOptions, BarGaugeSizing, BarGaugeValueMode, Calc, Custom,
+    CustomConfig, CustomVariable, DashboardLink, DashboardLinkKind, DataLink, Datasource, Defaults,
+    DrawStyle, EmptyList, FieldConfig, Fill, GaugeOptions, GraphMode, GridPos, Legend,
+    LegendDisplay, LineStyle, LogsOptions, LogsSortOrder, Matcher, MatcherKind, NamePlacement,
+    Options, Orientation, OverrideProperty, PanelLink, PanelModel, PanelType, Placement,
+    PropertyId, PropertyValue, QueryVariable, ReduceOptions, ShowValue, SortOrder, Stacking,
+    StatColorMode, StatOptions, StateTimelineOptions, StatusHistoryOptions, Templating, TimeRange,
+    TimeSeriesOptions, TimelineCustom, Tooltip, TooltipMode, ValueMapping, ValueMappingKind,
+    ValueMappingResult, VariableHide, VariableOption, VariableRefresh, VariableSort,
 };
 pub use schema::{
     AxisPlacement, Color, GradientMode, LineInterpolation, ShowPoints, StackingMode, Thresholds,
@@ -73,7 +73,8 @@ const TIMELINE_ROW_HEIGHT: f64 = 0.9;
 #[derive(Clone)]
 pub struct Selector {
     metric: String,
-    matchers: Vec<(String, String)>,
+    /// Rendered matchers, e.g. `label="value"`.
+    matchers: Vec<String>,
 }
 
 impl Selector {
@@ -87,20 +88,25 @@ impl Selector {
     /// Keep only series whose `label` equals `value`. `value` may reference a
     /// dashboard variable, e.g. `$sequencer`.
     #[must_use]
-    pub fn label_eq(mut self, label: impl Into<String>, value: impl Into<String>) -> Self {
-        self.matchers.push((label.into(), value.into()));
+    pub fn label_eq(mut self, label: impl AsRef<str>, value: impl AsRef<str>) -> Self {
+        self.matchers
+            .push(format!("{}=\"{}\"", label.as_ref(), value.as_ref()));
+        self
+    }
+
+    /// Keep only series whose whole `label` matches `regex`. `regex` may
+    /// reference a dashboard variable.
+    #[must_use]
+    pub fn label_matches(mut self, label: impl AsRef<str>, regex: impl AsRef<str>) -> Self {
+        self.matchers
+            .push(format!("{}=~\"{}\"", label.as_ref(), regex.as_ref()));
         self
     }
 
     /// The selector for one of the series a histogram expands into, e.g.
     /// `_bucket`.
     fn suffixed(&self, suffix: &str) -> String {
-        let matchers = self
-            .matchers
-            .iter()
-            .map(|(label, value)| format!("{label}=\"{value}\""))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let matchers = self.matchers.join(", ");
         if matchers.is_empty() {
             format!("{}{suffix}", self.metric)
         } else {
@@ -180,6 +186,17 @@ impl FieldOverride {
             matcher: Matcher {
                 id: MatcherKind::ByName,
                 options: name.into(),
+            },
+            properties: Vec::new(),
+        }
+    }
+
+    /// Matches every series whose name matches `regex`, e.g. `/ · avg$/`.
+    pub fn by_regex(regex: impl Into<String>) -> Self {
+        Self {
+            matcher: Matcher {
+                id: MatcherKind::ByRegexp,
+                options: regex.into(),
             },
             properties: Vec::new(),
         }
@@ -576,6 +593,12 @@ impl Panel {
                 };
                 let options = Options::BarGauge(BarGaugeOptions {
                     display_mode: BarGaugeDisplay::Basic,
+                    // Grafana's defaults, but for the minimum height: at its
+                    // 16px, crowded bars leave no room for the name above.
+                    max_viz_height: 300,
+                    min_viz_height: 36,
+                    min_viz_width: 8,
+                    name_placement: NamePlacement::Top,
                     orientation: Orientation::Horizontal,
                     reduce_options: ReduceOptions {
                         calcs: vec![Calc::LastNotNull],
@@ -583,6 +606,7 @@ impl Panel {
                         values: false,
                     },
                     show_unfilled: true,
+                    sizing: BarGaugeSizing::Manual,
                     value_mode: BarGaugeValueMode::Text,
                 });
                 (defaults, options, PanelType::BarGauge)
@@ -807,6 +831,37 @@ impl Dashboard {
     }
 }
 
+impl Variable {
+    /// Cut each fetched choice down to the first capture group of `regex`, a
+    /// JavaScript regex with its slashes, e.g. `/^(\w+)/`. The cut is both what
+    /// the dropdown shows and what `$name` holds.
+    ///
+    /// Panics on a variable whose choices are not fetched.
+    #[must_use]
+    pub fn regex(mut self, regex: impl Into<String>) -> Self {
+        match &mut self {
+            Self::Query(variable) => variable.regex = Some(regex.into()),
+            Self::Custom(_) => {
+                panic!("a custom variable spells out its choices: no regex to cut them with")
+            }
+        }
+        self
+    }
+
+    /// Leave the variable out of the top bar, for one the dashboard derives
+    /// from the others, e.g. through [`Variable::regex`].
+    ///
+    /// Panics on a variable whose choices are not fetched.
+    #[must_use]
+    pub fn hidden(mut self) -> Self {
+        match &mut self {
+            Self::Query(variable) => variable.hide = Some(VariableHide::Variable),
+            Self::Custom(_) => panic!("a custom variable is there to be picked from"),
+        }
+        self
+    }
+}
+
 /// The dropdown driving every [`selected_percentile`] query, offering
 /// `percentiles` (e.g. `[50, 90, 95, 99]`) with `default` pre-selected.
 ///
@@ -859,12 +914,14 @@ pub fn label_values_variable(name: &str, title: &str, metric: &str, label: &str)
     Variable::Query(QueryVariable {
         datasource: Datasource::prometheus(),
         definition: query.clone(),
+        hide: None,
         include_all: false,
         label: title.to_owned(),
         multi: false,
         name: name.to_owned(),
         query,
         refresh: VariableRefresh::OnTimeRangeChange,
+        regex: None,
         sort: VariableSort::NaturalAsc,
     })
 }
@@ -882,6 +939,13 @@ pub fn percentile_legend() -> String {
 /// [`histogram_quantile`]: https://prometheus.io/docs/prometheus/latest/querying/functions/#histogram_quantile
 #[must_use]
 pub fn selected_percentile(metric: &Selector, labels: &[&str], legend: &str) -> Target {
+    Target::new(selected_percentile_expr(metric, labels, RATE_WINDOW)).legend(legend)
+}
+
+/// [`selected_percentile`]'s query, over `window` instead, e.g. `$__range`
+/// for one value per series over the whole time range.
+#[must_use]
+pub fn selected_percentile_expr(metric: &Selector, labels: &[&str], window: &str) -> String {
     // `le` carries the bucket boundary, so it must survive the aggregation.
     let grouping = std::iter::once("le")
         .chain(labels.iter().copied())
@@ -889,10 +953,9 @@ pub fn selected_percentile(metric: &Selector, labels: &[&str], legend: &str) -> 
         .join(", ");
 
     let buckets = metric.suffixed("_bucket");
-    Target::new(format!(
-        "histogram_quantile(${{{PERCENTILE_VAR}}}, sum by ({grouping}) (rate({buckets}[{RATE_WINDOW}])))"
-    ))
-    .legend(legend)
+    format!(
+        "histogram_quantile(${{{PERCENTILE_VAR}}}, sum by ({grouping}) (rate({buckets}[{window}])))"
+    )
 }
 
 /// A percentile as its `histogram_quantile` argument, derived without float

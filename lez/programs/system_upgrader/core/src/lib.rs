@@ -31,6 +31,7 @@ pub enum Message {
         name: SystemProgramName,
         first_segment: AccountId,
         image_id: ProgramId,
+        immutable: bool,
         activation_height: BlockId,
         approvals: Vec<Approval>,
     },
@@ -46,11 +47,12 @@ pub enum Message {
         activation_height: BlockId,
         approvals: Vec<Approval>,
     },
-    /// Deploys a new, mutable system program `name` from the chain at `first_segment`.
+    /// Deploys a new system program `name` from the chain at `first_segment`.
     Install {
         name: SystemProgramName,
         first_segment: AccountId,
         image_id: ProgramId,
+        immutable: bool,
         approvals: Vec<Approval>,
     },
 }
@@ -64,11 +66,13 @@ impl Message {
                 name,
                 first_segment,
                 image_id,
+                immutable,
                 activation_height,
             } => Self::Schedule {
                 name,
                 first_segment,
                 image_id,
+                immutable,
                 activation_height,
                 approvals,
             },
@@ -86,10 +90,12 @@ impl Message {
                 name,
                 first_segment,
                 image_id,
+                immutable,
             } => Self::Install {
                 name,
                 first_segment,
                 image_id,
+                immutable,
                 approvals,
             },
         }
@@ -104,15 +110,18 @@ impl Message {
                 name,
                 first_segment,
                 image_id,
+                immutable,
                 activation_height,
                 ..
             } => vec![
                 committee_actor(),
+                loader_actor(name),
                 staging_actor(
                     name,
                     &ScheduledUpgrade {
                         first_segment: *first_segment,
                         image_id: *image_id,
+                        immutable: *immutable,
                         activation_height: *activation_height,
                     },
                 ),
@@ -132,6 +141,7 @@ impl Message {
                 name,
                 first_segment,
                 image_id,
+                immutable,
                 activation_height,
                 approvals,
             } => Some((
@@ -139,6 +149,7 @@ impl Message {
                     name: *name,
                     first_segment: *first_segment,
                     image_id: *image_id,
+                    immutable: *immutable,
                     activation_height: *activation_height,
                 },
                 approvals,
@@ -160,12 +171,14 @@ impl Message {
                 name,
                 first_segment,
                 image_id,
+                immutable,
                 approvals,
             } => Some((
                 Proposal::Install {
                     name: *name,
                     first_segment: *first_segment,
                     image_id: *image_id,
+                    immutable: *immutable,
                 },
                 approvals,
             )),
@@ -182,6 +195,7 @@ pub enum Proposal {
         name: SystemProgramName,
         first_segment: AccountId,
         image_id: ProgramId,
+        immutable: bool,
         activation_height: BlockId,
     },
     Cancel {
@@ -193,6 +207,7 @@ pub enum Proposal {
         name: SystemProgramName,
         first_segment: AccountId,
         image_id: ProgramId,
+        immutable: bool,
     },
 }
 
@@ -219,6 +234,8 @@ pub struct ScheduledUpgrade {
     pub first_segment: AccountId,
     /// What the chain at `first_segment` computes to, checked by the loader at `Schedule`.
     pub image_id: ProgramId,
+    /// Whether `Apply` leaves the header immutable.
+    pub immutable: bool,
     pub activation_height: BlockId,
 }
 
@@ -364,6 +381,7 @@ mod tests {
             name: SystemProgramName::new(b"clock"),
             first_segment: AccountId::new([1; 32]),
             image_id: [2; 8],
+            immutable: false,
             activation_height: 10,
         }
     }
@@ -420,6 +438,7 @@ mod tests {
             name,
             first_segment,
             image_id,
+            immutable,
             activation_height,
         } = proposal()
         else {
@@ -429,6 +448,7 @@ mod tests {
             name,
             first_segment,
             image_id,
+            immutable,
             activation_height: activation_height + 1,
         };
         assert_eq!(proposal().hash(), proposal().hash());
@@ -436,12 +456,13 @@ mod tests {
     }
 
     #[test]
-    fn a_schedule_declares_its_staging_header() {
+    fn a_schedule_declares_its_loader_and_staging_headers() {
         let message = Message::approved(proposal(), Vec::new());
         let Proposal::Schedule {
             name,
             first_segment,
             image_id,
+            immutable,
             activation_height,
         } = proposal()
         else {
@@ -452,12 +473,18 @@ mod tests {
             &ScheduledUpgrade {
                 first_segment,
                 image_id,
+                immutable,
                 activation_height,
             },
         );
         assert_eq!(
             message.actors(),
-            vec![registry_actor(), committee_actor(), staging]
+            vec![
+                registry_actor(),
+                committee_actor(),
+                loader_actor(&name),
+                staging
+            ]
         );
     }
 }

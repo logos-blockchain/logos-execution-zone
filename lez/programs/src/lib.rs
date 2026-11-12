@@ -15,7 +15,8 @@ mod inner {
         SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID, SYSTEM_UPGRADER_ELF, SYSTEM_UPGRADER_ID,
         WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
     };
-    use lee::program::Program;
+    use lee::{AccountId, program::Program};
+    use system_upgrader_core::SystemProgramName;
 
     mod guests {
         include!(concat!(env!("OUT_DIR"), "/lez/programs/mod.rs"));
@@ -119,6 +120,62 @@ mod inner {
 
     pub use sequencer_stake_core::sequencer_stake_account_id;
 
+    /// System programs every zone registers at genesis, by name.
+    #[must_use]
+    pub fn builtin_core_programs() -> [(SystemProgramName, Program); 4] {
+        [
+            (CLOCK_NAME, clock()),
+            (FEE_NAME, fee()),
+            (BRIDGE_NAME, bridge()),
+            (SEQUENCER_STAKE_NAME, sequencer_stake()),
+        ]
+    }
+
+    #[must_use]
+    pub fn builtin_cross_zone_programs() -> [(SystemProgramName, Program); 6] {
+        [
+            (CROSS_ZONE_INBOX_NAME, cross_zone_inbox()),
+            (CROSS_ZONE_OUTBOX_NAME, cross_zone_outbox()),
+            (PING_SENDER_NAME, ping_sender()),
+            (PING_RECEIVER_NAME, ping_receiver()),
+            (BRIDGE_LOCK_NAME, bridge_lock()),
+            (WRAPPED_TOKEN_NAME, wrapped_token()),
+        ]
+    }
+
+    /// `system_upgrader`, then the system programs at their name-derived addresses.
+    ///
+    /// The refusal list and the elf check derive from this, genesis from its parts. The fixed
+    /// lengths are the enforcement: adding to either half fails to compile until every length
+    /// here is updated too.
+    #[must_use]
+    pub fn builtin_programs() -> [(AccountId, Program); 11] {
+        let at_name = |(name, program): (SystemProgramName, Program)| {
+            (AccountId::from_system_program_name(&name), program)
+        };
+        let [clock, fee, bridge, stake] = builtin_core_programs().map(at_name);
+        let [inbox, outbox, sender, receiver, lock, wrapped] =
+            builtin_cross_zone_programs().map(at_name);
+        [
+            (system_upgrader_account_id(), system_upgrader()),
+            clock,
+            fee,
+            bridge,
+            stake,
+            inbox,
+            outbox,
+            sender,
+            receiver,
+            lock,
+            wrapped,
+        ]
+    }
+
+    #[must_use]
+    pub fn builtin_program_account_ids() -> [AccountId; 11] {
+        builtin_programs().map(|(account_id, _)| account_id)
+    }
+
     #[cfg(test)]
     mod tests {
         use lee::{Account, AccountId, Actor, PublicTransaction, V03State, public_transaction};
@@ -210,10 +267,19 @@ mod inner {
             }
 
             fn schedule_proposal(name: SystemProgramName, first_segment: AccountId) -> Proposal {
+                schedule_proposal_for(name, first_segment, false)
+            }
+
+            fn schedule_proposal_for(
+                name: SystemProgramName,
+                first_segment: AccountId,
+                immutable: bool,
+            ) -> Proposal {
                 Proposal::Schedule {
                     name,
                     first_segment,
                     image_id: ping_receiver().id(),
+                    immutable,
                     activation_height: ACTIVATION_HEIGHT,
                 }
             }
@@ -258,7 +324,7 @@ mod inner {
                 let state = V03State::new()
                     .with_programs_at(
                         [
-                            (system_upgrader_account_id(), system_upgrader(), false),
+                            (system_upgrader_account_id(), system_upgrader(), true),
                             (sequencer_stake_account_id(), sequencer_stake(), false),
                         ]
                         .into_iter()
@@ -303,20 +369,52 @@ mod inner {
                 first_segment: AccountId,
                 approvals: Vec<Approval>,
             ) -> PublicTransaction {
+                schedule_tx_for(name, first_segment, false, approvals)
+            }
+
+            fn schedule_tx_for(
+                name: SystemProgramName,
+                first_segment: AccountId,
+                immutable: bool,
+                approvals: Vec<Approval>,
+            ) -> PublicTransaction {
                 let upgrade = ScheduledUpgrade {
                     first_segment,
                     image_id: ping_receiver().id(),
+                    immutable,
                     activation_height: ACTIVATION_HEIGHT,
                 };
                 system_upgrader_tx(
-                    &[committee_actor(), staging_actor(&name, &upgrade)],
+                    &[
+                        committee_actor(),
+                        loader_actor(&name),
+                        staging_actor(&name, &upgrade),
+                    ],
                     &Message::Schedule {
                         name,
                         first_segment,
                         image_id: ping_receiver().id(),
+                        immutable,
                         activation_height: ACTIVATION_HEIGHT,
                         approvals,
                     },
+                )
+            }
+
+            /// An approved `Schedule` of `clock`'s upgrade to the chain at `first_segment`.
+            fn approved_schedule_tx_for(
+                first_segment: AccountId,
+                immutable: bool,
+            ) -> PublicTransaction {
+                schedule_tx_for(
+                    CLOCK_NAME,
+                    first_segment,
+                    immutable,
+                    approvals_for(
+                        &schedule_proposal_for(CLOCK_NAME, first_segment, immutable),
+                        &[1, 2],
+                        VALID_UNTIL,
+                    ),
                 )
             }
 
@@ -328,20 +426,27 @@ mod inner {
                 let upgrade = ScheduledUpgrade {
                     first_segment,
                     image_id: ping_receiver().id(),
+                    immutable: false,
                     activation_height,
                 };
                 let proposal = Proposal::Schedule {
                     name: CLOCK_NAME,
                     first_segment,
                     image_id: ping_receiver().id(),
+                    immutable: false,
                     activation_height,
                 };
                 system_upgrader_tx(
-                    &[committee_actor(), staging_actor(&CLOCK_NAME, &upgrade)],
+                    &[
+                        committee_actor(),
+                        loader_actor(&CLOCK_NAME),
+                        staging_actor(&CLOCK_NAME, &upgrade),
+                    ],
                     &Message::Schedule {
                         name: CLOCK_NAME,
                         first_segment,
                         image_id: ping_receiver().id(),
+                        immutable: false,
                         activation_height,
                         approvals: approvals_for(&proposal, &[1, 2], VALID_UNTIL),
                     },
@@ -391,10 +496,19 @@ mod inner {
             }
 
             fn install_tx(name: SystemProgramName, first_segment: AccountId) -> PublicTransaction {
+                install_tx_for(name, first_segment, false)
+            }
+
+            fn install_tx_for(
+                name: SystemProgramName,
+                first_segment: AccountId,
+                immutable: bool,
+            ) -> PublicTransaction {
                 let proposal = Proposal::Install {
                     name,
                     first_segment,
                     image_id: ping_receiver().id(),
+                    immutable,
                 };
                 system_upgrader_tx(
                     &[committee_actor(), loader_actor(&name)],
@@ -402,6 +516,7 @@ mod inner {
                         name,
                         first_segment,
                         image_id: ping_receiver().id(),
+                        immutable,
                         approvals: approvals_for(&proposal, &[1, 2], VALID_UNTIL),
                     },
                 )
@@ -427,6 +542,14 @@ mod inner {
                 .unwrap()
             }
 
+            fn has_mirror(state: &V03State, program: AccountId) -> bool {
+                let commitment = lee_core::program::immutable_mirror_commitment(
+                    program,
+                    &header(state, program),
+                );
+                state.get_proof_for_commitment(&commitment).is_some()
+            }
+
             fn schedule(state: &V03State) -> Option<ScheduledUpgrade> {
                 registry(state).scheduled(&CLOCK_NAME)
             }
@@ -435,6 +558,7 @@ mod inner {
                 Some(ScheduledUpgrade {
                     first_segment: ids[0],
                     image_id: ping_receiver().id(),
+                    immutable: false,
                     activation_height: ACTIVATION_HEIGHT,
                 })
             }
@@ -472,6 +596,47 @@ mod inner {
                     Some(ping_receiver().id())
                 );
                 assert_eq!(schedule(&state), None, "applying clears the schedule");
+                assert!(!header(&state, clock_account_id()).immutable);
+            }
+
+            #[test]
+            fn an_immutable_upgrade_freezes_the_program() {
+                let (mut state, ids) = staged();
+                state
+                    .transition_from_public_transaction(
+                        &approved_schedule_tx_for(ids[0], true),
+                        1,
+                        0,
+                    )
+                    .expect("scheduling an immutable upgrade succeeds");
+
+                state
+                    .transition_from_public_transaction(
+                        &apply_tx(ACTIVATION_HEIGHT),
+                        ACTIVATION_HEIGHT,
+                        0,
+                    )
+                    .expect("the upgrade applies at its height");
+                assert_eq!(
+                    state.get_program_image_id(clock_account_id()),
+                    Some(ping_receiver().id())
+                );
+                assert!(header(&state, clock_account_id()).immutable);
+                assert!(has_mirror(&state, clock_account_id()));
+
+                let err = state
+                    .transition_from_public_transaction(
+                        &schedule_tx_at(ids[0], ACTIVATION_HEIGHT + 10),
+                        ACTIVATION_HEIGHT + 1,
+                        0,
+                    )
+                    .expect_err("an immutable system program can't be scheduled");
+                assert!(
+                    err.to_string()
+                        .contains("AssertMutable target is immutable"),
+                    "got: {err}"
+                );
+                assert_eq!(schedule(&state), None);
             }
 
             #[test]
@@ -500,52 +665,35 @@ mod inner {
             }
 
             #[test]
-            fn applying_to_a_system_program_without_a_header_is_refused() {
+            fn scheduling_a_system_program_without_a_header_is_refused() {
                 let (mut state, ids) = staged_with([]);
-                state
-                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
-                    .unwrap();
 
                 let err = state
-                    .transition_from_public_transaction(
-                        &apply_tx(ACTIVATION_HEIGHT),
-                        ACTIVATION_HEIGHT,
-                        0,
-                    )
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
                     .expect_err("there is no clock header to upgrade");
                 assert!(
-                    err.to_string().contains("must already hold a valid header"),
-                    "got: {err}"
+                    format!("{err:?}").contains("UnadmittedPublicActor"),
+                    "got: {err:?}"
                 );
-                assert_eq!(schedule(&state), scheduled_at(&ids), "the schedule is kept");
+                assert_eq!(schedule(&state), None);
             }
 
             #[test]
-            fn applying_to_an_immutable_system_program_is_refused() {
+            fn scheduling_an_immutable_system_program_is_refused() {
                 let (mut state, ids) = staged_with([(clock_account_id(), clock(), true)]);
-                state
-                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
-                    .unwrap();
 
                 let err = state
-                    .transition_from_public_transaction(
-                        &apply_tx(ACTIVATION_HEIGHT),
-                        ACTIVATION_HEIGHT,
-                        0,
-                    )
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
                     .expect_err("an immutable system program can't be upgraded");
                 assert!(
-                    err.to_string().contains("immutable and cannot be updated"),
+                    err.to_string()
+                        .contains("AssertMutable target is immutable"),
                     "got: {err}"
                 );
-                assert_eq!(
-                    state.get_program_image_id(clock_account_id()),
-                    Some(clock().id())
-                );
+                assert_eq!(schedule(&state), None);
             }
 
-            /// `system_upgrader`'s header is mutable, but no signer or PDA can authorize its
-            /// address, so only a protocol upgrade can repoint it.
+            /// `system_upgrader`'s header is immutable, so only a protocol upgrade can repoint it.
             #[test]
             fn system_upgrader_header_cannot_be_updated() {
                 let (mut state, ids) = staged();
@@ -571,8 +719,11 @@ mod inner {
                         1,
                         0,
                     )
-                    .expect_err("nobody can authorize system_upgrader's header");
-                assert!(err.to_string().contains("must be authorized"), "got: {err}");
+                    .expect_err("system_upgrader's header is immutable");
+                assert!(
+                    err.to_string().contains("immutable and cannot be updated"),
+                    "got: {err}"
+                );
                 assert_eq!(
                     state.get_account_by_id(system_upgrader_account_id()),
                     header_before
@@ -706,20 +857,27 @@ mod inner {
                 let upgrade = ScheduledUpgrade {
                     first_segment: ids[0],
                     image_id,
+                    immutable: false,
                     activation_height: ACTIVATION_HEIGHT,
                 };
                 let proposal = Proposal::Schedule {
                     name: CLOCK_NAME,
                     first_segment: ids[0],
                     image_id,
+                    immutable: false,
                     activation_height: ACTIVATION_HEIGHT,
                 };
                 let tx = system_upgrader_tx(
-                    &[committee_actor(), staging_actor(&CLOCK_NAME, &upgrade)],
+                    &[
+                        committee_actor(),
+                        loader_actor(&CLOCK_NAME),
+                        staging_actor(&CLOCK_NAME, &upgrade),
+                    ],
                     &Message::Schedule {
                         name: CLOCK_NAME,
                         first_segment: ids[0],
                         image_id,
+                        immutable: false,
                         activation_height: ACTIVATION_HEIGHT,
                         approvals: approvals_for(&proposal, &[1, 2], VALID_UNTIL),
                     },
@@ -745,6 +903,7 @@ mod inner {
                     name,
                     first_segment: ids[0],
                     image_id,
+                    immutable: false,
                 };
                 let tx = system_upgrader_tx(
                     &[committee_actor(), loader_actor(&name)],
@@ -752,6 +911,7 @@ mod inner {
                         name,
                         first_segment: ids[0],
                         image_id,
+                        immutable: false,
                         approvals: approvals_for(&proposal, &[1, 2], VALID_UNTIL),
                     },
                 );
@@ -875,6 +1035,7 @@ mod inner {
                         name: CLOCK_NAME,
                         first_segment: ids[0],
                         image_id: ping_receiver().id(),
+                        immutable: false,
                         activation_height: ACTIVATION_HEIGHT,
                         approvals: approvals_for(
                             &schedule_proposal(CLOCK_NAME, ids[0]),
@@ -934,6 +1095,42 @@ mod inner {
                     registry(&state).programs.get(&name),
                     Some(&None),
                     "an installed system program is registered, with nothing pending"
+                );
+            }
+
+            #[test]
+            fn installing_a_system_program_immutable_freezes_it() {
+                let (mut state, ids) = staged();
+                let name = SystemProgramName::new(b"new_system_program");
+                let program = AccountId::from_system_program_name(&name);
+
+                state
+                    .transition_from_public_transaction(&install_tx_for(name, ids[0], true), 1, 0)
+                    .expect("a new system program installs immutable");
+                assert_eq!(
+                    state.get_program_image_id(program),
+                    Some(ping_receiver().id())
+                );
+                assert!(header(&state, program).immutable);
+                assert!(has_mirror(&state, program));
+                assert_eq!(registry(&state).programs.get(&name), Some(&None));
+
+                let err = state
+                    .transition_from_public_transaction(
+                        &schedule_tx_for(
+                            name,
+                            ids[0],
+                            false,
+                            approvals_for(&schedule_proposal(name, ids[0]), &[1, 2], VALID_UNTIL),
+                        ),
+                        2,
+                        0,
+                    )
+                    .expect_err("an immutable system program can't be scheduled");
+                assert!(
+                    err.to_string()
+                        .contains("AssertMutable target is immutable"),
+                    "got: {err}"
                 );
             }
 
@@ -1049,7 +1246,7 @@ mod inner {
                 refused_schedule(
                     approvals_for(&schedule_proposal(CLOCK_NAME, ids[0]), &[1, 2], 3),
                     4,
-                    "",
+                    "outside of the validity window",
                 );
             }
 
@@ -1174,7 +1371,7 @@ mod inner {
         }
 
         #[test]
-        fn builtin_programs() {
+        fn builtin_constructors_carry_their_ids_and_elfs() {
             let bridge_program = bridge();
             let sequencer_stake_program = sequencer_stake();
 
@@ -1186,23 +1383,40 @@ mod inner {
 
         #[test]
         fn builtin_program_ids_match_elfs() {
-            let cases: &[(&[u8], [u32; 8])] = &[
-                (SYSTEM_UPGRADER_ELF, SYSTEM_UPGRADER_ID),
-                (CLOCK_ELF, CLOCK_ID),
-                (FEE_ELF, FEE_ID),
-                (BRIDGE_ELF, BRIDGE_ID),
-                (CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID),
-                (CROSS_ZONE_INBOX_ELF, CROSS_ZONE_INBOX_ID),
-                (PING_SENDER_ELF, PING_SENDER_ID),
-                (PING_RECEIVER_ELF, PING_RECEIVER_ID),
-                (BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID),
-                (WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID),
-                (SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID),
-            ];
-            for (elf, expected_id) in cases {
-                let program = Program::new((*elf).into()).unwrap();
-                assert_eq!(program.id(), *expected_id);
+            for (_, program) in builtin_programs() {
+                let rebuilt = Program::new(program.elf().to_vec().into()).unwrap();
+                assert_eq!(rebuilt.id(), program.id());
             }
+        }
+
+        #[test]
+        fn builtin_account_ids_are_distinct() {
+            let ids = builtin_program_account_ids();
+            let unique: std::collections::BTreeSet<_> = ids.iter().collect();
+            assert_eq!(unique.len(), ids.len());
+        }
+
+        /// Genesis registers in this order and each registration takes the next
+        /// merkle leaf, so reordering either half moves every later builtin's
+        /// leaf and with it the genesis fingerprint.
+        #[test]
+        fn builtin_registration_order_is_pinned() {
+            assert_eq!(
+                builtin_program_account_ids(),
+                [
+                    system_upgrader_account_id(),
+                    clock_account_id(),
+                    fee_account_id(),
+                    bridge_account_id(),
+                    sequencer_stake_account_id(),
+                    cross_zone_inbox_account_id(),
+                    cross_zone_outbox_account_id(),
+                    ping_sender_account_id(),
+                    ping_receiver_account_id(),
+                    bridge_lock_account_id(),
+                    wrapped_token_account_id(),
+                ]
+            );
         }
     }
 }
