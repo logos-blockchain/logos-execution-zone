@@ -19,6 +19,17 @@ pub const SENDER_ATTRIBUTE: &str = "sender";
 /// sender itself when sent outside any trace.
 pub const CAUSE_ATTRIBUTE: &str = "cause";
 
+/// Attribute of a handled message's span, for an actor that runs as one of
+/// several of its type: which one, as in [`ACTOR_INSTANCE_LABEL`].
+///
+/// [`ACTOR_INSTANCE_LABEL`]: crate::names::ACTOR_INSTANCE_LABEL
+pub const INSTANCE_ATTRIBUTE: &str = "instance";
+
+/// Attribute of a handled message's span, sent by an actor that runs as one of
+/// several of its type: which one, as [`INSTANCE_ATTRIBUTE`] says of the actor
+/// handling it.
+pub const SENDER_INSTANCE_ATTRIBUTE: &str = "sender_instance";
+
 /// Attribute of every span: the sequencer, as in [`SEQUENCER_LABEL`]. Spans
 /// exported before the sequencer knows its key go without.
 ///

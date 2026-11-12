@@ -12230,6 +12230,7 @@ name = "sequencer_service_metrics"
 version = "0.1.0"
 dependencies = [
  "metrics",
+ "metrics-exporter-prometheus",
 ]
 
 [[package]]

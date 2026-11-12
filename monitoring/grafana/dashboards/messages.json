@@ -78,7 +78,7 @@
         {
           "datasource": { "type": "tempo", "uid": "tempo" },
           "limit": 200,
-          "query": "{ trace:id = \"$trace\" && nestedSetParent = -1 } | select(span.sender, span.cause, link:traceID) with(most_recent=true)",
+          "query": "{ trace:id = \"$trace\" && nestedSetParent = -1 } | select(span.sender, span.cause, span.instance, link:traceID) with(most_recent=true)",
           "queryType": "traceql",
           "refId": "A",
           "spss": 1,
@@ -99,16 +99,18 @@
               "sequencer": true
             },
             "indexByName": {
-              "Duration": 4,
+              "Duration": 5,
               "Start time": 0,
               "Trace Name": 1,
-              "cause": 3,
-              "link:traceID": 5,
-              "sender": 2
+              "cause": 4,
+              "instance": 2,
+              "link:traceID": 6,
+              "sender": 3
             },
             "renameByName": {
               "Trace Name": "Message",
               "cause": "Sent from",
+              "instance": "Instance",
               "link:traceID": "sentFromTrace",
               "sender": "Sender"
             }
@@ -182,7 +184,7 @@
         {
           "datasource": { "type": "tempo", "uid": "tempo" },
           "limit": 200,
-          "query": "{ link:traceID = \"$trace\" } | select(span.sender, span.cause, link:traceID) with(most_recent=true)",
+          "query": "{ link:traceID = \"$trace\" } | select(span.sender, span.cause, span.instance, link:traceID) with(most_recent=true)",
           "queryType": "traceql",
           "refId": "A",
           "spss": 1,
@@ -203,16 +205,18 @@
               "sequencer": true
             },
             "indexByName": {
-              "Duration": 4,
+              "Duration": 5,
               "Start time": 0,
               "Trace Name": 1,
-              "cause": 3,
-              "link:traceID": 5,
-              "sender": 2
+              "cause": 4,
+              "instance": 2,
+              "link:traceID": 6,
+              "sender": 3
             },
             "renameByName": {
               "Trace Name": "Message",
               "cause": "Sent from",
+              "instance": "Instance",
               "link:traceID": "sentFromTrace",
               "sender": "Sender"
             }
@@ -253,7 +257,7 @@
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
       "id": 5,
       "panels": [ ],
-      "title": "${actor} · messages",
+      "title": "${actor:text} · messages",
       "type": "row"
     },
     {
@@ -321,14 +325,14 @@
         {
           "datasource": { "type": "tempo", "uid": "tempo" },
           "limit": 10000,
-          "query": "{ span.sequencer = \"$sequencer\" && span.sender = \"$actor\" && name =~ \".*$message.*\" } | select(span.sender, span.cause, link:traceID) with(most_recent=true)",
+          "query": "{ span.sequencer = \"$sequencer\" && span.sender = \"$actor_type\" && (span.sender_instance =~ \"$instance\" || span.sender_instance = nil) && name =~ \".*$message.*\" } | select(span.sender, span.cause, span.instance, link:traceID) with(most_recent=true)",
           "queryType": "traceql",
           "refId": "A",
           "spss": 1,
           "tableType": "spans"
         }
       ],
-      "title": "${actor} · messages sent, newest 10 000",
+      "title": "${actor:text} · messages sent, newest 10 000",
       "transformations": [
         {
           "id": "organize",
@@ -343,16 +347,18 @@
               "sequencer": true
             },
             "indexByName": {
-              "Duration": 4,
+              "Duration": 5,
               "Start time": 0,
               "Trace Name": 1,
-              "cause": 3,
-              "link:traceID": 5,
-              "sender": 2
+              "cause": 4,
+              "instance": 2,
+              "link:traceID": 6,
+              "sender": 3
             },
             "renameByName": {
               "Trace Name": "Message",
               "cause": "Sent from",
+              "instance": "Instance",
               "link:traceID": "sentFromTrace",
               "sender": "Sender"
             }
@@ -426,14 +432,14 @@
         {
           "datasource": { "type": "tempo", "uid": "tempo" },
           "limit": 10000,
-          "query": "{ span.sequencer = \"$sequencer\" && span.actor = \"$actor\" && name =~ \".*$message.*\" } | select(span.sender, span.cause, link:traceID) with(most_recent=true)",
+          "query": "{ span.sequencer = \"$sequencer\" && span.actor = \"$actor_type\" && (span.instance =~ \"$instance\" || span.instance = nil) && name =~ \".*$message.*\" } | select(span.sender, span.cause, span.instance, link:traceID) with(most_recent=true)",
           "queryType": "traceql",
           "refId": "A",
           "spss": 1,
           "tableType": "spans"
         }
       ],
-      "title": "${actor} · messages handled, newest 10 000",
+      "title": "${actor:text} · messages handled, newest 10 000",
       "transformations": [
         {
           "id": "organize",
@@ -447,16 +453,18 @@
               "sequencer": true
             },
             "indexByName": {
-              "Duration": 4,
+              "Duration": 5,
               "Start time": 0,
               "Trace Name": 1,
-              "cause": 3,
-              "link:traceID": 5,
-              "sender": 2
+              "cause": 4,
+              "instance": 2,
+              "link:traceID": 6,
+              "sender": 3
             },
             "renameByName": {
               "Trace Name": "Message",
               "cause": "Sent from",
+              "instance": "Instance",
               "link:traceID": "sentFromTrace",
               "sender": "Sender"
             }
@@ -486,14 +494,42 @@
       {
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "prometheus" },
-        "definition": "label_values(kameo_messages_received_total{sequencer=\"$sequencer\"}, actor_name)",
+        "definition": "query_result(group by (key, title) (label_replace(label_replace(label_replace(label_join(label_join(label_replace(group by (actor_name, actor_instance) (actor_state{sequencer=\"$sequencer\"}), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"), \"key\", \"|\", \"actor\", \"actor_instance\"), \"title\", \" · \", \"actor\", \"actor_instance\"), \"key\", \"$1|.*\", \"key\", \"(.*)\\\\|\"), \"title\", \"$1\", \"title\", \"(.*) · \"), \"title\", \"$1 · $2…\", \"title\", \"(.*) · (.{8}).+\") or label_replace(label_replace(label_replace(label_join(label_join(label_replace(group by (actor_name) (actor_state{sequencer=\"$sequencer\"}), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"), \"key\", \"|\", \"actor\", \"actor_instance\"), \"title\", \" · \", \"actor\", \"actor_instance\"), \"key\", \"$1|.*\", \"key\", \"(.*)\\\\|\"), \"title\", \"$1\", \"title\", \"(.*) · \"), \"title\", \"$1 · $2…\", \"title\", \"(.*) · (.{8}).+\")))",
         "includeAll": false,
         "label": "Actor",
         "multi": false,
         "name": "actor",
-        "query": "label_values(kameo_messages_received_total{sequencer=\"$sequencer\"}, actor_name)",
+        "query": "query_result(group by (key, title) (label_replace(label_replace(label_replace(label_join(label_join(label_replace(group by (actor_name, actor_instance) (actor_state{sequencer=\"$sequencer\"}), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"), \"key\", \"|\", \"actor\", \"actor_instance\"), \"title\", \" · \", \"actor\", \"actor_instance\"), \"key\", \"$1|.*\", \"key\", \"(.*)\\\\|\"), \"title\", \"$1\", \"title\", \"(.*) · \"), \"title\", \"$1 · $2…\", \"title\", \"(.*) · (.{8}).+\") or label_replace(label_replace(label_replace(label_join(label_join(label_replace(group by (actor_name) (actor_state{sequencer=\"$sequencer\"}), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"), \"key\", \"|\", \"actor\", \"actor_instance\"), \"title\", \" · \", \"actor\", \"actor_instance\"), \"key\", \"$1|.*\", \"key\", \"(.*)\\\\|\"), \"title\", \"$1\", \"title\", \"(.*) · \"), \"title\", \"$1 · $2…\", \"title\", \"(.*) · (.{8}).+\")))",
         "refresh": 2,
-        "regex": "/^(?:[a-z0-9_]+::)*([A-Za-z0-9_]+)/",
+        "regex": "/key=\"(?<value>[^\"]*)\".*title=\"(?<text>[^\"]*)\"/",
+        "sort": 7
+      },
+      {
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "query_result(label_replace(vector(1), \"key\", \"$actor\", \"\", \"\"))",
+        "hide": 2,
+        "includeAll": false,
+        "label": "actor_type",
+        "multi": false,
+        "name": "actor_type",
+        "query": "query_result(label_replace(vector(1), \"key\", \"$actor\", \"\", \"\"))",
+        "refresh": 2,
+        "regex": "/key=\"([^|\"]*)/",
+        "sort": 7
+      },
+      {
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "query_result(label_replace(vector(1), \"key\", \"$actor\", \"\", \"\"))",
+        "hide": 2,
+        "includeAll": false,
+        "label": "instance",
+        "multi": false,
+        "name": "instance",
+        "query": "query_result(label_replace(vector(1), \"key\", \"$actor\", \"\", \"\"))",
+        "refresh": 2,
+        "regex": "/key=\"[^|\"]*\\|([^\"]*)\"/",
         "sort": 7
       },
       { "type": "textbox", "label": "Message", "name": "message", "query": "" },

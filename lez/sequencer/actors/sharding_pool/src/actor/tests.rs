@@ -309,7 +309,9 @@ async fn the_spawn_hook_sees_a_worker_per_key() {
             },
             Counter::fresh,
         )
-        .with_on_worker_spawned(move |worker| spawned_clone.lock().unwrap().push(worker.id())),
+        .with_on_worker_spawned(move |key, worker| {
+            spawned_clone.lock().unwrap().push((*key, worker.id()));
+        }),
     );
 
     increment(&pool, 1).await;
@@ -317,8 +319,9 @@ async fn the_spawn_hook_sees_a_worker_per_key() {
     increment(&pool, 2).await;
 
     let spawned = spawned.lock().unwrap();
-    assert_eq!(spawned.len(), 2, "{spawned:?}");
-    assert_ne!(spawned[0], spawned[1]);
+    let keys: Vec<_> = spawned.iter().map(|(key, _)| *key).collect();
+    assert_eq!(keys, [1, 2]);
+    assert_ne!(spawned[0].1, spawned[1].1);
 }
 
 #[tokio::test]
@@ -336,7 +339,7 @@ async fn the_spawn_hook_skips_a_restarted_worker() {
             },
             |TickShardingKey| 2,
         )
-        .with_on_worker_spawned(move |_worker| *spawned_clone.lock().unwrap() += 1),
+        .with_on_worker_spawned(move |_key, _worker| *spawned_clone.lock().unwrap() += 1),
     );
 
     assert_eq!(pool.ask(Tick).await, Ok(()));

@@ -11,11 +11,15 @@
 
 use dashboard_gen::{Dashboard, FieldOverride, Panel, Target, Unit, textbox_variable};
 use sequencer_service_metrics::traces::{
-    ACTOR_ATTRIBUTE, CAUSE_ATTRIBUTE, SENDER_ATTRIBUTE, SEQUENCER_ATTRIBUTE,
+    ACTOR_ATTRIBUTE, CAUSE_ATTRIBUTE, INSTANCE_ATTRIBUTE, SENDER_ATTRIBUTE,
+    SENDER_INSTANCE_ATTRIBUTE, SEQUENCER_ATTRIBUTE,
 };
 
 use super::{
-    actors::{ACTOR_VAR, actor_variable, sequencer_variable},
+    actors::{
+        ACTOR_TYPE_VAR, ACTOR_VAR, INSTANCE_VAR, actor_variable, picked_actor_variables,
+        sequencer_variable,
+    },
     sequencer::SEQUENCER_VAR,
 };
 
@@ -44,6 +48,7 @@ const SENT_FROM: &str = "Sent from";
 const START_TIME: &str = "Start time";
 
 const SENDER: &str = "Sender";
+const INSTANCE: &str = "Instance";
 const DURATION: &str = "Duration";
 
 /// The time of day a message started at, to the millisecond: the time range
@@ -76,6 +81,25 @@ const ALL_LIMIT: u32 = 10_000;
 
 /// The most of an actor's messages [`newest_actor_messages`] lists.
 const NEWEST_LIMIT: u32 = 200;
+
+/// Which of a message's actors is the selected one.
+#[derive(Clone, Copy)]
+pub enum Side {
+    /// The one that sent it.
+    Sent,
+    /// The one that handled it.
+    Handled,
+}
+
+impl Side {
+    /// The span attributes naming this actor: its type and its instance.
+    const fn attributes(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Sent => (SENDER_ATTRIBUTE, SENDER_INSTANCE_ATTRIBUTE),
+            Self::Handled => (ACTOR_ATTRIBUTE, INSTANCE_ATTRIBUTE),
+        }
+    }
+}
 
 /// Where a message table is.
 #[derive(Clone, Copy)]
@@ -138,7 +162,7 @@ pub fn around_point_of_series(window_ms: u32) -> String {
 /// message tables show.
 fn spans(traceql: &str) -> Target {
     Target::spans(format!(
-        "{traceql} | select(span.{SENDER_ATTRIBUTE}, span.{CAUSE_ATTRIBUTE}, {LINKED_TRACE})"
+        "{traceql} | select(span.{SENDER_ATTRIBUTE}, span.{CAUSE_ATTRIBUTE}, span.{INSTANCE_ATTRIBUTE}, {LINKED_TRACE})"
     ))
 }
 
@@ -150,6 +174,7 @@ fn messages(title: &str, description: &str, search: Target, place: Place) -> Pan
         .count_rows()
         .column(START_TIME, START_TIME)
         .column("Trace Name", MESSAGE)
+        .column(INSTANCE_ATTRIBUTE, INSTANCE)
         .column(SENDER_ATTRIBUTE, SENDER)
         .column(CAUSE_ATTRIBUTE, SENT_FROM)
         .column(DURATION, DURATION)
@@ -182,17 +207,18 @@ fn messages(title: &str, description: &str, search: Target, place: Place) -> Pan
         .with_override(FieldOverride::by_name(SENT_FROM_TRACE).hidden())
 }
 
-/// The spans of the selected sequencer's messages whose `attribute` is the
-/// selected actor: [`SENDER_ATTRIBUTE`] for the ones it sent,
-/// [`ACTOR_ATTRIBUTE`] for the ones it handled.
-pub fn of_actor(attribute: &str) -> String {
-    format!("{{ {} }}", actor_condition(attribute))
+/// The spans of the selected sequencer's messages the selected actor sent or
+/// handled, as `side` says.
+pub fn of_actor(side: Side) -> String {
+    format!("{{ {} }}", actor_condition(side))
 }
 
-/// [`of_actor`] without its braces, for more conditions to join.
-fn actor_condition(attribute: &str) -> String {
+/// [`of_actor`] without its braces, for more conditions to join. An actor with
+/// no instance matches whatever instance is selected.
+fn actor_condition(side: Side) -> String {
+    let (actor, instance) = side.attributes();
     format!(
-        r#"span.{SEQUENCER_ATTRIBUTE} = "${SEQUENCER_VAR}" && span.{attribute} = "${ACTOR_VAR}""#
+        r#"span.{SEQUENCER_ATTRIBUTE} = "${SEQUENCER_VAR}" && span.{actor} = "${ACTOR_TYPE_VAR}" && (span.{instance} =~ "${INSTANCE_VAR}" || span.{instance} = nil)"#
     )
 }
 
@@ -231,15 +257,20 @@ pub fn newest_actor_messages() -> [Panel; 2] {
 /// `limit` of each, which their titles name. `how_many` says which of them,
 /// in their descriptions.
 fn actor_tables(limit: u32, how_many: &str, place: Place) -> [Panel; 2] {
-    let search = |attribute: &str| {
+    let search = |side: Side| {
         spans(&format!(
             "{{ {}{} }}",
-            actor_condition(attribute),
+            actor_condition(side),
             place.filter()
         ))
         .limit(limit)
     };
-    let title = |done: &str| format!("${{actor}} · messages {done}, newest {}", grouped(limit));
+    let title = |done: &str| {
+        format!(
+            "${{actor:text}} · messages {done}, newest {}",
+            grouped(limit)
+        )
+    };
     let description = |done: &str| {
         format!(
             "Messages the actor {done} over the time range, newest first. {how_many} {ON_CLICK_DESCRIPTION}"
@@ -250,14 +281,14 @@ fn actor_tables(limit: u32, how_many: &str, place: Place) -> [Panel; 2] {
         messages(
             &title("sent"),
             &description("sent"),
-            search(SENDER_ATTRIBUTE),
+            search(Side::Sent),
             place,
         )
         .drop_columns(&[SENDER_ATTRIBUTE]),
         messages(
             &title("handled"),
             &description("handled"),
-            search(ACTOR_ATTRIBUTE),
+            search(Side::Handled),
             place,
         ),
     ]
@@ -276,6 +307,7 @@ fn grouped(number: u32) -> String {
 
 pub fn dashboard() -> Dashboard {
     let trace = format!("${TRACE_VAR}");
+    let [actor_type_variable, instance_variable] = picked_actor_variables();
     Dashboard::new("Messages", UID)
         .tag(super::TAG)
         .link_tagged("Dashboards", super::TAG)
@@ -283,6 +315,8 @@ pub fn dashboard() -> Dashboard {
         .refresh("")
         .variable(sequencer_variable())
         .variable(actor_variable())
+        .variable(actor_type_variable)
+        .variable(instance_variable)
         .variable(textbox_variable(MESSAGE_VAR, "Message"))
         .variable(textbox_variable(TRACE_VAR, "Selected message's trace"))
         .row(
@@ -313,6 +347,6 @@ pub fn dashboard() -> Dashboard {
                 .description(TRACE_DESCRIPTION)
                 .target(Target::trace(trace))],
         )
-        .heading("${actor} · messages")
+        .heading("${actor:text} · messages")
         .row(12, actor_messages())
 }

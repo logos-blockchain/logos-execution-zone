@@ -7,8 +7,9 @@ use std::{fmt, sync::OnceLock, time::Instant};
 
 use opentelemetry::KeyValue;
 use sequencer_service_metrics::{
+    instances::{self, Lifecycle},
     names::{ActorState, NO_SENDER},
-    traces::{CAUSE_ATTRIBUTE, SENDER_ATTRIBUTE},
+    traces::{CAUSE_ATTRIBUTE, INSTANCE_ATTRIBUTE, SENDER_ATTRIBUTE, SENDER_INSTANCE_ATTRIBUTE},
 };
 use tracing::{
     Dispatch, Event, Level, Subscriber,
@@ -55,7 +56,16 @@ struct ActorSpan {
 
 /// What sent the messages a span of ours sends, when it does not run in an
 /// actor: what it follows from, e.g. the handler that set it off.
-struct FollowsFrom(String);
+struct FollowsFrom(Sender);
+
+/// What sent a message.
+#[derive(Clone)]
+struct Sender {
+    /// The actor's name, or a span's.
+    name: String,
+    /// The instance of the actor, if it is named.
+    instance: Option<String>,
+}
 
 /// The `otel.name` a span of ours names its trace with.
 struct OtelName(String);
@@ -63,8 +73,10 @@ struct OtelName(String);
 /// A message being handled, kept on its span until the span closes.
 struct Handling {
     message_name: String,
+    /// The instance of the actor handling it, if it is named.
+    instance: Option<String>,
     /// Set by the first span the handler's span follows from.
-    sender: Option<String>,
+    sender: Option<Sender>,
     since: Instant,
     /// When the handler last stopped running. The span can close much later:
     /// each message the handler sent holds it until handled.
@@ -112,6 +124,7 @@ impl<S: Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for ActorMetrics
         if handles_message && let Some(message_name) = fields.message {
             extensions.insert(Handling {
                 message_name,
+                instance: instances::of(&actor_id),
                 sender: None,
                 since: Instant::now(),
                 until: None,
@@ -149,13 +162,14 @@ impl<S: Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for ActorMetrics
         if let Some(handling) = extensions.get_mut::<Handling>() {
             if handling.sender.is_none() {
                 let (sender, trace) = if own_lifecycle {
-                    (NO_SENDER.to_owned(), None)
+                    (Sender::none(), None)
                 } else {
                     (sender, trace_name(&cause))
                 };
                 handling.sender = Some(sender.clone());
+                let instance = handling.instance.clone();
                 drop(extensions);
-                self.tag(id, &sender, trace);
+                self.tag(id, sender, trace, instance);
             }
             return;
         }
@@ -179,6 +193,7 @@ impl<S: Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for ActorMetrics
         let mut extensions = span.extensions_mut();
         let Some(Handling {
             message_name,
+            instance,
             sender,
             since,
             until,
@@ -187,10 +202,13 @@ impl<S: Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for ActorMetrics
             return;
         };
         if let Some(actor) = extensions.get_mut::<ActorSpan>() {
+            let sender = sender.unwrap_or_else(Sender::none);
             sequencer_service_metrics::record_message_handling_time(
                 actor.name.clone(),
+                instance,
                 message_name,
-                sender.unwrap_or_else(|| NO_SENDER.to_owned()),
+                sender.name,
+                sender.instance,
                 until.unwrap_or_else(Instant::now).duration_since(since),
             );
         }
@@ -205,39 +223,51 @@ impl<S: Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for ActorMetrics
         let Some(actor_name) = fields.actor_name else {
             return;
         };
-        match fields.message.as_deref() {
-            Some(STARTED) => {
-                sequencer_service_metrics::record_actor_start_time(
-                    actor_name.clone(),
-                    std::time::SystemTime::now(),
-                );
-                sequencer_service_metrics::record_actor_state(actor_name, ActorState::Running);
+        let lifecycle = match fields.message.as_deref() {
+            Some(STARTED) => Lifecycle::Started(std::time::SystemTime::now()),
+            Some(STOPPED) => {
+                Lifecycle::Stopped(state_after(fields.reason.as_deref().unwrap_or_default()))
             }
-            Some(STOPPED) => sequencer_service_metrics::record_actor_state(
-                actor_name,
-                state_after(fields.reason.as_deref().unwrap_or_default()),
-            ),
-            _ => {}
+            _ => return,
+        };
+        instances::record_lifecycle(actor_name, fields.actor_id, lifecycle);
+    }
+}
+
+impl Sender {
+    /// The sender of a message sent in no span.
+    fn none() -> Self {
+        Self {
+            name: NO_SENDER.to_owned(),
+            instance: None,
         }
     }
 }
 
 impl ActorMetrics {
-    /// Puts `sender` and the trace the message was sent from on the trace
-    /// span of the message handled in `id`.
-    fn tag(&self, id: &span::Id, sender: &str, trace: Option<String>) {
+    /// Puts `sender`, the trace the message was sent from and the instance of
+    /// the actor handling it on the trace span of the message handled in `id`.
+    fn tag(&self, id: &span::Id, sender: Sender, trace: Option<String>, instance: Option<String>) {
         let Some(dispatch) = self.dispatch.get().and_then(WeakDispatch::upgrade) else {
             return;
         };
-        let sender = traces::type_name(sender).to_owned();
-        let cause = trace.unwrap_or_else(|| sender.clone());
+        let sender_name = traces::type_name(&sender.name).to_owned();
+        let cause = trace.unwrap_or_else(|| sender_name.clone());
+        let instances = [
+            instance.map(|handler| KeyValue::new(INSTANCE_ATTRIBUTE, handler)),
+            sender
+                .instance
+                .map(|sender| KeyValue::new(SENDER_INSTANCE_ATTRIBUTE, sender)),
+        ];
         traces::set_attributes(
             &dispatch,
             id,
             [
-                KeyValue::new(SENDER_ATTRIBUTE, sender),
+                KeyValue::new(SENDER_ATTRIBUTE, sender_name),
                 KeyValue::new(CAUSE_ATTRIBUTE, cause),
-            ],
+            ]
+            .into_iter()
+            .chain(instances.into_iter().flatten()),
         );
     }
 }
@@ -247,7 +277,8 @@ impl Fields {
     fn slot(&mut self, field: &Field) -> Option<&mut Option<String>> {
         match field.name() {
             "actor.name" | "name" => Some(&mut self.actor_name),
-            "actor.id" => Some(&mut self.actor_id),
+            // `id` on kameo's start and stop events.
+            "actor.id" | "id" => Some(&mut self.actor_id),
             "message" => Some(&mut self.message),
             "reason" => Some(&mut self.reason),
             "otel.name" => Some(&mut self.otel_name),
@@ -272,19 +303,25 @@ impl Visit for Fields {
 
 /// What sent a message from within `cause`: the actor running it, or the
 /// sender of what it follows from; failing both, the outermost span it is in.
-fn sender<S: for<'lookup> LookupSpan<'lookup>>(cause: &SpanRef<'_, S>) -> String {
+fn sender<S: for<'lookup> LookupSpan<'lookup>>(cause: &SpanRef<'_, S>) -> Sender {
     let mut outermost = cause.name();
     for span in cause.scope() {
         let extensions = span.extensions();
         if let Some(actor) = extensions.get::<ActorSpan>() {
-            return actor.name.clone();
+            return Sender {
+                name: actor.name.clone(),
+                instance: instances::of(&actor.id),
+            };
         }
         if let Some(FollowsFrom(sender)) = extensions.get() {
             return sender.clone();
         }
         outermost = span.name();
     }
-    outermost.to_owned()
+    Sender {
+        name: outermost.to_owned(),
+        instance: None,
+    }
 }
 
 /// The name of the trace a message sent from within `cause` comes from, as
@@ -343,12 +380,14 @@ mod tests {
     use kameo::{
         actor::{ActorRef, Spawn as _},
         message::{Context, Message},
+        supervision::RestartPolicy,
     };
     use metrics_exporter_prometheus::PrometheusRecorder;
     use sequencer_service_metrics::names::{
-        ACTOR_MESSAGE_HANDLING_TIME, ACTOR_NAME_LABEL, ACTOR_START_TIME, ACTOR_STATE,
-        MESSAGE_NAME_LABEL, SENDER_LABEL,
+        ACTOR_INSTANCE_LABEL, ACTOR_MESSAGE_HANDLING_TIME, ACTOR_NAME_LABEL, ACTOR_START_TIME,
+        ACTOR_STATE, MESSAGE_NAME_LABEL, SENDER_INSTANCE_LABEL, SENDER_LABEL,
     };
+    use sharding_pool_actor::{RestartConfig, ShardingKey, ShardingPoolActor};
     use tracing::Instrument as _;
     use tracing_subscriber::layer::SubscriberExt as _;
 
@@ -406,6 +445,42 @@ mod tests {
         }
     }
 
+    /// One of several, its instance named, handing work on to a worker.
+    #[derive(kameo::Actor)]
+    struct Named(ActorRef<Worker>);
+
+    struct Delegate;
+
+    impl Message<Delegate> for Named {
+        type Reply = ();
+
+        async fn handle(&mut self, _: Delegate, _: &mut Context<Self, Self::Reply>) {
+            self.0.ask(Work(Duration::ZERO)).await.unwrap();
+        }
+    }
+
+    /// Run by a pool, which labels it with its instance.
+    #[derive(kameo::Actor)]
+    struct Pooled;
+
+    /// For the pooled actor of the given key.
+    #[derive(Clone)]
+    struct Ping(u32);
+
+    impl ShardingKey for Ping {
+        type Key = u32;
+
+        fn sharding_key(&self) -> Self::Key {
+            self.0
+        }
+    }
+
+    impl Message<Ping> for Pooled {
+        type Reply = ();
+
+        async fn handle(&mut self, _: Ping, _: &mut Context<Self, Self::Reply>) {}
+    }
+
     fn subscriber() -> impl Subscriber + Send + Sync {
         tracing_subscriber::registry().with(layer())
     }
@@ -414,6 +489,29 @@ mod tests {
         crate::prometheus_builder("test".to_owned())
             .unwrap()
             .build_recorder()
+    }
+
+    /// The instances of the pooled actor's `metric` series, as `recorder` renders
+    /// them, sorted; `None` for a series with no instance.
+    fn pooled_instances(recorder: &PrometheusRecorder, metric: &str) -> Vec<Option<String>> {
+        let series = format!("{metric}{{");
+        let actor_name = format!(
+            r#"{ACTOR_NAME_LABEL}="{}""#,
+            <Pooled as kameo::Actor>::name()
+        );
+        let instance = format!(r#"{ACTOR_INSTANCE_LABEL}=""#);
+        let mut instances: Vec<_> = recorder
+            .handle()
+            .render()
+            .lines()
+            .filter(|line| line.starts_with(&series) && line.contains(&actor_name))
+            .map(|line| {
+                let (_, rest) = line.split_once(&instance)?;
+                Some(rest.split('"').next()?.to_owned())
+            })
+            .collect();
+        instances.sort();
+        instances
     }
 
     /// The worker's `metric` value, as `recorder` renders it.
@@ -543,6 +641,59 @@ mod tests {
         assert!(relayed_for < 0.05, "relayed for {relayed_for}s");
         let worked_for = handling_time::<Worker, Work>(&recorder);
         assert!(worked_for >= 0.1, "worked for {worked_for}s");
+    }
+
+    #[tokio::test]
+    async fn labels_a_pools_actors_with_their_instance() {
+        let recorder = recorder();
+        let _recorder = metrics::set_default_local_recorder(&recorder);
+        let _subscriber = tracing::subscriber::set_default(subscriber());
+
+        let expected = instances::expect(<Pooled as kameo::Actor>::name());
+        let pool = ShardingPoolActor::spawn(
+            ShardingPoolActor::<Pooled, u32>::new(
+                RestartConfig {
+                    policy: RestartPolicy::Never,
+                    limit: 0,
+                    within: Duration::ZERO,
+                },
+                |_key| Pooled,
+            )
+            .with_on_worker_spawned(move |key, worker| expected.name(worker.id(), key)),
+        );
+        pool.ask(Ping(1)).await.unwrap();
+        pool.ask(Ping(2)).await.unwrap();
+
+        let both = [Some("1".to_owned()), Some("2".to_owned())];
+        for metric in [
+            format!("{ACTOR_MESSAGE_HANDLING_TIME}_count"),
+            ACTOR_STATE.to_owned(),
+            ACTOR_START_TIME.to_owned(),
+        ] {
+            assert_eq!(pooled_instances(&recorder, &metric), both, "{metric}");
+        }
+    }
+
+    #[tokio::test]
+    async fn labels_a_message_with_the_instance_of_its_sender() {
+        let recorder = recorder();
+        let _recorder = metrics::set_default_local_recorder(&recorder);
+        let _subscriber = tracing::subscriber::set_default(subscriber());
+
+        let expected = instances::expect(<Named as kameo::Actor>::name());
+        let named = Named::spawn(Named(Worker::spawn(Worker)));
+        expected.name(named.id(), "named-1");
+        named.ask(Delegate).await.unwrap();
+
+        let count = format!("{ACTOR_MESSAGE_HANDLING_TIME}_count{{");
+        let sender = format!(r#"{SENDER_INSTANCE_LABEL}="named-1""#);
+        let rendered = recorder.handle().render();
+        assert!(
+            rendered.lines().any(|line| line.starts_with(&count)
+                && line.contains("Worker\"")
+                && line.contains(&sender)),
+            "no Worker message from `named-1` in\n{rendered}"
+        );
     }
 
     #[tokio::test]

@@ -1220,7 +1220,8 @@ impl Dashboard {
 impl Variable {
     /// Cut each fetched choice down to the first capture group of `regex`, a
     /// JavaScript regex with its slashes, e.g. `/^(\w+)/`. The cut is both what
-    /// the dropdown shows and what `$name` holds.
+    /// the dropdown shows and what `$name` holds, unless the groups named `text`
+    /// and `value` set them apart: `${name:text}` holds the shown one.
     ///
     /// Panics on a variable whose choices are not fetched.
     #[must_use]
@@ -1310,6 +1311,29 @@ pub fn textbox_variable(name: &str, title: &str) -> Variable {
 #[must_use]
 pub fn label_values_variable(name: &str, title: &str, metric: &str, label: &str) -> Variable {
     let query = format!("label_values({metric}, {label})");
+    Variable::Query(QueryVariable {
+        datasource: Datasource::prometheus(),
+        definition: query.clone(),
+        hide: None,
+        include_all: false,
+        label: title.to_owned(),
+        multi: false,
+        name: name.to_owned(),
+        query,
+        refresh: VariableRefresh::OnTimeRangeChange,
+        regex: None,
+        sort: VariableSort::NaturalAsc,
+    })
+}
+
+/// A single-choice dropdown named `name` (referenced as `$name`), titled
+/// `title`, offering a choice per series of the instant query `expr`.
+///
+/// Each is the series as it prints, e.g. `{key="a"} 1 1700000000000`, for
+/// [`Variable::regex`] to cut.
+#[must_use]
+pub fn query_result_variable(name: &str, title: &str, expr: &str) -> Variable {
+    let query = format!("query_result({expr})");
     Variable::Query(QueryVariable {
         datasource: Datasource::prometheus(),
         definition: query.clone(),

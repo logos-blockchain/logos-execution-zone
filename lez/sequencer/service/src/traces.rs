@@ -268,8 +268,11 @@ mod tests {
     use opentelemetry_sdk::trace::InMemorySpanExporter;
     use sequencer_bedrock_actor::protocol::Ed25519Key;
     use sequencer_service_metrics::{
+        instances,
         names::NO_SENDER,
-        traces::{CAUSE_ATTRIBUTE, SENDER_ATTRIBUTE},
+        traces::{
+            CAUSE_ATTRIBUTE, INSTANCE_ATTRIBUTE, SENDER_ATTRIBUTE, SENDER_INSTANCE_ATTRIBUTE,
+        },
     };
     use tracing::Instrument as _;
     use tracing_subscriber::layer::SubscriberExt as _;
@@ -302,6 +305,32 @@ mod tests {
                 .instrument(tracing::info_span!("nested"))
                 .await
                 .unwrap();
+        }
+    }
+
+    /// One of several, its instance named.
+    #[derive(kameo::Actor)]
+    struct Pinged;
+
+    struct Ping;
+
+    impl Message<Ping> for Pinged {
+        type Reply = ();
+
+        async fn handle(&mut self, Ping: Ping, _: &mut Context<Self, Self::Reply>) {}
+    }
+
+    /// One of several, its instance named, pinging another.
+    #[derive(kameo::Actor)]
+    struct Pinger(ActorRef<Pinged>);
+
+    struct Start;
+
+    impl Message<Start> for Pinger {
+        type Reply = ();
+
+        async fn handle(&mut self, Start: Start, _: &mut Context<Self, Self::Reply>) {
+            self.0.ask(Ping).await.unwrap();
         }
     }
 
@@ -417,6 +446,42 @@ mod tests {
             "{:?}",
             names(&spans)
         );
+    }
+
+    #[tokio::test]
+    async fn a_message_carries_the_instances_of_its_handler_and_sender() {
+        let exporter = InMemorySpanExporter::default();
+        let traces = Traces::new(exporter.clone(), resource());
+        let subscriber = tracing_subscriber::registry()
+            .with(crate::actor_metrics::layer())
+            .with(traces.layer(EnvFilter::new("info")));
+        let _subscriber = tracing::subscriber::set_default(subscriber);
+
+        let pinged_instances = instances::expect(<Pinged as kameo::Actor>::name());
+        let pinger_instances = instances::expect(<Pinger as kameo::Actor>::name());
+        let pinged = Pinged::spawn(Pinged);
+        pinged_instances.name(pinged.id(), "pinged-1");
+        let pinger = Pinger::spawn(Pinger(pinged));
+        pinger_instances.name(pinger.id(), "pinger-1");
+        pinger.ask(Start).await.unwrap();
+        traces.provider.force_flush().unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        let ping = exported(&spans, "Pinged.Ping");
+        assert_eq!(
+            attribute(&ping, INSTANCE_ATTRIBUTE).as_deref(),
+            Some("pinged-1")
+        );
+        assert_eq!(
+            attribute(&ping, SENDER_INSTANCE_ATTRIBUTE).as_deref(),
+            Some("pinger-1")
+        );
+        let start = exported(&spans, "Pinger.Start");
+        assert_eq!(
+            attribute(&start, INSTANCE_ATTRIBUTE).as_deref(),
+            Some("pinger-1")
+        );
+        assert_eq!(attribute(&start, SENDER_INSTANCE_ATTRIBUTE), None);
     }
 
     #[test]

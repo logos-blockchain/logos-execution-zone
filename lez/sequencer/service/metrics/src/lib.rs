@@ -8,4 +8,6 @@ pub mod names;
 pub mod traces;
 
 #[cfg(feature = "record")]
+pub mod instances;
+#[cfg(feature = "record")]
 pub mod record;

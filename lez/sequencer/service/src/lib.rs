@@ -305,6 +305,8 @@ pub fn run(
         let config_clone = config.clone();
         let storage_ref_clone = storage_ref.clone();
         let bedrock_broker_ref_clone = bedrock_broker_ref.clone();
+        let bedrock_instances =
+            sequencer_service_metrics::instances::expect(<BedrockActor as kameo::Actor>::name());
         let bedrock_pool = ShardingPoolActor::<BedrockActor, ChannelId>::new(
             sharding_pool_actor::RestartConfig {
                 policy: RestartPolicy::Permanent,
@@ -332,7 +334,10 @@ pub fn run(
                 within: Duration::ZERO,
             },
         )
-        .with_on_worker_spawned(actor_handle::record_mailbox_capacity);
+        .with_on_worker_spawned(move |channel_id, worker| {
+            actor_handle::record_mailbox_capacity(worker);
+            bedrock_instances.name(worker.id(), channel_id);
+        });
         let bedrock_pool_ref = ShardingPoolActor::spawn(bedrock_pool);
         info!("Bedrock Sharding Pool Actor spawned");
 
