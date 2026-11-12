@@ -82,3 +82,64 @@ impl request_response::Codec for ProofCodec {
 pub fn protocol_for_channel(channel_id: [u8; 32]) -> String {
     format!("/lez/{}/v1/proofs", hex::encode(channel_id))
 }
+
+#[cfg(test)]
+mod tests {
+    use futures::io::Cursor;
+    use libp2p::request_response::Codec as _;
+
+    use super::*;
+
+    fn response_with_proof_of(len: u64) -> Vec<u8> {
+        let proof = Proof::from_inner(vec![0; usize::try_from(len).unwrap()]);
+        borsh::to_vec(&Some(proof)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_request_is_exactly_one_digest() {
+        let protocol = protocol_for_channel([0; 32]);
+        let digest = Proof::from_inner(vec![0; 32]).digest();
+        let mut written = Vec::new();
+        ProofCodec
+            .write_request(&protocol, &mut written, digest)
+            .await
+            .unwrap();
+
+        let read = ProofCodec
+            .read_request(&protocol, &mut Cursor::new(written.clone()))
+            .await
+            .unwrap();
+        let short = ProofCodec
+            .read_request(&protocol, &mut Cursor::new(written[1..].to_vec()))
+            .await
+            .unwrap_err();
+
+        assert_eq!(written.len(), REQUEST_SIZE);
+        assert_eq!(read, digest);
+        assert_eq!(short.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[tokio::test]
+    async fn a_response_past_the_largest_proof_a_block_can_carry_is_refused() {
+        let protocol = protocol_for_channel([0; 32]);
+        let largest = response_with_proof_of(MAX_PUBLISHABLE_BLOCK_SIZE);
+        let oversized = response_with_proof_of(MAX_PUBLISHABLE_BLOCK_SIZE.checked_add(1).unwrap());
+
+        let accepted = ProofCodec
+            .read_response(&protocol, &mut Cursor::new(largest.clone()))
+            .await
+            .unwrap();
+        let refused = ProofCodec
+            .read_response(&protocol, &mut Cursor::new(oversized))
+            .await
+            .unwrap_err();
+
+        assert_eq!(u64::try_from(largest.len()).unwrap(), MAX_RESPONSE_SIZE);
+        assert_eq!(
+            accepted.map(|proof| proof.into_inner().len()),
+            Some(usize::try_from(MAX_PUBLISHABLE_BLOCK_SIZE).unwrap())
+        );
+        assert_eq!(refused.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(refused.to_string(), "proof response too large");
+    }
+}

@@ -227,7 +227,34 @@ impl From<Block> for HashableBlockData {
 
 #[cfg(test)]
 mod tests {
-    use crate::{HashType, block::HashableBlockData, test_utils};
+    use lee::{
+        PrivacyPreservingTransaction,
+        privacy_preserving_transaction::{Message, WitnessSet, circuit::Proof},
+    };
+
+    use crate::{
+        HashType,
+        block::{HashableBlockData, HashableBlockDataWith, OwnHasher},
+        test_utils,
+        transaction::LeeTransaction,
+    };
+
+    fn private_transaction(proof: Vec<u8>) -> LeeTransaction {
+        LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+            Message::default(),
+            WitnessSet::from_raw_parts(vec![], Proof::from_inner(proof)),
+        ))
+    }
+
+    fn block_data_with(transactions: Vec<LeeTransaction>) -> HashableBlockData {
+        HashableBlockData {
+            block_id: 1,
+            prev_block_hash: HashType([0; 32]),
+            timestamp: 0,
+            transactions,
+            reverted: Vec::new(),
+        }
+    }
 
     #[test]
     fn encoding_roundtrip() {
@@ -284,5 +311,58 @@ mod tests {
         let mut tampered = block;
         tampered.header.timestamp = 99; // header changed; stale hash no longer matches
         assert_ne!(tampered.recompute_hash(), tampered.header.hash);
+    }
+
+    #[test]
+    fn inscription_len_is_the_length_of_the_inscribed_block() {
+        let data = HashableBlockData {
+            block_id: 1,
+            prev_block_hash: HashType([0; 32]),
+            timestamp: 0,
+            transactions: vec![test_utils::produce_dummy_empty_transaction()],
+            reverted: vec![0],
+        };
+        let inscribed = data.clone().into_pending_block().to_inscription().unwrap();
+
+        assert_eq!(data.inscription_len().unwrap(), inscribed.len());
+    }
+
+    #[test]
+    fn the_block_hash_is_the_tagged_sha256_of_the_digest_form() {
+        let data = block_data_with(vec![
+            private_transaction(vec![0; 32]),
+            test_utils::produce_dummy_empty_transaction(),
+        ]);
+        let digest_form = HashableBlockDataWith {
+            block_id: data.block_id,
+            prev_block_hash: data.prev_block_hash,
+            timestamp: data.timestamp,
+            transactions: data
+                .transactions
+                .iter()
+                .map(LeeTransaction::digested)
+                .collect(),
+            reverted: data.reverted.clone(),
+        };
+        let tag = b"/LEE/v0.3/Message/Block/\x00\x00\x00\x00\x00\x00\x00\x00";
+        let expected = OwnHasher::hash(&[&tag[..], &borsh::to_vec(&digest_form).unwrap()].concat());
+
+        assert_eq!(digest_form.compute_hash(), expected);
+        assert_eq!(data.compute_hash(), expected);
+        assert_eq!(data.into_pending_block().recompute_hash(), expected);
+    }
+
+    #[test]
+    fn the_transaction_and_block_hashes_commit_to_each_proof() {
+        let hashes_with = |proof: Vec<u8>| {
+            let tx = private_transaction(proof);
+            (tx.hash(), block_data_with(vec![tx]).compute_hash())
+        };
+
+        assert_eq!(hashes_with(vec![0; 32]), hashes_with(vec![0; 32]));
+        let (tx_hash, block_hash) = hashes_with(vec![0; 32]);
+        let (other_tx_hash, other_block_hash) = hashes_with(vec![1; 32]);
+        assert_ne!(tx_hash, other_tx_hash);
+        assert_ne!(block_hash, other_block_hash);
     }
 }

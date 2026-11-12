@@ -68,3 +68,65 @@ impl ProofStore {
             .map(Proof::from_inner)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn proof(fill: u8) -> Proof {
+        Proof::from_inner(vec![fill; 32])
+    }
+
+    #[test]
+    fn an_inserted_proof_is_returned_by_its_digest() {
+        let store = ProofStore::new(64);
+
+        let digest = store.insert(&proof(0));
+
+        assert_eq!(digest, proof(0).digest());
+        assert_eq!(store.get(&digest), Some(proof(0)));
+        assert_eq!(store.get(&proof(1).digest()), None);
+    }
+
+    #[test]
+    fn the_oldest_proof_is_evicted_once_the_bytes_exceed_the_capacity() {
+        let store = ProofStore::new(64);
+
+        store.insert(&proof(0));
+        store.insert(&proof(1));
+        store.insert(&proof(2));
+
+        assert_eq!(store.get(&proof(0).digest()), None);
+        assert_eq!(store.get(&proof(1).digest()), Some(proof(1)));
+        assert_eq!(store.get(&proof(2).digest()), Some(proof(2)));
+    }
+
+    #[test]
+    fn inserting_a_held_proof_again_neither_counts_its_bytes_twice_nor_refreshes_it() {
+        let store = ProofStore::new(64);
+
+        store.insert(&proof(0));
+        store.insert(&proof(0));
+        store.insert(&proof(1));
+        assert_eq!(store.get(&proof(0).digest()), Some(proof(0)));
+        assert_eq!(store.get(&proof(1).digest()), Some(proof(1)));
+
+        store.insert(&proof(0));
+        store.insert(&proof(2));
+        assert_eq!(store.get(&proof(0).digest()), None);
+        assert_eq!(store.get(&proof(1).digest()), Some(proof(1)));
+    }
+
+    #[test]
+    fn a_proof_larger_than_the_capacity_is_not_kept_and_evicts_nothing() {
+        let store = ProofStore::new(32);
+        let oversized = Proof::from_inner(vec![1; 33]);
+
+        store.insert(&proof(0));
+        let digest = store.insert(&oversized);
+
+        assert_eq!(digest, oversized.digest());
+        assert_eq!(store.get(&digest), None);
+        assert_eq!(store.get(&proof(0).digest()), Some(proof(0)));
+    }
+}

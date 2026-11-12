@@ -95,6 +95,8 @@ impl PrivacyPreservingTransaction {
 
 #[cfg(test)]
 mod tests {
+    use sha2::{Digest as _, Sha256};
+
     use crate::{
         AccountId, PrivacyPreservingTransaction, PrivateKey, PublicKey,
         privacy_preserving_transaction::{
@@ -129,5 +131,37 @@ mod tests {
         let bytes = tx.to_bytes();
         let tx_from_bytes = PrivacyPreservingTransaction::from_bytes(&bytes).unwrap();
         assert_eq!(tx, tx_from_bytes);
+    }
+
+    #[test]
+    fn a_proof_digest_is_the_tagged_sha256_of_the_proof_bytes() {
+        let proof = Proof(vec![0; 32]);
+        let tag = b"/LEE/v0.3/ProofDigest/\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+        let expected: [u8; 32] = Sha256::digest([&tag[..], &proof.0].concat()).into();
+
+        assert_eq!(borsh::to_vec(&proof.digest()).unwrap(), expected);
+    }
+
+    #[test]
+    fn the_digest_form_replaces_only_the_proof() {
+        let tx = transaction_for_tests();
+
+        let digested = tx.digested();
+
+        assert_eq!(digested.message(), tx.message());
+        assert_eq!(
+            digested.witness_set().signatures_and_public_keys(),
+            tx.witness_set().signatures_and_public_keys()
+        );
+        assert_eq!(*digested.witness_set().proof(), proof_for_tests().digest());
+    }
+
+    #[test]
+    fn hash_is_sha256_of_the_digest_form_bytes() {
+        let tx = transaction_for_tests();
+        let expected: [u8; 32] = Sha256::digest(borsh::to_vec(&tx.digested()).unwrap()).into();
+
+        assert_eq!(tx.hash(), expected);
+        assert_eq!(tx.digested().hash(), expected);
     }
 }
