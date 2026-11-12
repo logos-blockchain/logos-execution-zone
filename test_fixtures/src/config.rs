@@ -446,13 +446,23 @@ pub const fn bedrock_funding_key_id() -> &'static str {
     BEDROCK_FUNDING_KEY_HEX
 }
 
-/// A source-only zone: programs registered, `InitConfig`s emitted, nobody watched.
+/// A source-only zone: programs registered, `InitConfig`s emitted, nobody
+/// watched and nowhere to lock to.
 #[must_use]
 pub const fn source_only_cross_zone() -> CrossZoneConfig {
     CrossZoneConfig {
         peers: Vec::new(),
+        lock_target_zones: Vec::new(),
         source_authority: None,
         source_governance: None,
+    }
+}
+
+#[must_use]
+pub fn source_only_cross_zone_locking_to(lock_target_zones: Vec<[u8; 32]>) -> CrossZoneConfig {
+    CrossZoneConfig {
+        lock_target_zones,
+        ..source_only_cross_zone()
     }
 }
 

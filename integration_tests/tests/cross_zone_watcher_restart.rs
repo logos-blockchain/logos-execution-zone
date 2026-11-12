@@ -77,6 +77,7 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
             genesis_hash: None,
             emitters: vec![],
         }],
+        lock_target_zones: Vec::new(),
         source_authority: None,
         source_governance: None,
     };
