@@ -114,7 +114,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
     let mut blocks: Vec<BlockSize> = Vec::new();
     for block_id in (pre_block_burst.saturating_add(1))..=tip {
         if let Some(block) = ctx.sequencer_client().get_block(block_id).await? {
-            let block_bytes = borsh::to_vec(&block).map_or(0, |v| v.len());
+            let block_bytes = block.digested().to_inscription().map_or(0, |v| v.len());
             let mut sz = BlockSize {
                 block_id,
                 block_bytes,
@@ -122,7 +122,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                 ppe_tx_bytes: Vec::new(),
             };
             for tx in &block.body.transactions {
-                let n = borsh::to_vec(tx).map_or(0, |v| v.len());
+                let n = borsh::to_vec(&tx.digested()).map_or(0, |v| v.len());
                 match tx {
                     LeeTransaction::Public(_) => sz.public_tx_bytes.push(n),
                     LeeTransaction::PrivacyPreserving(_) => sz.ppe_tx_bytes.push(n),

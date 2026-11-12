@@ -27,6 +27,8 @@ pub struct IndexerConfig {
     #[serde(with = "humantime_serde")]
     pub consensus_info_polling_interval: Duration,
     pub bedrock_config: ClientConfig,
+    /// The sequencers proofs are fetched from, tried in order.
+    pub proof_sources: Vec<ClientConfig>,
     pub channel_id: ChannelId,
     /// Presence selects the genesis program set, must match the sequencer's, and
     /// cannot change on an existing chain. `None` also disables the verifier; a

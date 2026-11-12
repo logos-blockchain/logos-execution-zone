@@ -14,6 +14,7 @@
             "minimum_sequencer_stake": 25000000000,
             "posting_timeframe": 900,
             "posting_timeout": 150,
+            "skip_window": 1500,
             "exit_delay": 240,
             "max_block_size": 1048576
         },

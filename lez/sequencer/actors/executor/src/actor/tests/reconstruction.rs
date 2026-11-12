@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::Result;
-use chain_state::{ChainState, ChannelEntry, Tip};
+use chain_state::{ChainState, ChannelEntry, ProofStore, Tip};
 use common::{
     HashType,
     block::{Block, BlockMeta, HashableBlockData},
@@ -27,7 +27,7 @@ use ping_core::{ReceiverMessage, ping_record_pda, receiver_config_account_id};
 use sequencer_bedrock_actor::{
     error::Error,
     mock::MockBedrockActor,
-    protocol::{Checkpoint, HeaderId, MsgId, ReadChannel, Slot, ZoneMessage},
+    protocol::{Batch, Checkpoint, HeaderId, MsgId, ReadChannel, Slot, ZoneMessage},
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_storage_actor::{
@@ -103,6 +103,7 @@ impl StoredChain {
                 }],
                 min_committee_size: 0,
                 genesis_hash: None,
+                skip_window: 0,
             }],
             source_authority: None,
             source_governance: None,
@@ -307,10 +308,14 @@ fn channel_serving_inner(
     mock.expect_handle_read_channel()
         .returning(move |ReadChannel { after }, _ctx| {
             let mut items: Vec<_> = messages
-                .iter()
-                .filter(|(_, slot)| after.is_none_or(|after| *slot > after))
-                .cloned()
-                .map(Ok)
+                .chunk_by(|(_, slot), (_, next)| slot == next)
+                .filter(|in_slot| after.is_none_or(|after| in_slot[0].1 > after))
+                .map(|in_slot| {
+                    Ok(Batch {
+                        messages: in_slot.to_vec(),
+                        watermark: in_slot[0].1,
+                    })
+                })
                 .collect();
             if read_fails {
                 items.push(Err(Error::ChannelReadFailed {
@@ -377,7 +382,7 @@ fn applied(state: &V03State, block: &Block) -> V03State {
 }
 
 fn channel_message(block: &Block, slot: u64) -> (ZoneMessage, Slot) {
-    let bytes = block.to_inscription().expect("block serializes");
+    let bytes = block.digested().to_inscription().expect("block serializes");
     let message = ZoneMessage::Block(ZoneBlock {
         id: MsgId::from(block.header.hash.0),
         data: Inscription::try_from(bytes.as_slice()).expect("block fits an inscription"),
@@ -540,7 +545,7 @@ async fn reconstruction_pins_on_trailing_garbage() -> Result<()> {
         .expect("view capture lock")
         .clone()
         .expect("the trailing garbage persists the view");
-    let mut chain = ChainState::from_final(V03State::default(), None);
+    let mut chain = ChainState::from_final(V03State::default(), None, ProofStore::new(usize::MAX));
     chain.restore_view(&bytes)?;
     assert_eq!(chain.final_msg(), MsgId::from([41; 32]));
     assert_eq!(chain.pin(), MsgId::from([41; 32]));
@@ -583,7 +588,7 @@ fn captured_lineage(view: &Mutex<Option<Vec<u8>>>) -> Result<(MsgId, Vec<MsgId>)
         .expect("view capture lock")
         .clone()
         .expect("the update persists the view");
-    let mut chain = ChainState::from_final(V03State::default(), None);
+    let mut chain = ChainState::from_final(V03State::default(), None, ProofStore::new(usize::MAX));
     chain.restore_view(&bytes)?;
     let held = chain.view().iter().map(|entry| entry.msg).collect();
     Ok((chain.final_msg(), held))
@@ -608,15 +613,32 @@ fn final_through(block2: &Block, final_msg: Option<MsgId>, held: &[Block]) -> St
     let mut stored = StoredChain::finalized_genesis().with_head(block2.clone());
     stored.final_snapshot = Some((stored.head_state.clone(), BlockMeta::from(block2)));
     let (final_state, final_meta) = stored.final_snapshot.clone().expect("final snapshot");
-    let mut chain = ChainState::from_final(final_state, Some(Tip::from(final_meta)));
+    let mut chain = ChainState::from_final(
+        final_state,
+        Some(Tip::from(final_meta)),
+        ProofStore::new(usize::MAX),
+    );
     let mut parent = final_msg.unwrap_or_else(MsgId::root);
-    chain.apply_reconstructed(parent, None);
+    if final_msg.is_some() {
+        chain.apply_finalized(
+            &[ChannelEntry {
+                msg: parent,
+                parent: MsgId::root(),
+                signer: None,
+                slot: None,
+                block: None,
+            }],
+            Slot::from(0),
+        );
+    }
     for block in held {
         stored = stored.with_head(block.clone());
         chain.apply_extension(vec![ChannelEntry {
             msg: msg_of(block),
             parent,
-            block: Some(block.clone()),
+            signer: None,
+            slot: None,
+            block: Some(block.digested()),
         }]);
         parent = msg_of(block);
     }
@@ -865,7 +887,7 @@ async fn fails_when_channel_is_missing() {
 }
 
 // The following cases exercise the divergence branches of
-// `apply_reconstructed_entry` reached with no recorded anchor, so the block's own
+// `apply_reconstructed_entries` reached with no recorded anchor, so the block's own
 // validation fires rather than the up-front `AnchorConsistencyCheck`.
 
 #[test]

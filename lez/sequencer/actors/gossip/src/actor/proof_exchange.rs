@@ -4,11 +4,11 @@ use async_trait::async_trait;
 use futures::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use lee::privacy_preserving_transaction::circuit::{Proof, ProofDigest};
 use libp2p::request_response;
-use sequencer_core::config::MAX_PUBLISHABLE_BLOCK_SIZE;
+use sequencer_core::config::MAX_TRANSACTION_SIZE;
 
 const REQUEST_SIZE: usize = 32;
-// A proof a block can carry, behind borsh's `Some` tag and `u32` length.
-const MAX_RESPONSE_SIZE: u64 = MAX_PUBLISHABLE_BLOCK_SIZE.saturating_add(5);
+// A proof a transaction can carry, behind borsh's `Some` tag and `u32` length.
+const MAX_RESPONSE_SIZE: u64 = MAX_TRANSACTION_SIZE.saturating_add(5);
 
 #[derive(Clone)]
 pub struct ProofCodec;
@@ -120,10 +120,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_response_past_the_largest_proof_a_block_can_carry_is_refused() {
+    async fn a_response_past_the_largest_proof_a_transaction_can_carry_is_refused() {
         let protocol = protocol_for_channel([0; 32]);
-        let largest = response_with_proof_of(MAX_PUBLISHABLE_BLOCK_SIZE);
-        let oversized = response_with_proof_of(MAX_PUBLISHABLE_BLOCK_SIZE.checked_add(1).unwrap());
+        let largest = response_with_proof_of(MAX_TRANSACTION_SIZE);
+        let oversized = response_with_proof_of(MAX_TRANSACTION_SIZE.checked_add(1).unwrap());
 
         let accepted = ProofCodec
             .read_response(&protocol, &mut Cursor::new(largest.clone()))
@@ -137,7 +137,7 @@ mod tests {
         assert_eq!(u64::try_from(largest.len()).unwrap(), MAX_RESPONSE_SIZE);
         assert_eq!(
             accepted.map(|proof| proof.into_inner().len()),
-            Some(usize::try_from(MAX_PUBLISHABLE_BLOCK_SIZE).unwrap())
+            Some(usize::try_from(MAX_TRANSACTION_SIZE).unwrap())
         );
         assert_eq!(refused.kind(), io::ErrorKind::InvalidData);
         assert_eq!(refused.to_string(), "proof response too large");

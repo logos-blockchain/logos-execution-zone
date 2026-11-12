@@ -111,6 +111,8 @@ pub struct CrossZonePeer {
     /// as-is. A production peer should set it.
     #[serde(default)]
     pub genesis_hash: Option<HashType>,
+    /// The peer zone's skip window Δ in slots, as its genesis channel parameters set it.
+    pub skip_window: u32,
 }
 
 /// Cross-zone configuration shared by a zone's sequencer (watcher) and indexer
@@ -471,6 +473,7 @@ mod tests {
                 }],
                 min_committee_size: 0,
                 genesis_hash: None,
+                skip_window: 0,
             }],
             source_authority: None,
             source_governance: None,
@@ -494,6 +497,7 @@ mod tests {
                 }],
                 min_committee_size: 0,
                 genesis_hash: None,
+                skip_window: 0,
             }],
             source_authority: None,
             source_governance: None,
@@ -517,6 +521,7 @@ mod tests {
                 allowed_routes: vec![route.clone(), route],
                 min_committee_size: 0,
                 genesis_hash: None,
+                skip_window: 0,
             }],
             source_authority: None,
             source_governance: None,

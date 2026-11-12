@@ -190,6 +190,7 @@ async fn empty_local_reconstructs_from_populated_bedrock() -> Result<()> {
         .context("Failed to setup Bedrock")?;
     let (indexer_handle, _indexer_dir) = setup_indexer(
         bedrock_addr,
+        None,
         test_fixtures::config::bedrock_channel_id(),
         None,
     )
@@ -358,6 +359,7 @@ async fn local_ahead_of_channel_resumes() -> Result<()> {
         .context("Failed to setup Bedrock")?;
     let (indexer_handle, _indexer_dir) = setup_indexer(
         bedrock_addr,
+        None,
         test_fixtures::config::bedrock_channel_id(),
         None,
     )
@@ -446,6 +448,7 @@ async fn local_behind_channel_reconstructs_forward() -> Result<()> {
         .context("Failed to setup Bedrock")?;
     let (indexer_handle, _indexer_dir) = setup_indexer(
         bedrock_addr,
+        None,
         test_fixtures::config::bedrock_channel_id(),
         None,
     )

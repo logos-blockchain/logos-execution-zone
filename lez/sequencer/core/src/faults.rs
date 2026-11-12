@@ -1,50 +1,33 @@
 //! Slashable faults in a channel update.
 
-use chain_state::AcceptOutcome;
+use chain_state::{Judged, Verdict};
 use sequencer_slasher_actor::{Fault, ReportedOffence};
 
 use crate::{Ed25519PublicKey, MsgId};
 
-/// How the final tier took one finalized entry carrying a block.
-pub struct Finalized {
-    pub msg: MsgId,
-    pub outcome: AcceptOutcome,
-    /// It was the lineage's next entry past a finalized block, so its block
-    /// had to follow the final tip.
-    pub next: bool,
-}
-
-/// Every offence an update proves; `signers` names who wrote each finalized entry.
-pub fn judge(
-    undecodable: &[(MsgId, Ed25519PublicKey)],
-    finalized: &[Finalized],
-    signers: &[(MsgId, Ed25519PublicKey)],
-) -> Vec<ReportedOffence> {
+/// Every offence an update proves; a finalized entry's `signer` is who wrote it.
+pub fn judge(undecodable: &[(MsgId, Ed25519PublicKey)], judged: &[Judged]) -> Vec<ReportedOffence> {
     let not_blocks = undecodable
         .iter()
-        .map(|(inscription, signer)| offence(*inscription, *signer, Fault::NotABlock));
-    let bad_blocks = finalized.iter().filter_map(|entry| {
-        let AcceptOutcome::Parked(err) = &entry.outcome else {
+        .map(|(inscription, signer)| offence(*inscription, signer.to_bytes(), Fault::NotABlock));
+    let bad_blocks = judged.iter().filter_map(|entry| {
+        let Verdict::Dropped { error, next: true } = &entry.verdict else {
             return None;
         };
-        if !entry.next {
-            return None;
-        }
-        let fault = if err.is_invalid_block() {
+        let fault = if error.is_invalid_block() {
             Fault::InvalidBlock
         } else {
             Fault::MisplacedBlock
         };
-        let (_, signer) = signers.iter().find(|(msg, _)| *msg == entry.msg)?;
-        Some(offence(entry.msg, *signer, fault))
+        Some(offence(entry.msg, entry.signer?, fault))
     });
 
     not_blocks.chain(bad_blocks).collect()
 }
 
-fn offence(inscription: MsgId, signer: Ed25519PublicKey, fault: Fault) -> ReportedOffence {
+fn offence(inscription: MsgId, signer: [u8; 32], fault: Fault) -> ReportedOffence {
     ReportedOffence {
-        signer: signer.to_bytes(),
+        signer,
         inscription: inscription.into(),
         fault,
     }
@@ -53,6 +36,7 @@ fn offence(inscription: MsgId, signer: Ed25519PublicKey, fault: Fault) -> Report
 #[cfg(test)]
 mod tests {
     use chain_state::BlockIngestError;
+    use common::test_utils::produce_dummy_block;
     use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 
     use super::*;
@@ -65,12 +49,17 @@ mod tests {
         MsgId::from([n; 32])
     }
 
-    fn finalized(n: u8, outcome: AcceptOutcome, next: bool) -> Finalized {
-        Finalized {
+    fn judged(n: u8, verdict: Verdict) -> Judged {
+        Judged {
             msg: msg(n),
-            outcome,
-            next,
+            signer: Some(signer().to_bytes()),
+            block: produce_dummy_block(1, None, vec![]).digested(),
+            verdict,
         }
+    }
+
+    fn dropped(error: BlockIngestError, next: bool) -> Verdict {
+        Verdict::Dropped { error, next }
     }
 
     #[test]
@@ -79,42 +68,34 @@ mod tests {
             expected: 5,
             got: 7,
         };
-        let finalized = [
-            finalized(1, AcceptOutcome::Applied(vec![]), true),
-            finalized(2, AcceptOutcome::AlreadyApplied, true),
-            finalized(
-                3,
-                AcceptOutcome::RetryableFailure(BlockIngestError::EmptyBlock),
-                true,
+        let judged = [
+            judged(1, Verdict::Settled),
+            judged(
+                2,
+                Verdict::AlreadySettled(produce_dummy_block(1, None, vec![])),
             ),
-            finalized(4, AcceptOutcome::Parked(BlockIngestError::EmptyBlock), true),
-            finalized(5, AcceptOutcome::Parked(wrong_id.clone()), true),
-            finalized(6, AcceptOutcome::Parked(wrong_id), false),
-            finalized(
-                7,
-                AcceptOutcome::Parked(BlockIngestError::EmptyBlock),
-                false,
-            ),
+            judged(4, dropped(BlockIngestError::EmptyBlock, true)),
+            judged(5, dropped(wrong_id.clone(), true)),
+            judged(6, dropped(wrong_id, false)),
+            judged(7, dropped(BlockIngestError::EmptyBlock, false)),
         ];
-        let signers: Vec<_> = (1..=7).map(|n| (msg(n), signer())).collect();
 
         assert_eq!(
-            judge(&[(msg(9), signer())], &finalized, &signers),
+            judge(&[(msg(9), signer())], &judged),
             vec![
-                offence(msg(9), signer(), Fault::NotABlock),
-                offence(msg(4), signer(), Fault::InvalidBlock),
-                offence(msg(5), signer(), Fault::MisplacedBlock),
+                offence(msg(9), signer().to_bytes(), Fault::NotABlock),
+                offence(msg(4), signer().to_bytes(), Fault::InvalidBlock),
+                offence(msg(5), signer().to_bytes(), Fault::MisplacedBlock),
             ]
         );
     }
 
     #[test]
     fn an_unsigned_block_is_no_offence() {
-        let finalized = [finalized(
-            1,
-            AcceptOutcome::Parked(BlockIngestError::EmptyBlock),
-            true,
-        )];
-        assert!(judge(&[], &finalized, &[]).is_empty());
+        let judged = [Judged {
+            signer: None,
+            ..judged(1, dropped(BlockIngestError::EmptyBlock, true))
+        }];
+        assert!(judge(&[], &judged).is_empty());
     }
 }

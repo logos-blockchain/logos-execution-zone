@@ -26,7 +26,7 @@ To our knowledge, this design is unique to LEZ. Other privacy-focused programmab
 2. Transfer from public to private (local / privacy-preserving execution)
    - Alice runs the token program `Transfer` function locally, sending to Bob’s private account.
    - A ZKP of correct execution is generated.
-   - The proof is submitted to the blockchain and verified by validators.
+   - The proof is submitted to the validators, which verify it; only its digest is published on-chain.
    - Alice’s public balance is updated on-chain.
    - Bob’s private balance remains hidden, while the transfer is provably correct.
 

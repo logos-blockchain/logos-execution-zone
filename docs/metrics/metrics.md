@@ -119,7 +119,9 @@ The **Sequencer network** dashboard (`dashboards/network.rs`) puts every sequenc
 | Is the rotation fair, and are turns used? | **Share of turns**, **Share of blocks produced**, **Blocks per turn** over the time range |
 | Is anyone falling behind or failing? | **Blocks behind the network**, **Failed production turns in a row** |
 
-`blocks_produced_total` counts a block once the channel finalizes it, signed by this sequencer: a block on the head can still be orphaned when another sequencer's inscription wins the same position, typically around a turn handover. Summed over sequencers it equals the finalized chain height, as long as none restarted.
+`blocks_produced_total` counts a block once it settles, signed by this sequencer: until then a block on the head can still be orphaned when another sequencer's inscription wins the same position, typically around a turn handover, or cut when the next writer skips it. Summed over sequencers it equals the settled chain height, as long as none restarted.
+
+`skips_total{writer}` counts the skips each writer placed, once final: blocks built on the parent of another writer's private block, cutting it. An honest writer skips a block whose proofs it never received, so a high count is evidence for eviction, not proof of a fault.
 
 Turns come from Bedrock: the zone SDK notifies a sequencer when its turn to write starts and ends, and the Bedrock actor forwards that to the executor. `sequencer_executor_actor_metrics` records them as `turn_to_write` (1 while held) and `turns_to_write_total` (turns started; a turn notified several times counts once, while a new starting slot is a new turn even for the same holder).
 

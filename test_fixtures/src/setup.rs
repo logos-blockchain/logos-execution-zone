@@ -486,6 +486,7 @@ pub async fn setup_bedrock_node_with_settings(
 
 pub async fn setup_indexer(
     bedrock_addr: SocketAddr,
+    sequencer_addr: Option<SocketAddr>,
     channel_id: ChannelId,
     cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
 ) -> Result<(IndexerHandle, TempDir)> {
@@ -494,6 +495,7 @@ pub async fn setup_indexer(
 
     let handle = setup_indexer_at(
         bedrock_addr,
+        sequencer_addr,
         channel_id,
         cross_zone,
         temp_indexer_dir.path(),
@@ -506,6 +508,7 @@ pub async fn setup_indexer(
 /// Set up the indexer in an explicit home directory owned by the caller.
 pub async fn setup_indexer_at(
     bedrock_addr: SocketAddr,
+    sequencer_addr: Option<SocketAddr>,
     channel_id: ChannelId,
     cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
     home: &Path,
@@ -514,8 +517,9 @@ pub async fn setup_indexer_at(
 
     debug!("Using indexer home at {}", home.display());
 
-    let indexer_config = config::indexer_config(bedrock_addr, channel_id, cross_zone)
-        .context("Failed to create Indexer config")?;
+    let indexer_config =
+        config::indexer_config(bedrock_addr, sequencer_addr, channel_id, cross_zone)
+            .context("Failed to create Indexer config")?;
 
     indexer_service::run_server(
         indexer_config,

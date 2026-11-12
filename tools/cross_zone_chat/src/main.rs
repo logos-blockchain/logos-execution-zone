@@ -302,11 +302,11 @@ async fn main() -> Result<()> {
     let zone_b: ZoneId = *channel_b.as_ref();
     let receiver_id = programs::ping_receiver_account_id();
 
-    // Each zone watches the other and may deliver only to ping_receiver.
-    let cross_zone_a = watch_peer(zone_b, receiver_id);
-    let cross_zone_b = watch_peer(zone_a, receiver_id);
-
     let partial = SequencerPartialConfig::default();
+    // Each zone watches the other and may deliver only to ping_receiver.
+    let cross_zone_a = watch_peer(zone_b, partial.channel_params.skip_window, receiver_id);
+    let cross_zone_b = watch_peer(zone_a, partial.channel_params.skip_window, receiver_id);
+
     let (seq_a, _home_a) = SequencerSetup::new(partial, bedrock_addr)
         .with_genesis(vec![])
         .with_channel_id(channel_a)
@@ -378,7 +378,7 @@ async fn main() -> Result<()> {
 
 /// A cross-zone config whose single peer is `peer`, allowed to deliver only to
 /// `receiver_id`.
-fn watch_peer(peer: ZoneId, receiver_id: AccountId) -> CrossZoneConfig {
+fn watch_peer(peer: ZoneId, skip_window: u32, receiver_id: AccountId) -> CrossZoneConfig {
     CrossZoneConfig {
         peers: vec![CrossZonePeer {
             channel_id: peer,
@@ -389,6 +389,7 @@ fn watch_peer(peer: ZoneId, receiver_id: AccountId) -> CrossZoneConfig {
             }],
             min_committee_size: 0,
             genesis_hash: None,
+            skip_window,
         }],
         source_authority: None,
         source_governance: None,

@@ -1,6 +1,7 @@
 use std::{future::Future, net::SocketAddr, path::Path};
 
 use anyhow::{Context as _, Result};
+use chain_state::ProofStore;
 use futures::never::Never;
 use glob::Pattern;
 use kameo::actor::{ActorRef, Recipient, Spawn as _};
@@ -17,8 +18,8 @@ pub use sequencer_core::config::*;
 use sequencer_core::{
     gossip::{AccreditedKeysReceiver, MaxBlockSizeReceiver},
     load_or_create_signing_key,
-    proof_store::ProofStore,
 };
+use sequencer_executor_actor::protocol::SetProofFetcher;
 use sequencer_gossip_actor::{
     GossipActor,
     protocol::{PublishConfig, PublishTransaction},
@@ -328,7 +329,7 @@ pub fn run(
                     max_block_size_rx.clone(),
                     accredited_keys_rx,
                     staked_keys_rx,
-                    proof_store,
+                    proof_store.clone(),
                     &executor_ref,
                     &slasher_ref,
                     &channel_signer_ref,
@@ -345,12 +346,13 @@ pub fn run(
             max_block_size_rx,
             executor_ref.clone(),
             gossip_publisher,
+            proof_store,
         )
         .await?;
         // Nothing binds the address in this build, and with no RPC server there
         // is nobody left to publish the transactions it would have accepted.
         #[cfg(not(feature = "rpc"))]
-        drop((listen_addr, gossip_publisher));
+        drop((listen_addr, gossip_publisher, proof_store));
 
         scheduler_ref
             .tell(
@@ -485,6 +487,11 @@ pub async fn setup_gossip(
         }
     });
 
+    // The executor's missing proofs are fetched into the shared proof store.
+    executor_ref
+        .tell(SetProofFetcher(gossip_ref.clone().recipient()))
+        .await?;
+
     // Startup already dialed the bootstrap peers, so the first retry waits
     // a full interval.
     scheduler_ref
@@ -515,12 +522,14 @@ async fn setup_rpc_server(
     max_block_size_rx: MaxBlockSizeReceiver,
     executor_ref: ActorRef<ExecutorActor>,
     gossip_publisher: Option<Recipient<PublishTransaction>>,
+    proof_store: ProofStore,
 ) -> Result<RpcServer> {
     let rpc_server = RpcServerActor::new(
         listen_addr,
         max_block_size_rx,
         executor_ref,
         gossip_publisher,
+        proof_store,
     )
     .await
     .context("Failed to initialize RPC Server Actor")?;

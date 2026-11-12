@@ -223,7 +223,9 @@ fn entry_of(block: &Block, parent: MsgId) -> ChannelEntry {
     ChannelEntry {
         msg: mock_msg_of(block),
         parent,
-        block: Some(block.clone()),
+        signer: None,
+        slot: None,
+        block: Some(block.digested()),
     }
 }
 
@@ -292,7 +294,6 @@ fn empty_channel_update() -> ChannelUpdate {
         deposits: Vec::new(),
         withdrawals: Vec::new(),
         undecodable: Vec::new(),
-        finalized_signers: Vec::new(),
     }
 }
 
@@ -327,7 +328,10 @@ fn setup_sequencer_config() -> SequencerConfig {
         },
         retry_pending_blocks_timeout: Duration::from_mins(4),
         genesis: Some(config::GenesisConfig {
-            channel_params: config::default_channel_params(),
+            channel_params: config::ChannelParams {
+                skip_window: 0,
+                ..config::default_channel_params()
+            },
             actions: vec![],
         }),
         cross_zone: None,
@@ -668,6 +672,7 @@ fn cross_zone_test_config() -> SequencerConfig {
                 }],
                 min_committee_size: 0,
                 genesis_hash: None,
+                skip_window: 0,
             }],
             source_authority: None,
             source_governance: None,
@@ -2703,6 +2708,8 @@ async fn production_chains_on_a_garbage_entry_at_the_tip() {
             view: ViewChange::Extension(vec![ChannelEntry {
                 msg: junk,
                 parent: pin,
+                signer: None,
+                slot: None,
                 block: None,
             }]),
             ..empty_channel_update()
@@ -2776,6 +2783,8 @@ async fn a_conflict_dropping_a_garbage_entry_rewinds_only_the_pin() {
             view: ViewChange::Extension(vec![ChannelEntry {
                 msg: junk,
                 parent: pin,
+                signer: None,
+                slot: None,
                 block: None,
             }]),
             ..empty_channel_update()
@@ -2844,13 +2853,16 @@ async fn the_bootstrap_publishes_leave_a_view_the_first_turn_extends() {
 
     // The published entries, chained from the root.
     let view = sequencer.chain().lock().await.view().to_vec();
+    let proofs = sequencer.proof_store();
     let mut parent = MsgId::root();
     for entry in &view {
         let block = entry
             .block
             .as_ref()
-            .expect("a bootstrap entry carries its block");
-        assert_eq!(entry.msg, mock_msg_of(block));
+            .expect("a bootstrap entry carries its block")
+            .hydrate(|digest| proofs.get(digest))
+            .expect("the bootstrap publishes keep their proofs");
+        assert_eq!(entry.msg, mock_msg_of(&block));
         assert_eq!(entry.parent, parent);
         parent = entry.msg;
     }
@@ -3030,7 +3042,7 @@ async fn signs_peer_pin(
     let pin = Ops::from([
         Op::ChannelInscribe(InscriptionOp {
             channel_id,
-            inscription: Inscription::try_from(block.to_inscription().unwrap())
+            inscription: Inscription::try_from(block.digested().to_inscription().unwrap())
                 .expect("the block fits an inscription"),
             parent: MsgId::root(),
             signer: peer.public_key().into_unverified(),
@@ -4529,12 +4541,18 @@ async fn a_restart_without_a_view_follows_the_channel_from_the_final_tier() {
         let (mut sequencer, _mempool_handle) = start_sequencer(config.clone()).await;
         sequencer.run_production_turn().await.unwrap();
         let view = sequencer.chain().lock().await.view().to_vec();
+        let proofs = sequencer.proof_store();
         sequencer
             .storage_ref
             .ask(AtomicUpdate {
                 channel_view: Some(vec![0xff]),
                 ..AtomicUpdate::from_block(
-                    view[1].block.clone().unwrap(),
+                    view[1]
+                        .block
+                        .as_ref()
+                        .unwrap()
+                        .hydrate(|digest| proofs.get(digest))
+                        .unwrap(),
                     sequencer.chain().lock().await.share_head_state(),
                     vec![],
                 )
@@ -4771,7 +4789,7 @@ fn stake_test_state(funding_id: AccountId, funding_balance: u128) -> V03State {
 
 /// The exit delay genesis set in `state`.
 fn exit_delay(state: &V03State) -> u64 {
-    crate::committee_discovery::channel_params(state)
+    chain_state::stake_config::channel_params(state)
         .expect("genesis sets the channel params")
         .exit_delay
 }
@@ -6456,7 +6474,7 @@ async fn a_slash_lands_over_a_pending_partial_unstake() {
         state
             .transition_from_public_transaction(&unstake, 1, 0)
             .expect("UnstakeRequest should succeed");
-        crate::committee_discovery::read_config(state).expect("genesis writes the stake config")
+        chain_state::stake_config::read_config(state).expect("genesis writes the stake config")
     };
     let channel_id = config.channel_id.expect("genesis sets the channel id");
     let approval = test_approval_on(channel_id, 0x45, offender);
@@ -6859,8 +6877,10 @@ async fn finalize_signed(
     let signer = Ed25519Key::from_bytes(&[5; 32]).public_key();
     sequencer
         .on_channel_update(Arc::new(ChannelUpdate {
-            finalized_signers: vec![(entry.msg, signer)],
-            finalized: vec![entry],
+            finalized: vec![ChannelEntry {
+                signer: Some(signer.to_bytes()),
+                ..entry
+            }],
             ..empty_channel_update()
         }))
         .await;
@@ -7222,7 +7242,8 @@ fn a_peer_genesis_hash_round_trips_as_hex() {
     let peer: CrossZonePeer = serde_json::from_str(
         r#"{"channel_id":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],
             "allowed_routes":[],
-            "genesis_hash":"0202020202020202020202020202020202020202020202020202020202020202"}"#,
+            "genesis_hash":"0202020202020202020202020202020202020202020202020202020202020202",
+            "skip_window":0}"#,
     )
     .expect("hex genesis hash parses");
 

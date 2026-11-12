@@ -15,7 +15,7 @@ use std::{
 
 use anyhow::{Context as _, Result};
 use clap::Parser;
-use common::block::Block;
+use common::block::DigestedBlock;
 use kameo::{
     Actor,
     actor::{ActorRef, Spawn as _},
@@ -50,9 +50,9 @@ struct Args {
 
 /// The latest channel block, finalized or not, published into `latest`.
 struct LatestBlock {
-    latest: Arc<Mutex<Option<Block>>>,
-    finalized: Option<Block>,
-    view: Option<Block>,
+    latest: Arc<Mutex<Option<DigestedBlock>>>,
+    finalized: Option<DigestedBlock>,
+    view: Option<DigestedBlock>,
 }
 
 impl Actor for LatestBlock {
@@ -83,25 +83,28 @@ impl Message<ChannelEvent> for LatestBlock {
 }
 
 /// The block in `blocks` with the highest id.
-fn highest<'block>(blocks: impl Iterator<Item = &'block Block>) -> Option<Block> {
+fn highest<'block>(blocks: impl Iterator<Item = &'block DigestedBlock>) -> Option<DigestedBlock> {
     blocks.max_by_key(|block| block.header.block_id).cloned()
 }
 
 /// The blocks `entries` carry.
-fn blocks_of(entries: &[ChannelEntry]) -> impl Iterator<Item = &Block> {
+fn blocks_of(entries: &[ChannelEntry]) -> impl Iterator<Item = &DigestedBlock> {
     entries.iter().filter_map(|entry| entry.block.as_ref())
 }
 
 /// A block at `block_id` on `parent`, signed with a fresh block key.
 fn block_on(
-    parent: &Block,
+    parent: &DigestedBlock,
     block_id: u64,
     transactions: Vec<common::transaction::LeeTransaction>,
 ) -> Vec<u8> {
     let block =
         common::test_utils::produce_dummy_block(block_id, Some(parent.header.hash), transactions);
     let block = common::block::HashableBlockData::from(block).into_pending_block();
-    block.to_inscription().expect("a block should serialize")
+    block
+        .digested()
+        .to_inscription()
+        .expect("a block should serialize")
 }
 
 /// Waits for the tip to become `msg`. False if the turn ends first: L1 refused it.
@@ -167,7 +170,7 @@ async fn main() -> Result<()> {
         kameo_actors::DeliveryStrategy::Guaranteed,
     ));
 
-    let latest: Arc<Mutex<Option<Block>>> = Arc::default();
+    let latest: Arc<Mutex<Option<DigestedBlock>>> = Arc::default();
     let watcher = LatestBlock::spawn(LatestBlock {
         latest: Arc::clone(&latest),
         finalized: None,

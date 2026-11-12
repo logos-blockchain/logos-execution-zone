@@ -3,6 +3,11 @@
     "bedrock_config": {
         "addr": "http://logos-blockchain-node-0:18080"
     },
+    "proof_sources": [
+        {
+            "addr": "http://sequencer_service_0:3040"
+        }
+    ],
     "channel_id": "0101010101010101010101010101010101010101010101010101010101010101",
     "allow_chain_reset": true,
     "event_filter": "archival"

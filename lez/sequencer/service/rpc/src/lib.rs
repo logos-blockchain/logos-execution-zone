@@ -8,7 +8,8 @@ pub use sequencer_service_protocol::FeeStateQuote;
 use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
     CommitmentSetDigest, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, EncryptedNote,
-    HashType, LeeTransaction, MembershipProof, Nonce, PageLimit, ProgramId, Publication,
+    HashType, LeeTransaction, MembershipProof, Nonce, PageLimit, ProgramId, Proof, ProofDigest,
+    Publication,
 };
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
@@ -55,6 +56,10 @@ pub trait Rpc {
     // TODO: expand healthcheck response into some kind of report
     #[method(name = "checkHealth")]
     async fn check_health(&self) -> Result<(), ErrorObjectOwned>;
+
+    /// The proof with `digest`, if this sequencer's proof store holds it.
+    #[method(name = "getProof")]
+    async fn get_proof(&self, digest: ProofDigest) -> Result<Option<Proof>, ErrorObjectOwned>;
 
     // TODO: These functions should be removed after wallet starts using indexer
     // for this type of queries.

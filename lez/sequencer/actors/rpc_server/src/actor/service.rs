@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use chain_state::ProofStore;
 use common::transaction::LeeTransaction;
 use jsonrpsee::{
     core::async_trait,
@@ -17,13 +18,14 @@ use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
     CommitmentSetDigest, CrossZoneDeadLetter, CrossZoneDeadLetterReport,
     CrossZoneDeadLetterRequeue, EncryptedNote, FeeStateQuote, HashType, MembershipProof, Nonce,
-    PageLimit, ProgramId, Publication,
+    PageLimit, ProgramId, Proof, ProofDigest, Publication,
 };
 
 pub struct Service<E: ExecutorActorTrait> {
     executor_ref: ActorRef<E>,
     max_block_size_rx: MaxBlockSizeReceiver,
     gossip: Option<Recipient<PublishTransaction>>,
+    proof_store: ProofStore,
 }
 
 impl<E: ExecutorActorTrait> Service<E> {
@@ -31,6 +33,7 @@ impl<E: ExecutorActorTrait> Service<E> {
         executor_ref: ActorRef<E>,
         max_block_size_rx: MaxBlockSizeReceiver,
         gossip: Option<Recipient<PublishTransaction>>,
+        proof_store: ProofStore,
     ) -> Self {
         sequencer_rpc_server_actor_metrics::init();
 
@@ -38,6 +41,7 @@ impl<E: ExecutorActorTrait> Service<E> {
             executor_ref,
             max_block_size_rx,
             gossip,
+            proof_store,
         }
     }
 }
@@ -50,23 +54,18 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         let tx_hash = tx.hash();
 
         let res = async move {
+            let too_large = |err: sequencer_core::config::TransactionTooLarge| {
+                ErrorObjectOwned::owned(
+                    ErrorCode::InvalidParams.code(),
+                    err.to_string(),
+                    None::<()>,
+                )
+            };
             let encoded_tx =
                 borsh::to_vec(&tx).expect("Transaction borsh serialization should not fail");
-            let tx_size =
-                u64::try_from(encoded_tx.len()).expect("Transaction size should fit in u64");
-
-            let max_tx_size = self
-                .max_block_size_rx
-                .borrow()
-                .saturating_sub(sequencer_core::config::BLOCK_OVERHEAD);
-
-            if tx_size > max_tx_size {
-                return Err(ErrorObjectOwned::owned(
-                    ErrorCode::InvalidParams.code(),
-                    format!("Transaction too large: size {tx_size}, max {max_tx_size}"),
-                    None::<()>,
-                ));
-            }
+            sequencer_core::config::check_transaction_size(encoded_tx.len()).map_err(too_large)?;
+            sequencer_core::config::check_inscribed_size(&tx, *self.max_block_size_rx.borrow())
+                .map_err(too_large)?;
 
             let authenticated_tx = tx.transaction_stateless_check().map_err(|err| {
                 ErrorObjectOwned::owned(
@@ -136,6 +135,10 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
 
     async fn check_health(&self) -> Result<(), ErrorObjectOwned> {
         Ok(())
+    }
+
+    async fn get_proof(&self, digest: ProofDigest) -> Result<Option<Proof>, ErrorObjectOwned> {
+        Ok(self.proof_store.get(&digest.0).map(Proof))
     }
 
     async fn get_block(&self, block_id: BlockId) -> Result<Option<Block>, ErrorObjectOwned> {
@@ -418,6 +421,7 @@ fn internal_error(err: impl std::fmt::Display) -> ErrorObjectOwned {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     #[test]

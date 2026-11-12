@@ -13,6 +13,7 @@ actor = [
   "dep:anyhow",
   "dep:async-trait",
   "dep:borsh",
+  "dep:chain_state",
   "dep:futures",
   "dep:hex",
   "dep:kameo",
@@ -30,6 +31,7 @@ actor = [
 mdns = ["actor"]
 
 [dependencies]
+chain_state = { workspace = true, optional = true }
 common.workspace = true
 lee = { workspace = true, optional = true }
 sequencer_channel_signing_actor = { workspace = true, optional = true }

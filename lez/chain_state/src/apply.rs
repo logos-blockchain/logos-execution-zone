@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use common::{
     HashType,
-    block::{Block, BlockMeta},
+    block::{Block, BlockHeader, BlockMeta},
     transaction::{
         LeeTransaction, TxEvents, clock_invocation, fee_invocation, fee_refund_invocation,
         fee_reserve_invocation, private_fee_refund_invocation, validate_private_fee_credit,
@@ -65,23 +65,6 @@ impl From<&Tip> for BlockMeta {
     }
 }
 
-/// Outcome of feeding a parsed L2 block to a validated tip.
-pub enum AcceptOutcome {
-    /// Chained and applied; the tip advances.
-    Applied(Vec<(BlockId, Vec<TxEvents>)>),
-    /// A duplicate re-delivery of an already-applied block. No state change.
-    AlreadyApplied,
-    /// Did not chain or failed to apply; the tip stays frozen.
-    Parked(BlockIngestError),
-    /// Chained but failed to apply, possibly transiently
-    /// ([`BlockIngestError::is_retryable`]); nothing recorded, tip and state
-    /// untouched. The caller retries and parks once it gives up.
-    ///
-    /// TODO: Only the indexer's `accept_block` emits this today; the sequencer's
-    /// `ChainState` parks on all failures without retrying (see `on_follow`).
-    RetryableFailure(BlockIngestError),
-}
-
 /// Validates `block` against `tip`, then applies it to `state`.
 ///
 /// Mutates `state` in place, so callers pass a scratch clone and commit on `Ok`.
@@ -105,13 +88,18 @@ pub fn validate_against_tip(tip: Option<&Tip>, block: &Block) -> Result<(), Bloc
             header: block.header.hash,
         });
     }
+    validate_link(tip, &block.header)
+}
 
+/// Checks that a block with `header` follows `tip`: block-id continuity, then
+/// `prev_block_hash` linkage.
+pub fn validate_link(tip: Option<&Tip>, header: &BlockHeader) -> Result<(), BlockIngestError> {
     match tip {
         None => {
-            if block.header.block_id != GENESIS_BLOCK_ID {
+            if header.block_id != GENESIS_BLOCK_ID {
                 return Err(BlockIngestError::UnexpectedBlockId {
                     expected: GENESIS_BLOCK_ID,
-                    got: block.header.block_id,
+                    got: header.block_id,
                 });
             }
         }
@@ -120,16 +108,16 @@ pub fn validate_against_tip(tip: Option<&Tip>, block: &Block) -> Result<(), Bloc
                 .block_id
                 .checked_add(1)
                 .expect("block id should not overflow");
-            if block.header.block_id != expected {
+            if header.block_id != expected {
                 return Err(BlockIngestError::UnexpectedBlockId {
                     expected,
-                    got: block.header.block_id,
+                    got: header.block_id,
                 });
             }
-            if block.header.prev_block_hash != tip.hash {
+            if header.prev_block_hash != tip.hash {
                 return Err(BlockIngestError::BrokenChainLink {
                     expected_prev: tip.hash,
-                    got_prev: block.header.prev_block_hash,
+                    got_prev: header.prev_block_hash,
                 });
             }
         }
@@ -700,7 +688,7 @@ fn settle_charged_transaction(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::{
         borrow::Cow,
         collections::{BTreeMap, BTreeSet, HashMap},
@@ -750,7 +738,7 @@ mod tests {
         }
     }
 
-    fn tip_of(block: &Block) -> Tip {
+    pub fn tip_of(block: &Block) -> Tip {
         Tip::from(block)
     }
 
@@ -1326,7 +1314,7 @@ mod tests {
     }
 
     /// A funded private sender next to the initial state, for in-proof fee tests.
-    fn private_sender_state(seeds: &[u8]) -> (V03State, Vec<(TestPrivateKeys, lee::Account)>) {
+    pub fn private_sender_state(seeds: &[u8]) -> (V03State, Vec<(TestPrivateKeys, lee::Account)>) {
         let senders: Vec<_> = seeds
             .iter()
             .map(|&seed| {
@@ -1358,7 +1346,7 @@ mod tests {
 
     /// A deshielding transfer of `amount` from the private `sender` to a public `recipient`,
     /// paying `fee` inside the proof from the sender presented under [`ALIAS_OPENING`].
-    fn private_tx(
+    pub fn private_tx(
         state: &V03State,
         sender: &(TestPrivateKeys, lee::Account),
         recipient: AccountId,
@@ -1454,7 +1442,7 @@ mod tests {
         ))
     }
 
-    fn inbox_fee(amount: u128, payer: AccountId) -> lee_core::FeeTransfer {
+    pub fn inbox_fee(amount: u128, payer: AccountId) -> lee_core::FeeTransfer {
         lee_core::FeeTransfer {
             payer,
             recipient: system_accounts::fee_inbox_account_id(),
@@ -1945,7 +1933,7 @@ mod tests {
 
     /// A block whose forced fee transaction carries the summary its user
     /// transactions actually settle to, signed by the shared test key.
-    fn settled_block(
+    pub fn settled_block(
         id: u64,
         prev_hash: HashType,
         transactions: Vec<LeeTransaction>,

@@ -4,7 +4,8 @@
 use common::{block::Block, test_utils::produce_dummy_block, transaction::LeeTransaction};
 use cross_zone_inbox_core::ZoneId;
 use lee::{
-    GENESIS_BLOCK_ID, PublicAccountEvidence, PublicTransaction,
+    GENESIS_BLOCK_ID, PrivacyPreservingTransaction, PublicAccountEvidence, PublicTransaction,
+    privacy_preserving_transaction::{self, circuit::Proof},
     public_transaction::{Message, WitnessSet},
 };
 use lee_core::account::{AccountId, Actor};
@@ -69,5 +70,17 @@ pub fn ping_emission(
     LeeTransaction::Public(PublicTransaction::new(
         message,
         WitnessSet::from_raw_parts(vec![]),
+    ))
+}
+
+/// A privacy-preserving transaction with a junk proof, which makes the block carrying it private.
+#[must_use]
+pub fn private_transaction() -> LeeTransaction {
+    LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+        privacy_preserving_transaction::Message::default(),
+        privacy_preserving_transaction::WitnessSet::from_raw_parts(
+            vec![],
+            Proof::from_inner(vec![0; 32]),
+        ),
     ))
 }

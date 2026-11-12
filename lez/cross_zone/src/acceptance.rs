@@ -9,7 +9,7 @@ use std::fmt::{self, Display, Formatter};
 
 use common::{
     HashType,
-    block::{Block, PeerChainTip},
+    block::{DigestedBlock, PeerChainTip},
 };
 use cross_zone_inbox_core::ZoneId;
 use lee::GENESIS_BLOCK_ID;
@@ -326,7 +326,7 @@ pub fn equivocation_report(
 #[must_use]
 pub fn link_to_tip(
     tip: Option<&PeerChainTip>,
-    block: &Block,
+    block: &DigestedBlock,
     recomputed: HashType,
     pinned_genesis: Option<HashType>,
 ) -> Link {
@@ -365,7 +365,7 @@ pub fn link_to_tip(
 
 /// Whether a block read off a peer's channel may be considered for the chain at
 /// all, returning the recomputed hash every later placement has to use.
-pub fn screen_peer_block(block: &Block) -> Result<HashType, ScreenRefusal> {
+pub fn screen_peer_block(block: &DigestedBlock) -> Result<HashType, ScreenRefusal> {
     let recomputed = block.recompute_hash();
     if recomputed != block.header.hash {
         return Err(ScreenRefusal::HashMismatch {
@@ -385,10 +385,11 @@ mod tests {
     use crate::test_utils::linked_chain_to;
 
     /// The peer's block at `block_id`, on its one honest chain.
-    fn chain_block(block_id: u64) -> Block {
+    fn chain_block(block_id: u64) -> DigestedBlock {
         linked_chain_to(block_id, |_| vec![])
             .pop()
             .expect("chain reaches block_id")
+            .digested()
     }
 
     /// The hash the block after `block_id` has to link to.
@@ -404,7 +405,7 @@ mod tests {
         }
     }
 
-    fn screened(block: &Block) -> HashType {
+    fn screened(block: &DigestedBlock) -> HashType {
         screen_peer_block(block).expect("honest block passes screening")
     }
 
@@ -433,8 +434,8 @@ mod tests {
         // one with no link at all is caught by the same check and proves
         // nothing about this one.
         for ahead in [
-            produce_dummy_block(5, Some(chain_hash(2)), vec![]),
-            produce_dummy_block(5, None, vec![]),
+            produce_dummy_block(5, Some(chain_hash(2)), vec![]).digested(),
+            produce_dummy_block(5, None, vec![]).digested(),
         ] {
             assert_eq!(
                 link_to_tip(Some(&tip), &ahead, screened(&ahead), None),
@@ -446,7 +447,7 @@ mod tests {
         }
 
         // Right id, wrong ancestry: the peer forked at our tip, or reset it.
-        let forked = produce_dummy_block(3, Some(HashType([9; 32])), vec![]);
+        let forked = produce_dummy_block(3, Some(HashType([9; 32])), vec![]).digested();
         assert!(matches!(
             link_to_tip(Some(&tip), &forked, screened(&forked), None),
             Link::OffChain(OffChain::DoesNotLink { .. })
@@ -514,14 +515,14 @@ mod tests {
             Link::AlreadySeen { equivocates: false }
         );
 
-        let differing = produce_dummy_block(2, Some(HashType([9; 32])), vec![]);
+        let differing = produce_dummy_block(2, Some(HashType([9; 32])), vec![]).digested();
         assert_eq!(
             link_to_tip(Some(&tip), &differing, screened(&differing), None),
             Link::AlreadySeen { equivocates: true }
         );
 
         // Below the tip there is no held hash to compare against.
-        let below = produce_dummy_block(1, Some(HashType([9; 32])), vec![]);
+        let below = produce_dummy_block(1, Some(HashType([9; 32])), vec![]).digested();
         assert_eq!(
             link_to_tip(Some(&tip), &below, screened(&below), None),
             Link::AlreadySeen { equivocates: false }

@@ -546,6 +546,7 @@ mod tests {
                 minimum_sequencer_stake: 1,
                 posting_timeframe: 300,
                 posting_timeout: 25,
+                skip_window: system_accounts::DEFAULT_SKIP_WINDOW,
                 exit_delay: 10,
                 max_block_size: 1 << 20,
             }),

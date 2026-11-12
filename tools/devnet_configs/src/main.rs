@@ -61,6 +61,8 @@ fn main() -> Result<()> {
         .as_mut()
         .context("The template config has no genesis")?;
     genesis.channel_params.posting_timeframe = POSTING_TIMEFRAME;
+    genesis.channel_params.skip_window =
+        POSTING_TIMEFRAME.saturating_add(genesis.channel_params.posting_timeout.saturating_mul(4));
     config.gossip = Some(GossipConfig {
         listen_addr: GOSSIP_LISTEN_ADDR
             .parse()

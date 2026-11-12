@@ -2,7 +2,7 @@
 //! channel serves.
 
 use anyhow::Result;
-use common::{HashType, block::Block};
+use common::{HashType, block::DigestedBlock};
 use futures::StreamExt as _;
 use lee_core::BlockId;
 use log::warn;
@@ -136,7 +136,7 @@ impl Anchor {
         let ZoneMessage::Block(zone_block) = msg else {
             return AnchorProbe::KeepLooking;
         };
-        let Ok(block) = Block::from_inscription(&zone_block.data) else {
+        let Ok(block) = DigestedBlock::from_inscription(&zone_block.data) else {
             return AnchorProbe::KeepLooking;
         };
         let (id, hash) = (block.header.block_id, block.header.hash);
@@ -280,9 +280,12 @@ where
             .await?;
         let mut stream = std::pin::pin!(stream);
 
-        while let Some(item) = stream.next().await {
-            let (msg, slot) = item?;
-            if check.observe(&msg, slot).is_some() {
+        while let Some(batch) = stream.next().await {
+            if batch?
+                .messages
+                .iter()
+                .any(|(msg, slot)| check.observe(msg, *slot).is_some())
+            {
                 break;
             }
         }
@@ -319,7 +322,7 @@ fn frontier_verdict(anchor_slot: Slot, channel_tip_slot: Option<Slot>) -> Option
 
 #[cfg(test)]
 mod tests {
-    use common::block::HashableBlockData;
+    use common::block::{Block, HashableBlockData};
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
     use logos_blockchain_zone_sdk::{UnverifiedEd25519PublicKey, ZoneBlock};
 
@@ -337,7 +340,7 @@ mod tests {
     }
 
     fn block_msg(block: &Block) -> ZoneMessage {
-        let bytes = block.to_inscription().expect("serialize");
+        let bytes = block.digested().to_inscription().expect("serialize");
         ZoneMessage::Block(ZoneBlock {
             id: MsgId::from([0_u8; 32]),
             data: Inscription::try_from(bytes.as_slice()).expect("inscription"),

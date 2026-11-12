@@ -21,6 +21,8 @@ lee_core = { workspace = true, features = ["host"] }
 cross_zone.workspace = true
 cross_zone_inbox_core.workspace = true
 programs.workspace = true
+sequencer_service_protocol.workspace = true
+sequencer_service_rpc = { workspace = true, features = ["client"] }
 storage.workspace = true
 testnet_initial_state.workspace = true
 
@@ -41,10 +43,15 @@ hex.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+chain_state = { workspace = true, features = ["test-utils"] }
 cross_zone = { workspace = true, features = ["test-utils"] }
+jsonrpsee = { workspace = true, features = ["server"] }
 tempfile.workspace = true
 ping_core.workspace = true
 test_guest_core.workspace = true
 test_programs.workspace = true
 bridge_core.workspace = true
 program_loader_core.workspace = true
+lee = { workspace = true, features = ["test-utils"] }
+sequencer_stake_core.workspace = true
+system_accounts.workspace = true

@@ -18,6 +18,7 @@ sequencer_slasher_actor.workspace = true
 sequencer_storage_actor = { workspace = true, features = ["actor"] }
 sequencer_bedrock_actor = { workspace = true, features = ["actor"] }
 lee.workspace = true
+chain_state.workspace = true
 common.workspace = true
 programs.workspace = true
 system_accounts.workspace = true

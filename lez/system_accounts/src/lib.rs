@@ -18,6 +18,10 @@ pub const DEFAULT_MINIMUM_SEQUENCER_STAKE: u128 = 149;
 pub const DEFAULT_SEQUENCER_POSTING_TIMEFRAME: Slots = 300;
 pub const DEFAULT_SEQUENCER_POSTING_TIMEOUT: Slots = 25;
 
+/// Slots within which another writer may skip a provisional block: one turn plus four timeouts.
+pub const DEFAULT_SKIP_WINDOW: Slots = DEFAULT_SEQUENCER_POSTING_TIMEFRAME
+    .saturating_add(DEFAULT_SEQUENCER_POSTING_TIMEOUT.saturating_mul(4));
+
 // TODO: Size against mainnet finality before launch.
 /// Blocks an unstake waits before release.
 pub const DEFAULT_SEQUENCER_EXIT_DELAY: u64 = 100;

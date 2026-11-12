@@ -668,26 +668,6 @@ impl ZoneTestContextBuilder {
             && sequencer_partial_config.unwrap_or_default().channel_params
                 == config::SequencerPartialConfig::default().channel_params;
 
-        let indexer_components = if enable_indexer {
-            let (indexer_handle, temp_indexer_dir) = setup_indexer(
-                bedrock_addr,
-                mn_config.bedrock_channel,
-                cross_zone_config.clone(),
-            )
-            .await
-            .context("Failed to setup Indexer")?;
-            let indexer_client = setup::indexer_client(indexer_handle.addr())
-                .await
-                .context("Failed to create indexer client")?;
-            Some(IndexerComponents {
-                indexer_handle,
-                indexer_client,
-                temp_dir: temp_indexer_dir,
-            })
-        } else {
-            None
-        };
-
         let initial_public_accounts = config::default_public_accounts_for_wallet();
         let initial_private_accounts = config::default_private_accounts_for_wallet();
 
@@ -716,6 +696,27 @@ impl ZoneTestContextBuilder {
             leader_gossip,
         )
         .await?;
+
+        let indexer_components = if enable_indexer {
+            let (indexer_handle, temp_indexer_dir) = setup_indexer(
+                bedrock_addr,
+                Some(leader_addr),
+                mn_config.bedrock_channel,
+                cross_zone_config.clone(),
+            )
+            .await
+            .context("Failed to setup Indexer")?;
+            let indexer_client = setup::indexer_client(indexer_handle.addr())
+                .await
+                .context("Failed to create indexer client")?;
+            Some(IndexerComponents {
+                indexer_handle,
+                indexer_client,
+                temp_dir: temp_indexer_dir,
+            })
+        } else {
+            None
+        };
 
         // The leader listened on an OS-assigned port, so followers can only
         // learn its gossip address from the running handle.

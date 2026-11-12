@@ -5,7 +5,8 @@ Reads finalized L1 blocks and decodes every channel inscription, so it sees
 what the channel actually carries rather than what a sequencer reports. Walks
 back until it reaches genesis unless `--from` says where to start. Exits
 non-zero if the run has a gap, a duplicate, a step backwards, or never reaches
-genesis.
+genesis. A height inscribed again by another signer is a skip, which cuts the
+blocks from that height on: it is reported, and is not a fault.
 
     tools/channel_health.py
     tools/channel_health.py --from 2614000
@@ -96,9 +97,14 @@ def report(blocks, others, scanned) -> bool:
     print(f"first block_id {ids[0]} at slot {blocks[0][0]}, "
           f"last {ids[-1]} at slot {blocks[-1][0]}")
 
-    seen, dupes, steps = {}, [], []
+    seen, dupes, steps, skips = {}, [], [], []
     previous = None
     for slot, block_id, signer in blocks:
+        if block_id in seen and seen[block_id][1] != signer:
+            skips.append((block_id, seen[block_id], (slot, signer)))
+            seen[block_id] = (slot, signer)
+            previous = block_id
+            continue
         if block_id in seen:
             dupes.append((block_id, seen[block_id], (slot, signer)))
         else:
@@ -124,6 +130,11 @@ def report(blocks, others, scanned) -> bool:
           + (f" ({len(steps)})" if steps else ""))
     for previous_id, block_id, slot, signer in steps[:10]:
         print(f"    {previous_id} -> {block_id} at slot {slot} by {signer}")
+    if skips:
+        print(f"  {len(skips)} heights re-inscribed by another signer (skips)")
+    for block_id, first, second in skips[:10]:
+        print(f"    block {block_id}: slot {first[0]} by {first[1]}, "
+              f"replaced at slot {second[0]} by {second[1]}")
 
     ok = from_genesis and not (missing or dupes or steps)
     print()

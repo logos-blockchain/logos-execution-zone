@@ -173,10 +173,10 @@ mod tests {
     #[test]
     fn spec_worked_example_private() {
         // A private transaction with no metered effects pays
-        // 409,764·8 + 224,063·8 = 5,070,616; each effect cycle adds one
+        // 409,764·8 + 544·8 = 3,282,464; each effect cycle adds one
         // base_fee_exec.
-        assert_eq!(private_fee_required(0, 8, 8), 5_070_616);
-        assert_eq!(private_fee_required(1_000, 8, 8), 5_070_616 + 8_000);
+        assert_eq!(private_fee_required(0, 8, 8), 3_282_464);
+        assert_eq!(private_fee_required(1_000, 8, 8), 3_282_464 + 8_000);
     }
 
     #[test]

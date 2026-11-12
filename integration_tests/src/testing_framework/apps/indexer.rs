@@ -67,6 +67,7 @@ impl LezIndexerClient {
 #[derive(Clone)]
 pub struct IndexerApp {
     bedrock_addr: SocketAddr,
+    proof_source: Option<SocketAddr>,
     state_dir: Option<PathBuf>,
 }
 
@@ -76,8 +77,16 @@ impl IndexerApp {
     pub const fn new(bedrock_addr: SocketAddr) -> Self {
         Self {
             bedrock_addr,
+            proof_source: None,
             state_dir: None,
         }
+    }
+
+    /// Fetches the proofs of private blocks from the sequencer at `addr`.
+    #[must_use]
+    pub const fn with_proof_source(mut self, addr: SocketAddr) -> Self {
+        self.proof_source = Some(addr);
+        self
     }
 
     /// Places indexer state and logs below the supplied scenario artifact
@@ -100,6 +109,7 @@ impl AppDeployment<AppHostEnv> for IndexerApp {
         if let Some(home) = self.state_dir {
             service = crate::setup::setup_indexer_at(
                 self.bedrock_addr,
+                self.proof_source,
                 config::bedrock_channel_id(),
                 None,
                 &home,
@@ -108,10 +118,14 @@ impl AppDeployment<AppHostEnv> for IndexerApp {
             .context("failed to set up LEZ indexer")?;
             state_dir = None;
         } else {
-            let (indexer, temp_dir) =
-                setup_indexer(self.bedrock_addr, config::bedrock_channel_id(), None)
-                    .await
-                    .context("failed to set up LEZ indexer")?;
+            let (indexer, temp_dir) = setup_indexer(
+                self.bedrock_addr,
+                self.proof_source,
+                config::bedrock_channel_id(),
+                None,
+            )
+            .await
+            .context("failed to set up LEZ indexer")?;
             service = indexer;
             state_dir = Some(temp_dir);
         }

@@ -2,13 +2,14 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use chain_state::{
+    ChannelEntry, StructuralChain, Tip,
     timeout_node::TimeoutNode,
-    zone_indexer::{ZoneIndexer, stop_at_read_error},
+    zone_indexer::{self, Batch, ZoneIndexer},
 };
 use common::{
     HashType,
-    block::{Block, PeerChainTip},
-    transaction::LeeTransaction,
+    block::{DigestedBlock, PeerChainTip},
+    transaction::{LeeTransaction, LeeTransactionWith},
 };
 use cross_zone::{
     CommitteeFloorState, EmissionSource, FloorVerdict, Link, StallState, alerts_at,
@@ -47,6 +48,7 @@ struct PeerContext {
     min_committee_size: u32,
     /// Pin for the peer's genesis hash; `None` anchors on the first read.
     genesis_hash: Option<HashType>,
+    skip_window: u32,
     /// The watcher's own handle for the committee read; the connection inside
     /// `ZoneIndexer` is consumed by the message stream.
     node: TimeoutNode<NodeHttpClient>,
@@ -251,6 +253,7 @@ pub fn spawn_watchers<S: StorageActorTrait>(
                 self_zone,
                 min_committee_size: peer.min_committee_size,
                 genesis_hash: peer.genesis_hash,
+                skip_window: peer.skip_window,
                 node: floor_node,
             },
             poll_interval,
@@ -332,6 +335,7 @@ async fn watch_peer<S: StorageActorTrait>(
             hex::encode(peer_zone)
         );
     }
+    let mut chain = structural_chain(&peer, tip);
 
     // In memory, and rebuilt from the store on every start: it says only how
     // loud to be about a slot this watcher is stuck on, or how long it has
@@ -356,11 +360,15 @@ async fn watch_peer<S: StorageActorTrait>(
                 continue;
             }
         };
-        let stream = stop_at_read_error(
+        let outcome = consume_peer_stream(
             stream,
-            format!("Watcher channel read for peer {}", hex::encode(peer_zone)),
-        );
-        let outcome = consume_peer_stream(stream, &peer, &storage_ref, &mut cursor, &mut tip).await;
+            &peer,
+            &mut chain,
+            &storage_ref,
+            &mut cursor,
+            &mut tip,
+        )
+        .await;
 
         report_pass_alerts(&mut state, outcome, cursor, tip, peer_zone, &storage_ref).await;
 
@@ -470,164 +478,207 @@ fn describe_committee(last_read: Option<(usize, u64)>) -> String {
     }
 }
 
-/// Delivers the peer blocks carried by `stream`, moving `cursor` as it goes,
-/// persisting the delivery floor behind it and the chain tip as it accepts each
-/// block. Says why the pass ended.
+/// Delivers the peer blocks carried by `stream` that the skip rule settles,
+/// moving `cursor` as it goes, persisting the delivery floor behind it and the
+/// chain tip as it accepts each block. Says why the pass ended.
 ///
 /// Ending early holds the floor at the last slot consumed whole, so the next
 /// poll re-reads from there and a transient failure heals.
 async fn consume_peer_stream<Str, S: StorageActorTrait>(
     stream: Str,
     peer: &PeerContext,
+    chain: &mut StructuralChain,
     storage_ref: &ActorRef<S>,
     cursor: &mut Option<Slot>,
     tip: &mut Option<PeerChainTip>,
 ) -> PassOutcome
 where
-    Str: Stream<Item = (ZoneMessage, Slot)>,
+    Str: Stream<Item = Result<Batch, zone_indexer::Error>>,
 {
     let mut stream = std::pin::pin!(stream);
-    // The slot being consumed: every message of it seen so far is handled, but
-    // there may be more to come, so the cursor may not advance onto it yet.
-    let mut in_progress: Option<Slot> = None;
+    let mut floor = delivery_floor(*cursor, chain);
     // What the pass did with the blocks it read, so a peer going quiet behind a
     // tip that no longer tracks it is distinguishable from one with nothing to
     // say.
+    let mut read = 0_usize;
     let mut placed = 0_usize;
     let mut skipped = 0_usize;
 
-    while let Some((msg, slot)) = stream.next().await {
-        if in_progress != Some(slot) {
-            // A message from a later slot means the previous one completed.
-            if let Some(done) = in_progress {
-                advance_cursor(storage_ref, peer.peer_zone, cursor, done).await;
-            }
-            in_progress = Some(slot);
-        }
-
-        let zone_block = match msg {
-            ZoneMessage::Block(block) => block,
-            ZoneMessage::Deposit(_) | ZoneMessage::Withdraw(_) => continue,
-        };
-        match Block::from_inscription(&zone_block.data) {
-            Ok(block) => {
+    let ended_early = 'pass: {
+        while let Some(batch) = stream.next().await {
+            let batch = match batch {
+                Ok(batch) => batch,
+                Err(err) => {
+                    warn!(
+                        "Watcher channel read for peer {}: {err}",
+                        hex::encode(peer.peer_zone)
+                    );
+                    break;
+                }
+            };
+            let mut entries: Vec<ChannelEntry> = Vec::new();
+            let mut undecodable = None;
+            for (msg, slot) in batch.messages {
+                let zone_block = match msg {
+                    ZoneMessage::Block(block) => block,
+                    ZoneMessage::Deposit(_) | ZoneMessage::Withdraw(_) => continue,
+                };
+                let block = match DigestedBlock::from_inscription(&zone_block.data) {
+                    Ok(block) => block,
+                    Err(err) => {
+                        warn!(
+                            "Watcher failed to deserialize peer {} block at slot {slot:?}: {err}. Holding the cursor and retrying.",
+                            hex::encode(peer.peer_zone)
+                        );
+                        undecodable = Some(slot);
+                        break;
+                    }
+                };
                 debug!(
                     "Watcher observed finalized peer {} block {}",
                     hex::encode(peer.peer_zone),
                     block.header.block_id
                 );
-                // Nothing but [`Link::Next`] is ever delivered from, and
-                // nothing but a block that will not decode stops the pass. A
-                // peer can inscribe anything it likes on its own channel, so a
-                // block this watcher cannot place is read past rather than
-                // treated as the end of the chain: the peer's own next honest
-                // block still links to the tip.
-                let link = match screen_peer_block(&block) {
-                    Ok(recomputed) => {
-                        link_to_tip(tip.as_ref(), &block, recomputed, peer.genesis_hash)
-                    }
-                    Err(refusal) => {
-                        skipped = skipped.saturating_add(1);
-                        warn!(
-                            "Watcher not delivering from peer {} block at slot {slot:?}: {refusal}. Reading on; the peer's next block that continues the chain still delivers.",
-                            hex::encode(peer.peer_zone)
-                        );
-                        continue;
-                    }
-                };
-                match link {
-                    Link::AlreadySeen { equivocates } => {
-                        if equivocates && let Some(held) = *tip {
-                            error!(
-                                "{}",
-                                equivocation_report(
-                                    &peer.peer_zone,
-                                    block.header.block_id,
-                                    held.block_hash,
-                                    block.header.hash
-                                )
-                            );
-                        } else {
-                            debug!(
-                                "Watcher ignoring peer {} block {}: at or below the block it has already delivered from",
-                                hex::encode(peer.peer_zone),
-                                block.header.block_id
-                            );
-                        }
-                    }
-                    Link::OffChain(reason) => {
-                        skipped = skipped.saturating_add(1);
-                        warn!(
-                            "Watcher not delivering from peer {} block at slot {slot:?}: {reason}. Reading on; the peer's next block that continues the chain still delivers.",
-                            hex::encode(peer.peer_zone)
-                        );
-                    }
-                    Link::Next(block_hash) => {
-                        if !record_block_deliveries(&block, block_hash, peer, storage_ref).await {
-                            // Recording a delivery is what makes it survive the
-                            // mempool. Letting the pass finish here would move
-                            // the floor past this slot on a store that just
-                            // refused the write, and nothing re-reads a slot
-                            // below the floor.
-                            error!(
-                                "Watcher could not record every delivery in peer {} block {}. Holding the floor and retrying the slot.",
-                                hex::encode(peer.peer_zone),
-                                block.header.block_id
-                            );
-                            return PassOutcome::Undelivered(slot);
-                        }
-                        // After the deliveries, never before: a tip past
-                        // deliveries that were never recorded makes the blocks
-                        // carrying them read as already seen, and nothing looks
-                        // at them again.
-                        let next = PeerChainTip {
-                            block_id: block.header.block_id,
-                            block_hash,
-                        };
-                        if let Err(err) = storage_ref
-                            .ask(SetCrossZonePeerTip {
-                                peer_zone: peer.peer_zone,
-                                tip: next,
-                            })
-                            .await
-                        {
-                            // Advancing only in memory would leave a restart
-                            // resuming from a floor above a tip, and every block
-                            // after it unlinkable.
-                            error!(
-                                "Watcher could not store the chain tip for peer {} at block {}: {err:#}. Holding the floor and retrying the slot.",
-                                hex::encode(peer.peer_zone),
-                                block.header.block_id
-                            );
-                            return PassOutcome::Undelivered(slot);
-                        }
-                        *tip = Some(next);
-                        placed = placed.saturating_add(1);
-                    }
-                }
+                read = read.saturating_add(1);
+                entries.push(ChannelEntry {
+                    msg: zone_block.id,
+                    parent: entries.last().map_or_else(|| chain.pin(), |prev| prev.msg),
+                    signer: Some(zone_block.signer.to_bytes()),
+                    slot: Some(slot),
+                    block: Some(block),
+                });
             }
-            Err(err) => {
-                warn!(
-                    "Watcher failed to deserialize peer {} block at slot {slot:?}: {err}. Holding the cursor and retrying.",
-                    hex::encode(peer.peer_zone)
-                );
-                return PassOutcome::Undecodable(slot);
+            let held = undecodable.map_or(Some(batch.watermark), |slot| {
+                slot.checked_sub(Slot::from(1))
+            });
+            let settled = chain.apply_finalized(&entries, held.unwrap_or_else(Slot::genesis));
+            if let Err(at) =
+                deliver_settled(settled, peer, storage_ref, tip, &mut placed, &mut skipped).await
+            {
+                break 'pass Some(PassOutcome::Undelivered(at));
+            }
+            if let Some(held) = held {
+                floor = advance_cursor(storage_ref, peer.peer_zone, cursor, held, chain).await;
+            }
+            if let Some(slot) = undecodable {
+                break 'pass Some(PassOutcome::Undecodable(slot));
             }
         }
+        None
+    };
+    if let Some(outcome) = ended_early {
+        *chain = structural_chain(peer, *tip);
+        *cursor = floor;
+        return outcome;
     }
-
-    // The stream drained cleanly, so the slot in progress completed too.
-    if let Some(done) = in_progress {
-        advance_cursor(storage_ref, peer.peer_zone, cursor, done).await;
-    }
-    if placed == 0 && skipped > 0 {
+    if placed == 0 && (skipped > 0 || (read > 0 && chain.reread_from().is_none())) {
         return PassOutcome::Stranded;
     }
     PassOutcome::Drained
 }
 
+async fn deliver_settled<S: StorageActorTrait>(
+    settled: Vec<(DigestedBlock, Slot)>,
+    peer: &PeerContext,
+    storage_ref: &ActorRef<S>,
+    tip: &mut Option<PeerChainTip>,
+    placed: &mut usize,
+    skipped: &mut usize,
+) -> Result<(), Slot> {
+    for (block, slot) in settled {
+        // Nothing but [`Link::Next`] is ever delivered from, and
+        // nothing but a block that will not decode stops the pass. A
+        // peer can inscribe anything it likes on its own channel, so a
+        // block this watcher cannot place is read past rather than
+        // treated as the end of the chain: the peer's own next honest
+        // block still links to the tip.
+        let link = match screen_peer_block(&block) {
+            Ok(recomputed) => link_to_tip(tip.as_ref(), &block, recomputed, peer.genesis_hash),
+            Err(refusal) => {
+                *skipped = skipped.saturating_add(1);
+                warn!(
+                    "Watcher not delivering from peer {} block at slot {slot:?}: {refusal}. Reading on; the peer's next block that continues the chain still delivers.",
+                    hex::encode(peer.peer_zone)
+                );
+                continue;
+            }
+        };
+        match link {
+            Link::AlreadySeen { equivocates } => {
+                if equivocates && let Some(held) = *tip {
+                    error!(
+                        "{}",
+                        equivocation_report(
+                            &peer.peer_zone,
+                            block.header.block_id,
+                            held.block_hash,
+                            block.header.hash
+                        )
+                    );
+                } else {
+                    debug!(
+                        "Watcher ignoring peer {} block {}: at or below the block it has already delivered from",
+                        hex::encode(peer.peer_zone),
+                        block.header.block_id
+                    );
+                }
+            }
+            Link::OffChain(reason) => {
+                *skipped = skipped.saturating_add(1);
+                warn!(
+                    "Watcher not delivering from peer {} block at slot {slot:?}: {reason}. Reading on; the peer's next block that continues the chain still delivers.",
+                    hex::encode(peer.peer_zone)
+                );
+            }
+            Link::Next(block_hash) => {
+                if !record_block_deliveries(&block, block_hash, peer, storage_ref).await {
+                    // Recording a delivery is what makes it survive the
+                    // mempool. Letting the pass finish here would move
+                    // the floor past this slot on a store that just
+                    // refused the write, and nothing re-reads a slot
+                    // below the floor.
+                    error!(
+                        "Watcher could not record every delivery in peer {} block {}. Holding the floor and retrying the slot.",
+                        hex::encode(peer.peer_zone),
+                        block.header.block_id
+                    );
+                    return Err(slot);
+                }
+                // After the deliveries, never before: a tip past
+                // deliveries that were never recorded makes the blocks
+                // carrying them read as already seen, and nothing looks
+                // at them again.
+                let next = PeerChainTip {
+                    block_id: block.header.block_id,
+                    block_hash,
+                };
+                if let Err(err) = storage_ref
+                    .ask(SetCrossZonePeerTip {
+                        peer_zone: peer.peer_zone,
+                        tip: next,
+                    })
+                    .await
+                {
+                    // Advancing only in memory would leave a restart
+                    // resuming from a floor above a tip, and every block
+                    // after it unlinkable.
+                    error!(
+                        "Watcher could not store the chain tip for peer {} at block {}: {err:#}. Holding the floor and retrying the slot.",
+                        hex::encode(peer.peer_zone),
+                        block.header.block_id
+                    );
+                    return Err(slot);
+                }
+                *tip = Some(next);
+                *placed = placed.saturating_add(1);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Moves the in-memory read cursor past `slot` and the durable delivery floor
-/// with it.
+/// with it, held below the oldest entry `chain` has not settled. Returns the floor.
 ///
 /// A persist failure is only logged: the worst case is re-reading from the last
 /// stored slot after a restart, which delivery handles idempotently.
@@ -636,14 +687,35 @@ async fn advance_cursor<S: StorageActorTrait>(
     peer_zone: [u8; 32],
     cursor: &mut Option<Slot>,
     slot: Slot,
-) {
+    chain: &StructuralChain,
+) -> Option<Slot> {
     *cursor = Some(slot);
-    if let Err(err) = set_cross_zone_peer_floor(storage_ref, peer_zone, slot).await {
+    let floor = delivery_floor(*cursor, chain);
+    if let Some(floor) = floor
+        && let Err(err) = set_cross_zone_peer_floor(storage_ref, peer_zone, floor).await
+    {
         warn!(
             "Failed to persist watcher delivery floor for peer {}: {err:#}",
             hex::encode(peer_zone)
         );
     }
+    floor
+}
+
+fn delivery_floor(cursor: Option<Slot>, chain: &StructuralChain) -> Option<Slot> {
+    chain.reread_from().map_or(cursor, |from| {
+        cursor.min(from.into_inner().checked_sub(1).map(Slot::from))
+    })
+}
+
+fn structural_chain(peer: &PeerContext, tip: Option<PeerChainTip>) -> StructuralChain {
+    StructuralChain::new(
+        peer.skip_window,
+        tip.map(|tip| Tip {
+            block_id: tip.block_id,
+            hash: tip.block_hash,
+        }),
+    )
 }
 
 /// Scans one peer block for outbound messages and records a dispatch per match.
@@ -655,7 +727,7 @@ async fn advance_cursor<S: StorageActorTrait>(
 /// `block_hash` is the value [`screen_peer_block`] recomputed from the block's
 /// own contents, not `block.header.hash`, which the signature does not cover.
 async fn record_block_deliveries<S: StorageActorTrait>(
-    block: &Block,
+    block: &DigestedBlock,
     block_hash: HashType,
     peer: &PeerContext,
     storage_ref: &ActorRef<S>,
@@ -670,7 +742,7 @@ async fn record_block_deliveries<S: StorageActorTrait>(
         if block.body.is_reverted(index) {
             continue;
         }
-        let LeeTransaction::Public(public_tx) = tx else {
+        let LeeTransactionWith::Public(public_tx) = tx else {
             continue;
         };
         let Some(emission) = extract_emission(public_tx) else {
@@ -771,7 +843,7 @@ async fn record_block_deliveries<S: StorageActorTrait>(
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use common::test_utils::produce_dummy_block;
+    use common::{block::Block, test_utils::produce_dummy_block};
     use cross_zone::test_utils::{linked_chain_to, ping_emission};
     use futures::stream;
     use kameo::actor::Spawn as _;
@@ -790,12 +862,15 @@ mod tests {
     const SELF_ZONE: [u8; 32] = [1; 32];
     const PEER_ZONE: [u8; 32] = [2; 32];
 
+    const SKIP_WINDOW: u32 = 10;
+
     fn peer_context() -> PeerContext {
         PeerContext {
             peer_zone: PEER_ZONE,
             self_zone: SELF_ZONE,
             min_committee_size: 0,
             genesis_hash: None,
+            skip_window: SKIP_WINDOW,
             node: TimeoutNode::new(NodeHttpClient::new(
                 CommonHttpClient::new(None),
                 "http://127.0.0.1:0".parse().expect("valid url"),
@@ -897,7 +972,10 @@ mod tests {
     }
 
     fn block_msg(block: &Block, slot: u64) -> (ZoneMessage, Slot) {
-        peer_msg(block.to_inscription().expect("block serializes"), slot)
+        peer_msg(
+            block.digested().to_inscription().expect("block serializes"),
+            slot,
+        )
     }
 
     /// A stream item carrying the peer's block `block_id`.
@@ -933,6 +1011,22 @@ mod tests {
             block_id,
             block_hash: chain_hash(block_id),
         }
+    }
+
+    /// `messages` as the one batch a pass reads, through `lib` or their last slot if later.
+    fn batch(
+        messages: Vec<(ZoneMessage, Slot)>,
+        lib: Option<Slot>,
+    ) -> impl Stream<Item = Result<Batch, zone_indexer::Error>> {
+        let watermark = messages
+            .last()
+            .map(|(_, slot)| *slot)
+            .max(lib)
+            .expect("a pass reads at least one message");
+        stream::iter([Ok(Batch {
+            messages,
+            watermark,
+        })])
     }
 
     fn undecodable_msg(slot: u64) -> (ZoneMessage, Slot) {
@@ -1078,10 +1172,12 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
+        let mut chain = structural_chain(&peer_context(), None);
 
         let outcome = consume_peer_stream(
-            stream::iter(vec![peer_block_msg(1, 0), peer_block_msg(2, 1)]),
+            batch(vec![peer_block_msg(1, 0), peer_block_msg(2, 1)], None),
             &peer_context(),
+            &mut chain,
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1107,10 +1203,12 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
+        let mut chain = structural_chain(&peer_context(), None);
 
         let outcome = consume_peer_stream(
-            stream::iter(vec![peer_block_msg_reverted(1, 0)]),
+            batch(vec![peer_block_msg_reverted(1, 0)], None),
             &peer_context(),
+            &mut chain,
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1134,14 +1232,19 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
+        let mut chain = structural_chain(&peer_context(), None);
 
         let outcome = consume_peer_stream(
-            stream::iter(vec![peer_block_msg_to(
-                1,
-                0,
-                programs::cross_zone_inbox_account_id(),
-            )]),
+            batch(
+                vec![peer_block_msg_to(
+                    1,
+                    0,
+                    programs::cross_zone_inbox_account_id(),
+                )],
+                None,
+            ),
             &peer_context(),
+            &mut chain,
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1173,14 +1276,19 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
+        let mut chain = structural_chain(&peer_context(), None);
 
         let outcome = consume_peer_stream(
-            stream::iter(vec![peer_block_msg_to(
-                1,
-                0,
-                programs::wrapped_token_account_id(),
-            )]),
+            batch(
+                vec![peer_block_msg_to(
+                    1,
+                    0,
+                    programs::wrapped_token_account_id(),
+                )],
+                None,
+            ),
             &peer_context(),
+            &mut chain,
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1200,10 +1308,12 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
+        let mut chain = structural_chain(&peer_context(), None);
 
         consume_peer_stream(
-            stream::iter(vec![peer_block_msg(1, 0)]),
+            batch(vec![peer_block_msg(1, 0)], None),
             &peer_context(),
+            &mut chain,
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1239,10 +1349,12 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
+        let mut chain = structural_chain(&peer_context(), None);
 
         consume_peer_stream(
-            stream::iter(vec![peer_block_msg(1, 0)]),
+            batch(vec![peer_block_msg(1, 0)], None),
             &peer_context(),
+            &mut chain,
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1278,10 +1390,12 @@ mod tests {
         let storage_ref = store_refusing_deliveries();
         let mut cursor = None;
         let mut tip = None;
+        let mut chain = structural_chain(&peer_context(), None);
 
         let outcome = consume_peer_stream(
-            stream::iter(vec![peer_block_msg(1, 0)]),
+            batch(vec![peer_block_msg(1, 0)], None),
             &peer_context(),
+            &mut chain,
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1319,10 +1433,12 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
+        let mut chain = structural_chain(&peer_context(), None);
 
         consume_peer_stream(
-            stream::iter(vec![peer_block_msg(1, 0), peer_block_msg(2, 1)]),
+            batch(vec![peer_block_msg(1, 0), peer_block_msg(2, 1)], None),
             &peer_context(),
+            &mut chain,
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1351,9 +1467,11 @@ mod tests {
 
         // The sdk resumes the stream at cursor + 1, so only block 3 arrives.
         let mut resumed_cursor = resumed;
+        let mut resumed_chain = structural_chain(&peer_context(), resumed_tip);
         consume_peer_stream(
-            stream::iter(vec![peer_block_msg(3, 2)]),
+            batch(vec![peer_block_msg(3, 2)], None),
             &peer_context(),
+            &mut resumed_chain,
             &storage_ref,
             &mut resumed_cursor,
             &mut resumed_tip,
@@ -1384,14 +1502,19 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
+        let mut chain = structural_chain(&peer_context(), None);
 
         let outcome = consume_peer_stream(
-            stream::iter(vec![
-                peer_block_msg(1, 0),
-                undecodable_msg(1),
-                peer_block_msg(3, 2),
-            ]),
+            batch(
+                vec![
+                    peer_block_msg(1, 0),
+                    undecodable_msg(1),
+                    peer_block_msg(3, 2),
+                ],
+                None,
+            ),
             &peer_context(),
+            &mut chain,
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1422,10 +1545,12 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
+        let mut chain = structural_chain(&peer_context(), None);
 
         let outcome = consume_peer_stream(
-            stream::iter(vec![peer_block_msg(1, 4), undecodable_msg(4)]),
+            batch(vec![peer_block_msg(1, 4), undecodable_msg(4)], None),
             &peer_context(),
+            &mut chain,
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1433,12 +1558,16 @@ mod tests {
         .await;
 
         assert_eq!(outcome, PassOutcome::Undecodable(Slot::from(4)));
-        assert_eq!(cursor, None, "slot 4 is re-read whole on the next pass");
+        assert_eq!(
+            cursor,
+            Some(Slot::from(3)),
+            "slot 4 is re-read whole on the next pass"
+        );
         assert_eq!(
             get_cross_zone_peer_floor(&storage_ref, PEER_ZONE)
                 .await
                 .unwrap(),
-            None
+            Some(Slot::from(3))
         );
         assert_eq!(
             recorded_keys(&storage_ref).await,
@@ -1454,15 +1583,20 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
+        let mut chain = structural_chain(&peer_context(), None);
 
         for _ in 0..3 {
             let outcome = consume_peer_stream(
-                stream::iter(vec![
-                    peer_block_msg(1, 0),
-                    undecodable_msg(1),
-                    peer_block_msg(3, 2),
-                ]),
+                batch(
+                    vec![
+                        peer_block_msg(1, 0),
+                        undecodable_msg(1),
+                        peer_block_msg(3, 2),
+                    ],
+                    None,
+                ),
                 &peer_context(),
+                &mut chain,
                 &storage_ref,
                 &mut cursor,
                 &mut tip,
@@ -1499,16 +1633,21 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
+        let mut chain = structural_chain(&peer_context(), None);
         let pre_burn = produce_dummy_block(5, None, vec![emission()]);
 
         let outcome = consume_peer_stream(
-            stream::iter(vec![
-                peer_block_msg(1, 0),
-                block_msg(&pre_burn, 1),
-                peer_block_msg(2, 2),
-                peer_block_msg(3, 3),
-            ]),
+            batch(
+                vec![
+                    peer_block_msg(1, 0),
+                    block_msg(&pre_burn, 1),
+                    peer_block_msg(2, 2),
+                    peer_block_msg(3, 3),
+                ],
+                None,
+            ),
             &peer_context(),
+            &mut chain,
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1537,15 +1676,20 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
+        let mut chain = structural_chain(&peer_context(), None);
         let equivocation = produce_dummy_block(2, Some(HashType([9; 32])), vec![emission()]);
 
         let outcome = consume_peer_stream(
-            stream::iter(vec![
-                peer_block_msg(1, 0),
-                peer_block_msg(2, 1),
-                block_msg(&equivocation, 2),
-            ]),
+            batch(
+                vec![
+                    peer_block_msg(1, 0),
+                    peer_block_msg(2, 1),
+                    block_msg(&equivocation, 2),
+                ],
+                None,
+            ),
             &peer_context(),
+            &mut chain,
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1574,15 +1718,20 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
+        let mut chain = structural_chain(&peer_context(), None);
         let forked = produce_dummy_block(2, Some(HashType([9; 32])), vec![emission()]);
 
         let outcome = consume_peer_stream(
-            stream::iter(vec![
-                peer_block_msg(1, 0),
-                block_msg(&forked, 1),
-                peer_block_msg(2, 2),
-            ]),
+            batch(
+                vec![
+                    peer_block_msg(1, 0),
+                    block_msg(&forked, 1),
+                    peer_block_msg(2, 2),
+                ],
+                None,
+            ),
             &peer_context(),
+            &mut chain,
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1608,10 +1757,12 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
+        let mut chain = structural_chain(&peer_context(), None);
 
         let outcome = consume_peer_stream(
-            stream::iter(vec![peer_block_msg(2, 0)]),
+            batch(vec![peer_block_msg(2, 0)], None),
             &peer_context(),
+            &mut chain,
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1632,14 +1783,16 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
+        let mut chain = structural_chain(&peer_context(), None);
         let pinned_elsewhere = PeerContext {
             genesis_hash: Some(HashType([9; 32])),
             ..peer_context()
         };
 
         let outcome = consume_peer_stream(
-            stream::iter(vec![peer_block_msg(GENESIS_BLOCK_ID, 0)]),
+            batch(vec![peer_block_msg(GENESIS_BLOCK_ID, 0)], None),
             &pinned_elsewhere,
+            &mut chain,
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1654,9 +1807,11 @@ mod tests {
             genesis_hash: Some(chain_hash(GENESIS_BLOCK_ID)),
             ..peer_context()
         };
+        chain = structural_chain(&pinned_here, tip);
         let anchored = consume_peer_stream(
-            stream::iter(vec![peer_block_msg(GENESIS_BLOCK_ID, 1)]),
+            batch(vec![peer_block_msg(GENESIS_BLOCK_ID, 1)], None),
             &pinned_here,
+            &mut chain,
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1678,16 +1833,21 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
+        let mut chain = structural_chain(&peer_context(), None);
         let mut tampered = chain_block(2);
         tampered.header.hash = HashType([9; 32]);
 
         let outcome = consume_peer_stream(
-            stream::iter(vec![
-                peer_block_msg(1, 0),
-                block_msg(&tampered, 1),
-                peer_block_msg(2, 2),
-            ]),
+            batch(
+                vec![
+                    peer_block_msg(1, 0),
+                    block_msg(&tampered, 1),
+                    peer_block_msg(2, 2),
+                ],
+                None,
+            ),
             &peer_context(),
+            &mut chain,
             &storage_ref,
             &mut cursor,
             &mut tip,

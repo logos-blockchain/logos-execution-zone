@@ -131,9 +131,9 @@ def decode_stake_config(data: bytes) -> dict:
     # values when present.
     if r.take(1)[0]:
         minimum, timeframe, timeout = r.u128(), r.u32(), r.u32()
-        exit_delay, max_block_size = r.u64(), r.u64()
+        skip_window, exit_delay, max_block_size = r.u32(), r.u64(), r.u64()
     else:
-        minimum = timeframe = timeout = exit_delay = max_block_size = None
+        minimum = timeframe = timeout = skip_window = exit_delay = max_block_size = None
     # `channel_id: Option<[u8; 32]>`.
     if r.take(1)[0]:
         r.take(32)
@@ -151,6 +151,7 @@ def decode_stake_config(data: bytes) -> dict:
         "minimum": minimum,
         "posting_timeframe": timeframe,
         "posting_timeout": timeout,
+        "skip_window": skip_window,
         "exit_delay": exit_delay,
         "max_block_size": max_block_size,
         "entries": entries,

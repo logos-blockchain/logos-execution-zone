@@ -18,9 +18,9 @@ const TX_INCLUSION_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const TX_INCLUSION_TIMEOUT: Duration = Duration::from_mins(2);
 
 /// Borsh-serialized sizes for one zone block fetched after a step. `block_bytes`
-/// is the full Block (header + body + bedrock metadata) and is the closest
-/// proxy we have to the L1 payload posted per block. `tx_bytes` is each contained
-/// transaction split by variant, which is what the fee model's `S_tx` slot covers.
+/// is the block as inscribed, each proof replaced by its digest: the L1 payload
+/// posted per block. `tx_bytes` is each contained transaction in that form, split
+/// by variant, which is what the fee model's `S_tx` slot covers.
 #[derive(Debug, Serialize, Clone, Default)]
 pub struct BlockSize {
     pub block_id: u64,
@@ -149,7 +149,7 @@ async fn finalize_step(
         let tip = ctx.sequencer_client().get_last_block_id().await?;
         for block_id in (pre_block_id.saturating_add(1))..=tip {
             if let Some(block) = ctx.sequencer_client().get_block(block_id).await? {
-                let block_bytes = borsh::to_vec(&block).map_or(0, |v| v.len());
+                let block_bytes = block.digested().to_inscription().map_or(0, |v| v.len());
                 let mut sz = BlockSize {
                     block_id,
                     block_bytes,
@@ -157,7 +157,7 @@ async fn finalize_step(
                     ppe_tx_bytes: Vec::new(),
                 };
                 for tx in &block.body.transactions {
-                    let n = borsh::to_vec(tx).map_or(0, |v| v.len());
+                    let n = borsh::to_vec(&tx.digested()).map_or(0, |v| v.len());
                     match tx {
                         LeeTransaction::Public(_) => sz.public_tx_bytes.push(n),
                         LeeTransaction::PrivacyPreserving(_) => sz.ppe_tx_bytes.push(n),

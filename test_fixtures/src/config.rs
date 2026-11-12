@@ -97,6 +97,7 @@ impl Default for SequencerPartialConfig {
             channel_params: ChannelParams {
                 posting_timeframe: TEST_POSTING_TIMEFRAME,
                 posting_timeout: TEST_POSTING_TIMEOUT,
+                skip_window: 0,
                 exit_delay: TEST_EXIT_DELAY,
                 ..sequencer_core::config::default_channel_params()
             },
@@ -312,6 +313,7 @@ pub fn wallet_config(sequencer_addr: &SocketAddr) -> Result<WalletConfig> {
 
 pub fn indexer_config(
     bedrock_addr: SocketAddr,
+    sequencer_addr: Option<SocketAddr>,
     channel_id: ChannelId,
     cross_zone: Option<CrossZoneConfig>,
 ) -> Result<IndexerConfig> {
@@ -323,6 +325,13 @@ pub fn indexer_config(
                 .context("Failed to convert bedrock addr to URL")?,
             auth: None,
         },
+        proof_sources: sequencer_addr
+            .map(|addr| addr_to_url(UrlProtocol::Http, addr))
+            .transpose()
+            .context("Failed to convert sequencer addr to URL")?
+            .into_iter()
+            .map(|addr| ClientConfig { addr, auth: None })
+            .collect(),
         channel_id,
         cross_zone,
         peer_block_cache_window: NonZeroU32::new(1024).expect("1024 is nonzero"),

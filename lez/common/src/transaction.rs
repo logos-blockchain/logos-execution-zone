@@ -39,7 +39,7 @@ impl<'de> Deserialize<'de> for LeeTransaction {
     }
 }
 
-impl LeeTransaction {
+impl<P> LeeTransactionWith<P> {
     #[must_use]
     pub const fn public_call(&self) -> Option<(Actor, &[u8])> {
         let Self::Public(tx) = self else {
@@ -48,7 +48,9 @@ impl LeeTransaction {
         let root = &tx.message().execution.root;
         Some((root.to, root.message.as_slice()))
     }
+}
 
+impl LeeTransaction {
     #[must_use]
     pub fn hash(&self) -> HashType {
         HashType(match self {

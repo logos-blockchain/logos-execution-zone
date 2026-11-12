@@ -148,19 +148,20 @@ impl AppDeployment<AppHostEnv> for LezLocalApp {
         let bedrock = ctx.deploy_and_expose(bedrock_app).await?;
         wait_for_bedrock_ready(&bedrock).await?;
 
-        let indexer = IndexerApp::new(bedrock.primary_api_addr());
-        let indexer = scenario_base_dir.as_ref().map_or_else(
-            || indexer.clone(),
-            |dir| indexer.clone().with_state_dir(dir.join("lez/indexer")),
-        );
-        let indexer = ctx.deploy_and_expose(indexer).await?;
-
         let sequencer = SequencerApp::new(self.sequencer, bedrock.primary_api_addr());
         let sequencer = scenario_base_dir.as_ref().map_or_else(
             || sequencer.clone(),
             |dir| sequencer.clone().with_state_dir(dir.join("lez/sequencer")),
         );
         let sequencer = ctx.deploy_and_expose(sequencer).await?;
+
+        let indexer =
+            IndexerApp::new(bedrock.primary_api_addr()).with_proof_source(sequencer.addr());
+        let indexer = scenario_base_dir.as_ref().map_or_else(
+            || indexer.clone(),
+            |dir| indexer.clone().with_state_dir(dir.join("lez/indexer")),
+        );
+        let indexer = ctx.deploy_and_expose(indexer).await?;
 
         let wallet = WalletApp::from_sequencer(&sequencer);
         let wallet = if self.initialize_private_accounts {

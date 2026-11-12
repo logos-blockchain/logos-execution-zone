@@ -13,6 +13,7 @@
             "minimum_sequencer_stake": 149,
             "posting_timeframe": 300,
             "posting_timeout": 25,
+            "skip_window": 0,
             "exit_delay": 100,
             "max_block_size": 1048576
         },

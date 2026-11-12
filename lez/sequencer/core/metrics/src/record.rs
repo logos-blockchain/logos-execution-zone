@@ -99,6 +99,17 @@ pub fn increment_blocks_produced_total() {
     blocks_produced_total_counter().increment(1);
 }
 
+/// A skip `writer` (a hex channel key) placed, cutting another writer's private block.
+pub fn increment_skips_total(writer: String) {
+    counter!(
+        description: "Skips a writer placed on the channel, each cutting another writer's private block",
+        unit: Unit::Count,
+        names::SKIPS_TOTAL,
+        "writer" => writer
+    )
+    .increment(1);
+}
+
 pub fn record_mempool_size(size: usize) {
     gauge!(
         description: "Size of the mempool",

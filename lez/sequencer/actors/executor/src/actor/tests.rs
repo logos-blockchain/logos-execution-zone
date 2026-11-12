@@ -152,11 +152,24 @@ fn stake_entries(sequencer_key: SequencerKey) -> BTreeMap<SequencerKey, Sequence
 }
 
 fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
-    prepare_mock_storage_with_stake(BTreeMap::new())
+    prepare_mock_storage_with_stake(BTreeMap::new(), mock_channel_params())
+}
+
+/// The channel params the mock genesis sets unless a test needs others.
+const fn mock_channel_params() -> sequencer_stake_core::ChannelParams {
+    sequencer_stake_core::ChannelParams {
+        minimum_sequencer_stake: 0,
+        posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
+        posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
+        skip_window: system_accounts::DEFAULT_SKIP_WINDOW,
+        exit_delay: system_accounts::DEFAULT_SEQUENCER_EXIT_DELAY,
+        max_block_size: system_accounts::DEFAULT_MAX_BLOCK_SIZE,
+    }
 }
 
 fn prepare_mock_storage_with_stake(
     entries: BTreeMap<SequencerKey, SequencerEntry>,
+    channel_params: sequencer_stake_core::ChannelParams,
 ) -> MockStorageActor {
     let genesis_block_meta = BlockMeta {
         id: 1,
@@ -182,13 +195,7 @@ fn prepare_mock_storage_with_stake(
         Account::default().with_actor_state(
             programs::sequencer_stake_account_id(),
             sequencer_stake_core::SequencerStakeConfig {
-                channel_params: Some(sequencer_stake_core::ChannelParams {
-                    minimum_sequencer_stake: 0,
-                    posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
-                    posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
-                    exit_delay: system_accounts::DEFAULT_SEQUENCER_EXIT_DELAY,
-                    max_block_size: system_accounts::DEFAULT_MAX_BLOCK_SIZE,
-                }),
+                channel_params: Some(channel_params),
                 channel_id: Some([0xC1; 32]),
                 entries,
             }
@@ -274,7 +281,8 @@ async fn a_publish_refused_as_stale_returns_its_transactions_to_the_mempool() ->
     let _res = env_logger::try_init();
 
     let (config, _home, sequencer_key) = staked_sequencer_config();
-    let mut mock_storage = prepare_mock_storage_with_stake(stake_entries(sequencer_key));
+    let mut mock_storage =
+        prepare_mock_storage_with_stake(stake_entries(sequencer_key), mock_channel_params());
     mock_storage
         .expect_handle_get_pending_cross_zone_dispatches()
         .returning(|_msg, _ctx| Ok(Vec::new()));

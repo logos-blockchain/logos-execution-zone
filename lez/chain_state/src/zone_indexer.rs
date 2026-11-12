@@ -1,10 +1,11 @@
-//! Temporary in-tree copy of the `ZoneIndexer` that zone-sdk removed in #3220.
+//! Temporary in-tree version of the `ZoneIndexer` that zone-sdk removed in #3220,
+//! reading whole slot ranges in batches.
 //!
-//! Kept verbatim so the sdk bump can be evaluated without also doing the
+//! Kept so the sdk bump can be evaluated without also doing the
 //! read-only-`ZoneSequencer` migration the removal asks for. Delete this
 //! module once that migration lands.
 
-use futures::{Stream, StreamExt as _, future::Either};
+use futures::{Stream, StreamExt as _};
 use logos_blockchain_zone_sdk::{
     ZoneMessage, adapter,
     node_types::{ChannelId, Error as NodeError, Slot},
@@ -26,6 +27,14 @@ pub enum Error {
     },
 }
 
+/// The messages of a slot range read whole.
+#[derive(Debug)]
+pub struct Batch {
+    pub messages: Vec<(ZoneMessage, Slot)>,
+    /// The range's last slot: every message up to it has been read.
+    pub watermark: Slot,
+}
+
 /// Zone indexer — reads finalized zone messages from a channel.
 pub struct ZoneIndexer<Node> {
     channel_id: ChannelId,
@@ -42,7 +51,7 @@ where
     }
 
     /// Stream finalized [`ZoneMessage`]s from `last_slot` (exclusive) up to
-    /// LIB.
+    /// LIB, in [`Batch`]es.
     ///
     /// `last_slot` is the last slot the caller has fully consumed. `None`
     /// means cold start — streaming begins from genesis. The caller is
@@ -56,50 +65,66 @@ where
     pub async fn next_messages(
         &self,
         last_slot: Option<Slot>,
-    ) -> Result<impl Stream<Item = Result<(ZoneMessage, Slot), Error>> + '_, Error> {
+    ) -> Result<impl Stream<Item = Result<Batch, Error>> + '_, Error> {
         let lib_slot = self.node.consensus_info().await?.cryptarchia_info.lib_slot;
-        let start_slot = last_slot.map_or_else(Slot::genesis, |s| s.strict_add(1.into()));
-
-        let stream = futures::stream::unfold(Some(start_slot), move |next| async move {
-            let current_slot = next?;
-            if current_slot > lib_slot {
-                return None;
-            }
-
-            let end_slot = (Slot::from(
-                current_slot
-                    .into_inner()
-                    .saturating_add(BATCH_SIZE.into_inner())
-                    .checked_sub(1)
-                    .expect("slot shouldn't overflow"),
-            ))
-            .min(lib_slot);
-
-            match self
-                .node
-                .zone_messages_in_blocks(current_slot, end_slot, self.channel_id)
-                .await
-            {
-                Ok(messages) => Some((
-                    Either::Left(messages.map(Ok)),
-                    Some(end_slot.strict_add(1.into())),
-                )),
-                Err(cause) => Some((
-                    Either::Right(futures::stream::once(std::future::ready(Err(
-                        Error::Fetch {
-                            from: current_slot,
-                            to: end_slot,
-                            cause,
-                        },
-                    )))),
-                    None,
-                )),
-            }
-        })
-        .flatten();
-
-        Ok(stream)
+        Ok(read_batches(
+            self.node.clone(),
+            self.channel_id,
+            last_slot,
+            lib_slot,
+        ))
     }
+}
+
+/// Reads `channel_id`'s finalized messages from `after` (exclusive) up to
+/// `lib_slot`, one [`Batch`] per slot range. A failed read is the last item.
+pub fn read_batches<Node>(
+    node: Node,
+    channel_id: ChannelId,
+    after: Option<Slot>,
+    lib_slot: Slot,
+) -> impl Stream<Item = Result<Batch, Error>>
+where
+    Node: adapter::Node + Sync,
+{
+    let start_slot = after.map_or_else(Slot::genesis, |s| s.strict_add(1.into()));
+
+    futures::stream::unfold(Some((node, start_slot)), move |next| async move {
+        let (client, current_slot) = next?;
+        if current_slot > lib_slot {
+            return None;
+        }
+
+        let end_slot = (Slot::from(
+            current_slot
+                .into_inner()
+                .saturating_add(BATCH_SIZE.into_inner())
+                .checked_sub(1)
+                .expect("slot shouldn't overflow"),
+        ))
+        .min(lib_slot);
+
+        match client
+            .zone_messages_in_blocks(current_slot, end_slot, channel_id)
+            .await
+        {
+            Ok(messages) => Some((
+                Ok(Batch {
+                    messages: messages.collect().await,
+                    watermark: end_slot,
+                }),
+                Some((client, end_slot.strict_add(1.into()))),
+            )),
+            Err(cause) => Some((
+                Err(Error::Fetch {
+                    from: current_slot,
+                    to: end_slot,
+                    cause,
+                }),
+                None,
+            )),
+        }
+    })
 }
 
 /// Ends the pass at the first read failure, naming `what` failed. For callers that retry
@@ -109,7 +134,7 @@ pub fn stop_at_read_error<'stream, S>(
     what: String,
 ) -> impl Stream<Item = (ZoneMessage, Slot)> + 'stream
 where
-    S: Stream<Item = Result<(ZoneMessage, Slot), Error>> + 'stream,
+    S: Stream<Item = Result<Batch, Error>> + 'stream,
 {
     stream
         .take_while(move |item| {
@@ -123,6 +148,7 @@ where
             std::future::ready(keep)
         })
         .filter_map(|item| std::future::ready(item.ok()))
+        .flat_map(|batch| futures::stream::iter(batch.messages))
 }
 
 #[cfg(test)]
@@ -145,7 +171,7 @@ mod tests {
     };
 
     use super::{
-        BATCH_SIZE, ChannelId, Error, NodeError, Slot, ZoneIndexer, ZoneMessage, adapter,
+        BATCH_SIZE, Batch, ChannelId, Error, NodeError, Slot, ZoneIndexer, ZoneMessage, adapter,
         stop_at_read_error,
     };
 
@@ -291,13 +317,19 @@ mod tests {
     #[tokio::test]
     async fn stop_at_read_error_truncates_at_the_failure() {
         let scripted = futures::stream::iter(vec![
-            Ok((message(1), Slot::genesis())),
+            Ok(Batch {
+                messages: vec![(message(1), Slot::genesis())],
+                watermark: Slot::from(99),
+            }),
             Err(Error::Fetch {
                 from: Slot::from(100),
                 to: Slot::from(199),
                 cause: NodeError::Client("node down".to_owned()),
             }),
-            Ok((message(2), Slot::from(200))),
+            Ok(Batch {
+                messages: vec![(message(2), Slot::from(200))],
+                watermark: Slot::from(299),
+            }),
         ]);
 
         let delivered: Vec<_> = stop_at_read_error(scripted, "test read".to_owned())
@@ -323,7 +355,8 @@ mod tests {
 
         let slots: Vec<_> = items
             .into_iter()
-            .map(|item| item.expect("every batch serves").1)
+            .flat_map(|item| item.expect("every batch serves").messages)
+            .map(|(_, slot)| slot)
             .collect();
         assert_eq!(
             slots,
@@ -344,7 +377,7 @@ mod tests {
 
         assert_eq!(items.len(), 2, "one message then one error: {items:?}");
         assert_eq!(
-            items[0].as_ref().expect("the first batch served").1,
+            items[0].as_ref().expect("the first batch served").messages[0].1,
             Slot::genesis()
         );
         let Err(Error::Fetch { from, to, .. }) = &items[1] else {

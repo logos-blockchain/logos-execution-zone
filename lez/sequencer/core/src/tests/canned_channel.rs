@@ -17,8 +17,8 @@ use sequencer_bedrock_actor::{
     error::Error,
     mock::MockBedrockActor,
     protocol::{
-        AccreditedKeys, ChannelReadStream, CreateChannel, PreparePin, PreparedPin, PublishBlock,
-        PublishOutcome, PublishPin, ReadChannel,
+        AccreditedKeys, Batch, ChannelReadStream, CreateChannel, PreparePin, PreparedPin,
+        PublishBlock, PublishOutcome, PublishPin, ReadChannel,
     },
 };
 
@@ -184,15 +184,20 @@ impl CannedChannel {
     }
 }
 
-/// The entries of `messages` past `after` (exclusive), as `ReadChannel` serves them.
+/// The entries of `messages` past `after` (exclusive), as `ReadChannel` serves them: one batch
+/// per slot.
 fn history_after(messages: &[(ZoneMessage, Slot)], after: Option<Slot>) -> ChannelReadStream {
-    let messages: Vec<_> = messages
-        .iter()
-        .filter(|(_, slot)| after.is_none_or(|after| *slot > after))
-        .cloned()
-        .map(Ok)
+    let batches: Vec<_> = messages
+        .chunk_by(|(_, slot), (_, next)| slot == next)
+        .filter(|in_slot| after.is_none_or(|after| in_slot[0].1 > after))
+        .map(|in_slot| {
+            Ok(Batch {
+                messages: in_slot.to_vec(),
+                watermark: in_slot[0].1,
+            })
+        })
         .collect();
-    Box::pin(futures::stream::iter(messages))
+    Box::pin(futures::stream::iter(batches))
 }
 
 /// Lands `block` unless it is chained on an entry that is no longer the tip,

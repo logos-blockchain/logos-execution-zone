@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Result, ensure};
 use bridge_core::BridgeAmount;
 pub use bridge_core::DepositRecipient;
-use common::config::BasicAuth;
+use common::{config::BasicAuth, transaction::LeeTransaction};
 pub use cross_zone::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use humantime_serde;
 use lee::{AccountId, PublicKey, Signature};
@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 /// Bytes reserved out of `max_block_size` for the block header plus the forced
-/// fee and clock tail transactions; RPC and gossip cap a single transaction at
-/// `max_block_size - BLOCK_OVERHEAD`.
+/// fee and clock tail transactions; RPC and gossip cap a single transaction's
+/// digest form at `max_block_size - BLOCK_OVERHEAD`.
 pub const BLOCK_OVERHEAD: u64 = 2_048;
 
 /// The largest usable `max_block_size`: an L2 block is published to Bedrock as
@@ -30,6 +30,10 @@ pub const BLOCK_OVERHEAD: u64 = 2_048;
 )]
 pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 =
     logos_blockchain_core::mantle::ops::channel::inscribe::MAX_BYTES as u64;
+
+/// The largest transaction RPC and gossip admit in full form, proofs included. Blocks carry
+/// proof digests, so this bounds transport only; it is what the largest block could hold.
+pub const MAX_TRANSACTION_SIZE: u64 = MAX_PUBLISHABLE_BLOCK_SIZE.saturating_sub(BLOCK_OVERHEAD);
 
 /// The largest Bedrock transaction: the L1 caps a block's transactions at this
 /// many bytes.
@@ -46,6 +50,15 @@ pub const PROOF_STORE_CAPACITY: usize = 256 * 1024 * 1024;
 /// Smallest nonzero `stale_refund_slots`, since a shorter window orphans blocks before L1 can
 /// mine them.
 const MIN_STALE_REFUND_SLOTS: u64 = 50;
+
+/// Why RPC and gossip refuse a transaction for its size.
+#[derive(Debug, thiserror::Error)]
+pub enum TransactionTooLarge {
+    #[error("transaction too large: {size} > {max}")]
+    Full { size: u64, max: u64 },
+    #[error("transaction too large for a block: {size} > {max}")]
+    Inscribed { size: u64, max: u64 },
+}
 
 /// A transaction to be applied at genesis to supply initial balances.
 ///
@@ -248,6 +261,34 @@ pub fn check_max_block_size(params: &ChannelParams) -> Result<()> {
     Ok(())
 }
 
+/// Refuses `len` encoded bytes over [`MAX_TRANSACTION_SIZE`], before anything decodes them.
+pub fn check_transaction_size(len: usize) -> Result<(), TransactionTooLarge> {
+    let size = u64::try_from(len).unwrap_or(u64::MAX);
+    if size > MAX_TRANSACTION_SIZE {
+        return Err(TransactionTooLarge::Full {
+            size,
+            max: MAX_TRANSACTION_SIZE,
+        });
+    }
+    Ok(())
+}
+
+/// Refuses `tx` when its digest form, which a block carries, does not fit a block of
+/// `max_block_size`.
+pub fn check_inscribed_size(
+    tx: &LeeTransaction,
+    max_block_size: u64,
+) -> Result<(), TransactionTooLarge> {
+    let size = borsh::to_vec(&tx.digested()).map_or(u64::MAX, |bytes| {
+        u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+    });
+    let max = max_block_size.saturating_sub(BLOCK_OVERHEAD);
+    if size > max {
+        return Err(TransactionTooLarge::Inscribed { size, max });
+    }
+    Ok(())
+}
+
 fn default_gossip_listen_addr() -> libp2p::Multiaddr {
     "/ip4/0.0.0.0/udp/0/quic-v1"
         .parse()
@@ -280,6 +321,7 @@ pub const fn default_channel_params() -> ChannelParams {
         minimum_sequencer_stake: system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE,
         posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
         posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
+        skip_window: system_accounts::DEFAULT_SKIP_WINDOW,
         exit_delay: system_accounts::DEFAULT_SEQUENCER_EXIT_DELAY,
         max_block_size: system_accounts::DEFAULT_MAX_BLOCK_SIZE,
     }

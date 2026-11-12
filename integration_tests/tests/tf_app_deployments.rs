@@ -51,16 +51,18 @@ async fn lez_apps_can_be_deployed_individually() -> Result<()> {
         .await
         .map_err(anyhow::Error::from_boxed)?;
 
-    deployment
-        .deploy_and_expose(IndexerApp::new(bedrock.primary_api_addr()))
-        .await
-        .map_err(anyhow::Error::from_boxed)?;
-
     let sequencer = deployment
         .deploy_and_expose(SequencerApp::new(
             SequencerPartialConfig::default(),
             bedrock.primary_api_addr(),
         ))
+        .await
+        .map_err(anyhow::Error::from_boxed)?;
+
+    deployment
+        .deploy_and_expose(
+            IndexerApp::new(bedrock.primary_api_addr()).with_proof_source(sequencer.addr()),
+        )
         .await
         .map_err(anyhow::Error::from_boxed)?;
 
@@ -94,16 +96,18 @@ async fn lez_services_can_be_redeployed_after_explicit_shutdown() -> Result<()> 
         let mut deployment = new_deployment();
         deployment.expose(bedrock.clone())?;
         let bedrock_addr = bedrock.primary_api_addr();
-        deployment
-            .deploy_and_expose(
-                IndexerApp::new(bedrock_addr).with_state_dir(state_dir.path().join("lez/indexer")),
-            )
-            .await
-            .map_err(anyhow::Error::from_boxed)?;
         let sequencer = deployment
             .deploy_and_expose(
                 SequencerApp::new(SequencerPartialConfig::default(), bedrock_addr)
                     .with_state_dir(state_dir.path().join("lez/sequencer")),
+            )
+            .await
+            .map_err(anyhow::Error::from_boxed)?;
+        deployment
+            .deploy_and_expose(
+                IndexerApp::new(bedrock_addr)
+                    .with_proof_source(sequencer.addr())
+                    .with_state_dir(state_dir.path().join("lez/indexer")),
             )
             .await
             .map_err(anyhow::Error::from_boxed)?;

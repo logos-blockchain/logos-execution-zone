@@ -65,7 +65,10 @@ pub fn indexed_account(indexer: &IndexerServiceFFI, account_id: &AccountId) -> O
     account
 }
 
-pub fn setup_indexer_ffi(bedrock_addr: SocketAddr) -> Result<(IndexerServiceFFI, TempDir)> {
+pub fn setup_indexer_ffi(
+    bedrock_addr: SocketAddr,
+    sequencer_addr: SocketAddr,
+) -> Result<(IndexerServiceFFI, TempDir)> {
     let temp_indexer_dir =
         tempfile::tempdir().context("Failed to create temp dir for indexer home")?;
 
@@ -76,6 +79,7 @@ pub fn setup_indexer_ffi(bedrock_addr: SocketAddr) -> Result<(IndexerServiceFFI,
 
     let indexer_config = integration_tests::config::indexer_config(
         bedrock_addr,
+        Some(sequencer_addr),
         integration_tests::config::bedrock_channel_id(),
         None,
     )
@@ -117,7 +121,13 @@ pub fn setup() -> Result<(BlockingTestContext, IndexerServiceFFI, TempDir)> {
     // moved into the returned tuple, which would leave any pointer into it
     // dangling. Pass a null runtime so the FFI owns its own — the same path the
     // production module uses.
-    let (indexer_ffi, indexer_dir) = setup_indexer_ffi(ctx.ctx().bedrock_addr())?;
+    let (indexer_ffi, indexer_dir) = setup_indexer_ffi(
+        ctx.ctx().bedrock_addr(),
+        ctx.ctx()
+            .default_sequencer_component()
+            .sequencer_handle
+            .addr(),
+    )?;
     Ok((ctx, indexer_ffi, indexer_dir))
 }
 

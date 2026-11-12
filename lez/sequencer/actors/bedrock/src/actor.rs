@@ -4,9 +4,9 @@ use std::{
 };
 
 use anyhow::{Context as _, anyhow};
-use chain_state::timeout_node::TimeoutNode;
-use common::block::Block;
-use futures::{StreamExt as _, future::Either};
+use chain_state::{timeout_node::TimeoutNode, zone_indexer};
+use common::block::{Block, DigestedBlock};
+use futures::StreamExt as _;
 use kameo::{
     Actor,
     actor::{ActorRef, WeakActorRef},
@@ -224,24 +224,24 @@ impl BedrockActor {
                 let mut deposits = Vec::new();
                 let mut withdrawals = Vec::new();
                 let mut undecodable = Vec::new();
-                let mut finalized_signers = Vec::new();
-                for op in finalized.into_iter().flat_map(|item| item.ops) {
+                for (slot, op) in finalized.into_iter().flat_map(|item| {
+                    let slot = item.l1_slot;
+                    item.ops.into_iter().map(move |op| (slot, op))
+                }) {
                     match op {
                         FinalizedOp::Inscription(inscription) => {
-                            let entry = channel_entry(&inscription);
+                            let entry = channel_entry(&inscription, Some(slot));
                             let signed = inscription
                                 .signer
                                 .and_then(|signer| Ed25519PublicKey::try_from(signer).ok())
                                 .map(|signer| (inscription.this_msg, signer));
                             let empty = <Inscription as AsRef<[u8]>>::as_ref(&inscription.payload)
                                 .is_empty();
-                            match (&entry.block, empty) {
-                                (Some(_), _) => finalized_signers.extend(signed),
-                                // Empty payload: a missed turn for the liveness
-                                // fault. Signer-less entries are configs, via
-                                // `FinalizedOp::Config`.
-                                (None, true) => {}
-                                (None, false) => undecodable.extend(signed),
+                            // Empty payload: a missed turn for the liveness
+                            // fault. Signer-less entries are configs, via
+                            // `FinalizedOp::Config`.
+                            if entry.block.is_none() && !empty {
+                                undecodable.extend(signed);
                             }
                             finalized_entries.push(entry);
                         }
@@ -267,7 +267,6 @@ impl BedrockActor {
                             deposits,
                             withdrawals,
                             undecodable,
-                            finalized_signers,
                         })),
                     })
                     .await
@@ -496,6 +495,7 @@ impl Message<CreateChannel> for BedrockActor {
         );
 
         let data = genesis
+            .digested()
             .to_inscription()
             .map_err(Error::BlockEncodingFailed)?;
         let inscription: Inscription = data.try_into().map_err(|_rr| Error::BlockTooLarge)?;
@@ -855,8 +855,6 @@ impl Message<ReadChannel> for BedrockActor {
         ReadChannel { after }: ReadChannel,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        const BATCH_SIZE: Slot = Slot::new(100);
-
         let node_lib_slot = self
             .node
             .consensus_info()
@@ -867,49 +865,20 @@ impl Message<ReadChannel> for BedrockActor {
         let lib_slot = self
             .ready_lib_slot
             .map_or(node_lib_slot, |ready| ready.min(node_lib_slot));
-        let start_slot = after.map_or_else(Slot::genesis, |s| s.strict_add(1.into()));
-
-        let node = self.node.clone();
-        let channel_id = self.config.channel_id;
-        let stream = futures::stream::unfold(Some(start_slot), move |next| {
-            let node = node.clone();
-            async move {
-                let current_slot = next?;
-                if current_slot > lib_slot {
-                    return None;
-                }
-
-                let end_slot = (Slot::from(
-                    current_slot
-                        .into_inner()
-                        .saturating_add(BATCH_SIZE.into_inner())
-                        .checked_sub(1)
-                        .expect("slot shouldn't overflow"),
-                ))
-                .min(lib_slot);
-
-                match node
-                    .zone_messages_in_blocks(current_slot, end_slot, channel_id)
-                    .await
-                {
-                    Ok(messages) => Some((
-                        Either::Left(messages.map(Ok)),
-                        Some(end_slot.strict_add(1.into())),
-                    )),
-                    Err(cause) => Some((
-                        Either::Right(futures::stream::once(std::future::ready(Err(
+        let stream =
+            zone_indexer::read_batches(self.node.clone(), self.config.channel_id, after, lib_slot)
+                .map(|batch| {
+                    batch.map_err(|err| match err {
+                        zone_indexer::Error::Fetch { from, to, cause } => {
                             Error::ChannelReadFailed {
-                                from: current_slot,
-                                to: end_slot,
+                                from,
+                                to,
                                 cause: cause.into(),
-                            },
-                        )))),
-                        None,
-                    )),
-                }
-            }
-        })
-        .flatten();
+                            }
+                        }
+                        zone_indexer::Error::Http(err) => Error::NodeRequestFailed(err.into()),
+                    })
+                });
 
         Ok(Box::pin(stream))
     }
@@ -990,7 +959,7 @@ fn has_channel_activity(checkpoint: &SequencerCheckpoint) -> bool {
 }
 
 /// A message-lineage entry, with its block when the payload decodes to one.
-fn channel_entry(inscription: &InscriptionInfo) -> ChannelEntry {
+fn channel_entry(inscription: &InscriptionInfo, slot: Option<Slot>) -> ChannelEntry {
     let block = if <Inscription as AsRef<[u8]>>::as_ref(&inscription.payload).is_empty() {
         None
     } else {
@@ -999,6 +968,11 @@ fn channel_entry(inscription: &InscriptionInfo) -> ChannelEntry {
     ChannelEntry {
         msg: inscription.this_msg,
         parent: inscription.parent_msg,
+        signer: inscription
+            .signer
+            .and_then(|signer| Ed25519PublicKey::try_from(signer).ok())
+            .map(|key| key.to_bytes()),
+        slot,
         block,
     }
 }
@@ -1008,23 +982,23 @@ fn channel_entry(inscription: &InscriptionInfo) -> ChannelEntry {
 /// A config op is on the config lineage, not this one, so it is skipped.
 fn channel_entries(tx: &ChannelUpdateTx, channel_id: ChannelId) -> Vec<ChannelEntry> {
     match tx {
-        ChannelUpdateTx::Inscription(info) => vec![channel_entry(info)],
-        ChannelUpdateTx::AtomicWithdraw(bundle) => vec![channel_entry(&bundle.inscription)],
-        ChannelUpdateTx::PinDeposit(bundle) => vec![channel_entry(&bundle.inscription)],
+        ChannelUpdateTx::Inscription(info) => vec![channel_entry(info, None)],
+        ChannelUpdateTx::AtomicWithdraw(bundle) => vec![channel_entry(&bundle.inscription, None)],
+        ChannelUpdateTx::PinDeposit(bundle) => vec![channel_entry(&bundle.inscription, None)],
         ChannelUpdateTx::Config(_) => Vec::new(),
         ChannelUpdateTx::Custom(signed_tx) => {
             logos_blockchain_zone_sdk::sequencer::channel_inscriptions(signed_tx, channel_id)
                 .iter()
-                .map(channel_entry)
+                .map(|info| channel_entry(info, None))
                 .collect()
         }
     }
 }
 
-/// Deserialize an inscription payload into `(this_msg, Block)`. Bad payloads are
+/// Deserialize an inscription payload into `(this_msg, DigestedBlock)`. Bad payloads are
 /// logged and skipped.
-fn block_from_inscription(inscription: &InscriptionInfo) -> Option<Block> {
-    Block::from_inscription(&inscription.payload)
+fn block_from_inscription(inscription: &InscriptionInfo) -> Option<DigestedBlock> {
+    DigestedBlock::from_inscription(&inscription.payload)
         .inspect_err(|err| {
             warn!("Failed to deserialize block from inscription: {err:?}");
         })
@@ -1046,7 +1020,10 @@ fn released_notes(tx: &PendingTx) -> Vec<NoteId> {
 
 /// `block` as the bytes of an inscription.
 fn block_inscription(block: &Block) -> Result<Inscription> {
-    let data = block.to_inscription().map_err(Error::BlockEncodingFailed)?;
+    let data = block
+        .digested()
+        .to_inscription()
+        .map_err(Error::BlockEncodingFailed)?;
 
     data.try_into().map_err(|_err| Error::BlockTooLarge)
 }

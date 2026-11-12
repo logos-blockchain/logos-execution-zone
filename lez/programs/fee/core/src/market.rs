@@ -47,13 +47,13 @@ pub const MIN_PRIVATE_REFUND: Balance = 1_000_000;
 /// RISC Zero 3.0.5, `G_verify` ≈ 12.2 ms at 33,546 cycles/ms (`docs/benchmarks/cycle_bench.md`).
 /// Independent of the circuit's contents; re-pin on a RISC Zero bump.
 pub const PRIVATE_VERIFY_GAS: u64 = 409_764;
-/// Proof bytes inside every private transaction: the fixed succinct receipt size.
-pub const PROOF_BYTES: u64 = 223_551;
+/// Proof bytes published with every private transaction: its proof's digest.
+pub const PROOF_DIGEST_BYTES: u64 = 32;
 /// Payload size every private transaction is padded to.
 pub const PRIVATE_PAD_BYTES: u64 = 512;
-/// Canonical serialized size of every private transaction. Derived from its
+/// Canonical published size of every private transaction. Derived from its
 /// parts so the relationship cannot drift silently on a re-pin.
-pub const PRIVATE_GAS_STOR: u64 = PROOF_BYTES + PRIVATE_PAD_BYTES;
+pub const PRIVATE_GAS_STOR: u64 = PROOF_DIGEST_BYTES + PRIVATE_PAD_BYTES;
 /// The most private actions one private transaction may carry: its storage is priced flat, so
 /// the count is capped instead of metered.
 pub const MAX_PRIVATE_ACTIONS: usize = 8;

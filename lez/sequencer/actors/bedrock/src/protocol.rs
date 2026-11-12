@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-pub use chain_state::ChannelEntry;
+pub use chain_state::{ChannelEntry, zone_indexer::Batch};
 use common::block::Block;
 use kameo::Reply;
 pub use logos_blockchain_core::mantle::NoteId;
@@ -21,7 +21,7 @@ pub use sequencer_stake_core::ChannelParams;
 pub type BoxStream<T> = std::pin::Pin<Box<dyn futures::Stream<Item = T> + Send>>;
 
 /// What [`ReadChannel`] serves: a failed read is an `Err` item, not the stream's end.
-pub type ChannelReadStream = BoxStream<crate::Result<(ZoneMessage, Slot)>>;
+pub type ChannelReadStream = BoxStream<crate::Result<Batch>>;
 
 /// Version of the channel view the actor holds, bumped by every broadcast update
 /// and every publish.
@@ -118,8 +118,6 @@ pub struct ChannelUpdate {
     pub withdrawals: Vec<WithdrawInfo>,
     /// Finalized inscriptions that are not blocks, with the key that signed each.
     pub undecodable: Vec<(MsgId, Ed25519PublicKey)>,
-    /// The key that signed each finalized entry carrying a block.
-    pub finalized_signers: Vec<(MsgId, Ed25519PublicKey)>,
 }
 
 /// The live channel config, as much of it as a config update needs.

@@ -124,7 +124,10 @@ fn block_by_offender(block_id: u64, tip: &Block, transactions: Vec<LeeTransactio
     let block =
         common::test_utils::produce_dummy_block(block_id, Some(tip.header.hash), transactions);
     let block = common::block::HashableBlockData::from(block).into_pending_block();
-    block.to_inscription().expect("a block should serialize")
+    block
+        .digested()
+        .to_inscription()
+        .expect("a block should serialize")
 }
 
 /// Has the offender inscribe `payload(leader's tip)` on its turns until the leader

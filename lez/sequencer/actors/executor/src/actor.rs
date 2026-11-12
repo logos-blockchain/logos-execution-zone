@@ -1,12 +1,13 @@
 use std::future::Future;
 
+use chain_state::ProofStore;
 use common::{PageLimit, block::Block, transaction::LeeTransaction};
 use fee_core::validity::FeeError;
 use futures::{
     FutureExt as _, StreamExt as _, TryFutureExt as _, TryStreamExt as _, future::ready, stream,
 };
 use kameo::{
-    actor::{ActorRef, WeakActorRef},
+    actor::{ActorRef, Recipient, WeakActorRef},
     error::{ActorStopReason, Infallible},
     mailbox::{MailboxReceiver, Signal},
     message::{Context, Message},
@@ -23,9 +24,8 @@ use sequencer_actors_common::EraseMessage as _;
 use sequencer_bedrock_actor::BedrockActorTrait;
 use sequencer_core::{
     ChannelSigningActor, SequencerCore, SubmitConfig, TransactionOrigin,
-    config::{PROOF_STORE_CAPACITY, SequencerConfig},
-    gossip::{AccreditedKeysReceiver, MaxBlockSizeReceiver},
-    proof_store::ProofStore,
+    config::SequencerConfig,
+    gossip::{AccreditedKeysReceiver, FetchProof, MaxBlockSizeReceiver},
     task_group::TaskGroup,
 };
 use sequencer_slasher_actor::SlasherActor;
@@ -33,7 +33,7 @@ use sequencer_storage_actor::StorageActorTrait;
 
 use crate::{
     ExecutorActorTrait, Result,
-    actor::turn::Turn,
+    actor::{skip::SkipPolicy, turn::Turn},
     error::Error,
     protocol::{
         ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
@@ -41,11 +41,12 @@ use crate::{
         GetChannelId, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply, GetFeeQuote,
         GetLastBlockId, GetMessagePath, GetProofsAndRoot, GetPublications, GetRecoveryBinding,
         GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
-        Transaction,
+        SetProofFetcher, Transaction,
     },
 };
 
 mod conversions;
+mod skip;
 #[cfg(test)]
 mod tests;
 mod turn;
@@ -63,6 +64,7 @@ pub struct ExecutorActor<S: StorageActorTrait, B: BedrockActorTrait> {
 
     /// Whose turn it is to write: blocks are only produced in ours.
     turn: Turn,
+    skip_policy: SkipPolicy,
 
     // TODO: Remove this field
     background_task: TaskGroup,
@@ -70,6 +72,9 @@ pub struct ExecutorActor<S: StorageActorTrait, B: BedrockActorTrait> {
     /// Consecutive production turns that failed outright. A run of these looks
     /// exactly like an idle node in every other signal, so it gets its own.
     failed_attempts: u32,
+
+    /// Where missing proofs are requested; `None` without gossip.
+    proof_fetcher: Option<Recipient<FetchProof>>,
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
@@ -105,16 +110,19 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
             }
 
             let background_task = sequencer.background_task();
+            let proofs = sequencer.proof_store();
 
             Ok(Self {
                 mempool_handle,
                 sequencer,
                 storage_ref,
                 bedrock_ref,
-                proofs: ProofStore::new(PROOF_STORE_CAPACITY),
+                proofs,
                 turn: Turn::new(is_our_turn),
+                skip_policy: SkipPolicy::default(),
                 background_task,
                 failed_attempts: 0,
+                proof_fetcher: None,
             })
         }
     }
@@ -153,6 +161,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
     #[must_use]
     pub fn proof_store(&self) -> ProofStore {
         self.proofs.clone()
+    }
+
+    /// Refolds on the proofs that arrived, then requests those still missing.
+    async fn fetch_proofs(&self) {
+        for digest in self.sequencer.hydrate().await {
+            if let Some(fetcher) = &self.proof_fetcher
+                && fetcher.tell(FetchProof(digest)).try_send().is_err()
+            {
+                debug!("Dropped a request for proof {digest:?}");
+            }
+        }
     }
 }
 
@@ -198,8 +217,19 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
         ProduceBlock: ProduceBlock,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        self.fetch_proofs().await;
+
         if !self.turn.is_ours() {
             debug!("Not our turn to produce a block, skipping");
+            return Ok(());
+        }
+
+        let own = self.sequencer.channel_signing_public_key();
+        let produce = self
+            .sequencer
+            .with_chain(|chain| self.skip_policy.may_produce(chain, own, &self.turn))
+            .await;
+        if !produce {
             return Ok(());
         }
 
@@ -250,6 +280,18 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<SubmitConfig> for Execu
         _ctx: &mut Context<Self, Self::Reply>,
     ) {
         self.sequencer.submit_signed_config(*submission).await;
+    }
+}
+
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<SetProofFetcher> for ExecutorActor<S, B> {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        SetProofFetcher(fetcher): SetProofFetcher,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) {
+        self.proof_fetcher = Some(fetcher);
     }
 }
 
@@ -649,6 +691,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait>
         match msg {
             sequencer_bedrock_actor::protocol::ChannelEvent::Update(channel_update) => {
                 self.sequencer.on_channel_update(channel_update).await;
+                self.fetch_proofs().await;
+                self.sequencer
+                    .with_chain(|chain| self.skip_policy.observe(chain.view()))
+                    .await;
             }
             sequencer_bedrock_actor::protocol::ChannelEvent::Turn {
                 our_turn_to_write,
@@ -656,6 +702,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait>
             } => {
                 if self.turn.update(our_turn_to_write, starting_slot) {
                     sequencer_executor_actor_metrics::increment_turns_to_write_total();
+                    self.skip_policy.start_turn();
                 }
                 sequencer_executor_actor_metrics::record_turn_to_write(self.turn.is_ours());
             }

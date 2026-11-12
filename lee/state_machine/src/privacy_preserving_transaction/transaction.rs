@@ -73,6 +73,17 @@ impl PrivacyPreservingTransaction<ProofDigest> {
         hasher.update(&bytes);
         hasher.finalize_fixed().into()
     }
+
+    #[must_use]
+    pub fn hydrate(&self, proof: Proof) -> Option<PrivacyPreservingTransaction> {
+        (proof.digest() == self.witness_set.proof).then(|| PrivacyPreservingTransaction {
+            message: self.message.clone(),
+            witness_set: WitnessSet {
+                signatures_and_public_keys: self.witness_set.signatures_and_public_keys.clone(),
+                proof,
+            },
+        })
+    }
 }
 
 impl PrivacyPreservingTransaction {

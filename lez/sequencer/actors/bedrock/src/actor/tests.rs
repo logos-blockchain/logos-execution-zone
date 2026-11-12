@@ -9,9 +9,8 @@ use logos_blockchain_core::mantle::{
     ops::{
         Op, OpProof, SignedOperation,
         channel::{
-            ChannelId, MsgId, VerifiedChannelKeys,
-            config::ChannelConfigValidationContext,
-            inscribe::{Inscription, InscriptionOp},
+            ChannelId, MsgId, VerifiedChannelKeys, config::ChannelConfigValidationContext,
+            inscribe::InscriptionOp,
         },
     },
     transactions::{
@@ -28,11 +27,7 @@ use crate::protocol::ChannelParams;
 
 /// A tx wrapping `block` in one inscribe op on `channel`.
 fn inscribing_tx(channel: ChannelId, block: &Block) -> SignedOps<Unverified, StandardMode> {
-    let inscription: Inscription = block
-        .to_inscription()
-        .expect("serialize")
-        .try_into()
-        .unwrap();
+    let inscription = super::block_inscription(block).expect("the block fits an inscription");
     let signer = Ed25519Key::generate(&mut rand::rngs::OsRng);
     let op = Op::ChannelInscribe(InscriptionOp {
         channel_id: channel,
@@ -97,6 +92,7 @@ fn the_genesis_config_op_and_its_proof_pass_bedrock_verification() {
             minimum_sequencer_stake: 0,
             posting_timeframe: 10,
             posting_timeout: 20,
+            skip_window: 0,
             exit_delay: 10,
             max_block_size: 1 << 20,
         },

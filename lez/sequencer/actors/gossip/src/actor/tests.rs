@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::Context as _;
+use chain_state::ProofStore;
 use common::transaction::LeeTransaction;
 use futures::StreamExt as _;
 use kameo::{
@@ -22,7 +23,6 @@ use sequencer_core::{
     TransactionOrigin,
     config::{GossipConfig, PROOF_STORE_CAPACITY},
     gossip::{FetchProof, accredited_keys_channel},
-    proof_store::ProofStore,
 };
 use sequencer_slasher_actor::{Approval, Offence};
 use sequencer_stake_core::SequencerKey;

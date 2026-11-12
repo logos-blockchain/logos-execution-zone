@@ -1,11 +1,12 @@
 use sequencer_bedrock_actor::protocol::Slot;
+use tokio::time::Instant;
 
 /// Whose turn it is to write to the channel, as Bedrock last told us.
 #[derive(Debug)]
 pub struct Turn {
     ours: bool,
-    /// Slot our current turn started at, once Bedrock has told us.
-    starting_slot: Option<Slot>,
+    /// Slot our current turn started at, once Bedrock has told us, and when it did.
+    starting_slot: Option<(Slot, Instant)>,
 }
 
 impl Turn {
@@ -28,14 +29,25 @@ impl Turn {
             return false;
         }
 
-        let started = match (self.starting_slot, starting_slot) {
+        let known = self.starting_slot.map(|(slot, _)| slot);
+        let started = match (known, starting_slot) {
             (Some(current), Some(new)) => current != new,
             _ => !was_ours,
         };
-        if started || starting_slot.is_some() {
-            self.starting_slot = starting_slot;
+        if (started || starting_slot.is_some()) && known != starting_slot {
+            self.starting_slot = starting_slot.map(|slot| (slot, Instant::now()));
         }
         started
+    }
+
+    /// The slot at `at`, one a second from when Bedrock told us our turn's starting slot.
+    pub fn slot_at(&self, at: Instant) -> Option<u64> {
+        let (slot, since) = self.starting_slot?;
+        Some(
+            slot.into_inner()
+                .saturating_add(at.saturating_duration_since(since).as_secs())
+                .saturating_sub(since.saturating_duration_since(at).as_secs()),
+        )
     }
 }
 

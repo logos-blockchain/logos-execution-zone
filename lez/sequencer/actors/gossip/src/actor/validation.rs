@@ -5,7 +5,10 @@
 
 use common::transaction::LeeTransaction;
 use sequencer_channel_signing_actor::Wire;
-use sequencer_core::{config::BLOCK_OVERHEAD, gossip::AccreditedKeys};
+use sequencer_core::{
+    config::{check_inscribed_size, check_transaction_size},
+    gossip::AccreditedKeys,
+};
 use sequencer_slasher_actor::Approval;
 
 #[derive(Debug)]
@@ -43,16 +46,18 @@ pub enum ConfigEvaluation {
 /// sequencer-only-program guard.
 #[must_use]
 pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
-    let tx_size = u64::try_from(data.len()).unwrap_or(u64::MAX);
-    let max_tx_size = max_block_size.saturating_sub(BLOCK_OVERHEAD);
-    if tx_size > max_tx_size {
-        return TxEvaluation::Reject(format!("transaction too large: {tx_size} > {max_tx_size}"));
+    if let Err(err) = check_transaction_size(data.len()) {
+        return TxEvaluation::Reject(err.to_string());
     }
 
     let tx: LeeTransaction = match borsh::from_slice(data) {
         Ok(tx) => tx,
         Err(err) => return TxEvaluation::Reject(format!("undecodable transaction: {err}")),
     };
+
+    if let Err(err) = check_inscribed_size(&tx, max_block_size) {
+        return TxEvaluation::Reject(err.to_string());
+    }
 
     let authenticated = match tx.transaction_stateless_check() {
         Ok(tx) => tx,
@@ -127,6 +132,7 @@ pub fn evaluate_config_message(
 
 #[cfg(test)]
 mod tests {
+
     use logos_blockchain_core::proofs::channel_multi_sig_proof::IndexedSignature;
     use logos_blockchain_key_management_system_service::keys::Ed25519Key;
     use sequencer_channel_signing_actor::Signature;

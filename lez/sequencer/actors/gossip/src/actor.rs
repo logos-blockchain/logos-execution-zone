@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, anyhow};
+use chain_state::ProofStore;
 use common::{bounded_vec_deque::BoundedVecDeque, transaction::LeeTransaction};
 use futures::{StreamExt as _, future::BoxFuture};
 use kameo::{
@@ -29,9 +30,8 @@ use libp2p::{
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
 use sequencer_channel_signing_actor::Wire;
 use sequencer_core::{
-    config::{GossipConfig, MAX_BEDROCK_TX_SIZE, MAX_PUBLISHABLE_BLOCK_SIZE},
+    config::{GossipConfig, MAX_BEDROCK_TX_SIZE, MAX_TRANSACTION_SIZE},
     gossip::{AccreditedKeysReceiver, FetchProof, MaxBlockSizeReceiver},
-    proof_store::ProofStore,
 };
 use sequencer_slasher_actor::Approval;
 use tokio::select;
@@ -188,7 +188,7 @@ impl GossipActor {
         // A constant, so no node drops at the codec a frame its peers send, sized
         // for the largest L2 transaction or channel-signing draft (one Bedrock transaction).
         let max_transmit_size = usize::try_from(
-            MAX_PUBLISHABLE_BLOCK_SIZE
+            MAX_TRANSACTION_SIZE
                 .max(MAX_BEDROCK_TX_SIZE)
                 .saturating_add(GOSSIP_FRAME_MARGIN),
         )

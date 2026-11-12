@@ -52,7 +52,7 @@ impl OwnHasher {
     }
 }
 
-#[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct BlockHeader {
     pub block_id: BlockId,
     pub prev_block_hash: BlockHash,
@@ -60,9 +60,9 @@ pub struct BlockHeader {
     pub timestamp: Timestamp,
 }
 
-#[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
-pub struct BlockBody {
-    pub transactions: Vec<LeeTransaction>,
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct BlockBodyWith<P> {
+    pub transactions: Vec<LeeTransactionWith<P>>,
     /// Indices into `transactions` of the charged transactions whose action reverted, ascending.
     ///
     /// TODO: fold into a `receipts` vector parallel to `transactions`, one per transaction with
@@ -70,7 +70,9 @@ pub struct BlockBody {
     pub reverted: Vec<u64>,
 }
 
-impl BlockBody {
+pub type BlockBody = BlockBodyWith<Proof>;
+
+impl<P> BlockBodyWith<P> {
     /// Whether the transaction at `position` reverted.
     #[must_use]
     pub fn is_reverted(&self, position: usize) -> bool {
@@ -95,31 +97,27 @@ pub struct Block {
 }
 
 impl Block {
+    #[must_use]
+    pub fn digested(&self) -> DigestedBlock {
+        DigestedBlock {
+            header: self.header.clone(),
+            body: BlockBodyWith {
+                transactions: self
+                    .body
+                    .transactions
+                    .iter()
+                    .map(LeeTransaction::digested)
+                    .collect(),
+                reverted: self.body.reverted.clone(),
+            },
+        }
+    }
+
     /// Recomputes the hash from this block's contents, for integrity verification
     /// against the value stored in `header.hash`.
     #[must_use]
     pub fn recompute_hash(&self) -> BlockHash {
-        HashableBlockDataWith {
-            block_id: self.header.block_id,
-            prev_block_hash: self.header.prev_block_hash,
-            timestamp: self.header.timestamp,
-            transactions: self
-                .body
-                .transactions
-                .iter()
-                .map(LeeTransaction::digested)
-                .collect(),
-            reverted: self.body.reverted.clone(),
-        }
-        .compute_hash()
-    }
-
-    pub fn to_inscription(&self) -> std::io::Result<Vec<u8>> {
-        borsh::to_vec(self)
-    }
-
-    pub fn from_inscription(bytes: &[u8]) -> std::io::Result<Self> {
-        borsh::from_slice(bytes)
+        self.digested().recompute_hash()
     }
 }
 
@@ -132,6 +130,80 @@ impl Serialize for Block {
 impl<'de> Deserialize<'de> for Block {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         crate::borsh_base64::deserialize(deserializer)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct DigestedBlock {
+    pub header: BlockHeader,
+    pub body: BlockBodyWith<ProofDigest>,
+}
+
+impl DigestedBlock {
+    #[must_use]
+    pub fn recompute_hash(&self) -> BlockHash {
+        HashableBlockDataWith {
+            block_id: self.header.block_id,
+            prev_block_hash: self.header.prev_block_hash,
+            timestamp: self.header.timestamp,
+            transactions: self.body.transactions.clone(),
+            reverted: self.body.reverted.clone(),
+        }
+        .compute_hash()
+    }
+
+    pub fn to_inscription(&self) -> std::io::Result<Vec<u8>> {
+        borsh::to_vec(self)
+    }
+
+    pub fn from_inscription(bytes: &[u8]) -> std::io::Result<Self> {
+        borsh::from_slice(bytes)
+    }
+
+    pub fn proof_digests(&self) -> impl Iterator<Item = &ProofDigest> {
+        self.body
+            .transactions
+            .iter()
+            .filter_map(|transaction| match transaction {
+                LeeTransactionWith::PrivacyPreserving(tx) => Some(tx.witness_set().proof()),
+                LeeTransactionWith::Public(_) => None,
+            })
+    }
+
+    pub fn hydrate(
+        &self,
+        proofs: impl Fn(&ProofDigest) -> Option<Proof>,
+    ) -> Result<Block, Vec<ProofDigest>> {
+        let mut transactions = Vec::with_capacity(self.body.transactions.len());
+        let mut missing = Vec::new();
+        for transaction in &self.body.transactions {
+            match transaction {
+                LeeTransactionWith::Public(tx) => {
+                    transactions.push(LeeTransaction::Public(tx.clone()));
+                }
+                LeeTransactionWith::PrivacyPreserving(tx) => {
+                    let digest = tx.witness_set().proof();
+                    let Some(hydrated) = proofs(digest).and_then(|proof| tx.hydrate(proof)) else {
+                        if !missing.contains(digest) {
+                            missing.push(*digest);
+                        }
+                        continue;
+                    };
+                    transactions.push(LeeTransaction::PrivacyPreserving(hydrated));
+                }
+            }
+        }
+        if !missing.is_empty() {
+            return Err(missing);
+        }
+        Ok(Block {
+            header: self.header.clone(),
+            body: BlockBody {
+                transactions,
+                reverted: self.body.reverted.clone(),
+            },
+            bedrock_status: BedrockStatus::Pending,
+        })
     }
 }
 
@@ -193,7 +265,11 @@ impl HashableBlockData {
 
     pub fn inscription_len(self) -> std::io::Result<usize> {
         // The hash is fixed-width, so its value does not change the length.
-        Ok(self.into_block(HashType([0; 32])).to_inscription()?.len())
+        Ok(self
+            .into_block(HashType([0; 32]))
+            .digested()
+            .to_inscription()?
+            .len())
     }
 
     fn into_block(self, hash: BlockHash) -> Block {
@@ -322,7 +398,12 @@ mod tests {
             transactions: vec![test_utils::produce_dummy_empty_transaction()],
             reverted: vec![0],
         };
-        let inscribed = data.clone().into_pending_block().to_inscription().unwrap();
+        let inscribed = data
+            .clone()
+            .into_pending_block()
+            .digested()
+            .to_inscription()
+            .unwrap();
 
         assert_eq!(data.inscription_len().unwrap(), inscribed.len());
     }

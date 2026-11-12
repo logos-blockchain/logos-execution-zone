@@ -3,6 +3,7 @@
 use std::{fmt::Display, str::FromStr};
 
 pub use common::{HashType, PageLimit, block::Block, transaction::LeeTransaction};
+use lee::privacy_preserving_transaction::circuit;
 pub use lee::{Account, AccountData, AccountId, Actor, EncryptedNote, ProgramId, Publication};
 pub use lee_core::{
     BlockId, Commitment, CommitmentPosition, CommitmentSetDigest, MembershipProof, Nullifier,
@@ -13,6 +14,12 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr)]
 pub struct ChannelId(pub [u8; 32]);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ProofDigest(#[serde(with = "common::borsh_base64")] pub circuit::ProofDigest);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Proof(#[serde(with = "common::borsh_base64")] pub circuit::Proof);
 
 /// The fee market priced off the head state: what a public transaction sizes
 /// its `max_fee` against, and what a private transaction prices its in-proof

@@ -202,6 +202,9 @@ pub struct ChannelParams {
     /// above `block_create_timeout`, or a healthy sequencer loses its turn
     /// between its own blocks.
     pub posting_timeout: u32,
+    /// Slots after a provisional block within which another writer may skip
+    /// it; zero disables skipping.
+    pub skip_window: u32,
     /// Blocks an unstake waits before `FinalizeUnstake` may release it.
     pub exit_delay: u64,
     /// Largest block a sequencer builds, in borsh-encoded bytes.
@@ -420,6 +423,7 @@ mod tests {
                 minimum_sequencer_stake: 1_000_000,
                 posting_timeframe: 300,
                 posting_timeout: 25,
+                skip_window: 400,
                 exit_delay: 10,
                 max_block_size: 1 << 20,
             }),
@@ -597,6 +601,7 @@ mod tests {
                 minimum_sequencer_stake: 1_000,
                 posting_timeframe: 300,
                 posting_timeout: 25,
+                skip_window: 400,
                 exit_delay: 10,
                 max_block_size: 1 << 20,
             }),

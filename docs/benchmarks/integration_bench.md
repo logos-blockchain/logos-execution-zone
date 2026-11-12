@@ -22,8 +22,8 @@ All three draw from a genesis-funded public account and move the native token; n
 |---|---|---|
 | Wall time per step | same in both modes | real adds the PPE prove time per private step |
 | `public_tx_bytes` | same in both modes | same in both modes |
-| `ppe_tx_bytes` | n/a | dev ≈ 24 KB stub → real ≈ 223 KB (matches `S_agg` from cycle_bench) |
-| `block_bytes` | same in both modes | real adds about 223 KB per PPE tx in the block |
+| `ppe_tx_bytes` | n/a | same in both modes: the proof is published as its 32-byte digest |
+| `block_bytes` | same in both modes | same in both modes |
 | `bedrock_finality_s` | same in both modes | same in both modes (L1 cadence, not LEZ prover) |
 | Blocks captured | similar in both modes | real captures more empty clock-only ticks that fill prove wall-time |
 
@@ -31,7 +31,7 @@ Tables below report dev mode for all three scenarios. A real-proving sweep is no
 
 ## Methodology
 
-Per scenario, every produced block is fetched via `getBlock(BlockId)` and serialized with `borsh::to_vec(&Block)`. Each transaction is serialized individually and counted by variant. Empty clock-only ticks give the per-block fixed-cost baseline. Wall time is captured per step (submit + inclusion + wallet sync) and aggregated to the per-scenario `total_s`. The one-time stack-setup cost (`shared_setup_s` at the run level) and the closing bedrock finality wait (`bedrock_finality_s` per scenario) are reported separately, not folded into `total_s`.
+Per scenario, every produced block is fetched via `getBlock(BlockId)` and measured as inscribed, each proof replaced by its digest (`block.digested().to_inscription()`). Each transaction is measured individually in the same form and counted by variant. Empty clock-only ticks give the per-block fixed-cost baseline. Wall time is captured per step (submit + inclusion + wallet sync) and aggregated to the per-scenario `total_s`. The one-time stack-setup cost (`shared_setup_s` at the run level) and the closing bedrock finality wait (`bedrock_finality_s` per scenario) are reported separately, not folded into `total_s`.
 
 `bedrock_finality_s` is the time for the indexer's L1-finalised block id to reach the sequencer tip. If it does not within `--finality-timeout-s` (default 300), the scenario records it as unmeasured rather than reporting the deadline as a latency.
 
@@ -67,12 +67,12 @@ In dev mode every submitting step costs about 30 s, which is block cadence and n
 | private_chained_flow | 9 | 8,891 | 810..25,210 | 314 / 18 | 24,244 / 3 |
 | parallel_fanout | 60 | 933 | 810..1,181 | 322 / 140 | n/a |
 
-The `private_chained_flow` `ppe_tx_bytes` above are dev-mode stubs. Under real proving they become the `S_agg` figure from cycle_bench, about 223 KB each.
+These figures predate digest-form inscriptions: they count each PPE transaction's full proof, a dev-mode stub of about 24 KB (about 223 KB under real proving, the `S_agg` figure from cycle_bench). Re-measurement is pending.
 
 ## Findings
 
 - Public native transfers are small and uniform: 258 to 371 bytes per transaction, under 1.2 KB per block.
-- A PPE transaction dominates its block. Even the dev-mode stub takes a block from 810 bytes to 25 KB, and real proofs take it to roughly 223 KB.
+- Before digest-form inscriptions, a PPE transaction dominated its block: even the dev-mode stub took a block from 810 bytes to 25 KB, and real proofs took it to roughly 223 KB. Blocks now publish a 32-byte digest per proof; re-measurement is pending.
 - Wall time in dev mode is set by block cadence, not by the node's work.
 
 ## Reproduce

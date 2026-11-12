@@ -16,6 +16,11 @@ pub type ChannelId = [u8; 32];
 #[derive(Copy, Clone)]
 pub struct ProduceBlock;
 
+/// Where this node requests the proofs its chain state lacks; unset until
+/// gossip is up.
+#[cfg(feature = "actor")]
+pub struct SetProofFetcher(pub kameo::actor::Recipient<sequencer_core::gossip::FetchProof>);
+
 /// The origin of a transaction.
 #[derive(Clone, Copy)]
 pub enum TransactionOrigin {

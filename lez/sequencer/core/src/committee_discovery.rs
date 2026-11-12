@@ -1,7 +1,8 @@
 //! Discovery process for the `sequencer_stake` committee.
 
+use chain_state::stake_config::read_config;
 use log::warn;
-use sequencer_stake_core::{SequencerKey, SequencerStakeConfig};
+use sequencer_stake_core::SequencerKey;
 
 /// Signatures a `ChannelConfigOp` must carry: two thirds of the accredited
 /// keys, capped at `committee_size - 1`, floored at one.
@@ -127,42 +128,11 @@ pub(crate) fn clock_block_id(state: &lee::V03State) -> Option<u64> {
     .map(|clock| clock.block_id)
 }
 
-/// Reads the `sequencer_stake` config account — a single account read, not a
-/// scan, since every `Stake`/`UnstakeRequest`/`FinalizeUnstake` keeps its
-/// `entries` map current as it executes. `None` only if the account is absent
-/// or undecodable, which genesis rules out.
-pub(crate) fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig> {
-    let Some(account) =
-        state.get_account_by_id_ref(system_accounts::sequencer_stake_config_account_id())
-    else {
-        warn!("sequencer_stake config account is absent");
-        return None;
-    };
-    let sequencer_stake_program_id = programs::sequencer_stake_account_id();
-    let config = SequencerStakeConfig::from_bytes(
-        account
-            .data
-            .actor_state(sequencer_stake_program_id)
-            .as_ref(),
-    );
-    if config.is_none() {
-        warn!("sequencer_stake config account did not decode as SequencerStakeConfig");
-    }
-    config
-}
-
-/// Channel posting params from the config account. `None` before genesis set
-/// them, which a live chain rules out.
-pub(crate) fn channel_params(state: &lee::V03State) -> Option<crate::config::ChannelParams> {
-    read_config(state)?.channel_params
-}
-
 #[cfg(test)]
 mod tests {
-
     use lee_core::account::Account;
     use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-    use sequencer_stake_core::{PendingUnstake, SequencerEntry};
+    use sequencer_stake_core::{PendingUnstake, SequencerEntry, SequencerStakeConfig};
 
     use super::*;
 
@@ -226,6 +196,7 @@ mod tests {
                     minimum_sequencer_stake: MINIMUM,
                     posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
                     posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
+                    skip_window: system_accounts::DEFAULT_SKIP_WINDOW,
                     exit_delay: EXIT_DELAY,
                     max_block_size: 1 << 20,
                 }),

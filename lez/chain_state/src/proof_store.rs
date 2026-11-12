@@ -13,6 +13,7 @@ struct ProofStoreInner {
     order: VecDeque<ProofDigest>,
     total_bytes: usize,
     capacity_bytes: usize,
+    pinned: HashMap<ProofDigest, (usize, Vec<u8>)>,
 }
 
 impl ProofStore {
@@ -23,49 +24,81 @@ impl ProofStore {
             order: VecDeque::new(),
             total_bytes: 0,
             capacity_bytes,
+            pinned: HashMap::new(),
         })))
     }
 
     pub fn insert(&self, proof: &Proof) -> ProofDigest {
         let digest = proof.digest();
         let mut held = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        if held.proofs.contains_key(&digest) {
-            return digest;
-        }
-        let bytes = proof.clone().into_inner();
-        if bytes.len() > held.capacity_bytes {
-            return digest;
-        }
-        held.total_bytes = held.total_bytes.saturating_add(bytes.len());
-        held.proofs.insert(digest, bytes);
-        held.order.push_back(digest);
-        while held.total_bytes > held.capacity_bytes
-            && let Some(oldest) = held.order.pop_front()
-            && let Some(evicted) = held.proofs.remove(&oldest)
-        {
-            held.total_bytes = held.total_bytes.saturating_sub(evicted.len());
+        if !held.proofs.contains_key(&digest) && !held.pinned.contains_key(&digest) {
+            held.admit(digest, proof.clone().into_inner());
         }
         digest
     }
 
+    pub fn pin(&self, proof: &Proof) {
+        let digest = proof.digest();
+        let mut held = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((pins, _)) = held.pinned.get_mut(&digest) {
+            *pins = pins.saturating_add(1);
+            return;
+        }
+        let bytes = held.proofs.remove(&digest).map_or_else(
+            || proof.clone().into_inner(),
+            |bytes| {
+                held.order.retain(|queued| *queued != digest);
+                held.total_bytes = held.total_bytes.saturating_sub(bytes.len());
+                bytes
+            },
+        );
+        held.pinned.insert(digest, (1, bytes));
+    }
+
+    pub fn unpin(&self, digest: &ProofDigest) {
+        let mut held = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some((pins, _)) = held.pinned.get_mut(digest) else {
+            return;
+        };
+        *pins = pins.saturating_sub(1);
+        if *pins == 0
+            && let Some((_, bytes)) = held.pinned.remove(digest)
+        {
+            held.admit(*digest, bytes);
+        }
+    }
+
     #[must_use]
     pub fn contains(&self, digest: &ProofDigest) -> bool {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .proofs
-            .contains_key(digest)
+        let held = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        held.proofs.contains_key(digest) || held.pinned.contains_key(digest)
     }
 
     #[must_use]
     pub fn get(&self, digest: &ProofDigest) -> Option<Proof> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .proofs
+        let held = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        held.proofs
             .get(digest)
+            .or_else(|| held.pinned.get(digest).map(|(_, bytes)| bytes))
             .cloned()
             .map(Proof::from_inner)
+    }
+}
+
+impl ProofStoreInner {
+    fn admit(&mut self, digest: ProofDigest, bytes: Vec<u8>) {
+        if bytes.len() > self.capacity_bytes {
+            return;
+        }
+        self.total_bytes = self.total_bytes.saturating_add(bytes.len());
+        self.proofs.insert(digest, bytes);
+        self.order.push_back(digest);
+        while self.total_bytes > self.capacity_bytes
+            && let Some(oldest) = self.order.pop_front()
+            && let Some(evicted) = self.proofs.remove(&oldest)
+        {
+            self.total_bytes = self.total_bytes.saturating_sub(evicted.len());
+        }
     }
 }
 
