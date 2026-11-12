@@ -20,7 +20,7 @@ use lee::privacy_preserving_transaction::circuit::{Proof, ProofDigest};
 #[cfg(feature = "mdns")]
 use libp2p::mdns;
 use libp2p::{
-    Multiaddr, PeerId, SwarmBuilder, gossipsub, identify,
+    Multiaddr, PeerId, StreamProtocol, SwarmBuilder, gossipsub, identify,
     identity::Keypair,
     kad,
     multiaddr::Protocol,
@@ -36,15 +36,11 @@ use sequencer_core::{
 use sequencer_slasher_actor::protocol::Approval;
 use tokio::select;
 
-use self::{
-    proof_exchange::{ProofCodec, protocol_for_channel},
-    seen_cache::SeenCache,
-};
+use self::seen_cache::SeenCache;
 use crate::protocol::{
     FetchProof, GetConnectedPeers, PublishConfig, PublishTransaction, RetryBootstrap,
 };
 
-mod proof_exchange;
 mod seen_cache;
 #[cfg(test)]
 mod tests;
@@ -69,13 +65,27 @@ pub const BOOTSTRAP_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 /// Local transactions whose publish failed (e.g. `InsufficientPeers` while
 /// the mesh is still forming), kept for republish once a peer subscribes.
 const PENDING_PUBLISH_CAPACITY: usize = 256;
+/// The largest proof request: a proof digest, as a base64 JSON string.
+const MAX_PROOF_REQUEST_SIZE: u64 = 64;
+/// The largest proof response: a proof a transaction can carry, borsh-encoded, as a base64 JSON
+/// string.
+const MAX_PROOF_RESPONSE_SIZE: u64 = MAX_TRANSACTION_SIZE
+    .saturating_add(4)
+    .div_ceil(3)
+    .saturating_mul(4)
+    .saturating_add(2);
+
+type ProofExchange = request_response::json::Behaviour<
+    sequencer_service_protocol::ProofDigest,
+    Option<sequencer_service_protocol::Proof>,
+>;
 
 #[derive(NetworkBehaviour)]
 struct GossipBehaviour {
     gossipsub: gossipsub::Behaviour,
     identify: identify::Behaviour,
     kademlia: kad::Behaviour<kad::store::MemoryStore>,
-    proof_exchange: request_response::Behaviour<ProofCodec>,
+    proof_exchange: ProofExchange,
     #[cfg(feature = "mdns")]
     mdns: mdns::tokio::Behaviour,
 }
@@ -211,14 +221,6 @@ impl GossipActor {
             kademlia.set_mode(Some(kad::Mode::Server));
             kademlia
         };
-        let proof_exchange_behaviour = request_response::Behaviour::with_codec(
-            ProofCodec,
-            [(
-                protocol_for_channel(channel_id),
-                request_response::ProtocolSupport::Full,
-            )],
-            request_response::Config::default(),
-        );
         #[cfg(feature = "mdns")]
         let mdns_behaviour = mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)
             .map_err(|err| anyhow!("Failed to build mdns behaviour: {err}"))?;
@@ -232,7 +234,7 @@ impl GossipActor {
                 gossipsub: gossipsub_behaviour,
                 identify: identify_behaviour,
                 kademlia: kademlia_behaviour,
-                proof_exchange: proof_exchange_behaviour,
+                proof_exchange: proof_exchange(channel_id),
                 #[cfg(feature = "mdns")]
                 mdns: mdns_behaviour,
             })
@@ -465,7 +467,10 @@ impl GossipActor {
                 request_response::Message::Request {
                     request, channel, ..
                 } => {
-                    let proof = self.proof_store.get(&request);
+                    let proof = self
+                        .proof_store
+                        .get(&request.0)
+                        .map(sequencer_service_protocol::Proof);
                     if self
                         .swarm_mut()
                         .behaviour_mut()
@@ -479,7 +484,7 @@ impl GossipActor {
                 request_response::Message::Response {
                     request_id,
                     response,
-                } => self.on_proof_response(request_id, response),
+                } => self.on_proof_response(request_id, response.map(|proof| proof.0)),
             },
             GossipBehaviourEvent::ProofExchange(request_response::Event::OutboundFailure {
                 peer,
@@ -749,7 +754,7 @@ impl GossipActor {
             .swarm_mut()
             .behaviour_mut()
             .proof_exchange
-            .send_request(&peer, digest);
+            .send_request(&peer, sequencer_service_protocol::ProofDigest(digest));
         self.proof_fetches.insert(request_id, (digest, tried));
     }
 
@@ -906,6 +911,21 @@ impl Drop for WatchdogGuard {
     fn drop(&mut self) {
         self.0.abort();
     }
+}
+
+/// The behaviour the sequencers on `channel_id` fetch proofs from each other over.
+fn proof_exchange(channel_id: [u8; 32]) -> ProofExchange {
+    let protocol = format!("/lez/{}/v1/proofs", hex::encode(channel_id));
+    request_response::json::Behaviour::with_codec(
+        request_response::json::codec::Codec::default()
+            .set_request_size_maximum(MAX_PROOF_REQUEST_SIZE)
+            .set_response_size_maximum(MAX_PROOF_RESPONSE_SIZE),
+        [(
+            StreamProtocol::try_from_owned(protocol).expect("the protocol starts with a slash"),
+            request_response::ProtocolSupport::Full,
+        )],
+        request_response::Config::default(),
+    )
 }
 
 /// True if `addr` carries an unspecified (`0.0.0.0` / `::`) IP component.

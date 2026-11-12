@@ -28,10 +28,7 @@ use sequencer_stake_core::SequencerKey;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 use tokio::sync::mpsc;
 
-use super::{
-    GossipActor, IngestSubmit, MAILBOX_CAPACITY, peer_id_from_ed25519,
-    proof_exchange::{ProofCodec, protocol_for_channel},
-};
+use super::{GossipActor, IngestSubmit, MAILBOX_CAPACITY, peer_id_from_ed25519, proof_exchange};
 use crate::protocol::{FetchProof, GetConnectedPeers, PublishConfig, PublishTransaction};
 
 const CHANNEL: [u8; 32] = [1; 32];
@@ -279,16 +276,7 @@ fn scripted_proof_peer(
     let mut swarm = libp2p::SwarmBuilder::with_new_identity()
         .with_tokio()
         .with_quic()
-        .with_behaviour(|_key| {
-            request_response::Behaviour::with_codec(
-                ProofCodec,
-                [(
-                    protocol_for_channel(CHANNEL),
-                    request_response::ProtocolSupport::Full,
-                )],
-                request_response::Config::default(),
-            )
-        })
+        .with_behaviour(|_key| proof_exchange(CHANNEL))
         .expect("behaviour constructor is infallible")
         .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(60)))
         .build();
@@ -308,7 +296,7 @@ fn scripted_proof_peer(
                         ..
                     }) = event
                     {
-                        _ = requests_tx.send(request);
+                        _ = requests_tx.send(request.0);
                         held.push(channel);
                     }
                 }
@@ -316,7 +304,8 @@ fn scripted_proof_peer(
             }
             if answering {
                 for channel in std::mem::take(&mut held) {
-                    _ = swarm.behaviour_mut().send_response(channel, answer.clone());
+                    let answer = answer.clone().map(sequencer_service_protocol::Proof);
+                    _ = swarm.behaviour_mut().send_response(channel, answer);
                 }
             }
         }

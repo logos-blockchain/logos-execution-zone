@@ -6835,6 +6835,8 @@ dependencies = [
  "libp2p-identity 0.3.1",
  "libp2p-swarm 0.48.0",
  "rand 0.10.1",
+ "serde",
+ "serde_json",
  "smallvec",
  "tracing",
 ]
@@ -12140,6 +12142,7 @@ dependencies = [
  "mempool",
  "sequencer_channel_signing_actor",
  "sequencer_core",
+ "sequencer_service_protocol",
  "sequencer_slasher_actor",
  "sequencer_stake_core",
  "testnet_initial_state",
