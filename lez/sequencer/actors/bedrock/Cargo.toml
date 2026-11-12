@@ -15,7 +15,7 @@ actor = [
   "dep:tokio",
   "dep:borsh",
   "dep:url",
-  "dep:log",
+  "dep:tracing",
 ]
 # Adds mock actor implementation.
 mock = ["sequencer_actors_common/mock", "dep:mockall"]
@@ -42,7 +42,7 @@ kameo_actors = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 borsh = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
-log = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
 mockall = { workspace = true, optional = true }
 
 [dev-dependencies]

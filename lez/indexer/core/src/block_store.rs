@@ -10,11 +10,11 @@ use common::{
 };
 use lee::{Account, AccountId, Actor, V03State};
 use lee_core::BlockId;
-use log::warn;
 use logos_blockchain_core::header::HeaderId;
 use logos_blockchain_zone_sdk::Slot;
 use storage::indexer::RocksDBIO;
 use tokio::sync::RwLock;
+use tracing::{error, info, warn};
 
 use crate::{event_filter::EventFilter, status::CrossZoneHalt};
 
@@ -42,9 +42,9 @@ impl IndexerStore {
         // sequencer's by construction (fingerprint below is the diagnostic). Tests
         // seed the producer's reward account, which no genesis block of theirs
         // stakes.
-        log::info!(
-            "Genesis fingerprint: {}",
-            hex::encode(initial_state.genesis_fingerprint())
+        info!(
+            fingerprint = %hex::encode(initial_state.genesis_fingerprint()),
+            "Genesis fingerprint computed"
         );
         let dbio = RocksDBIO::open_or_create(location, &initial_state)?;
         // Presence cannot change on a chain: an existing store keeps its seeded
@@ -52,9 +52,11 @@ impl IndexerStore {
         if let Some(stored) = dbio.get_breakpoint_opt(0)?
             && stored.genesis_fingerprint() != initial_state.genesis_fingerprint()
         {
-            log::error!(
-                "Stored genesis fingerprint {} does not match the configured one; the store keeps running on its own genesis. Did cross_zone presence change since this chain was created?",
-                hex::encode(stored.genesis_fingerprint())
+            error!(
+                stored_fingerprint = %hex::encode(stored.genesis_fingerprint()),
+                "Stored genesis fingerprint does not match the configured one; the store keeps \
+                 running on its own genesis. Did cross_zone presence change since this chain was \
+                 created?"
             );
         }
 
@@ -350,7 +352,10 @@ impl IndexerStore {
         // Best-effort: the block is durably applied, so a failed stall clear must not
         // fail the apply. It self-heals on the next clear.
         if let Err(err) = self.clear_stall_if_present() {
-            warn!("Failed to clear stall marker after applying block: {err:#}");
+            warn!(
+                error = format_args!("{err:#}"),
+                "Failed to clear stall marker after applying block"
+            );
         }
         // Indexer writes logs directly into DB, they are redundant here.
         Ok(AcceptOutcome::Applied(Vec::new()))
@@ -397,7 +402,7 @@ fn reconcile_filter_segments(
     };
     if let Some(change) = change {
         dbio.put_event_filter_segments_bytes(&borsh::to_vec(&segments)?)?;
-        log::info!("Event filter changed: {change} segment, effective from block {seam}");
+        info!(%change, from_block = seam, "Event filter changed");
     }
     Ok(segments)
 }

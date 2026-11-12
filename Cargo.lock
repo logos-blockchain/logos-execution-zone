@@ -1590,7 +1590,6 @@ dependencies = [
  "futures",
  "lee",
  "lee_core",
- "log",
  "logos-blockchain-core",
  "logos-blockchain-zone-sdk",
  "program_loader_core",
@@ -1604,6 +1603,7 @@ dependencies = [
  "testnet_initial_state",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1853,7 +1853,6 @@ dependencies = [
  "hex",
  "lee",
  "lee_core",
- "log",
  "logos-blockchain-common-http-client",
  "ping_core",
  "programs",
@@ -1863,6 +1862,7 @@ dependencies = [
  "system_accounts",
  "system_upgrader_core",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
@@ -2072,12 +2072,11 @@ dependencies = [
  "bip39",
  "cbindgen",
  "common",
- "env_logger",
  "kameo",
  "key_protocol",
  "lee",
  "lee_core",
- "log",
+ "logging",
  "programs",
  "sequencer_core",
  "sequencer_executor_actor",
@@ -2088,6 +2087,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "wallet",
  "zeroize",
 ]
@@ -2191,6 +2191,7 @@ dependencies = [
  "ping_core",
  "programs",
  "serde",
+ "tracing",
  "wrapped_token_core",
 ]
 
@@ -2205,10 +2206,9 @@ dependencies = [
  "cross_zone",
  "cross_zone_inbox_core",
  "cross_zone_outbox_core",
- "env_logger",
  "lee",
  "lee_core",
- "log",
+ "logging",
  "ping_core",
  "programs",
  "rand 0.8.6",
@@ -2217,6 +2217,7 @@ dependencies = [
  "test_fixtures",
  "testnet_initial_state",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3272,29 +3273,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "env_filter"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32e90c2accc4b07a8456ea0debdc2e7587bdd890680d71173a15d4ae604f6eef"
-dependencies = [
- "log",
- "regex",
-]
-
-[[package]]
-name = "env_logger"
-version = "0.11.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0621c04f2196ac3f488dd583365b9c09be011a4ab8b9f37248ffcc8f6198b56a"
-dependencies = [
- "anstream",
- "anstyle",
- "env_filter",
- "jiff",
- "log",
-]
-
-[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3394,7 +3372,6 @@ dependencies = [
  "clap",
  "console_error_panic_hook",
  "console_log",
- "env_logger",
  "indexer_service_protocol",
  "indexer_service_rpc",
  "jsonrpsee",
@@ -3403,8 +3380,10 @@ dependencies = [
  "leptos_meta",
  "leptos_router",
  "log",
+ "logging",
  "serde",
  "tokio",
+ "tracing",
  "url",
  "urlencoding",
  "wasm-bindgen",
@@ -4938,7 +4917,6 @@ dependencies = [
  "humantime-serde",
  "lee",
  "lee_core",
- "log",
  "logos-blockchain-core",
  "logos-blockchain-zone-sdk",
  "ping_core",
@@ -4954,6 +4932,7 @@ dependencies = [
  "testnet_initial_state",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "url",
 ]
 
@@ -4962,16 +4941,16 @@ name = "indexer_ffi"
 version = "0.1.0"
 dependencies = [
  "cbindgen",
- "env_logger",
  "ffi_types",
  "futures",
  "indexer_core",
  "indexer_service_protocol",
  "lee",
  "lee_core",
- "log",
+ "logging",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -4981,17 +4960,17 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "clap",
- "env_logger",
  "futures",
  "indexer_core",
  "indexer_service_protocol",
  "indexer_service_rpc",
  "jsonrpsee",
  "lee_core",
- "log",
+ "logging",
  "serde_json",
  "tokio",
  "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -5132,7 +5111,6 @@ dependencies = [
  "key_protocol",
  "lee",
  "lee_core",
- "log",
  "logos-blockchain-core",
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-service",
@@ -5412,6 +5390,23 @@ checksum = "62a9c1f06b173b0da0ccc8cae00599d7b3ceda6e76d68be9b6bc2c941adafe0e"
 dependencies = [
  "serde_json",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "json-subscriber"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7450152f0f81b8a1ad51e69fcc114ef6155d1a4efa076697471c4f572067de15"
+dependencies = [
+ "opentelemetry",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-core",
+ "tracing-opentelemetry",
+ "tracing-serde",
+ "tracing-subscriber 0.3.23",
+ "uuid",
 ]
 
 [[package]]
@@ -5790,10 +5785,10 @@ dependencies = [
  "hex",
  "keycard-rs",
  "lee",
- "log",
  "pcsc",
  "rand 0.8.6",
  "thiserror 2.0.18",
+ "tracing",
  "zeroize",
 ]
 
@@ -5974,7 +5969,6 @@ dependencies = [
  "hex-literal 1.1.0",
  "k256 0.13.4",
  "lee_core",
- "log",
  "program_loader_core",
  "rand 0.8.6",
  "risc0-binfmt",
@@ -5989,6 +5983,7 @@ dependencies = [
  "test_guest_core",
  "test_methods",
  "thiserror 2.0.18",
+ "tracing",
  "zeroize",
 ]
 
@@ -7095,6 +7090,16 @@ name = "log"
 version = "0.4.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "113b30b4cd05f7c06868fdb2854f66a7b9fece9a48425351cd532e810d74024f"
+
+[[package]]
+name = "logging"
+version = "0.1.0"
+dependencies = [
+ "json-subscriber",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber 0.3.23",
+]
 
 [[package]]
 name = "logos-blockchain-api-service"
@@ -11943,7 +11948,6 @@ dependencies = [
  "glob",
  "kameo",
  "kameo_actors",
- "log",
  "logos-blockchain-binary-codec",
  "logos-blockchain-common-http-client",
  "logos-blockchain-core",
@@ -11957,6 +11961,7 @@ dependencies = [
  "sharding_pool_actor",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "url",
 ]
 
@@ -11975,12 +11980,12 @@ name = "sequencer_channel_signing_actor"
 version = "0.1.0"
 dependencies = [
  "kameo",
- "log",
  "logos-blockchain-binary-codec",
  "logos-blockchain-core",
  "logos-blockchain-key-management-system-service",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -12006,7 +12011,6 @@ dependencies = [
  "lee",
  "lee_core",
  "libp2p 0.57.1",
- "log",
  "logos-blockchain-binary-codec",
  "logos-blockchain-core",
  "logos-blockchain-key-management-system-service",
@@ -12036,6 +12040,7 @@ dependencies = [
  "testnet_initial_state",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "url",
 ]
 
@@ -12060,7 +12065,6 @@ dependencies = [
  "common",
  "cross_zone",
  "cross_zone_inbox_core",
- "env_logger",
  "fee_core",
  "futures",
  "glob",
@@ -12068,7 +12072,7 @@ dependencies = [
  "kameo_actors",
  "lee",
  "lee_core",
- "log",
+ "logging",
  "logos-blockchain-binary-codec",
  "logos-blockchain-core",
  "mempool",
@@ -12092,6 +12096,7 @@ dependencies = [
  "testnet_initial_state",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -12114,13 +12119,13 @@ dependencies = [
  "hex",
  "lee",
  "lee_core",
- "log",
  "programs",
  "sequencer_bridge",
  "sequencer_stake_core",
  "serde",
  "system_accounts",
  "testnet_initial_state",
+ "tracing",
 ]
 
 [[package]]
@@ -12135,7 +12140,6 @@ dependencies = [
  "kameo",
  "lee",
  "libp2p 0.57.1",
- "log",
  "logos-blockchain-core",
  "logos-blockchain-key-management-system-service",
  "mempool",
@@ -12146,6 +12150,7 @@ dependencies = [
  "system_upgrader_core",
  "testnet_initial_state",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -12157,7 +12162,6 @@ dependencies = [
  "jsonrpsee",
  "kameo",
  "lee",
- "log",
  "sequencer_core",
  "sequencer_executor_actor",
  "sequencer_gossip_actor",
@@ -12166,6 +12170,7 @@ dependencies = [
  "sequencer_service_rpc",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -12184,7 +12189,6 @@ dependencies = [
  "borsh",
  "clap",
  "common",
- "env_logger",
  "futures",
  "glob",
  "hex",
@@ -12192,9 +12196,12 @@ dependencies = [
  "kameo_actors",
  "lee",
  "libp2p 0.57.1",
- "log",
+ "logging",
  "metrics",
  "metrics-exporter-prometheus",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
  "programs",
  "sequencer_bedrock_actor",
  "sequencer_channel_signing_actor",
@@ -12213,6 +12220,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-opentelemetry",
  "tracing-subscriber 0.3.23",
  "wallet",
 ]
@@ -12222,6 +12230,7 @@ name = "sequencer_service_metrics"
 version = "0.1.0"
 dependencies = [
  "metrics",
+ "metrics-exporter-prometheus",
 ]
 
 [[package]]
@@ -12254,7 +12263,6 @@ dependencies = [
  "hex",
  "kameo",
  "lee",
- "log",
  "logos-blockchain-key-management-system-service",
  "programs",
  "sequencer_stake_core",
@@ -12262,6 +12270,7 @@ dependencies = [
  "system_accounts",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -12295,7 +12304,6 @@ dependencies = [
  "kameo",
  "lee",
  "lee_core",
- "log",
  "mockall",
  "num-traits",
  "rocksdb",
@@ -12304,6 +12312,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "zstd",
 ]
 
@@ -12669,11 +12678,12 @@ dependencies = [
 name = "sharding_pool_actor"
 version = "0.1.0"
 dependencies = [
- "env_logger",
  "kameo",
- "log",
+ "logging",
  "sequencer_actors_common",
  "tokio",
+ "tracing",
+ "tracing-subscriber 0.3.23",
 ]
 
 [[package]]
@@ -12937,12 +12947,12 @@ dependencies = [
  "fee_core",
  "lee",
  "lee_core",
- "log",
  "programs",
  "rocksdb",
  "system_accounts",
  "tempfile",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
@@ -13359,7 +13369,6 @@ dependencies = [
  "anyhow",
  "bip39",
  "common",
- "env_logger",
  "fee_core",
  "futures",
  "hex",
@@ -13370,7 +13379,7 @@ dependencies = [
  "key_protocol",
  "lee",
  "lee_core",
- "log",
+ "logging",
  "logos-blockchain-key-management-system-service",
  "num-bigint 0.4.6",
  "programs",
@@ -13389,6 +13398,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
+ "tracing",
  "url",
  "wallet",
 ]
@@ -14209,6 +14219,7 @@ dependencies = [
  "smallvec",
  "tracing",
  "tracing-core",
+ "tracing-log",
  "tracing-subscriber 0.3.23",
  "web-time",
 ]
@@ -14679,7 +14690,6 @@ dependencies = [
  "clap",
  "common",
  "derive_more",
- "env_logger",
  "fee_core",
  "futures",
  "hex",
@@ -14692,7 +14702,7 @@ dependencies = [
  "keycard_wallet",
  "lee",
  "lee_core",
- "log",
+ "logging",
  "optfield",
  "program_loader_core",
  "programs",
@@ -14711,6 +14721,7 @@ dependencies = [
  "testnet_initial_state",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "url",
  "zeroize",
 ]

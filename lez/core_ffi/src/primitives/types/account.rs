@@ -54,7 +54,7 @@ impl TryFrom<FfiAccountData> for AccountData {
         let values_std_raw: Vec<Vec<u8>> = values_ffi.into_iter().map(Into::into).collect();
 
         if values_std_raw.len() != keys_std.len() {
-            log::error!(
+            tracing::error!(
                 "Failed to cast `FfiAccount` into `Account`, err: Keys and values length mismatch"
             );
             return Err(PrimitiveOperationStatus::CastError);
@@ -190,7 +190,7 @@ impl TryFrom<&FfiAccount> for lee::Account {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn primitves_ffi_free_ffi_account_opt(val: *mut FfiOption<FfiAccount>) {
     if val.is_null() {
-        log::error!("Trying to free a null pointer. Exiting");
+        tracing::error!("Trying to free a null pointer. Exiting");
         return;
     }
     // Reclaim the outer box, then the inner account box (if any), converting it to drop its data.
@@ -199,7 +199,7 @@ pub unsafe extern "C" fn primitves_ffi_free_ffi_account_opt(val: *mut FfiOption<
         let account = unsafe { Box::from_raw(opt.value) };
         let orig_val_res: Result<Account, FfiOperationError> = (&*account)
             .try_into()
-            .inspect_err(|_| log::error!("Failed to cast `FfiAccount` into `Account`"));
+            .inspect_err(|_| tracing::error!("Failed to cast `FfiAccount` into `Account`"));
 
         if let Ok(orig_val) = orig_val_res {
             drop(orig_val);

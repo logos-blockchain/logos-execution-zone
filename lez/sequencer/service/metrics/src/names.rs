@@ -29,15 +29,41 @@ pub const KAMEO_LINK_DIED_RECEIVED_TOTAL: &str = "kameo_link_died_received_total
 /// unbounded one. Labelled with [`ACTOR_NAME_LABEL`], like kameo's counters.
 pub const ACTOR_MAILBOX_CAPACITY: &str = "actor_mailbox_capacity";
 
-/// Time the actor spent handling one message, from taking it off the mailbox
-/// to its handler returning. Labelled with [`ACTOR_NAME_LABEL`] and
-/// [`MESSAGE_NAME_LABEL`].
+/// Label of an actor that runs as one of several of its type: which one.
+///
+/// E.g. the key a sharding pool runs it for, as the channel ID, in hex, of a
+/// Bedrock actor. It is on [`ACTOR_MESSAGE_HANDLING_TIME`], [`ACTOR_STATE`]
+/// and [`ACTOR_START_TIME`]; other actors go without.
+pub const ACTOR_INSTANCE_LABEL: &str = "actor_instance";
+
+/// Time the actor spent handling one message.
+///
+/// From taking it off the mailbox to its handler returning. Labelled with
+/// [`ACTOR_NAME_LABEL`], [`MESSAGE_NAME_LABEL`], [`SENDER_LABEL`] and, for
+/// actors with named instances, [`ACTOR_INSTANCE_LABEL`] and
+/// [`SENDER_INSTANCE_LABEL`].
 pub const ACTOR_MESSAGE_HANDLING_TIME: &str = "actor_message_handling_time_seconds";
 
 /// Label on [`ACTOR_MESSAGE_HANDLING_TIME`]: kameo's name for the message, by
 /// default its type name with the module path, e.g.
 /// `sequencer_storage_actor::messages::GetBlock`.
 pub const MESSAGE_NAME_LABEL: &str = "message_name";
+
+/// Label on [`ACTOR_MESSAGE_HANDLING_TIME`]: what sent the message.
+///
+/// That is the type name of the actor whose code sent it, as in
+/// [`ACTOR_NAME_LABEL`]; outside any actor, the name of the outermost `info`
+/// or higher span it was sent in, e.g. `rpc`, whatever the log level; and
+/// [`NO_SENDER`] outside any such span, e.g. from a scheduler's timer.
+pub const SENDER_LABEL: &str = "sender";
+
+/// Label on [`ACTOR_MESSAGE_HANDLING_TIME`], for a message an actor that runs
+/// as one of several of its type sent: which one, as [`ACTOR_INSTANCE_LABEL`]
+/// says of the actor handling it.
+pub const SENDER_INSTANCE_LABEL: &str = "sender_instance";
+
+/// [`SENDER_LABEL`] of a message sent outside any span.
+pub const NO_SENDER: &str = "none";
 
 /// What the actor is doing, one of [`ActorState`]'s values.
 pub const ACTOR_STATE: &str = "actor_state";

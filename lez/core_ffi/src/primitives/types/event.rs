@@ -60,7 +60,7 @@ pub unsafe extern "C" fn primitives_ffi_free_ffi_event_record_vec(
     val: *mut FfiVec<FfiEventRecord>,
 ) {
     if val.is_null() {
-        log::error!("Trying to free a null pointer. Exiting");
+        tracing::error!("Trying to free a null pointer. Exiting");
         return;
     }
     let ffi_vec = unsafe { Box::from_raw(val) };

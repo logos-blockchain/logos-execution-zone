@@ -206,7 +206,7 @@ impl TryFrom<FfiProgramImageClaim> for ProgramImageClaim {
                         image_id: *image_id,
                     })
                 } else {
-                    log::error!(
+                    tracing::error!(
                         "Disclosed `FfiProgramImageClaim` is missing its account or image id"
                     );
                     Err(PrimitiveOperationStatus::NullPointer)
@@ -215,7 +215,7 @@ impl TryFrom<FfiProgramImageClaim> for ProgramImageClaim {
             FfiProgramImageClaimKind::Undisclosed => root
                 .map(|root| Self::Undisclosed { root: *root })
                 .ok_or_else(|| {
-                    log::error!("Undisclosed `FfiProgramImageClaim` is missing its root");
+                    tracing::error!("Undisclosed `FfiProgramImageClaim` is missing its root");
                     PrimitiveOperationStatus::NullPointer
                 }),
         }
@@ -600,7 +600,7 @@ pub unsafe extern "C" fn primitives_ffi_free_ffi_transaction_opt(
     val: *mut FfiOption<FfiTransaction>,
 ) {
     if val.is_null() {
-        log::error!("Trying to free a null pointer. Exiting");
+        tracing::error!("Trying to free a null pointer. Exiting");
         return;
     }
     // Reclaim the outer box, then the inner transaction box (if any).
@@ -650,7 +650,7 @@ pub(crate) fn primitives_ffi_free_transaction_vec_value(val: FfiVec<FfiTransacti
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn primitives_ffi_free_ffi_transaction_vec(val: *mut FfiVec<FfiTransaction>) {
     if val.is_null() {
-        log::error!("Trying to free a null pointer. Exiting");
+        tracing::error!("Trying to free a null pointer. Exiting");
         return;
     }
     // Reclaim the outer box, then the backing buffer and each transaction.
@@ -663,7 +663,7 @@ pub unsafe extern "C" fn primitives_ffi_free_ffi_transaction_vec(val: *mut FfiVe
     reason = "`map_err` passes the error by value"
 )]
 fn cast_error(error: LeeError) -> PrimitiveOperationStatus {
-    log::error!("Failed to cast `[u8; 32]` into PublicKey, err: {error}");
+    tracing::error!(%error, "Failed to cast `[u8; 32]` into PublicKey");
     PrimitiveOperationStatus::CastError
 }
 
@@ -690,7 +690,7 @@ fn cast_ffi_validity_window(
     };
 
     ValidityWindow::try_from((left, right)).map_err(|e| {
-        log::error!("Failed to cast ffi validity window: {e}");
+        tracing::error!(error = %e, "Failed to cast ffi validity window");
         PrimitiveOperationStatus::CastError
     })
 }

@@ -1,6 +1,7 @@
 #![expect(
     clippy::shadow_unrelated,
     clippy::tests_outside_test_module,
+    clippy::arithmetic_side_effects,
     reason = "We don't care about these in tests"
 )]
 
@@ -34,10 +35,10 @@ fn indexer_ffi_state_consistency() -> Result<()> {
 
     ctx.block_on_mut(|ctx| wallet::cli::execute_subcommand(ctx.wallet_mut(), command))?;
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
-    log::info!("Checking correct balance move");
+    tracing::info!("Checking correct balance move");
     let acc_1_balance = ctx.block_on(|ctx| {
         sequencer_service_rpc::RpcClient::get_account_balance(
             ctx.sequencer_client(),
@@ -51,8 +52,8 @@ fn indexer_ffi_state_consistency() -> Result<()> {
         )
     })?;
 
-    log::info!("Balance of sender: {acc_1_balance:#?}");
-    log::info!("Balance of receiver: {acc_2_balance:#?}");
+    tracing::info!(?acc_1_balance, "Balance of sender");
+    tracing::info!(?acc_2_balance, "Balance of receiver");
 
     // Charged transfer: the recipient gains exactly the amount; the sender
     // pays the amount plus a positive fee within the protocol ceiling.
@@ -80,7 +81,7 @@ fn indexer_ffi_state_consistency() -> Result<()> {
 
     ctx.block_on_mut(|ctx| wallet::cli::execute_subcommand(ctx.wallet_mut(), command))?;
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     let new_commitment1 = ctx
@@ -101,10 +102,10 @@ fn indexer_ffi_state_consistency() -> Result<()> {
         ctx.block_on(|ctx| verify_commitment_is_in_state(new_commitment2, ctx.sequencer_client()));
     assert!(commitment_check2);
 
-    log::info!("Successfully transferred privately to owned account");
+    tracing::info!("Successfully transferred privately to owned account");
 
     // WAIT
-    log::info!("Waiting for indexer to parse blocks");
+    tracing::info!("Waiting for indexer to parse blocks");
     std::thread::sleep(L2_TO_L1_TIMEOUT);
 
     let acc1_ind_state = indexer_ffi_helpers::indexed_account(
@@ -116,7 +117,7 @@ fn indexer_ffi_state_consistency() -> Result<()> {
         &ctx.ctx().existing_public_accounts()[1],
     );
 
-    log::info!("Checking correct state transition");
+    tracing::info!("Checking correct state transition");
     let acc1_seq_state = ctx.block_on(|ctx| {
         sequencer_service_rpc::RpcClient::get_account(
             ctx.sequencer_client(),

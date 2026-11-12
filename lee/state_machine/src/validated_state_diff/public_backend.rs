@@ -7,7 +7,7 @@ use lee_core::{
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{MessageBody, PROGRAM_LOADER_ACCOUNT_ID, ReceiveInput, Transition},
 };
-use log::debug;
+use tracing::debug;
 
 use super::{loader_actor_state, run_program_loader};
 use crate::{
@@ -65,7 +65,7 @@ impl ExecutionEnvironment for PublicBackend<'_> {
     ) -> Result<Transition, LeeError> {
         let state = self.state;
         let program_account_id = input.receiver.program_account_id;
-        debug!("Program {program_account_id:?} input: {input:?}");
+        debug!(program = ?program_account_id, ?input, "Program input");
         let transition = if program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
             const ABSENT: &ActorState = &ActorState::empty();
             let (transition, new_commitment) = run_program_loader(
@@ -88,7 +88,7 @@ impl ExecutionEnvironment for PublicBackend<'_> {
             })?;
             program.handle_message_metered(input, self.cycle_budget, self.cycles_used)?
         };
-        debug!("Program {program_account_id:?} transition: {transition:?}");
+        debug!(program = ?program_account_id, ?transition, "Program transition");
         Ok(transition)
     }
 

@@ -49,6 +49,7 @@ members = [
   "lez/mempool",
   "lez/wallet",
   "lez/common",
+  "lez/logging",
   "lez/programs",
   "lez/programs/bridge",
   "lez/programs/system_upgrader",
@@ -96,6 +97,7 @@ program_loader_core = { path = "lee/program_loader" }
 common = { path = "lez/common" }
 chain_state = { path = "lez/chain_state" }
 mempool = { path = "lez/mempool" }
+logging = { path = "lez/logging" }
 storage = { path = "lez/storage" }
 key_protocol = { path = "lee/key_protocol" }
 sequencer_core = { path = "lez/sequencer/core" }
@@ -183,7 +185,6 @@ jsonrpsee = "0.26.0"
 futures = "0.3"
 actix-rt = "*"
 lazy_static = "1.5.0"
-env_logger = "0.11"
 log = "0.4.28"
 metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
@@ -191,6 +192,16 @@ lru = "0.16.3"
 thiserror = "2.0"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+# Kept on the OpenTelemetry versions `logos-blockchain-tracing` pulls in, so the tree builds one copy.
+tracing-opentelemetry = "0.33.0"
+opentelemetry = "0.32.0"
+opentelemetry_sdk = "0.32.1"
+opentelemetry-otlp = { version = "0.32.0", default-features = false, features = [
+  "http-proto",
+  "reqwest-blocking-client",
+  "trace",
+] }
+json-subscriber = "0.3.1"
 sha2 = "0.10.8"
 ed25519-dalek = { version = "2.2.0", default-features = false }
 hex = "0.4.3"
@@ -434,6 +445,9 @@ clippy.nursery = { level = "deny", priority = -1 }
 clippy.future-not-send = "allow"
 # Reason: this is actually a good lint, but currently it gives a lot of false-positives.
 clippy.significant-drop-tightening = "allow"
+# Reason: it counts the branches `tracing`'s macros expand to, so any function that logs a few
+# structured events goes over the threshold.
+clippy.cognitive-complexity = "allow"
 
 # Correctness
 clippy.correctness = { level = "deny", priority = -1 }

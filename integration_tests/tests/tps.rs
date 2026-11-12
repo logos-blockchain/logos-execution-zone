@@ -163,9 +163,7 @@ pub async fn tps_test() -> Result<()> {
         .await?;
 
     let target_time = tps_test.target_time();
-    log::info!(
-        "TPS test begin. Target time is {target_time:?} for {num_transactions} transactions ({target_tps} TPS)"
-    );
+    tracing::info!(?target_time, num_transactions, target_tps, "TPS test begin");
 
     let txs = tps_test.build_public_txs();
     let now = Instant::now();
@@ -177,7 +175,7 @@ pub async fn tps_test() -> Result<()> {
             .send_transaction(LeeTransaction::Public(tx))
             .await
             .unwrap();
-        log::info!("Sent tx {i}");
+        tracing::info!(index = i, "Sent tx");
         tx_hashes.push(tx_hash);
     }
 
@@ -193,11 +191,11 @@ pub async fn tps_test() -> Result<()> {
                 .get_transaction(*tx_hash)
                 .await
                 .inspect_err(|err| {
-                    log::warn!("Failed to get transaction by hash {tx_hash} with error: {err:#?}");
+                    tracing::warn!(%tx_hash, error = ?err, "Failed to get transaction by hash");
                 });
 
             if tx_obj.is_ok_and(|opt| opt.is_some()) {
-                log::info!("Found tx {i} with hash {tx_hash}");
+                tracing::info!(index = i, %tx_hash, "Found tx");
                 break;
             }
         }
@@ -206,7 +204,12 @@ pub async fn tps_test() -> Result<()> {
 
     let tx_processed = tx_hashes.len();
     let actual_tps = tx_processed as u64 / time_elapsed;
-    log::info!("Processed {tx_processed} transactions in {time_elapsed:?} ({actual_tps} TPS)");
+    tracing::info!(
+        tx_processed,
+        ?time_elapsed,
+        actual_tps,
+        "Processed transactions"
+    );
 
     assert_eq!(tx_processed, num_transactions);
 
@@ -235,7 +238,7 @@ pub async fn tps_test() -> Result<()> {
          (revert-keeps-fee), so no funds actually moved"
     );
 
-    log::info!("TPS test finished successfully");
+    tracing::info!("TPS test finished successfully");
 
     Ok(())
 }

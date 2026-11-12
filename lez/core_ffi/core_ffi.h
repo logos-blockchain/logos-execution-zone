@@ -1500,7 +1500,7 @@ enum FfiOperationError sequencer_ffi_stop_sequencer(struct SequencerServiceFFI *
  * - `level` is a null-terminated string (`off`/`error`/`warn`/`info`/`debug`/ `trace`,
  *   case-insensitive); null or unparseable falls back to `info`.
  *
- * Only the `sequencer_ffi` and `sequencer_core` targets are enabled!
+ * `RUST_LOG`, when set, overrides `level` (e.g. `info,sequencer_core=debug`).
  *
  * # Safety
  * - `level` must be a valid null-terminated C string, or null.

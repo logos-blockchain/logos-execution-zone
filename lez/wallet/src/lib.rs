@@ -40,12 +40,12 @@ use lee_core::{
     native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::{MessageBody, MessageData, PROGRAM_LOADER_ACCOUNT_ID, Publication},
 };
-use log::warn;
 /// The fee quote a [`WalletSequencerClient`] returns.
 pub use sequencer_service_rpc::FeeStateQuote;
 use sequencer_service_rpc::{RpcClient, SequencerClient, SequencerClientBuilder};
 use storage::{Storage, StorageKey, spent_nullifiers::SpentNullifiers};
 use tokio::io::AsyncWriteExt as _;
+use tracing::warn;
 use url::Url;
 
 use crate::{
@@ -783,9 +783,9 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 )
             })?;
 
-        log::info!(
-            "Stored persistent accounts at {}",
-            self.storage_path.display()
+        tracing::info!(
+            path = %self.storage_path.display(),
+            "Stored persistent accounts"
         );
 
         Ok(())
@@ -800,7 +800,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         // Ensure data is flushed to disk before returning to prevent race conditions
         config_file.sync_all().await?;
 
-        log::info!("Stored data at {}", self.config_path.display());
+        tracing::info!(path = %self.config_path.display(), "Stored data");
 
         Ok(())
     }
@@ -912,7 +912,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?
             .max(self.storage.last_synced_block());
-        log::info!("Scanning account {account_id:#?} from genesis to block {tip}");
+        tracing::info!(%account_id, tip, "Scanning account from genesis");
         let poller = self.poller();
         let unrecorded = self.storage.key_chain().clone();
         self.storage
@@ -1648,13 +1648,13 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             )
             .await?;
         if !claims.is_empty() {
-            log::info!(
-                "Claiming {} pending credit(s) before the root: {:?}",
-                claims.len(),
-                claims
+            tracing::info!(
+                count = claims.len(),
+                claims = ?claims
                     .iter()
                     .map(|claim| (claim.position, claim.native_credit()))
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>(),
+                "Claiming pending credits before the root"
             );
         }
         let acc_manager =
@@ -1685,8 +1685,10 @@ impl<C: WalletSequencerClient> WalletCore<C> {
 
         for account_id in acc_manager.accounts_outgrowing_pad() {
             warn!(
-                "Account {account_id} exceeds the {CIPHERTEXT_PAD_SIZE}-byte note pad; its note is \
-                 identifiable by length in this transaction"
+                %account_id,
+                pad_size_bytes = CIPHERTEXT_PAD_SIZE,
+                "Account exceeds the note pad; its note is identifiable by length in this \
+                 transaction"
             );
         }
 
@@ -2042,8 +2044,9 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 .contains(&Actor::native_balance(target))
         {
             warn!(
-                "Refund target {target} is not credited publicly by this transaction; the refund \
-                 links the transaction to it"
+                %target,
+                "Refund target is not credited publicly by this transaction; the refund links the \
+                 transaction to it"
             );
         }
         let opening = account_manager::random_bytes();
@@ -2201,8 +2204,11 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 Err(ExecutionFailureKind::PrivateFeeBelowHead(_)) if reprices < MAX_REPRICES => {
                     reprices = reprices.saturating_add(1);
                     warn!(
-                        "The sequencer prices the fee above the {reserve} reserved; pricing it \
-                         again off a fresh quote ({reprices} of {MAX_REPRICES})"
+                        %reserve,
+                        reprices,
+                        max_reprices = MAX_REPRICES,
+                        "The sequencer prices the fee above the reserve; pricing it again off a \
+                         fresh quote"
                     );
                     quote = self
                         .sequencer_client
@@ -2285,7 +2291,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             if !self.allow_revert {
                 return Err(ExecutionFailureKind::SimulatedRevert(reason));
             }
-            warn!("The transaction reverts when simulated, and still pays its fee: {reason}");
+            warn!(%reason, "The transaction reverts when simulated, and still pays its fee");
         }
         Ok(())
     }
@@ -2344,8 +2350,10 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .map_err(ExecutionFailureKind::SequencerError)?;
         let synced = self.storage.last_synced_block();
         if head.saturating_sub(synced) > MAX_SWEEP_SCAN_BLOCKS {
-            log::info!(
-                "Pending credits are not claimed: the wallet is synced to block {synced} of {head}"
+            tracing::info!(
+                synced,
+                head,
+                "Pending credits are not claimed: the wallet is not synced to the head"
             );
             return Ok(Vec::new());
         }
@@ -2854,7 +2862,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .get_last_block_id()
             .await?
             .max(self.storage.last_synced_block());
-        log::info!("Rescanning private accounts from genesis to block {tip}");
+        tracing::info!(tip, "Rescanning private accounts from genesis");
         let poller = self.poller();
         let rescanned = self
             .storage
