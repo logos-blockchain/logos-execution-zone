@@ -1,12 +1,12 @@
 //! Slashable faults in a channel update.
 
 use chain_state::AcceptOutcome;
-use sequencer_slasher_actor::{Fault, ReportedOffence};
+use sequencer_slasher_actor::protocol::{Fault, ReportedOffence};
 
 use crate::{Ed25519PublicKey, MsgId};
 
 /// How the final tier took one finalized entry carrying a block.
-pub struct Finalized {
+pub(crate) struct Finalized {
     pub msg: MsgId,
     pub outcome: AcceptOutcome,
     /// It was the lineage's next entry past a finalized block, so its block
@@ -15,31 +15,51 @@ pub struct Finalized {
 }
 
 /// Every offence an update proves; `signers` names who wrote each finalized entry.
-pub fn judge(
+pub(crate) fn judge(
     undecodable: &[(MsgId, Ed25519PublicKey)],
     finalized: &[Finalized],
     signers: &[(MsgId, Ed25519PublicKey)],
 ) -> Vec<ReportedOffence> {
     let not_blocks = undecodable
         .iter()
-        .map(|(inscription, signer)| offence(*inscription, *signer, Fault::NotABlock));
+        .map(|(inscription, signer)| not_a_block(*inscription, *signer));
     let bad_blocks = finalized.iter().filter_map(|entry| {
-        let AcceptOutcome::Parked(err) = &entry.outcome else {
-            return None;
-        };
-        if !entry.next {
-            return None;
-        }
-        let fault = if err.is_invalid_block() {
-            Fault::InvalidBlock
-        } else {
-            Fault::MisplacedBlock
-        };
         let (_, signer) = signers.iter().find(|(msg, _)| *msg == entry.msg)?;
-        Some(offence(entry.msg, *signer, fault))
+        block_offence(entry.msg, &entry.outcome, entry.next, *signer)
     });
 
     not_blocks.chain(bad_blocks).collect()
+}
+
+/// The offence of `signer` writing `inscription`, which is not a block.
+#[must_use]
+pub fn not_a_block(inscription: MsgId, signer: Ed25519PublicKey) -> ReportedOffence {
+    offence(inscription, signer, Fault::NotABlock)
+}
+
+/// The offence, if any, of `signer` writing the block the final tier took with `outcome`.
+///
+/// Only a block that had to follow the final tip, being the lineage's `next` entry past it, is
+/// one.
+#[must_use]
+pub fn block_offence(
+    inscription: MsgId,
+    outcome: &AcceptOutcome,
+    next: bool,
+    signer: Ed25519PublicKey,
+) -> Option<ReportedOffence> {
+    let AcceptOutcome::Parked(err) = outcome else {
+        return None;
+    };
+    if !next {
+        return None;
+    }
+    let fault = if err.is_invalid_block() {
+        Fault::InvalidBlock
+    } else {
+        Fault::MisplacedBlock
+    };
+    Some(offence(inscription, signer, fault))
 }
 
 fn offence(inscription: MsgId, signer: Ed25519PublicKey, fault: Fault) -> ReportedOffence {

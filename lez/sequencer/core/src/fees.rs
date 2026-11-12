@@ -331,7 +331,6 @@ mod tests {
         };
 
         let state = initial_state(true);
-        let flat = fee_core::assess::private_fee_required(0, 8, 8);
         let private_tx = |reserve: Option<u128>| {
             let mut message = PrivateMessage::default();
             message.execution.boundary = reserve
@@ -356,6 +355,9 @@ mod tests {
             ))
         };
 
+        // The reserve's value leaves the size alone.
+        let size = private_tx(Some(0)).charged_bytes().unwrap();
+        let flat = fee_core::assess::private_fee_required(0, size, 8, 8);
         screen(&private_tx(Some(flat)), &state).expect("a well-priced reserve is admitted");
         assert!(matches!(
             screen(&private_tx(None), &state),

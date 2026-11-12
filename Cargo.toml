@@ -19,6 +19,8 @@ members = [
   "lez/chain_state",
   "lez/sequencer/core",
   "lez/sequencer/core/metrics",
+  "lez/sequencer/bridge",
+  "lez/sequencer/genesis",
   "lez/sequencer/service",
   "lez/sequencer/service/metrics",
   "lez/sequencer/service/protocol",
@@ -33,6 +35,7 @@ members = [
   "lez/sequencer/actors/slasher",
   "lez/sequencer/actors/storage",
   "lez/sequencer/actors/bedrock",
+  "lez/sequencer/actors/sharding_pool",
   "lez/ffi_types",
   "lez/indexer/core",
   "lez/indexer/service",
@@ -52,6 +55,7 @@ members = [
   "lez/programs/fee/core",
   "lez/programs/cross_zone_marker",
   "lez/programs/cross_zone_emission_core",
+  "lez/programs/cross_zone_receiver_core",
   "lez/programs/cross_zone_inbox",
   "lez/programs/cross_zone_outbox",
   "lez/programs/bridge_lock",
@@ -94,6 +98,8 @@ key_protocol = { path = "lee/key_protocol" }
 sequencer_core = { path = "lez/sequencer/core" }
 sequencer_core_metrics = { path = "lez/sequencer/core/metrics" }
 sequencer_service_metrics = { path = "lez/sequencer/service/metrics" }
+sequencer_bridge = { path = "lez/sequencer/bridge" }
+sequencer_genesis = { path = "lez/sequencer/genesis" }
 sequencer_service_protocol = { path = "lez/sequencer/service/protocol" }
 sequencer_service_rpc = { path = "lez/sequencer/service/rpc" }
 sequencer_channel_signing_actor = { path = "lez/sequencer/actors/channel_signing" }
@@ -106,6 +112,7 @@ sequencer_rpc_server_actor_metrics = { path = "lez/sequencer/actors/rpc_server/m
 sequencer_slasher_actor = { path = "lez/sequencer/actors/slasher" }
 sequencer_storage_actor = { path = "lez/sequencer/actors/storage" }
 sequencer_bedrock_actor = { path = "lez/sequencer/actors/bedrock" }
+sharding_pool_actor = { path = "lez/sequencer/actors/sharding_pool" }
 sequencer_service = { path = "lez/sequencer/service" }
 ffi_types = { path = "lez/ffi_types" }
 indexer_core = { path = "lez/indexer/core" }
@@ -127,6 +134,7 @@ bridge_core = { path = "lez/programs/bridge/core" }
 cross_zone_inbox_core = { path = "lez/programs/cross_zone_inbox/core" }
 cross_zone_outbox_core = { path = "lez/programs/cross_zone_outbox/core" }
 cross_zone_emission_core = { path = "lez/programs/cross_zone_emission_core" }
+cross_zone_receiver_core = { path = "lez/programs/cross_zone_receiver_core" }
 bridge_lock_core = { path = "lez/programs/bridge_lock/core" }
 wrapped_token_core = { path = "lez/programs/wrapped_token/core" }
 ping_core = { path = "lez/programs/ping_core" }
@@ -188,7 +196,7 @@ bytesize = { version = "2.3.1", features = ["serde"] }
 humantime-serde = "1.1"
 arc-swap = "1.7"
 humantime = "2.1"
-libp2p = { version = "0.56", features = [
+libp2p = { version = "0.57", features = [
   "dns",
   "ed25519",
   "gossipsub",
@@ -218,7 +226,7 @@ chrono = "0.4.41"
 time = "0.3"
 borsh = "1.5.7"
 rpds = "1.2.1"
-zstd = "0.13"
+zstd = "0.14"
 base58 = "0.2.0"
 itertools = "0.14.0"
 num-bigint = "0.4.6"

@@ -1,42 +1,37 @@
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::{Context as _, Result};
-use chain_state::{
-    timeout_node::TimeoutNode,
-    zone_indexer::{ZoneIndexer, stop_at_read_error},
-};
+use chain_state::zone_indexer::stop_at_read_error;
 use common::{
     HashType,
     block::{Block, PeerChainTip},
     transaction::LeeTransaction,
 };
 use cross_zone::{
-    CommitteeFloorState, EmissionSource, FloorVerdict, Link, StallState, alerts_at,
-    build_dispatch_from_emission, equivocation_report, extract_emission, is_sequencer_only_program,
-    link_to_tip, screen_peer_block,
+    CommitteeFloorState, EmissionSource, FloorVerdict, Link, RegisteredEmitter, StallState,
+    alerts_at, build_dispatch_from_emission, equivocation_report, extract_emission,
+    is_sequencer_only_program, link_to_tip, peer_emitter_set, screen_peer_block,
 };
 use cross_zone_inbox_core::message_key;
-use futures::{Stream, StreamExt as _};
+use futures::{Stream, StreamExt as _, TryStreamExt as _};
 use kameo::actor::ActorRef;
+use lee_core::account::AccountId;
 use log::{debug, error, warn};
-use logos_blockchain_core::mantle::ops::channel::ChannelId;
-use logos_blockchain_zone_sdk::{
-    CommonHttpClient, Slot, ZoneMessage,
-    adapter::{Node as _, NodeHttpClient},
+use sequencer_bedrock_actor::{
+    BedrockActorTrait,
+    protocol::{AccreditedKeys, ChannelId, GetAccreditedKeys, ReadChannel, Slot, ZoneMessage},
 };
 use sequencer_storage_actor::{
     StorageActorTrait,
     protocol::{
         AddPendingCrossZoneDispatches, DeleteCrossZonePeerFloor, GetCrossZonePeerFloorBytes,
-        GetCrossZonePeerTip, PeerZoneKey, PendingCrossZoneDispatchRecord,
-        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip,
+        GetCrossZonePeerTip, GetPendingCrossZoneDispatchCount, PeerZoneKey,
+        PendingCrossZoneDispatchRecord, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip,
     },
 };
+use sharding_pool_actor::ShardingPoolActor;
 
-use crate::{
-    config::{BedrockConfig, CrossZoneConfig},
-    task_group::TaskGroup,
-};
+use crate::{config::CrossZoneConfig, task_group::TaskGroup};
 
 /// The per-peer settings one watcher pass needs.
 struct PeerContext {
@@ -47,9 +42,9 @@ struct PeerContext {
     min_committee_size: u32,
     /// Pin for the peer's genesis hash; `None` anchors on the first read.
     genesis_hash: Option<HashType>,
-    /// The watcher's own handle for the committee read; the connection inside
-    /// `ZoneIndexer` is consumed by the message stream.
-    node: TimeoutNode<NodeHttpClient>,
+    /// Registered emitters on this peer, recognized through the generic
+    /// contract alongside the builtin emitters.
+    emitters: BTreeMap<AccountId, RegisteredEmitter>,
 }
 
 /// Why one pass over a peer's stream ended.
@@ -222,39 +217,34 @@ async fn clear_cross_zone_peer_floor<S: StorageActorTrait>(
 /// [`TaskGroup::shutdown`](crate::task_group::TaskGroup::shutdown) is what
 /// proves they have stopped.
 #[must_use]
-pub fn spawn_watchers<S: StorageActorTrait>(
-    bedrock_config: &BedrockConfig,
+pub fn spawn_watchers<S: StorageActorTrait, B: BedrockActorTrait>(
+    self_channel_id: ChannelId,
     cross_zone: &CrossZoneConfig,
     poll_interval: Duration,
     storage_ref: &ActorRef<S>,
+    bedrock_pool_ref: &ActorRef<ShardingPoolActor<B, ChannelId>>,
 ) -> TaskGroup {
-    let self_zone: [u8; 32] = *bedrock_config.channel_id.as_ref();
+    let self_zone: [u8; 32] = *self_channel_id.as_ref();
     let mut tasks = Vec::new();
 
     for peer in cross_zone.peers.clone() {
-        let node = TimeoutNode::new(NodeHttpClient::new(
-            CommonHttpClient::new(bedrock_config.auth.clone().map(Into::into)),
-            bedrock_config.node_url.clone(),
-        ));
-        // The indexer consumes `node` for its message stream; this clone is the
-        // watcher's own handle for the committee-floor read.
-        let floor_node = node.clone();
         // Zero per peer up front, so a never-suspended peer still has a series.
         sequencer_core_metrics::record_cross_zone_peer_committee_suspended(
             hex::encode(peer.channel_id),
             false,
         );
+        sequencer_core_metrics::record_cross_zone_watcher_alive(hex::encode(peer.channel_id), true);
         tasks.push(tokio::spawn(watch_peer(
-            ZoneIndexer::new(ChannelId::from(peer.channel_id), node),
             PeerContext {
                 peer_zone: peer.channel_id,
                 self_zone,
                 min_committee_size: peer.min_committee_size,
                 genesis_hash: peer.genesis_hash,
-                node: floor_node,
+                emitters: peer_emitter_set(&peer),
             },
             poll_interval,
             storage_ref.clone(),
+            bedrock_pool_ref.clone(),
         )));
     }
 
@@ -265,13 +255,14 @@ pub fn spawn_watchers<S: StorageActorTrait>(
     clippy::infinite_loop,
     reason = "the peer watcher runs for the lifetime of the sequencer process"
 )]
-async fn watch_peer<S: StorageActorTrait>(
-    zone_indexer: ZoneIndexer<TimeoutNode<NodeHttpClient>>,
+async fn watch_peer<S: StorageActorTrait, B: BedrockActorTrait>(
     peer: PeerContext,
     poll_interval: Duration,
     storage_ref: ActorRef<S>,
+    bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
 ) {
     let peer_zone = peer.peer_zone;
+    let peer_channel_id = ChannelId::from(peer_zone);
     log::info!(
         "Cross-zone watcher started for peer {}",
         hex::encode(peer_zone)
@@ -292,6 +283,7 @@ async fn watch_peer<S: StorageActorTrait>(
                 "Watcher failed to load the stored delivery floor for peer {}: {err:#}. Stopping this watcher rather than re-reading the channel from the beginning.",
                 hex::encode(peer_zone)
             );
+            sequencer_core_metrics::record_cross_zone_watcher_alive(hex::encode(peer_zone), false);
             return;
         }
     };
@@ -305,6 +297,7 @@ async fn watch_peer<S: StorageActorTrait>(
                 "Watcher failed to load the stored chain tip for peer {}: {err:#}. Stopping this watcher rather than accepting blocks with nothing to link them against.",
                 hex::encode(peer_zone)
             );
+            sequencer_core_metrics::record_cross_zone_watcher_alive(hex::encode(peer_zone), false);
             return;
         }
     };
@@ -322,6 +315,7 @@ async fn watch_peer<S: StorageActorTrait>(
                 "Watcher could not clear the stale delivery floor for peer {}: {err:#}. Stopping this watcher rather than rebuilding its chain against a floor a restart would resume from.",
                 hex::encode(peer_zone)
             );
+            sequencer_core_metrics::record_cross_zone_watcher_alive(hex::encode(peer_zone), false);
             return;
         }
     }
@@ -338,18 +332,24 @@ async fn watch_peer<S: StorageActorTrait>(
     // been suspended on the committee floor.
     let mut state = WatcherState::new(peer.min_committee_size);
     loop {
-        // Above `next_messages`, so a suspended watcher reads nothing at all,
+        // Above the channel read, so a suspended watcher reads nothing at all,
         // and below the startup loads, so suspension never masks their
         // fail-stop paths.
-        if held_below_committee_floor(&mut state.committee_floor, &peer).await {
+        if held_below_committee_floor(&mut state.committee_floor, &peer, &bedrock_pool_ref).await {
             tokio::time::sleep(poll_interval).await;
             continue;
         }
-        let stream = match zone_indexer.next_messages(cursor).await {
+        let read = bedrock_pool_ref
+            .ask(ReadChannel {
+                channel_id: peer_channel_id,
+                after: cursor,
+            })
+            .await;
+        let stream = match read {
             Ok(stream) => stream,
             Err(err) => {
                 error!(
-                    "Watcher next_messages failed for peer {}: {err}",
+                    "Watcher failed to read the channel of peer {}: {err:#}",
                     hex::encode(peer_zone)
                 );
                 tokio::time::sleep(poll_interval).await;
@@ -357,7 +357,7 @@ async fn watch_peer<S: StorageActorTrait>(
             }
         };
         let stream = stop_at_read_error(
-            stream,
+            stream.map_err(anyhow::Error::from),
             format!("Watcher channel read for peer {}", hex::encode(peer_zone)),
         );
         let outcome = consume_peer_stream(stream, &peer, &storage_ref, &mut cursor, &mut tip).await;
@@ -408,11 +408,15 @@ async fn report_pass_alerts<S: StorageActorTrait>(
 /// Folds one committee read into the floor latch and reports the outcome:
 /// gauge and log on the suspend and resume edges, the suspend line again on
 /// the [`alerts_at`] cadence. True while the pass must be skipped.
-async fn held_below_committee_floor(floor: &mut CommitteeFloorState, peer: &PeerContext) -> bool {
+async fn held_below_committee_floor<B: BedrockActorTrait>(
+    floor: &mut CommitteeFloorState,
+    peer: &PeerContext,
+    bedrock_pool_ref: &ActorRef<ShardingPoolActor<B, ChannelId>>,
+) -> bool {
     if !floor.enforced() {
         return false;
     }
-    let read = peer_committee(&peer.node, peer.peer_zone).await;
+    let read = peer_committee(bedrock_pool_ref, peer.peer_zone).await;
     match floor.after_read(read) {
         FloorVerdict::Suspended { passes, last_read } => {
             sequencer_core_metrics::record_cross_zone_peer_committee_suspended(
@@ -449,15 +453,17 @@ async fn held_below_committee_floor(floor: &mut CommitteeFloorState, peer: &Peer
 /// failure or an absent channel, both unknown rather than zero. The indexer's
 /// verifier holds the twin of this helper; the policy folding it is
 /// [`CommitteeFloorState`].
-async fn peer_committee(
-    node: &TimeoutNode<NodeHttpClient>,
+async fn peer_committee<B: BedrockActorTrait>(
+    bedrock_pool_ref: &ActorRef<ShardingPoolActor<B, ChannelId>>,
     peer_zone: [u8; 32],
 ) -> Option<(usize, u64)> {
-    let state = node
-        .channel_state(ChannelId::from(peer_zone))
+    let AccreditedKeys { keys, tip_slot, .. } = bedrock_pool_ref
+        .ask(GetAccreditedKeys {
+            channel_id: ChannelId::from(peer_zone),
+        })
         .await
         .ok()??;
-    Some((state.accredited_keys.len(), state.tip_slot.into_inner()))
+    Some((keys.len(), tip_slot.into_inner()))
 }
 
 /// The committee behind a floor verdict, for the suspension report.
@@ -646,6 +652,17 @@ async fn advance_cursor<S: StorageActorTrait>(
     }
 }
 
+/// Sets the pending-dispatch gauge from the store, so it follows the list.
+pub(crate) async fn record_pending_dispatch_gauge<S: StorageActorTrait>(storage_ref: &ActorRef<S>) {
+    match storage_ref.ask(GetPendingCrossZoneDispatchCount).await {
+        Ok(pending) => sequencer_core_metrics::record_cross_zone_pending_dispatches(pending),
+        Err(err) => warn!(
+            "Failed to read the pending cross-zone dispatch count: {:#}",
+            anyhow::Error::from(err)
+        ),
+    }
+}
+
 /// Scans one peer block for outbound messages and records a dispatch per match.
 ///
 /// Returns `false` if a delivery could not be recorded, which the caller turns
@@ -673,7 +690,8 @@ async fn record_block_deliveries<S: StorageActorTrait>(
         let LeeTransaction::Public(public_tx) = tx else {
             continue;
         };
-        let Some(emission) = extract_emission(public_tx) else {
+        let Some(emission) = extract_emission(public_tx, &peer.emitters, block.header.block_id)
+        else {
             continue;
         };
 
@@ -739,6 +757,7 @@ async fn record_block_deliveries<S: StorageActorTrait>(
         // the slot stays stuck.
         Ok(accepted) => {
             if accepted > 0 {
+                record_pending_dispatch_gauge(storage_ref).await;
                 log::info!(
                     "Watcher recorded {accepted} of {offered} cross-zone deliveries from peer {} block {}",
                     hex::encode(peer_zone),
@@ -774,15 +793,17 @@ mod tests {
     use common::test_utils::produce_dummy_block;
     use cross_zone::test_utils::{linked_chain_to, ping_emission};
     use futures::stream;
-    use kameo::actor::Spawn as _;
+    use kameo::{actor::Spawn as _, supervision::RestartPolicy};
     use lee::GENESIS_BLOCK_ID;
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
     use logos_blockchain_zone_sdk::{UnverifiedEd25519PublicKey, ZoneBlock};
+    use sequencer_bedrock_actor::{error::Error as BedrockError, mock::MockBedrockActor};
     use sequencer_storage_actor::{
         StorageActor,
         mock::MockStorageActor,
         protocol::{AtomicUpdate, CrossZoneMessageKey, GetPendingCrossZoneDispatches},
     };
+    use sharding_pool_actor::RestartConfig;
     use tempfile::TempDir;
 
     use super::*;
@@ -796,11 +817,29 @@ mod tests {
             self_zone: SELF_ZONE,
             min_committee_size: 0,
             genesis_hash: None,
-            node: TimeoutNode::new(NodeHttpClient::new(
-                CommonHttpClient::new(None),
-                "http://127.0.0.1:0".parse().expect("valid url"),
-            )),
+            emitters: BTreeMap::new(),
         }
+    }
+
+    /// A Bedrock pool whose every committee read fails.
+    fn unreachable_bedrock_pool() -> ActorRef<ShardingPoolActor<MockBedrockActor, ChannelId>> {
+        ShardingPoolActor::spawn(ShardingPoolActor::new(
+            RestartConfig {
+                policy: RestartPolicy::Never,
+                limit: 0,
+                within: Duration::ZERO,
+            },
+            |_channel_id| {
+                let mut mock = MockBedrockActor::default();
+                mock.expect_handle_get_accredited_keys()
+                    .returning(|_msg, _ctx| {
+                        Err(BedrockError::NodeRequestFailed(anyhow::anyhow!(
+                            "node unreachable"
+                        )))
+                    });
+                mock
+            },
+        ))
     }
 
     /// The gate itself, on the two paths the latch tests cannot see: a
@@ -808,10 +847,11 @@ mod tests {
     /// is unreachable fails closed before the first read.
     #[tokio::test]
     async fn the_floor_gate_fails_closed_on_an_unreachable_node() {
+        let bedrock_pool_ref = unreachable_bedrock_pool();
         let peer = peer_context();
         let mut floorless = CommitteeFloorState::new(0);
         assert!(
-            !held_below_committee_floor(&mut floorless, &peer).await,
+            !held_below_committee_floor(&mut floorless, &peer, &bedrock_pool_ref).await,
             "no floor, no gate, no read"
         );
 
@@ -821,7 +861,7 @@ mod tests {
         };
         let mut floor = CommitteeFloorState::new(floored.min_committee_size);
         assert!(
-            held_below_committee_floor(&mut floor, &floored).await,
+            held_below_committee_floor(&mut floor, &floored, &bedrock_pool_ref).await,
             "an unreadable committee before the first read suspends"
         );
     }
@@ -1167,6 +1207,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_delivery_into_the_fee_program_is_never_recorded() {
+        let (_dir, storage_ref) = store().await;
+        let mut cursor = None;
+        let mut tip = None;
+
+        let outcome = consume_peer_stream(
+            stream::iter(vec![peer_block_msg_to(1, 0, programs::fee_account_id())]),
+            &peer_context(),
+            &storage_ref,
+            &mut cursor,
+            &mut tip,
+        )
+        .await;
+
+        assert_eq!(
+            outcome,
+            PassOutcome::Drained,
+            "a message the watcher drops is not a failure"
+        );
+        assert!(
+            recorded_keys(&storage_ref).await.is_empty(),
+            "a message aimed at the fee program must not be recorded"
+        );
+        assert_eq!(
+            get_cross_zone_peer_floor(&storage_ref, PEER_ZONE)
+                .await
+                .unwrap(),
+            Some(Slot::from(0)),
+            "the slot was fully read, so the floor still advances"
+        );
+    }
+
+    #[tokio::test]
     async fn a_delivery_to_an_unrelated_target_is_still_recorded() {
         // The watcher is not the authorization point any more. A target it knows
         // nothing about is recorded and delivered, and that target decides.
@@ -1192,6 +1265,139 @@ mod tests {
             recorded_keys(&storage_ref).await.len(),
             1,
             "the watcher records it and lets the target refuse it"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_registered_generic_emitter_gets_its_delivery_recorded() {
+        let emitter = lee_core::account::AccountId::new([8; 32]);
+        let peer = PeerContext {
+            emitters: BTreeMap::from([(
+                emitter,
+                RegisteredEmitter {
+                    account_id: emitter,
+                    until_src_block: None,
+                },
+            )]),
+            ..peer_context()
+        };
+        let (_dir, storage_ref) = store().await;
+        let mut cursor = None;
+        let mut tip = None;
+
+        let block = produce_dummy_block(
+            1,
+            None,
+            vec![cross_zone::test_utils::generic_emission(
+                emitter,
+                SELF_ZONE,
+                programs::ping_receiver_account_id(),
+                b"hi",
+            )],
+        );
+        let outcome = consume_peer_stream(
+            stream::iter(vec![block_msg(&block, 0)]),
+            &peer,
+            &storage_ref,
+            &mut cursor,
+            &mut tip,
+        )
+        .await;
+
+        assert_eq!(outcome, PassOutcome::Drained);
+        assert_eq!(
+            recorded_keys(&storage_ref).await,
+            vec![message_key(&PEER_ZONE, 1, 0)],
+            "a registered emitter's emission is recorded like a builtin's"
+        );
+    }
+
+    /// The cutoff is compared against the source block's id, which only this
+    /// path chooses. The emission sits in block 1 at slot 0, so a watcher
+    /// comparing anything but the block id would read block 1 as covered.
+    #[tokio::test]
+    async fn a_retired_emitters_emission_past_the_cutoff_is_not_recorded() {
+        let emitter = lee_core::account::AccountId::new([8; 32]);
+        for (until_src_block, expected) in [
+            (Some(0), vec![]),
+            (Some(1), vec![message_key(&PEER_ZONE, 1, 0)]),
+        ] {
+            let peer = PeerContext {
+                emitters: BTreeMap::from([(
+                    emitter,
+                    RegisteredEmitter {
+                        account_id: emitter,
+                        until_src_block,
+                    },
+                )]),
+                ..peer_context()
+            };
+            let (_dir, storage_ref) = store().await;
+            let mut cursor = None;
+            let mut tip = None;
+
+            let block = produce_dummy_block(
+                1,
+                None,
+                vec![cross_zone::test_utils::generic_emission(
+                    emitter,
+                    SELF_ZONE,
+                    programs::ping_receiver_account_id(),
+                    b"hi",
+                )],
+            );
+            let outcome = consume_peer_stream(
+                stream::iter(vec![block_msg(&block, 0)]),
+                &peer,
+                &storage_ref,
+                &mut cursor,
+                &mut tip,
+            )
+            .await;
+
+            assert_eq!(outcome, PassOutcome::Drained);
+            assert_eq!(
+                recorded_keys(&storage_ref).await,
+                expected,
+                "cutoff {until_src_block:?} against a source block id of 1"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unregistered_generic_emitter_is_never_recorded() {
+        let emitter = lee_core::account::AccountId::new([8; 32]);
+        let (_dir, storage_ref) = store().await;
+        let mut cursor = None;
+        let mut tip = None;
+
+        let block = produce_dummy_block(
+            1,
+            None,
+            vec![cross_zone::test_utils::generic_emission(
+                emitter,
+                SELF_ZONE,
+                programs::ping_receiver_account_id(),
+                b"hi",
+            )],
+        );
+        let outcome = consume_peer_stream(
+            stream::iter(vec![block_msg(&block, 0)]),
+            &peer_context(),
+            &storage_ref,
+            &mut cursor,
+            &mut tip,
+        )
+        .await;
+
+        assert_eq!(
+            outcome,
+            PassOutcome::Drained,
+            "a transaction the watcher does not read is not a failure"
+        );
+        assert!(
+            recorded_keys(&storage_ref).await.is_empty(),
+            "an unregistered emitter's transaction must not be recorded"
         );
     }
 

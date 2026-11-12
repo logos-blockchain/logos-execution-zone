@@ -21,6 +21,7 @@ key_protocol.workspace = true
 serde_json.workspace = true
 bridge_core.workspace = true
 ping_core.workspace = true
+cross_zone.workspace = true
 cross_zone_outbox_core.workspace = true
 cross_zone_inbox_core.workspace = true
 bridge_lock_core.workspace = true
