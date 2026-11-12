@@ -157,7 +157,7 @@ pub enum Message {
     ///
     /// `params` replace the channel params in this transaction once [`params_vote_threshold`]
     /// accredited keys vote for them, and every vote is then cleared. A vote for the params in
-    /// force withdraws the key's vote, and one changing `finality_depth` is refused.
+    /// force is refused, as is one changing `finality_depth`.
     VoteChannelParams {
         sequencer_key: SequencerKey,
         params: ChannelParams,
@@ -167,6 +167,15 @@ pub enum Message {
         sequencer_key: SequencerKey,
         ownership: AccountId,
         params: ChannelParams,
+    },
+
+    /// Drops the standing vote of the key the ownership account backs, if it has one; signed by
+    /// the ownership account.
+    WithdrawChannelParamsVote { sequencer_key: SequencerKey },
+
+    DropChannelParamsVote {
+        sequencer_key: SequencerKey,
+        ownership: AccountId,
     },
 }
 

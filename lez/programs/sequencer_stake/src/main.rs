@@ -72,6 +72,13 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
             ownership,
             params,
         } => record_channel_params_vote(input, sequencer_key, ownership, params),
+        Message::WithdrawChannelParamsVote { sequencer_key } => {
+            withdraw_channel_params_vote(input, sequencer_key)
+        }
+        Message::DropChannelParamsVote {
+            sequencer_key,
+            ownership,
+        } => drop_channel_params_vote(input, sequencer_key, ownership),
     }
 }
 
@@ -353,10 +360,10 @@ fn record_channel_params_vote(
         "finality_depth is fixed at genesis"
     );
 
-    if params == params_in_force {
-        config.params_votes.remove(&sequencer_key);
-        return Response::set_state(config.to_bytes());
-    }
+    assert_ne!(
+        params, params_in_force,
+        "the voted params are already in force"
+    );
     config.params_votes.insert(sequencer_key, params);
 
     let votes = config
@@ -372,6 +379,39 @@ fn record_channel_params_vote(
             "new channel params would leave no key accredited"
         );
     }
+    Response::set_state(config.to_bytes())
+}
+
+fn withdraw_channel_params_vote(input: &ReceiveInput, sequencer_key: SequencerKey) -> Response {
+    assert_root_origin(
+        input,
+        "WithdrawChannelParamsVote is only invoked as a top-level user transaction",
+    );
+    assert!(input.is_authorized, "must sign for the ownership account");
+    let record = decode_record(&input.pre_state);
+    assert_eq!(
+        record.sequencer_key, sequencer_key,
+        "ownership account backs a different sequencer key"
+    );
+
+    Response::keep_state().send(to_config(
+        input.receiver.program_account_id,
+        &Message::DropChannelParamsVote {
+            sequencer_key,
+            ownership: input.receiver.account_id,
+        },
+    ))
+}
+
+fn drop_channel_params_vote(
+    input: &ReceiveInput,
+    sequencer_key: SequencerKey,
+    ownership: AccountId,
+) -> Response {
+    assert_bookkeeping(input);
+    let mut config = decode_config(&input.pre_state);
+    entry_of(&mut config, sequencer_key, ownership);
+    config.params_votes.remove(&sequencer_key);
     Response::set_state(config.to_bytes())
 }
 
@@ -774,6 +814,19 @@ mod tests {
             sequencer_key: key(1),
             ownership,
             params,
+        }
+    }
+
+    fn withdraw_vote() -> Message {
+        Message::WithdrawChannelParamsVote {
+            sequencer_key: key(1),
+        }
+    }
+
+    fn drop_vote(ownership: AccountId) -> Message {
+        Message::DropChannelParamsVote {
+            sequencer_key: key(1),
+            ownership,
         }
     }
 
@@ -1322,18 +1375,12 @@ mod tests {
     }
 
     #[test]
-    fn a_vote_for_the_params_in_force_withdraws_the_keys_vote() {
-        let transition = at_config(
+    #[should_panic(expected = "the voted params are already in force")]
+    fn a_vote_for_the_params_in_force_is_refused() {
+        let _transition = at_config(
             Some(PROGRAM),
-            &committee_of_three_with_votes(&[(key(1), new_params()), (key(2), new_params())]),
+            &committee_of_three_with_votes(&[(key(1), new_params())]),
             record_vote(OWNER, genesis_params()),
-        );
-
-        let config = decoded_config(&transition);
-        assert_eq!(config.channel_params, Some(genesis_params()));
-        assert_eq!(
-            config.params_votes,
-            BTreeMap::from([(key(2), new_params())])
         );
     }
 
@@ -1439,6 +1486,129 @@ mod tests {
             None,
             &committee_of_three_with_votes(&[]),
             record_vote(OWNER, new_params()),
+        );
+    }
+
+    // --- WithdrawChannelParamsVote ---
+
+    #[test]
+    fn a_withdrawal_is_forwarded_to_the_config() {
+        let transition = at_owner(true, &record(key(1)), withdraw_vote());
+
+        assert!(transition.response.post_state.is_none());
+        assert_eq!(
+            (
+                transition.response.sync_messages,
+                transition.response.async_messages
+            ),
+            (vec![to_config(PROGRAM, &drop_vote(OWNER))], Vec::new())
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "must sign for the ownership account")]
+    fn an_unsigned_withdrawal_is_refused() {
+        let _transition = at_owner(false, &record(key(1)), withdraw_vote());
+    }
+
+    #[test]
+    #[should_panic(expected = "ownership account backs a different sequencer key")]
+    fn a_withdrawal_cannot_name_a_key_this_account_does_not_back() {
+        let _transition = at_owner(true, &record(key(2)), withdraw_vote());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "WithdrawChannelParamsVote is only invoked as a top-level user transaction"
+    )]
+    fn a_withdrawal_from_another_program_is_refused() {
+        let _transition = run(
+            OWNER,
+            true,
+            Some(OTHER_PROGRAM),
+            &record(key(1)),
+            withdraw_vote(),
+        );
+    }
+
+    #[test]
+    fn a_withdrawal_drops_only_the_keys_vote() {
+        let transition = at_config(
+            Some(PROGRAM),
+            &committee_of_three_with_votes(&[(key(1), new_params()), (key(2), new_params())]),
+            drop_vote(OWNER),
+        );
+
+        let config = decoded_config(&transition);
+        assert_eq!(config.channel_params, Some(genesis_params()));
+        assert_eq!(
+            config.params_votes,
+            BTreeMap::from([(key(2), new_params())])
+        );
+    }
+
+    #[test]
+    fn a_withdrawal_without_a_vote_changes_nothing() {
+        let config = committee_of_three_with_votes(&[(key(2), new_params())]);
+        let transition = at_config(Some(PROGRAM), &config, drop_vote(OWNER));
+
+        assert_eq!(
+            decoded_config(&transition),
+            SequencerStakeConfig::from_bytes(&config).expect("config should decode")
+        );
+    }
+
+    #[test]
+    fn a_key_on_its_way_out_can_withdraw_its_vote() {
+        let transition = at_config(
+            Some(PROGRAM),
+            &config_with_votes(
+                &[(key(1), entry(OWNER, 3_000, 3_000))],
+                &[(key(1), new_params())],
+            ),
+            drop_vote(OWNER),
+        );
+
+        assert!(decoded_config(&transition).params_votes.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "config entry points at a different ownership account")]
+    fn a_withdrawal_cannot_be_recorded_for_another_accounts_key() {
+        let _transition = at_config(
+            Some(PROGRAM),
+            &committee_of_three_with_votes(&[(key(1), new_params())]),
+            drop_vote(ATTACKER),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "staked key must already have a config entry")]
+    fn a_withdrawal_for_a_key_with_no_stake_is_refused() {
+        let _transition = at_config(Some(PROGRAM), &config_with(&[]), drop_vote(OWNER));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "stake bookkeeping is only sent by this program's ownership accounts"
+    )]
+    fn a_withdrawal_recorded_from_another_program_is_refused() {
+        let _transition = at_config(
+            Some(OTHER_PROGRAM),
+            &committee_of_three_with_votes(&[(key(1), new_params())]),
+            drop_vote(OWNER),
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "stake bookkeeping is only sent by this program's ownership accounts"
+    )]
+    fn a_withdrawal_recorded_from_the_root_is_refused() {
+        let _transition = at_config(
+            None,
+            &committee_of_three_with_votes(&[(key(1), new_params())]),
+            drop_vote(OWNER),
         );
     }
 

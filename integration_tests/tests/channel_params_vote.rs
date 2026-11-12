@@ -1,9 +1,10 @@
 //! Channel params change once two thirds of the accredited keys vote for them.
 //!
-//! Three sequencers are staked at genesis, so one vote changes nothing and the
-//! second one replaces the params. The sequencer then admits transactions
-//! against the new `max_block_size`, and the Bedrock channel takes the new
-//! posting params through a config update that needs a peer's signature.
+//! Three sequencers are staked at genesis, so one vote changes nothing, and
+//! withdrawing it leaves no vote. Two votes then replace the params: the
+//! sequencer admits transactions against the new `max_block_size`, and the
+//! Bedrock channel takes the new posting params through a config update that
+//! needs a peer's signature.
 
 #![expect(
     clippy::tests_outside_test_module,
@@ -17,7 +18,6 @@ use common::transaction::LeeTransaction;
 use integration_tests::{get_account, init_logger, wait_for_inclusion, wait_until};
 use lee::{AccountId, Actor, PrivateKey, PublicKey};
 use lee_core::account::Nonce;
-use log::info;
 use logos_blockchain_core::mantle::channel::ChannelState;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
@@ -59,11 +59,11 @@ async fn stake_config(ctx: &TestContext) -> Result<SequencerStakeConfig> {
     .context("config account data did not decode as a SequencerStakeConfig")
 }
 
-/// Sends founding sequencer `index`'s vote for `params` and waits for its block.
+/// Imports founding sequencer `index`'s ownership key into the wallet, and returns that account
+/// with a funded wallet account to pay its fees.
 ///
-/// A funded wallet account pays the fee: a founding ownership account holds only what its
-/// sequencer has earned producing blocks.
-async fn vote(ctx: &mut TestContext, index: usize, params: ChannelParams) -> Result<()> {
+/// A founding ownership account holds only what its sequencer has earned producing blocks.
+fn founding_owner(ctx: &mut TestContext, index: usize) -> Result<(AccountId, AccountId)> {
     let owner = config::founding_stake_owner_key(index)?;
     let ownership = AccountId::from(&PublicKey::new_from_private_key(&owner));
     ctx.wallet_mut()
@@ -73,11 +73,28 @@ async fn vote(ctx: &mut TestContext, index: usize, params: ChannelParams) -> Res
     let payer = AccountId::from(&PublicKey::new_from_private_key(
         &config::default_public_accounts_for_wallet()[0].0,
     ));
+    Ok((ownership, payer))
+}
 
+/// Sends founding sequencer `index`'s vote for `params` and waits for its block.
+async fn vote(ctx: &mut TestContext, index: usize, params: ChannelParams) -> Result<()> {
+    let (ownership, payer) = founding_owner(ctx, index)?;
     let tx_hash = SequencerStake(ctx.wallet())
         .send_params_vote(ownership, params, Some(payer))
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit sequencer {index}'s vote: {err:?}"))?;
+    wait_for_inclusion(ctx, tx_hash).await
+}
+
+/// Withdraws founding sequencer `index`'s vote and waits for its block.
+async fn withdraw_vote(ctx: &mut TestContext, index: usize) -> Result<()> {
+    let (ownership, payer) = founding_owner(ctx, index)?;
+    let tx_hash = SequencerStake(ctx.wallet())
+        .send_params_vote_withdrawal(ownership, Some(payer))
+        .await
+        .map_err(|err| {
+            anyhow::anyhow!("Failed to submit sequencer {index}'s withdrawal: {err:?}")
+        })?;
     wait_for_inclusion(ctx, tx_hash).await
 }
 
@@ -170,8 +187,16 @@ async fn channel_params_change_once_two_thirds_of_the_committee_vote() -> Result
         "the first vote should be on record, got {} votes",
         after_one.params_votes.len()
     );
-    info!("One vote recorded; the params are unchanged");
+    tracing::info!("One vote recorded; the params are unchanged");
 
+    withdraw_vote(&mut ctx, 0).await?;
+    ensure!(
+        stake_config(&ctx).await?.params_votes.is_empty(),
+        "the withdrawn vote should be gone"
+    );
+    tracing::info!("The withdrawn vote is gone");
+
+    vote(&mut ctx, 0, new_params).await?;
     vote(&mut ctx, 1, new_params).await?;
     let after_two = stake_config(&ctx).await?;
     ensure!(
@@ -183,7 +208,7 @@ async fn channel_params_change_once_two_thirds_of_the_committee_vote() -> Result
         after_two.params_votes.is_empty(),
         "applying the params should clear every vote"
     );
-    info!("Two votes of three replaced the params");
+    tracing::info!("Two votes of three replaced the params");
 
     wait_until(
         "the sequencer to refuse a transaction over the voted max_block_size",
@@ -196,7 +221,7 @@ async fn channel_params_change_once_two_thirds_of_the_committee_vote() -> Result
         },
     )
     .await?;
-    info!("The sequencer admits transactions against the voted max_block_size");
+    tracing::info!("The sequencer admits transactions against the voted max_block_size");
 
     wait_until(
         "the Bedrock channel to take the new posting params",
@@ -209,7 +234,7 @@ async fn channel_params_change_once_two_thirds_of_the_committee_vote() -> Result
         },
     )
     .await?;
-    info!("The Bedrock channel follows the voted posting params");
+    tracing::info!("The Bedrock channel follows the voted posting params");
 
     Ok(())
 }

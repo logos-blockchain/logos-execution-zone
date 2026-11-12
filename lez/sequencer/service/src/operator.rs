@@ -1,4 +1,4 @@
-//! The `setup`, `stake`, `unstake` and `vote-params` commands.
+//! The `setup`, `stake`, `unstake`, `vote-params` and `withdraw-params-vote` commands.
 #![expect(
     clippy::print_stdout,
     reason = "these commands report to the operator on stdout"
@@ -235,8 +235,7 @@ pub async fn unstake(
     confirm(&wallet, tx_hash).await
 }
 
-/// Votes, as `key`'s stake owner, for the params in force with `changes` applied; no changes
-/// withdraws `key`'s vote.
+/// Votes, as `key`'s stake owner, for the params in force with `changes` applied.
 pub async fn vote_params(
     wallet_home: Option<PathBuf>,
     key: SequencerKey,
@@ -247,41 +246,27 @@ pub async fn vote_params(
     let in_force = config
         .channel_params
         .context("The stake config has no channel params")?;
-    let entry = config
-        .entries
-        .get(&key)
-        .context("This channel signing key has no stake")?;
+    let ownership = stake_owner(&wallet, &config, &key)?;
     ensure!(
         config.is_accredited_committee_member(&key),
         "This channel signing key is not accredited, so it cannot vote"
     );
-    // The wallet drops a signature it holds no key for without saying so.
+    let params = changes.applied_to(in_force);
     ensure!(
-        wallet
-            .get_account_public_signing_key(entry.account_id)
-            .is_some(),
-        "The wallet holds no key for the stake's ownership account {}; import it with `wallet \
-         account import public`",
-        entry.account_id
+        params != in_force,
+        "These params are already in force; `withdraw-params-vote` withdraws a vote"
     );
 
-    let params = changes.applied_to(in_force);
     let tx_hash = SequencerStake(&wallet)
-        .send_params_vote(entry.account_id, params, None)
+        .send_params_vote(ownership, params, None)
         .await
         .map_err(|err| anyhow!("Failed to submit the VoteChannelParams transaction: {err:?}"))?;
-    if params == in_force {
-        println!("Withdrawing this key's vote: {tx_hash}");
-    } else {
-        println!("Voting for {params:?}: {tx_hash}");
-    }
+    println!("Voting for {params:?}: {tx_hash}");
     confirm(&wallet, tx_hash).await?;
 
     let after = stake_config(&wallet).await?;
     if after.channel_params == Some(params) {
-        if params != in_force {
-            println!("The channel params are now {params:?}");
-        }
+        println!("The channel params are now {params:?}, by this vote or others that landed first");
     } else if after.params_votes.get(&key) == Some(&params) {
         let backing = after
             .params_votes
@@ -296,6 +281,54 @@ pub async fn vote_params(
         bail!("The vote did not take effect; the transaction was likely rejected");
     }
     Ok(())
+}
+
+/// Withdraws `key`'s vote on channel params, as its stake owner.
+pub async fn withdraw_params_vote(wallet_home: Option<PathBuf>, key: SequencerKey) -> Result<()> {
+    let wallet = open_wallet(wallet_home)?;
+    let config = stake_config(&wallet).await?;
+    let ownership = stake_owner(&wallet, &config, &key)?;
+    ensure!(
+        config.params_votes.contains_key(&key),
+        "This channel signing key has no vote to withdraw"
+    );
+
+    let tx_hash = SequencerStake(&wallet)
+        .send_params_vote_withdrawal(ownership, None)
+        .await
+        .map_err(|err| {
+            anyhow!("Failed to submit the WithdrawChannelParamsVote transaction: {err:?}")
+        })?;
+    println!("Withdrawing this key's vote: {tx_hash}");
+    confirm(&wallet, tx_hash).await?;
+
+    ensure!(
+        !stake_config(&wallet).await?.params_votes.contains_key(&key),
+        "The withdrawal did not take effect; the transaction was likely rejected"
+    );
+    Ok(())
+}
+
+/// The ownership account of `key`'s stake, which the wallet must hold the key for.
+fn stake_owner(
+    wallet: &WalletCore<SequencerClient>,
+    config: &SequencerStakeConfig,
+    key: &SequencerKey,
+) -> Result<AccountId> {
+    let entry = config
+        .entries
+        .get(key)
+        .context("This channel signing key has no stake")?;
+    // The wallet drops a signature it holds no key for without saying so.
+    ensure!(
+        wallet
+            .get_account_public_signing_key(entry.account_id)
+            .is_some(),
+        "The wallet holds no key for the stake's ownership account {}; import it with `wallet \
+         account import public`",
+        entry.account_id
+    );
+    Ok(entry.account_id)
 }
 
 fn open_wallet(home: Option<PathBuf>) -> Result<WalletCore<SequencerClient>> {

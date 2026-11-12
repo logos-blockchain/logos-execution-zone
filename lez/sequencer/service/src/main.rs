@@ -85,14 +85,24 @@ enum Command {
     },
     /// Votes, as a staked key's owner, for new channel params, through the wallet's sequencer.
     ///
-    /// Params left out keep the values in force, and voting with none withdraws the key's vote.
-    /// The params change once two thirds of the accredited keys vote for the same values.
+    /// Params left out keep the values in force. The params change once two thirds of the
+    /// accredited keys vote for the same values.
     VoteParams {
         /// Accredited channel signing public key voting, in hex.
         #[clap(long, value_parser = operator::parse_sequencer_key)]
         sequencer_key: SequencerKey,
         #[clap(flatten)]
         changes: operator::ParamsArgs,
+        /// Defaults to `$LEE_WALLET_HOME_DIR`, else `~/.lee/wallet`.
+        #[clap(long)]
+        wallet_home: Option<PathBuf>,
+    },
+    /// Withdraws, as a staked key's owner, its vote on channel params, through the wallet's
+    /// sequencer.
+    WithdrawParamsVote {
+        /// Channel signing public key whose vote to withdraw, in hex.
+        #[clap(long, value_parser = operator::parse_sequencer_key)]
+        sequencer_key: SequencerKey,
         /// Defaults to `$LEE_WALLET_HOME_DIR`, else `~/.lee/wallet`.
         #[clap(long)]
         wallet_home: Option<PathBuf>,
@@ -193,6 +203,10 @@ async fn main() -> Result<()> {
             changes,
             wallet_home,
         } => operator::vote_params(wallet_home, sequencer_key, changes).await,
+        Command::WithdrawParamsVote {
+            sequencer_key,
+            wallet_home,
+        } => operator::withdraw_params_vote(wallet_home, sequencer_key).await,
     }
 }
 

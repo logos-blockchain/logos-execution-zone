@@ -107,23 +107,52 @@ impl<C: WalletSequencerClient> SequencerStake<'_, C> {
         self.0.send_pub_tx(accounts, 0, message).await
     }
 
-    /// Votes for `params` as the key `ownership` backs; a vote for the params in force withdraws
-    /// that key's vote. `payer` covers the fee, `ownership` if `None`.
+    /// Votes for `params` as the key `ownership` backs. `payer` covers the fee, `ownership` if
+    /// `None`.
     pub async fn send_params_vote(
         &self,
         ownership: AccountId,
         params: ChannelParams,
         payer: Option<AccountId>,
     ) -> Result<HashType, ExecutionFailureKind> {
+        self.send_vote_message(
+            ownership,
+            |sequencer_key| Message::VoteChannelParams {
+                sequencer_key,
+                params,
+            },
+            payer,
+        )
+        .await
+    }
+
+    /// Withdraws the vote of the key `ownership` backs. `payer` covers the fee, `ownership` if
+    /// `None`.
+    pub async fn send_params_vote_withdrawal(
+        &self,
+        ownership: AccountId,
+        payer: Option<AccountId>,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        self.send_vote_message(
+            ownership,
+            |sequencer_key| Message::WithdrawChannelParamsVote { sequencer_key },
+            payer,
+        )
+        .await
+    }
+
+    async fn send_vote_message(
+        &self,
+        ownership: AccountId,
+        message: impl FnOnce(SequencerKey) -> Message,
+        payer: Option<AccountId>,
+    ) -> Result<HashType, ExecutionFailureKind> {
         let program = programs::sequencer_stake_account_id();
         let owner = AccountIdentity::Public(ownership);
         let record = StakeRecord::from_bytes(&super::actor_state(self.0, &owner, program).await?)
             .ok_or(ExecutionFailureKind::AccountDataError(ownership))?;
-        let message = Program::serialize_message(Message::VoteChannelParams {
-            sequencer_key: record.sequencer_key,
-            params,
-        })
-        .expect("Message should serialize");
+        let message = Program::serialize_message(message(record.sequencer_key))
+            .expect("Message should serialize");
         let accounts = vec![
             owner.select_program_actor_state(program),
             AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id())
