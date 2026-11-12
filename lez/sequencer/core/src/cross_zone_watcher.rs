@@ -1054,6 +1054,26 @@ mod tests {
         })])
     }
 
+    /// One pass of `peer`'s watcher over `messages`, read as one batch, folding from `tip`.
+    async fn pass<S: StorageActorTrait>(
+        peer: &PeerContext,
+        messages: Vec<(ZoneMessage, Slot)>,
+        storage_ref: &ActorRef<S>,
+        cursor: &mut Option<Slot>,
+        tip: &mut Option<PeerChainTip>,
+    ) -> PassOutcome {
+        let mut chain = structural_chain(peer, *tip);
+        consume_peer_stream(
+            batch(messages, None),
+            peer,
+            &mut chain,
+            storage_ref,
+            cursor,
+            tip,
+        )
+        .await
+    }
+
     fn undecodable_msg(slot: u64) -> (ZoneMessage, Slot) {
         peer_msg(b"not a block".to_vec(), slot)
     }
@@ -1197,12 +1217,10 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let mut chain = structural_chain(&peer_context(), None);
 
-        let outcome = consume_peer_stream(
-            batch(vec![peer_block_msg(1, 0), peer_block_msg(2, 1)], None),
+        let outcome = pass(
             &peer_context(),
-            &mut chain,
+            vec![peer_block_msg(1, 0), peer_block_msg(2, 1)],
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1228,12 +1246,10 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let mut chain = structural_chain(&peer_context(), None);
 
-        let outcome = consume_peer_stream(
-            batch(vec![peer_block_msg_reverted(1, 0)], None),
+        let outcome = pass(
             &peer_context(),
-            &mut chain,
+            vec![peer_block_msg_reverted(1, 0)],
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1257,19 +1273,14 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let mut chain = structural_chain(&peer_context(), None);
 
-        let outcome = consume_peer_stream(
-            batch(
-                vec![peer_block_msg_to(
-                    1,
-                    0,
-                    programs::cross_zone_inbox_account_id(),
-                )],
-                None,
-            ),
+        let outcome = pass(
             &peer_context(),
-            &mut chain,
+            vec![peer_block_msg_to(
+                1,
+                0,
+                programs::cross_zone_inbox_account_id(),
+            )],
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1299,15 +1310,10 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let mut chain = structural_chain(&peer_context(), None);
 
-        let outcome = consume_peer_stream(
-            batch(
-                vec![peer_block_msg_to(1, 0, programs::fee_account_id())],
-                None,
-            ),
+        let outcome = pass(
             &peer_context(),
-            &mut chain,
+            vec![peer_block_msg_to(1, 0, programs::fee_account_id())],
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1339,19 +1345,14 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let mut chain = structural_chain(&peer_context(), None);
 
-        let outcome = consume_peer_stream(
-            batch(
-                vec![peer_block_msg_to(
-                    1,
-                    0,
-                    programs::wrapped_token_account_id(),
-                )],
-                None,
-            ),
+        let outcome = pass(
             &peer_context(),
-            &mut chain,
+            vec![peer_block_msg_to(
+                1,
+                0,
+                programs::wrapped_token_account_id(),
+            )],
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1382,7 +1383,6 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let mut chain = structural_chain(&peer, None);
 
         let block = produce_dummy_block(
             1,
@@ -1394,10 +1394,9 @@ mod tests {
                 b"hi",
             )],
         );
-        let outcome = consume_peer_stream(
-            batch(vec![block_msg(&block, 0)], None),
+        let outcome = pass(
             &peer,
-            &mut chain,
+            vec![block_msg(&block, 0)],
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1435,7 +1434,6 @@ mod tests {
             let (_dir, storage_ref) = store().await;
             let mut cursor = None;
             let mut tip = None;
-            let mut chain = structural_chain(&peer, None);
 
             let block = produce_dummy_block(
                 1,
@@ -1447,10 +1445,9 @@ mod tests {
                     b"hi",
                 )],
             );
-            let outcome = consume_peer_stream(
-                batch(vec![block_msg(&block, 0)], None),
+            let outcome = pass(
                 &peer,
-                &mut chain,
+                vec![block_msg(&block, 0)],
                 &storage_ref,
                 &mut cursor,
                 &mut tip,
@@ -1472,7 +1469,6 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let mut chain = structural_chain(&peer_context(), None);
 
         let block = produce_dummy_block(
             1,
@@ -1484,10 +1480,9 @@ mod tests {
                 b"hi",
             )],
         );
-        let outcome = consume_peer_stream(
-            batch(vec![block_msg(&block, 0)], None),
+        let outcome = pass(
             &peer_context(),
-            &mut chain,
+            vec![block_msg(&block, 0)],
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1510,12 +1505,10 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let mut chain = structural_chain(&peer_context(), None);
 
-        consume_peer_stream(
-            batch(vec![peer_block_msg(1, 0)], None),
+        pass(
             &peer_context(),
-            &mut chain,
+            vec![peer_block_msg(1, 0)],
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1551,12 +1544,10 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let mut chain = structural_chain(&peer_context(), None);
 
-        consume_peer_stream(
-            batch(vec![peer_block_msg(1, 0)], None),
+        pass(
             &peer_context(),
-            &mut chain,
+            vec![peer_block_msg(1, 0)],
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1592,12 +1583,10 @@ mod tests {
         let storage_ref = store_refusing_deliveries();
         let mut cursor = None;
         let mut tip = None;
-        let mut chain = structural_chain(&peer_context(), None);
 
-        let outcome = consume_peer_stream(
-            batch(vec![peer_block_msg(1, 0)], None),
+        let outcome = pass(
             &peer_context(),
-            &mut chain,
+            vec![peer_block_msg(1, 0)],
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1635,12 +1624,10 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let mut chain = structural_chain(&peer_context(), None);
 
-        consume_peer_stream(
-            batch(vec![peer_block_msg(1, 0), peer_block_msg(2, 1)], None),
+        pass(
             &peer_context(),
-            &mut chain,
+            vec![peer_block_msg(1, 0), peer_block_msg(2, 1)],
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1669,11 +1656,9 @@ mod tests {
 
         // The sdk resumes the stream at cursor + 1, so only block 3 arrives.
         let mut resumed_cursor = resumed;
-        let mut resumed_chain = structural_chain(&peer_context(), resumed_tip);
-        consume_peer_stream(
-            batch(vec![peer_block_msg(3, 2)], None),
+        pass(
             &peer_context(),
-            &mut resumed_chain,
+            vec![peer_block_msg(3, 2)],
             &storage_ref,
             &mut resumed_cursor,
             &mut resumed_tip,
@@ -1704,19 +1689,14 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let mut chain = structural_chain(&peer_context(), None);
 
-        let outcome = consume_peer_stream(
-            batch(
-                vec![
-                    peer_block_msg(1, 0),
-                    undecodable_msg(1),
-                    peer_block_msg(3, 2),
-                ],
-                None,
-            ),
+        let outcome = pass(
             &peer_context(),
-            &mut chain,
+            vec![
+                peer_block_msg(1, 0),
+                undecodable_msg(1),
+                peer_block_msg(3, 2),
+            ],
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1747,12 +1727,10 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let mut chain = structural_chain(&peer_context(), None);
 
-        let outcome = consume_peer_stream(
-            batch(vec![peer_block_msg(1, 4), undecodable_msg(4)], None),
+        let outcome = pass(
             &peer_context(),
-            &mut chain,
+            vec![peer_block_msg(1, 4), undecodable_msg(4)],
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1785,20 +1763,15 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let mut chain = structural_chain(&peer_context(), None);
 
         for _ in 0..3 {
-            let outcome = consume_peer_stream(
-                batch(
-                    vec![
-                        peer_block_msg(1, 0),
-                        undecodable_msg(1),
-                        peer_block_msg(3, 2),
-                    ],
-                    None,
-                ),
+            let outcome = pass(
                 &peer_context(),
-                &mut chain,
+                vec![
+                    peer_block_msg(1, 0),
+                    undecodable_msg(1),
+                    peer_block_msg(3, 2),
+                ],
                 &storage_ref,
                 &mut cursor,
                 &mut tip,
@@ -1835,21 +1808,16 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let mut chain = structural_chain(&peer_context(), None);
         let pre_burn = produce_dummy_block(5, None, vec![emission()]);
 
-        let outcome = consume_peer_stream(
-            batch(
-                vec![
-                    peer_block_msg(1, 0),
-                    block_msg(&pre_burn, 1),
-                    peer_block_msg(2, 2),
-                    peer_block_msg(3, 3),
-                ],
-                None,
-            ),
+        let outcome = pass(
             &peer_context(),
-            &mut chain,
+            vec![
+                peer_block_msg(1, 0),
+                block_msg(&pre_burn, 1),
+                peer_block_msg(2, 2),
+                peer_block_msg(3, 3),
+            ],
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1878,20 +1846,15 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let mut chain = structural_chain(&peer_context(), None);
         let equivocation = produce_dummy_block(2, Some(HashType([9; 32])), vec![emission()]);
 
-        let outcome = consume_peer_stream(
-            batch(
-                vec![
-                    peer_block_msg(1, 0),
-                    peer_block_msg(2, 1),
-                    block_msg(&equivocation, 2),
-                ],
-                None,
-            ),
+        let outcome = pass(
             &peer_context(),
-            &mut chain,
+            vec![
+                peer_block_msg(1, 0),
+                peer_block_msg(2, 1),
+                block_msg(&equivocation, 2),
+            ],
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1920,20 +1883,15 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let mut chain = structural_chain(&peer_context(), None);
         let forked = produce_dummy_block(2, Some(HashType([9; 32])), vec![emission()]);
 
-        let outcome = consume_peer_stream(
-            batch(
-                vec![
-                    peer_block_msg(1, 0),
-                    block_msg(&forked, 1),
-                    peer_block_msg(2, 2),
-                ],
-                None,
-            ),
+        let outcome = pass(
             &peer_context(),
-            &mut chain,
+            vec![
+                peer_block_msg(1, 0),
+                block_msg(&forked, 1),
+                peer_block_msg(2, 2),
+            ],
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1959,12 +1917,10 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let mut chain = structural_chain(&peer_context(), None);
 
-        let outcome = consume_peer_stream(
-            batch(vec![peer_block_msg(2, 0)], None),
+        let outcome = pass(
             &peer_context(),
-            &mut chain,
+            vec![peer_block_msg(2, 0)],
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -1985,16 +1941,14 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let mut chain = structural_chain(&peer_context(), None);
         let pinned_elsewhere = PeerContext {
             genesis_hash: Some(HashType([9; 32])),
             ..peer_context()
         };
 
-        let outcome = consume_peer_stream(
-            batch(vec![peer_block_msg(GENESIS_BLOCK_ID, 0)], None),
+        let outcome = pass(
             &pinned_elsewhere,
-            &mut chain,
+            vec![peer_block_msg(GENESIS_BLOCK_ID, 0)],
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -2009,11 +1963,9 @@ mod tests {
             genesis_hash: Some(chain_hash(GENESIS_BLOCK_ID)),
             ..peer_context()
         };
-        chain = structural_chain(&pinned_here, tip);
-        let anchored = consume_peer_stream(
-            batch(vec![peer_block_msg(GENESIS_BLOCK_ID, 1)], None),
+        let anchored = pass(
             &pinned_here,
-            &mut chain,
+            vec![peer_block_msg(GENESIS_BLOCK_ID, 1)],
             &storage_ref,
             &mut cursor,
             &mut tip,
@@ -2035,21 +1987,16 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let mut chain = structural_chain(&peer_context(), None);
         let mut tampered = chain_block(2);
         tampered.header.hash = HashType([9; 32]);
 
-        let outcome = consume_peer_stream(
-            batch(
-                vec![
-                    peer_block_msg(1, 0),
-                    block_msg(&tampered, 1),
-                    peer_block_msg(2, 2),
-                ],
-                None,
-            ),
+        let outcome = pass(
             &peer_context(),
-            &mut chain,
+            vec![
+                peer_block_msg(1, 0),
+                block_msg(&tampered, 1),
+                peer_block_msg(2, 2),
+            ],
             &storage_ref,
             &mut cursor,
             &mut tip,
