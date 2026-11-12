@@ -509,16 +509,17 @@ fn loader_actor_state<'state>(
         .or_else(|| state.loader_actor_state(account_id))
 }
 
-/// The cycles a public action is charged: what it metered, plus a failing call's own count on a
-/// non-zero exit, since execution bailed before adding them; a panic or session-limit bail loses
-/// the count and pays the full budget.
+/// The cycles a public action is charged: what it metered, also when it ran whole and then
+/// published to an unbound destination; plus a failing call's own count on a non-zero exit, since
+/// execution bailed before adding them; a panic or session-limit bail loses the count and pays
+/// the full budget.
 pub const fn charged_cycles<T>(
     result: &Result<T, LeeError>,
     cycles_used: Cycles,
     cycle_budget: Cycles,
 ) -> Cycles {
     match result {
-        Ok(_) => cycles_used,
+        Ok(_) | Err(LeeError::UnboundAsyncDestination { .. }) => cycles_used,
         Err(LeeError::ProgramExitedWithCode { cycles, .. }) => cycles_used.saturating_add(*cycles),
         Err(_) => cycle_budget,
     }
