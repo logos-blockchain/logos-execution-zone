@@ -153,8 +153,13 @@ typedef struct FfiPrivacyPreservingMessage {
   uint64_t block_validity_window[2];
   uint64_t timestamp_validity_window[2];
   FfiPublicAccountEvidenceList admission_evidence;
+  bool has_proven_fee;
+  struct FfiProvenFee proven_fee;
+  /**
+   * The fee declaration, paid by a public signer instead of inside the proof.
+   */
   bool has_fee;
-  struct FfiProvenFee fee;
+  FfiFeeDeclaration fee;
 } FfiPrivacyPreservingMessage;
 
 typedef FfiVecU8 FfiProof;

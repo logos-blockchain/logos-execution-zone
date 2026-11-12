@@ -56,6 +56,23 @@ impl LeeTransaction {
         })
     }
 
+    /// Whether a declared fee is signed by its payer; a transaction declaring none always is.
+    #[must_use]
+    pub fn is_fee_authorized(&self) -> bool {
+        match self {
+            Self::Public(tx) => lee::is_fee_authorized(
+                tx.message().fee,
+                &tx.message().hash(),
+                tx.witness_set().signatures_and_public_keys(),
+            ),
+            Self::PrivacyPreserving(tx) => lee::is_fee_authorized(
+                tx.message().fee,
+                &tx.message().hash(),
+                tx.witness_set().signatures_and_public_keys(),
+            ),
+        }
+    }
+
     #[must_use]
     pub const fn public_call(&self) -> Option<(Actor, &[u8])> {
         let Self::Public(tx) = self else {
@@ -506,7 +523,7 @@ fn validate_no_restricted_account_modification(
         .chain(system_accounts::fee_account_ids());
     for account_id in restricted_modification_accounts {
         let in_proof_fee = account_id == fee_inbox
-            && matches!(tx, LeeTransaction::PrivacyPreserving(_))
+            && matches!(tx, LeeTransaction::PrivacyPreserving(private_tx) if private_tx.message().fee.is_none())
             && diff.public_diff().get(&account_id).is_some_and(|post| {
                 native_balance_only_increased(&state.get_account_by_id(account_id), post)
             });
@@ -1037,9 +1054,10 @@ mod tests {
                     private_actions: Vec::new(),
                     validity: lee_core::program::ValidityWindows::new_unbounded(),
                     program_image_claims: Vec::new(),
-                    fee: None,
+                    proven_fee: None,
                 },
                 nonces: BTreeMap::new(),
+                fee: None,
                 admission_evidence: Vec::new(),
             },
             witness_set: lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(
