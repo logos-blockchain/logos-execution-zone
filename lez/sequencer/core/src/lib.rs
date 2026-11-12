@@ -1248,7 +1248,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     &mut scratch_summary,
                 ) {
                     Ok((_events, tx_reverted)) => {
-                        if let Some(withdraw_data) = extract_bridge_withdraw_data(tx) {
+                        if !tx_reverted
+                            && let Some(withdraw_data) = extract_bridge_withdraw_data(tx)
+                        {
                             withdrawals.push(withdraw_data);
                         }
                         *state = scratch;
