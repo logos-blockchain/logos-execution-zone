@@ -38,6 +38,14 @@ pub fn with_private_sender(state: V03State) -> V03State {
 /// A transfer out of the private sender over `state`, paying its fee inside the proof.
 #[must_use]
 pub fn private_transfer(state: &V03State) -> LeeTransaction {
+    // The fee's amount is fixed-width, so a transfer paying nothing measures the one that pays.
+    let size = private_transfer_paying(state, 0)
+        .charged_bytes()
+        .expect("a transfer's size");
+    private_transfer_paying(state, fee_core::assess::private_fee_required(0, size, 8, 8))
+}
+
+fn private_transfer_paying(state: &V03State, fee: u128) -> LeeTransaction {
     let (keys, funded) = private_sender();
     let recipient = testnet_initial_state::initial_public_user_accounts()[1].account_id;
     let fee_inbox = system_accounts::fee_inbox_account_id();
@@ -81,7 +89,7 @@ pub fn private_transfer(state: &V03State) -> LeeTransaction {
             fee: Some(lee_core::FeeTransfer {
                 payer: keys.account_id(),
                 recipient: fee_inbox,
-                amount: fee_core::assess::private_fee_required(0, 8, 8),
+                amount: fee,
                 refund_to: None,
             }),
         },

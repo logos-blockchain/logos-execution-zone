@@ -10,21 +10,21 @@ workspace = true
 [features]
 # Adds actor implementation.
 actor = [
+  "dep:sequencer_core",
+  "dep:sequencer_slasher_actor",
+  "dep:sequencer_channel_signing_actor",
+
+  "dep:logos-blockchain-key-management-system-service",
+
+  "dep:tokio",
+  "dep:kameo",
   "dep:anyhow",
-  "dep:async-trait",
   "dep:borsh",
   "dep:chain_state",
   "dep:futures",
   "dep:hex",
-  "dep:kameo",
-  "dep:lee",
   "dep:libp2p",
   "dep:log",
-  "dep:logos-blockchain-key-management-system-service",
-  "dep:sequencer_channel_signing_actor",
-  "dep:sequencer_core",
-  "dep:sequencer_slasher_actor",
-  "dep:tokio",
 ]
 # Enable mDNS-based local peer discovery for gossip.
 # All mDNS code lives in the actor, so this implies `actor`.
@@ -33,15 +33,15 @@ mdns = ["actor"]
 [dependencies]
 chain_state = { workspace = true, optional = true }
 common.workspace = true
-lee = { workspace = true, optional = true }
+lee.workspace = true
 sequencer_channel_signing_actor = { workspace = true, optional = true }
+# TODO: Remove dependency from sequencer_core
 sequencer_core = { workspace = true, optional = true }
 sequencer_slasher_actor = { workspace = true, optional = true }
 
 logos-blockchain-key-management-system-service = { workspace = true, optional = true }
 
 anyhow = { workspace = true, optional = true }
-async-trait = { workspace = true, optional = true }
 borsh = { workspace = true, optional = true }
 kameo = { workspace = true, optional = true }
 log = { workspace = true, optional = true }

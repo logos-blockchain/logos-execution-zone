@@ -1,9 +1,6 @@
 //! A producer's turn while the head cannot execute the block past its tip.
 
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use chain_state::{ChannelEntry, ProofStore};
 use common::{
@@ -17,21 +14,24 @@ use lee::privacy_preserving_transaction::{Message, WitnessSet, circuit::Proof};
 use sequencer_bedrock_actor::{
     mock::MockBedrockActor,
     protocol::{
-        ChannelEvent, ChannelSeq, ChannelUpdate, Checkpoint, HeaderId, MsgId, PublishOutcome, Slot,
-        ViewChange,
+        ChannelEvent, ChannelEventKind, ChannelSeq, ChannelUpdate, Checkpoint, HeaderId, MsgId,
+        PublishOutcome, PublisherEvent, Slot, ViewChange,
     },
 };
-use sequencer_slasher_actor::{Approval, SetApprovalPublisher};
+use sequencer_slasher_actor::protocol::{Approval, SetApprovalPublisher};
 use sequencer_stake_core::ed25519_dalek::SigningKey;
-use sequencer_storage_actor::{mock::MockStorageActor, protocol::StoreUpdateOutcome};
+use sequencer_storage_actor::mock::{CannedStore, MockStorageActor, SharedStore};
 use tempfile::TempDir;
 use tokio::{sync::mpsc, test};
 
 use super::{
-    mock_channel_params, prepare_mock_bedrock_with_empty_channel, prepare_mock_storage_with_stake,
-    stake_entries, staked_sequencer_config,
+    empty_genesis, executor_args, mock_channel_params, prepare_mock_bedrock_on_genesis,
+    spawn_bedrock_pool, stake_entries, stake_state, staked_sequencer_config,
 };
-use crate::{ExecutorActor, protocol::ProduceBlock};
+use crate::{
+    ExecutorActor,
+    protocol::{ChannelId, ProduceBlock},
+};
 
 /// Slots after a private block within which another writer may skip it.
 const SKIP_WINDOW: u32 = 10;
@@ -43,12 +43,13 @@ const BLOCKER_SLOT: u64 = 5;
 const GENESIS: HashType = HashType([0; 32]);
 
 /// An executor on its turn, over a genesis that sets [`SKIP_WINDOW`] and [`POSTING_TIMEOUT`],
-/// with the blocks it publishes, the tips it settles and the offences it reports.
+/// with the blocks it publishes, the store it settles them into and the offences it reports.
 struct Producer {
     executor: ActorRef<ExecutorActor<MockStorageActor, MockBedrockActor>>,
+    channel_id: ChannelId,
     proofs: ProofStore,
     published: mpsc::UnboundedReceiver<Block>,
-    settled: Arc<Mutex<Vec<BlockMeta>>>,
+    store: SharedStore,
     approvals: mpsc::Receiver<Approval>,
     own: [u8; 32],
     _home: TempDir,
@@ -58,7 +59,7 @@ impl Producer {
     async fn start() -> Self {
         let (mut config, home, sequencer_key) = staked_sequencer_config();
         config.block_create_timeout = Duration::from_secs(1);
-        let mut storage = prepare_mock_storage_with_stake(
+        let state = stake_state(
             stake_entries(sequencer_key),
             sequencer_stake_core::ChannelParams {
                 posting_timeout: POSTING_TIMEOUT,
@@ -66,65 +67,64 @@ impl Producer {
                 ..mock_channel_params()
             },
         );
-        storage
-            .expect_handle_get_pending_cross_zone_dispatches()
-            .returning(|_msg, _ctx| Ok(Vec::new()));
-        storage
-            .expect_handle_get_pending_deposit_events()
-            .returning(|_msg, _ctx| Ok(Vec::new()));
-        storage
-            .expect_handle_put_slash_record_bytes()
-            .returning(|_msg, _ctx| Ok(()));
-        let settled = Arc::new(Mutex::new(Vec::new()));
-        storage.expect_handle_apply_store_update().returning({
-            let settled = Arc::clone(&settled);
-            move |update, _ctx| {
-                settled
-                    .lock()
-                    .expect("settled tips lock")
-                    .extend(update.final_snapshot.map(|(_, meta)| meta));
-                Ok(StoreUpdateOutcome::default())
-            }
-        });
+        let genesis = empty_genesis();
+        let store = CannedStore {
+            final_snapshot: Some((state.clone(), BlockMeta::from(&genesis))),
+            head_state: Some(state),
+            blocks: BTreeMap::from([(genesis.header.block_id, genesis)]),
+            ..CannedStore::default()
+        }
+        .share();
 
-        let mut bedrock = prepare_mock_bedrock_with_empty_channel();
         let (published_tx, published) = mpsc::unbounded_channel();
-        bedrock
-            .expect_handle_publish_block()
-            .returning(move |msg, _ctx| {
-                let this_msg = MsgId::from(msg.block.header.hash.0);
-                let parent = msg.parent.unwrap_or_else(MsgId::root);
-                published_tx
-                    .send(msg.block)
-                    .expect("the test still listens");
-                Ok(PublishOutcome {
-                    this_msg,
-                    parent,
-                    checkpoint: checkpoint(0),
-                    seq: ChannelSeq::mocked(0),
-                    released_notes: Vec::new(),
-                })
-            });
-
-        let executor = ExecutorActor::new(
+        let args = Box::pin(executor_args(
             config,
-            MockStorageActor::spawn(storage),
-            MockBedrockActor::spawn(bedrock),
-        )
-        .await
-        .expect("the executor starts");
+            MockStorageActor::spawn(store.mock()),
+            spawn_bedrock_pool(move |channel_id| {
+                let mut bedrock = prepare_mock_bedrock_on_genesis(channel_id);
+                bedrock
+                    .expect_handle_get_accredited_keys()
+                    .returning(|_msg, _ctx| Ok(None));
+                let published_tx = published_tx.clone();
+                bedrock
+                    .expect_handle_publish_block()
+                    .returning(move |msg, _ctx| {
+                        let this_msg = MsgId::from(msg.block.header.hash.0);
+                        let parent = msg.parent.unwrap_or_else(MsgId::root);
+                        published_tx
+                            .send(msg.block)
+                            .expect("the test still listens");
+                        Ok(PublishOutcome {
+                            this_msg,
+                            parent,
+                            checkpoint: checkpoint(0),
+                            seq: ChannelSeq::mocked(0),
+                            released_notes: Vec::new(),
+                        })
+                    });
+                bedrock
+            }),
+        ))
+        .await;
         let (approvals_tx, approvals) = mpsc::channel(8);
-        executor
-            .slasher_ref()
+        args.slasher_ref
             .tell(SetApprovalPublisher(approvals_tx))
             .await
             .expect("the slasher takes a publisher");
+        let proofs = args.proofs.clone();
+        let channel_id = args.config.bedrock_config.channel_id;
+        let executor = ExecutorActor::spawn(args);
+        executor
+            .wait_for_startup_with_result(|res| res.map_err(|err| format!("{err:?}")))
+            .await
+            .expect("the executor starts");
 
         Self {
-            proofs: executor.proof_store(),
-            executor: ExecutorActor::spawn(executor),
+            executor,
+            channel_id,
+            proofs,
             published,
-            settled,
+            store,
             approvals,
             own: sequencer_key.to_bytes(),
             _home: home,
@@ -133,7 +133,12 @@ impl Producer {
 
     async fn follow(&self, update: ChannelUpdate) {
         self.executor
-            .ask(ChannelEvent::Update(Arc::new(update)))
+            .ask(ChannelEvent {
+                channel_id: self.channel_id,
+                event: ChannelEventKind::Publisher(Arc::new(PublisherEvent::Update(Box::new(
+                    update,
+                )))),
+            })
             .await
             .expect("the executor follows the channel");
     }
@@ -141,9 +146,12 @@ impl Producer {
     /// Our turn, which Bedrock reports started at `slot`.
     async fn turn_from(&self, slot: u64) {
         self.executor
-            .ask(ChannelEvent::Turn {
-                our_turn_to_write: true,
-                starting_slot: Some(Slot::from(slot)),
+            .ask(ChannelEvent {
+                channel_id: self.channel_id,
+                event: ChannelEventKind::Publisher(Arc::new(PublisherEvent::Turn {
+                    our_turn_to_write: true,
+                    starting_slot: Some(Slot::from(slot)),
+                })),
             })
             .await
             .expect("the executor takes the turn");
@@ -319,13 +327,14 @@ async fn a_turn_builds_over_a_failed_block_of_ours_past_its_window_and_the_block
             ..update(past_the_window)
         })
         .await;
-    assert!(
+    assert_eq!(
         producer
-            .settled
+            .store
             .lock()
-            .expect("settled tips lock")
-            .iter()
-            .any(|tip| tip.hash == built.header.hash),
+            .final_snapshot
+            .as_ref()
+            .map(|(_, tip)| tip.hash),
+        Some(built.header.hash),
         "the failed block leaves before the new one is placed on its parent"
     );
     let reported = producer.reported();

@@ -1,0 +1,14 @@
+[package]
+name = "sequencer_bridge"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lee.workspace = true
+programs.workspace = true
+system_accounts.workspace = true
+bridge_core = { workspace = true, features = ["host"] }

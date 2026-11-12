@@ -6,7 +6,7 @@ use sequencer_bedrock_actor::protocol::Slot;
 use sequencer_core::{MsgId, config::ChannelParams};
 use tokio::time::{Duration, Instant};
 
-use crate::actor::turn::Turn;
+use super::turn::Turn;
 
 /// When our turn builds on the head tip past a block the head has not executed, skipping it.
 #[derive(Default)]

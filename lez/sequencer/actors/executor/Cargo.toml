@@ -10,15 +10,28 @@ workspace = true
 [features]
 # Adds actor implementation.
 actor = [
-  "dep:sequencer_executor_actor_metrics",
-  "dep:chain_state",
-  "dep:fee_core",
   "dep:sequencer_core",
+  "dep:sequencer_channel_signing_actor",
+  "dep:sequencer_gossip_actor",
+  "dep:sequencer_genesis",
+  "dep:sequencer_executor_actor_metrics",
+  "dep:sharding_pool_actor",
+  "dep:sequencer_core_metrics",
+  "dep:sequencer_stake_core",
   "dep:mempool",
+  "dep:testnet_initial_state",
+  "dep:cross_zone",
+  "dep:programs",
+  "dep:system_accounts",
+  "dep:fee_core",
+  "dep:bridge_core",
 
   "dep:tokio",
   "dep:futures",
+  "dep:borsh",
+  "dep:kameo_actors",
   "dep:log",
+  "dep:glob",
 ]
 # Adds mock actor implementation.
 mock = ["sequencer_actors_common/mock", "dep:mockall"]
@@ -30,14 +43,30 @@ sequencer_actors_common.workspace = true
 sequencer_slasher_actor.workspace = true
 sequencer_storage_actor.workspace = true
 sequencer_bedrock_actor.workspace = true
+chain_state.workspace = true
 sequencer_executor_actor_metrics = { workspace = true, features = [
   "record",
 ], optional = true }
+sharding_pool_actor = { workspace = true, features = [
+  "actor",
+], optional = true }
 lee.workspace = true
-chain_state = { workspace = true, optional = true }
-fee_core = { workspace = true, optional = true }
 sequencer_core = { workspace = true, optional = true }
+sequencer_channel_signing_actor = { workspace = true, optional = true }
+sequencer_gossip_actor = { workspace = true, optional = true }
+sequencer_genesis = { workspace = true, optional = true }
+# TODO: Don't import that
+sequencer_core_metrics = { workspace = true, features = [
+  "record",
+], optional = true }
+sequencer_stake_core = { workspace = true, optional = true }
 mempool = { workspace = true, optional = true }
+testnet_initial_state = { workspace = true, optional = true }
+cross_zone = { workspace = true, optional = true }
+system_accounts = { workspace = true, optional = true }
+programs = { workspace = true, optional = true }
+fee_core = { workspace = true, optional = true }
+bridge_core = { workspace = true, optional = true }
 
 kameo.workspace = true
 anyhow.workspace = true
@@ -45,7 +74,10 @@ thiserror.workspace = true
 num-traits.workspace = true
 tokio = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
+borsh = { workspace = true, optional = true }
+kameo_actors = { workspace = true, optional = true }
 log = { workspace = true, optional = true }
+glob = { workspace = true, optional = true }
 mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -53,14 +85,13 @@ lee = { workspace = true, features = ["test-utils"] }
 sequencer_storage_actor = { workspace = true, features = ["mock"] }
 sequencer_bedrock_actor = { workspace = true, features = ["mock"] }
 bridge_core.workspace = true
-chain_state.workspace = true
+chain_state = { workspace = true, features = ["test-utils"] }
 cross_zone = { workspace = true, features = ["test-utils"] }
 cross_zone_inbox_core.workspace = true
 fee_core.workspace = true
 ping_core.workspace = true
 logos-blockchain-core.workspace = true
 logos-blockchain-binary-codec.workspace = true
-logos-blockchain-zone-sdk.workspace = true
 system_accounts.workspace = true
 sequencer_stake_core.workspace = true
 programs.workspace = true

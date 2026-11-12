@@ -67,6 +67,13 @@ impl LeeTransaction {
         }
     }
 
+    /// The bytes the transaction's storage is charged for: its size in the digest form its block
+    /// publishes, a privacy-preserving transaction's proof replaced by the proof's digest.
+    pub fn charged_bytes(&self) -> borsh::io::Result<u64> {
+        let size = borsh::object_length(&self.digested())?;
+        Ok(u64::try_from(size).expect("a transaction's size fits u64"))
+    }
+
     #[must_use]
     pub const fn kind(&self) -> TxKind {
         match self {
@@ -128,8 +135,8 @@ impl LeeTransaction {
         }
     }
 
-    /// Validates the transaction against the current state, rejects modifications to clock
-    /// system accounts, and applies the resulting diff to the state.
+    /// Validates the transaction against the current state, rejects modifications to the clock
+    /// system account, and applies the resulting diff to the state.
     pub fn execute_check_on_state(
         self,
         state: &mut V03State,
@@ -242,12 +249,10 @@ impl FeePayee {
 /// The clock checks that the proposed block ID advances its stored ID by one.
 #[must_use]
 pub fn clock_invocation(block_id: BlockId, timestamp: Timestamp) -> lee::PublicTransaction {
-    let clock_program_id = programs::clock_account_id();
+    let clock = system_accounts::clock_actor();
     let message = lee::public_transaction::Message::try_new(
-        Actor::new(clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID, clock_program_id),
-        clock_core::CLOCK_PROGRAM_ACCOUNT_IDS
-            .map(|id| Actor::new(id, clock_program_id))
-            .to_vec(),
+        clock,
+        vec![clock],
         BTreeMap::new(),
         clock_core::Message::Tick {
             timestamp,
@@ -408,8 +413,7 @@ fn fee_state_actor() -> Actor {
 ///
 /// This is needed because the producer chooses its own payout account.
 pub fn validate_reward_target(target: AccountId) -> Result<(), String> {
-    let is_restricted = system_accounts::clock_account_ids()
-        .into_iter()
+    let is_restricted = std::iter::once(system_accounts::clock_account_id())
         .chain(system_accounts::fee_account_ids())
         .chain(std::iter::once(system_accounts::bridge_account_id()))
         .any(|id| id == target);
@@ -479,7 +483,7 @@ fn refund_invocation(
 }
 
 /// Rejects a diff that modifies any always-restricted system account (the clock
-/// accounts or the fee subsystem's accounts).
+/// account or the fee subsystem's accounts).
 ///
 /// These are written only by their sequencer-forced invocations, never by a user
 /// transaction. Enforcing this on the apply/settlement path as well as the
@@ -499,8 +503,7 @@ fn validate_no_restricted_account_modification(
     diff: &ValidatedStateDiff,
 ) -> Result<(), lee::error::LeeError> {
     let fee_inbox = system_accounts::fee_inbox_account_id();
-    let restricted_modification_accounts = system_accounts::clock_account_ids()
-        .into_iter()
+    let restricted_modification_accounts = std::iter::once(system_accounts::clock_account_id())
         .chain(system_accounts::fee_account_ids());
     for account_id in restricted_modification_accounts {
         let in_proof_fee = account_id == fee_inbox
@@ -687,10 +690,8 @@ mod tests {
             validate_reward_target(fee_account)
                 .expect_err("a fee account is not a valid reward target");
         }
-        for clock_account in system_accounts::clock_account_ids() {
-            validate_reward_target(clock_account)
-                .expect_err("a clock account is not a valid reward target");
-        }
+        validate_reward_target(system_accounts::clock_account_id())
+            .expect_err("the clock account is not a valid reward target");
     }
 
     #[test]
@@ -813,7 +814,7 @@ mod tests {
         // clock account, then with one that leaves it untouched. The inverted comparison would
         // treat a changed account as unchanged and wave it through (and would flag an *unchanged*
         // account instead).
-        let clock_id = system_accounts::clock_account_ids()[0];
+        let clock_id = system_accounts::clock_account_id();
         let pre = Account::funded(1_000);
 
         let changed = Account::funded(2_000);
@@ -833,18 +834,14 @@ mod tests {
     #[test]
     fn system_account_ids_are_distinct_and_non_default() {
         let bridge = system_accounts::bridge_account_id();
-        let clock = system_accounts::clock_account_ids();
+        let clock = system_accounts::clock_account_id();
         assert_ne!(bridge, AccountId::default());
-        assert!(
-            clock
-                .iter()
-                .all(|id| *id != bridge && *id != AccountId::default())
-        );
+        assert!(clock != bridge && clock != AccountId::default());
     }
 
     #[test]
     fn validate_on_state_rejects_modifying_a_fee_account() {
-        // Fee accounts are restricted the same way clock accounts are: a native
+        // Fee accounts are restricted the same way the clock account is: a native
         // transfer crediting any of them must be rejected.
         let sender_key = PrivateKey::try_new([5_u8; 32]).expect("valid key");
         let sender_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
@@ -862,7 +859,7 @@ mod tests {
 
     #[test]
     fn validate_on_state_rejects_modifying_a_system_account() {
-        // A native transfer that credits a clock system account *changes* that
+        // A native transfer that credits the clock system account *changes* that
         // account, so `validate_doesnt_modify_account` must reject it.  Catches
         // the `!=` → `==` inversion at `validate_doesnt_modify_account` (a changed
         // account would no longer be flagged) and `public_diff → HashMap::new()`
@@ -874,14 +871,14 @@ mod tests {
         let tx = create_transaction_native_token_transfer(
             sender_id,
             0,
-            system_accounts::clock_account_ids()[0],
+            system_accounts::clock_account_id(),
             100,
             &sender_key,
         );
 
         assert!(
             tx.validate_on_state(&state, 1, 0).is_err(),
-            "validate_on_state must reject a transfer that credits a clock system account",
+            "validate_on_state must reject a transfer that credits the clock system account",
         );
     }
 

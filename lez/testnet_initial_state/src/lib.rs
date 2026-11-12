@@ -166,11 +166,10 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
             system_accounts::bridge_account_id(),
             system_accounts::bridge_account(),
         )])
-        .chain(
-            system_accounts::clock_account_ids()
-                .into_iter()
-                .map(|clock_id| (clock_id, system_accounts::clock_account())),
-        )
+        .chain([(
+            system_accounts::clock_account_id(),
+            system_accounts::clock_account(),
+        )])
         .chain([(
             system_accounts::sequencer_stake_config_account_id(),
             system_accounts::sequencer_stake_config_account(None, None),
@@ -187,39 +186,11 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
 }
 
 fn initial_programs(cross_zone: bool) -> Vec<(AccountId, Program)> {
-    let mut programs = vec![
-        (programs::clock_account_id(), programs::clock()),
-        (programs::fee_account_id(), programs::fee()),
-        (programs::bridge_account_id(), programs::bridge()),
-        (
-            programs::sequencer_stake_account_id(),
-            programs::sequencer_stake(),
-        ),
-    ];
+    let mut programs = programs::builtin_core_programs().to_vec();
     if cross_zone {
-        // Builtins baked into every node (genesis-block ELFs would exceed the
-        // inscription size limit); registered only on cross_zone zones, fixed at
-        // genesis.
-        programs.extend([
-            (
-                programs::cross_zone_inbox_account_id(),
-                programs::cross_zone_inbox(),
-            ),
-            (
-                programs::cross_zone_outbox_account_id(),
-                programs::cross_zone_outbox(),
-            ),
-            (programs::ping_sender_account_id(), programs::ping_sender()),
-            (
-                programs::ping_receiver_account_id(),
-                programs::ping_receiver(),
-            ),
-            (programs::bridge_lock_account_id(), programs::bridge_lock()),
-            (
-                programs::wrapped_token_account_id(),
-                programs::wrapped_token(),
-            ),
-        ]);
+        // Baked into every node: genesis-block ELFs would exceed the
+        // inscription size limit.
+        programs.extend(programs::builtin_cross_zone_programs());
     }
     programs
 }

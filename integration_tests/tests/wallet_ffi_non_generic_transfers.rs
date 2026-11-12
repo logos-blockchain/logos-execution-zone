@@ -23,7 +23,7 @@ use core_ffi::{
 };
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS,
-    config::{INITIAL_PRIVATE_BALANCES_FOR_WALLET, min_private_fee},
+    config::{INITIAL_PRIVATE_BALANCES_FOR_WALLET, private_fee},
     ffi_helpers::{sequencer as sequencer_ffi_helpers, wallet::*},
 };
 use lee::Account;
@@ -322,7 +322,7 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
     let declared = transfer_result.fee;
     assert_eq!(declared.kind, FfiFeeKind::Private);
     assert_eq!(declared.private_fee.payer, from);
-    assert!(u128::from(declared.private_fee.reserve) >= min_private_fee());
+    let fee = u128::from(declared.private_fee.reserve);
     assert!(!declared.private_fee.has_refund_to);
 
     wait_for_inclusion(wallet_ffi_handle, &transfer_result);
@@ -356,7 +356,7 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
     // amount.
     assert_eq!(
         from_balance,
-        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0] - 100 - min_private_fee()
+        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0] - 100 - fee
     );
     assert_eq!(to_balance, to_before + 100);
 
@@ -424,7 +424,8 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
         wallet_ffi_sync_to_block(wallet_ffi_handle, current_height).unwrap();
     };
     // Sent by keys, the credit is pending until the owner receives it.
-    receive_pending(wallet_ffi_handle);
+    let fee = u128::from(transfer_result.fee.private_fee.reserve);
+    let receipt_fee = receive_pending(wallet_ffi_handle);
 
     let from_balance = unsafe {
         let mut out_balance: [u8; 16] = [0; 16];
@@ -451,7 +452,7 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
     // The recipient holds 100, below the fee, so the wallet pays its receipt from `from` too.
     assert_eq!(
         from_balance,
-        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0] - 100 - 2 * min_private_fee()
+        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0] - 100 - fee - receipt_fee
     );
     assert_eq!(to_balance, 100);
 
@@ -558,7 +559,10 @@ fn test_wallet_ffi_dry_runs_report_without_sending() -> Result<()> {
         u128::from(private_send.fee.private_fee.reserve),
         u128::from(private_send.dry_run.fee_at_head)
     );
-    assert!(u128::from(private_send.dry_run.fee_at_head) >= min_private_fee());
+    assert!(
+        u128::from(private_send.dry_run.fee_at_head)
+            >= private_fee(fee_core::market::PROOF_DIGEST_BYTES)
+    );
 
     // Fee params replace the defaults a send declares.
     let params = FfiFeeParams {

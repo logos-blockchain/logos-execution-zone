@@ -26,6 +26,46 @@ pub fn linked_chain_to(last: u64, txs_at: impl Fn(u64) -> Vec<LeeTransaction>) -
     blocks
 }
 
+/// A transaction whose root call sends `instruction` to `emitter`, the shape
+/// `extract_emission` reads a registered emitter's transactions through.
+#[must_use]
+pub fn emitter_instruction(emitter: AccountId, instruction: Vec<u8>) -> LeeTransaction {
+    let root = Actor::new(emitter, emitter);
+    let message = Message::new_preserialized(
+        root,
+        instruction,
+        vec![root],
+        std::collections::BTreeMap::new(),
+        None,
+    );
+    LeeTransaction::Public(PublicTransaction::new(
+        message,
+        WitnessSet::from_raw_parts(vec![]),
+    ))
+}
+
+/// A generic-contract emission from `emitter`, recognized only while `emitter`
+/// is in the peer's registered set.
+#[must_use]
+pub fn generic_emission(
+    emitter: AccountId,
+    target_zone: ZoneId,
+    target_account_id: AccountId,
+    payload: &[u8],
+) -> LeeTransaction {
+    let emission = cross_zone_emission_core::CrossZoneEmission {
+        target_zone,
+        target_account_id,
+        target_accounts: vec![],
+        payload: payload.to_vec(),
+        ordinal: 0,
+    };
+    emitter_instruction(
+        emitter,
+        cross_zone_emission_core::emitting_instruction_bytes(&emission),
+    )
+}
+
 /// A `ping_sender` emission aimed at `target_zone` and `target_program_id`,
 /// carrying `payload`. The sender lets its caller name any target, which is why
 /// routes pin the pair rather than the target alone.

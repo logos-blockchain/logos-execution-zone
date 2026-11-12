@@ -1,18 +1,19 @@
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    num::NonZero,
     path::{Path, PathBuf},
     time::Duration,
 };
 
-use anyhow::{Result, ensure};
-use bridge_core::BridgeAmount;
+use anyhow::{Context as _, Result, ensure};
 pub use bridge_core::DepositRecipient;
 use common::{config::BasicAuth, transaction::LeeTransaction};
 pub use cross_zone::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use humantime_serde;
-use lee::{AccountId, PublicKey, Signature};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
+pub use sequencer_genesis::GenesisAction;
+use sequencer_genesis::GenesisSpec;
 pub use sequencer_stake_core::ChannelParams;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -22,27 +23,24 @@ use url::Url;
 /// digest form at `max_block_size - BLOCK_OVERHEAD`.
 pub const BLOCK_OVERHEAD: u64 = 2_048;
 
-/// The largest usable `max_block_size`: an L2 block is published to Bedrock as
-/// a single inscription, which the L1 caps at this many bytes.
-#[expect(
-    clippy::as_conversions,
-    reason = "usize::try_from is not const & usize fits u64 on every supported target"
-)]
-pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 =
-    logos_blockchain_core::mantle::ops::channel::inscribe::MAX_BYTES as u64;
+/// The largest usable `max_block_size`, 7/8 of 2 MiB.
+///
+/// An L2 block is published to Bedrock as a single inscription, which an era
+/// caps at its `max_op_data_size`. Bedrock sets its limits per era, so this is
+/// the smallest one in the era schedule of the `logos-blockchain-node` default
+/// deployment.
+pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 = 0x001C_0000;
 
 /// The largest transaction RPC and gossip admit in full form, proofs included. Blocks carry
 /// proof digests, so this bounds transport only; it is what the largest block could hold.
 pub const MAX_TRANSACTION_SIZE: u64 = MAX_PUBLISHABLE_BLOCK_SIZE.saturating_sub(BLOCK_OVERHEAD);
 
-/// The largest Bedrock transaction: the L1 caps a block's transactions at this
-/// many bytes.
-#[expect(
-    clippy::as_conversions,
-    reason = "usize::try_from is not const & usize fits u64 on every supported target"
-)]
-pub const MAX_BEDROCK_TX_SIZE: u64 =
-    logos_blockchain_core::block::MAX_BLOCK_TRANSACTIONS_SIZE as u64;
+/// The largest Bedrock transaction, 2 MiB.
+///
+/// An era caps a block's transactions at its `max_transactions_size` bytes; this
+/// is the smallest one in the era schedule of the `logos-blockchain-node`
+/// default deployment.
+pub const MAX_BEDROCK_TX_SIZE: u64 = 0x0020_0000;
 
 /// Bytes of transaction proofs a node keeps in memory.
 pub const PROOF_STORE_CAPACITY: usize = 256 * 1024 * 1024;
@@ -58,37 +56,6 @@ pub enum TransactionTooLarge {
     Full { size: u64, max: u64 },
     #[error("transaction too large for a block: {size} > {max}")]
     Inscribed { size: u64, max: u64 },
-}
-
-/// A transaction to be applied at genesis to supply initial balances.
-///
-/// Amounts are [`BridgeAmount`], not [`lee::Balance`]: every one is funded through the bridge's
-/// `Deposit`, so it has the bridge's range, while the balance it credits stays a `Balance`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum GenesisAction {
-    SupplyAccount {
-        recipient: DepositRecipient,
-        balance: BridgeAmount,
-    },
-    /// Credits a private address with a pending native credit, published under the recovery
-    /// binding the initial state pins for it; its owner receives it.
-    SupplyPrivateAccount {
-        address: AccountId,
-        balance: BridgeAmount,
-    },
-    /// Funds a holder's holding PDA at genesis with one replayable genesis
-    /// credit; the balance-only PDA needs no claim.
-    SupplyBridgeLockHolding {
-        holder: AccountId,
-        amount: BridgeAmount,
-    },
-    /// Stakes `sequencer_key` at genesis.
-    StakeSequencer {
-        sequencer_key: sequencer_stake_core::SequencerKey,
-        ownership_public_key: PublicKey,
-        stake_signature: Signature,
-    },
 }
 
 /// Sequencer p2p gossip configuration. Absent (`None`) disables gossip
@@ -127,7 +94,7 @@ pub struct SequencerConfig {
     pub genesis: Option<GenesisConfig>,
     /// Presence selects the genesis program set, must match the indexer's, and
     /// cannot change on an existing chain. A source-only zone declares
-    /// `"cross_zone": {}`.
+    /// `"cross_zone": {"lock_target_zones": []}`.
     #[serde(default)]
     pub cross_zone: Option<CrossZoneConfig>,
     /// Address the Prometheus metrics exporter binds to.
@@ -164,6 +131,8 @@ pub struct BedrockConfig {
     pub priority_fee_percent: u64,
     #[serde(default = "default_stale_refund_slots")]
     pub stale_refund_slots: u64,
+    #[serde(default = "default_backfill_batch_slots")]
+    pub backfill_batch_slots: NonZero<u64>,
 }
 
 /// The values a new channel is created with.
@@ -197,6 +166,44 @@ impl SequencerConfig {
              {MIN_STALE_REFUND_SLOTS}"
         );
         Ok(config)
+    }
+
+    /// The genesis this config describes, or a placeholder with the default channel params when
+    /// [`Self::genesis`] is absent.
+    ///
+    /// When [`Self::genesis`] stakes no sequencer, `bootstrap_sequencer_key` is staked by the key
+    /// in `<home>/sequencer_stake_signing_key`, created on first use.
+    pub fn genesis_spec(
+        &self,
+        bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
+    ) -> Result<GenesisSpec> {
+        let mut spec = GenesisSpec {
+            channel_id: *self.bedrock_config.channel_id.as_ref(),
+            channel_params: default_channel_params(),
+            cross_zone: self.cross_zone.clone(),
+            actions: Vec::new(),
+        };
+        let Some(genesis) = &self.genesis else {
+            return Ok(spec);
+        };
+
+        spec.channel_params = genesis.channel_params;
+        spec.actions.clone_from(&genesis.actions);
+        if let Some(sequencer_key) = bootstrap_sequencer_key
+            && !sequencer_genesis::stakes_any_sequencer(&spec.actions)
+        {
+            let ownership_key = crate::load_or_create_stake_signing_key(
+                &self.home.join("sequencer_stake_signing_key"),
+            )
+            .context("Failed to load or create the stake signing key")?;
+            spec.actions.push(sequencer_genesis::self_stake(
+                sequencer_key,
+                &ownership_key,
+                genesis.channel_params.minimum_sequencer_stake,
+            ));
+        }
+
+        Ok(spec)
     }
 
     /// Where this sequencer's database lives, suffixed with the channel id like
@@ -314,6 +321,11 @@ pub const fn default_stale_refund_slots() -> u64 {
     300
 }
 
+#[must_use]
+pub const fn default_backfill_batch_slots() -> NonZero<u64> {
+    chain_state::zone_indexer::DEFAULT_BACKFILL_BATCH_SLOTS
+}
+
 /// Production defaults for the values genesis fixes.
 #[must_use]
 pub const fn default_channel_params() -> ChannelParams {
@@ -333,6 +345,7 @@ mod tests {
         PrivacyPreservingTransaction,
         privacy_preserving_transaction::{Message, WitnessSet, circuit::Proof},
     };
+    use logos_blockchain_node::config::deployment::{DeploymentSettings, era::ruleset::EraRuleset};
 
     use super::*;
 
@@ -341,6 +354,31 @@ mod tests {
             Message::default(),
             WitnessSet::from_raw_parts(vec![], Proof::from_inner(proof)),
         ))
+    }
+
+    #[test]
+    fn bedrock_size_limits_match_the_node_default_deployment() {
+        let deployment = DeploymentSettings::default();
+        let eras: Vec<_> = deployment
+            .era_schedule()
+            .iter()
+            .map(|era| {
+                let EraRuleset::V1(parameters) = &era.parameters.ruleset;
+                &parameters.cryptarchia
+            })
+            .collect();
+
+        let smallest_op_data_size = eras.iter().map(|era| era.max_op_data_size()).min();
+        let smallest_transactions_size = eras.iter().map(|era| era.max_transactions_size).min();
+
+        assert_eq!(
+            smallest_op_data_size.map(u64::from),
+            Some(MAX_PUBLISHABLE_BLOCK_SIZE)
+        );
+        assert_eq!(
+            smallest_transactions_size.map(u64::from),
+            Some(MAX_BEDROCK_TX_SIZE)
+        );
     }
 
     #[test]

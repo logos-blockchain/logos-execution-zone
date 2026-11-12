@@ -1,6 +1,8 @@
 //! Startup check that a local store still belongs to the chain the connected
 //! channel serves.
 
+use std::num::NonZero;
+
 use anyhow::Result;
 use common::{HashType, block::DigestedBlock};
 use futures::StreamExt as _;
@@ -35,6 +37,7 @@ pub enum ChainConsistency {
 }
 
 /// The evidence behind a [`ChainConsistency::Inconsistent`].
+#[derive(Debug, Clone)]
 pub enum ChainMismatch {
     /// The channel serves a different block at the anchor's id.
     Block {
@@ -116,9 +119,9 @@ impl Anchor {
         Self { slot, block }
     }
 
-    /// Probes a channel message read at/after the anchor slot.
-    /// See [`verify_chain_consistency`].
-    fn probe_anchor_slot(&self, msg: &ZoneMessage, slot: Slot) -> AnchorProbe {
+    /// Probes a channel message read at/after the anchor slot, `block` being [`None`] for one
+    /// that is not a decodable block. See [`verify_chain_consistency`].
+    fn probe_anchor_slot(&self, block: Option<&DigestedBlock>, slot: Slot) -> AnchorProbe {
         if slot < self.slot {
             return AnchorProbe::KeepLooking;
         }
@@ -133,10 +136,7 @@ impl Anchor {
                 })
             };
         };
-        let ZoneMessage::Block(zone_block) = msg else {
-            return AnchorProbe::KeepLooking;
-        };
-        let Ok(block) = DigestedBlock::from_inscription(&zone_block.data) else {
+        let Some(block) = block else {
             return AnchorProbe::KeepLooking;
         };
         let (id, hash) = (block.header.block_id, block.header.hash);
@@ -199,11 +199,16 @@ impl AnchorConsistencyCheck {
         }
     }
 
-    /// Feeds the next channel message in slot order. Returns the verdict once it
-    /// is known so the caller can stop, or `None` while still undetermined.
-    pub fn observe(&mut self, msg: &ZoneMessage, slot: Slot) -> Option<&ChainConsistency> {
+    /// Feeds the next channel message in slot order, `block` being [`None`] for one that is not
+    /// a decodable block. Returns the verdict once it is known so the caller can stop, or `None`
+    /// while still undetermined.
+    pub fn observe(
+        &mut self,
+        block: Option<&DigestedBlock>,
+        slot: Slot,
+    ) -> Option<&ChainConsistency> {
         if self.verdict.is_none() {
-            self.verdict = match self.anchor.probe_anchor_slot(msg, slot) {
+            self.verdict = match self.anchor.probe_anchor_slot(block, slot) {
                 AnchorProbe::SameChain => Some(ChainConsistency::Consistent),
                 AnchorProbe::Mismatch(mismatch) => Some(ChainConsistency::Inconsistent(mismatch)),
                 AnchorProbe::Bail => Some(ChainConsistency::Inconclusive),
@@ -250,11 +255,12 @@ enum AnchorProbe {
 /// [`ChainConsistency::Inconclusive`].
 ///
 /// `node` need only implement the zone-sdk [`adapter::Node`] trait; a throwaway
-/// [`ZoneIndexer`] is built internally for the channel read.
+/// [`ZoneIndexer`] reading `batch_slots` per request is built internally for the channel read.
 pub async fn verify_chain_consistency<N>(
     node: &N,
     channel_id: ChannelId,
     anchor: &Anchor,
+    batch_slots: NonZero<u64>,
 ) -> Result<ChainConsistency>
 where
     N: adapter::Node + Clone + Sync,
@@ -273,7 +279,7 @@ where
         return Ok(ChainConsistency::Inconclusive);
     };
 
-    let zone_indexer = ZoneIndexer::new(channel_id, node.clone());
+    let zone_indexer = ZoneIndexer::new(channel_id, node.clone(), batch_slots);
     let scan = async {
         let stream = zone_indexer
             .next_messages(Some(Slot::from(from_slot)))
@@ -281,11 +287,16 @@ where
         let mut stream = std::pin::pin!(stream);
 
         while let Some(batch) = stream.next().await {
-            if batch?
-                .messages
-                .iter()
-                .any(|(msg, slot)| check.observe(msg, *slot).is_some())
-            {
+            if batch?.messages.iter().any(|(msg, slot)| {
+                let block = match msg {
+                    ZoneMessage::Block(zone_block) => {
+                        DigestedBlock::from_inscription(&zone_block.data).ok()
+                    }
+                    ZoneMessage::Deposit(_) | ZoneMessage::Withdraw(_) => None,
+                };
+
+                check.observe(block.as_ref(), *slot).is_some()
+            }) {
                 break;
             }
         }
@@ -322,13 +333,11 @@ fn frontier_verdict(anchor_slot: Slot, channel_tip_slot: Option<Slot>) -> Option
 
 #[cfg(test)]
 mod tests {
-    use common::block::{Block, HashableBlockData};
-    use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
-    use logos_blockchain_zone_sdk::{UnverifiedEd25519PublicKey, ZoneBlock};
+    use common::block::HashableBlockData;
 
     use super::*;
 
-    fn test_block(block_id: BlockId, timestamp: u64) -> Block {
+    fn test_block(block_id: BlockId, timestamp: u64) -> DigestedBlock {
         HashableBlockData {
             block_id,
             prev_block_hash: HashType([0; 32]),
@@ -337,18 +346,10 @@ mod tests {
             reverted: Vec::new(),
         }
         .into_pending_block()
+        .digested()
     }
 
-    fn block_msg(block: &Block) -> ZoneMessage {
-        let bytes = block.digested().to_inscription().expect("serialize");
-        ZoneMessage::Block(ZoneBlock {
-            id: MsgId::from([0_u8; 32]),
-            data: Inscription::try_from(bytes.as_slice()).expect("inscription"),
-            signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
-        })
-    }
-
-    fn anchor_for(block: &Block, slot: Slot) -> Anchor {
+    fn anchor_for(block: &DigestedBlock, slot: Slot) -> Anchor {
         Anchor::new(slot, Some((block.header.block_id, block.header.hash)))
     }
 
@@ -357,7 +358,7 @@ mod tests {
         let tip = test_block(5, 42);
         let anchor = anchor_for(&tip, Slot::from(1_000));
         assert!(matches!(
-            anchor.probe_anchor_slot(&block_msg(&tip), Slot::from(1_000)),
+            anchor.probe_anchor_slot(Some(&tip), Slot::from(1_000)),
             AnchorProbe::SameChain
         ));
     }
@@ -369,7 +370,7 @@ mod tests {
         // Same id, different content (timestamp) => different hash.
         let other = test_block(5, 43);
         assert!(matches!(
-            anchor.probe_anchor_slot(&block_msg(&other), Slot::from(1_000)),
+            anchor.probe_anchor_slot(Some(&other), Slot::from(1_000)),
             AnchorProbe::Mismatch(ChainMismatch::Block { .. })
         ));
     }
@@ -383,7 +384,7 @@ mod tests {
         let anchor = anchor_for(&tip, Slot::from(1_000));
         let genesis = test_block(1, 0);
         assert!(matches!(
-            anchor.probe_anchor_slot(&block_msg(&genesis), Slot::from(1_001)),
+            anchor.probe_anchor_slot(Some(&genesis), Slot::from(1_001)),
             AnchorProbe::Mismatch(ChainMismatch::ReinscribedBlock { .. })
         ));
     }
@@ -394,7 +395,7 @@ mod tests {
         let anchor = anchor_for(&tip, Slot::from(1_000));
         let earlier = test_block(4, 41);
         assert!(matches!(
-            anchor.probe_anchor_slot(&block_msg(&earlier), Slot::from(1_000)),
+            anchor.probe_anchor_slot(Some(&earlier), Slot::from(1_000)),
             AnchorProbe::KeepLooking
         ));
     }
@@ -407,43 +408,46 @@ mod tests {
         let anchor = anchor_for(&tip, Slot::from(1_000));
         let newer = test_block(6, 43);
         assert!(matches!(
-            anchor.probe_anchor_slot(&block_msg(&newer), Slot::from(1_001)),
+            anchor.probe_anchor_slot(Some(&newer), Slot::from(1_001)),
             AnchorProbe::Bail
         ));
     }
 
     #[test]
-    fn probe_skips_undeserializable_inscriptions() {
+    fn probe_skips_a_message_that_is_not_a_block_for_a_block_anchor() {
         let tip = test_block(5, 42);
         let anchor = anchor_for(&tip, Slot::from(1_000));
-        let garbage = ZoneMessage::Block(ZoneBlock {
-            id: MsgId::from([0_u8; 32]),
-            data: Inscription::try_from(&[1_u8, 2, 3][..]).expect("inscription"),
-            signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
-        });
         assert!(matches!(
-            anchor.probe_anchor_slot(&garbage, Slot::from(1_000)),
+            anchor.probe_anchor_slot(None, Slot::from(1_000)),
             AnchorProbe::KeepLooking
         ));
     }
 
+    /// A headerless anchor was recorded on an undecodable inscription, so that inscription,
+    /// still served at the anchor slot, is the evidence of the same chain.
     #[test]
-    fn probe_accepts_any_message_for_a_headerless_anchor() {
-        // A deserialize park records no header: any message still present at
-        // the anchor slot means the history is intact.
-        let anchor = Anchor::new(Slot::from(1_000), None);
-        let garbage = ZoneMessage::Block(ZoneBlock {
-            id: MsgId::from([0_u8; 32]),
-            data: Inscription::try_from(&[1_u8, 2, 3][..]).expect("inscription"),
-            signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
-        });
+    fn an_undecodable_message_at_the_slot_of_a_headerless_anchor_is_the_same_chain() {
+        let mut check = AnchorConsistencyCheck::new(Anchor::new(Slot::from(1_000), None));
+
         assert!(matches!(
-            anchor.probe_anchor_slot(&garbage, Slot::from(1_000)),
-            AnchorProbe::SameChain
+            check.observe(None, Slot::from(1_000)),
+            Some(ChainConsistency::Consistent)
         ));
         assert!(matches!(
-            anchor.probe_anchor_slot(&garbage, Slot::from(1_001)),
-            AnchorProbe::Mismatch(ChainMismatch::AnchorSlotChanged { .. })
+            check.observe(Some(&test_block(6, 43)), Slot::from(1_001)),
+            Some(ChainConsistency::Consistent)
+        ));
+    }
+
+    #[test]
+    fn a_headerless_anchor_with_no_message_at_its_slot_has_changed() {
+        let mut check = AnchorConsistencyCheck::new(Anchor::new(Slot::from(1_000), None));
+
+        assert!(matches!(
+            check.observe(Some(&test_block(6, 43)), Slot::from(1_001)),
+            Some(ChainConsistency::Inconsistent(
+                ChainMismatch::AnchorSlotChanged { .. }
+            ))
         ));
     }
 

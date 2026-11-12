@@ -67,7 +67,7 @@ In dev mode every submitting step costs about 30 s, which is block cadence and n
 | private_chained_flow | 9 | 8,891 | 810..25,210 | 314 / 18 | 24,244 / 3 |
 | parallel_fanout | 60 | 933 | 810..1,181 | 322 / 140 | n/a |
 
-These figures predate digest-form inscriptions: they count each PPE transaction's full proof, a dev-mode stub of about 24 KB (about 223 KB under real proving, the `S_agg` figure from cycle_bench). Re-measurement is pending.
+These figures predate digest-form inscriptions: they count each PPE transaction's full proof, a dev-mode stub measured before the proof's claim was pruned to a digest. Each PPE transaction now publishes its proof as a 32-byte digest, in either mode.
 
 ## Findings
 

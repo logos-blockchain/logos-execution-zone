@@ -11,19 +11,17 @@ use kameo::{
     error::{Infallible, SendError},
 };
 use log::debug;
-use sequencer_core::gossip::MaxBlockSizeReceiver;
 use sequencer_executor_actor::ExecutorActorTrait;
 use sequencer_gossip_actor::protocol::PublishTransaction;
 use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
     CommitmentSetDigest, CrossZoneDeadLetter, CrossZoneDeadLetterReport,
     CrossZoneDeadLetterRequeue, EncryptedNote, FeeStateQuote, HashType, MembershipProof, Nonce,
-    PageLimit, ProgramId, Proof, ProofDigest, Publication,
+    PageLimit, ProgramId, Proof, ProofDigest, Publication, SequencerStatus,
 };
 
 pub struct Service<E: ExecutorActorTrait> {
     executor_ref: ActorRef<E>,
-    max_block_size_rx: MaxBlockSizeReceiver,
     gossip: Option<Recipient<PublishTransaction>>,
     proof_store: ProofStore,
 }
@@ -31,7 +29,6 @@ pub struct Service<E: ExecutorActorTrait> {
 impl<E: ExecutorActorTrait> Service<E> {
     pub fn new(
         executor_ref: ActorRef<E>,
-        max_block_size_rx: MaxBlockSizeReceiver,
         gossip: Option<Recipient<PublishTransaction>>,
         proof_store: ProofStore,
     ) -> Self {
@@ -39,7 +36,6 @@ impl<E: ExecutorActorTrait> Service<E> {
 
         Self {
             executor_ref,
-            max_block_size_rx,
             gossip,
             proof_store,
         }
@@ -54,19 +50,6 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         let tx_hash = tx.hash();
 
         let res = async move {
-            let too_large = |err: sequencer_core::config::TransactionTooLarge| {
-                ErrorObjectOwned::owned(
-                    ErrorCode::InvalidParams.code(),
-                    err.to_string(),
-                    None::<()>,
-                )
-            };
-            let encoded_tx =
-                borsh::to_vec(&tx).expect("Transaction borsh serialization should not fail");
-            sequencer_core::config::check_transaction_size(encoded_tx.len()).map_err(too_large)?;
-            sequencer_core::config::check_inscribed_size(&tx, *self.max_block_size_rx.borrow())
-                .map_err(too_large)?;
-
             let authenticated_tx = tx.transaction_stateless_check().map_err(|err| {
                 ErrorObjectOwned::owned(
                     ErrorCode::InvalidParams.code(),
@@ -130,11 +113,18 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             .ask(sequencer_executor_actor::protocol::GetFeeQuote)
             .await
             .map(map_fee_state_quote)
-            .map_err(map_infallible_error)
+            .map_err(map_executor_error)
     }
 
     async fn check_health(&self) -> Result<(), ErrorObjectOwned> {
-        Ok(())
+        // A stopped executor means production halted while reads still answer.
+        if self.executor_ref.is_alive() {
+            Ok(())
+        } else {
+            Err(internal_error(
+                "Executor actor is stopped; block production has halted",
+            ))
+        }
     }
 
     async fn get_proof(&self, digest: ProofDigest) -> Result<Option<Proof>, ErrorObjectOwned> {
@@ -178,7 +168,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetAccountBalance { account_id })
             .await
-            .map_err(map_infallible_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_transaction(
@@ -198,7 +188,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetAccountNonces { account_ids })
             .await
-            .map_err(map_infallible_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_account_view(
@@ -210,8 +200,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
                 actor_state_selector,
             })
             .await
-            .map(|reply| reply.account)
-            .map_err(map_infallible_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_publications(
@@ -225,7 +214,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
                 limit,
             })
             .await
-            .map_err(map_infallible_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_message_path(
@@ -235,7 +224,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetMessagePath { position })
             .await
-            .map_err(map_infallible_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_recovery_binding(
@@ -245,7 +234,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetRecoveryBinding { address })
             .await
-            .map_err(map_infallible_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_proofs_and_root(
@@ -266,7 +255,8 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
                 message_positions,
             })
             .await
-            .map_err(map_infallible_error)
+            .map(|reply| (reply.proofs, reply.message_paths, reply.root))
+            .map_err(map_executor_error)
     }
 
     async fn get_account(
@@ -276,8 +266,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetAccount { account_id })
             .await
-            .map(|reply| reply.account)
-            .map_err(map_infallible_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>, ErrorObjectOwned> {
@@ -294,8 +283,35 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetChannelId)
             .await
-            .map(ChannelId)
-            .map_err(map_executor_error)
+            .map(|reply| ChannelId(*reply.0.as_ref()))
+            .map_err(map_infallible_error)
+    }
+
+    async fn get_sequencer_status(&self) -> Result<SequencerStatus, ErrorObjectOwned> {
+        let status = self
+            .executor_ref
+            .ask(sequencer_executor_actor::protocol::GetStatus)
+            .await
+            .map_err(map_infallible_error)?;
+        Ok(match status {
+            sequencer_executor_actor::protocol::ExecutorStatus::Bootstrapping {
+                target,
+                replayed_up_to,
+                height,
+            } => SequencerStatus::Bootstrapping {
+                target_slot: target.map(sequencer_executor_actor::protocol::Slot::into_inner),
+                replayed_up_to_slot: replayed_up_to
+                    .map(sequencer_executor_actor::protocol::Slot::into_inner),
+                height,
+            },
+            sequencer_executor_actor::protocol::ExecutorStatus::Online {
+                height,
+                is_our_turn,
+            } => SequencerStatus::Online {
+                height,
+                is_our_turn,
+            },
+        })
     }
 
     async fn get_cross_zone_dead_letters(
@@ -381,7 +397,8 @@ fn map_executor_error<M>(
                     None::<()>,
                 )
             }
-            invalid @ sequencer_executor_actor::error::Error::IncorrectFee(_) => {
+            invalid @ (sequencer_executor_actor::error::Error::IncorrectFee(_)
+            | sequencer_executor_actor::error::Error::TransactionTooLarge { .. }) => {
                 // With its cause, which the sender is shown.
                 let message = std::error::Error::source(&invalid).map_or_else(
                     || invalid.to_string(),
@@ -394,12 +411,30 @@ fn map_executor_error<M>(
                 "Mempool is full".to_owned(),
                 None::<()>,
             ),
+            sequencer_executor_actor::error::Error::NotOnline => ErrorObjectOwned::owned(
+                sequencer_service_rpc::SEQUENCER_IS_NOT_ONLINE_ERROR_CODE,
+                "Sequencer is not online yet, try again later".to_owned(),
+                None::<()>,
+            ),
             handle_err @ (sequencer_executor_actor::error::Error::BackgroundTaskFinishedUnexpectedly
             | sequencer_executor_actor::error::Error::StorageRequestFailed(_)
+            | sequencer_executor_actor::error::Error::BedrockActorStartFailed
             | sequencer_executor_actor::error::Error::BedrockRequestFailed(_)
+            | sequencer_executor_actor::error::Error::SlasherRequestFailed(_)
             | sequencer_executor_actor::error::Error::CrossZoneDeadLettersUnavailable(_)
             | sequencer_executor_actor::error::Error::CrossZoneDeadLetterRequeueFailed(_)
-            | sequencer_executor_actor::error::Error::SequencerStartFailed(_)) => {
+            | sequencer_executor_actor::error::Error::SequencerStartFailed(_)
+            | sequencer_executor_actor::error::Error::StoreAndChannelDivergence(_)
+            | sequencer_executor_actor::error::Error::StorageInconsistency(_)
+            | sequencer_executor_actor::error::Error::InvalidSequencerKey
+            | sequencer_executor_actor::error::Error::CheckpointEncodingFailed(_)
+            | sequencer_executor_actor::error::Error::InvalidGenesisConfig(_)
+            | sequencer_executor_actor::error::Error::MissingGenesisConfig(_)
+            | sequencer_executor_actor::error::Error::ChannelWithoutBlocks(_)
+            | sequencer_executor_actor::error::Error::UnsupportedChannelParams(_)
+            | sequencer_executor_actor::error::Error::FundingKeyUnavailable(_)
+            | sequencer_executor_actor::error::Error::BlockReconstructionFailed { .. }
+            | sequencer_executor_actor::error::Error::SequencerStakeConfigNotFound) => {
                 internal_error(handle_err)
             }
         },
@@ -422,35 +457,25 @@ fn internal_error(err: impl std::fmt::Display) -> ErrorObjectOwned {
 #[cfg(test)]
 mod tests {
     use kameo::actor::Spawn as _;
-    use lee::{
-        PrivacyPreservingTransaction,
-        privacy_preserving_transaction::{Message, WitnessSet, circuit},
-    };
-    use sequencer_core::config::{BLOCK_OVERHEAD, MAX_TRANSACTION_SIZE};
+    use lee::privacy_preserving_transaction::circuit;
     use sequencer_executor_actor::mock::MockExecutorActor;
     use sequencer_service_rpc::RpcServer as _;
 
     use super::*;
 
-    fn spawn_service(
-        max_block_size: u64,
-        executor: MockExecutorActor,
-        proof_store: ProofStore,
-    ) -> Service<MockExecutorActor> {
-        let (_, max_block_size_rx) = tokio::sync::watch::channel(max_block_size);
-        Service::new(
-            MockExecutorActor::spawn(executor),
-            max_block_size_rx,
-            None,
-            proof_store,
-        )
-    }
+    #[tokio::test]
+    async fn health_fails_once_the_executor_actor_is_stopped() {
+        let executor_ref = MockExecutorActor::spawn(MockExecutorActor::new());
+        let service = Service::new(executor_ref.clone(), None, ProofStore::new(0));
 
-    fn private_transaction(proof: Vec<u8>) -> LeeTransaction {
-        LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
-            Message::default(),
-            WitnessSet::from_raw_parts(vec![], circuit::Proof::from_inner(proof)),
-        ))
+        assert!(service.check_health().await.is_ok());
+
+        executor_ref.stop_gracefully().await.expect("stop request");
+        executor_ref.wait_for_shutdown().await;
+        assert!(
+            service.check_health().await.is_err(),
+            "a stopped executor means no block production, so health must fail"
+        );
     }
 
     #[test]
@@ -471,7 +496,11 @@ mod tests {
     #[tokio::test]
     async fn get_proof_serves_a_held_proof_by_its_digest_and_nothing_for_an_unknown_one() {
         let store = ProofStore::new(usize::MAX);
-        let service = spawn_service(1 << 20, MockExecutorActor::new(), store.clone());
+        let service = Service::new(
+            MockExecutorActor::spawn(MockExecutorActor::new()),
+            None,
+            store.clone(),
+        );
         let held = circuit::Proof::from_inner(vec![1; 32]);
         let unknown = circuit::Proof::from_inner(vec![2; 32]);
         store.insert(&held);
@@ -486,41 +515,6 @@ mod tests {
                 .await
                 .unwrap(),
             None
-        );
-    }
-
-    #[tokio::test]
-    async fn send_transaction_refuses_a_full_form_over_the_transaction_cap() {
-        let service = spawn_service(1 << 20, MockExecutorActor::new(), ProofStore::new(0));
-        let tx = private_transaction(vec![7; usize::try_from(MAX_TRANSACTION_SIZE).unwrap()]);
-        let size = borsh::to_vec(&tx).unwrap().len();
-
-        let refused = service.send_transaction(tx).await.unwrap_err();
-
-        assert_eq!(refused.code(), ErrorCode::InvalidParams.code());
-        assert_eq!(
-            refused.message(),
-            format!("transaction too large: {size} > {MAX_TRANSACTION_SIZE}")
-        );
-    }
-
-    #[tokio::test]
-    async fn send_transaction_refuses_a_digest_form_over_the_block_cap() {
-        let tx = private_transaction(vec![7; 32]);
-        let inscribed_size = u64::try_from(borsh::to_vec(&tx.digested()).unwrap().len()).unwrap();
-        let max_inscribed_size = inscribed_size.checked_sub(1).unwrap();
-        let service = spawn_service(
-            max_inscribed_size.checked_add(BLOCK_OVERHEAD).unwrap(),
-            MockExecutorActor::new(),
-            ProofStore::new(0),
-        );
-
-        let refused = service.send_transaction(tx).await.unwrap_err();
-
-        assert_eq!(refused.code(), ErrorCode::InvalidParams.code());
-        assert_eq!(
-            refused.message(),
-            format!("transaction too large for a block: {inscribed_size} > {max_inscribed_size}")
         );
     }
 }

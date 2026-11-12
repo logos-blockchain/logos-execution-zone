@@ -1,11 +1,12 @@
 //! Slashable faults in a channel update.
 
 use chain_state::{Judged, Verdict};
-use sequencer_slasher_actor::{Fault, ReportedOffence};
+use sequencer_slasher_actor::protocol::{Fault, ReportedOffence};
 
 use crate::{Ed25519PublicKey, MsgId};
 
 /// Every offence an update proves; a finalized entry's `signer` is who wrote it.
+#[must_use]
 pub fn judge(undecodable: &[(MsgId, Ed25519PublicKey)], judged: &[Judged]) -> Vec<ReportedOffence> {
     let not_blocks = undecodable
         .iter()

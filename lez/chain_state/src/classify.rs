@@ -45,8 +45,7 @@ pub enum ClassifyError {
     /// into the fee inbox, or that crossing is not a native credit.
     #[error("private transaction omits its required in-proof fee")]
     MissingPrivateFee,
-    /// A private transaction carries more private actions than its flat
-    /// storage price covers.
+    /// A private transaction carries more private actions than allowed.
     #[error(
         "private transaction carries {count} private actions, more than the {} allowed",
         market::MAX_PRIVATE_ACTIONS
@@ -60,6 +59,12 @@ pub enum ClassifyError {
     /// its reserve is priced from.
     #[error("private fee fallback does not replay the fee transfer alone")]
     InvalidFeeFallback,
+    /// A private transaction's proof is longer than the most a proof may carry.
+    #[error(
+        "private transaction's proof is {size} bytes, more than the {} allowed",
+        market::PROOF_BYTES
+    )]
+    OversizedProof { size: usize },
 }
 
 /// The reserve a private transaction credits to the fee inbox inside its proof,
@@ -108,6 +113,7 @@ fn private_fee_reserve(message: &PrivateMessage) -> Option<(AccountId, Balance, 
 /// - [`ClassifyError::InvalidRefundTarget`] if it names a restricted account as its refund target,
 /// - [`ClassifyError::InvalidFeeFallback`] if its fee fallback replays anything but that fee
 ///   transfer's crossing,
+/// - [`ClassifyError::OversizedProof`] if its proof is longer than [`market::PROOF_BYTES`],
 /// - [`ClassifyError::Unserializable`] if a charged transaction cannot be serialized to price its
 ///   storage gas.
 pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, ClassifyError> {
@@ -135,11 +141,19 @@ pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, Class
             if count > market::MAX_PRIVATE_ACTIONS {
                 return Err(ClassifyError::TooManyPrivateActions { count });
             }
+            let size = private_tx.witness_set().proof().size();
+            if u64::try_from(size).map_or(true, |size| size > market::PROOF_BYTES) {
+                return Err(ClassifyError::OversizedProof { size });
+            }
             if let Some(target) = execution.fee.as_ref().and_then(|fee| fee.refund_to) {
                 validate_reward_target(target)
                     .map_err(|reason| ClassifyError::InvalidRefundTarget { reason })?;
             }
-            return Ok(FeeClass::Charged(FeeTxView::Private { payer, reserve }));
+            return Ok(FeeClass::Charged(FeeTxView::Private {
+                payer,
+                reserve,
+                data_bytes: tx.charged_bytes()?,
+            }));
         }
         LeeTransaction::Public(public_tx) => public_tx,
     };
@@ -167,7 +181,7 @@ pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, Class
         return Err(ClassifyError::MissingFeeDeclaration);
     };
 
-    let data_bytes = u64::try_from(borsh::to_vec(tx)?.len()).expect("tx size fits u64");
+    let data_bytes = tx.charged_bytes()?;
     Ok(FeeClass::Charged(FeeTxView::Public {
         payer: fee.payer,
         gas_limit: fee.gas_limit,
@@ -224,11 +238,38 @@ mod tests {
             crossing(inbox(), &native_token::Message::Credit(42)),
             BoundaryStep::EndPublicSubtree,
         ];
-        let class = classify(&private_tx(boundary), false).unwrap();
+        let tx = private_tx(boundary);
+        let size = tx.charged_bytes().unwrap();
+        let class = classify(&tx, false).unwrap();
         assert!(matches!(
             class,
-            FeeClass::Charged(FeeTxView::Private { payer, reserve: 42 })
-                if payer == self::payer().account_id
+            FeeClass::Charged(FeeTxView::Private { payer, reserve: 42, data_bytes })
+                if payer == self::payer().account_id && data_bytes == size
+        ));
+    }
+
+    #[test]
+    fn a_private_transaction_is_charged_its_proofs_digest_and_its_proof_may_not_exceed_the_cap() {
+        let with_proof = |size| {
+            let mut message = Message::default();
+            message.execution.boundary = vec![
+                crossing(inbox(), &native_token::Message::Credit(42)),
+                BoundaryStep::EndPublicSubtree,
+            ];
+            LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+                message,
+                WitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![0; size])),
+            ))
+        };
+        let cap = usize::try_from(market::PROOF_BYTES).unwrap();
+        assert_eq!(
+            with_proof(0).charged_bytes().unwrap(),
+            with_proof(cap).charged_bytes().unwrap()
+        );
+        assert!(classify(&with_proof(cap), false).is_ok());
+        assert!(matches!(
+            classify(&with_proof(cap + 1), false),
+            Err(ClassifyError::OversizedProof { size }) if size == cap + 1
         ));
     }
 

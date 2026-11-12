@@ -34,12 +34,19 @@ use test_fixtures::{
 use testnet_initial_state::{PublicAccountPrivateInitialData, initial_pub_accounts_private_keys};
 use tokio::test;
 
+mod any_program;
+mod three_zones;
+
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(480);
 const PING_PAYLOAD: &[u8] = b"hello-cross-zone";
 
 #[test]
 async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
-    let partial = SequencerPartialConfig::default();
+    let partial = SequencerPartialConfig {
+        // Covers the storage price doubling at the devnet's first epoch rotations.
+        priority_fee_percent: 150,
+        ..SequencerPartialConfig::default()
+    };
     let channel_a = config::bedrock_channel_id();
     let channel_b = config::bedrock_channel_id_b();
     let zone_a: [u8; 32] = *channel_a.as_ref();
@@ -59,7 +66,9 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
             min_committee_size: 0,
             genesis_hash: None,
             skip_window: partial.channel_params.skip_window,
+            emitters: vec![],
         }],
+        lock_target_zones: Vec::new(),
         source_authority: None,
         source_governance: None,
     };

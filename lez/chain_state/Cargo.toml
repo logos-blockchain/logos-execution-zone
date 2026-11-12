@@ -35,6 +35,7 @@ prove = ["lee/prove"]
 test-utils = ["lee/test-utils", "dep:testnet_initial_state"]
 
 [dev-dependencies]
+clock_core.workspace = true
 lee = { workspace = true, features = ["test-utils"] }
 testnet_initial_state.workspace = true
 serde_json.workspace = true

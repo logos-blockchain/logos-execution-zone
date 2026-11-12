@@ -1,6 +1,5 @@
 use std::io;
 
-use async_trait::async_trait;
 use futures::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use lee::privacy_preserving_transaction::circuit::{Proof, ProofDigest};
 use libp2p::request_response;
@@ -13,7 +12,6 @@ const MAX_RESPONSE_SIZE: u64 = MAX_TRANSACTION_SIZE.saturating_add(5);
 #[derive(Clone)]
 pub struct ProofCodec;
 
-#[async_trait]
 impl request_response::Codec for ProofCodec {
     type Protocol = String;
     type Request = ProofDigest;

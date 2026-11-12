@@ -10,9 +10,13 @@ pub struct PublishTransaction(pub LeeTransaction);
 
 /// Publish one of this node's own channel-config messages to the mesh.
 #[cfg(feature = "actor")]
-pub struct PublishConfig(pub sequencer_channel_signing_actor::Wire);
+pub struct PublishConfig(pub sequencer_channel_signing_actor::protocol::Wire);
 
 /// Re-dial the configured bootstrap peers if the node has no connected
 /// peers; sent periodically by the scheduler.
 #[derive(Copy, Clone)]
 pub struct RetryBootstrap;
+
+/// Fetch a proof missing from the store from the connected peers.
+#[derive(Copy, Clone)]
+pub struct FetchProof(pub lee::privacy_preserving_transaction::circuit::ProofDigest);

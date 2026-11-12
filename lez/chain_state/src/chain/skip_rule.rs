@@ -11,7 +11,9 @@ use testnet_initial_state::initial_pub_accounts_private_keys;
 
 use crate::{
     ChainState, ChannelEntry, Judged, ProofStore, Verdict,
-    apply::tests::{inbox_fee, private_sender_state, private_tx, settled_block, tip_of},
+    apply::tests::{
+        inbox_fee, private_sender_state, private_tx, required_for, settled_block, tip_of,
+    },
     apply_block,
 };
 
@@ -145,9 +147,11 @@ fn fixture() -> Fixture {
     let (genesis, state) = (&plain.genesis, &plain.on_genesis);
     let (_, senders) = private_sender_state(&[0, 1]);
     let accounts = initial_pub_accounts_private_keys();
-    let required = fee_core::assess::private_fee_required(0, 8, 8);
-    let fee = inbox_fee(required, senders[0].0.account_id());
-    let private = private_tx(state, &senders[0], accounts[0].account_id, 10, Some(fee));
+    let paying = |amount| {
+        let fee = inbox_fee(amount, senders[0].0.account_id());
+        private_tx(state, &senders[0], accounts[0].account_id, 10, Some(fee))
+    };
+    let private = paying(required_for(0, paying));
     let LeeTransaction::PrivacyPreserving(proven) = &private else {
         unreachable!("a privacy-preserving transaction was built");
     };
@@ -167,15 +171,17 @@ fn fixture() -> Fixture {
 
 fn deshield(state: &V03State, amount: u128) -> (LeeTransaction, Proof) {
     let (_, senders) = private_sender_state(&[0, 1]);
-    let required = fee_core::assess::private_fee_required(0, 8, 8);
-    let fee = inbox_fee(required, senders[1].0.account_id());
-    let private = private_tx(
-        state,
-        &senders[1],
-        initial_pub_accounts_private_keys()[0].account_id,
-        amount,
-        Some(fee),
-    );
+    let paying = |fee_amount| {
+        let fee = inbox_fee(fee_amount, senders[1].0.account_id());
+        private_tx(
+            state,
+            &senders[1],
+            initial_pub_accounts_private_keys()[0].account_id,
+            amount,
+            Some(fee),
+        )
+    };
+    let private = paying(required_for(0, paying));
     let LeeTransaction::PrivacyPreserving(proven) = &private else {
         unreachable!("a privacy-preserving transaction was built");
     };
