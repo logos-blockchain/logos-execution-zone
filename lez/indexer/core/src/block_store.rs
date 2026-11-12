@@ -5,7 +5,7 @@ use chain_state::{
     AcceptOutcome, BlockIngestError, StallReason, Tip, apply_block_to_state, validate_against_tip,
 };
 use common::{
-    block::{BedrockStatus, Block, BlockHeader},
+    block::{BedrockStatus, Block, BlockHeader, TransactionReceipt},
     transaction::{LeeTransaction, TxEvents},
 };
 use lee::{Account, AccountId, Actor, V03State};
@@ -116,6 +116,23 @@ impl IndexerStore {
     }
 
     pub fn get_transaction_by_hash(&self, tx_hash: [u8; 32]) -> Result<Option<LeeTransaction>> {
+        Ok(self
+            .block_with_transaction(tx_hash)?
+            .map(|(mut block, position)| block.body.transactions.swap_remove(position)))
+    }
+
+    /// `None` also for the trailing fee and clock transactions, which have no receipt.
+    pub fn get_transaction_receipt_by_hash(
+        &self,
+        tx_hash: [u8; 32],
+    ) -> Result<Option<TransactionReceipt>> {
+        Ok(self
+            .block_with_transaction(tx_hash)?
+            .and_then(|(block, position)| block.body.receipts.get(position).copied()))
+    }
+
+    /// The block holding `tx_hash`, and the transaction's position in it.
+    fn block_with_transaction(&self, tx_hash: [u8; 32]) -> Result<Option<(Block, usize)>> {
         let Some(block_id) = self.dbio.get_block_id_by_tx_hash(tx_hash)? else {
             return Ok(None);
         };
@@ -125,8 +142,9 @@ impl IndexerStore {
         Ok(block
             .body
             .transactions
-            .into_iter()
-            .find(|enc_tx| enc_tx.hash().0 == tx_hash))
+            .iter()
+            .position(|tx| tx.hash().0 == tx_hash)
+            .map(|position| (block, position)))
     }
 
     pub fn get_events_for_block(&self, block_id: BlockId) -> Result<Option<Vec<TxEvents>>> {
@@ -978,6 +996,20 @@ mod tests {
             .and_then(|rows| rows.into_iter().find(|row| row.tx_hash == invoke_hash))
             .expect("tx-hash lookup must find the group");
         assert_eq!(group, groups[0]);
+
+        let block = store.get_block_at_id(3).unwrap().unwrap();
+        assert_eq!(
+            store
+                .get_transaction_receipt_by_hash(invoke_hash.0)
+                .unwrap(),
+            Some(block.body.receipts[0]),
+        );
+        let clock_hash = block.body.transactions.last().unwrap().hash();
+        assert_eq!(
+            store.get_transaction_receipt_by_hash(clock_hash.0).unwrap(),
+            None,
+            "the clock transaction has no receipt",
+        );
     }
 
     #[tokio::test]

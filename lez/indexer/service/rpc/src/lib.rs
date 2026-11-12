@@ -1,6 +1,7 @@
 use indexer_service_protocol::{
     Account, AccountId, AccountSummary, Actor, Block, BlockId, EventRecord,
     EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus, Transaction,
+    TransactionReceipt,
 };
 use jsonrpsee::proc_macros::rpc;
 #[cfg(feature = "server")]
@@ -94,6 +95,13 @@ pub trait Rpc {
         &self,
         tx_hash: HashType,
     ) -> Result<Option<Transaction>, ErrorObjectOwned>;
+
+    /// `None` for an unknown transaction, and for a block's trailing fee and clock transactions.
+    #[method(name = "getTransactionReceipt")]
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: HashType,
+    ) -> Result<Option<TransactionReceipt>, ErrorObjectOwned>;
 
     #[method(name = "getBlocks")]
     async fn get_blocks(
