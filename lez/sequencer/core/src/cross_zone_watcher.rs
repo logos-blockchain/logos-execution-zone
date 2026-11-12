@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::{Context as _, Result};
-use chain_state::{StructuralChain, Tip, zone_indexer::Batch};
+use chain_state::{ChannelEntry, StructuralChain, Tip, zone_indexer::Batch};
 use common::{
     HashType,
     block::{DigestedBlock, PeerChainTip},
@@ -19,7 +19,7 @@ use lee_core::account::AccountId;
 use log::{debug, error, warn};
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
-    protocol::{AccreditedKeys, ChannelId, GetAccreditedKeys, ReadChannel, Slot},
+    protocol::{AccreditedKeys, ChannelId, GetAccreditedKeys, ReadChannel, Slot, ZoneMessage},
 };
 use sequencer_storage_actor::{
     StorageActorTrait,
@@ -521,35 +521,51 @@ where
                     break;
                 }
             };
-            let fold = chain.apply_batch(batch);
-            debug!(
-                "Watcher observed {} finalized peer {} blocks",
-                fold.blocks,
-                hex::encode(peer.peer_zone)
-            );
-            read = read.saturating_add(fold.blocks);
-            if let Some((slot, err)) = &fold.undecodable {
-                warn!(
-                    "Watcher failed to deserialize peer {} block at slot {slot:?}: {err}. Holding the cursor and retrying.",
-                    hex::encode(peer.peer_zone)
+            let mut entries: Vec<ChannelEntry> = Vec::new();
+            let mut undecodable = None;
+            for (msg, slot) in batch.messages {
+                let zone_block = match msg {
+                    ZoneMessage::Block(block) => block,
+                    ZoneMessage::Deposit(_) | ZoneMessage::Withdraw(_) => continue,
+                };
+                let block = match DigestedBlock::from_inscription(&zone_block.data) {
+                    Ok(block) => block,
+                    Err(err) => {
+                        warn!(
+                            "Watcher failed to deserialize peer {} block at slot {slot:?}: {err}. Holding the cursor and retrying.",
+                            hex::encode(peer.peer_zone)
+                        );
+                        undecodable = Some(slot);
+                        break;
+                    }
+                };
+                debug!(
+                    "Watcher observed finalized peer {} block {}",
+                    hex::encode(peer.peer_zone),
+                    block.header.block_id
                 );
+                read = read.saturating_add(1);
+                entries.push(ChannelEntry {
+                    msg: zone_block.id,
+                    parent: entries.last().map_or_else(|| chain.pin(), |prev| prev.msg),
+                    signer: Some(zone_block.signer.to_bytes()),
+                    slot: Some(slot),
+                    block: Some(block),
+                });
             }
-            if let Err(at) = deliver_settled(
-                fold.settled,
-                peer,
-                storage_ref,
-                tip,
-                &mut placed,
-                &mut skipped,
-            )
-            .await
+            let held = undecodable.map_or(Some(batch.watermark), |slot| {
+                slot.checked_sub(Slot::from(1))
+            });
+            let settled = chain.apply_finalized(&entries, held.unwrap_or_else(Slot::genesis));
+            if let Err(at) =
+                deliver_settled(settled, peer, storage_ref, tip, &mut placed, &mut skipped).await
             {
                 break 'pass Some(PassOutcome::Undelivered(at));
             }
-            if let Some(held) = fold.read {
+            if let Some(held) = held {
                 floor = advance_cursor(storage_ref, peer.peer_zone, cursor, held, chain).await;
             }
-            if let Some((slot, _)) = fold.undecodable {
+            if let Some(slot) = undecodable {
                 break 'pass Some(PassOutcome::Undecodable(slot));
             }
         }
@@ -853,9 +869,7 @@ mod tests {
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
     use logos_blockchain_key_management_system_service::keys::Ed25519Key;
     use logos_blockchain_zone_sdk::{UnverifiedEd25519PublicKey, ZoneBlock};
-    use sequencer_bedrock_actor::{
-        error::Error as BedrockError, mock::MockBedrockActor, protocol::ZoneMessage,
-    };
+    use sequencer_bedrock_actor::{error::Error as BedrockError, mock::MockBedrockActor};
     use sequencer_storage_actor::{
         StorageActor,
         mock::MockStorageActor,

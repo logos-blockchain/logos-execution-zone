@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::anyhow;
 use chain_state::{
-    StructuralChain,
+    ChannelEntry, StructuralChain,
     timeout_node::TimeoutNode,
     zone_indexer::{self, Batch, ZoneIndexer, stop_at_read_error},
 };
@@ -1314,19 +1314,43 @@ where
                 break;
             }
         };
-        let fold = chain.apply_batch(batch);
-        cache_settled(fold.settled, peer_zone, peers).await;
-        if let Some((slot, err)) = fold.undecodable {
-            error!(
-                "Peer reader failed to deserialize block from {} at slot {slot:?}: {err}. Holding the cursor and retrying.",
-                hex::encode(peer_zone)
-            );
-            return PeerPass {
-                cursor: fold.read,
-                stalled_at: Some(slot),
+        let mut entries: Vec<ChannelEntry> = Vec::new();
+        for (msg, slot) in batch.messages {
+            let ZoneMessage::Block(zone_block) = msg else {
+                continue;
             };
+            match DigestedBlock::from_inscription(&zone_block.data) {
+                Ok(block) => entries.push(ChannelEntry {
+                    msg: zone_block.id,
+                    parent: entries.last().map_or_else(|| chain.pin(), |prev| prev.msg),
+                    signer: Some(zone_block.signer.to_bytes()),
+                    slot: Some(slot),
+                    block: Some(block),
+                }),
+                Err(err) => {
+                    error!(
+                        "Peer reader failed to deserialize block from {} at slot {slot:?}: {err}. Holding the cursor and retrying.",
+                        hex::encode(peer_zone)
+                    );
+                    let held = slot.checked_sub(Slot::from(1));
+                    if let Some(lib) = held {
+                        entries.retain(|entry| entry.slot < Some(slot));
+                        cache_settled(chain.apply_finalized(&entries, lib), peer_zone, peers).await;
+                    }
+                    return PeerPass {
+                        cursor: held,
+                        stalled_at: Some(slot),
+                    };
+                }
+            }
         }
-        cursor = fold.read;
+        cache_settled(
+            chain.apply_finalized(&entries, batch.watermark),
+            peer_zone,
+            peers,
+        )
+        .await;
+        cursor = Some(batch.watermark);
     }
 
     PeerPass {
