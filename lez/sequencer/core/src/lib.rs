@@ -13,7 +13,7 @@ use bridge_core::DepositMetadata;
 use chain_state::{AcceptOutcome, ChainState, ChannelEntry, PublishRecord, full_stake_releases};
 use common::{
     HashType,
-    block::{BedrockStatus, Block, BlockMeta, HashableBlockData},
+    block::{BedrockStatus, Block, BlockMeta, HashableBlockData, TransactionReceipt},
     system_upgrades::ProposalApprovals,
     transaction::{FeePayee, LeeTransaction, clock_invocation, fee_invocation},
 };
@@ -1204,9 +1204,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     }
 
     /// Validates and applies a single mempool transaction to the current state.
-    /// Returns `Some(reverted)` if the transaction was valid and applied, with
-    /// whether its action reverted, or `None` if it was skipped due to validation
-    /// failure.
+    /// Returns its receipt if the transaction was valid and applied, or `None` if
+    /// it was skipped due to validation failure.
     #[expect(
         clippy::too_many_arguments,
         reason = "the settlement threads exactly the block-transition context the spec names"
@@ -1221,9 +1220,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         opening: &fee_core::state::FeeState,
         tx_index: u64,
         summary: &mut fee_core::BlockFeeSummary,
-    ) -> Option<bool> {
+    ) -> Option<TransactionReceipt> {
         let tx_hash = tx.hash();
-        let mut reverted = false;
+        let mut receipt = TransactionReceipt::EXEMPT;
         match origin {
             // Gossiped transactions arrive from untrusted peers, same as
             // user-submitted ones, so they get the same full state validation.
@@ -1265,15 +1264,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     tx_index,
                     &mut scratch_summary,
                 ) {
-                    Ok((_events, tx_reverted)) => {
-                        if !tx_reverted
+                    Ok((_events, tx_receipt)) => {
+                        if tx_receipt.success
                             && let Some(withdraw_data) = extract_bridge_withdraw_data(tx)
                         {
                             withdrawals.push(withdraw_data);
                         }
                         *state = scratch;
                         *summary = scratch_summary;
-                        reverted = tx_reverted;
+                        receipt = tx_receipt;
                     }
                     Err(err) => {
                         if matches!(origin, TransactionOrigin::Gossip) {
@@ -1328,7 +1327,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
 
         debug!(%tx_hash, "Validated transaction, including it in block");
-        Some(reverted)
+        Some(receipt)
     }
 
     async fn build_block_from_mempool(&mut self) -> Result<BlockWithMeta> {
@@ -1470,7 +1469,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
 
         let mut valid_transactions = Vec::new();
-        let mut reverted = Vec::new();
+        let mut receipts = Vec::new();
         let mut withdrawals = Vec::new();
         let releasable_keys = release_finality::producible_releases(
             &self.bedrock_pool_ref,
@@ -1623,11 +1622,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 transactions: temp_valid_transactions,
                 prev_block_hash,
                 timestamp: new_block_timestamp,
-                // Whether this transaction reverts is known only once it is settled below; if
-                // it does, its index joins the list and the block grows by one `u64`. Size the
-                // worst case now, with a placeholder index, so a revert doesn't push the block
-                // over the limit.
-                reverted: reverted.iter().copied().chain([0]).collect(),
+                // Receipts are fixed-size, so a placeholder sizes this transaction's exactly.
+                receipts: receipts
+                    .iter()
+                    .copied()
+                    .chain([TransactionReceipt::EXEMPT])
+                    .collect(),
             };
 
             let block_size = borsh::to_vec(&temp_hashable_data)
@@ -1770,10 +1770,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     continue;
                 }
             }
-            if let Some(tx_reverted) = applied {
-                if tx_reverted {
-                    reverted.push(u64::try_from(valid_transactions.len()).expect("fits u64"));
-                }
+            if let Some(receipt) = applied {
+                receipts.push(receipt);
                 // track the charged gas
                 gas_budget.sync(&summary);
                 sequencer_core_metrics::record_mempool_transaction_application_time(
@@ -1842,7 +1840,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 .concat(),
                 prev_block_hash,
                 timestamp: new_block_timestamp,
-                reverted: reverted.clone(),
+                receipts: receipts
+                    .iter()
+                    .copied()
+                    .chain([TransactionReceipt::EXEMPT])
+                    .collect(),
             })
             .context("Failed to serialize block for size check")?
             .len();
@@ -1856,7 +1858,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 }
                 continue;
             }
-            if let Some(tx_reverted) = Self::apply_mempool_transaction(
+            if let Some(receipt) = Self::apply_mempool_transaction(
                 &mut working_state,
                 origin,
                 &tx,
@@ -1867,9 +1869,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 valid_transactions.len().try_into().expect("fits u64"),
                 &mut summary,
             ) {
-                if tx_reverted {
-                    reverted.push(u64::try_from(valid_transactions.len()).expect("fits u64"));
-                }
+                receipts.push(receipt);
                 if !matches!(origin, TransactionOrigin::Sequencer) {
                     mempool_transactions.push((origin, tx.clone()));
                 }
@@ -1925,7 +1925,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             transactions: valid_transactions,
             prev_block_hash,
             timestamp: new_block_timestamp,
-            reverted,
+            receipts,
         };
 
         let block = hashable_data.clone().into_pending_block();
@@ -2059,8 +2059,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         timestamp: u64,
     ) -> Result<bool> {
         let alone = HashableBlockData {
-            // A placeholder index: the size if the transaction reverts.
-            reverted: vec![0],
+            receipts: vec![TransactionReceipt::EXEMPT],
             block_id,
             transactions: [std::slice::from_ref(tx), system_txs].concat(),
             prev_block_hash,

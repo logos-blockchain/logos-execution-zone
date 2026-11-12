@@ -973,7 +973,7 @@ mod tests {
             block_id,
             prefix.last().map(|block| block.header.hash),
             vec![emission()],
-            vec![0],
+            &[0],
         );
         block_msg(&block, slot)
     }

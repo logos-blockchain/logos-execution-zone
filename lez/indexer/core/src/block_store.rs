@@ -508,7 +508,7 @@ fn settled_test_block(
         transaction::{FeePayee, LeeTransaction, clock_invocation, fee_invocation},
     };
     let timestamp = id.saturating_mul(100);
-    let (summary, payout, reverted) =
+    let (summary, payout, receipts) =
         chain_state::apply::derive_block_summary(state, &txs, id, timestamp)
             .expect("test transactions settle");
     let producer = producer_account_for_testing();
@@ -520,7 +520,7 @@ fn settled_test_block(
     )));
     transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
     let block = HashableBlockData {
-        reverted,
+        receipts,
         block_id: id,
         prev_block_hash: prev_hash.unwrap_or_default(),
         timestamp,
@@ -1359,7 +1359,7 @@ mod accept_tests {
             prev_block_hash: prev,
             timestamp: 0,
             transactions: vec![],
-            reverted: Vec::new(),
+            receipts: Vec::new(),
         }
         .into_pending_block()
     }

@@ -207,9 +207,28 @@ impl FromStr for Signature {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct BlockBody {
     pub transactions: Vec<Transaction>,
-    /// Indices into `transactions` of the charged transactions whose action reverted.
-    #[serde(default)]
-    pub reverted: Vec<u64>,
+    /// One per user transaction, parallel to `transactions`; the trailing fee and clock
+    /// transactions have none.
+    pub receipts: Vec<TransactionReceipt>,
+}
+
+/// See `common::block::FeeReceipt`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct FeeReceipt {
+    pub gas_exec: u64,
+    pub gas_stor: u64,
+    pub fee_base: u128,
+    pub tip: u128,
+    pub refund: u128,
+}
+
+/// See `common::block::TransactionReceipt`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct TransactionReceipt {
+    /// `true`: applied; `false`: the action reverted, and its fee was still charged.
+    pub success: bool,
+    /// All zeros for a fee-exempt transaction.
+    pub fee: FeeReceipt,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -611,9 +630,10 @@ pub enum BlockIngestError {
         reason: String,
     },
     NonPublicGenesisTransaction,
-    RevertMismatch {
-        listed: Vec<u64>,
-        settled: Vec<u64>,
+    ReceiptMismatch {
+        tx_index: u64,
+        listed: Option<TransactionReceipt>,
+        settled: Option<TransactionReceipt>,
     },
     UnfinalizedRelease {
         tx_index: u64,

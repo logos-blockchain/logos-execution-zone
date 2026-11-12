@@ -26,7 +26,7 @@ pub fn BlockPreview(block: Block) -> impl IntoView {
             },
         body: BlockBody {
             transactions,
-            reverted: _,
+            receipts: _,
         },
         bedrock_status,
     } = block;

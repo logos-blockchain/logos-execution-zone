@@ -1782,7 +1782,7 @@ mod tests {
             PEER_BLOCK_ID,
             chain.last().map(|block| block.header.hash),
             vec![emission(b"hi")],
-            vec![0],
+            &[0],
         );
         chain.push(reverted.clone());
         cache_chain(&verifier, chain).await;

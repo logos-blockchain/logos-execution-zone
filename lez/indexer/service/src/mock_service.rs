@@ -619,7 +619,7 @@ fn build_mock_block(
         },
         body: BlockBody {
             transactions: block_transactions,
-            reverted: Vec::new(),
+            receipts: Vec::new(),
         },
         bedrock_status,
     }

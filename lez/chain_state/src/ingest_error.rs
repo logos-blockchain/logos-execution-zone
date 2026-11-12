@@ -1,4 +1,4 @@
-use common::HashType;
+use common::{HashType, block::TransactionReceipt};
 use serde::{Deserialize, Serialize};
 
 /// Why an L2 block from the channel could not be applied.
@@ -71,8 +71,14 @@ pub enum BlockIngestError {
     },
     #[error("Genesis block must contain only public transactions")]
     NonPublicGenesisTransaction,
-    #[error("the block lists transactions {listed:?} as reverted, settlement reverted {settled:?}")]
-    RevertMismatch { listed: Vec<u64>, settled: Vec<u64> },
+    #[error("Transaction {tx_index} is listed with receipt {listed:?}, but settled to {settled:?}")]
+    ReceiptMismatch {
+        tx_index: u64,
+        /// `None` when the block lists fewer receipts than it has user transactions.
+        listed: Option<Box<TransactionReceipt>>,
+        /// `None` when the block lists more.
+        settled: Option<Box<TransactionReceipt>>,
+    },
     #[error("Transaction {tx_index} releases the whole stake of {key} before its removal is final")]
     UnfinalizedRelease {
         /// Index of the offending transaction within the block body.
@@ -137,7 +143,7 @@ impl BlockIngestError {
             | Self::GasCapExceeded { .. }
             | Self::RestrictedAccountModification { .. }
             | Self::NonPublicGenesisTransaction
-            | Self::RevertMismatch { .. }
+            | Self::ReceiptMismatch { .. }
             | Self::UnfinalizedRelease { .. }
             | Self::StateTransition { .. } => true,
         }
