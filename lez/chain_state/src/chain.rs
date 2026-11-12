@@ -7,8 +7,8 @@ use std::{collections::HashSet, sync::Arc};
 use borsh::{BorshDeserialize, BorshSerialize};
 use common::{block::Block, transaction::TxEvents};
 use lee::V03State;
-use log::{error, warn};
 use logos_blockchain_core::mantle::ops::channel::MsgId;
+use tracing::{error, warn};
 
 use crate::{
     AcceptOutcome, BlockIngestError,
@@ -258,10 +258,10 @@ impl ChainState {
             }
             if entry.parent != self.pin() {
                 warn!(
-                    "Adopted channel entry {} chains on {}, not on the pin {}",
-                    entry.msg,
-                    entry.parent,
-                    self.pin()
+                    msg_id = %entry.msg,
+                    parent = %entry.parent,
+                    pin = %self.pin(),
+                    "Adopted channel entry does not chain on the pin"
                 );
             }
             self.push(entry);
@@ -279,8 +279,10 @@ impl ChainState {
         for entry in &canonical {
             if entry.parent != parent {
                 warn!(
-                    "Channel view entry {} chains on {}, not on {parent}",
-                    entry.msg, entry.parent
+                    msg_id = %entry.msg,
+                    parent = %entry.parent,
+                    expected_parent = %parent,
+                    "Channel view entry does not chain on the previous one"
                 );
             }
             parent = entry.msg;
@@ -344,8 +346,9 @@ impl ChainState {
             let outcome = self.apply_finalized_redelivery(msg, block);
             if let (Some(AcceptOutcome::Applied(_)), Some(block)) = (&outcome, block) {
                 error!(
-                    "Block {} in finalized message {msg} extended the final tier",
-                    block.header.block_id
+                    block_id = block.header.block_id,
+                    msg_id = %msg,
+                    "Block in a finalized message extended the final tier"
                 );
             }
             return outcome;
@@ -530,8 +533,10 @@ fn fold_block(
     apply_with_retries(tip, block, state)
         .inspect_err(|err| {
             warn!(
-                "Skipping channel block {} ({}): {err}",
-                block.header.block_id, block.header.hash
+                block_id = block.header.block_id,
+                block_hash = %block.header.hash,
+                error = %err,
+                "Skipping channel block"
             );
         })
         .ok()
@@ -550,8 +555,10 @@ fn apply_with_retries(
             Ok(block_events) => return Ok((next, block_events)),
             Err(err) if err.is_retryable() && attempt < APPLY_ATTEMPTS => {
                 warn!(
-                    "Block {} failed to apply (attempt {attempt}), retrying: {err}",
-                    block.header.block_id
+                    block_id = block.header.block_id,
+                    attempt,
+                    error = %err,
+                    "Block failed to apply, retrying"
                 );
                 attempt = attempt.saturating_add(1);
             }

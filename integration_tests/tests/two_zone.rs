@@ -105,9 +105,7 @@ async fn wait_until_zone_live(
                 .await?
                 .unwrap_or(0);
             if finalized >= target {
-                log::info!(
-                    "Zone {label} live: sequencer at {target}, indexer finalized {finalized}"
-                );
+                tracing::info!(zone = label, target_block = target, finalized, "Zone live");
                 return Ok::<u64, anyhow::Error>(finalized);
             }
             tokio::time::sleep(Duration::from_secs(2)).await;

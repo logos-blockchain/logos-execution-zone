@@ -13,7 +13,6 @@ use kameo_actors::{
     pubsub::PubSub,
     scheduler::{Scheduler, SetInterval},
 };
-use log::info;
 #[cfg(feature = "rpc")]
 use sequencer_bedrock_actor::{BasicAuthCredentials, Url, protocol::ChannelId};
 use sequencer_channel_signing_actor::{
@@ -31,6 +30,7 @@ use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActor;
 use sharding_pool_actor::ShardingPoolActor;
 use tokio::select;
+use tracing::info;
 
 use crate::{actor_handle::ActorHandle, supervisor::SequencerSupervisor};
 
@@ -131,6 +131,23 @@ impl SequencerHandle {
         slasher.shutdown().await;
         bedrock.shutdown().await;
         storage.shutdown().await;
+    }
+
+    /// Hands `transaction` straight to the executor, past the RPC and gossip entry points, which
+    /// refuse `system_upgrader` transactions. Until approval tooling lands, this is how tests
+    /// reach `Schedule`.
+    pub async fn submit_transaction(
+        &self,
+        transaction: common::transaction::LeeTransaction,
+    ) -> Result<()> {
+        use sequencer_executor_actor::protocol::{Transaction, TransactionOrigin};
+        self.executor_ref
+            .ask(Transaction {
+                transaction,
+                origin: TransactionOrigin::User,
+            })
+            .await
+            .context("Failed to submit the transaction")
     }
 
     /// Wait for any of the sequencer tasks to fail and return the error.
@@ -288,6 +305,8 @@ pub fn run(
         let config_clone = config.clone();
         let storage_ref_clone = storage_ref.clone();
         let bedrock_broker_ref_clone = bedrock_broker_ref.clone();
+        let bedrock_instances =
+            sequencer_service_metrics::instances::expect(<BedrockActor as kameo::Actor>::name());
         let bedrock_pool = ShardingPoolActor::<BedrockActor, ChannelId>::new(
             sharding_pool_actor::RestartConfig {
                 policy: RestartPolicy::Permanent,
@@ -315,15 +334,18 @@ pub fn run(
                 within: Duration::ZERO,
             },
         )
-        .with_on_worker_spawned(actor_handle::record_mailbox_capacity);
+        .with_on_worker_spawned(move |channel_id, worker| {
+            actor_handle::record_mailbox_capacity(worker);
+            bedrock_instances.name(worker.id(), channel_id);
+        });
         let bedrock_pool_ref = ShardingPoolActor::spawn(bedrock_pool);
         info!("Bedrock Sharding Pool Actor spawned");
 
         let channel_signing_key = load_or_create_signing_key(&channel_signing_key_path)
             .context("Failed to load or create the channel signing key")?;
-        log::info!(
-            "Channel signing public key: {}",
-            hex::encode(channel_signing_key.public_key().to_bytes())
+        info!(
+            public_key = %hex::encode(channel_signing_key.public_key().to_bytes()),
+            "Channel signing key loaded"
         );
 
         let stake_config_pubsub_ref = PubSub::spawn(PubSub::new(DeliveryStrategy::Guaranteed));
@@ -502,7 +524,7 @@ pub async fn setup_gossip(
     ))
     .await
     .context("Failed to start sequencer gossip network")?;
-    info!("Gossip network started as {}", gossip_actor.local_peer_id());
+    info!(peer_id = %gossip_actor.local_peer_id(), "Gossip network started");
     let bootstrap_addrs = gossip_actor.bootstrap_addrs();
 
     let gossip_ref = gossip_actor_prepared.actor_ref().clone();

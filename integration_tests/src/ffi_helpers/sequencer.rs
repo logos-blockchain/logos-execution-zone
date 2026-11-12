@@ -157,7 +157,7 @@ pub fn wait_for_sequencer_ffi_online(sequencer: &SequencerServiceFFI) -> Result<
                  last seen bootstrapping at height {replayed_height:?}"
             );
         }
-        log::debug!("Sequencer FFI is still bootstrapping, at height {replayed_height:?}");
+        tracing::debug!(?replayed_height, "Sequencer FFI is still bootstrapping");
         std::thread::sleep(Duration::from_secs(2));
     }
 }
@@ -231,26 +231,26 @@ pub fn joining_setup_with_stake() -> Result<JoiningSetup> {
         .key_chain_mut()
         .add_imported_public_account(funding_private_key);
 
-    log::info!("Waiting for the genesis supply to land on the funding account");
+    tracing::info!("Waiting for the genesis supply to land on the funding account");
     ctx.block_on(|ctx| {
         poll_until("genesis supply to land", 60, || async {
             Ok(account_balance(ctx, funding_id).await? == FUNDING_BALANCE)
         })
     })?;
-    log::info!("Funded joining account {funding_id} with {FUNDING_BALANCE} native balance");
+    tracing::info!(%funding_id, balance = FUNDING_BALANCE, "Funded joining account");
 
     let ownership_id = ctx.block_on_mut(|ctx| async {
         new_account(ctx, false, None)
             .await
             .context("Failed to create a fresh stake ownership account")
     })?;
-    log::info!("Fresh stake ownership account: {ownership_id}");
+    tracing::info!(%ownership_id, "Fresh stake ownership account");
 
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
 
-    log::info!(
-        "Submitting Stake transaction for sequencer key {}",
-        hex::encode(joining_sequencer_key.to_bytes())
+    tracing::info!(
+        sequencer_key = %hex::encode(joining_sequencer_key.to_bytes()),
+        "Submitting Stake transaction"
     );
     let stake_id = programs::sequencer_stake_account_id();
     ctx.block_on(|ctx| async {
@@ -265,7 +265,7 @@ pub fn joining_setup_with_stake() -> Result<JoiningSetup> {
             .map_err(|err| anyhow::anyhow!("Failed to submit Stake transaction: {err:?}"))
     })?;
 
-    log::info!("Waiting for the Stake transaction's block to land");
+    tracing::info!("Waiting for the Stake transaction's block to land");
 
     ctx.block_on(|ctx| {
         poll_until("stake to take ownership", 60, || async {
@@ -305,9 +305,10 @@ pub fn joining_setup_with_stake() -> Result<JoiningSetup> {
     )
     .context("ownership account data did not decode as a StakeRecord")?;
     assert_eq!(record.sequencer_key, joining_stake_key);
-    log::info!(
-        "Ownership account confirmed: {staked_balance} staked for sequencer key {}",
-        hex::encode(record.sequencer_key)
+    tracing::info!(
+        staked_balance,
+        sequencer_key = %hex::encode(record.sequencer_key),
+        "Ownership account confirmed"
     );
 
     let bedrock_url = addr_to_url(UrlProtocol::Http, ctx.ctx().bedrock_addr())
@@ -338,10 +339,9 @@ pub fn joining_setup_with_stake() -> Result<JoiningSetup> {
         "joining sequencer key should have been discovered and accredited after the Stake
     transaction",
     )?;
-    log::info!(
-        "Bedrock channel now accredits {} key(s), including the joining sequencer key — self-join
-    complete",
-        channel_state.accredited_keys.len()
+    tracing::info!(
+        accredited_keys = channel_state.accredited_keys.len(),
+        "Bedrock channel now accredits the joining sequencer key, self-join complete"
     );
 
     // Only now start a node behind the key, against a channel that already has a chain.
@@ -388,7 +388,7 @@ pub fn joining_setup_with_stake() -> Result<JoiningSetup> {
         }
         return Err(err);
     }
-    log::info!("Joining sequencer is online");
+    tracing::info!("Joining sequencer is online");
 
     Ok(JoiningSetup {
         node,
@@ -464,7 +464,7 @@ pub fn joining_setup_no_stake() -> Result<JoiningSetup> {
         }
         return Err(err);
     }
-    log::info!("Joining sequencer is online");
+    tracing::info!("Joining sequencer is online");
 
     Ok(JoiningSetup {
         node,

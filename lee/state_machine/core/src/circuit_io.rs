@@ -511,7 +511,7 @@ pub struct ProvenExecution {
     /// receipt actually commits to, so the sequencer can check it against real chain state.
     pub program_image_claims: Vec<ProgramImageClaim>,
     /// The fee transfer's refund target and fallback, when the proof runs one.
-    pub fee: Option<ProvenFee>,
+    pub proven_fee: Option<ProvenFee>,
 }
 
 #[cfg(any(feature = "host", test))]
@@ -683,7 +683,7 @@ mod tests {
                     },
                     ProgramImageClaim::Undisclosed { root: [26; 32] },
                 ],
-                fee: None,
+                proven_fee: None,
             },
         };
 
@@ -758,7 +758,7 @@ mod tests {
             &[25, 0, 0, 0].repeat(8), // image_id: eight little-endian words
             &[1],                     // ProgramImageClaim::Undisclosed
             &[26; 32],                // root
-            &[0],                     // fee: None
+            &[0],                     // proven_fee: None
         ]
         .concat();
 

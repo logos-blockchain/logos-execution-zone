@@ -12,7 +12,7 @@ workspace = true
 actor = [
   "dep:rocksdb",
   "dep:borsh",
-  "dep:log",
+  "dep:tracing",
   "dep:itertools",
   "dep:strum",
   "dep:enum-iterator",
@@ -34,7 +34,7 @@ thiserror.workspace = true
 anyhow.workspace = true
 rocksdb = { workspace = true, optional = true }
 borsh = { workspace = true, optional = true }
-log = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
 itertools = { workspace = true, optional = true }
 strum = { workspace = true, optional = true }
 enum-iterator = { workspace = true, optional = true }

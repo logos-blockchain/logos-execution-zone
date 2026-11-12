@@ -3,7 +3,6 @@ use std::{fmt::Display, future::Future, time::Duration};
 use chain_state::{Anchor, AnchorConsistencyCheck, ChainConsistency, ChainState, Tip};
 use kameo::actor::ActorRef;
 use kameo_actors::pubsub::PubSub;
-use log::{info, warn};
 use sequencer_actors_common::SendErrorExt;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
@@ -17,6 +16,7 @@ use sequencer_storage_actor::{
     protocol::{ZoneAnchorRecord, ZoneCheckpointRecord},
 };
 use sharding_pool_actor::ShardingPoolActor;
+use tracing::{info, warn};
 
 use crate::{Result, actor::Args, error::Error};
 
@@ -69,11 +69,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
         let mut channel_tip_slot =
             with_retries("Reading the channel tip slot", get_channel_tip_slot).await?;
         if channel_tip_slot.is_none() && config.genesis.is_none() && config.wait_for_channel {
-            info!("Channel {channel_id} does not exist yet; waiting for its creator");
+            info!(%channel_id, "Channel does not exist yet, waiting for its creator");
             while channel_tip_slot.is_none() {
                 tokio::time::sleep(CHANNEL_PROBE_DELAY).await;
                 channel_tip_slot = get_channel_tip_slot().await.unwrap_or_else(|err| {
-                    warn!("Failed to check for channel {channel_id}; still waiting: {err:#}");
+                    warn!(
+                        %channel_id,
+                        error = format_args!("{err:#}"),
+                        "Failed to check for the channel, still waiting"
+                    );
                     None
                 });
             }
@@ -208,7 +212,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
         let restored = view.is_some_and(|bytes| {
             chain
                 .restore_view(&bytes)
-                .inspect_err(|err| warn!("Stored channel view does not decode: {err}"))
+                .inspect_err(|err| warn!(error = %err, "Stored channel view does not decode"))
                 .is_ok()
         });
         if !restored {
@@ -317,8 +321,10 @@ fn check_startup_channel_params(
 ) -> Result<()> {
     if !sequencer_core::config::keeps_turn(params, config.block_create_timeout) {
         warn!(
-            "block_create_timeout ({:?}) is not under posting_timeout ({}s): this node loses its turn between its own blocks",
-            config.block_create_timeout, params.posting_timeout
+            block_create_timeout = ?config.block_create_timeout,
+            posting_timeout_secs = params.posting_timeout,
+            "block_create_timeout is not under posting_timeout: this node loses its turn between \
+             its own blocks"
         );
     }
     sequencer_core::config::check_max_block_size(params).map_err(Error::UnsupportedChannelParams)
@@ -339,7 +345,12 @@ where
         match request().await {
             Ok(value) => return Ok(value),
             Err(err) if retries_left > 0 => {
-                warn!("{what} failed, retrying in {CHANNEL_PROBE_DELAY:?}: {err:#}");
+                warn!(
+                    request = what,
+                    delay = ?CHANNEL_PROBE_DELAY,
+                    error = format_args!("{err:#}"),
+                    "Channel request failed, retrying"
+                );
                 retries_left = retries_left.saturating_sub(1);
                 tokio::time::sleep(CHANNEL_PROBE_DELAY).await;
             }

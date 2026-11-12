@@ -27,7 +27,7 @@ use wallet::config::WalletConfigOverrides;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init();
+    logging::init();
 
     let dest = prebuilt_sequencer_db_dump_path();
     println!(

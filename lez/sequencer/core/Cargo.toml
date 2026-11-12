@@ -28,6 +28,7 @@ bridge_core = { workspace = true, features = ["host"] }
 programs.workspace = true
 clock_core.workspace = true
 system_accounts.workspace = true
+system_upgrader_core.workspace = true
 cross_zone.workspace = true
 cross_zone_inbox_core.workspace = true
 sequencer_stake_core.workspace = true
@@ -43,7 +44,7 @@ serde_json.workspace = true
 humantime-serde.workspace = true
 tempfile.workspace = true
 chrono.workspace = true
-log.workspace = true
+tracing.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 rand.workspace = true
 borsh.workspace = true

@@ -20,6 +20,8 @@ use wallet::{
     config::WalletConfigOverrides,
 };
 
+mod system_upgrade;
+
 #[test]
 async fn deploy_and_execute_program() -> Result<()> {
     let mut ctx = TestContext::new().await?;
@@ -114,7 +116,7 @@ async fn deploy_and_execute_program() -> Result<()> {
         .send_transaction(LeeTransaction::Public(transaction))
         .await?;
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     // Waiting for long time as it may take some time for such a big transaction to be included in a
     // block
     tokio::time::sleep(Duration::from_secs(2 * TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
@@ -128,7 +130,7 @@ async fn deploy_and_execute_program() -> Result<()> {
     );
     assert_eq!(post_state_account.nonce.0, 1);
 
-    log::info!("Successfully deployed and executed program");
+    tracing::info!("Successfully deployed and executed program");
 
     Ok(())
 }
@@ -173,7 +175,7 @@ async fn deploy_invalid_program_fails() -> Result<()> {
         "Deploying an invalid program should fail, but got: {result:?}"
     );
 
-    log::info!("Deploying an invalid program failed as expected");
+    tracing::info!("Deploying an invalid program failed as expected");
 
     Ok(())
 }

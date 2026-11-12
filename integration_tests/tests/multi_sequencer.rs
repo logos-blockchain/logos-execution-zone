@@ -12,9 +12,9 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, ensure};
 use indexer_service_rpc::RpcClient as _;
 use integration_tests::{
-    assert_same_chain, committee,
+    committee,
     config::{self, SequencerPartialConfig},
-    init_logger, wait_until,
+    init_logger, wait_for_same_chain, wait_until,
 };
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
@@ -91,7 +91,7 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
         Ok(committee(&observer, channel).await?.1 == Some(pub_b))
     })
     .await?;
-    assert_same_chain(a, b).await?;
+    wait_for_same_chain(a, b).await?;
 
     // Phase 4: a tx submitted only to B is included by B and visible on A.
     let accounts = initial_public_user_accounts();

@@ -4,7 +4,6 @@ use common::{
     transaction::LeeTransaction,
 };
 use kameo::actor::ActorRef;
-use log::info;
 use mempool::{MemPool, MemPoolHandle};
 use sequencer_actors_common::SendErrorExt;
 use sequencer_bedrock_actor::{
@@ -14,6 +13,7 @@ use sequencer_bedrock_actor::{
 use sequencer_core::{SequencerCore, TransactionOrigin, config::SequencerConfig};
 use sequencer_storage_actor::{StorageActorTrait, protocol::AtomicUpdate};
 use sharding_pool_actor::ShardingPoolActor;
+use tracing::info;
 
 use self::turn::Turn;
 use crate::{
@@ -195,7 +195,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             .get(&own_sequencer_key)
             .map(|entry| entry.account_id)
         {
-            info!("Producer reward account (stake ownership): {reward_account}");
+            info!(%reward_account, "Producer reward account (stake ownership)");
         }
 
         let mempool = MemPool::new(config.mempool_max_size);
