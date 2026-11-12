@@ -101,41 +101,28 @@ where
 {
     let start_slot = after.map_or_else(Slot::genesis, |s| s.strict_add(1.into()));
 
-    futures::stream::unfold(Some((node, start_slot)), move |next| async move {
-        let (client, current_slot) = next?;
-        if current_slot > lib_slot {
-            return None;
+    futures::stream::try_unfold((node, start_slot), move |(client, from)| async move {
+        if from > lib_slot {
+            return Ok(None);
         }
 
-        let end_slot = (Slot::from(
-            current_slot
-                .into_inner()
+        let to = (Slot::from(
+            from.into_inner()
                 .saturating_add(batch_slots.get())
                 .checked_sub(1)
                 .expect("slot shouldn't overflow"),
         ))
         .min(lib_slot);
 
-        match client
-            .zone_messages_in_blocks(current_slot, end_slot, channel_id)
+        let messages = client
+            .zone_messages_in_blocks(from, to, channel_id)
             .await
-        {
-            Ok(messages) => Some((
-                Ok(Batch {
-                    messages: messages.collect().await,
-                    watermark: end_slot,
-                }),
-                Some((client, end_slot.strict_add(1.into()))),
-            )),
-            Err(cause) => Some((
-                Err(Error::Fetch {
-                    from: current_slot,
-                    to: end_slot,
-                    cause,
-                }),
-                None,
-            )),
-        }
+            .map_err(|cause| Error::Fetch { from, to, cause })?;
+        let batch = Batch {
+            messages: messages.collect().await,
+            watermark: to,
+        };
+        Ok(Some((batch, (client, to.strict_add(1.into())))))
     })
 }
 
