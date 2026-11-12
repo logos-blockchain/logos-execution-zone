@@ -1041,6 +1041,7 @@ mod tests {
             0,
             FeePayee::Present(producer_account_for_testing()),
         ));
+        let receipts = vec![TransactionReceipt::EXEMPT; transactions.len()];
         HashableBlockData {
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
@@ -1050,7 +1051,7 @@ mod tests {
                 vec![fee, LeeTransaction::Public(clock_invocation(1, 100))],
             ]
             .concat(),
-            receipts: Vec::new(),
+            receipts,
         }
         .into_pending_block()
     }
