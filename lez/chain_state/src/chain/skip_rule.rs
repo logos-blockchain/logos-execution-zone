@@ -243,7 +243,7 @@ fn at_once_and_stepwise(
     [at_once.as_slice(), steps].map(|updates| {
         let mut node = fixture.node(SKIP_WINDOW);
         for proof in proofs {
-            node.proofs.insert(proof);
+            node.proofs().insert(proof);
         }
         node.apply_extension(entries.to_vec());
         let mut start = 0;
@@ -268,7 +268,7 @@ fn nodes_with_and_without_the_proof_take_a_skip_that_only_an_l1_reorg_undoes() {
         (&fixture.y_on_genesis, [2; 32]),
     ]);
     let mut holding = fixture.node(SKIP_WINDOW);
-    holding.proofs.insert(&fixture.proof);
+    holding.proofs().insert(&fixture.proof);
     let mut lacking = fixture.node(SKIP_WINDOW);
 
     for node in [&mut holding, &mut lacking] {
@@ -280,7 +280,7 @@ fn nodes_with_and_without_the_proof_take_a_skip_that_only_an_l1_reorg_undoes() {
     holding.apply_conflict(entries[..2].to_vec());
     assert_eq!(holding.head_tip(), Some(tip_of(&fixture.x)));
 
-    lacking.proofs.insert(&fixture.proof);
+    lacking.proofs().insert(&fixture.proof);
     lacking.hydrate();
     for node in [&mut holding, &mut lacking] {
         node.apply_extension(vec![entries[1].clone()]);
@@ -309,7 +309,7 @@ fn a_node_without_a_confirmed_blocks_proof_stalls_instead_of_diverging_until_the
         assert_eq!(node.missing_proofs(), vec![fixture.proof.digest()]);
     }
 
-    following.proofs.insert(&fixture.proof);
+    following.proofs().insert(&fixture.proof);
     following.hydrate();
     assert_eq!(following.head_tip(), Some(tip_of(&fixture.y_on_x)));
 
@@ -332,7 +332,7 @@ fn a_final_skip_is_counted_once_for_its_signer() {
         (&fixture.y_on_genesis, [2; 32]),
     ]);
     let mut node = fixture.node(SKIP_WINDOW);
-    node.proofs.insert(&fixture.proof);
+    node.proofs().insert(&fixture.proof);
 
     node.apply_extension(entries.clone());
     assert!(node.apply_finalized(&[], Slot::from(0)).skipped.is_empty());
@@ -375,7 +375,7 @@ fn a_writer_cannot_skip_its_own_run() {
         (&fixture.y_on_genesis, [1; 32]),
     ]);
     let mut holding = fixture.node(SKIP_WINDOW);
-    holding.proofs.insert(&fixture.proof);
+    holding.proofs().insert(&fixture.proof);
     let mut lacking = fixture.node(SKIP_WINDOW);
 
     holding.apply_extension(entries.clone());
@@ -391,7 +391,7 @@ fn a_provisional_block_settles_once_the_window_passes_and_at_l1_finality_with_a_
     let mut windowed = fixture.node(SKIP_WINDOW);
     let mut zero_window = fixture.node(0);
     for node in [&mut windowed, &mut zero_window] {
-        node.proofs.insert(&fixture.proof);
+        node.proofs().insert(&fixture.proof);
         node.apply_extension(entries.clone());
         node.apply_finalized(&at_slots(&entries, &[1, 10]), Slot::from(19));
     }
@@ -512,7 +512,7 @@ fn a_failed_private_block_is_skipped_like_a_missing_one() {
     ]);
     let finalized = at_slots(&entries, &[1, 2, 3, 4]);
     let mut holding = fixture.node(SKIP_WINDOW);
-    holding.proofs.insert(&failing_on_genesis_proof);
+    holding.proofs().insert(&failing_on_genesis_proof);
     let mut lacking = fixture.node(SKIP_WINDOW);
 
     holding.apply_extension(entries.clone());
@@ -548,10 +548,10 @@ fn a_node_without_the_proof_of_a_confirmed_failed_block_stalls_then_converges() 
     ]);
     let finalized = at_slots(&entries, &[1, 2, 3, 4, 5]);
     let mut holding = fixture.node(SKIP_WINDOW);
-    holding.proofs.insert(&failing_on_x_proof);
+    holding.proofs().insert(&failing_on_x_proof);
     let mut lacking = fixture.node(SKIP_WINDOW);
     for node in [&mut holding, &mut lacking] {
-        node.proofs.insert(&fixture.proof);
+        node.proofs().insert(&fixture.proof);
         node.apply_extension(entries.clone());
         node.apply_finalized(&finalized, Slot::from(20));
     }
@@ -565,7 +565,7 @@ fn a_node_without_the_proof_of_a_confirmed_failed_block_stalls_then_converges() 
     assert_eq!(blocked(&holding), Some((entries[2].msg, true, false)));
     assert_eq!(blocked(&lacking), Some((entries[2].msg, true, true)));
 
-    lacking.proofs.insert(&failing_on_x_proof);
+    lacking.proofs().insert(&failing_on_x_proof);
     lacking.hydrate();
     lacking.apply_finalized(&[], Slot::from(20));
     assert_eq!(lacking.final_tip(), Some(tip_of(&fixture.x)));
@@ -583,7 +583,7 @@ fn a_failed_private_block_nobody_skips_leaves_when_its_window_closes() {
     ]);
     let finalized = at_slots(&entries, &[1, 2, 13]);
     let mut holding = fixture.node(SKIP_WINDOW);
-    holding.proofs.insert(&failing_on_genesis_proof);
+    holding.proofs().insert(&failing_on_genesis_proof);
     let mut lacking = fixture.node(SKIP_WINDOW);
     for node in [&mut holding, &mut lacking] {
         node.apply_extension(entries.clone());
@@ -593,7 +593,7 @@ fn a_failed_private_block_nobody_skips_leaves_when_its_window_closes() {
     assert_eq!(holding.final_tip(), Some(tip_of(&fixture.plain_x)));
     assert_eq!(lacking.final_tip(), Some(tip_of(&fixture.genesis)));
 
-    lacking.proofs.insert(&failing_on_genesis_proof);
+    lacking.proofs().insert(&failing_on_genesis_proof);
     lacking.hydrate();
     lacking.apply_finalized(&[], Slot::from(13));
     assert_eq!(lacking.final_tip(), Some(tip_of(&fixture.plain_x)));
@@ -612,7 +612,7 @@ fn a_node_without_the_proof_cuts_the_blocks_held_behind_a_skipped_block() {
         (&z_on_y, [2; 32]),
     ]);
     let mut lacking = fixture.node(SKIP_WINDOW);
-    lacking.proofs.insert(&z_on_y_proof);
+    lacking.proofs().insert(&z_on_y_proof);
 
     lacking.apply_extension(entries.clone());
     let outcomes = lacking
@@ -656,7 +656,7 @@ fn a_held_misplaced_block_is_still_reported_after_an_unfinalized_skip_turns_late
             .apply_finalized(&at_slots(&entries[3..], &[21]), Slot::from(21))
             .judged,
     );
-    lacking.proofs.insert(&fixture.proof);
+    lacking.proofs().insert(&fixture.proof);
     lacking.hydrate();
     outcomes.extend(lacking.apply_finalized(&[], Slot::from(21)).judged);
 

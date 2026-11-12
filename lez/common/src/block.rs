@@ -245,11 +245,7 @@ impl HashableBlockData {
 
     pub fn inscription_len(self) -> std::io::Result<usize> {
         // The hash is fixed-width, so its value does not change the length.
-        Ok(self
-            .into_block(HashType([0; 32]))
-            .digested()
-            .to_inscription()?
-            .len())
+        borsh::object_length(&self.into_block(HashType([0; 32])).digested())
     }
 
     fn into_block(self, hash: BlockHash) -> Block {

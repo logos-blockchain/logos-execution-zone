@@ -222,7 +222,6 @@ pub struct ChainState {
     hydrated: Hydrated,
     /// The finalized entries whose verdicts have been returned.
     judged: HashSet<MsgId>,
-    proofs: ProofStore,
 }
 
 /// The head after folding one view entry.
@@ -420,10 +419,9 @@ impl ChainState {
             folds: Vec::new(),
             hydrated: Hydrated {
                 blocks: HashMap::new(),
-                proofs: proofs.clone(),
+                proofs,
             },
             judged: HashSet::new(),
-            proofs,
         }
     }
 
@@ -489,7 +487,7 @@ impl ChainState {
         let pending = self.pending().and_then(|idx| self.view[idx].block.as_ref());
         let mut missing = Vec::new();
         for digest in pending.into_iter().flat_map(|block| block.body.proofs()) {
-            if !self.proofs.contains(digest) && !missing.contains(digest) {
+            if !self.hydrated.proofs.contains(digest) && !missing.contains(digest) {
                 missing.push(*digest);
             }
         }
@@ -572,7 +570,7 @@ impl ChainState {
 
     #[must_use]
     pub const fn proofs(&self) -> &ProofStore {
-        &self.proofs
+        &self.hydrated.proofs
     }
 
     /// The view, `final_msg` and what placement reads at the final tier, in
@@ -653,7 +651,7 @@ impl ChainState {
         let Some(block) = self.view[idx]
             .block
             .as_ref()
-            .and_then(|block| block.hydrate(|digest| self.proofs.get(digest)))
+            .and_then(|block| block.hydrate(|digest| self.hydrated.proofs.get(digest)))
         else {
             return false;
         };
@@ -856,7 +854,7 @@ impl ChainState {
             .as_ref()
             .is_some_and(|tip| tip.hash == block.header.hash)
         {
-            Verdict::AlreadySettled(block.hydrate(|digest| self.proofs.get(digest))?)
+            Verdict::AlreadySettled(block.hydrate(|digest| self.hydrated.proofs.get(digest))?)
         } else {
             let computed = block.recompute_hash();
             let linked = if computed == block.header.hash {
@@ -1237,7 +1235,7 @@ impl ChainState {
             let Some(block) = entry
                 .block
                 .as_ref()
-                .and_then(|block| block.hydrate(|digest| self.proofs.get(digest)))
+                .and_then(|block| block.hydrate(|digest| self.hydrated.proofs.get(digest)))
             else {
                 return Err(None);
             };
@@ -1465,7 +1463,7 @@ mod tests {
         let mut fresh = ChainState::from_final(
             chain.final_state().clone(),
             chain.final_tip(),
-            chain.proofs.clone(),
+            chain.proofs().clone(),
         );
         fresh.final_msg = chain.final_msg;
         fresh.view = chain.view.clone();

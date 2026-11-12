@@ -286,9 +286,7 @@ pub fn check_inscribed_size(
     tx: &LeeTransaction,
     max_block_size: u64,
 ) -> Result<(), TransactionTooLarge> {
-    let size = borsh::to_vec(&tx.digested()).map_or(u64::MAX, |bytes| {
-        u64::try_from(bytes.len()).unwrap_or(u64::MAX)
-    });
+    let size = tx.charged_bytes().unwrap_or(u64::MAX);
     let max = max_block_size.saturating_sub(BLOCK_OVERHEAD);
     if size > max {
         return Err(TransactionTooLarge::Inscribed { size, max });
