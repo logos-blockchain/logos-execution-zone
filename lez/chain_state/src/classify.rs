@@ -262,11 +262,19 @@ mod tests {
             ))
         };
         let cap = usize::try_from(market::PROOF_BYTES).unwrap();
-        assert_eq!(
-            with_proof(0).charged_bytes().unwrap(),
-            with_proof(cap).charged_bytes().unwrap()
-        );
-        assert!(classify(&with_proof(cap), false).is_ok());
+        // The proof's length-prefixed bytes give way to its fixed 32-byte digest.
+        let compact = |size: usize| {
+            let full = borsh::object_length(&with_proof(size)).unwrap();
+            u64::try_from(full - (4 + size) + 32).unwrap()
+        };
+        for size in [0, cap] {
+            assert_eq!(with_proof(size).charged_bytes().unwrap(), compact(size));
+        }
+        assert_eq!(compact(0), compact(cap));
+        assert!(matches!(
+            classify(&with_proof(cap), false),
+            Ok(FeeClass::Charged(FeeTxView::Private { data_bytes, .. })) if data_bytes == compact(cap)
+        ));
         assert!(matches!(
             classify(&with_proof(cap + 1), false),
             Err(ClassifyError::OversizedProof { size }) if size == cap + 1
