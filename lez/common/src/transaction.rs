@@ -48,6 +48,14 @@ impl<P> LeeTransactionWith<P> {
         let root = &tx.message().execution.root;
         Some((root.to, root.message.as_slice()))
     }
+
+    #[must_use]
+    pub const fn proof(&self) -> Option<&P> {
+        match self {
+            Self::Public(_) => None,
+            Self::PrivacyPreserving(tx) => Some(tx.witness_set().proof()),
+        }
+    }
 }
 
 impl LeeTransaction {

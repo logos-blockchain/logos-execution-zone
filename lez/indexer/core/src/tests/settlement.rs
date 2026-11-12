@@ -42,10 +42,7 @@ fn channel() -> Channel {
     let genesis = settled_test_block(&mut state, 1, None, vec![]);
     let plain = settled_test_block(&mut state.clone(), 2, Some(genesis.header.hash), vec![]);
     let transfer = private_transfer(&state);
-    let LeeTransaction::PrivacyPreserving(proven) = &transfer else {
-        unreachable!("a private transfer was built");
-    };
-    let proof = proven.witness_set().proof().clone();
+    let proof = transfer.proof().expect("a private transfer was built").clone();
     let private = settled_test_block(&mut state, 2, Some(genesis.header.hash), vec![transfer]);
     let on_private = settled_test_block(&mut state, 3, Some(private.header.hash), vec![]);
     Channel {

@@ -357,10 +357,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                 })
                 .await
                 .map_err(SendErrorExt::flatten)?;
-            for transaction in &block.body.transactions {
-                if let LeeTransaction::PrivacyPreserving(tx) = transaction {
-                    chain.proofs().insert(tx.witness_set().proof());
-                }
+            for proof in block.body.proofs() {
+                chain.proofs().insert(proof);
             }
             published.push(published_entry(&outcome, block, own_sequencer_key));
         }

@@ -80,6 +80,10 @@ impl<P> BlockBodyWith<P> {
         // we don't expect many reverted tx'es every block
         u64::try_from(position).is_ok_and(|position| self.reverted.contains(&position))
     }
+
+    pub fn proofs(&self) -> impl Iterator<Item = &P> {
+        self.transactions.iter().filter_map(LeeTransactionWith::proof)
+    }
 }
 
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
@@ -158,16 +162,6 @@ impl DigestedBlock {
 
     pub fn from_inscription(bytes: &[u8]) -> std::io::Result<Self> {
         borsh::from_slice(bytes)
-    }
-
-    pub fn proof_digests(&self) -> impl Iterator<Item = &ProofDigest> {
-        self.body
-            .transactions
-            .iter()
-            .filter_map(|transaction| match transaction {
-                LeeTransactionWith::PrivacyPreserving(tx) => Some(tx.witness_set().proof()),
-                LeeTransactionWith::Public(_) => None,
-            })
     }
 
     pub fn hydrate(
@@ -312,7 +306,7 @@ mod tests {
         HashType,
         block::{DigestedBlock, HashableBlockData, HashableBlockDataWith, OwnHasher},
         test_utils,
-        transaction::{LeeTransaction, LeeTransactionWith},
+        transaction::LeeTransaction,
     };
 
     fn private_transaction(proof: Vec<u8>) -> LeeTransaction {
@@ -449,10 +443,7 @@ mod tests {
 
         let decoded = DigestedBlock::from_inscription(&inscription).unwrap();
         assert_eq!(decoded, block);
-        assert!(matches!(
-            &*decoded.body.transactions,
-            [LeeTransactionWith::PrivacyPreserving(tx), _] if *tx.witness_set().proof() == digest
-        ));
+        assert!(decoded.body.proofs().eq([&digest]));
         assert!(inscription.len() < proof.len());
         let distinctive = &proof[4096..4128];
         assert!(

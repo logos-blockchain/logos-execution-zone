@@ -11,7 +11,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use common::{
     HashType,
     block::{Block, DigestedBlock},
-    transaction::{LeeTransaction, LeeTransactionWith, TxEvents},
+    transaction::TxEvents,
 };
 use lee::{V03State, privacy_preserving_transaction::circuit::ProofDigest};
 use log::warn;
@@ -331,11 +331,7 @@ impl BlockRecord {
             hash: header.hash,
             parent: header.prev_block_hash,
             slot: entry.slot.map(Slot::into_inner),
-            private: block
-                .body
-                .transactions
-                .iter()
-                .any(|tx| matches!(tx, LeeTransactionWith::PrivacyPreserving(_))),
+            private: block.body.proofs().next().is_some(),
             signer: entry.signer,
         }
     }
@@ -362,10 +358,8 @@ struct Hydrated {
 
 impl Hydrated {
     fn insert(&mut self, msg: MsgId, block: Block) {
-        for transaction in &block.body.transactions {
-            if let LeeTransaction::PrivacyPreserving(tx) = transaction {
-                self.proofs.pin(tx.witness_set().proof());
-            }
+        for proof in block.body.proofs() {
+            self.proofs.pin(proof);
         }
         if let Some(replaced) = self.blocks.insert(msg, block) {
             Self::unpin(&self.proofs, &replaced);
@@ -385,10 +379,8 @@ impl Hydrated {
     }
 
     fn unpin(proofs: &ProofStore, block: &Block) {
-        for transaction in &block.body.transactions {
-            if let LeeTransaction::PrivacyPreserving(tx) = transaction {
-                proofs.unpin(&tx.witness_set().proof().digest());
-            }
+        for proof in block.body.proofs() {
+            proofs.unpin(&proof.digest());
         }
     }
 }
@@ -496,7 +488,7 @@ impl ChainState {
     pub fn missing_proofs(&self) -> Vec<ProofDigest> {
         let pending = self.pending().and_then(|idx| self.view[idx].block.as_ref());
         let mut missing = Vec::new();
-        for digest in pending.into_iter().flat_map(DigestedBlock::proof_digests) {
+        for digest in pending.into_iter().flat_map(|block| block.body.proofs()) {
             if !self.proofs.contains(digest) && !missing.contains(digest) {
                 missing.push(*digest);
             }

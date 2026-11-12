@@ -550,11 +550,8 @@ async fn replay_cuts_a_block_skipped_in_the_last_slot_of_its_window_as_a_live_no
         &genesis,
     ));
     let transfer = private_transfer(&state);
-    let LeeTransaction::PrivacyPreserving(private_tx) = &transfer else {
-        unreachable!("the transfer is private");
-    };
     let proofs = ProofStore::new(usize::MAX);
-    proofs.insert(private_tx.witness_set().proof());
+    proofs.insert(transfer.proof().expect("the transfer is private"));
     let (summary, payout, reverted) =
         chain_state::apply::derive_block_summary(&state, std::slice::from_ref(&transfer), 2, 200)
             .expect("the transfer settles");

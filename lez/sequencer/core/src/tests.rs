@@ -7234,22 +7234,6 @@ async fn fund_private_sender(
     state.clone()
 }
 
-fn is_private(block: &Block) -> bool {
-    block
-        .body
-        .transactions
-        .iter()
-        .any(|tx| matches!(tx, LeeTransaction::PrivacyPreserving(_)))
-}
-
-/// The proof of `block`'s leading private transaction.
-fn proof_of(block: &Block) -> lee::privacy_preserving_transaction::circuit::Proof {
-    let LeeTransaction::PrivacyPreserving(private) = &block.body.transactions[0] else {
-        unreachable!("the block leads with a private transaction");
-    };
-    private.witness_set().proof().clone()
-}
-
 /// A peer's block on `genesis` carrying the private transfer, and another peer's block on
 /// `genesis` that skips it, both over `state`.
 fn private_block_and_skip(genesis: &Block, state: &V03State) -> (Block, Block) {
@@ -7280,7 +7264,8 @@ async fn nodes_with_and_without_the_proof_of_a_skipped_private_block_converge_on
     let private_entry = peer_entry(&private, genesis_entry.msg, 5);
     let skip_entry = peer_entry(&skip, private_entry.msg, 6);
 
-    holding.proof_store().insert(&proof_of(&private));
+    let proof = private.body.proofs().next().expect("a private block");
+    holding.proof_store().insert(proof);
     adopt(&mut holding, private_entry.clone()).await;
     adopt(&mut lacking, private_entry.clone()).await;
     assert_eq!(
@@ -7290,7 +7275,7 @@ async fn nodes_with_and_without_the_proof_of_a_skipped_private_block_converge_on
     );
     assert_eq!(
         lacking.chain().lock().await.missing_proofs(),
-        vec![proof_of(&private).digest()]
+        vec![proof.digest()]
     );
     for node in [&mut holding, &mut lacking] {
         adopt(node, skip_entry.clone()).await;
@@ -7407,7 +7392,10 @@ async fn a_deposit_minted_in_a_cut_block_is_minted_again_once_and_recorded_until
         .await
         .expect("produced block is stored");
     assert_eq!(mint_count(&cut, op_id, 5), 1);
-    assert!(is_private(&cut), "only a private block can be skipped");
+    assert!(
+        cut.body.proofs().next().is_some(),
+        "only a private block can be skipped"
+    );
 
     let genesis = block_at(&sequencer, GENESIS_BLOCK_ID).await.unwrap();
     let skip = settled_peer_block(
@@ -7454,7 +7442,7 @@ async fn a_deposit_minted_in_a_cut_block_is_minted_again_once_and_recorded_until
         "the recipient is credited once across the cut"
     );
     assert!(
-        is_private(&again),
+        again.body.proofs().next().is_some(),
         "the cut block's private transfer is requeued, so the new mint settles late"
     );
     assert!(deposit_recorded(&sequencer, op_id).await);

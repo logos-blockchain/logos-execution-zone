@@ -1092,10 +1092,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         };
         let block_id = block.header.block_id;
 
-        for transaction in &block.body.transactions {
-            if let LeeTransaction::PrivacyPreserving(tx) = transaction {
-                self.proofs.insert(tx.witness_set().proof());
-            }
+        for proof in block.body.proofs() {
+            self.proofs.insert(proof);
         }
         let mut chain = self.chain.lock().await;
         let record = chain.record_publish(ChannelEntry {

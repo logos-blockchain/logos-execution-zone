@@ -375,11 +375,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
         }
 
         // Kept even if the screen below turns the transaction away: a peer's block may carry it.
-        if let LeeTransaction::PrivacyPreserving(tx) = &transaction {
-            online
-                .sequencer()
-                .proof_store()
-                .insert(tx.witness_set().proof());
+        if let Some(proof) = transaction.proof() {
+            online.sequencer().proof_store().insert(proof);
         }
 
         // Fee admission against the head state, before the mempool sees it.
