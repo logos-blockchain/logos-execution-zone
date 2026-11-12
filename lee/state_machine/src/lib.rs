@@ -3,7 +3,7 @@
     reason = "We prefer to group methods by functionality rather than by type for encoding"
 )]
 
-pub use fees::{FeeDeclaration, SignedMessage, is_fee_authorized};
+pub use fees::{FeeDeclaration, is_fee_authorized};
 pub use lee_core::{
     DummyOutput, EncryptedNote, GENESIS_BLOCK_ID, MessageWitness, ProvingInput, Recipient,
     RecipientEncryption, RecoveryBinding, RootCall, SealedMessage, SenderPresentation,

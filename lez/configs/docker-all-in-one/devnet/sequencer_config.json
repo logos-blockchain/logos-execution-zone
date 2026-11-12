@@ -9,7 +9,8 @@
     "node_url": "http://logos-blockchain-node-0:18080/",
     "auth": null,
     "priority_fee_percent": 12,
-    "stale_refund_slots": 300
+    "stale_refund_slots": 300,
+    "backfill_batch_slots": 10000
   },
   "genesis": {
     "channel_params": {
@@ -56,8 +57,8 @@
             132,
             121
           ],
-          "ownership_public_key": "84dc17d9090eea5e5b97c5167f47f32b3cfb78c11505008e86584430d7a54c53",
-          "stake_signature": "84be7e4374cc85349d5e0794abff50e91651ccd94da79b4687b8e5082cbad79e0f52b92ab3f9e45337a20b915a02a6f0c8e5628fe460080bd3a9e1d77f6d7656"
+          "ownership_public_key": "da7cba5adc37cc9042c8d9406611a20149569cc87673bbd699f6425dc6bdfb61",
+          "stake_signature": "85d2cbf097407f149b3b51be29c0c36d15dbe1b88291705ad8b1d0f30efbfa1318d14fe4b07b2d62903ed10c4877389aaf455fab14530bed9ffadee1121aad1b"
         }
       },
       {
@@ -96,8 +97,8 @@
             42,
             251
           ],
-          "ownership_public_key": "920fa4e0f8bb319c54fc60fff75feaa069be592cf15367fbcc21e680d542ac19",
-          "stake_signature": "f9763966d21569eec59909840be5d7bafd5fd978c31e648edcc9eb9ada2acff3bb9652486968b9705a41049d7910252f705153b3dad593b8b82574446c7bae66"
+          "ownership_public_key": "ba22fdcb2ee514797606a6a5a63cde33cfa917262a8562c08ec63285989b42b9",
+          "stake_signature": "700222c47fd14bf1acaff9654f1a85cfb5faee37f1a84654616f02022b0eaa9e694dd520e489f30702cd83077000b16e34b452f7185639842bcbd3888e6fc3ab"
         }
       },
       {
@@ -136,8 +137,8 @@
             113,
             209
           ],
-          "ownership_public_key": "76d15e16e29233f272552a925ac47940d1a13b0abab2e700f6d1797f0080dd21",
-          "stake_signature": "5d209829954923066f05eb6dd78ed61a07c1e72ab51c335124042d1a50f86d9c35843c634be4ae87da8d64661cccf5d5cc4e955eaecf12bb2385a2bf55a347f7"
+          "ownership_public_key": "eac0de535800fcc3cdd8b3fc55582dfa1619cbe2cf337ac1fa818cea396851a5",
+          "stake_signature": "c4319bde0b6bfa802ba2b86d994f794a8bd86f8355fcb0b97d96e4a7c0119b702dcd821417e166599416ca7c32c4d8e0f731f481c5259017c8aea8b04efbb441"
         }
       },
       {
@@ -176,8 +177,8 @@
             17,
             10
           ],
-          "ownership_public_key": "0bc0a846f614c53ad4bcce06b2db2059e0d4add7a81d885bac2a23318522b874",
-          "stake_signature": "09736d99eb10e94ce9b51c07df4a56191b2be49bd3751f48028d49cdf58f10643bdf4f74f808addd432f58b000828fa0636060a7950d562a996ac43b085d7bb9"
+          "ownership_public_key": "ca13f705471a0af8e0ed390e1fad2ff71b55b0453095fa4070f7d3a6a475e316",
+          "stake_signature": "22a6fbfc11d51b5e137fcdf8ef274142ef63feaae964eb575b1228e771aa1ea76a9a0c164896efa4154d57b300913108090a539cedb889301b8cc42fe73b8d36"
         }
       },
       {

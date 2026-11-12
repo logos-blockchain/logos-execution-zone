@@ -506,7 +506,7 @@ impl UserKeyChain {
     pub fn sync_reverted_via_nullifier(&mut self, message: &Message, index: &mut NullifierIndex) {
         let Some(action) = message
             .execution
-            .fee
+            .proven_fee
             .as_ref()
             .and_then(|fee| fee.fallback.as_ref())
             .map(|fallback| &fallback.action)

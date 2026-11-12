@@ -57,7 +57,7 @@ pub fn compute_circuit_output(
         private_actions: Vec::new(),
         validity,
         program_image_claims,
-        fee,
+        proven_fee: fee,
     };
 
     // Emit one action per private account, covering all its actor states.

@@ -56,8 +56,8 @@ regenerate-test-fixture:
     @just resolve-bedrock-node
     RISC0_DEV_MODE=1 RUST_LOG=info cargo run -p test_fixtures --bin regenerate_test_fixture
 
-# Regenerate the four-node docker devnet's shared sequencer config and per-node keys (the genesis
-# stakes the whole committee, so the signatures are resigned; commit the result).
+# Regenerate the four-node docker devnet's shared sequencer config and per-node keys. The genesis
+# stakes the whole committee, so its stake signatures are re-signed; existing keys are kept.
 regenerate-devnet-configs:
     @echo "🕸️  Regenerating devnet sequencer config and keys"
     @cargo run -q -p devnet_configs
