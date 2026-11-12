@@ -1,7 +1,9 @@
-use indexer_service_protocol::{BedrockStatus, Block, BlockHeader, HashType};
+use indexer_service_protocol::{
+    BedrockStatus, Block, BlockBody, BlockHeader, FeeReceipt, HashType, TransactionReceipt,
+};
 
 use crate::api::types::{
-    FfiBlockId, FfiHashType, FfiOption, FfiTimestamp, FfiVec,
+    FfiBlockId, FfiHashType, FfiOption, FfiTimestamp, FfiU128, FfiVec,
     transaction::free_transaction_vec_value, vectors::FfiBlockBody,
 };
 
@@ -9,6 +11,9 @@ use crate::api::types::{
 pub struct FfiBlock {
     pub header: FfiBlockHeader,
     pub body: FfiBlockBody,
+    /// One per user transaction, parallel to `body`; the trailing fee and clock transactions
+    /// have none.
+    pub receipts: FfiVec<FfiTransactionReceipt>,
     pub bedrock_status: FfiBedrockStatus,
 }
 
@@ -16,14 +21,21 @@ impl From<Block> for FfiBlock {
     fn from(value: Block) -> Self {
         let Block {
             header,
-            body,
+            body: BlockBody {
+                transactions,
+                receipts,
+            },
             bedrock_status,
         } = value;
 
         Self {
             header: header.into(),
-            body: body
-                .transactions
+            body: transactions
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
+            receipts: receipts
                 .into_iter()
                 .map(Into::into)
                 .collect::<Vec<_>>()
@@ -34,6 +46,53 @@ impl From<Block> for FfiBlock {
 }
 
 pub type FfiBlockOpt = FfiOption<FfiBlock>;
+
+/// The fee one transaction paid; all zeros for a fee-exempt one.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FfiFeeReceipt {
+    pub gas_exec: u64,
+    pub gas_stor: u64,
+    pub fee_base: FfiU128,
+    pub tip: FfiU128,
+    pub refund: FfiU128,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FfiTransactionReceipt {
+    /// `true`: applied; `false`: the action reverted, and its fee was still charged.
+    pub success: bool,
+    pub fee: FfiFeeReceipt,
+}
+
+impl From<TransactionReceipt> for FfiTransactionReceipt {
+    fn from(value: TransactionReceipt) -> Self {
+        let TransactionReceipt {
+            success,
+            fee:
+                FeeReceipt {
+                    gas_exec,
+                    gas_stor,
+                    fee_base,
+                    tip,
+                    refund,
+                },
+        } = value;
+        Self {
+            success,
+            fee: FfiFeeReceipt {
+                gas_exec,
+                gas_stor,
+                fee_base: fee_base.into(),
+                tip: tip.into(),
+                refund: refund.into(),
+            },
+        }
+    }
+}
+
+pub type FfiTransactionReceiptOpt = FfiOption<FfiTransactionReceipt>;
 
 #[repr(C)]
 pub struct FfiBlockHeader {
@@ -90,8 +149,8 @@ impl From<FfiBedrockStatus> for BedrockStatus {
 
 /// Frees the resources owned by an `FfiBlock` value.
 ///
-/// This frees the block's transaction bodies (the only heap-owning field); the
-/// header/status fields are `Copy`. It operates on the struct by value because
+/// This frees the block's transaction bodies and receipts (the only heap-owning
+/// fields); the header/status fields are `Copy`. It operates on the struct by value because
 /// it is an element-level helper, used both for the vector path
 /// ([`free_ffi_block_vec`]) and the optional path ([`free_ffi_block_opt`]) — in
 /// neither case is an `FfiBlock` itself wrapped in its own outer box.
@@ -119,6 +178,7 @@ pub unsafe extern "C" fn free_ffi_block(val: FfiBlock) {
         timestamp: val.header.timestamp,
     };
     let ffi_tx_ffi_vec = val.body;
+    drop(Vec::<FfiTransactionReceipt>::from(val.receipts));
 
     #[expect(clippy::let_underscore_must_use, reason = "No use for this Copy type")]
     let _: BedrockStatus = val.bedrock_status.into();
@@ -191,5 +251,22 @@ pub unsafe extern "C" fn free_ffi_block_vec(val: *mut FfiVec<FfiBlock>) {
         unsafe {
             free_ffi_block(block);
         }
+    }
+}
+
+/// Frees the option a `query_transaction_receipt` call returned, and its receipt if present.
+///
+/// # Safety
+///
+/// `val` must be null or an unfreed `PointerResult.value` from `query_transaction_receipt`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn free_ffi_transaction_receipt_opt(val: *mut FfiTransactionReceiptOpt) {
+    if val.is_null() {
+        log::error!("Trying to free a null pointer. Exiting");
+        return;
+    }
+    let opt = unsafe { Box::from_raw(val) };
+    if opt.is_some {
+        drop(unsafe { Box::from_raw(opt.value) });
     }
 }
