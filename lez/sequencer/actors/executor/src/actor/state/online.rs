@@ -1,4 +1,4 @@
-use chain_state::{ChainState, ChannelEntry, ProofStore};
+use chain_state::{ChainState, ChannelEntry};
 use common::{
     block::{BedrockStatus, Block},
     transaction::LeeTransaction,
@@ -53,7 +53,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             bootstrapping_state.config,
             bootstrapping_state.chain,
             bootstrapping_state.channel_signing_key,
-            bootstrapping_state.proofs,
             bootstrapping_state.actors,
         )
         .await
@@ -63,19 +62,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         config: SequencerConfig,
         chain: ChainState,
         channel_signing_key: Ed25519Key,
-        proofs: ProofStore,
         actors: ActorsBundle<S, B>,
     ) -> Result<Self> {
-        Self::start(
-            true,
-            None,
-            config,
-            chain,
-            channel_signing_key,
-            proofs,
-            actors,
-        )
-        .await
+        Self::start(true, None, config, chain, channel_signing_key, actors).await
     }
 
     /// Creates the channel, inscribing the stored chain onto it, or a new genesis when the store
@@ -84,19 +73,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         config: SequencerConfig,
         chain: ChainState,
         channel_signing_key: Ed25519Key,
-        proofs: ProofStore,
         actors: ActorsBundle<S, B>,
     ) -> Result<Self> {
-        Self::start(
-            false,
-            None,
-            config,
-            chain,
-            channel_signing_key,
-            proofs,
-            actors,
-        )
-        .await
+        Self::start(false, None, config, chain, channel_signing_key, actors).await
     }
 
     pub const fn sequencer(&self) -> &SequencerCore<S, B> {
@@ -162,7 +141,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         config: SequencerConfig,
         mut chain: ChainState,
         channel_signing_key: Ed25519Key,
-        proofs: ProofStore,
         actors: ActorsBundle<S, B>,
     ) -> Result<Self> {
         let ActorsBundle {
@@ -207,7 +185,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                     &mut chain,
                     &config,
                     own_sequencer_key,
-                    &proofs,
                     &storage_ref,
                     &bedrock_pool_ref,
                 )
@@ -274,7 +251,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             config,
             mempool,
             chain,
-            proofs,
             applied_seq,
             channel_signing_key,
             storage_ref,
@@ -334,7 +310,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         chain: &mut ChainState,
         config: &SequencerConfig,
         own_sequencer_key: sequencer_stake_core::SequencerKey,
-        proofs: &ProofStore,
         storage_ref: &ActorRef<S>,
         bedrock_pool_ref: &ActorRef<ShardingPoolActor<B, ChannelId>>,
     ) -> Result<Option<ChannelSeq>> {
@@ -384,7 +359,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                 .map_err(SendErrorExt::flatten)?;
             for transaction in &block.body.transactions {
                 if let LeeTransaction::PrivacyPreserving(tx) = transaction {
-                    proofs.insert(tx.witness_set().proof());
+                    chain.proofs().insert(tx.witness_set().proof());
                 }
             }
             published.push(published_entry(&outcome, block, own_sequencer_key));

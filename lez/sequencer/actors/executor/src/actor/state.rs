@@ -62,7 +62,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
             check_startup_channel_params(&genesis.channel_params, &config)?;
         }
 
-        let chain = Self::restore_chain_state(&config, &storage_ref, proofs.clone()).await?;
+        let chain = Self::restore_chain_state(&config, &storage_ref, proofs).await?;
         let get_channel_tip_slot = || async {
             bedrock_pool_ref
                 .ask(sequencer_bedrock_actor::protocol::GetChannelTipSlot { channel_id })
@@ -122,7 +122,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
                 config,
                 chain,
                 channel_signing_key,
-                proofs,
                 consistency_check,
                 actors,
             )))
@@ -134,14 +133,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
             info!("Channel holds nothing to bootstrap from; resuming on the stored chain");
 
             Ok(Self::Online(
-                online::OnlineState::from_stored_chain(
-                    config,
-                    chain,
-                    channel_signing_key,
-                    proofs,
-                    actors,
-                )
-                .await?,
+                online::OnlineState::from_stored_chain(config, chain, channel_signing_key, actors)
+                    .await?,
             ))
         } else {
             if config.genesis.is_none() {
@@ -150,14 +143,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
             info!("Channel does not exist yet; starting it as channel creator");
 
             Ok(Self::Online(
-                online::OnlineState::creating_channel(
-                    config,
-                    chain,
-                    channel_signing_key,
-                    proofs,
-                    actors,
-                )
-                .await?,
+                online::OnlineState::creating_channel(config, chain, channel_signing_key, actors)
+                    .await?,
             ))
         }
     }

@@ -578,6 +578,11 @@ impl ChainState {
         self.final_tip.clone()
     }
 
+    #[must_use]
+    pub const fn proofs(&self) -> &ProofStore {
+        &self.proofs
+    }
+
     /// The view, `final_msg` and what placement reads at the final tier, in
     /// their persisted form. An entry keeps its full block once hydrated, its
     /// digest form otherwise.

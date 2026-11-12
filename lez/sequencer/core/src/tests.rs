@@ -218,7 +218,7 @@ async fn start_sequencer_bare_on(
             |(state, meta)| (state, Some(chain_state::Tip::from(meta))),
         );
     let proofs = ProofStore::new(config::PROOF_STORE_CAPACITY);
-    let mut chain = ChainState::from_final(final_state, final_tip, proofs.clone());
+    let mut chain = ChainState::from_final(final_state, final_tip, proofs);
     // An undecodable view leaves the chain on the final tier, as it does the executor's.
     let _restored = storage_ref
         .ask(GetChannelViewBytes)
@@ -257,7 +257,6 @@ async fn start_sequencer_bare_on(
         config,
         mempool,
         chain,
-        proofs,
         None,
         channel_signing_key,
         storage_ref,

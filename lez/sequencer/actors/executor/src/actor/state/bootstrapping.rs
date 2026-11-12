@@ -1,8 +1,6 @@
 use std::collections::HashSet;
 
-use chain_state::{
-    AnchorConsistencyCheck, ChainConsistency, ChainState, ChannelEntry, ProofStore, Verdict,
-};
+use chain_state::{AnchorConsistencyCheck, ChainConsistency, ChainState, ChannelEntry, Verdict};
 use common::{HashType, block::Block};
 use kameo::actor::ActorRef;
 use log::warn;
@@ -33,7 +31,6 @@ pub struct BootstrappingState<S: StorageActorTrait, B: BedrockActorTrait> {
     pub(super) config: SequencerConfig,
     pub(super) chain: ChainState,
     pub(super) channel_signing_key: Ed25519Key,
-    pub(super) proofs: ProofStore,
     pub(super) consistency_check: Option<AnchorConsistencyCheck>,
     /// The final entry the store held at startup. Finalized history is read in lineage order,
     /// but a warm start re-reads what the final tier holds, so the lineage resumes past it.
@@ -52,7 +49,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
         config: SequencerConfig,
         chain: ChainState,
         channel_signing_key: Ed25519Key,
-        proofs: ProofStore,
         consistency_check: Option<AnchorConsistencyCheck>,
         actors: ActorsBundle<S, B>,
     ) -> Self {
@@ -61,7 +57,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             config,
             chain,
             channel_signing_key,
-            proofs,
             consistency_check,
             stored_final,
             on_lineage: stored_final == MsgId::root(),

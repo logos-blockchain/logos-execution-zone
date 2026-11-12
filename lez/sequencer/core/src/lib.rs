@@ -244,7 +244,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         config: SequencerConfig,
         mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
         chain: ChainState,
-        proofs: ProofStore,
         applied_seq: Option<sequencer_bedrock_actor::protocol::ChannelSeq>,
         channel_signing_key: Ed25519Key,
         storage_ref: ActorRef<S>,
@@ -289,8 +288,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
         let mut sequencer = Self {
             channel_id,
+            proofs: chain.proofs().clone(),
             chain: Arc::new(Mutex::new(chain)),
-            proofs,
             mempool,
             stake_config: StakeConfigUpdate::default(),
             storage_ref,
