@@ -163,7 +163,7 @@ pub async fn send(
     from: CliAccountMention,
     to: CliAccountMention,
     amount: u128,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<HashType> {
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
         from,
         to: Some(to),
@@ -173,8 +173,12 @@ pub async fn send(
         to_pk: None,
         amount,
     });
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-    Ok(())
+    let SubcommandReturnValue::TransactionExecuted { tx_hash } =
+        wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?
+    else {
+        anyhow::bail!("a send returns its transaction hash");
+    };
+    Ok(tx_hash)
 }
 
 /// A fresh private account holding `amount`, funded from the context's first public account and
@@ -277,6 +281,15 @@ pub async fn receive_pending(ctx: &mut TestContext) -> anyhow::Result<()> {
         .await?;
     }
     Ok(())
+}
+
+/// The bytes the included privacy-preserving transaction `tx_hash` is charged storage for.
+pub async fn charged_bytes(ctx: &TestContext, tx_hash: HashType) -> u64 {
+    common::transaction::LeeTransaction::PrivacyPreserving(
+        test_fixtures::fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await,
+    )
+    .charged_bytes()
+    .expect("a transaction serializes")
 }
 
 /// Look up a restored private account for `account_id`, panicking with `label` if absent.

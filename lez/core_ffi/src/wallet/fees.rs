@@ -134,7 +134,7 @@ pub struct FfiDryRunReport {
     /// Public: what admission holds from the payer, priced at the gas limit: the least
     /// `max_fee` the sequencer accepts.
     pub reserve_at_head: FfiU128,
-    /// Public: the transaction's wire size, priced at the storage base fee.
+    /// The transaction's wire size, priced at the storage base fee.
     pub wire_bytes: u64,
     /// Public: why the action reverts, or null when it applies. A reverted action still pays its
     /// fee.
@@ -194,6 +194,7 @@ impl From<DryRunReport> for FfiDryRunReport {
             DryRunReport::Private {
                 quote,
                 cycles,
+                wire_bytes,
                 fee_at_head,
                 headroom_blocks,
                 exec_ceiling,
@@ -205,6 +206,7 @@ impl From<DryRunReport> for FfiDryRunReport {
             } => Self {
                 fee_state: (&quote).into(),
                 cycles,
+                wire_bytes,
                 fee_at_head: fee_at_head.into(),
                 headroom_blocks,
                 exec_ceiling,
