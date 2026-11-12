@@ -2,11 +2,12 @@
 
 use common::block::DigestedBlock;
 use logos_blockchain_core::mantle::ops::channel::MsgId;
-use logos_blockchain_zone_sdk::Slot;
+use logos_blockchain_zone_sdk::{Slot, ZoneMessage};
 
 use crate::{
     ChannelEntry, Tip,
     chain::{BlockRecord, Placed, Placement, Record, Status, cut, placement, window_passed},
+    zone_indexer::Batch,
 };
 
 /// A channel's L1-final entries folded by the skip rule, every placed block taken as valid.
@@ -17,6 +18,18 @@ pub struct StructuralChain {
     pin: MsgId,
     record: Record,
     blocks: Vec<(DigestedBlock, Slot)>,
+}
+
+/// What folding one [`Batch`] did.
+pub struct BatchFold {
+    /// The blocks it settled, in order.
+    pub settled: Vec<(DigestedBlock, Slot)>,
+    /// The last slot read whole: the batch's watermark, or the one before an undecodable block.
+    pub read: Option<Slot>,
+    /// The first block that did not decode, which ends the fold, at its slot.
+    pub undecodable: Option<(Slot, std::io::Error)>,
+    /// The blocks folded.
+    pub blocks: usize,
 }
 
 impl StructuralChain {
@@ -44,6 +57,41 @@ impl StructuralChain {
             self.fold(entry);
         }
         self.settle()
+    }
+
+    /// Folds `batch`'s blocks up to the first that does not decode, the slots before it read whole.
+    pub fn apply_batch(&mut self, batch: Batch) -> BatchFold {
+        let mut entries: Vec<ChannelEntry> = Vec::new();
+        let mut undecodable = None;
+        for (msg, slot) in batch.messages {
+            let ZoneMessage::Block(zone_block) = msg else {
+                continue;
+            };
+            match DigestedBlock::from_inscription(&zone_block.data) {
+                Ok(block) => entries.push(ChannelEntry {
+                    msg: zone_block.id,
+                    parent: entries.last().map_or(self.pin, |prev| prev.msg),
+                    signer: Some(zone_block.signer.to_bytes()),
+                    slot: Some(slot),
+                    block: Some(block),
+                }),
+                Err(err) => {
+                    undecodable = Some((slot, err));
+                    break;
+                }
+            }
+        }
+        let read = undecodable
+            .as_ref()
+            .map_or(Some(batch.watermark), |(slot, _)| {
+                slot.checked_sub(Slot::from(1))
+            });
+        BatchFold {
+            settled: self.apply_finalized(&entries, read.unwrap_or_else(Slot::genesis)),
+            read,
+            undecodable,
+            blocks: entries.len(),
+        }
     }
 
     #[must_use]
