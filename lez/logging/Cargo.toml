@@ -1,0 +1,18 @@
+[package]
+name = "logging"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["json"] }
+json-subscriber.workspace = true
+serde_json.workspace = true
+
+[features]
+# Puts the trace and span ids on JSON lines, for a binary exporting traces.
+otel = ["json-subscriber/tracing-opentelemetry-0-33"]

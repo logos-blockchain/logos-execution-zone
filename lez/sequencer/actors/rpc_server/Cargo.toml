@@ -19,7 +19,7 @@ sequencer_gossip_actor.workspace = true
 
 kameo.workspace = true
 tokio.workspace = true
-log.workspace = true
+tracing.workspace = true
 thiserror.workspace = true
 jsonrpsee.workspace = true
 borsh.workspace = true

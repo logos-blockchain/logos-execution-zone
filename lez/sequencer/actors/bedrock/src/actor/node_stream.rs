@@ -8,7 +8,6 @@ use common::block::Block;
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 use kameo::actor::ActorRef;
 use kameo_actors::broker::Broker;
-use log::warn;
 use logos_blockchain_common_http_client::ProcessedBlockEvent;
 use logos_blockchain_core::mantle::ops::channel::withdraw::ChannelWithdrawOp;
 use logos_blockchain_zone_sdk::{
@@ -17,6 +16,7 @@ use logos_blockchain_zone_sdk::{
 };
 use sequencer_actors_common::SendErrorExt as _;
 use sequencer_storage_actor::protocol::ZoneAnchorRecord;
+use tracing::warn;
 
 use crate::{
     Result,
@@ -43,6 +43,17 @@ pub enum StreamItem {
     Message(ZoneMessage, Slot),
     /// Every finalized message up to a slot has been read.
     ReadUpTo(FinalizedUpTo),
+}
+
+impl StreamItem {
+    /// The name of the span the item is handled in, which roots the trace of
+    /// what it sets off.
+    pub const fn span_name(&self) -> &'static str {
+        match self {
+            Self::Message(..) => "bedrock.channel_message",
+            Self::ReadUpTo(_) => "bedrock.channel_read_up_to",
+        }
+    }
 }
 
 /// Follows the channel's finalized history from the stored anchor on, publishing it to the
@@ -261,8 +272,12 @@ impl Backoff {
             ));
         }
         warn!(
-            "{what} failed ({}/{NODE_REQUEST_ATTEMPTS}), retrying in {:?}: {err:#}",
-            self.failures, self.delay
+            request = what,
+            attempt = self.failures,
+            max_attempts = NODE_REQUEST_ATTEMPTS,
+            delay = ?self.delay,
+            error = format_args!("{err:#}"),
+            "Node request failed, retrying"
         );
         tokio::time::sleep(self.delay).await;
         self.delay = self.delay.saturating_mul(2).min(MAX_RETRY_DELAY);

@@ -411,7 +411,7 @@ enum OperationStatus stop_indexer(struct IndexerServiceFFI *indexer);
  * - `level` is a null-terminated string (`off`/`error`/`warn`/`info`/`debug`/ `trace`,
  *   case-insensitive); null or unparseable falls back to `info`.
  *
- * Only the `indexer_ffi` and `indexer_core` targets are enabled!
+ * `RUST_LOG`, when set, overrides `level` (e.g. `info,indexer_core=debug`).
  *
  * # Safety
  * - `level` must be a valid null-terminated C string, or null.

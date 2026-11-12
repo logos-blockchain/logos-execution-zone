@@ -14,7 +14,6 @@ use kameo::{
     message::{Context, Message},
 };
 use kameo_actors::broker::Broker;
-use log::warn;
 use logos_blockchain_common_http_client::BasicAuthCredentials;
 use logos_blockchain_core::mantle::NoteId;
 use logos_blockchain_zone_sdk::{
@@ -24,6 +23,7 @@ use logos_blockchain_zone_sdk::{
 };
 use sequencer_storage_actor::{StorageActorTrait, protocol::GetZoneCheckpoint};
 use tokio::select;
+use tracing::{Instrument as _, info_span, warn};
 
 #[cfg(feature = "test-utils")]
 use crate::protocol::PublishRawInscription;
@@ -151,10 +151,13 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
         loop {
             select! {
                 Some(Some(item)) = OptionFuture::from(self.node_stream.as_mut().map(node_stream::NodeStream::next_item)) => {
-                    self.node_stream.as_mut().expect("Channel is followed").on_item(item?).await?;
+                    let item = item?;
+                    let span = info_span!("bedrock_event", otel.name = item.span_name());
+                    self.node_stream.as_mut().expect("Channel is followed").on_item(item).instrument(span).await?;
                 }
                 Some(event) = OptionFuture::from(self.publisher.as_mut().map(publisher::Publisher::next_event)) => {
-                    self.publisher().expect("Publisher is initialized").on_event(event).await?;
+                    let span = info_span!("bedrock_event", otel.name = publisher::span_name(&event));
+                    self.publisher().expect("Publisher is initialized").on_event(event).instrument(span).await?;
                 }
                 signal = mailbox_rx.recv() => {
                     return Ok(signal)
@@ -584,7 +587,7 @@ impl TryFrom<&logos_blockchain_zone_sdk::node_types::ChannelState> for LiveChann
 fn block_from_inscription(inscription: &InscriptionInfo) -> Option<Block> {
     borsh::from_slice::<Block>(&inscription.payload)
         .inspect_err(|err| {
-            warn!("Failed to deserialize block from inscription: {err:?}");
+            warn!(error = ?err, "Failed to deserialize block from inscription");
         })
         .ok()
 }

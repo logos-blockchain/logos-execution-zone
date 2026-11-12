@@ -6,7 +6,6 @@ use kameo::{
     message::{Context, Message},
     reply::{DelegatedReply, ReplySender},
 };
-use log::{debug, warn};
 use logos_blockchain_core::{
     mantle::{
         NoteId,
@@ -24,6 +23,7 @@ use logos_blockchain_key_management_system_service::keys::{
     Ed25519Key, Ed25519PublicKey, Ed25519Signature,
 };
 use tokio::sync::mpsc;
+use tracing::{debug, warn};
 
 use crate::{
     error::Error,
@@ -140,7 +140,7 @@ impl ChannelSigningActor {
             return false;
         };
         if let Err(err) = submitter.tell(SubmitConfig(submission)).try_send() {
-            debug!("Dropped a signed channel config: {err}");
+            debug!(error = %err, "Dropped a signed channel config");
             return false;
         }
 

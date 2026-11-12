@@ -31,13 +31,13 @@ fee_core.workspace = true
 
 anyhow.workspace = true
 bip39.workspace = true
-env_logger.workspace = true
+logging.workspace = true
 futures.workspace = true
 hex.workspace = true
 jsonrpsee = { workspace = true, features = ["ws-client"] }
 kameo.workspace = true
 kameo_actors.workspace = true
-log.workspace = true
+tracing.workspace = true
 num-bigint.workspace = true
 serde.workspace = true
 serde_json.workspace = true

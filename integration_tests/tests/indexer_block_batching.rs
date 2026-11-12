@@ -11,10 +11,10 @@ use integration_tests::{TestContext, wait_for_indexer_to_catch_up};
 async fn indexer_block_batching() -> Result<()> {
     let ctx = TestContext::new().await?;
 
-    log::info!("Waiting for indexer to parse blocks");
+    tracing::info!("Waiting for indexer to parse blocks");
     let last_block_indexer = wait_for_indexer_to_catch_up(&ctx).await?;
 
-    log::info!("Last block on ind now is {last_block_indexer}");
+    tracing::info!(last_block_indexer, "Indexer last block");
 
     assert!(last_block_indexer > 0);
 
@@ -30,7 +30,7 @@ async fn indexer_block_batching() -> Result<()> {
     for block in &block_batch[1..] {
         assert_eq!(block.header.prev_block_hash, prev_block_hash);
 
-        log::info!("Block {} chain-consistent", block.header.block_id);
+        tracing::info!(block_id = block.header.block_id, "Block chain-consistent");
 
         prev_block_hash = block.header.hash;
     }

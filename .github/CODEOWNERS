@@ -53,8 +53,9 @@
 /tools/channel_health.py                      @schouhy
 /tools/committee_watch.py                     @schouhy @agureev
 
-## Monitoring and dashboards
+## Monitoring, logging and dashboards
 /monitoring/                                  @arjentix
+/lez/logging/                                 @arjentix
 /tools/dashboard_gen/                         @arjentix
 /docs/metrics/                                @arjentix
 

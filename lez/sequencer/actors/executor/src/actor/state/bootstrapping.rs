@@ -6,7 +6,6 @@ use common::{
     block::{Block, BlockMeta},
 };
 use kameo::actor::ActorRef;
-use log::warn;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
     protocol::{
@@ -20,6 +19,7 @@ use sequencer_storage_actor::{
     StorageActorTrait,
     protocol::{AtomicUpdate, ZoneAnchorRecord},
 };
+use tracing::warn;
 
 use crate::{
     Result,
@@ -89,9 +89,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
                 // An offence the channel already carries, so replaying it must not
                 // be fatal: the entry carries no block, and the lineage moves past it.
                 warn!(
-                    "Skipping an undecodable inscription {:?} at slot {}",
-                    finalized.msg_id,
-                    finalized.slot.into_inner(),
+                    msg_id = ?finalized.msg_id,
+                    slot = finalized.slot.into_inner(),
+                    "Skipping an undecodable inscription"
                 );
                 None
             }
@@ -120,9 +120,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
 
         if !self.on_lineage {
             warn!(
-                "Bootstrapping never re-read the stored final entry {}, so it left the lineage \
-                 untouched; the Bedrock node's finality may lag behind it",
-                self.stored_final
+                stored_final = %self.stored_final,
+                "Bootstrapping never re-read the stored final entry, so it left the lineage \
+                 untouched; the Bedrock node's finality may lag behind it"
             );
         }
         Ok(State::Online(
@@ -294,9 +294,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
                 }
                 Some(AcceptOutcome::AlreadyApplied) | None => {}
                 Some(AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err)) => {
+                    let err = anyhow::anyhow!(err);
                     warn!(
-                        "Finalized channel block {block_id} does not apply, skipping it: {:#}",
-                        anyhow::anyhow!(err)
+                        block_id,
+                        error = format_args!("{err:#}"),
+                        "Finalized channel block does not apply, skipping it"
                     );
                 }
             }

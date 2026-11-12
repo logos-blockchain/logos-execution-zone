@@ -14,7 +14,6 @@ use anyhow::{Context as _, Result, ensure};
 use common::{block::Block, transaction::LeeTransaction};
 use integration_tests::{committee, get_account, init_logger, wait_for_same_chain, wait_until};
 use lee::AccountId;
-use log::info;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use sequencer_bedrock_actor::protocol::{
     CheckIsOurTurn, InitializeChannelPublisher, PublishRawInscription,
@@ -26,6 +25,7 @@ use test_fixtures::{
     spawn_channel_observer, spawn_standalone_bedrock_actor,
 };
 use tokio::test;
+use tracing::info;
 
 /// What genesis stakes each founding sequencer.
 const STAKE: u128 = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
@@ -253,7 +253,7 @@ async fn assert_offender_is_slashed(payload: impl Fn(&Block) -> Vec<u8>) -> Resu
                 })
                 .await
                 .context("Failed to inscribe the offending payload")?;
-            info!("Offered an offending payload as {}", outcome.this_msg);
+            info!(msg_id = %outcome.this_msg, "Offered an offending payload");
         }
         Ok(false)
     })

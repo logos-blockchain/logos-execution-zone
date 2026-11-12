@@ -51,6 +51,8 @@ COPY --from=builder /explorer_service/Cargo.toml /explorer_service/
 
 # Set any required env variables
 ENV RUST_LOG="info"
+# One JSON object per log line, for log collectors. `LOG_FORMAT=text` for plain lines.
+ENV LOG_FORMAT=json
 ENV LEPTOS_SITE_ADDR="0.0.0.0:8080"
 ENV LEPTOS_SITE_ROOT="site"
 ENV INDEXER_RPC_URL="http://localhost:8779"

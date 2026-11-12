@@ -9,7 +9,6 @@ use kameo::{
     actor::{ActorRef, Recipient},
     error::{Infallible, SendError},
 };
-use log::debug;
 use sequencer_executor_actor::ExecutorActorTrait;
 use sequencer_gossip_actor::protocol::Publish;
 use sequencer_service_protocol::{
@@ -19,6 +18,7 @@ use sequencer_service_protocol::{
     Nonce, PageLimit, ProgramId, Publication, SequencerPublicKey, SequencerStatus, SystemProposal,
     SystemProposalApproval, SystemProposalReport,
 };
+use tracing::debug;
 
 pub struct Service<E: ExecutorActorTrait> {
     executor_ref: ActorRef<E>,
@@ -73,7 +73,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         let authenticated_tx = res.await.inspect_err(|err| {
             sequencer_rpc_server_actor_metrics::increment_before_mempool_failed_transactions_total(
             );
-            debug!("Transaction failed before reaching mempool: {err:#?}");
+            debug!(error = ?err, "Transaction failed before reaching mempool");
         })?;
 
         self
@@ -98,7 +98,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
                 .tell(Publish::Transaction(Box::new(authenticated_tx)))
                 .try_send()
         {
-            log::warn!("Dropping local tx publish: gossip mailbox full or closed: {err}");
+            tracing::warn!(error = %err, "Dropping local tx publish: gossip mailbox full or closed");
         }
 
         Ok(tx_hash)
@@ -410,7 +410,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         if let Some(gossip) = &self.gossip
             && let Err(err) = gossip.tell(Publish::SystemApproval(signed)).try_send()
         {
-            log::warn!("Dropping local approval publish: gossip mailbox full or closed: {err}");
+            tracing::warn!(error = %err, "Dropping local approval publish: gossip mailbox full or closed");
         }
         Ok(())
     }
