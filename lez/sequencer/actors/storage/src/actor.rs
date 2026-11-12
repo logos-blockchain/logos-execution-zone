@@ -33,14 +33,15 @@ use crate::{
         DropSettledCrossZoneDispatches, DumpDb, EventFilter, GetAccountTransactions, GetAllBlocks,
         GetBlock, GetBlockByHash, GetBlockEvents, GetChannelViewBytes, GetCrossZonePeerFloorBytes,
         GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatchRetainedCount,
-        GetDeadLetterDispatches, GetEventFilter, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
-        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatchCount,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,
-        GetTransactionByHash, GetTxHashToBlockIdMapItem, GetZoneAnchor, GetZoneCheckpoint,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutSlashRecordBytes,
-        RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
-        SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
-        WithdrawalReconciliationKey, ZoneAnchorRecord, ZoneCheckpointRecord,
+        GetDeadLetterDispatches, GetEventFilter, GetFinalConfigsBytes, GetFinalSnapshot,
+        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
+        GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        GetSlashRecordBytes, GetTransactionByHash, GetTxHashToBlockIdMapItem, GetZoneAnchor,
+        GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+        PutFinalConfigsBytes, PutSlashRecordBytes, RecordDispatchFailure,
+        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
+        StoreUpdateOutcome, UpdateZoneCheckpoint, WithdrawalReconciliationKey, ZoneAnchorRecord,
+        ZoneCheckpointRecord,
     },
 };
 
@@ -891,6 +892,35 @@ impl Message<PutSlashRecordBytes> for StorageActor {
     ) -> Self::Reply {
         self.db()
             .put(&encoding::SingletonKey, &entities::SlashRecord { bytes })
+            .map_err(Into::into)
+    }
+}
+
+impl Message<GetFinalConfigsBytes> for StorageActor {
+    type Reply = Result<Option<Vec<u8>>>;
+
+    async fn handle(
+        &mut self,
+        GetFinalConfigsBytes: GetFinalConfigsBytes,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self
+            .db()
+            .get::<entities::FinalConfigs>(&encoding::SingletonKey)?
+            .map(|record| record.bytes))
+    }
+}
+
+impl Message<PutFinalConfigsBytes> for StorageActor {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        PutFinalConfigsBytes { bytes }: PutFinalConfigsBytes,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.db()
+            .put(&encoding::SingletonKey, &entities::FinalConfigs { bytes })
             .map_err(Into::into)
     }
 }

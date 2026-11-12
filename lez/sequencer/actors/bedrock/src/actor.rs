@@ -25,7 +25,10 @@ use logos_blockchain_zone_sdk::{
     adapter::{Node as _, NodeHttpClient},
     sequencer::{InscriptionInfo, PendingTx},
 };
-use sequencer_storage_actor::{StorageActorTrait, protocol::GetZoneCheckpoint};
+use sequencer_storage_actor::{
+    StorageActorTrait,
+    protocol::{GetFinalConfigsBytes, GetZoneCheckpoint, PutFinalConfigsBytes},
+};
 use tokio::select;
 use tracing::{Instrument as _, info_span, warn};
 
@@ -120,6 +123,16 @@ impl<S: StorageActorTrait> BedrockActor<S> {
             .as_mut()
             .ok_or(Error::ChannelPublisherIsNotInitialized)
     }
+
+    /// Stores the config index when its bytes are due.
+    async fn store_config_index(&mut self) {
+        let Some(bytes) = self.config_index.bytes_to_store() else {
+            return;
+        };
+        if let Err(err) = self.storage_ref.ask(PutFinalConfigsBytes { bytes }).await {
+            warn!("Failed to store the channel's final configs: {err}");
+        }
+    }
 }
 
 impl<S: StorageActorTrait> BedrockActorTrait for BedrockActor<S> {}
@@ -148,8 +161,16 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
         let config_index = match storage_ref.ask(GetZoneCheckpoint).await? {
             None => ConfigIndex::starting_at(0),
             Some(stored) => {
-                let checkpoint = SequencerCheckpoint::from_bytes(&stored.bytes)?;
-                ConfigIndex::starting_at(checkpoint.lib_slot.into_inner().saturating_add(1))
+                let restored = storage_ref
+                    .ask(GetFinalConfigsBytes)
+                    .await?
+                    .and_then(|bytes| ConfigIndex::from_bytes(&bytes));
+                if let Some(index) = restored {
+                    index
+                } else {
+                    let checkpoint = SequencerCheckpoint::from_bytes(&stored.bytes)?;
+                    ConfigIndex::starting_at(checkpoint.lib_slot.into_inner().saturating_add(1))
+                }
             }
         };
 
@@ -190,6 +211,7 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
                         .on_event(event, &mut self.config_index)
                         .instrument(span)
                         .await?;
+                    self.store_config_index().await;
                 }
                 signal = mailbox_rx.recv() => {
                     return Ok(signal)
@@ -246,6 +268,20 @@ impl<S: StorageActorTrait> Message<InitializeChannelPublisher> for BedrockActor<
         }
 
         let initial_checkpoint = self.storage_ref.ask(GetZoneCheckpoint).await?;
+        // zone-sdk's events start after the checkpoint's LIB, so the index is read up to it.
+        if let Some(stored) = &initial_checkpoint {
+            let lib_slot = SequencerCheckpoint::from_bytes(&stored.bytes)?
+                .lib_slot
+                .into_inner();
+            let mut reader = NodeReader {
+                node: &self.node,
+                block_summary_cache: &mut self.block_summary_cache,
+                channel_id,
+            };
+            self.config_index
+                .cover_through(&mut reader, lib_slot)
+                .await?;
+        }
 
         let (publisher, start_seq) = publisher::Publisher::new(
             publisher::PublisherConfig {
@@ -265,6 +301,7 @@ impl<S: StorageActorTrait> Message<InitializeChannelPublisher> for BedrockActor<
         )
         .await?;
         self.publisher = Some(publisher);
+        self.store_config_index().await;
         Ok(Some(start_seq))
     }
 }
@@ -545,7 +582,8 @@ impl<S: StorageActorTrait> Message<FilterFinallyAbsent> for BedrockActor<S> {
             finality::filter_finally_absent(&mut reader, &mut self.config_index, at, &keys, depth);
         let verdict = tokio::time::timeout(FILTER_FINALLY_ABSENT_BUDGET, walk)
             .await
-            .map_err(|_elapsed| Error::VerdictTimedOut)?;
+            .unwrap_or(Err(Error::VerdictTimedOut));
+        self.store_config_index().await;
         if verdict.is_ok() && self.block_summary_cache.len() >= NodeReader::CACHE_CAPACITY {
             self.block_summary_cache.clear();
         }

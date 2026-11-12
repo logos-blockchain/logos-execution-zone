@@ -553,6 +553,27 @@ mod tests {
     }
 
     #[test]
+    fn a_restored_index_reads_only_the_slots_after_it() {
+        let mut chain = Chain::new(400).config_at(1, &[key(2)]);
+        let bytes = reported_through(&chain, 500).bytes_to_store().unwrap();
+        // The checkpoint was final through slot 600.
+        let mut index = ConfigIndex::from_bytes(&bytes).unwrap();
+        futures::executor::block_on(index.cover_through(&mut chain, 600)).unwrap();
+        assert_eq!(chain.reads, 1, "slots 501 to 600 should be read");
+
+        chain.reads = 0;
+        let keys = [key(1)];
+        assert_eq!(
+            judge(&mut chain, &mut index, at_height(300), &keys).unwrap(),
+            keys.into()
+        );
+        assert_eq!(
+            chain.reads, 4,
+            "the anchor and three parents should be read"
+        );
+    }
+
+    #[test]
     fn nothing_is_read_for_no_keys() {
         let mut chain = Chain::new(10);
         assert!(verdict(&mut chain, at_height(8), &[]).is_empty());
