@@ -1,8 +1,7 @@
 use std::collections::HashSet;
 
 use chain_state::{AnchorConsistencyCheck, ChainConsistency, ChainState, ChannelEntry, Verdict};
-use common::{HashType, block::Block};
-use kameo::actor::ActorRef;
+use common::HashType;
 use log::warn;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
@@ -272,7 +271,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
                 // deposits and deliveries are settled and their records are
                 // owed nothing.
                 Some(stored) => {
-                    Self::settle_reconstructed_deliveries(storage_ref, &stored).await?;
+                    update
+                        .finalized_dispatch_records
+                        .extend(sequencer_core::settled_dispatch_keys(storage_ref, &stored).await);
                     update.finalized_deposit_records.extend(
                         stored
                             .body
@@ -296,26 +297,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
         }
 
         storage_ref.ask(update).await?;
-        Ok(())
-    }
-
-    /// Drops the records of deliveries carried by a reconstructed block.
-    async fn settle_reconstructed_deliveries(
-        storage_ref: &ActorRef<S>,
-        block: &Block,
-    ) -> Result<()> {
-        let keys = sequencer_core::settled_dispatch_keys(storage_ref, block).await;
-        if keys.is_empty() {
-            return Ok(());
-        }
-        storage_ref
-            .ask(
-                sequencer_storage_actor::protocol::DropSettledCrossZoneDispatches {
-                    message_keys: keys,
-                },
-            )
-            .await?;
-
         Ok(())
     }
 }
