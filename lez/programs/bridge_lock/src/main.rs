@@ -36,8 +36,6 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
                 "locked amount must equal the wrapped mint amount"
             );
 
-            // The target zone is not checkable here, so a lock aimed at a zone that will not
-            // route it still burns.
             let target_account_id = emission.target_account_id;
             let expected_accounts = vec![
                 Actor::new(
@@ -77,6 +75,7 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
                     &Message::CheckRoute {
                         outbox_account_id: outbox.program_account_id,
                         target_account_id,
+                        target_zone: emission.target_zone,
                     },
                 )
                 .send(custody_transfer(
@@ -96,18 +95,20 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
                     },
                 )
         }
-        // Nothing releases an escrow, so an emission steered off the pinned route burns the
-        // holder's balance with no compensating mint anywhere. This is all that stands between.
+        // Nothing releases an escrow and the wrapped token has no burn, so a lock off the pinned
+        // route (another outbox, another mint target, or a zone nothing carries it to) debits the
+        // holder for ever with no compensating mint anywhere.
         Message::CheckRoute {
             outbox_account_id,
             target_account_id,
+            target_zone,
         } => {
             assert!(
                 input.from_own_program(),
                 "the route is only checked for a lock of bridge_lock's own"
             );
-            let (outbox, target) = read_config(&input.pre_state)
-                .expect("config account holds an outbox and a mint target");
+            let (outbox, target, lock_target_zones) = read_config(&input.pre_state)
+                .expect("config account holds an outbox, a mint target and the zones it locks to");
             assert_eq!(
                 outbox, outbox_account_id,
                 "bridge_lock only emits through the outbox it is pinned to"
@@ -116,6 +117,10 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
                 target, target_account_id,
                 "bridge_lock only mints through the wrapped token it is pinned to"
             );
+            assert!(
+                lock_target_zones.contains(&target_zone),
+                "bridge_lock only locks to a zone it is pinned to"
+            );
             Response::keep_state()
         }
         // A written actor state must already pin exactly these programs rather than being refused,
@@ -123,6 +128,7 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
         Message::InitConfig {
             outbox_account_id,
             target_account_id,
+            lock_target_zones,
         } => {
             assert_top_level(input);
             assert_eq!(
@@ -132,7 +138,7 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
             );
             Response::set_state(write_once(
                 &input.pre_state,
-                config_bytes(outbox_account_id, target_account_id).to_vec(),
+                config_bytes(outbox_account_id, target_account_id, &lock_target_zones),
             ))
         }
     }
@@ -169,7 +175,7 @@ mod tests {
     const AMOUNT: u128 = 1_000;
 
     fn config() -> Vec<u8> {
-        config_bytes(OUTBOX_ID, WRAPPED_ID).to_vec()
+        config_bytes(OUTBOX_ID, WRAPPED_ID, &[ZONE])
     }
 
     fn config_actor() -> Actor {
@@ -246,6 +252,7 @@ mod tests {
     fn check_route(
         outbox_account_id: AccountId,
         target_account_id: AccountId,
+        target_zone: [u8; 32],
         pre: Vec<u8>,
     ) -> Transition {
         run(
@@ -256,6 +263,7 @@ mod tests {
             Message::CheckRoute {
                 outbox_account_id,
                 target_account_id,
+                target_zone,
             },
         )
     }
@@ -269,6 +277,7 @@ mod tests {
             Message::InitConfig {
                 outbox_account_id: OUTBOX_ID,
                 target_account_id,
+                lock_target_zones: vec![ZONE],
             },
         )
     }
@@ -291,6 +300,7 @@ mod tests {
                         &Message::CheckRoute {
                             outbox_account_id: OUTBOX_ID,
                             target_account_id: WRAPPED_ID,
+                            target_zone: ZONE,
                         },
                     ),
                     custody_transfer(
@@ -329,7 +339,7 @@ mod tests {
     #[test]
     fn the_route_genesis_pinned_is_accepted() {
         assert_eq!(
-            check_route(OUTBOX_ID, WRAPPED_ID, config())
+            check_route(OUTBOX_ID, WRAPPED_ID, ZONE, config())
                 .response
                 .post_state,
             None
@@ -341,19 +351,47 @@ mod tests {
     fn an_outbox_the_config_does_not_pin_is_refused() {
         // The emission is what compensates the escrow debit. Steered to a program of the
         // caller's choosing, the balance is gone and nothing mints on the destination.
-        let _transition = check_route(AccountId::new([0xAA; 32]), WRAPPED_ID, config());
+        let _transition = check_route(AccountId::new([0xAA; 32]), WRAPPED_ID, ZONE, config());
     }
 
     #[test]
     #[should_panic(expected = "bridge_lock only mints through the wrapped token it is pinned to")]
     fn a_mint_target_the_config_does_not_pin_is_refused() {
-        let _transition = check_route(OUTBOX_ID, AccountId::new([0xBB; 32]), config());
+        let _transition = check_route(OUTBOX_ID, AccountId::new([0xBB; 32]), ZONE, config());
     }
 
     #[test]
-    #[should_panic(expected = "config account holds an outbox and a mint target")]
+    #[should_panic(expected = "bridge_lock only locks to a zone it is pinned to")]
+    fn a_lock_to_a_zone_the_config_does_not_pin_is_refused() {
+        let _transition = check_route(OUTBOX_ID, WRAPPED_ID, [0xCC; 32], config());
+    }
+
+    #[test]
+    fn a_lock_to_any_pinned_zone_is_accepted() {
+        let two_zones = config_bytes(OUTBOX_ID, WRAPPED_ID, &[[0xCC; 32], ZONE]);
+        assert_eq!(
+            check_route(OUTBOX_ID, WRAPPED_ID, ZONE, two_zones)
+                .response
+                .post_state,
+            None
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "bridge_lock only locks to a zone it is pinned to")]
+    fn a_config_pinning_no_zone_locks_nowhere() {
+        let _transition = check_route(
+            OUTBOX_ID,
+            WRAPPED_ID,
+            ZONE,
+            config_bytes(OUTBOX_ID, WRAPPED_ID, &[]),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "config account holds an outbox, a mint target and the zones")]
     fn an_unwritten_config_authorizes_no_route() {
-        let _transition = check_route(OUTBOX_ID, WRAPPED_ID, Vec::new());
+        let _transition = check_route(OUTBOX_ID, WRAPPED_ID, ZONE, Vec::new());
     }
 
     #[test]
@@ -367,6 +405,7 @@ mod tests {
             Message::CheckRoute {
                 outbox_account_id: OUTBOX_ID,
                 target_account_id: WRAPPED_ID,
+                target_zone: ZONE,
             },
         );
     }

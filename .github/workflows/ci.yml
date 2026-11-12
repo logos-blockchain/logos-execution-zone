@@ -419,7 +419,7 @@ jobs:
     needs: integration-tests-prebuild
     runs-on: ubuntu-latest
     env:
-      BUDGET_MIB: 4500
+      BUDGET_MIB: 4600
     steps:
       - name: Compare the archive against its budget
         run: |

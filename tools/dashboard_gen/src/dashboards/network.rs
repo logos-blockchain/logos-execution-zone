@@ -80,9 +80,9 @@ fn per_sequencer(panel: Panel) -> Panel {
 }
 
 pub fn dashboard() -> Dashboard {
-    Dashboard::new("Sequencer network", "sequencer-network")
+    Dashboard::new("Network", "sequencer-network")
         .tag(super::TAG)
-        .link_tagged("Sequencer dashboards", super::TAG)
+        .link_tagged("Dashboards", super::TAG)
         .variable(percentile_variable(PERCENTILES, DEFAULT_PERCENTILE))
         .row(
             5,

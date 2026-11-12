@@ -712,6 +712,7 @@ fn cross_zone_test_config() -> SequencerConfig {
                 genesis_hash: None,
                 emitters: vec![],
             }],
+            lock_target_zones: Vec::new(),
             source_authority: None,
             source_governance: None,
         }),
@@ -6717,6 +6718,7 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
     config.home = temp_dir.path().to_path_buf();
     config.cross_zone = Some(config::CrossZoneConfig {
         peers: Vec::new(),
+        lock_target_zones: Vec::new(),
         source_authority: None,
         source_governance: None,
     });
