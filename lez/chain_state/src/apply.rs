@@ -731,9 +731,7 @@ pub(crate) mod tests {
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_state};
 
     use super::*;
-
-    /// The alias a private sender presents under; its opening is bound for refunds.
-    const ALIAS_OPENING: [u8; 32] = [9; 32];
+    use crate::test_utils::{ALIAS_OPENING, inbox_fee, private_tx_presented, required_for};
 
     #[must_use]
     const fn event_emitter() -> Program {
@@ -1410,109 +1408,8 @@ pub(crate) mod tests {
         private_tx_presented(state, sender, recipient, amount, fee, true)
     }
 
-    /// [`private_tx`] with the sender presented under its alias and bound for refunds, or
-    /// canonically and unbound.
-    fn private_tx_presented(
-        state: &V03State,
-        (keys, funded): &(TestPrivateKeys, lee::Account),
-        recipient: AccountId,
-        amount: u128,
-        fee: Option<lee_core::FeeTransfer>,
-        bound: bool,
-    ) -> LeeTransaction {
-        let public_actors = vec![
-            Actor::native_balance(recipient),
-            Actor::native_balance(system_accounts::fee_inbox_account_id()),
-        ];
-        let public_actor_states = public_actors
-            .iter()
-            .map(|actor| {
-                (
-                    *actor,
-                    state
-                        .get_account_by_id(actor.account_id)
-                        .data
-                        .actor_state(actor.program_account_id)
-                        .clone(),
-                )
-            })
-            .collect();
-        let membership_proof = state
-            .get_proof_for_commitment(&lee_core::Commitment::new(&keys.account_id(), funded))
-            .expect("the sender's commitment is in state");
-        let (output, proof) = lee::execute_and_prove(
-            lee::ProvingInput {
-                claims: Vec::new(),
-                root: TransactionEntry::Sync(RootCall {
-                    to: Actor::native_balance(keys.account_id()),
-                    message: borsh::to_vec(&native_token::Message::Transfer {
-                        to: recipient,
-                        amount,
-                    })
-                    .unwrap(),
-                }),
-                fee,
-                public_context: lee::PublicExecutionContext::new(public_actors, []),
-                private_witnesses: vec![update_witness(keys, funded.clone(), membership_proof)],
-                dummy_inputs: Vec::new(),
-                ciphertext_padding: None,
-                recoveries: bound
-                    .then(|| RecipientEncryption {
-                        recipient: Recipient {
-                            npk: keys.npk(),
-                            vpk: keys.vpk(),
-                            kind: PrivateAccountKind::Regular,
-                            opening: Some(ALIAS_OPENING),
-                        },
-                        esk: EphemeralSecretKey([1; 32]),
-                    })
-                    .into_iter()
-                    .collect(),
-                private_promotions: BTreeSet::new(),
-            },
-            &lee::Simulation {
-                public_actor_states,
-                admitted_accounts: None,
-            },
-            &ProgramCatalog::default(),
-            |_| {
-                if bound {
-                    SenderPresentation::Blinded(ALIAS_OPENING)
-                } else {
-                    SenderPresentation::Canonical
-                }
-            },
-            |_, _| false,
-            no_seal,
-        )
-        .expect("the private transfer proves");
-        let message = lee::privacy_preserving_transaction::Message::from_circuit_output(
-            BTreeMap::new(),
-            output,
-        );
-        LeeTransaction::PrivacyPreserving(lee::PrivacyPreservingTransaction::new(
-            message,
-            lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(vec![], proof),
-        ))
-    }
-
     fn size_of(tx: &LeeTransaction) -> u64 {
         tx.charged_bytes().unwrap()
-    }
-
-    /// The base fee the transaction `build` makes owes for `cycles` at genesis, measured on a
-    /// build paying nothing: the amount is fixed-width, so it leaves the size alone.
-    pub fn required_for(cycles: u64, build: impl Fn(u128) -> LeeTransaction) -> u128 {
-        fee_core::assess::private_fee_required(cycles, size_of(&build(0)), 8, 8)
-    }
-
-    pub fn inbox_fee(amount: u128, payer: AccountId) -> lee_core::FeeTransfer {
-        lee_core::FeeTransfer {
-            payer,
-            recipient: system_accounts::fee_inbox_account_id(),
-            amount,
-            refund_to: None,
-        }
     }
 
     /// A call of the scripted program at `scripted`, which keeps its state, from a private sender

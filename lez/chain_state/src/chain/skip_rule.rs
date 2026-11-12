@@ -11,10 +11,9 @@ use testnet_initial_state::initial_pub_accounts_private_keys;
 
 use crate::{
     ChainState, ChannelEntry, Judged, ProofStore, Verdict,
-    apply::tests::{
-        inbox_fee, private_sender_state, private_tx, required_for, settled_block, tip_of,
-    },
+    apply::tests::{private_sender_state, private_tx, settled_block, tip_of},
     apply_block,
+    test_utils::{inbox_fee, required_for},
 };
 
 const SKIP_WINDOW: u32 = 10;
