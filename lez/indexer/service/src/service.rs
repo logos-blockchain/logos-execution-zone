@@ -10,8 +10,8 @@ use futures::StreamExt as _;
 use indexer_core::{IndexerCore, config::IndexerConfig, event_filter::EventFilter};
 use indexer_service_protocol::{
     Account, AccountId, AccountSummary, Actor, ActorStateSummary, Block, BlockId, EventRecord,
-    EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus, Selector, Transaction,
-    resolve_event_block_range,
+    EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus, MAX_GET_BLOCKS_LIMIT,
+    Selector, Transaction, resolve_event_block_range,
 };
 use jsonrpsee::{
     SubscriptionSink,
@@ -214,6 +214,8 @@ impl indexer_service_rpc::RpcServer for IndexerService {
         before: Option<BlockId>,
         limit: u64,
     ) -> Result<Vec<Block>, ErrorObjectOwned> {
+        check_get_blocks_limit(limit)?;
+
         let blocks = self
             .indexer
             .store
@@ -813,6 +815,15 @@ fn uncovered_query_error() -> ErrorObjectOwned {
     )
 }
 
+fn check_get_blocks_limit(limit: u64) -> Result<(), ErrorObjectOwned> {
+    if limit > MAX_GET_BLOCKS_LIMIT {
+        return Err(invalid_params_error(format!(
+            "limit {limit} exceeds the maximum of {MAX_GET_BLOCKS_LIMIT}"
+        )));
+    }
+    Ok(())
+}
+
 fn invalid_params_error(message: impl Into<String>) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(
         ErrorCode::InvalidParams.code(),
@@ -864,6 +875,17 @@ mod tests {
             program_account_id: test_program_account_id(program),
             selector: Selector([selector; 8]),
             data: vec![],
+        }
+    }
+
+    #[test]
+    fn get_blocks_limit_is_capped() {
+        assert!(check_get_blocks_limit(0).is_ok());
+        assert!(check_get_blocks_limit(MAX_GET_BLOCKS_LIMIT).is_ok());
+
+        for limit in [MAX_GET_BLOCKS_LIMIT.saturating_add(1), u64::MAX] {
+            let err = check_get_blocks_limit(limit).unwrap_err();
+            assert_eq!(err.code(), ErrorCode::InvalidParams.code());
         }
     }
 

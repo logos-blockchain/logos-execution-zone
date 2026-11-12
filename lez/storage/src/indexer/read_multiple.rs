@@ -5,28 +5,19 @@ use super::{Block, DbError, DbResult, RocksDBIO};
 #[expect(clippy::multiple_inherent_impl, reason = "Readability")]
 impl RocksDBIO {
     pub fn get_block_batch(&self, before: Option<u64>, limit: u64) -> DbResult<Vec<Block>> {
-        let mut seq = vec![];
-
-        // Determine the starting block ID
-        let start_block_id = if let Some(before_id) = before {
-            before_id.saturating_sub(1)
-        } else {
-            // Get the latest block ID
-            let Some(last) = self.get_meta_last_block_id_in_db()? else {
-                return Ok(vec![]); // No blocks in the database
-            };
-            last
+        let Some(last) = self.get_meta_last_block_id_in_db()? else {
+            return Ok(vec![]); // No blocks in the database
         };
 
-        for i in 0..limit {
-            let block_id = start_block_id.saturating_sub(i);
-            if block_id == 0 {
-                break;
-            }
-            seq.push(block_id);
-        }
+        // Clamp to the stored tip so the id sequence follows the data, not the request:
+        // a far-future `before` would otherwise build `limit` ids that match no block.
+        let start_block_id = before.map_or(last, |before_id| before_id.saturating_sub(1).min(last));
 
-        self.get_block_batch_seq(seq.into_iter())
+        // Ids run from `start_block_id` down to 1, so there are at most `start_block_id`.
+        let count = limit.min(start_block_id);
+        let seq = (0..count).map(|i| start_block_id.saturating_sub(i));
+
+        self.get_block_batch_seq(seq)
     }
 
     /// Get block batch from a sequence.
