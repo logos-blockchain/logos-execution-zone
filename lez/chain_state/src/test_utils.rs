@@ -54,9 +54,8 @@ pub fn private_transfer(state: &V03State) -> LeeTransaction {
     paying(required_for(0, paying))
 }
 
-/// A deshielding transfer of `amount` from the private `sender` to a public `recipient`, paying
-/// `fee` inside the proof, the sender presented under [`ALIAS_OPENING`] and bound for refunds, or
-/// canonically and unbound.
+/// A deshielding transfer of `amount` from the private `sender` to a public `recipient` paying
+/// `fee` inside the proof, the sender under [`ALIAS_OPENING`] and bound for refunds if `bound`.
 #[must_use]
 pub fn private_tx_presented(
     state: &V03State,
