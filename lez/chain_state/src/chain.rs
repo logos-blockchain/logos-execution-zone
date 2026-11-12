@@ -650,10 +650,10 @@ impl ChainState {
         let Some(idx) = self.pending() else {
             return false;
         };
-        let Some(Ok(block)) = self.view[idx]
+        let Some(block) = self.view[idx]
             .block
             .as_ref()
-            .map(|block| block.hydrate(|digest| self.proofs.get(digest)))
+            .and_then(|block| block.hydrate(|digest| self.proofs.get(digest)))
         else {
             return false;
         };
@@ -856,7 +856,7 @@ impl ChainState {
             .as_ref()
             .is_some_and(|tip| tip.hash == block.header.hash)
         {
-            Verdict::AlreadySettled(block.hydrate(|digest| self.proofs.get(digest)).ok()?)
+            Verdict::AlreadySettled(block.hydrate(|digest| self.proofs.get(digest))?)
         } else {
             let computed = block.recompute_hash();
             let linked = if computed == block.header.hash {
@@ -1234,10 +1234,10 @@ impl ChainState {
             return Ok(executed);
         }
         if !self.hydrated.contains_key(&entry.msg) {
-            let Some(Ok(block)) = entry
+            let Some(block) = entry
                 .block
                 .as_ref()
-                .map(|block| block.hydrate(|digest| self.proofs.get(digest)))
+                .and_then(|block| block.hydrate(|digest| self.proofs.get(digest)))
             else {
                 return Err(None);
             };

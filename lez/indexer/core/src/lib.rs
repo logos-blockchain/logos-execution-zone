@@ -1076,12 +1076,18 @@ mod tests {
         (client, server.start(sequencer))
     }
 
-    /// `block` hydrated from the proof store once the proofs it lacks are fetched.
-    async fn hydrate(core: &IndexerCore, block: &DigestedBlock) -> Result<Block, Vec<ProofDigest>> {
-        if let Err(missing) = block.hydrate(|digest| core.proofs.get(digest)) {
-            core.fetch_proofs(&missing).await;
-        }
-        block.hydrate(|digest| core.proofs.get(digest))
+    /// The proofs `block` still lacks once the ones the proof store lacked are fetched.
+    async fn fetch_missing(core: &IndexerCore, block: &DigestedBlock) -> Vec<ProofDigest> {
+        let missing = || -> Vec<ProofDigest> {
+            block
+                .body
+                .proofs()
+                .filter(|digest| !core.proofs.contains(digest))
+                .copied()
+                .collect()
+        };
+        core.fetch_proofs(&missing()).await;
+        missing()
     }
 
     #[tokio::test]
@@ -1104,17 +1110,18 @@ mod tests {
 
         core.proof_sources = vec![wrong.clone()];
         assert_eq!(
-            hydrate(&core, &block.digested()).await.err(),
-            Some(vec![proof.digest()])
+            fetch_missing(&core, &block.digested()).await,
+            vec![proof.digest()]
         );
 
         core.proof_sources = vec![wrong, right];
         assert_eq!(
-            hydrate(&core, &with_missing.digested()).await.err(),
-            Some(vec![missing.digest()])
+            fetch_missing(&core, &with_missing.digested()).await,
+            vec![missing.digest()]
         );
-        let hydrated = hydrate(&core, &block.digested())
-            .await
+        let hydrated = block
+            .digested()
+            .hydrate(|digest| core.proofs.get(digest))
             .expect("the later source holds the proof");
         assert_eq!(hydrated.body, block.body);
     }

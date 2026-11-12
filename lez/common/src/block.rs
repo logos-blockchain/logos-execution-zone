@@ -164,33 +164,19 @@ impl DigestedBlock {
         borsh::from_slice(bytes)
     }
 
-    pub fn hydrate(
-        &self,
-        proofs: impl Fn(&ProofDigest) -> Option<Proof>,
-    ) -> Result<Block, Vec<ProofDigest>> {
-        let mut transactions = Vec::with_capacity(self.body.transactions.len());
-        let mut missing = Vec::new();
-        for transaction in &self.body.transactions {
-            match transaction {
-                LeeTransactionWith::Public(tx) => {
-                    transactions.push(LeeTransaction::Public(tx.clone()));
-                }
-                LeeTransactionWith::PrivacyPreserving(tx) => {
-                    let digest = tx.witness_set().proof();
-                    let Some(hydrated) = proofs(digest).and_then(|proof| tx.hydrate(proof)) else {
-                        if !missing.contains(digest) {
-                            missing.push(*digest);
-                        }
-                        continue;
-                    };
-                    transactions.push(LeeTransaction::PrivacyPreserving(hydrated));
-                }
-            }
-        }
-        if !missing.is_empty() {
-            return Err(missing);
-        }
-        Ok(Block {
+    pub fn hydrate(&self, proofs: impl Fn(&ProofDigest) -> Option<Proof>) -> Option<Block> {
+        let transactions = self
+            .body
+            .transactions
+            .iter()
+            .map(|transaction| match transaction {
+                LeeTransactionWith::Public(tx) => Some(LeeTransaction::Public(tx.clone())),
+                LeeTransactionWith::PrivacyPreserving(tx) => proofs(tx.witness_set().proof())
+                    .and_then(|proof| tx.hydrate(proof))
+                    .map(LeeTransaction::PrivacyPreserving),
+            })
+            .collect::<Option<_>>()?;
+        Some(Block {
             header: self.header.clone(),
             body: BlockBody {
                 transactions,
