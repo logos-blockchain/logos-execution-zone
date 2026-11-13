@@ -376,6 +376,8 @@ impl SyncMessage {
 pub struct AsyncMessage {
     pub to: Target,
     pub message: MessageData,
+    /// Actors the destination zone declares on delivery; empty for a local send.
+    pub accounts: Vec<Actor>,
 }
 
 impl AsyncMessage {
@@ -383,7 +385,14 @@ impl AsyncMessage {
         Self {
             to: to.into(),
             message: borsh::to_vec(message).expect("borsh serialization is infallible"),
+            accounts: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_accounts(mut self, accounts: impl IntoIterator<Item = Actor>) -> Self {
+        self.accounts = accounts.into_iter().collect();
+        self
     }
 }
 

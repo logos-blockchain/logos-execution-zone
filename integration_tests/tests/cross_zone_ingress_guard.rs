@@ -55,9 +55,12 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
         src_zone: [2; 32],
         src_block_id: 1,
         src_block_hash: [7; 32],
-        src_tx_index: 0,
+        src_outbound_index: 0,
         src_account_id: AccountId::from_builtin_program([9_u32; 8]),
-        target_account_id: programs::ping_receiver_account_id(),
+        target: Actor::new(
+            programs::ping_receiver_account_id(),
+            programs::ping_receiver_account_id(),
+        ),
         payload: vec![],
         l1_inclusion_witness: None,
     };

@@ -283,7 +283,7 @@ fn dispatch_tx(
             inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
             inbox_id,
         ),
-        Actor::new(msg.target_account_id, msg.target_account_id),
+        msg.target,
     ];
     public_actors.extend(targets);
     let message = Message {
@@ -383,9 +383,9 @@ fn chained_via_inbox(
         src_zone: [2; 32],
         src_block_id: 5,
         src_block_hash: SRC_BLOCK_HASH,
-        src_tx_index: 0,
+        src_outbound_index: 0,
         src_account_id: programs::bridge_lock_account_id(),
-        target_account_id: target,
+        target: Actor::new(target, target),
         payload,
         l1_inclusion_witness: None,
     };
@@ -471,17 +471,17 @@ fn capped_mint_state(
 }
 
 /// The inbox dispatch a watcher would build for a mint of `amount` emitted at
-/// `src_tx_index` on the canonical peer source.
-fn mint_dispatch_tx(amount: u128, src_tx_index: u32) -> PublicTransaction {
+/// `src_outbound_index` on the canonical peer source.
+fn mint_dispatch_tx(amount: u128, src_outbound_index: u32) -> PublicTransaction {
     let inbox_id = programs::cross_zone_inbox_account_id();
     let wrapped_token_id = programs::wrapped_token_account_id();
     let msg = CrossZoneMessage {
         src_zone: MINT_SRC_ZONE,
         src_block_id: 5,
         src_block_hash: SRC_BLOCK_HASH,
-        src_tx_index,
+        src_outbound_index,
         src_account_id: AccountId::from_builtin_program(MINT_SRC_PROGRAM_ID),
-        target_account_id: wrapped_token_id,
+        target: Actor::new(wrapped_token_id, wrapped_token_id),
         payload: mint_payload_of(amount),
         l1_inclusion_witness: None,
     };
@@ -506,11 +506,11 @@ fn mint_dispatch_tx(amount: u128, src_tx_index: u32) -> PublicTransaction {
 fn dispatch_mint_on(
     state: &V03State,
     amount: u128,
-    src_tx_index: u32,
+    src_outbound_index: u32,
     block: u64,
 ) -> Result<ValidatedStateDiff, lee::error::LeeError> {
     ValidatedStateDiff::from_public_transaction(
-        &mint_dispatch_tx(amount, src_tx_index),
+        &mint_dispatch_tx(amount, src_outbound_index),
         state,
         block,
         0,
@@ -596,8 +596,8 @@ fn update_sources_tx(
 
 /// Asserts a mint dispatch is refused by the lifetime cap itself, not by an
 /// unrelated guard.
-fn rejects_on_cap(state: &V03State, amount: u128, src_tx_index: u32, block: u64) {
-    let Err(err) = dispatch_mint_on(state, amount, src_tx_index, block) else {
+fn rejects_on_cap(state: &V03State, amount: u128, src_outbound_index: u32, block: u64) {
+    let Err(err) = dispatch_mint_on(state, amount, src_outbound_index, block) else {
         panic!("expected the lifetime cap to refuse the mint");
     };
     assert!(
@@ -862,9 +862,9 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
         src_zone,
         src_block_id,
         src_block_hash: SRC_BLOCK_HASH,
-        src_tx_index: 0,
+        src_outbound_index: 0,
         src_account_id: AccountId::from_builtin_program([9_u32; 8]),
-        target_account_id: receiver_id,
+        target: Actor::new(receiver_id, receiver_id),
         payload,
         l1_inclusion_witness: None,
     };
@@ -1942,9 +1942,9 @@ fn a_delivery_from_an_unauthorized_source_does_not_reach_ping_receiver() {
         src_zone,
         src_block_id: 5,
         src_block_hash: SRC_BLOCK_HASH,
-        src_tx_index: 0,
+        src_outbound_index: 0,
         src_account_id: programs::ping_sender_account_id(),
-        target_account_id: receiver_id,
+        target: Actor::new(receiver_id, receiver_id),
         payload,
         l1_inclusion_witness: None,
     };
@@ -2558,9 +2558,9 @@ fn a_mint_is_refused_when_the_token_authorizes_no_source() {
         src_zone,
         src_block_id: 5,
         src_block_hash: SRC_BLOCK_HASH,
-        src_tx_index: 0,
+        src_outbound_index: 0,
         src_account_id: programs::bridge_lock_account_id(),
-        target_account_id: wrapped_token_id,
+        target: Actor::new(wrapped_token_id, wrapped_token_id),
         payload: mint_payload(),
         l1_inclusion_witness: None,
     };
@@ -2681,10 +2681,10 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
         src_zone,
         src_block_id,
         src_block_hash: SRC_BLOCK_HASH,
-        src_tx_index: 0,
+        src_outbound_index: 0,
         // The emitter a user can drive directly, aimed at the bridge's target.
         src_account_id: programs::ping_sender_account_id(),
-        target_account_id: wrapped_token_id,
+        target: Actor::new(wrapped_token_id, wrapped_token_id),
         payload: mint_payload(),
         l1_inclusion_witness: None,
     };
@@ -2735,9 +2735,9 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
         src_zone,
         src_block_id,
         src_block_hash: SRC_BLOCK_HASH,
-        src_tx_index: 0,
+        src_outbound_index: 0,
         src_account_id: bridge_lock_id,
-        target_account_id: wrapped_token_id,
+        target: Actor::new(wrapped_token_id, wrapped_token_id),
         payload: mint_payload(),
         l1_inclusion_witness: None,
     };
@@ -2775,7 +2775,7 @@ fn mint_replay_rejected() {
     let self_zone = [1_u8; 32];
     let src_zone = [2_u8; 32];
     let src_block_id = 5;
-    let src_tx_index = 0;
+    let src_outbound_index = 0;
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone);
@@ -2790,7 +2790,7 @@ fn mint_replay_rejected() {
     // block, so only the replay check stands in the way.
     let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);
     let mut shard = SeenShard::default();
-    shard.insert(SRC_BLOCK_HASH, src_tx_index);
+    shard.insert(SRC_BLOCK_HASH, src_outbound_index);
     state = state.with_public_accounts([(
         seen_id,
         Account::default().with_actor_state(inbox_id, shard.to_bytes().into()),
@@ -2800,9 +2800,9 @@ fn mint_replay_rejected() {
         src_zone,
         src_block_id,
         src_block_hash: SRC_BLOCK_HASH,
-        src_tx_index,
+        src_outbound_index,
         src_account_id: AccountId::from_builtin_program([9_u32; 8]),
-        target_account_id: wrapped_token_id,
+        target: Actor::new(wrapped_token_id, wrapped_token_id),
         payload: mint_payload(),
         l1_inclusion_witness: None,
     };
@@ -2871,9 +2871,9 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
         src_zone,
         src_block_id,
         src_block_hash: other_block_hash,
-        src_tx_index: 1,
+        src_outbound_index: 1,
         src_account_id: AccountId::from_builtin_program([9_u32; 8]),
-        target_account_id: receiver_id,
+        target: Actor::new(receiver_id, receiver_id),
         payload,
         l1_inclusion_witness: None,
     };
@@ -2903,9 +2903,9 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
         src_zone,
         src_block_id,
         src_block_hash: SRC_BLOCK_HASH,
-        src_tx_index: 1,
+        src_outbound_index: 1,
         src_account_id: AccountId::from_builtin_program([9_u32; 8]),
-        target_account_id: receiver_id,
+        target: Actor::new(receiver_id, receiver_id),
         payload: control_payload,
         l1_inclusion_witness: None,
     };
@@ -2994,9 +2994,9 @@ fn chat_dispatch_tx(
         src_zone,
         src_block_id: 5,
         src_block_hash: SRC_BLOCK_HASH,
-        src_tx_index: 0,
+        src_outbound_index: 0,
         src_account_id,
-        target_account_id: chat_id,
+        target: Actor::new(chat_id, chat_id),
         payload: text.to_vec(),
         l1_inclusion_witness: None,
     };

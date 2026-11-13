@@ -347,7 +347,7 @@ impl IndexerCore {
             block_hash: block.header.hash,
             src_zone: hex::encode(forged.src_zone),
             src_block_id: forged.src_block_id,
-            src_tx_index: forged.src_tx_index,
+            src_outbound_index: forged.src_outbound_index,
             verdict: forged.verdict.clone(),
         };
         if let Err(err) = self.store.set_cross_zone_halt(&Some(halt.clone())) {
@@ -821,23 +821,27 @@ mod tests {
     /// in these tests carry a decodable dispatch key.
     fn dispatch_tx() -> common::transaction::LeeTransaction {
         let receiver_id = programs::ping_receiver_account_id();
-        common::transaction::LeeTransaction::Public(cross_zone::build_dispatch_from_emission(
-            &cross_zone::EmissionSource {
+        let sender_id = programs::ping_sender_account_id();
+        common::transaction::LeeTransaction::Public(cross_zone::build_dispatch(
+            &cross_zone::OutboundSource {
                 src_zone: [2; 32],
                 src_block_id: 5,
                 src_block_hash: [3; 32],
-                src_tx_index: 0,
-                src_account_id: programs::ping_sender_account_id(),
+                src_outbound_index: 0,
             },
-            receiver_id,
-            &[
-                lee::Actor::new(
-                    ping_core::receiver_config_account_id(receiver_id),
-                    receiver_id,
-                ),
-                lee::Actor::new(ping_core::ping_record_pda(receiver_id), receiver_id),
-            ],
-            b"hi".to_vec(),
+            &lee::OutboundMessage {
+                from: lee::Actor::new(sender_id, sender_id),
+                zone: [2; 32],
+                to: lee::Actor::new(receiver_id, receiver_id),
+                message: b"hi".to_vec(),
+                accounts: vec![
+                    lee::Actor::new(
+                        ping_core::receiver_config_account_id(receiver_id),
+                        receiver_id,
+                    ),
+                    lee::Actor::new(ping_core::ping_record_pda(receiver_id), receiver_id),
+                ],
+            },
         ))
     }
 
@@ -845,7 +849,7 @@ mod tests {
         ForgedDispatch {
             src_zone: [2; 32],
             src_block_id: 5,
-            src_tx_index: 0,
+            src_outbound_index: 0,
             verdict: "re-derivation mismatch".to_owned(),
         }
     }
@@ -868,7 +872,7 @@ mod tests {
         assert_eq!(halt.block_hash, block.header.hash);
         assert_eq!(halt.src_zone, hex::encode([2_u8; 32]));
         assert_eq!(halt.src_block_id, 5);
-        assert_eq!(halt.src_tx_index, 0);
+        assert_eq!(halt.src_outbound_index, 0);
         assert_eq!(pending, Some(halt.clone()));
 
         let status = core.status();

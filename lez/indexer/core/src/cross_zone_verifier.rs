@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     fmt::{self, Display, Formatter},
     num::{NonZeroU32, NonZeroU64},
     sync::{
@@ -20,16 +20,14 @@ use common::{
     transaction::LeeTransaction,
 };
 use cross_zone::{
-    CommitteeFloorState, EmissionSource, FloorVerdict, Link, OffChain, RegisteredEmitter,
-    StallState, alerts_at, build_dispatch_from_emission, extract_emission, link_to_tip,
-    log_equivocation, peer_emitter_set, screen_peer_block,
+    CommitteeFloorState, FloorVerdict, Link, OffChain, OutboundSource, StallState, alerts_at,
+    build_dispatch, link_to_tip, log_equivocation, screen_peer_block,
 };
 use cross_zone_inbox_core::{
     CrossZoneMessage, Message as InboxMessage, MessageKey, ZoneId, message_key,
 };
 use futures::{Stream, StreamExt as _};
 use lee::GENESIS_BLOCK_ID;
-use lee_core::account::AccountId;
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, Slot, ZoneMessage,
@@ -87,7 +85,7 @@ pub enum CrossZoneVerifyError {
 pub struct ForgedDispatch {
     pub src_zone: ZoneId,
     pub src_block_id: u64,
-    pub src_tx_index: u32,
+    pub src_outbound_index: u32,
     pub verdict: String,
 }
 
@@ -98,7 +96,7 @@ impl Display for ForgedDispatch {
             "forged cross-zone dispatch from zone {} block {} tx {}: {}",
             hex::encode(self.src_zone),
             self.src_block_id,
-            self.src_tx_index,
+            self.src_outbound_index,
             self.verdict
         )
     }
@@ -736,9 +734,6 @@ pub struct CrossZoneVerifier {
     /// One-shot refetches attempted, successful or not. The retry cadence
     /// line in [`Self::wait_for_peer_block`] reports the running total.
     refetch_attempts: Arc<AtomicU64>,
-    /// Registered emitters per peer. Must match the watcher's set, or
-    /// re-derivation disagrees with it and ingestion halts as forged.
-    emitters: Arc<HashMap<ZoneId, BTreeMap<AccountId, RegisteredEmitter>>>,
     seen: Arc<RwLock<HashSet<SeenKey>>>,
     watch: PeerWatch,
 }
@@ -757,10 +752,8 @@ impl CrossZoneVerifier {
         let peers = PeerBlocks::new(config.peer_block_cache_window).with_genesis_pins(genesis_pins);
         let watch = PeerWatch::default();
         let mut refetch_clients = HashMap::new();
-        let mut emitters = HashMap::new();
 
         for peer in &cross_zone.peers {
-            emitters.insert(peer.channel_id, peer_emitter_set(peer));
             let node = TimeoutNode::new(NodeHttpClient::new(
                 CommonHttpClient::new(config.bedrock_config.auth.clone().map(Into::into)),
                 config.bedrock_config.addr.clone(),
@@ -804,7 +797,6 @@ impl CrossZoneVerifier {
             peers,
             refetch_clients,
             refetch_attempts: Arc::new(AtomicU64::new(0)),
-            emitters: Arc::new(emitters),
             seen: Arc::new(RwLock::new(HashSet::new())),
             watch,
         })
@@ -878,7 +870,7 @@ impl CrossZoneVerifier {
                 debug!(
                     peer_zone = %hex::encode(msg.src_zone),
                     peer_block_id = msg.src_block_id,
-                    peer_tx_index = msg.src_tx_index,
+                    peer_tx_index = msg.src_outbound_index,
                     "Skipping already-seen cross-zone dispatch, a replay the inbox refuses"
                 );
                 continue;
@@ -892,7 +884,7 @@ impl CrossZoneVerifier {
             info!(
                 peer_zone = %hex::encode(msg.src_zone),
                 peer_block_id = msg.src_block_id,
-                peer_tx_index = msg.src_tx_index,
+                peer_tx_index = msg.src_outbound_index,
                 "Verified cross-zone dispatch"
             );
             verified.push(key);
@@ -927,13 +919,12 @@ impl CrossZoneVerifier {
     }
 
     /// Re-derives the dispatch transaction the watcher should have injected for
-    /// `msg`, reading the source emission from the peer's finalized block.
+    /// `msg`, reading the source message from the peer block's outbound list.
     async fn rederive(
         &self,
         msg: &CrossZoneMessage,
         local_slot: u64,
     ) -> Result<lee::PublicTransaction, CrossZoneVerifyError> {
-        static NO_EMITTERS: BTreeMap<AccountId, RegisteredEmitter> = BTreeMap::new();
         let peer_block = self
             .wait_for_peer_block(msg.src_zone, msg.src_block_id, local_slot)
             .await
@@ -948,36 +939,23 @@ impl CrossZoneVerifier {
 
         // Everything below is a property of the peer block just read, so a
         // mismatch is the dispatch lying about it, not a transient condition.
-        let src_tx_index = usize::try_from(msg.src_tx_index).expect("u32 index fits in usize");
-        if peer_block.body.is_reverted(src_tx_index) {
-            return Err(forged(msg, "peer emission transaction reverted".to_owned()));
-        }
-        let emission_tx = peer_block
+        let src_outbound_index =
+            usize::try_from(msg.src_outbound_index).expect("u32 index fits in usize");
+        let message = peer_block
             .body
-            .transactions
-            .get(src_tx_index)
-            .ok_or_else(|| forged(msg, "src_tx_index out of range in peer block".to_owned()))?;
+            .outbound
+            .get(src_outbound_index)
+            .ok_or_else(|| {
+                forged(
+                    msg,
+                    "src_outbound_index out of range in peer block".to_owned(),
+                )
+            })?;
 
-        let LeeTransaction::Public(emission_tx) = emission_tx else {
+        if message.zone != self.self_zone {
             return Err(forged(
                 msg,
-                "peer emission transaction is not public".to_owned(),
-            ));
-        };
-        let not_an_emitter = || {
-            forged(
-                msg,
-                "peer transaction at src_tx_index is not a recognized emitter".to_owned(),
-            )
-        };
-        let peer_emitters = self.emitters.get(&msg.src_zone).unwrap_or(&NO_EMITTERS);
-        let emission = extract_emission(emission_tx, peer_emitters, msg.src_block_id)
-            .ok_or_else(not_an_emitter)?;
-
-        if emission.target_zone != self.self_zone {
-            return Err(forged(
-                msg,
-                "peer emission targets a different zone".to_owned(),
+                "peer message targets a different zone".to_owned(),
             ));
         }
 
@@ -987,17 +965,14 @@ impl CrossZoneVerifier {
 
         // Recomputed rather than read from `msg`, which would make the field
         // attest to itself.
-        Ok(build_dispatch_from_emission(
-            &EmissionSource {
+        Ok(build_dispatch(
+            &OutboundSource {
                 src_zone: msg.src_zone,
                 src_block_id: msg.src_block_id,
                 src_block_hash: peer_block.recompute_hash().0,
-                src_tx_index: msg.src_tx_index,
-                src_account_id: emission.source,
+                src_outbound_index: msg.src_outbound_index,
             },
-            emission.target_account_id,
-            &emission.target_accounts,
-            emission.payload,
+            message,
         ))
     }
 
@@ -1221,14 +1196,14 @@ const fn forged(msg: &CrossZoneMessage, verdict: String) -> CrossZoneVerifyError
     CrossZoneVerifyError::Forged(ForgedDispatch {
         src_zone: msg.src_zone,
         src_block_id: msg.src_block_id,
-        src_tx_index: msg.src_tx_index,
+        src_outbound_index: msg.src_outbound_index,
         verdict,
     })
 }
 
 fn seen_key(msg: &CrossZoneMessage) -> SeenKey {
     (
-        message_key(&msg.src_zone, msg.src_block_id, msg.src_tx_index),
+        message_key(&msg.src_zone, msg.src_block_id, msg.src_outbound_index),
         msg.src_block_hash,
     )
 }
@@ -1477,13 +1452,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use common::{HashType, test_utils::produce_dummy_block};
-    use cross_zone::test_utils::{generic_emission, linked_chain_to, ping_emission};
+    use common::{
+        HashType,
+        test_utils::{produce_dummy_block, produce_dummy_block_with_outbound},
+    };
+    use cross_zone::test_utils::{linked_chain_with_outbound, ping_outbound};
     use futures::stream;
-    use lee::Actor;
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
     use logos_blockchain_zone_sdk::{UnverifiedEd25519PublicKey, ZoneBlock};
-    use ping_core::{ping_record_pda, receiver_config_account_id};
 
     use super::*;
 
@@ -1495,18 +1471,12 @@ mod tests {
     const _: () = assert!(PEER_BLOCK_ID >= GENESIS_BLOCK_ID);
     /// The slot tests record blocks under when its value does not matter.
     const READ_SLOT: Slot = Slot::new(0);
-    /// A program registered for `PEER_ZONE` under the generic contract.
-    const GENERIC_EMITTER: AccountId = AccountId::new([8; 32]);
-    /// Where the generic emission tests aim their deliveries.
-    const GENERIC_TARGET: AccountId = AccountId::new([9; 32]);
-
     fn verifier() -> CrossZoneVerifier {
         CrossZoneVerifier {
             self_zone: SELF_ZONE,
             peers: PeerBlocks::default(),
             refetch_clients: HashMap::new(),
             refetch_attempts: Arc::new(AtomicU64::new(0)),
-            emitters: Arc::new(HashMap::new()),
             seen: Arc::new(RwLock::new(HashSet::new())),
             watch: PeerWatch::default(),
         }
@@ -1534,9 +1504,9 @@ mod tests {
         }
     }
 
-    /// A `ping_sender` emission addressed to `SELF_ZONE` carrying `payload`.
-    fn emission(payload: &[u8]) -> LeeTransaction {
-        ping_emission(SELF_ZONE, programs::ping_receiver_account_id(), payload)
+    /// A ping outbound message addressed to `SELF_ZONE` carrying `payload`.
+    fn outbound(payload: &[u8]) -> lee::OutboundMessage {
+        ping_outbound(SELF_ZONE, payload)
     }
 
     /// A peer-stream item inscribing `data` at `slot`.
@@ -1551,12 +1521,12 @@ mod tests {
         )
     }
 
-    /// A hash-linked chain of `len` blocks from genesis, each carrying a `b"hi"`
-    /// emission. Only a chain built this way advances the verified prefix.
+    /// A hash-linked chain of `len` blocks from genesis, each declaring a `b"hi"`
+    /// outbound message. Only a chain built this way advances the verified prefix.
     fn linked_chain(len: u64) -> Vec<Block> {
-        linked_chain_to(
+        linked_chain_with_outbound(
             GENESIS_BLOCK_ID.saturating_add(len).saturating_sub(1),
-            |_| vec![emission(b"hi")],
+            |_| vec![outbound(b"hi")],
         )
     }
 
@@ -1566,14 +1536,14 @@ mod tests {
     }
 
     /// A hash-linked run from the peer's genesis whose last block,
-    /// `PEER_BLOCK_ID`, carries a `payload` emission. The run is what makes that
-    /// block deliverable.
+    /// `PEER_BLOCK_ID`, declares a `payload` outbound message. The run is what
+    /// makes that block deliverable.
     fn peer_chain(payload: &[u8]) -> Vec<Block> {
-        linked_chain_to(PEER_BLOCK_ID, |block_id| {
+        linked_chain_with_outbound(PEER_BLOCK_ID, |block_id| {
             vec![if block_id == PEER_BLOCK_ID {
-                emission(payload)
+                outbound(payload)
             } else {
-                emission(b"hi")
+                outbound(b"hi")
             }]
         })
     }
@@ -1606,141 +1576,15 @@ mod tests {
     }
 
     fn dispatch_naming_block_hash(payload: &[u8], src_block_hash: [u8; 32]) -> LeeTransaction {
-        let receiver_id = programs::ping_receiver_account_id();
-        LeeTransaction::Public(build_dispatch_from_emission(
-            &EmissionSource {
+        LeeTransaction::Public(build_dispatch(
+            &OutboundSource {
                 src_zone: PEER_ZONE,
                 src_block_id: PEER_BLOCK_ID,
                 src_block_hash,
-                src_tx_index: 0,
-                src_account_id: programs::ping_sender_account_id(),
+                src_outbound_index: 0,
             },
-            receiver_id,
-            &[
-                Actor::new(receiver_config_account_id(receiver_id), receiver_id),
-                Actor::new(ping_record_pda(receiver_id), receiver_id),
-            ],
-            payload.to_vec(),
+            &outbound(payload),
         ))
-    }
-
-    /// A verifier registering [`GENERIC_EMITTER`] for `PEER_ZONE`.
-    fn verifier_with_generic_emitter() -> CrossZoneVerifier {
-        CrossZoneVerifier {
-            emitters: Arc::new(HashMap::from([(
-                PEER_ZONE,
-                BTreeMap::from([(
-                    GENERIC_EMITTER,
-                    RegisteredEmitter {
-                        account_id: GENERIC_EMITTER,
-                        until_src_block: None,
-                    },
-                )]),
-            )])),
-            ..verifier()
-        }
-    }
-
-    /// A run whose `PEER_BLOCK_ID` block carries a generic-contract emission of
-    /// `payload` from [`GENERIC_EMITTER`].
-    fn generic_peer_chain(payload: &[u8]) -> Vec<Block> {
-        linked_chain_to(PEER_BLOCK_ID, |block_id| {
-            vec![if block_id == PEER_BLOCK_ID {
-                generic_emission(GENERIC_EMITTER, SELF_ZONE, GENERIC_TARGET, payload)
-            } else {
-                emission(b"hi")
-            }]
-        })
-    }
-
-    /// The dispatch a watcher would inject for the [`generic_peer_chain`]
-    /// emission of `payload`.
-    fn generic_dispatch(payload: &[u8]) -> LeeTransaction {
-        let src_block_hash = generic_peer_chain(payload)
-            .last()
-            .expect("chain reaches PEER_BLOCK_ID")
-            .recompute_hash()
-            .0;
-        LeeTransaction::Public(build_dispatch_from_emission(
-            &EmissionSource {
-                src_zone: PEER_ZONE,
-                src_block_id: PEER_BLOCK_ID,
-                src_block_hash,
-                src_tx_index: 0,
-                src_account_id: GENERIC_EMITTER,
-            },
-            GENERIC_TARGET,
-            &[],
-            payload.to_vec(),
-        ))
-    }
-
-    #[tokio::test]
-    async fn verifies_a_dispatch_from_a_registered_generic_emitter() {
-        let verifier = verifier_with_generic_emitter();
-        cache_chain(&verifier, generic_peer_chain(b"hi")).await;
-
-        let block = produce_dummy_block(9, None, vec![generic_dispatch(b"hi")]);
-        verifier
-            .verify_block(&block, Slot::from(0))
-            .await
-            .expect("a registered emitter's dispatch re-derives");
-    }
-
-    /// The cutoff is compared against the dispatch's source block, 5, not the
-    /// local block carrying it, 9. A verifier comparing the local id would read
-    /// a cutoff of 5 as exceeded.
-    #[tokio::test]
-    async fn a_cutoff_is_read_against_the_source_block_not_the_local_one() {
-        for (until_src_block, covered) in [
-            (Some(PEER_BLOCK_ID), true),
-            (Some(PEER_BLOCK_ID - 1), false),
-        ] {
-            let verifier = CrossZoneVerifier {
-                emitters: Arc::new(HashMap::from([(
-                    PEER_ZONE,
-                    BTreeMap::from([(
-                        GENERIC_EMITTER,
-                        RegisteredEmitter {
-                            account_id: GENERIC_EMITTER,
-                            until_src_block,
-                        },
-                    )]),
-                )])),
-                ..verifier()
-            };
-            cache_chain(&verifier, generic_peer_chain(b"hi")).await;
-
-            let block = produce_dummy_block(9, None, vec![generic_dispatch(b"hi")]);
-            let result = verifier.verify_block(&block, Slot::from(0)).await;
-            assert_eq!(
-                result.is_ok(),
-                covered,
-                "cutoff {until_src_block:?} against source block {PEER_BLOCK_ID}: {result:?}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn rejects_a_dispatch_whose_emitter_is_not_registered() {
-        // The same peer chain and dispatch, but this verifier registers no
-        // emitters for the zone, so re-derivation does not read the emission.
-        let verifier = verifier();
-        cache_chain(&verifier, generic_peer_chain(b"hi")).await;
-
-        let block = produce_dummy_block(9, None, vec![generic_dispatch(b"hi")]);
-        let err = verifier
-            .verify_block(&block, Slot::from(0))
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(err, CrossZoneVerifyError::Forged(_)),
-            "an unregistered emitter's dispatch is forged, not transient: {err}"
-        );
-        assert!(
-            err.to_string().contains("not a recognized emitter"),
-            "rejected for the wrong reason: {err}"
-        );
     }
 
     #[tokio::test]
@@ -1770,38 +1614,6 @@ mod tests {
                 Err(CrossZoneVerifyError::Forged(_))
             ),
             "a delivery claiming a source block hash the peer block does not have is forged"
-        );
-    }
-
-    #[tokio::test]
-    async fn rejects_a_dispatch_whose_source_transaction_reverted() {
-        let verifier = verifier();
-        let mut chain = peer_chain(b"hi");
-        chain.pop().expect("chain reaches PEER_BLOCK_ID");
-        let reverted = common::test_utils::produce_dummy_block_with_reverted(
-            PEER_BLOCK_ID,
-            chain.last().map(|block| block.header.hash),
-            vec![emission(b"hi")],
-            vec![0],
-        );
-        chain.push(reverted.clone());
-        cache_chain(&verifier, chain).await;
-
-        let block = produce_dummy_block(
-            9,
-            None,
-            vec![dispatch_naming_block_hash(
-                b"hi",
-                reverted.recompute_hash().0,
-            )],
-        );
-        let err = verifier
-            .verify_block(&block, Slot::from(0))
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(&err, CrossZoneVerifyError::Forged(_)) && err.to_string().contains("reverted"),
-            "unexpected error: {err}"
         );
     }
 
@@ -1941,7 +1753,11 @@ mod tests {
         peers
             .insert(
                 PEER_ZONE,
-                produce_dummy_block(GENESIS_BLOCK_ID + 1, None, vec![emission(b"hi")]),
+                produce_dummy_block_with_outbound(
+                    GENESIS_BLOCK_ID + 1,
+                    None,
+                    vec![outbound(b"hi")],
+                ),
                 READ_SLOT,
             )
             .await;
@@ -2097,7 +1913,7 @@ mod tests {
         // need, and the inbox would refuse the real message.
         let verifier = verifier();
         cache_chain(&verifier, linked_chain(2)).await;
-        let claimed = produce_dummy_block(9, None, vec![emission(b"hi")]);
+        let claimed = produce_dummy_block_with_outbound(9, None, vec![outbound(b"hi")]);
         assert!(
             !verifier.peers.insert(PEER_ZONE, claimed, READ_SLOT).await,
             "the reader takes the next block on the run, never one ahead of it"
@@ -2134,7 +1950,7 @@ mod tests {
             .peers
             .insert(
                 PEER_ZONE,
-                produce_dummy_block(u64::MAX, None, vec![emission(b"hi")]),
+                produce_dummy_block_with_outbound(u64::MAX, None, vec![outbound(b"hi")]),
                 READ_SLOT,
             )
             .await;
@@ -2192,10 +2008,10 @@ mod tests {
         let verifier = verifier();
         let mut chain = peer_chain(b"hi");
         let real = chain.pop().expect("chain has a last block");
-        let impostor = produce_dummy_block(
+        let impostor = produce_dummy_block_with_outbound(
             PEER_BLOCK_ID,
             Some(real.header.prev_block_hash),
-            vec![emission(b"forged")],
+            vec![outbound(b"forged")],
         );
         assert_ne!(
             real.header.hash, impostor.header.hash,
@@ -2243,7 +2059,11 @@ mod tests {
         for block in chain.iter().take(2).cloned() {
             peers.insert(PEER_ZONE, block, READ_SLOT).await;
         }
-        let claimed = produce_dummy_block(3, Some(HashType([9; 32])), vec![emission(b"claimed")]);
+        let claimed = produce_dummy_block_with_outbound(
+            3,
+            Some(HashType([9; 32])),
+            vec![outbound(b"claimed")],
+        );
         assert!(peers.insert(PEER_ZONE, claimed, READ_SLOT).await);
         assert_eq!(
             peers.verified_prefix(PEER_ZONE).await,
@@ -2281,7 +2101,11 @@ mod tests {
         for block in chain.iter().take(2).cloned() {
             peers.insert(PEER_ZONE, block, READ_SLOT).await;
         }
-        let ahead = produce_dummy_block(4, Some(chain[2].header.hash), vec![emission(b"ahead")]);
+        let ahead = produce_dummy_block_with_outbound(
+            4,
+            Some(chain[2].header.hash),
+            vec![outbound(b"ahead")],
+        );
         assert!(!peers.insert(PEER_ZONE, ahead, READ_SLOT).await);
 
         peers.insert(PEER_ZONE, chain[2].clone(), READ_SLOT).await;
@@ -2301,7 +2125,7 @@ mod tests {
         // and cached it would answer every later lookup at that id as though
         // the peer had built it.
         let peers = PeerBlocks::default();
-        let below = produce_dummy_block(0, None, vec![emission(b"below")]);
+        let below = produce_dummy_block_with_outbound(0, None, vec![outbound(b"below")]);
         assert!(!peers.insert(PEER_ZONE, below, READ_SLOT).await);
 
         for block in linked_chain(3) {
@@ -2348,8 +2172,11 @@ mod tests {
         }
         assert_eq!(peers.verified_prefix(PEER_ZONE).await, Some(2));
 
-        let impostor =
-            produce_dummy_block(2, Some(chain[0].header.hash), vec![emission(b"forged")]);
+        let impostor = produce_dummy_block_with_outbound(
+            2,
+            Some(chain[0].header.hash),
+            vec![outbound(b"forged")],
+        );
         assert!(
             !peers.insert(PEER_ZONE, impostor, READ_SLOT).await,
             "it links to block 1 just as the held block does, and the run has certified the held one"
@@ -2358,8 +2185,11 @@ mod tests {
         // The one that would slip through if displacement were allowed anywhere
         // below the id that extends the run: it links to the run's own head, so
         // every test but the id guard says take it.
-        let plausible =
-            produce_dummy_block(2, Some(chain[1].header.hash), vec![emission(b"forged")]);
+        let plausible = produce_dummy_block_with_outbound(
+            2,
+            Some(chain[1].header.hash),
+            vec![outbound(b"forged")],
+        );
         assert!(
             !peers.insert(PEER_ZONE, plausible, READ_SLOT).await,
             "displacement fires only at the id that would extend the run, never inside it"
@@ -2407,7 +2237,8 @@ mod tests {
     #[tokio::test]
     async fn a_block_whose_hash_does_not_match_its_contents_is_not_cached() {
         let verifier = verifier();
-        let mut tampered = produce_dummy_block(PEER_BLOCK_ID, None, vec![emission(b"hi")]);
+        let mut tampered =
+            produce_dummy_block_with_outbound(PEER_BLOCK_ID, None, vec![outbound(b"hi")]);
         tampered.header.hash = common::HashType([0xAB; 32]);
 
         let pass = consume_peer_stream(
@@ -2509,7 +2340,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_pinned_genesis_refusal_latches_until_the_pinned_chain_anchors() {
-        let honest = linked_chain_to(GENESIS_BLOCK_ID, |_| vec![]);
+        let honest = linked_chain_with_outbound(GENESIS_BLOCK_ID, |_| vec![]);
         let pinned = honest[0].header.hash;
         let peers =
             PeerBlocks::new(window(1)).with_genesis_pins(HashMap::from([(PEER_ZONE, pinned)]));
@@ -2835,7 +2666,7 @@ mod tests {
         assert_eq!(peers.verified_prefix(PEER_ZONE).await, Some(4));
 
         // An equivocating block at an evicted id is refused off the index hash.
-        let impostor = produce_dummy_block(1, None, vec![emission(b"forged")]);
+        let impostor = produce_dummy_block_with_outbound(1, None, vec![outbound(b"forged")]);
         assert!(!peers.insert(PEER_ZONE, impostor, READ_SLOT).await);
         let PeerLookup::Evicted { block_hash, .. } = peers.resolve(PEER_ZONE, 1).await else {
             panic!("the evicted entry must survive the equivocation attempt");
@@ -2977,7 +2808,11 @@ mod tests {
     #[tokio::test]
     async fn refetch_refuses_a_block_hashing_differently_than_the_index() {
         let chain = linked_chain(2);
-        let served = produce_dummy_block(2, Some(chain[0].header.hash), vec![emission(b"other")]);
+        let served = produce_dummy_block_with_outbound(
+            2,
+            Some(chain[0].header.hash),
+            vec![outbound(b"other")],
+        );
         let stream = stream::iter(vec![peer_block_msg(&served, 4)]);
 
         let err = refetched_block(stream, Slot::from(4), 2, chain[1].header.hash)

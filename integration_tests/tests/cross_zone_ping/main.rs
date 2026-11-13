@@ -65,7 +65,6 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
             }],
             min_committee_size: 0,
             genesis_hash: None,
-            emitters: vec![],
         }],
         lock_target_zones: Vec::new(),
         source_authority: None,

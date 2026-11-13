@@ -214,10 +214,6 @@ async fn a_registered_program_sends_and_receives_across_zones() -> Result<()> {
             }],
             min_committee_size: 0,
             genesis_hash: None,
-            emitters: vec![cross_zone::RegisteredEmitter {
-                account_id: chat_a,
-                until_src_block: None,
-            }],
         }],
         source_authority: None,
         source_governance: None,
@@ -271,46 +267,4 @@ async fn a_registered_program_sends_and_receives_across_zones() -> Result<()> {
 
     wait_for_delivery(seq_b).await?;
     Ok(())
-}
-
-/// The bytes `post_tx` builds must be what `extract_emission` recognizes, from
-/// the real transaction rather than hand-written instruction bytes.
-#[tokio::test]
-async fn the_real_post_transaction_is_recognized_as_an_emission() {
-    let chat_id = account_of(header_seed(0xA1));
-    let payer = initial_pub_accounts_private_keys().swap_remove(0);
-    let zone_b = [7_u8; 32];
-
-    let LeeTransaction::Public(tx) = post_tx(chat_id, zone_b, CHAT_PAYLOAD, &payer, 0_u128.into())
-    else {
-        panic!("post_tx builds a public transaction");
-    };
-
-    let registered = std::collections::BTreeMap::from([(
-        chat_id,
-        cross_zone::RegisteredEmitter {
-            account_id: chat_id,
-            until_src_block: None,
-        },
-    )]);
-    let emission = cross_zone::extract_emission(&tx, &registered, 0)
-        .expect("a registered emitter's Post is an emission");
-    assert_eq!(emission.source, chat_id);
-    assert_eq!(emission.target_zone, zone_b);
-    assert_eq!(
-        emission.target_account_id,
-        programs::ping_receiver_account_id()
-    );
-    assert_eq!(
-        borsh::from_slice::<ReceiverMessage>(&emission.payload).expect("the payload decodes"),
-        ReceiverMessage::Record {
-            payload: CHAT_PAYLOAD.to_vec()
-        },
-        "the emission carries the instruction the builtin receiver expects"
-    );
-
-    assert!(
-        cross_zone::extract_emission(&tx, &std::collections::BTreeMap::new(), 0).is_none(),
-        "the same transaction is nothing to a zone that did not register the emitter"
-    );
 }

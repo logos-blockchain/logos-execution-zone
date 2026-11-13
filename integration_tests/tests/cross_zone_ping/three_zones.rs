@@ -50,7 +50,6 @@ fn ping_route_peer(channel: [u8; 32]) -> CrossZonePeer {
         }],
         min_committee_size: 0,
         genesis_hash: None,
-        emitters: vec![],
     }
 }
 

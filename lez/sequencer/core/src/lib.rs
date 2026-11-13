@@ -1394,7 +1394,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     }
                     Some(message) => (
                         Some(message.src_zone),
-                        (message.src_block_id, message.src_tx_index),
+                        (message.src_block_id, message.src_outbound_index),
                     ),
                     None => (None, (0, 0)),
                 };
@@ -2050,12 +2050,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let key = cross_zone_inbox_core::message_key(
             &message.src_zone,
             message.src_block_id,
-            message.src_tx_index,
+            message.src_outbound_index,
         );
         let origin = DispatchOrigin {
             src_zone: message.src_zone,
             src_block_id: message.src_block_id,
-            src_tx_index: message.src_tx_index,
+            src_outbound_index: message.src_outbound_index,
         };
         match self
             .storage_ref
@@ -2074,7 +2074,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     message_key = %hex::encode(key),
                     peer_zone = %hex::encode(origin.src_zone),
                     peer_block_id = origin.src_block_id,
-                    peer_tx_index = origin.src_tx_index,
+                    peer_tx_index = origin.src_outbound_index,
                     size_bytes = record.transaction.len(),
                     failed_attempts = record.failed_attempts,
                     "Giving up on cross-zone delivery. This node will not retry it; unless another \
@@ -2306,7 +2306,7 @@ fn dispatch_already_delivered(state: &lee::V03State, message: &CrossZoneMessage)
             shard.data.actor_state(inbox_program_id).as_ref(),
         )
         .is_ok_and(|seen| {
-            seen.binds(&message.src_block_hash) && seen.contains(message.src_tx_index)
+            seen.binds(&message.src_block_hash) && seen.contains(message.src_outbound_index)
         })
     })
 }
@@ -2661,14 +2661,14 @@ fn extract_cross_zone_dispatch(tx: &LeeTransaction) -> Option<CrossZoneMessage> 
 #[must_use]
 fn extract_cross_zone_dispatch_key(tx: &LeeTransaction) -> Option<CrossZoneMessageKey> {
     extract_cross_zone_dispatch(tx).map(|msg| {
-        cross_zone_inbox_core::message_key(&msg.src_zone, msg.src_block_id, msg.src_tx_index)
+        cross_zone_inbox_core::message_key(&msg.src_zone, msg.src_block_id, msg.src_outbound_index)
     })
 }
 
 /// The keys of the deliveries `block` carries, reporting any whose transaction
 /// is not the one we recorded for that key.
 ///
-/// The key covers `(src_zone, src_block_id, src_tx_index)` and nothing about the
+/// The key covers `(src_zone, src_block_id, src_outbound_index)` and nothing about the
 /// payload, and so does the inbox's own replay check, so a sequencer that
 /// publishes a dispatch with the right key and a forged payload settles our
 /// correct record along with it. The forgery is caught downstream by the

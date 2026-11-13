@@ -252,6 +252,9 @@ pub struct OutboundMessage {
     pub zone: [u8; 32],
     pub to: Actor,
     pub message: MessageData,
+    /// Actors the destination zone declares on delivery.
+    #[serde(default)]
+    pub accounts: Vec<Actor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -569,7 +572,7 @@ pub struct CrossZoneHalt {
     /// Hex id of the dispatch's source zone.
     pub src_zone: String,
     pub src_block_id: u64,
-    pub src_tx_index: u32,
+    pub src_outbound_index: u32,
     pub verdict: String,
 }
 
@@ -846,7 +849,7 @@ mod tests {
                 block_hash: HashType([0xAB; 32]),
                 src_zone: hex::encode([2_u8; 32]),
                 src_block_id: 5,
-                src_tx_index: 1,
+                src_outbound_index: 1,
                 verdict: "re-derivation mismatch".to_owned(),
             }),
             cross_zone_peers: vec![PeerStatus {

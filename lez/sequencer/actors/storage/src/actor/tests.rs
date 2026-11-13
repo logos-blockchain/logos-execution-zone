@@ -145,7 +145,7 @@ fn dispatch_origin(seed: u8) -> DispatchOrigin {
     DispatchOrigin {
         src_zone: [seed; 32],
         src_block_id: u64::from(seed),
-        src_tx_index: u32::from(seed),
+        src_outbound_index: u32::from(seed),
     }
 }
 
@@ -845,7 +845,7 @@ async fn settled_dispatch_reconciles_its_dead_letter_but_not_the_count() {
             origin: DispatchOrigin {
                 src_zone: [7; 32],
                 src_block_id: 3,
-                src_tx_index: 0,
+                src_outbound_index: 0,
             },
         })
         .await

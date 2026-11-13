@@ -3,15 +3,19 @@ use std::collections::BTreeSet;
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use cross_zone_emission_core::ZoneId;
 pub use cross_zone_marker_core::Delivery;
-use lee_core::{account::AccountId, program::PdaSeed};
+use lee_core::{
+    account::{AccountId, Actor},
+    program::PdaSeed,
+};
 use serde::{Deserialize, Serialize};
 
-const MESSAGE_KEY_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneMsgKey/00000/";
+const MESSAGE_KEY_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneMsgKey/00001/";
 const INBOX_CONFIG_SEED: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxCfg/000/";
-/// `/01/` because `/00/` keyed shards by epoch: an epoch and a block id are
-/// indistinguishable under one domain. Belt and braces, since the image id
+/// Bumped whenever the coordinate's meaning changes (`/00/` keyed shards by
+/// epoch, `/01/` by transaction index, `/02/` by outbound index): two meanings
+/// are indistinguishable under one domain. Belt and braces, since the image id
 /// already relocates every PDA in this crate whenever the crate changes.
-const INBOX_SEEN_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxSeen/01/";
+const INBOX_SEEN_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxSeen/02/";
 
 pub const CROSS_ZONE_INBOX_NAME: lee_core::program::SystemProgramName =
     lee_core::program::SystemProgramName::new(b"cross_zone_inbox");
@@ -33,9 +37,9 @@ pub struct CrossZoneMessage {
     /// contents themselves and fill this from that, so the two agree on it
     /// without either trusting what the peer wrote.
     pub src_block_hash: [u8; 32],
-    pub src_tx_index: u32,
+    pub src_outbound_index: u32,
     pub src_account_id: AccountId,
-    pub target_account_id: AccountId,
+    pub target: Actor,
     pub payload: Vec<u8>,
     /// Reserved for a future source-state proof; MUST be `None` in v1.
     pub l1_inclusion_witness: Option<Vec<u8>>,
@@ -76,7 +80,7 @@ pub struct SeenShard {
     /// Recomputed hash of the peer block this shard records deliveries from.
     /// All-zero until the first delivery claims it.
     pub src_block_hash: [u8; 32],
-    /// Indices of that block's transactions already delivered.
+    /// Indices into that block's outbound list already delivered.
     pub delivered: BTreeSet<u32>,
 }
 
@@ -105,8 +109,8 @@ impl SeenShard {
     }
 
     #[must_use]
-    pub fn contains(&self, src_tx_index: u32) -> bool {
-        self.delivered.contains(&src_tx_index)
+    pub fn contains(&self, src_outbound_index: u32) -> bool {
+        self.delivered.contains(&src_outbound_index)
     }
 
     /// Binds the shard if unclaimed and records the delivery; true if new.
@@ -114,12 +118,12 @@ impl SeenShard {
     /// A non-binding hash records nothing. The guest already asserts
     /// [`Self::binds`], so this is a backstop against a future caller rebinding
     /// a claimed shard and erasing which peer block delivered what.
-    pub fn insert(&mut self, src_block_hash: [u8; 32], src_tx_index: u32) -> bool {
+    pub fn insert(&mut self, src_block_hash: [u8; 32], src_outbound_index: u32) -> bool {
         if !self.binds(&src_block_hash) {
             return false;
         }
         self.src_block_hash = src_block_hash;
-        self.delivered.insert(src_tx_index)
+        self.delivered.insert(src_outbound_index)
     }
 }
 
@@ -139,18 +143,18 @@ pub fn cross_zone_inbox_account_id() -> AccountId {
 
 /// Content-addressed replay key for a delivered message.
 ///
-/// Hashes `(src_zone, src_block_id, src_tx_index)` under a domain separator.
+/// Hashes `(src_zone, src_block_id, src_outbound_index)` under a domain separator.
 /// Watcher-independent and immune to proof malleability, since it keys on block
-/// id plus index rather than a tx hash.
+/// id plus outbound index rather than a tx hash.
 #[must_use]
-pub fn message_key(src_zone: &ZoneId, src_block_id: u64, src_tx_index: u32) -> MessageKey {
+pub fn message_key(src_zone: &ZoneId, src_block_id: u64, src_outbound_index: u32) -> MessageKey {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let mut bytes = [0_u8; 76];
     bytes[..32].copy_from_slice(&MESSAGE_KEY_DOMAIN);
     bytes[32..64].copy_from_slice(src_zone);
     bytes[64..72].copy_from_slice(&src_block_id.to_le_bytes());
-    bytes[72..].copy_from_slice(&src_tx_index.to_le_bytes());
+    bytes[72..].copy_from_slice(&src_outbound_index.to_le_bytes());
 
     Impl::hash_bytes(&bytes)
         .as_bytes()

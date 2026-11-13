@@ -319,7 +319,7 @@ impl DeadLetterDispatch {
 pub struct DispatchOrigin {
     pub zone: PeerZoneKey,
     pub block_id: BlockId,
-    pub tx_index: u32,
+    pub outbound_index: u32,
 }
 
 /// One cross-zone watcher's delivery floor on a peer's channel, opaque here

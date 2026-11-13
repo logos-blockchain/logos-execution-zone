@@ -80,6 +80,25 @@ pub fn produce_dummy_block(
     produce_dummy_block_with_reverted(id, prev_hash, transactions, Vec::new())
 }
 
+/// Like [`produce_dummy_block`], declaring `outbound` on the block.
+#[must_use]
+pub fn produce_dummy_block_with_outbound(
+    id: u64,
+    prev_hash: Option<HashType>,
+    outbound: Vec<lee::OutboundMessage>,
+) -> Block {
+    let block = produce_dummy_block(id, prev_hash, Vec::new());
+    HashableBlockData {
+        block_id: block.header.block_id,
+        prev_block_hash: block.header.prev_block_hash,
+        timestamp: block.header.timestamp,
+        transactions: block.body.transactions,
+        reverted: block.body.reverted,
+        outbound,
+    }
+    .into_pending_block()
+}
+
 /// Like [`produce_dummy_block`], with `reverted` indices into the final transaction list.
 #[must_use]
 pub fn produce_dummy_block_with_reverted(

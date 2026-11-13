@@ -721,7 +721,6 @@ fn cross_zone_test_config() -> SequencerConfig {
                 }],
                 min_committee_size: 0,
                 genesis_hash: None,
-                emitters: vec![],
             }],
             lock_target_zones: Vec::new(),
             source_authority: None,
@@ -745,20 +744,24 @@ fn ping_payload(payload: &[u8]) -> Vec<u8> {
 /// to the encoding shows up here rather than passing silently.
 fn dispatch_tx(src_block_id: u64, payload: Vec<u8>) -> LeeTransaction {
     let receiver_id = programs::ping_receiver_account_id();
-    LeeTransaction::Public(cross_zone::build_dispatch_from_emission(
-        &cross_zone::EmissionSource {
+    let sender_id = programs::ping_sender_account_id();
+    LeeTransaction::Public(cross_zone::build_dispatch(
+        &cross_zone::OutboundSource {
             src_zone: PEER_ZONE,
             src_block_id,
             src_block_hash: peer_block_hash(src_block_id),
-            src_tx_index: 0,
-            src_account_id: programs::ping_sender_account_id(),
+            src_outbound_index: 0,
         },
-        receiver_id,
-        &[
-            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
-            Actor::new(ping_record_pda(receiver_id), receiver_id),
-        ],
-        payload,
+        &lee::OutboundMessage {
+            from: Actor::new(sender_id, sender_id),
+            zone: PEER_ZONE,
+            to: Actor::new(receiver_id, receiver_id),
+            message: payload,
+            accounts: vec![
+                Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+                Actor::new(ping_record_pda(receiver_id), receiver_id),
+            ],
+        },
     ))
 }
 
@@ -1042,7 +1045,7 @@ async fn a_dispatch_that_never_executes_is_given_up_on_after_repeated_failures()
         DispatchOrigin {
             src_zone: PEER_ZONE,
             src_block_id: 13,
-            src_tx_index: 0,
+            src_outbound_index: 0,
         }
     );
     assert_eq!(
@@ -1171,7 +1174,7 @@ async fn a_delivery_still_reversible_keeps_its_record() {
 
 #[test]
 fn a_settled_delivery_that_is_not_the_one_we_recorded_is_reported() {
-    // The message key covers (src_zone, src_block_id, src_tx_index) and nothing
+    // The message key covers (src_zone, src_block_id, src_outbound_index) and nothing
     // about the payload, and so does the inbox's own replay check. So a peer's
     // sequencer can publish a delivery under a key we hold with a payload we
     // never saw, and it settles our correct record along with it. The indexer

@@ -13,7 +13,7 @@ impl From<protocol::DispatchOrigin> for entities::DispatchOrigin {
         Self {
             zone: origin.src_zone,
             block_id: origin.src_block_id,
-            tx_index: origin.src_tx_index,
+            outbound_index: origin.src_outbound_index,
         }
     }
 }
@@ -23,7 +23,7 @@ impl From<entities::DispatchOrigin> for protocol::DispatchOrigin {
         Self {
             src_zone: origin.zone,
             src_block_id: origin.block_id,
-            src_tx_index: origin.tx_index,
+            src_outbound_index: origin.outbound_index,
         }
     }
 }

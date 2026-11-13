@@ -149,6 +149,8 @@ pub struct OutboundMessage {
     pub zone: ZoneId,
     pub to: Actor,
     pub message: MessageData,
+    /// Actors the destination zone declares on delivery.
+    pub accounts: Vec<Actor>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -303,6 +305,12 @@ pub enum ExecutionError {
          outbound surface"
     )]
     RemoteSendFromPrivateActor { zone: ZoneId, actor: Actor },
+
+    #[error(
+        "A local async message to {actor:?} carries delivery accounts, which only a remote send \
+         declares"
+    )]
+    AccountsOnLocalSend { actor: Actor },
 
     #[error("Boundary was not consumed exactly by the execution")]
     IncompleteBoundary,
@@ -1397,7 +1405,12 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
                 },
             )
             .collect::<Result<Vec<_>, E::Error>>()?;
-        for AsyncMessage { to, message } in transition.response.async_messages {
+        for AsyncMessage {
+            to,
+            message,
+            accounts,
+        } in transition.response.async_messages
+        {
             let destination = match to {
                 Target::Local(destination) => destination,
                 // Surfaces on the block in the clear, so only a public sender; its
@@ -1413,10 +1426,14 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
                         zone,
                         to,
                         message,
+                        accounts,
                     });
                     continue;
                 }
             };
+            if !accounts.is_empty() {
+                return Err(ExecutionError::AccountsOnLocalSend { actor: destination }.into());
+            }
             let body = MessageBody {
                 from: self.sender(actor, None, environment)?,
                 to,

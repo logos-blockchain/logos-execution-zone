@@ -66,7 +66,6 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
             }],
             min_committee_size: 0,
             genesis_hash: None,
-            emitters: vec![],
         }],
         lock_target_zones: Vec::new(),
         source_authority: None,

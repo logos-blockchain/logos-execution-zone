@@ -320,7 +320,7 @@ impl PendingCrossZoneDispatchRecord {
 pub struct DispatchOrigin {
     pub src_zone: PeerZoneKey,
     pub src_block_id: u64,
-    pub src_tx_index: u32,
+    pub src_outbound_index: u32,
 }
 
 /// A cross-zone delivery this node has given up on.

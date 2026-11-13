@@ -946,12 +946,14 @@ impl From<lee_core::execution_state::OutboundMessage> for OutboundMessage {
             zone,
             to,
             message,
+            accounts,
         } = value;
         Self {
             from: from.into(),
             zone,
             to: to.into(),
             message,
+            accounts: accounts.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -963,12 +965,14 @@ impl From<OutboundMessage> for lee_core::execution_state::OutboundMessage {
             zone,
             to,
             message,
+            accounts,
         } = value;
         Self {
             from: from.into(),
             zone,
             to: to.into(),
             message,
+            accounts: accounts.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -1109,7 +1113,7 @@ impl From<indexer_core::status::CrossZoneHalt> for CrossZoneHalt {
             block_hash,
             src_zone,
             src_block_id,
-            src_tx_index,
+            src_outbound_index,
             verdict,
         } = value;
 
@@ -1118,7 +1122,7 @@ impl From<indexer_core::status::CrossZoneHalt> for CrossZoneHalt {
             block_hash: block_hash.into(),
             src_zone,
             src_block_id,
-            src_tx_index,
+            src_outbound_index,
             verdict,
         }
     }

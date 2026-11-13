@@ -323,7 +323,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
                     message_key: HashType(record.message_key),
                     src_zone: ChannelId(record.origin.src_zone),
                     src_block_id: record.origin.src_block_id,
-                    src_tx_index: record.origin.src_tx_index,
+                    src_outbound_index: record.origin.src_outbound_index,
                     failed_attempts: record.failed_attempts,
                     transaction_bytes: u32::try_from(record.transaction.len()).unwrap_or(u32::MAX),
                 })

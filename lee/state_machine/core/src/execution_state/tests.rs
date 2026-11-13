@@ -1791,6 +1791,7 @@ fn a_parents_async_messages_precede_its_childrens_and_never_run_their_recipients
                 Response::keep_state()
                     .send(send_to(CALLEE))
                     .send(AsyncMessage {
+                        accounts: Vec::new(),
                         to: outer_target.into(),
                         message: b"x".to_vec(),
                     })
@@ -1801,6 +1802,7 @@ fn a_parents_async_messages_precede_its_childrens_and_never_run_their_recipients
             echo(
                 input,
                 Response::keep_state().send(AsyncMessage {
+                    accounts: Vec::new(),
                     to: inner_target.into(),
                     message: b"y".to_vec(),
                 }),
@@ -1876,6 +1878,7 @@ fn a_private_part_keeps_its_async_messages_out_of_the_boundary_and_a_public_part
             Response::keep_state()
                 .send(send_to(ENTRY))
                 .send(AsyncMessage {
+                    accounts: Vec::new(),
                     to: private_target.into(),
                     message: b"x".to_vec(),
                 }),
@@ -1907,6 +1910,7 @@ fn a_private_part_keeps_its_async_messages_out_of_the_boundary_and_a_public_part
         echo(
             input,
             Response::keep_state().send(AsyncMessage {
+                accounts: Vec::new(),
                 to: public_target.into(),
                 message: b"y".to_vec(),
             }),
@@ -1939,6 +1943,7 @@ fn a_public_actors_remote_async_message_is_an_outbound_effect() {
         echo(
             input,
             Response::keep_state().send(AsyncMessage {
+                accounts: Vec::new(),
                 to: Target::Remote { zone, actor: to },
                 message: b"x".to_vec(),
             }),
@@ -1951,6 +1956,7 @@ fn a_public_actors_remote_async_message_is_an_outbound_effect() {
     assert_eq!(
         outcome.outbound,
         vec![OutboundMessage {
+            accounts: Vec::new(),
             from: ENTRY,
             zone,
             to,
@@ -1968,6 +1974,7 @@ fn a_private_actors_remote_async_send_is_refused() {
         echo(
             input,
             Response::keep_state().send(AsyncMessage {
+                accounts: Vec::new(),
                 to: Target::Remote { zone, actor: to },
                 message: b"x".to_vec(),
             }),
@@ -2198,6 +2205,7 @@ fn a_failing_descendant_of_c1_stops_the_transaction_before_c2() {
             let response = if input.message == b"c1" {
                 Response::set_state(b"1".to_vec())
                     .send(AsyncMessage {
+                        accounts: Vec::new(),
                         to: stranger.into(),
                         message: b"x".to_vec(),
                     })
@@ -2452,6 +2460,7 @@ fn an_async_reply_to_a_private_call_can_blind_its_sender() {
             echo(
                 input,
                 Response::keep_state().send(AsyncMessage {
+                    accounts: Vec::new(),
                     to: input.from.expect("a call has a sender"),
                     message: b"reply".to_vec(),
                 }),
@@ -2517,6 +2526,7 @@ fn each_message_of_a_private_transition_presents_the_sender_its_presentation_sel
                 Response::keep_state()
                     .send(send_to(ENTRY))
                     .send(AsyncMessage {
+                        accounts: Vec::new(),
                         to: target.into(),
                         message: Vec::new(),
                     })
@@ -2572,6 +2582,7 @@ fn an_async_message_at_an_opened_alias_is_received_privately_by_the_account() {
 
 fn async_message(to: Actor, message: &[u8]) -> AsyncMessage {
     AsyncMessage {
+        accounts: Vec::new(),
         to: to.into(),
         message: message.to_vec(),
     }

@@ -51,7 +51,7 @@ pub struct CrossZoneDeadLetter {
     pub message_key: HashType,
     pub src_zone: ChannelId,
     pub src_block_id: u64,
-    pub src_tx_index: u32,
+    pub src_outbound_index: u32,
     pub failed_attempts: u32,
     pub transaction_bytes: u32,
 }

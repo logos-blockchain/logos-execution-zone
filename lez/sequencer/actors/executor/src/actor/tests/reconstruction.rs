@@ -127,24 +127,28 @@ fn peer_block_hash(src_block_id: u64) -> [u8; 32] {
 /// A delivery of `payload` to the ping receiver, read off peer block `src_block_id`.
 fn dispatch_tx(src_block_id: u64, payload: &[u8]) -> LeeTransaction {
     let receiver_id = programs::ping_receiver_account_id();
+    let sender_id = programs::ping_sender_account_id();
     let message = borsh::to_vec(&ReceiverMessage::Record {
         payload: payload.to_vec(),
     })
     .expect("ping message serializes");
-    LeeTransaction::Public(cross_zone::build_dispatch_from_emission(
-        &cross_zone::EmissionSource {
+    LeeTransaction::Public(cross_zone::build_dispatch(
+        &cross_zone::OutboundSource {
             src_zone: PEER_ZONE,
             src_block_id,
             src_block_hash: peer_block_hash(src_block_id),
-            src_tx_index: 0,
-            src_account_id: programs::ping_sender_account_id(),
+            src_outbound_index: 0,
         },
-        receiver_id,
-        &[
-            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
-            Actor::new(ping_record_pda(receiver_id), receiver_id),
-        ],
-        message,
+        &lee::OutboundMessage {
+            from: Actor::new(sender_id, sender_id),
+            zone: PEER_ZONE,
+            to: Actor::new(receiver_id, receiver_id),
+            message,
+            accounts: vec![
+                Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+                Actor::new(ping_record_pda(receiver_id), receiver_id),
+            ],
+        },
     ))
 }
 

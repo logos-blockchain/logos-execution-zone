@@ -53,7 +53,6 @@ pub(in crate::actor) fn cross_zone_genesis_store() -> CannedStore {
             }],
             min_committee_size: 0,
             genesis_hash: None,
-            emitters: vec![],
         }],
         lock_target_zones: Vec::new(),
         source_authority: None,

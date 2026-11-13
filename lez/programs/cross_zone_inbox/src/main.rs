@@ -78,14 +78,13 @@ fn mark(input: &ReceiveInput, msg: CrossZoneMessage) -> Response {
         "Seen shard is bound to a different peer block at this block id"
     );
     assert!(
-        !shard.contains(msg.src_tx_index),
+        !shard.contains(msg.src_outbound_index),
         "This delivery is already recorded"
     );
-    shard.insert(msg.src_block_hash, msg.src_tx_index);
+    shard.insert(msg.src_block_hash, msg.src_outbound_index);
 
-    let target = Actor::new(msg.target_account_id, msg.target_account_id);
     Response::set_state(shard.to_bytes()).send_sync(
-        target,
+        msg.target,
         &Delivery {
             src_zone: msg.src_zone,
             src_account_id: msg.src_account_id,
@@ -123,14 +122,18 @@ mod tests {
     const HASH: [u8; 32] = [1; 32];
     const OTHER_HASH: [u8; 32] = [2; 32];
 
-    fn msg(src_zone: [u8; 32], src_block_hash: [u8; 32], src_tx_index: u32) -> CrossZoneMessage {
+    fn msg(
+        src_zone: [u8; 32],
+        src_block_hash: [u8; 32],
+        src_outbound_index: u32,
+    ) -> CrossZoneMessage {
         CrossZoneMessage {
             src_zone,
             src_block_id: 3,
             src_block_hash,
-            src_tx_index,
+            src_outbound_index,
             src_account_id: SOURCE,
-            target_account_id: TARGET,
+            target: Actor::new(TARGET, TARGET),
             payload: b"payload".to_vec(),
             l1_inclusion_witness: None,
         }
@@ -160,12 +163,12 @@ mod tests {
         handle_message(&input, message).into_transition(input)
     }
 
-    fn mark_at_seen(pre: Vec<u8>, src_block_hash: [u8; 32], src_tx_index: u32) -> Transition {
+    fn mark_at_seen(pre: Vec<u8>, src_block_hash: [u8; 32], src_outbound_index: u32) -> Transition {
         run(
             seen_actor(),
             Some(config_actor().program_account_id),
             pre,
-            Message::Mark(msg(PEER_ZONE, src_block_hash, src_tx_index)),
+            Message::Mark(msg(PEER_ZONE, src_block_hash, src_outbound_index)),
         )
     }
 

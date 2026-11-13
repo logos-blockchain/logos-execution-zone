@@ -1,17 +1,15 @@
 //! Chain-builder helpers shared by the watcher's and verifier's tests, so both
 //! sides exercise the acceptance policy against identically built peer chains.
 
-use common::{block::Block, test_utils::produce_dummy_block, transaction::LeeTransaction};
+use common::{
+    block::Block,
+    test_utils::{produce_dummy_block, produce_dummy_block_with_outbound},
+    transaction::LeeTransaction,
+};
 use cross_zone_inbox_core::ZoneId;
-use lee::{
-    GENESIS_BLOCK_ID, PublicAccountEvidence, PublicTransaction,
-    public_transaction::{Message, WitnessSet},
-};
-use lee_core::account::{AccountId, Actor};
-use ping_core::{
-    CrossZoneEmission, SenderMessage, ping_record_pda, receiver_config_account_id,
-    sender_config_account_id,
-};
+use lee::GENESIS_BLOCK_ID;
+use lee_core::account::Actor;
+use ping_core::{ping_record_pda, receiver_config_account_id, sender_config_account_id};
 
 /// The peer's hash-linked chain from its genesis up to and including `last`,
 /// each block carrying the transactions `txs_at(block_id)` returns. Empty when
@@ -25,89 +23,38 @@ pub fn linked_chain_to(last: u64, txs_at: impl Fn(u64) -> Vec<LeeTransaction>) -
     blocks
 }
 
-/// A transaction whose root call sends `instruction` to `emitter`, the shape
-/// `extract_emission` reads a registered emitter's transactions through.
+/// The outbound message of a ping aimed at this zone's `ping_receiver`,
+/// declaring the actors its delivery reaches.
 #[must_use]
-pub fn emitter_instruction(emitter: AccountId, instruction: Vec<u8>) -> LeeTransaction {
-    let root = Actor::new(emitter, emitter);
-    let message = Message::new_preserialized(
-        root,
-        instruction,
-        vec![root],
-        std::collections::BTreeMap::new(),
-        None,
-    );
-    LeeTransaction::Public(PublicTransaction::new(
-        message,
-        WitnessSet::from_raw_parts(vec![]),
-    ))
-}
-
-/// A generic-contract emission from `emitter`, recognized only while `emitter`
-/// is in the peer's registered set.
-#[must_use]
-pub fn generic_emission(
-    emitter: AccountId,
-    target_zone: ZoneId,
-    target_account_id: AccountId,
-    payload: &[u8],
-) -> LeeTransaction {
-    let emission = cross_zone_emission_core::CrossZoneEmission {
-        target_zone,
-        target_account_id,
-        target_accounts: vec![],
-        payload: payload.to_vec(),
-        ordinal: 0,
-    };
-    emitter_instruction(
-        emitter,
-        cross_zone_emission_core::emitting_instruction_bytes(&emission),
-    )
-}
-
-/// A `ping_sender` emission aimed at `target_zone` and `target_program_id`,
-/// carrying `payload`. The sender lets its caller name any target, which is why
-/// routes pin the pair rather than the target alone.
-#[must_use]
-pub fn ping_emission(
-    target_zone: ZoneId,
-    target_account_id: AccountId,
-    payload: &[u8],
-) -> LeeTransaction {
+pub fn ping_outbound(target_zone: ZoneId, payload: &[u8]) -> lee::OutboundMessage {
     let receiver_id = programs::ping_receiver_account_id();
     let sender_id = programs::ping_sender_account_id();
-    let outbox_id = programs::cross_zone_outbox_account_id();
-    let config = Actor::new(sender_config_account_id(sender_id), sender_id);
-    let slot = PublicAccountEvidence::Pda {
-        program: outbox_id,
-        seed: cross_zone_outbox_core::outbox_pda_seed(sender_id, &target_zone, 0),
-    };
-    let outbox = Actor::new(slot.account_id(), outbox_id);
-    let send = SenderMessage::Send {
-        outbox,
-        emission: CrossZoneEmission {
-            target_zone,
-            target_account_id,
-            target_accounts: vec![
-                Actor::new(receiver_config_account_id(receiver_id), receiver_id),
-                Actor::new(ping_record_pda(receiver_id), receiver_id),
-            ],
-            payload: payload.to_vec(),
-            ordinal: 0,
-        },
-    };
-    let message = Message {
-        admission_evidence: vec![slot],
-        ..Message::try_new(
-            config,
-            [config, outbox],
-            std::collections::BTreeMap::new(),
-            send,
-        )
-        .expect("emission serializes")
-    };
-    LeeTransaction::Public(PublicTransaction::new(
-        message,
-        WitnessSet::from_raw_parts(vec![]),
-    ))
+    lee::OutboundMessage {
+        from: Actor::new(sender_config_account_id(sender_id), sender_id),
+        zone: target_zone,
+        to: Actor::new(receiver_id, receiver_id),
+        message: payload.to_vec(),
+        accounts: vec![
+            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+            Actor::new(ping_record_pda(receiver_id), receiver_id),
+        ],
+    }
+}
+
+/// The peer's hash-linked chain whose blocks declare `outbound_at(block_id)`.
+#[must_use]
+pub fn linked_chain_with_outbound(
+    last: u64,
+    outbound_at: impl Fn(u64) -> Vec<lee::OutboundMessage>,
+) -> Vec<Block> {
+    let mut blocks: Vec<Block> = Vec::new();
+    for block_id in GENESIS_BLOCK_ID..=last {
+        let prev = blocks.last().map(|block| block.header.hash);
+        blocks.push(produce_dummy_block_with_outbound(
+            block_id,
+            prev,
+            outbound_at(block_id),
+        ));
+    }
+    blocks
 }

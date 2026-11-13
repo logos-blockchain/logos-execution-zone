@@ -23,38 +23,13 @@ use cross_zone_inbox_core::{
 };
 use lee_core::{
     account::{AccountId, Actor, Balance},
-    native_token::NATIVE_TOKEN_PROGRAM_ID,
-    program::{PROGRAM_LOADER_ACCOUNT_ID, PdaSeed},
+    program::PdaSeed,
 };
 use serde::{Deserialize, Serialize};
 
 pub mod acceptance;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
-
-/// The cross-zone emission fields a watcher or verifier reads off a source
-/// transaction, common to every emitter program.
-pub struct Emission {
-    pub source: AccountId,
-    pub target_zone: ZoneId,
-    pub target_account_id: AccountId,
-    pub target_accounts: Vec<Actor>,
-    pub payload: Vec<u8>,
-}
-
-impl Emission {
-    /// The ordinal only shapes the source-side outbox slot, so it is dropped.
-    #[must_use]
-    pub fn from_wire(source: AccountId, wire: cross_zone_emission_core::CrossZoneEmission) -> Self {
-        Self {
-            source,
-            target_zone: wire.target_zone,
-            target_account_id: wire.target_account_id,
-            target_accounts: wire.target_accounts,
-            payload: wire.payload,
-        }
-    }
-}
 
 /// One delivery a peer is allowed to make: a program on the peer that may emit,
 /// paired with the program here it may reach.
@@ -69,7 +44,9 @@ impl Emission {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CrossZoneRoute {
-    /// The program on the peer zone that emitted the message.
+    /// The program on the peer zone that emitted the message, from any of its
+    /// actors at any call depth; a source that must stay top-level asserts it
+    /// in its own guest.
     pub src_account_id: AccountId,
     /// The program on this zone it may be delivered to.
     pub target_account_id: AccountId,
@@ -97,16 +74,6 @@ pub struct CrossZonePeer {
     /// own config. A route naming a program that does not authorize cross-zone
     /// sources is refused there, at genesis.
     pub allowed_routes: Vec<CrossZoneRoute>,
-    /// Programs on this peer, beyond the builtins, read for emissions under the
-    /// generic contract (see `cross_zone_emission_core::declared_emission`).
-    ///
-    /// Listing one asserts, unverifiably, that it honors that contract, that it
-    /// panics on any tag-0 call it does not intend delivered (an abort is its
-    /// only veto, from any of its actors), and that its code will not be
-    /// swapped. Retire one with [`RegisteredEmitter::until_src_block`], never by
-    /// deleting the entry.
-    #[serde(default)]
-    pub emitters: Vec<RegisteredEmitter>,
     /// Minimum live committee size (accredited keys on the peer's channel)
     /// below which reading from this peer is suspended, by the sequencer's
     /// watcher and the indexer's verifier alike. 0, the default, disables the
@@ -121,30 +88,6 @@ pub struct CrossZonePeer {
     /// as-is. A production peer should set it.
     #[serde(default)]
     pub genesis_hash: Option<HashType>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RegisteredEmitter {
-    pub account_id: AccountId,
-    /// Last peer block whose emissions from this program are recognized, unset
-    /// for no cutoff.
-    ///
-    /// Set it below the peer block that repointed the program's header, since a
-    /// `WriteSegment` and a call to the swapped code can share one block, and at
-    /// or above the newest source block already dispatched.
-    #[serde(default)]
-    pub until_src_block: Option<u64>,
-}
-
-impl RegisteredEmitter {
-    /// Applied to history too, so a cutoff excluding a block already dispatched
-    /// halts the indexer as `Forged`.
-    #[must_use]
-    pub fn covers(&self, src_block_id: u64) -> bool {
-        self.until_src_block
-            .is_none_or(|until| src_block_id <= until)
-    }
 }
 
 /// Cross-zone configuration shared by a zone's sequencer (watcher) and indexer
@@ -194,16 +137,15 @@ pub struct CrossZoneConfig {
 /// Where a delivery came from on the peer chain.
 ///
 /// One struct so the watcher and the verifier fill the same field list: their
-/// dispatch transactions for one emission must be byte-identical.
+/// dispatch transactions for one message must be byte-identical.
 ///
 /// `src_block_hash` is the recomputed hash on both sides, never the declared
 /// `header.hash`, which the signature does not cover.
-pub struct EmissionSource {
+pub struct OutboundSource {
     pub src_zone: ZoneId,
     pub src_block_id: u64,
     pub src_block_hash: [u8; 32],
-    pub src_tx_index: u32,
-    pub src_account_id: AccountId,
+    pub src_outbound_index: u32,
 }
 
 /// Whether a program may only be invoked by sequencer-origin transactions.
@@ -219,104 +161,26 @@ pub fn is_sequencer_only_program(account_id: AccountId) -> bool {
         || account_id == programs::system_upgrader_account_id()
 }
 
-/// Extracts the cross-zone emission from a source transaction.
-///
-/// Recognizes the builtin emitters through their own decoders and any program
-/// in `peer_emitters` whose cutoff covers `src_block_id` through the generic
-/// contract. The watcher and verifier share this, so both must pass the same
-/// set, built with [`peer_emitter_set`], and the same `src_block_id`.
-#[must_use]
-pub fn extract_emission(
-    tx: &lee::PublicTransaction,
-    peer_emitters: &BTreeMap<AccountId, RegisteredEmitter>,
-    src_block_id: u64,
-) -> Option<Emission> {
-    let lee::RootCall { to, message } = &tx.message().execution.root;
-    let lee::Target::Local(to) = to else {
-        return None;
-    };
-    if to.program_account_id == programs::ping_sender_account_id() {
-        // Not every transaction to an emitter emits: `InitConfig` is one of its
-        // messages, so a non-`Send` decode is an ordinary non-emitting tx.
-        let Ok(ping_core::SenderMessage::Send { emission, .. }) = borsh::from_slice(message) else {
-            return None;
-        };
-        Some(Emission::from_wire(to.program_account_id, emission))
-    } else if to.program_account_id == programs::bridge_lock_account_id() {
-        let Ok(bridge_lock_core::Message::Lock { emission, .. }) = borsh::from_slice(message)
-        else {
-            return None;
-        };
-        Some(Emission::from_wire(to.program_account_id, emission))
-    } else if peer_emitters
-        .get(&to.program_account_id)
-        .is_some_and(|emitter| emitter.covers(src_block_id))
-    {
-        let emission = cross_zone_emission_core::declared_emission(message)?;
-        Some(Emission::from_wire(to.program_account_id, emission))
-    } else {
-        None
-    }
-}
-
-/// The validated registered-emitter set for one peer.
-///
-/// Panics on a builtin id: builtins are recognized by their own decoders, and
-/// their encodings were never written against the generic contract, so their
-/// ordinary transactions could be misread as emissions (the loader's tag-0
-/// `WriteSegment` carries attacker-chosen bytes). A config typo must not cost
-/// a channel silently.
-#[must_use]
-pub fn peer_emitter_set(peer: &CrossZonePeer) -> BTreeMap<AccountId, RegisteredEmitter> {
-    let builtins = programs::builtin_program_account_ids();
-    for emitter in &peer.emitters {
-        let refused = builtins.contains(&emitter.account_id)
-            || emitter.account_id == PROGRAM_LOADER_ACCOUNT_ID
-            || emitter.account_id == NATIVE_TOKEN_PROGRAM_ID;
-        assert!(
-            !refused,
-            "cross-zone peer {} lists builtin program {:?} as a registered emitter; builtins are recognized by their own decoders and must not be listed",
-            hex::encode(peer.channel_id),
-            emitter.account_id
-        );
-    }
-    let mut set = BTreeMap::new();
-    for emitter in &peer.emitters {
-        // Merged config templates repeat an entry. Differing cutoffs for one
-        // account have no answer, and collecting would keep the last.
-        if let Some(held) = set.insert(emitter.account_id, *emitter) {
-            assert_eq!(
-                held,
-                *emitter,
-                "cross-zone peer {} lists emitter {:?} twice with different cutoffs",
-                hex::encode(peer.channel_id),
-                emitter.account_id
-            );
-        }
-    }
-    set
-}
-
 /// Builds the sequencer-origin dispatch transaction. Pure for fixed inputs, so
 /// the watcher's injected tx and the indexer's re-derived tx are byte-identical.
 fn build_inbox_dispatch_tx(
     inbox_id: AccountId,
     msg: &CrossZoneMessage,
-    target_accounts: Vec<Actor>,
+    accounts: Vec<Actor>,
 ) -> lee::PublicTransaction {
-    // The inbox's config and seen actors, then the target's coordinator the delivery
-    // lands on, then the target's own actors the delivery reaches. Declared here
-    // rather than by the guest, since a guest cannot conjure an actor; both the
-    // watcher and the verifier build it through this one function.
+    // The inbox's config and seen actors, then the target the delivery lands on,
+    // then the sender-declared actors the delivery reaches. Declared here rather
+    // than by the guest, since a guest cannot conjure an actor; both the watcher
+    // and the verifier build it through this one function.
     let config = Actor::new(inbox_config_account_id(inbox_id), inbox_id);
-    let mut public_actors = Vec::with_capacity(target_accounts.len().saturating_add(3));
+    let mut public_actors = Vec::with_capacity(accounts.len().saturating_add(3));
     public_actors.push(config);
     public_actors.push(Actor::new(
         inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
         inbox_id,
     ));
-    public_actors.push(Actor::new(msg.target_account_id, msg.target_account_id));
-    public_actors.extend(target_accounts);
+    public_actors.push(msg.target);
+    public_actors.extend(accounts);
 
     let message = lee::public_transaction::Message {
         admission_evidence: vec![lee::PublicAccountEvidence::Pda {
@@ -338,32 +202,31 @@ fn build_inbox_dispatch_tx(
     )
 }
 
-/// Builds the dispatch transaction for one peer emission.
+/// Builds the dispatch transaction for one message of a peer block's outbound list.
 ///
 /// Both the sequencer's watcher and the indexer's verifier go through this so
-/// their transactions are byte-identical for the same emission (the basis of the
-/// Option B check).
+/// their transactions are byte-identical for the same message (the basis of the
+/// Option B check). The source a receiver authorizes against is the emitting
+/// actor's program.
 #[must_use]
-pub fn build_dispatch_from_emission(
-    source: &EmissionSource,
-    target_account_id: AccountId,
-    target_accounts: &[Actor],
-    payload: Vec<u8>,
+pub fn build_dispatch(
+    source: &OutboundSource,
+    message: &lee::OutboundMessage,
 ) -> lee::PublicTransaction {
     let msg = CrossZoneMessage {
         src_zone: source.src_zone,
         src_block_id: source.src_block_id,
         src_block_hash: source.src_block_hash,
-        src_tx_index: source.src_tx_index,
-        src_account_id: source.src_account_id,
-        target_account_id,
-        payload,
+        src_outbound_index: source.src_outbound_index,
+        src_account_id: message.from.program_account_id,
+        target: message.to,
+        payload: message.message.clone(),
         l1_inclusion_witness: None,
     };
     build_inbox_dispatch_tx(
         programs::cross_zone_inbox_account_id(),
         &msg,
-        target_accounts.to_vec(),
+        message.accounts.clone(),
     )
 }
 
@@ -565,188 +428,6 @@ fn genesis_public_tx<M: borsh::BorshSerialize>(
 mod tests {
     use super::*;
 
-    /// Unwraps the public transaction the test emissions are built as.
-    fn public(tx: common::transaction::LeeTransaction) -> lee::PublicTransaction {
-        let common::transaction::LeeTransaction::Public(tx) = tx else {
-            panic!("test emissions are public transactions");
-        };
-        tx
-    }
-
-    fn registered(account_id: AccountId) -> RegisteredEmitter {
-        RegisteredEmitter {
-            account_id,
-            until_src_block: None,
-        }
-    }
-
-    fn emitter_set<const N: usize>(ids: [AccountId; N]) -> BTreeMap<AccountId, RegisteredEmitter> {
-        ids.into_iter().map(|id| (id, registered(id))).collect()
-    }
-
-    fn peer_with_emitters(emitters: Vec<RegisteredEmitter>) -> CrossZonePeer {
-        CrossZonePeer {
-            channel_id: [2; 32],
-            allowed_routes: vec![],
-            min_committee_size: 0,
-            genesis_hash: None,
-            emitters,
-        }
-    }
-
-    #[test]
-    fn a_registered_emitter_is_recognized_through_the_generic_contract() {
-        let emitter = AccountId::new([8; 32]);
-        let target = AccountId::new([9; 32]);
-        let tx = public(test_utils::generic_emission(
-            emitter, [2; 32], target, b"hi",
-        ));
-
-        let emission = extract_emission(&tx, &emitter_set([emitter]), 0)
-            .expect("a registered emitter's tag-0 instruction is an emission");
-        assert_eq!(emission.source, emitter);
-        assert_eq!(emission.target_zone, [2; 32]);
-        assert_eq!(emission.target_account_id, target);
-        assert_eq!(emission.payload, b"hi".to_vec());
-
-        assert!(
-            extract_emission(&tx, &BTreeMap::new(), 0).is_none(),
-            "the same transaction is invisible while the emitter is unregistered"
-        );
-    }
-
-    fn wire_emission() -> cross_zone_emission_core::CrossZoneEmission {
-        cross_zone_emission_core::CrossZoneEmission {
-            target_zone: [2; 32],
-            target_account_id: AccountId::new([9; 32]),
-            target_accounts: vec![],
-            payload: vec![0xAA],
-            ordinal: 0,
-        }
-    }
-
-    #[test]
-    fn trailing_program_fields_do_not_hide_a_registered_emission() {
-        let emitter = AccountId::new([8; 32]);
-        let mut instruction =
-            cross_zone_emission_core::emitting_instruction_bytes(&wire_emission());
-        instruction.extend_from_slice(&[0xDE, 0xAD]);
-        let tx = public(test_utils::emitter_instruction(emitter, instruction));
-
-        let emission = extract_emission(&tx, &emitter_set([emitter]), 0)
-            .expect("trailing fields are the emitter's own");
-        assert_eq!(emission.payload, vec![0xAA]);
-    }
-
-    #[test]
-    fn a_non_zero_tag_from_a_registered_emitter_is_not_an_emission() {
-        let emitter = AccountId::new([8; 32]);
-        let mut instruction =
-            cross_zone_emission_core::emitting_instruction_bytes(&wire_emission());
-        instruction[0] = 1;
-        let tx = public(test_utils::emitter_instruction(emitter, instruction));
-
-        assert!(extract_emission(&tx, &emitter_set([emitter]), 0).is_none());
-    }
-
-    #[test]
-    fn the_builtin_ping_sender_arm_ignores_the_registered_set() {
-        let tx = public(test_utils::ping_emission(
-            [2; 32],
-            programs::ping_receiver_account_id(),
-            b"hi",
-        ));
-        for set in [BTreeMap::new(), emitter_set([AccountId::new([8; 32])])] {
-            let emission = extract_emission(&tx, &set, 0)
-                .expect("ping_sender is recognized by its own decoder");
-            assert_eq!(emission.source, programs::ping_sender_account_id());
-        }
-    }
-
-    #[test]
-    #[should_panic(expected = "must not be listed")]
-    fn a_builtin_listed_as_a_registered_emitter_is_refused() {
-        let _set = peer_emitter_set(&peer_with_emitters(vec![registered(
-            programs::ping_sender_account_id(),
-        )]));
-    }
-
-    #[test]
-    fn a_retired_emitter_is_recognized_up_to_its_cutoff_and_not_past_it() {
-        let emitter = AccountId::new([8; 32]);
-        let tx = public(test_utils::generic_emission(
-            emitter,
-            [2; 32],
-            AccountId::new([9; 32]),
-            b"hi",
-        ));
-        let set = BTreeMap::from([(
-            emitter,
-            RegisteredEmitter {
-                account_id: emitter,
-                until_src_block: Some(100),
-            },
-        )]);
-
-        for src_block_id in [0, 99, 100] {
-            assert!(
-                extract_emission(&tx, &set, src_block_id).is_some(),
-                "block {src_block_id} is covered by the cutoff"
-            );
-        }
-        assert!(extract_emission(&tx, &set, 101).is_none());
-    }
-
-    #[test]
-    #[should_panic(expected = "twice with different cutoffs")]
-    fn an_emitter_listed_twice_with_differing_cutoffs_is_refused() {
-        let emitter = AccountId::new([8; 32]);
-        let _set = peer_emitter_set(&peer_with_emitters(vec![
-            registered(emitter),
-            RegisteredEmitter {
-                account_id: emitter,
-                until_src_block: Some(5),
-            },
-        ]));
-    }
-
-    #[test]
-    fn an_emitter_listed_twice_identically_is_accepted() {
-        let emitter = AccountId::new([8; 32]);
-        let set = peer_emitter_set(&peer_with_emitters(vec![
-            registered(emitter),
-            registered(emitter),
-        ]));
-        assert_eq!(set, emitter_set([emitter]));
-    }
-
-    #[test]
-    #[should_panic(expected = "must not be listed")]
-    fn the_program_loader_listed_as_a_registered_emitter_is_refused() {
-        let _set = peer_emitter_set(&peer_with_emitters(vec![registered(
-            PROGRAM_LOADER_ACCOUNT_ID,
-        )]));
-    }
-
-    #[test]
-    fn the_registered_emitter_set_is_the_peers_list() {
-        let emitters = vec![
-            registered(AccountId::new([8; 32])),
-            registered(AccountId::new([9; 32])),
-        ];
-        assert_eq!(
-            peer_emitter_set(&peer_with_emitters(emitters.clone())),
-            emitters
-                .into_iter()
-                .map(|emitter| (emitter.account_id, emitter))
-                .collect::<BTreeMap<_, _>>()
-        );
-    }
-
-    /// A route naming a program that never opted into cross-zone sources is an
-    /// operator typo that nothing downstream would report: the fan-out would drop
-    /// it, the watcher no longer filters targets, and every delivery would be
-    /// refused by the target and dead-lettered.
     #[test]
     #[should_panic(expected = "does not authorize cross-zone sources")]
     fn a_route_to_a_program_that_does_not_authorize_sources_is_refused() {
@@ -760,7 +441,6 @@ mod tests {
                 }],
                 min_committee_size: 0,
                 genesis_hash: None,
-                emitters: vec![],
             }],
             lock_target_zones: Vec::new(),
             source_authority: None,
@@ -785,7 +465,6 @@ mod tests {
                 }],
                 min_committee_size: 0,
                 genesis_hash: None,
-                emitters: vec![],
             }],
             lock_target_zones: Vec::new(),
             source_authority: None,
@@ -810,7 +489,6 @@ mod tests {
                 allowed_routes: vec![route.clone(), route],
                 min_committee_size: 0,
                 genesis_hash: None,
-                emitters: vec![],
             }],
             lock_target_zones: Vec::new(),
             source_authority: None,
@@ -870,17 +548,21 @@ mod tests {
 
     #[test]
     fn a_dispatch_carries_the_evidence_of_the_seen_shard_it_declares() {
-        let tx = build_dispatch_from_emission(
-            &EmissionSource {
+        let receiver = programs::ping_receiver_account_id();
+        let tx = build_dispatch(
+            &OutboundSource {
                 src_zone: [3; 32],
                 src_block_id: 7,
                 src_block_hash: [4; 32],
-                src_tx_index: 0,
-                src_account_id: AccountId::new([5; 32]),
+                src_outbound_index: 0,
             },
-            programs::ping_receiver_account_id(),
-            &[],
-            Vec::new(),
+            &lee::OutboundMessage {
+                from: Actor::new(AccountId::new([5; 32]), AccountId::new([5; 32])),
+                zone: [3; 32],
+                to: Actor::new(receiver, receiver),
+                message: Vec::new(),
+                accounts: Vec::new(),
+            },
         );
 
         let inbox_id = programs::cross_zone_inbox_account_id();

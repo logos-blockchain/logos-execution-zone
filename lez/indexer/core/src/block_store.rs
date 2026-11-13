@@ -480,7 +480,7 @@ mod stall_reason_tests {
             block_hash: HashType([0xAB_u8; 32]),
             src_zone: hex::encode([2_u8; 32]),
             src_block_id: 5,
-            src_tx_index: 1,
+            src_outbound_index: 1,
             verdict: "re-derivation mismatch".to_owned(),
         };
         store

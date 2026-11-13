@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use chain_state::zone_indexer::stop_at_read_error;
@@ -8,14 +8,12 @@ use common::{
     transaction::LeeTransaction,
 };
 use cross_zone::{
-    CommitteeFloorState, EmissionSource, FloorVerdict, Link, RegisteredEmitter, StallState,
-    alerts_at, build_dispatch_from_emission, extract_emission, is_sequencer_only_program,
-    link_to_tip, log_equivocation, peer_emitter_set, screen_peer_block,
+    CommitteeFloorState, FloorVerdict, Link, OutboundSource, StallState, alerts_at, build_dispatch,
+    is_sequencer_only_program, link_to_tip, log_equivocation, screen_peer_block,
 };
 use cross_zone_inbox_core::message_key;
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 use kameo::actor::ActorRef;
-use lee_core::account::AccountId;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
     protocol::{AccreditedKeys, ChannelId, GetAccreditedKeys, ReadChannel, Slot, ZoneMessage},
@@ -45,9 +43,6 @@ struct PeerContext {
     min_committee_size: u32,
     /// Pin for the peer's genesis hash; `None` anchors on the first read.
     genesis_hash: Option<HashType>,
-    /// Registered emitters on this peer, recognized through the generic
-    /// contract alongside the builtin emitters.
-    emitters: BTreeMap<AccountId, RegisteredEmitter>,
 }
 
 /// Why one pass over a peer's stream ended.
@@ -245,7 +240,6 @@ pub fn spawn_watchers<S: StorageActorTrait, B: BedrockActorTrait>(
                     self_zone,
                     min_committee_size: peer.min_committee_size,
                     genesis_hash: peer.genesis_hash,
-                    emitters: peer_emitter_set(&peer),
                 },
                 poll_interval,
                 storage_ref.clone(),
@@ -703,29 +697,17 @@ async fn record_block_deliveries<S: StorageActorTrait>(
     // Collected and written once, so recording a block is all-or-nothing; see
     // RocksDBIO::add_pending_cross_zone_dispatches.
     let mut deliveries = Vec::new();
-    for (index, tx) in block.body.transactions.iter().enumerate() {
-        // Effects did not take; the verifier refuses the dispatch identically.
-        if block.body.is_reverted(index) {
-            continue;
-        }
-        let LeeTransaction::Public(public_tx) = tx else {
-            continue;
-        };
-        let Some(emission) = extract_emission(public_tx, &peer.emitters, block.header.block_id)
-        else {
-            continue;
-        };
-
-        if emission.target_zone != self_zone {
+    for (index, message) in block.body.outbound.iter().enumerate() {
+        if message.zone != self_zone {
             continue;
         }
         // Targets authorize their own sources now, so this is not authorization,
         // it is hygiene: a delivery the zone will certainly refuse still costs a
         // pending-list slot and three execution attempts before it is dead
-        // lettered. Kept host-side only, never in `extract_emission` or the
-        // verifier's re-derivation, where a check that depends on this build would
-        // make the two disagree and halt ingestion.
-        if is_sequencer_only_program(emission.target_account_id) {
+        // lettered. Kept host-side only, never in the verifier's re-derivation,
+        // where a check that depends on this build would make the two disagree
+        // and halt ingestion.
+        if is_sequencer_only_program(message.to.program_account_id) {
             warn!(
                 "Watcher dropping peer message: a peer may not dispatch into a sequencer-only \
                  program"
@@ -733,18 +715,15 @@ async fn record_block_deliveries<S: StorageActorTrait>(
             continue;
         }
 
-        let src_tx_index = u32::try_from(index).unwrap_or(u32::MAX);
-        let dispatch = build_dispatch_from_emission(
-            &EmissionSource {
+        let src_outbound_index = u32::try_from(index).expect("outbound index fits u32");
+        let dispatch = build_dispatch(
+            &OutboundSource {
                 src_zone: peer_zone,
                 src_block_id: block.header.block_id,
                 src_block_hash: block_hash.0,
-                src_tx_index,
-                src_account_id: emission.source,
+                src_outbound_index,
             },
-            emission.target_account_id,
-            &emission.target_accounts,
-            emission.payload,
+            message,
         );
         let dispatch = LeeTransaction::Public(dispatch);
 
@@ -752,7 +731,7 @@ async fn record_block_deliveries<S: StorageActorTrait>(
         // this peer block is never re-read; the record is what block production
         // drains on its next turn, and what a restart still has. It is dropped
         // when the delivery itself becomes irreversible.
-        let key = message_key(&peer_zone, block.header.block_id, src_tx_index);
+        let key = message_key(&peer_zone, block.header.block_id, src_outbound_index);
         let encoded = match borsh::to_vec(&dispatch) {
             Ok(encoded) => encoded,
             Err(err) => {
@@ -812,7 +791,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use common::test_utils::produce_dummy_block;
-    use cross_zone::test_utils::{linked_chain_to, ping_emission};
+    use cross_zone::test_utils::{linked_chain_with_outbound, ping_outbound};
     use futures::stream;
     use kameo::{actor::Spawn as _, supervision::RestartPolicy};
     use lee::GENESIS_BLOCK_ID;
@@ -838,7 +817,6 @@ mod tests {
             self_zone: SELF_ZONE,
             min_committee_size: 0,
             genesis_hash: None,
-            emitters: BTreeMap::new(),
         }
     }
 
@@ -908,14 +886,17 @@ mod tests {
             .expect("seed genesis");
     }
 
-    /// A `ping_sender` emission addressed to `SELF_ZONE`.
-    fn emission() -> LeeTransaction {
-        emission_to(programs::ping_receiver_account_id())
+    /// A ping outbound message addressed to `SELF_ZONE`.
+    fn outbound() -> lee::OutboundMessage {
+        ping_outbound(SELF_ZONE, b"hi")
     }
 
-    /// A `ping_sender` emission aimed at `target_program_id`.
-    fn emission_to(target_program_id: lee_core::account::AccountId) -> LeeTransaction {
-        ping_emission(SELF_ZONE, target_program_id, b"hi")
+    /// A ping outbound message delivered to `target_program_id`.
+    fn outbound_to(target_program_id: lee_core::account::AccountId) -> lee::OutboundMessage {
+        lee::OutboundMessage {
+            to: lee::Actor::new(target_program_id, target_program_id),
+            ..outbound()
+        }
     }
 
     fn peer_msg(data: Vec<u8>, slot: u64) -> (ZoneMessage, Slot) {
@@ -930,10 +911,10 @@ mod tests {
     }
 
     /// The peer's chain from its genesis up to and including `block_id`, each
-    /// block linked to the one before it and carrying one emission for this
-    /// zone.
+    /// block linked to the one before it and declaring one outbound message for
+    /// this zone.
     fn chain_to(block_id: u64) -> Vec<Block> {
-        linked_chain_to(block_id, |_| vec![emission()])
+        linked_chain_with_outbound(block_id, |_| vec![outbound()])
     }
 
     /// The peer's block at `block_id`.
@@ -946,14 +927,14 @@ mod tests {
         chain_block(block_id).header.hash
     }
 
-    /// A block continuing the peer's chain at `block_id`, whose one emission
-    /// targets `target_program_id`.
+    /// A block continuing the peer's chain at `block_id`, whose one outbound
+    /// message is delivered to `target_program_id`.
     fn chain_block_to(block_id: u64, target_program_id: lee_core::account::AccountId) -> Block {
         let prefix = chain_to(block_id.saturating_sub(1));
-        produce_dummy_block(
+        common::test_utils::produce_dummy_block_with_outbound(
             block_id,
             prefix.last().map(|block| block.header.hash),
-            vec![emission_to(target_program_id)],
+            vec![outbound_to(target_program_id)],
         )
     }
 
@@ -966,14 +947,14 @@ mod tests {
         block_msg(&chain_block(block_id), slot)
     }
 
-    /// A stream item carrying the peer's block `block_id`, its one emission reverted.
-    fn peer_block_msg_reverted(block_id: u64, slot: u64) -> (ZoneMessage, Slot) {
+    /// A stream item carrying the peer's block `block_id` with an empty
+    /// outbound list, the shape a block whose sends all reverted inscribes.
+    fn peer_block_msg_without_outbound(block_id: u64, slot: u64) -> (ZoneMessage, Slot) {
         let prefix = chain_to(block_id.saturating_sub(1));
-        let block = common::test_utils::produce_dummy_block_with_reverted(
+        let block = produce_dummy_block(
             block_id,
             prefix.last().map(|block| block.header.hash),
-            vec![emission()],
-            vec![0],
+            vec![],
         );
         block_msg(&block, slot)
     }
@@ -1170,7 +1151,7 @@ mod tests {
         let mut tip = None;
 
         let outcome = consume_peer_stream(
-            stream::iter(vec![peer_block_msg_reverted(1, 0)]),
+            stream::iter(vec![peer_block_msg_without_outbound(1, 0)]),
             &peer_context(),
             &storage_ref,
             &mut cursor,
@@ -1286,139 +1267,6 @@ mod tests {
             recorded_keys(&storage_ref).await.len(),
             1,
             "the watcher records it and lets the target refuse it"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_registered_generic_emitter_gets_its_delivery_recorded() {
-        let emitter = lee_core::account::AccountId::new([8; 32]);
-        let peer = PeerContext {
-            emitters: BTreeMap::from([(
-                emitter,
-                RegisteredEmitter {
-                    account_id: emitter,
-                    until_src_block: None,
-                },
-            )]),
-            ..peer_context()
-        };
-        let (_dir, storage_ref) = store().await;
-        let mut cursor = None;
-        let mut tip = None;
-
-        let block = produce_dummy_block(
-            1,
-            None,
-            vec![cross_zone::test_utils::generic_emission(
-                emitter,
-                SELF_ZONE,
-                programs::ping_receiver_account_id(),
-                b"hi",
-            )],
-        );
-        let outcome = consume_peer_stream(
-            stream::iter(vec![block_msg(&block, 0)]),
-            &peer,
-            &storage_ref,
-            &mut cursor,
-            &mut tip,
-        )
-        .await;
-
-        assert_eq!(outcome, PassOutcome::Drained);
-        assert_eq!(
-            recorded_keys(&storage_ref).await,
-            vec![message_key(&PEER_ZONE, 1, 0)],
-            "a registered emitter's emission is recorded like a builtin's"
-        );
-    }
-
-    /// The cutoff is compared against the source block's id, which only this
-    /// path chooses. The emission sits in block 1 at slot 0, so a watcher
-    /// comparing anything but the block id would read block 1 as covered.
-    #[tokio::test]
-    async fn a_retired_emitters_emission_past_the_cutoff_is_not_recorded() {
-        let emitter = lee_core::account::AccountId::new([8; 32]);
-        for (until_src_block, expected) in [
-            (Some(0), vec![]),
-            (Some(1), vec![message_key(&PEER_ZONE, 1, 0)]),
-        ] {
-            let peer = PeerContext {
-                emitters: BTreeMap::from([(
-                    emitter,
-                    RegisteredEmitter {
-                        account_id: emitter,
-                        until_src_block,
-                    },
-                )]),
-                ..peer_context()
-            };
-            let (_dir, storage_ref) = store().await;
-            let mut cursor = None;
-            let mut tip = None;
-
-            let block = produce_dummy_block(
-                1,
-                None,
-                vec![cross_zone::test_utils::generic_emission(
-                    emitter,
-                    SELF_ZONE,
-                    programs::ping_receiver_account_id(),
-                    b"hi",
-                )],
-            );
-            let outcome = consume_peer_stream(
-                stream::iter(vec![block_msg(&block, 0)]),
-                &peer,
-                &storage_ref,
-                &mut cursor,
-                &mut tip,
-            )
-            .await;
-
-            assert_eq!(outcome, PassOutcome::Drained);
-            assert_eq!(
-                recorded_keys(&storage_ref).await,
-                expected,
-                "cutoff {until_src_block:?} against a source block id of 1"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn an_unregistered_generic_emitter_is_never_recorded() {
-        let emitter = lee_core::account::AccountId::new([8; 32]);
-        let (_dir, storage_ref) = store().await;
-        let mut cursor = None;
-        let mut tip = None;
-
-        let block = produce_dummy_block(
-            1,
-            None,
-            vec![cross_zone::test_utils::generic_emission(
-                emitter,
-                SELF_ZONE,
-                programs::ping_receiver_account_id(),
-                b"hi",
-            )],
-        );
-        let outcome = consume_peer_stream(
-            stream::iter(vec![block_msg(&block, 0)]),
-            &peer_context(),
-            &storage_ref,
-            &mut cursor,
-            &mut tip,
-        )
-        .await;
-
-        assert_eq!(
-            outcome,
-            PassOutcome::Drained,
-            "a transaction the watcher does not read is not a failure"
-        );
-        assert!(
-            recorded_keys(&storage_ref).await.is_empty(),
-            "an unregistered emitter's transaction must not be recorded"
         );
     }
 
@@ -1726,7 +1574,8 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let pre_burn = produce_dummy_block(5, None, vec![emission()]);
+        let pre_burn =
+            common::test_utils::produce_dummy_block_with_outbound(5, None, vec![outbound()]);
 
         let outcome = consume_peer_stream(
             stream::iter(vec![
@@ -1764,7 +1613,11 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let equivocation = produce_dummy_block(2, Some(HashType([9; 32])), vec![emission()]);
+        let equivocation = common::test_utils::produce_dummy_block_with_outbound(
+            2,
+            Some(HashType([9; 32])),
+            vec![outbound()],
+        );
 
         let outcome = consume_peer_stream(
             stream::iter(vec![
@@ -1801,7 +1654,11 @@ mod tests {
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
-        let forked = produce_dummy_block(2, Some(HashType([9; 32])), vec![emission()]);
+        let forked = common::test_utils::produce_dummy_block_with_outbound(
+            2,
+            Some(HashType([9; 32])),
+            vec![outbound()],
+        );
 
         let outcome = consume_peer_stream(
             stream::iter(vec![

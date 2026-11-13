@@ -204,12 +204,18 @@ pub fn apply_block_to_state(
             let LeeTransaction::Public(public_tx) = transaction else {
                 return Err(BlockIngestError::NonPublicGenesisTransaction);
             };
+            let diff = lee::ValidatedStateDiff::from_public_transaction(
+                public_tx,
+                state,
+                block.header.block_id,
+                block.header.timestamp,
+            )
+            .map_err(|err| state_transition(err.into()))?;
+            // A genesis transaction's outbound surfaces like any other, so a
+            // declared list cannot silently drop what genesis emitted.
+            outbound.extend(diff.outbound().iter().cloned());
             state
-                .transition_from_public_transaction(
-                    public_tx,
-                    block.header.block_id,
-                    block.header.timestamp,
-                )
+                .apply_state_diff(diff)
                 .map_err(|err| state_transition(err.into()))?
         } else {
             let (events, tx_reverted, tx_outbound) = settle_transaction(
@@ -1686,6 +1692,7 @@ mod tests {
         assert_eq!(
             block.body.outbound,
             vec![lee::OutboundMessage {
+                accounts: Vec::new(),
                 from: emitter,
                 zone,
                 to: target,
@@ -1762,6 +1769,7 @@ mod tests {
             BTreeMap::from([(from, Nonce(0))]),
             Script {
                 response: Response::keep_state().send(lee_core::program::AsyncMessage {
+                    accounts: Vec::new(),
                     to: lee::Target::Remote {
                         zone,
                         actor: target,
