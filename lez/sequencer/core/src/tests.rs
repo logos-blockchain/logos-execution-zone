@@ -2,7 +2,6 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
-    pin::pin,
     sync::Arc,
     time::Duration,
 };
@@ -505,8 +504,7 @@ async fn common_setup_with_config(
 
     let tx = common::test_utils::produce_dummy_empty_transaction();
     mempool_handle
-        .push((TransactionOrigin::User, tx))
-        .await
+        .try_push((TransactionOrigin::User, tx))
         .unwrap();
 
     sequencer.run_production_turn().await.unwrap();
@@ -621,8 +619,7 @@ async fn a_charged_bridge_deposit_is_dropped_by_the_builder_bridge_guard() {
     );
 
     mempool_handle
-        .push((TransactionOrigin::User, forged))
-        .await
+        .try_push((TransactionOrigin::User, forged))
         .unwrap();
 
     let block_id = sequencer.run_production_turn().await.unwrap();
@@ -673,8 +670,7 @@ async fn a_reverted_withdraw_releases_nothing_on_l1() {
         lee::public_transaction::WitnessSet::for_message(&message, &[&payer.pub_sign_key]);
     let withdraw = LeeTransaction::Public(PublicTransaction::new(message, witness_set));
     mempool_handle
-        .push((TransactionOrigin::User, withdraw.clone()))
-        .await
+        .try_push((TransactionOrigin::User, withdraw.clone()))
         .unwrap();
 
     let built = sequencer.build_block_from_mempool().await.unwrap();
@@ -709,8 +705,7 @@ async fn the_builder_orders_by_tip_without_breaking_a_nonce_sequence() {
 
     for tx in [&alice_first, &alice_second, &bob] {
         mempool_handle
-            .push((TransactionOrigin::User, tx.clone()))
-            .await
+            .try_push((TransactionOrigin::User, tx.clone()))
             .unwrap();
     }
 
@@ -755,8 +750,7 @@ async fn an_exempt_public_bridge_deposit_is_dropped_by_the_builder_bridge_guard(
     .expect("bridge deposit tx builds");
 
     mempool_handle
-        .push((TransactionOrigin::User, forged))
-        .await
+        .try_push((TransactionOrigin::User, forged))
         .unwrap();
 
     let block_id = sequencer.run_production_turn().await.unwrap();
@@ -1326,8 +1320,7 @@ async fn a_mempool_transaction_too_large_for_any_block_is_dropped() {
     );
     for tx in [oversized.clone(), user_tx.clone()] {
         mempool_handle
-            .push((TransactionOrigin::User, tx))
-            .await
+            .try_push((TransactionOrigin::User, tx))
             .unwrap();
     }
 
@@ -1374,8 +1367,7 @@ async fn a_delivery_too_large_for_any_block_does_not_stall_production() {
         &create_signing_key_for_account1(),
     );
     mempool_handle
-        .push((TransactionOrigin::User, user_tx.clone()))
-        .await
+        .try_push((TransactionOrigin::User, user_tx.clone()))
         .unwrap();
 
     // Production must get past it to the mempool in the very first block.
@@ -1477,8 +1469,7 @@ async fn unused_declared_gas_is_recredited_after_settlement() {
         .collect();
     for tx in &transfers {
         mempool_handle
-            .push((TransactionOrigin::User, tx.clone()))
-            .await
+            .try_push((TransactionOrigin::User, tx.clone()))
             .unwrap();
     }
 
@@ -1523,8 +1514,7 @@ async fn a_block_full_of_charged_gas_defers_the_rest() {
     ];
     for tx in &transfers {
         mempool_handle
-            .push((TransactionOrigin::User, tx.clone()))
-            .await
+            .try_push((TransactionOrigin::User, tx.clone()))
             .unwrap();
     }
 
@@ -1579,12 +1569,10 @@ async fn an_over_cap_transaction_is_dropped_not_deferred() {
         common::test_utils::create_transaction_native_token_transfer(acc1, 0, acc2, 10, &sign_key);
 
     mempool_handle
-        .push((TransactionOrigin::Gossip, over_cap))
-        .await
+        .try_push((TransactionOrigin::Gossip, over_cap))
         .unwrap();
     mempool_handle
-        .push((TransactionOrigin::User, normal.clone()))
-        .await
+        .try_push((TransactionOrigin::User, normal.clone()))
         .unwrap();
 
     // The over-cap tx is dropped and the normal transfer still makes the block:
@@ -1728,7 +1716,7 @@ async fn transaction_execute_native_transfer() {
 }
 
 #[tokio::test]
-async fn push_tx_into_mempool_blocks_until_mempool_is_full() {
+async fn push_tx_into_mempool_fails_until_a_turn_frees_it() {
     let config = SequencerConfig {
         mempool_max_size: 1,
         ..setup_sequencer_config()
@@ -1739,20 +1727,20 @@ async fn push_tx_into_mempool_blocks_until_mempool_is_full() {
 
     // Fill the mempool
     mempool_handle
-        .push((TransactionOrigin::User, tx.clone()))
-        .await
+        .try_push((TransactionOrigin::User, tx.clone()))
         .unwrap();
-
-    // Check that pushing another transaction will block
-    let mut push_fut = pin!(mempool_handle.push((TransactionOrigin::User, tx.clone())));
-    let poll = futures::poll!(push_fut.as_mut());
-    assert!(poll.is_pending());
+    assert!(
+        mempool_handle
+            .try_push((TransactionOrigin::User, tx.clone()))
+            .is_err()
+    );
 
     // Empty the mempool by producing a block
     sequencer.run_production_turn().await.unwrap();
 
-    // Resolve the pending push
-    assert!(push_fut.await.is_ok());
+    mempool_handle
+        .try_push((TransactionOrigin::User, tx))
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1762,8 +1750,7 @@ async fn build_block_from_mempool() {
 
     let tx = common::test_utils::produce_dummy_empty_transaction();
     mempool_handle
-        .push((TransactionOrigin::User, tx))
-        .await
+        .try_push((TransactionOrigin::User, tx))
         .unwrap();
 
     let result = sequencer.build_block_from_mempool().await;
@@ -1852,12 +1839,10 @@ async fn replay_transactions_are_rejected_in_the_same_block() {
     let tx_replay = tx.clone();
     // Pushing two copies of the same tx to the mempool
     mempool_handle
-        .push((TransactionOrigin::User, tx_original))
-        .await
+        .try_push((TransactionOrigin::User, tx_original))
         .unwrap();
     mempool_handle
-        .push((TransactionOrigin::User, tx_replay))
-        .await
+        .try_push((TransactionOrigin::User, tx_replay))
         .unwrap();
 
     // Create block
@@ -1890,8 +1875,7 @@ async fn replay_transactions_are_rejected_in_different_blocks() {
 
     // The transaction should be included the first time
     mempool_handle
-        .push((TransactionOrigin::User, tx.clone()))
-        .await
+        .try_push((TransactionOrigin::User, tx.clone()))
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
     let block = sequencer
@@ -1906,8 +1890,7 @@ async fn replay_transactions_are_rejected_in_different_blocks() {
 
     // Add same transaction should fail
     mempool_handle
-        .push((TransactionOrigin::User, tx.clone()))
-        .await
+        .try_push((TransactionOrigin::User, tx.clone()))
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
     let block = sequencer
@@ -1945,8 +1928,7 @@ async fn restart_from_storage() {
         );
 
         mempool_handle
-            .push((TransactionOrigin::User, tx.clone()))
-            .await
+            .try_push((TransactionOrigin::User, tx.clone()))
             .unwrap();
         sequencer.run_production_turn().await.unwrap();
         let block = sequencer
@@ -2023,8 +2005,7 @@ async fn produce_block_with_correct_prev_meta_after_restart() {
         );
 
         mempool_handle
-            .push((TransactionOrigin::User, tx))
-            .await
+            .try_push((TransactionOrigin::User, tx))
             .unwrap();
         sequencer.run_production_turn().await.unwrap();
 
@@ -2053,8 +2034,7 @@ async fn produce_block_with_correct_prev_meta_after_restart() {
     );
 
     mempool_handle
-        .push((TransactionOrigin::User, tx.clone()))
-        .await
+        .try_push((TransactionOrigin::User, tx.clone()))
         .unwrap();
 
     // Step 4: Produce new block
@@ -2118,8 +2098,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         segment_witness_set,
     ));
     mempool_handle
-        .push((TransactionOrigin::User, segment_tx))
-        .await
+        .try_push((TransactionOrigin::User, segment_tx))
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
 
@@ -2150,8 +2129,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         header_witness_set,
     ));
     mempool_handle
-        .push((TransactionOrigin::User, deploy_tx))
-        .await
+        .try_push((TransactionOrigin::User, deploy_tx))
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
 
@@ -2180,8 +2158,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         block_id: tick_block_id,
     });
     mempool_handle
-        .push((TransactionOrigin::User, tick))
-        .await
+        .try_push((TransactionOrigin::User, tick))
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
     let block = block_at(&sequencer, tick_block_id)
@@ -2192,8 +2169,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     // The same transaction with a read-only message is included, so the setup is sound.
     let read = user_tx(&clock_core::Message::ReadBlockId { granularity: 1 });
     mempool_handle
-        .push((TransactionOrigin::User, read.clone()))
-        .await
+        .try_push((TransactionOrigin::User, read.clone()))
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
     let block = block_at(&sequencer, tick_block_id + 1)
@@ -2225,8 +2201,7 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
     // Push a dummy transaction so the mempool is non-empty.
     let tx = common::test_utils::produce_dummy_empty_transaction();
     mempool_handle
-        .push((TransactionOrigin::User, tx))
-        .await
+        .try_push((TransactionOrigin::User, tx))
         .unwrap();
 
     // Block production must fail because the appended clock tx cannot execute.
@@ -2669,7 +2644,7 @@ async fn a_failed_publish_leaves_the_head_and_the_pin_alone() {
         ..CannedChannel::empty()
     });
     mempool_handle
-        .push((
+        .try_push((
             TransactionOrigin::User,
             common::test_utils::create_transaction_native_token_transfer(
                 initial_public_user_accounts()[0].account_id,
@@ -2679,7 +2654,6 @@ async fn a_failed_publish_leaves_the_head_and_the_pin_alone() {
                 &create_signing_key_for_account1(),
             ),
         ))
-        .await
         .unwrap();
     let failed = sequencer.run_production_turn().await;
     assert!(failed.is_err(), "the canned publish failure must surface");
@@ -3155,8 +3129,7 @@ async fn a_pin_short_of_signatures_leaves_its_deposit_to_finality() {
         &create_signing_key_for_account1(),
     );
     mempool_handle
-        .push((TransactionOrigin::User, user_tx.clone()))
-        .await
+        .try_push((TransactionOrigin::User, user_tx.clone()))
         .unwrap();
 
     let op_id = [0x6a; 32];
@@ -3780,8 +3753,7 @@ async fn an_extension_repeating_our_own_entry_is_deduped() {
         &create_signing_key_for_account1(),
     );
     mempool_handle
-        .push((TransactionOrigin::User, tx))
-        .await
+        .try_push((TransactionOrigin::User, tx))
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
     let view_msgs =
@@ -3829,8 +3801,7 @@ async fn a_conflict_dropping_our_block_reverts_it_and_requeues_its_user_txs() {
         &create_signing_key_for_account1(),
     );
     mempool_handle
-        .push((TransactionOrigin::User, tx.clone()))
-        .await
+        .try_push((TransactionOrigin::User, tx.clone()))
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
     let kept = sequencer.chain().lock().await.view()[..1].to_vec();
@@ -3882,8 +3853,7 @@ async fn a_conflict_after_finalization_requeues_nothing() {
         &create_signing_key_for_account1(),
     );
     mempool_handle
-        .push((TransactionOrigin::User, tx))
-        .await
+        .try_push((TransactionOrigin::User, tx))
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
     let block2 = block_at(&sequencer, 2).await.unwrap();
@@ -3930,8 +3900,7 @@ async fn follow_finalized_own_block_moves_final_tier_and_marks_store() {
 
     let tx = common::test_utils::produce_dummy_empty_transaction();
     mempool_handle
-        .push((TransactionOrigin::User, tx))
-        .await
+        .try_push((TransactionOrigin::User, tx))
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
     let block2 = block_at(&sequencer, 2).await.unwrap();
@@ -4018,8 +3987,7 @@ async fn a_parked_finalized_block_does_not_drop_a_dispatch_record() {
 
     let tx = common::test_utils::produce_dummy_empty_transaction();
     mempool_handle
-        .push((TransactionOrigin::User, tx))
-        .await
+        .try_push((TransactionOrigin::User, tx))
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
 
@@ -4099,8 +4067,7 @@ async fn restart_restores_the_view_and_recovers_from_a_conflict() {
             &create_signing_key_for_account1(),
         );
         mempool_handle
-            .push((TransactionOrigin::User, tx.clone()))
-            .await
+            .try_push((TransactionOrigin::User, tx.clone()))
             .unwrap();
         sequencer.run_production_turn().await.unwrap();
         let genesis_entry = sequencer.chain().lock().await.view()[0].clone();
@@ -4172,8 +4139,7 @@ async fn a_conflict_keeping_our_block_requeues_nothing() {
         &create_signing_key_for_account1(),
     );
     mempool_handle
-        .push((TransactionOrigin::User, tx))
-        .await
+        .try_push((TransactionOrigin::User, tx))
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
     let block2 = block_at(&sequencer, 2).await.unwrap();
@@ -4219,8 +4185,7 @@ async fn restart_reanchors_on_the_persisted_final_snapshot() {
         let (mut sequencer, mempool_handle) = start_sequencer(config.clone()).await;
         let tx = common::test_utils::produce_dummy_empty_transaction();
         mempool_handle
-            .push((TransactionOrigin::User, tx))
-            .await
+            .try_push((TransactionOrigin::User, tx))
             .unwrap();
         sequencer.run_production_turn().await.unwrap();
         let block2 = block_at(&sequencer, 2).await.unwrap();
@@ -4481,8 +4446,7 @@ async fn a_finalized_competitor_requeues_the_user_txs_of_our_block() {
         &create_signing_key_for_account1(),
     );
     mempool_handle
-        .push((TransactionOrigin::User, tx.clone()))
-        .await
+        .try_push((TransactionOrigin::User, tx.clone()))
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
     let genesis = sequencer.chain().lock().await.view()[0].clone();
@@ -7348,7 +7312,7 @@ async fn a_turn_on_a_view_with_a_hole_is_skipped() {
         .await;
     let pin = sequencer.chain().lock().await.pin();
     mempool_handle
-        .push((
+        .try_push((
             TransactionOrigin::User,
             common::test_utils::create_transaction_native_token_transfer(
                 initial_public_user_accounts()[0].account_id,
@@ -7358,7 +7322,6 @@ async fn a_turn_on_a_view_with_a_hole_is_skipped() {
                 &create_signing_key_for_account1(),
             ),
         ))
-        .await
         .unwrap();
 
     let skipped = sequencer.run_production_turn().await;
@@ -7607,8 +7570,7 @@ async fn an_approved_change_has_room_in_a_full_block() {
         .collect();
     for tx in &transfers {
         mempool_handle
-            .push((TransactionOrigin::User, tx.clone()))
-            .await
+            .try_push((TransactionOrigin::User, tx.clone()))
             .unwrap();
     }
 
@@ -7676,4 +7638,15 @@ fn a_peer_genesis_hash_round_trips_as_hex() {
             .expect("peer serializes")
             .contains("\"0202020202020202020202020202020202020202020202020202020202020202\"")
     );
+}
+
+#[test]
+fn tip_per_gas_ranks_by_tip_over_declared_gas() {
+    use crate::tip_per_gas;
+
+    // 3 over 100k gas outbids 5 over 10M gas
+    assert!(tip_per_gas(3, 100_000) > tip_per_gas(5, 10_000_000));
+    assert_eq!(tip_per_gas(1, 2), tip_per_gas(2, 4));
+    // a zero gas limit does not divide by zero
+    assert_eq!(tip_per_gas(7, 0), tip_per_gas(7, 1));
 }

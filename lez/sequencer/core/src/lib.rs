@@ -185,7 +185,7 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     /// Two-tier chain state: production builds on its head; the publisher's
     /// `on_follow` sink feeds adopted/orphaned/finalized peer blocks into it.
     chain: Arc<Mutex<ChainState>>,
-    /// Ordered by declared tip, one lane per signer's nonce sequence.
+    /// Ordered by tip per declared gas, one lane per signer's nonce sequence.
     mempool: SequencerMemPool,
     sequencer_config: SequencerConfig,
     /// Cross-zone watchers, stopped when this sequencer is dropped. They hold a
@@ -2275,6 +2275,10 @@ struct BlockWithMeta {
 /// Why a publish, pinned or not, did not go out.
 type PublishError = kameo::error::SendError<(), sequencer_bedrock_actor::error::Error>;
 
+/// The sequencer's mempool: ordered by tip per declared gas, one lane per
+/// signer's nonce sequence.
+pub type SequencerMemPool = MemPool<(TransactionOrigin, LeeTransaction), u128, AccountId>;
+
 /// A turn given up because the channel moved under the block while it was
 /// being built.
 #[derive(Debug, thiserror::Error)]
@@ -2311,23 +2315,26 @@ fn checkpoint_bytes(checkpoint: &SequencerCheckpoint) -> Result<Vec<u8>> {
         .context("Failed to serialize zone-sdk checkpoint")
 }
 
-/// The sequencer's mempool: ordered by declared tip, one lane per signer's
-/// nonce sequence.
-pub type SequencerMemPool = MemPool<(TransactionOrigin, LeeTransaction), u64, AccountId>;
-
 #[must_use]
 pub fn new_mempool(max_size: usize) -> SequencerMemPool {
-    MemPool::new(
-        max_size,
-        |(_, tx)| declared_tip(tx),
-        |(_, tx)| signers(tx),
-    )
+    MemPool::new(max_size, |(_, tx)| priority(tx), |(_, tx)| signers(tx))
 }
 
-/// The tip a transaction declares; zero for exempt or unclassifiable ones.
-fn declared_tip(tx: &LeeTransaction) -> u64 {
+/// Tip per declared gas, as a 64.64 fixed-point number.
+fn tip_per_gas(tip: u64, gas_limit: u64) -> u128 {
+    u128::from(tip)
+        .checked_shl(64)
+        .and_then(|tip| tip.checked_div(u128::from(gas_limit.max(1))))
+        .expect("a u64 shifted by 64 fits u128 and the divisor is nonzero")
+}
+
+/// The order the mempool pops a transaction in, highest first: its tip per
+/// declared gas; zero for exempt or unclassifiable ones.
+fn priority(tx: &LeeTransaction) -> u128 {
     match chain_state::classify::classify(tx, false) {
-        Ok(chain_state::classify::FeeClass::Charged(view)) => view.tip(),
+        Ok(chain_state::classify::FeeClass::Charged(view)) => {
+            tip_per_gas(view.tip(), view.gas_limit())
+        }
         Ok(chain_state::classify::FeeClass::Exempt) | Err(_) => 0,
     }
 }

@@ -63,11 +63,7 @@ impl<T> MemPool<T> {
 
 impl<T, K: Ord, G: Hash + Eq + Clone> MemPool<T, K, G> {
     #[must_use]
-    pub fn new(
-        max_size: usize,
-        priority: fn(&T) -> K,
-        lanes_of: fn(&T) -> Vec<G>,
-    ) -> Self {
+    pub fn new(max_size: usize, priority: fn(&T) -> K, lanes_of: fn(&T) -> Vec<G>) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::channel(max_size);
 
         let len = Arc::new(AtomicUsize::new(0));
@@ -94,19 +90,16 @@ impl<T, K: Ord, G: Hash + Eq + Clone> MemPool<T, K, G> {
     }
 
     /// Returns the total number of items in the mempool, received, pushed to front, or still in the
-    /// channel.
+    /// channel: the same count admission checks.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.front
-            .len()
-            .saturating_add(self.items.len())
-            .saturating_add(self.receiver.len())
+        self.len.load(Ordering::Relaxed)
     }
 
     /// Returns true if the mempool is empty, false otherwise.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.front.is_empty() && self.items.is_empty() && self.receiver.is_empty()
+        self.len() == 0
     }
 
     /// Pop what was given back first, then the ready item with the highest priority.
@@ -235,19 +228,6 @@ impl<T> Clone for MemPoolHandle<T> {
 }
 
 impl<T> MemPoolHandle<T> {
-    /// Send an item to the mempool blocking if the channel is full. Bounded by
-    /// the channel alone, unlike [`Self::try_push`].
-    pub async fn push(&self, item: T) -> Result<(), tokio::sync::mpsc::error::SendError<T>> {
-        // `reserve` the slot so that counting and sending happen together,
-        // and the entire thing is cancel-safe
-        let Ok(permit) = self.sender.reserve().await else {
-            return Err(tokio::sync::mpsc::error::SendError(item));
-        };
-        self.len.fetch_add(1, Ordering::Relaxed);
-        permit.send(item);
-        Ok(())
-    }
-
     /// Send an item to the mempool, failing _immediately_ if it is full: the
     /// bound counts what the pool already holds, not just the channel.
     pub fn try_push(&self, item: T) -> Result<(), tokio::sync::mpsc::error::TrySendError<T>> {
@@ -256,8 +236,8 @@ impl<T> MemPoolHandle<T> {
             self.len.fetch_sub(1, Ordering::Relaxed);
             return Err(tokio::sync::mpsc::error::TrySendError::Full(item));
         }
-        // every channel item is counted, so this fails only when closed or when
-        // the channel-bounded `push` is also in use; either way undo the slot
+        // every channel item is counted, so this fails only when closed; undo
+        // the slot
         self.sender.try_send(item).inspect_err(|_| {
             self.len.fetch_sub(1, Ordering::Relaxed);
         })
@@ -266,9 +246,6 @@ impl<T> MemPoolHandle<T> {
 
 #[cfg(test)]
 mod tests {
-    use futures::FutureExt as _;
-    use tokio::test;
-
     use super::*;
 
     /// An item as `(priority, lanes, tag)`.
@@ -289,18 +266,18 @@ mod tests {
     }
 
     #[test]
-    async fn mempool_new() {
+    fn mempool_new() {
         let mut pool = MemPool::<u64>::new_fifo(10);
         assert_eq!(pool.pop(), None);
         assert_eq!(pool.len(), 0);
     }
 
     #[test]
-    async fn push_and_pop() {
+    fn push_and_pop() {
         let mut pool = MemPool::new_fifo(10);
         let handle = pool.handle().clone();
 
-        handle.push(1).await.unwrap();
+        handle.try_push(1).unwrap();
         assert_eq!(pool.len(), 1);
 
         let item = pool.pop();
@@ -310,13 +287,13 @@ mod tests {
     }
 
     #[test]
-    async fn multiple_push_pop() {
+    fn multiple_push_pop() {
         let mut pool = MemPool::new_fifo(10);
         let handle = pool.handle().clone();
 
-        handle.push(1).await.unwrap();
-        handle.push(2).await.unwrap();
-        handle.push(3).await.unwrap();
+        handle.try_push(1).unwrap();
+        handle.try_push(2).unwrap();
+        handle.try_push(3).unwrap();
 
         assert_eq!(pool.len(), 3);
         assert_eq!(pool.pop(), Some(1));
@@ -327,57 +304,57 @@ mod tests {
     }
 
     #[test]
-    async fn pops_highest_first_then_arrival_order() {
+    fn pops_highest_first_then_arrival_order() {
         let mut pool = laned_pool();
         let handle = pool.handle().clone();
 
         // every item in its own lane
-        handle.push((1, vec!['b'], "b")).await.unwrap();
-        handle.push((5, vec!['c'], "c")).await.unwrap();
-        handle.push((1, vec!['d'], "d")).await.unwrap();
+        handle.try_push((1, vec!['b'], "b")).unwrap();
+        handle.try_push((5, vec!['c'], "c")).unwrap();
+        handle.try_push((1, vec!['d'], "d")).unwrap();
 
         assert_eq!(drain(&mut pool), vec!["c", "b", "d"]);
     }
 
     #[test]
-    async fn never_reorders_a_lane_and_waits_on_every_lane() {
+    fn never_reorders_a_lane_and_waits_on_every_lane() {
         let mut pool = laned_pool();
         let handle = pool.handle().clone();
 
         // `p` is in no lane; alice's tipped `a1` waits behind `a0`; the
         // sponsored `s` is in both lanes and waits behind `a0` even though
         // bob's lane is free; `b0` waits behind `s`.
-        handle.push((0, vec![], "p")).await.unwrap();
-        handle.push((0, vec!['A'], "a0")).await.unwrap();
-        handle.push((5, vec!['A'], "a1")).await.unwrap();
-        handle.push((9, vec!['A', 'B'], "s")).await.unwrap();
-        handle.push((3, vec!['B'], "b0")).await.unwrap();
+        handle.try_push((0, vec![], "p")).unwrap();
+        handle.try_push((0, vec!['A'], "a0")).unwrap();
+        handle.try_push((5, vec!['A'], "a1")).unwrap();
+        handle.try_push((9, vec!['A', 'B'], "s")).unwrap();
+        handle.try_push((3, vec!['B'], "b0")).unwrap();
 
         assert_eq!(drain(&mut pool), vec!["p", "a0", "a1", "s", "b0"]);
     }
 
     #[test]
-    async fn enqueues_an_item_once_however_many_lanes_report_it() {
+    fn enqueues_an_item_once_however_many_lanes_report_it() {
         let mut pool = laned_pool();
         let handle = pool.handle().clone();
 
         // `y` becomes the head of both lanes at once when `x` is picked;
         // `z` names the same lane twice.
-        handle.push((1, vec!['A', 'B'], "x")).await.unwrap();
-        handle.push((2, vec!['A', 'B'], "y")).await.unwrap();
-        handle.push((3, vec!['A', 'A'], "z")).await.unwrap();
+        handle.try_push((1, vec!['A', 'B'], "x")).unwrap();
+        handle.try_push((2, vec!['A', 'B'], "y")).unwrap();
+        handle.try_push((3, vec!['A', 'A'], "z")).unwrap();
 
         assert_eq!(drain(&mut pool), vec!["x", "y", "z"]);
     }
 
     #[test]
-    async fn push_front_pops_before_any_tip_and_ahead_of_its_lane() {
+    fn push_front_pops_before_any_tip_and_ahead_of_its_lane() {
         let mut pool = laned_pool();
         let handle = pool.handle().clone();
 
-        handle.push((0, vec!['A'], "a0")).await.unwrap();
-        handle.push((5, vec!['A'], "a1")).await.unwrap();
-        handle.push((9, vec!['H'], "h")).await.unwrap();
+        handle.try_push((0, vec!['A'], "a0")).unwrap();
+        handle.try_push((5, vec!['A'], "a1")).unwrap();
+        handle.try_push((9, vec!['H'], "h")).unwrap();
 
         // popping `h` then `a0` made the better-paying `a1` ready; the two
         // given back (in reverse) must still pop first and in order
@@ -392,20 +369,20 @@ mod tests {
     }
 
     #[test]
-    async fn orders_what_arrives_between_pops() {
+    fn orders_what_arrives_between_pops() {
         let mut pool = laned_pool();
         let handle = pool.handle().clone();
 
-        handle.push((1, vec![], "low")).await.unwrap();
-        handle.push((2, vec![], "mid")).await.unwrap();
+        handle.try_push((1, vec![], "low")).unwrap();
+        handle.try_push((2, vec![], "mid")).unwrap();
         assert_eq!(pool.pop().unwrap().2, "mid");
 
-        handle.push((9, vec![], "late")).await.unwrap();
+        handle.try_push((9, vec![], "late")).unwrap();
         assert_eq!(drain(&mut pool), vec!["late", "low"]);
     }
 
     #[test]
-    async fn try_push_counts_what_pop_moved_out_of_the_channel() {
+    fn try_push_counts_what_pop_moved_out_of_the_channel() {
         let mut pool = MemPool::new(2, |&item: &u32| item, |_| Vec::<()>::new());
         let handle = pool.handle().clone();
 
@@ -420,32 +397,7 @@ mod tests {
     }
 
     #[test]
-    async fn a_cancelled_push_does_not_leak_a_slot() {
-        let mut pool = MemPool::new_fifo(1);
-        let handle = pool.handle().clone();
-        handle.push(1).await.unwrap();
-
-        // the channel is full, so this push parks; drop it mid-wait
-        assert!(handle.push(2).now_or_never().is_none());
-
-        assert_eq!(pool.pop(), Some(1));
-        handle.try_push(3).unwrap();
-    }
-
-    #[test]
-    async fn max_size() {
-        let pool = MemPool::new_fifo(2);
-        let handle = pool.handle();
-
-        handle.push(1).await.unwrap();
-        handle.push(2).await.unwrap();
-
-        // This should block if buffer is full
-        assert_eq!(handle.push(3).now_or_never(), None);
-    }
-
-    #[test]
-    async fn try_push_fails_when_full_without_blocking() {
+    fn try_push_fails_when_full_without_blocking() {
         let mut pool = MemPool::new_fifo(1);
         let handle = pool.handle().clone();
 
@@ -459,12 +411,12 @@ mod tests {
     }
 
     #[test]
-    async fn push_front() {
+    fn push_front() {
         let mut pool = MemPool::new_fifo(10);
         let handle = pool.handle().clone();
 
-        handle.push(1).await.unwrap();
-        handle.push(2).await.unwrap();
+        handle.try_push(1).unwrap();
+        handle.try_push(2).unwrap();
 
         // Push items to the front - these should be popped first
         pool.push_front(10);
