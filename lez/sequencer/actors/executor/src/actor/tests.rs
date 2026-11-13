@@ -228,6 +228,7 @@ fn prepare_mock_storage_with_stake(
                 }),
                 channel_id: Some([0xC1; 32]),
                 entries,
+                params_votes: BTreeMap::new(),
             }
             .to_bytes()
             .into(),

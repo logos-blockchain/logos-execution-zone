@@ -649,6 +649,42 @@ async fn a_charged_bridge_deposit_is_dropped_by_the_builder_bridge_guard() {
 }
 
 #[tokio::test]
+async fn a_reverted_withdraw_releases_nothing_on_l1() {
+    let (mut sequencer, mempool_handle) = common_setup().await;
+    let payer = &initial_pub_accounts_private_keys()[0];
+    let root = Actor::new(payer.account_id, programs::bridge_account_id());
+    let message = lee::public_transaction::Message::try_new_with_fees(
+        root,
+        vec![
+            root,
+            Actor::native_balance(payer.account_id),
+            Actor::native_balance(system_accounts::bridge_account_id()),
+        ],
+        signer_nonces(&[&payer.pub_sign_key], vec![Nonce(0)]),
+        bridge_core::Message::Withdraw {
+            amount: u64::MAX,
+            bedrock_account_pk: [0; 32],
+        },
+        common::test_utils::test_fee_declaration(payer.account_id),
+    )
+    .unwrap();
+    let witness_set =
+        lee::public_transaction::WitnessSet::for_message(&message, &[&payer.pub_sign_key]);
+    let withdraw = LeeTransaction::Public(PublicTransaction::new(message, witness_set));
+    mempool_handle
+        .push((TransactionOrigin::User, withdraw.clone()))
+        .await
+        .unwrap();
+
+    let built = sequencer.build_block_from_mempool().await.unwrap();
+
+    // Withdrawing more than the payer holds reverts.
+    assert_block_tail(&built.block, std::slice::from_ref(&withdraw));
+    assert_eq!(built.block.body.reverted, vec![0]);
+    assert!(built.withdrawals.is_empty());
+}
+
+#[tokio::test]
 async fn an_exempt_public_bridge_deposit_is_dropped_by_the_builder_bridge_guard() {
     // An empty-witness bridge `Deposit` classifies as an exempt system
     // injection, so `settle_transaction` applies it — a legit deposit replays
@@ -1692,6 +1728,8 @@ fn live_channel(keys: Vec<Ed25519PublicKey>) -> LiveChannelConfig {
         config_tip: MsgId::root(),
         required_signatures: 1,
         transfer_threshold: 1,
+        posting_timeframe: config::default_channel_params().posting_timeframe,
+        posting_timeout: config::default_channel_params().posting_timeout,
     }
 }
 

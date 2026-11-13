@@ -1,10 +1,10 @@
 use common::HashType;
 use lee::{
-    AccountId, error::LeeError, privacy_preserving_transaction::circuit::ProgramCatalog,
+    AccountId, Balance, error::LeeError, privacy_preserving_transaction::circuit::ProgramCatalog,
     program::Program,
 };
 use lee_core::SharedSecretKey;
-use sequencer_stake_core::{Message, SequencerKey, StakeRecord, stake_funds_seed};
+use sequencer_stake_core::{ChannelParams, Message, SequencerKey, StakeRecord, stake_funds_seed};
 
 use crate::{
     AccountIdentity, AsyncDelivery, ExecutionFailureKind, WalletCore, WalletSequencerClient,
@@ -21,7 +21,7 @@ impl<C: WalletSequencerClient> SequencerStake<'_, C> {
         ownership: AccountIdentity,
         funding: AccountIdentity,
         sequencer_key: SequencerKey,
-        amount: u128,
+        amount: Balance,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let program = programs::sequencer_stake_account_id();
         let has_record = !super::actor_state(self.0, &ownership, program)
@@ -66,7 +66,7 @@ impl<C: WalletSequencerClient> SequencerStake<'_, C> {
     pub async fn send_unstake_request(
         &self,
         ownership: AccountId,
-        amount: u128,
+        amount: Balance,
         destination: AccountId,
     ) -> Result<HashType, ExecutionFailureKind> {
         let payable = self
@@ -105,5 +105,61 @@ impl<C: WalletSequencerClient> SequencerStake<'_, C> {
                 .select_program_actor_state(program),
         ];
         self.0.send_pub_tx(accounts, 0, message).await
+    }
+
+    /// Votes for `params` as the key `ownership` backs. `payer` covers the fee, `ownership` if
+    /// `None`.
+    pub async fn send_params_vote(
+        &self,
+        ownership: AccountId,
+        params: ChannelParams,
+        payer: Option<AccountId>,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        self.send_vote_message(
+            ownership,
+            |sequencer_key| Message::VoteChannelParams {
+                sequencer_key,
+                params,
+            },
+            payer,
+        )
+        .await
+    }
+
+    /// Withdraws the vote of the key `ownership` backs. `payer` covers the fee, `ownership` if
+    /// `None`.
+    pub async fn send_params_vote_withdrawal(
+        &self,
+        ownership: AccountId,
+        payer: Option<AccountId>,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        self.send_vote_message(
+            ownership,
+            |sequencer_key| Message::WithdrawChannelParamsVote { sequencer_key },
+            payer,
+        )
+        .await
+    }
+
+    async fn send_vote_message(
+        &self,
+        ownership: AccountId,
+        message: impl FnOnce(SequencerKey) -> Message,
+        payer: Option<AccountId>,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        let program = programs::sequencer_stake_account_id();
+        let owner = AccountIdentity::Public(ownership);
+        let record = StakeRecord::from_bytes(&super::actor_state(self.0, &owner, program).await?)
+            .ok_or(ExecutionFailureKind::AccountDataError(ownership))?;
+        let message = Program::serialize_message(message(record.sequencer_key))
+            .expect("Message should serialize");
+        let accounts = vec![
+            owner.select_program_actor_state(program),
+            AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id())
+                .select_program_actor_state(program),
+        ];
+        self.0
+            .send_pub_tx_paid_by(accounts, 0, message, payer)
+            .await
     }
 }

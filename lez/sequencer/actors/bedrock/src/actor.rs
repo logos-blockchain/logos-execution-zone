@@ -760,6 +760,8 @@ impl TryFrom<&logos_blockchain_zone_sdk::node_types::ChannelState> for LiveChann
             config_tip: state.config_tip_hash,
             required_signatures: state.configuration_threshold,
             transfer_threshold: state.transfer_threshold,
+            posting_timeframe: state.posting_timeframe.clone().into(),
+            posting_timeout: state.posting_timeout.clone().into(),
         })
     }
 }
