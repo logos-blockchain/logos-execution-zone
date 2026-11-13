@@ -34,7 +34,7 @@ RUN ARCH=$(uname -m); \
         rzup install; \
     else \
         echo "Using manual build for $ARCH"; \
-        git clone --depth 1 --branch release-3.0 https://github.com/risc0/risc0.git; \
+        git clone --depth 1 --branch release-3.1 https://github.com/risc0/risc0.git; \
         git clone --depth 1 --branch risc0-1.94.1 https://github.com/risc0/rust.git; \
         cd /risc0; \
         cargo install --locked --path rzup; \
