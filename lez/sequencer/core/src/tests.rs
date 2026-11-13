@@ -12,12 +12,13 @@ use chain_state::{ChainState, ChannelEntry};
 use common::{
     HashType,
     block::{BedrockStatus, Block, HashableBlockData},
+    test_utils::create_transaction_native_token_transfer_with_fees,
     transaction::{FeePayee, LeeTransaction, clock_invocation, fee_invocation},
 };
 use kameo::{actor::Spawn as _, supervision::RestartPolicy};
 use kameo_actors::{DeliveryStrategy, pubsub::PubSub};
 use lee::{
-    Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction, RootCall,
+    Account, AccountId, Actor, FeeDeclaration, PrivateKey, PublicKey, PublicTransaction, RootCall,
     TransactionEntry, V03State,
     program::Program,
     test_utils::{TestPrivateKeys, init_witness, no_seal, signer_nonces},
@@ -44,7 +45,7 @@ use logos_blockchain_key_management_system_service::keys::{
     Ed25519Key, Ed25519PublicKey, ZkPublicKey,
 };
 use logos_blockchain_zone_sdk::{Slot, sequencer::DepositInfo};
-use mempool::{MemPool, MemPoolHandle};
+use mempool::MemPoolHandle;
 use ping_core::{ReceiverMessage, ping_record_pda, receiver_config_account_id};
 use sequencer_bedrock_actor::{
     mock::{CannedChannel, MockBedrockActor, SharedChannel, checkpoint_at, mock_msg_of},
@@ -231,7 +232,7 @@ async fn start_sequencer_bare_on(
     let channel_signing_key =
         crate::load_or_create_signing_key(&config.home.join(crate::CHANNEL_SIGNING_KEY_FILE))
             .unwrap();
-    let mempool = MemPool::new(config.mempool_max_size);
+    let mempool = crate::new_mempool(config.mempool_max_size);
     let mempool_handle = mempool.handle().clone();
     let slasher_ref = SlasherActor::spawn(
         SlasherActor::load(
@@ -682,6 +683,52 @@ async fn a_reverted_withdraw_releases_nothing_on_l1() {
     assert_block_tail(&built.block, std::slice::from_ref(&withdraw));
     assert!(built.block.body.is_reverted(0));
     assert!(built.withdrawals.is_empty());
+}
+
+#[tokio::test]
+async fn the_builder_orders_by_tip_without_breaking_a_nonce_sequence() {
+    let (mut sequencer, mempool_handle) = start_sequencer(setup_sequencer_config()).await;
+
+    let accounts = initial_pub_accounts_private_keys();
+    let transfer = |from: usize, nonce: u128, tip: u64| {
+        let (from_id, to_id) = (accounts[from].account_id, accounts[1 - from].account_id);
+        create_transaction_native_token_transfer_with_fees(
+            from_id,
+            nonce,
+            to_id,
+            1,
+            &accounts[from].pub_sign_key,
+            FeeDeclaration::new(from_id, 2_000_000, tip, u128::MAX >> 1),
+        )
+    };
+    // Alice's tipped second transfer must wait behind her first;
+    // Bob's tip beats Alice's untipped head even though he arrived last.
+    let alice_first = transfer(0, 0, 0);
+    let alice_second = transfer(0, 1, 5);
+    let bob = transfer(1, 0, 3);
+
+    for tx in [&alice_first, &alice_second, &bob] {
+        mempool_handle
+            .push((TransactionOrigin::User, tx.clone()))
+            .await
+            .unwrap();
+    }
+
+    let block_id = sequencer.run_production_turn().await.unwrap();
+    let block = block_at(&sequencer, block_id)
+        .await
+        .expect("produced block is stored");
+
+    let position = |needle: &LeeTransaction| {
+        block
+            .body
+            .transactions
+            .iter()
+            .position(|tx| tx == needle)
+            .expect("all three transfers are included")
+    };
+    assert!(position(&bob) < position(&alice_first));
+    assert!(position(&alice_first) < position(&alice_second));
 }
 
 #[tokio::test]

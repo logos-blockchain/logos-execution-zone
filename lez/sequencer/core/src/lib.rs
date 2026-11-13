@@ -185,7 +185,8 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     /// Two-tier chain state: production builds on its head; the publisher's
     /// `on_follow` sink feeds adopted/orphaned/finalized peer blocks into it.
     chain: Arc<Mutex<ChainState>>,
-    mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
+    /// Ordered by declared tip, one lane per signer's nonce sequence.
+    mempool: SequencerMemPool,
     sequencer_config: SequencerConfig,
     /// Cross-zone watchers, stopped when this sequencer is dropped. They hold a
     /// store handle, so leaving them running would keep the `RocksDB` lock held
@@ -241,7 +242,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     )]
     pub async fn new(
         config: SequencerConfig,
-        mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
+        mempool: SequencerMemPool,
         chain: ChainState,
         applied_seq: Option<sequencer_bedrock_actor::protocol::ChannelSeq>,
         channel_signing_key: Ed25519Key,
@@ -2308,6 +2309,41 @@ fn checkpoint_bytes(checkpoint: &SequencerCheckpoint) -> Result<Vec<u8>> {
         .to_bytes()
         .map(Vec::from)
         .context("Failed to serialize zone-sdk checkpoint")
+}
+
+/// The sequencer's mempool: ordered by declared tip, one lane per signer's
+/// nonce sequence.
+pub type SequencerMemPool = MemPool<(TransactionOrigin, LeeTransaction), u64, AccountId>;
+
+#[must_use]
+pub fn new_mempool(max_size: usize) -> SequencerMemPool {
+    MemPool::new(
+        max_size,
+        |(_, tx)| declared_tip(tx),
+        |(_, tx)| signers(tx),
+    )
+}
+
+/// The tip a transaction declares; zero for exempt or unclassifiable ones.
+fn declared_tip(tx: &LeeTransaction) -> u64 {
+    match chain_state::classify::classify(tx, false) {
+        Ok(chain_state::classify::FeeClass::Charged(view)) => view.tip(),
+        Ok(chain_state::classify::FeeClass::Exempt) | Err(_) => 0,
+    }
+}
+
+/// The accounts whose nonce sequences a transaction belongs to: every witness,
+/// a co-signing payer included. A private tx signs for its public accounts the
+/// same way, one nonce per signature; a purely private one has none.
+fn signers(tx: &LeeTransaction) -> Vec<AccountId> {
+    let witnesses = match tx {
+        LeeTransaction::Public(tx) => tx.witness_set().signatures_and_public_keys(),
+        LeeTransaction::PrivacyPreserving(tx) => tx.witness_set().signatures_and_public_keys(),
+    };
+    witnesses
+        .iter()
+        .map(|(_, public_key)| AccountId::from(public_key))
+        .collect()
 }
 
 /// Whether `deposit_op_id`'s mint is already reflected in `state` — the bridge
