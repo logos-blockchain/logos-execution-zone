@@ -7,6 +7,7 @@ pub use public_key::PublicKey;
 use rand::{RngCore as _, rngs::OsRng};
 pub use scheme::{
     AuthError, KeyScheme, SignatureError, SignatureScheme, authenticate, current_key,
+    is_allowed_rotation_target,
 };
 pub use schnorr::{Schnorr, SchnorrAuthData};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
@@ -17,6 +18,7 @@ pub use signing_keys::{
 pub use wots::{WOTS_LEAVES, Wots, WotsAuthData, WotsPublicKey, WotsSecretKey};
 
 mod private_key;
+pub mod program;
 mod public_key;
 mod scheme;
 mod schnorr;

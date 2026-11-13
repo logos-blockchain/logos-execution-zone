@@ -5,9 +5,16 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 use crate::account::{AccountId, ActorState};
 
-/// The fixed address of `signature_program`: a native pseudo-program with no bytecode, whose
-/// actor state holds each account's signing key. Never dispatched, deployed or upgraded.
+/// The fixed address of `signature_program`: a native pseudo-program whose actor state holds each
+/// account's signing key. Dispatched natively: only `SetKey`, from the signature program itself.
 pub const SIGNATURE_PROGRAM_ID: AccountId = AccountId::new([0xFC; 32]);
+
+/// Messages to an account's `SIGNATURE_PROGRAM_ID` actor. Append only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum SignatureMessage {
+    /// Replaces the account's key state with `next`, without advancing its nonce.
+    SetKey { next: SigningKeyState },
+}
 
 /// Append only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -140,6 +147,22 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             "Not all bytes read"
+        );
+    }
+
+    #[test]
+    fn signature_message_encoding_is_pinned() {
+        let message = SignatureMessage::SetKey {
+            next: SigningKeyState {
+                key_type: KeyType::Schnorr,
+                key_commitment: [7; 32],
+            },
+        };
+        let bytes = borsh::to_vec(&message).unwrap();
+        assert_eq!(bytes, [&[0, 1][..], &[7; 32][..]].concat());
+        assert_eq!(
+            borsh::from_slice::<SignatureMessage>(&bytes).unwrap(),
+            message
         );
     }
 

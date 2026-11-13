@@ -21,6 +21,8 @@ pub enum AuthError {
     InvalidSignature,
     #[error("revealed key does not give the account id")]
     AccountIdMismatch,
+    #[error("the next key's type may not be rotated to")]
+    DisallowedRotation,
 }
 
 impl From<SignatureError> for AuthError {
@@ -109,6 +111,12 @@ pub fn current_key(
     Ok((initial, rest))
 }
 
+/// Key types an account may rotate to. Every type, until a scheme is blocked.
+#[must_use]
+pub const fn is_allowed_rotation_target(_key_type: KeyType) -> bool {
+    true
+}
+
 /// Authenticates one signer against its current key, dispatching on `current.key_type`
 /// (one `match` arm per `KeyScheme`); returns the signer's next key.
 pub fn authenticate(
@@ -117,6 +125,26 @@ pub fn authenticate(
     auth_data: &[u8],
     next: &SigningKeyState,
 ) -> Result<SigningKeyState, AuthError> {
+    // As in `program::handle_message`: the policy is a parameter for tests.
+    authenticate_with(
+        current,
+        message_with_keys,
+        auth_data,
+        next,
+        is_allowed_rotation_target,
+    )
+}
+
+fn authenticate_with(
+    current: &SigningKeyState,
+    message_with_keys: &[u8; 32],
+    auth_data: &[u8],
+    next: &SigningKeyState,
+    is_allowed: impl Fn(KeyType) -> bool,
+) -> Result<SigningKeyState, AuthError> {
+    if !is_allowed(next.key_type) {
+        return Err(AuthError::DisallowedRotation);
+    }
     match current.key_type {
         KeyType::Wots => {
             let auth = WotsAuthData::try_from(auth_data).map_err(|_err| AuthError::Malformed)?;
@@ -251,6 +279,43 @@ mod tests {
             authenticate(&key, &message, &auth_data, &key),
             Err(AuthError::Malformed),
             "a WOTS+ signature with the initial-key prefix still attached"
+        );
+    }
+
+    fn wots_key_and_auth(message: &[u8; 32]) -> (SigningKeyState, WotsAuthData) {
+        let (sk, pk) = Wots::keygen(&[3; 32]);
+        (Wots::key_state(&pk), Wots::sign(&sk, message))
+    }
+
+    #[test]
+    fn a_witness_rotation_to_a_disallowed_type_is_refused() {
+        let message = [1; 32];
+        let (current, auth) = wots_key_and_auth(&message);
+        let next = SigningKeyState {
+            key_type: KeyType::Schnorr,
+            key_commitment: [9; 32],
+        };
+        assert_eq!(
+            authenticate_with(&current, &message, &auth, &next, |key_type| {
+                key_type != KeyType::Schnorr
+            }),
+            Err(AuthError::DisallowedRotation)
+        );
+    }
+
+    #[test]
+    fn rotating_away_from_a_disallowed_type_is_allowed() {
+        let message = [1; 32];
+        let (current, auth) = wots_key_and_auth(&message);
+        let next = SigningKeyState {
+            key_type: KeyType::Schnorr,
+            key_commitment: [9; 32],
+        };
+        assert_eq!(
+            authenticate_with(&current, &message, &auth, &next, |key_type| {
+                key_type != KeyType::Wots
+            }),
+            Ok(next)
         );
     }
 }
