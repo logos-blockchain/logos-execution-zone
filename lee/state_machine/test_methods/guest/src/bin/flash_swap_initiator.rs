@@ -26,7 +26,7 @@ use std::collections::BTreeSet;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, Actor},
+    account::{AccountId, Actor, Target},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID, custody_transfer, decode_balance},
     program::{PdaSeed, ReceiveInput, Response, StateReply, SyncMessage},
 };
@@ -99,7 +99,7 @@ fn answer(input: &ReceiveInput, mut pending: Vec<Phase>, reply: &StateReply) -> 
     let (vault, vault_balance) = phase.expected();
     assert_eq!(
         input.from,
-        Some(Actor::native_balance(vault)),
+        Some(Actor::native_balance(vault).into()),
         "the reply must read the vault"
     );
     let balance = decode_balance(&reply.state).expect("the vault holds a canonical balance");
@@ -127,7 +127,7 @@ fn answer(input: &ReceiveInput, mut pending: Vec<Phase>, reply: &StateReply) -> 
                     amount_out,
                 ))
                 .send(SyncMessage {
-                    to: callback,
+                    to: callback.into(),
                     message: callback_message,
                     pda_seeds: BTreeSet::new(),
                 })
@@ -149,6 +149,7 @@ fn handle_message(input: &ReceiveInput) -> Response {
     let mut pending = pending(input);
     if input
         .from
+        .and_then(Target::local)
         .is_some_and(|from| from.program_account_id == NATIVE_TOKEN_PROGRAM_ID)
     {
         let reply: StateReply =

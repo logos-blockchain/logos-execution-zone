@@ -165,6 +165,34 @@ pub struct Actor {
     pub program_account_id: AccountId,
 }
 
+/// A message destination or source: an actor in this zone, or one in another zone.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum Target {
+    Local(Actor),
+    Remote {
+        #[serde(with = "base64::arr")]
+        #[schemars(with = "String", description = "base64-encoded zone id")]
+        zone: [u8; 32],
+        actor: Actor,
+    },
+}
+
+impl From<Actor> for Target {
+    fn from(actor: Actor) -> Self {
+        Self::Local(actor)
+    }
+}
+
+impl Target {
+    /// The actor regardless of zone; never an authorization input.
+    #[must_use]
+    pub const fn actor(self) -> Actor {
+        match self {
+            Self::Local(actor) | Self::Remote { actor, .. } => actor,
+        }
+    }
+}
+
 pub type BlockId = u64;
 pub type Timestamp = u64;
 
@@ -279,13 +307,13 @@ pub struct PdaSeed(
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct MessageEnvelope<S> {
     pub from: S,
-    pub to: Actor,
+    pub to: Target,
     pub message: MessageData,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct RootCall {
-    pub to: Actor,
+    pub to: Target,
     pub message: MessageData,
 }
 

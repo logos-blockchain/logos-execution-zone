@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BlockId, Commitment, EncryptedNote, NullifierPublicKey, SealedMessage, Timestamp,
-    account::{Account, AccountId, Actor, ActorState},
+    account::{Account, AccountId, Actor, ActorState, Target},
     encryption::ViewingPublicKey,
 };
 
@@ -315,7 +315,7 @@ impl AccountId {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct MessageEnvelope<S> {
     pub from: S,
-    pub to: Actor,
+    pub to: Target,
     pub message: MessageData,
 }
 
@@ -347,15 +347,15 @@ impl Publication {
 /// A synchronous message processed in the same transaction it was emitted in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct SyncMessage {
-    pub to: Actor,
+    pub to: Target,
     pub message: MessageData,
     pub pda_seeds: BTreeSet<PdaSeed>,
 }
 
 impl SyncMessage {
-    pub fn new<M: BorshSerialize>(to: Actor, message: &M) -> Self {
+    pub fn new<M: BorshSerialize>(to: impl Into<Target>, message: &M) -> Self {
         Self {
-            to,
+            to: to.into(),
             message: borsh::to_vec(message).expect("borsh serialization is infallible"),
             pda_seeds: BTreeSet::new(),
         }
@@ -374,14 +374,14 @@ impl SyncMessage {
 /// of that program must keep accepting the messages still pending to it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct AsyncMessage {
-    pub to: Actor,
+    pub to: Target,
     pub message: MessageData,
 }
 
 impl AsyncMessage {
-    pub fn new<M: BorshSerialize>(to: Actor, message: &M) -> Self {
+    pub fn new<M: BorshSerialize>(to: impl Into<Target>, message: &M) -> Self {
         Self {
-            to,
+            to: to.into(),
             message: borsh::to_vec(message).expect("borsh serialization is infallible"),
         }
     }
@@ -420,9 +420,9 @@ impl Sendable for AsyncMessage {
 pub struct ReceiveInput {
     /// Actor processing the message.
     pub receiver: Actor,
-    /// The actor that sent this message, at the address it presented; `None` when the transaction
-    /// itself submitted it.
-    pub from: Option<Actor>,
+    /// The actor that sent this message, at the address it presented, qualified by its zone;
+    /// `None` when the transaction itself submitted it.
+    pub from: Option<Target>,
     /// Input is authorized when signed by the receiver or authorized by owning program.
     pub is_authorized: bool,
     /// State the actor starts with at the beginning of the message handling.
@@ -432,11 +432,13 @@ pub struct ReceiveInput {
 }
 
 impl ReceiveInput {
-    /// Whether the message came from another actor of the receiver's own program.
+    /// Whether the message came from a same-zone actor of the receiver's own program.
     #[must_use]
     pub fn from_own_program(&self) -> bool {
-        self.from
-            .is_some_and(|from| from.program_account_id == self.receiver.program_account_id)
+        matches!(
+            self.from,
+            Some(Target::Local(from)) if from.program_account_id == self.receiver.program_account_id
+        )
     }
 }
 
@@ -502,11 +504,11 @@ impl Response {
         }
     }
 
-    pub fn send_sync<M: BorshSerialize>(self, to: Actor, message: &M) -> Self {
+    pub fn send_sync<M: BorshSerialize>(self, to: impl Into<Target>, message: &M) -> Self {
         self.send(SyncMessage::new(to, message))
     }
 
-    pub fn send_async<M: BorshSerialize>(self, to: Actor, message: &M) -> Self {
+    pub fn send_async<M: BorshSerialize>(self, to: impl Into<Target>, message: &M) -> Self {
         self.send(AsyncMessage::new(to, message))
     }
 

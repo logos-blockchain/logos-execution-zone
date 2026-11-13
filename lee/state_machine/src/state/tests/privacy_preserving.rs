@@ -81,7 +81,7 @@ impl NestedBoundary {
                 vec![Delivery {
                     envelope: MessageEnvelope {
                         from: outer,
-                        to: nested_private(),
+                        to: nested_private().into(),
                         message: borsh::to_vec(&inner_transition()).unwrap(),
                     },
                     inherited_authorizations: BTreeSet::new(),

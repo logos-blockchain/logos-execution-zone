@@ -170,7 +170,7 @@ fn prove_native_transfer_with_dummies(
             ciphertext_padding: Some(CIPHERTEXT_PAD),
             ..proving_input(
                 TransactionEntry::Sync(RootCall {
-                    to: sender,
+                    to: sender.into(),
                     message: to_vec(&native_token::Message::Transfer {
                         to: recipient_id,
                         amount: AMOUNT_TO_TRANSFER,
@@ -188,7 +188,7 @@ fn prove_native_transfer_with_dummies(
         },
         &ProgramCatalog::default(),
         |_| SenderPresentation::Canonical,
-        |_, body| body.to.account_id == recipient_id,
+        |_, body| body.to.actor().account_id == recipient_id,
         no_seal,
     )?)
 }
@@ -229,7 +229,7 @@ fn prove_scripted_transfers(
     Ok(execute_and_prove(
         proving_input(
             TransactionEntry::Sync(RootCall {
-                to: Actor::new(sender_id, scripted_id),
+                to: Actor::new(sender_id, scripted_id).into(),
                 message: to_vec(&script)?,
             }),
             vec![Actor::native_balance(RECIPIENT_ID)],

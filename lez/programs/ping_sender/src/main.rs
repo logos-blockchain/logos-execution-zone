@@ -67,7 +67,7 @@ mod tests {
         let receiver = Actor::new(sender_config_account_id(PING_SENDER), PING_SENDER);
         let input = ReceiveInput {
             receiver,
-            from: origin.map(|sender| Actor::new(sender, sender)),
+            from: origin.map(|sender| Actor::new(sender, sender).into()),
             is_authorized: false,
             pre_state: ActorState::from(pre.to_vec()),
             message: borsh::to_vec(&message).unwrap(),

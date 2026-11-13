@@ -294,7 +294,7 @@ fn a_sent_transitions_nonzero_exit_adds_its_cycles_to_its_senders() {
     let run = |sends: usize| {
         let script = (0..sends).fold(Script::default(), |script, _| {
             script.send(SyncMessage {
-                to: exiting,
+                to: exiting.into(),
                 message: Vec::new(),
                 pda_seeds: BTreeSet::new(),
             })

@@ -37,7 +37,11 @@ impl RecipientEncryption {
         let Recipient {
             vpk, kind, opening, ..
         } = &self.recipient;
-        if body.to.account_id != self.recipient.address() {
+        if body
+            .to
+            .local()
+            .is_none_or(|to| to.account_id != self.recipient.address())
+        {
             return None;
         }
         let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(vpk, &self.esk);
@@ -102,8 +106,11 @@ impl SealedMessage {
             opening,
         };
         (Commitment::for_sealed_message(&body, &rho) == self.commitment
-            && recipient.address() == body.to.account_id)
-            .then_some((body, recipient, rho))
+            && body
+                .to
+                .local()
+                .is_some_and(|to| recipient.address() == to.account_id))
+        .then_some((body, recipient, rho))
     }
 }
 
@@ -184,7 +191,7 @@ mod tests {
     fn body(to: AccountId) -> MessageBody {
         MessageBody {
             from: Actor::new(AccountId::new([8; 32]), AccountId::new([9; 32])),
-            to: Actor::new(to, AccountId::new([10; 32])),
+            to: Actor::new(to, AccountId::new([10; 32])).into(),
             message: vec![11; 2],
         }
     }
@@ -243,7 +250,7 @@ mod tests {
             let sealed = sealed(&recipient);
             let (body, opened, _) = sealed.open(NPK, &D, &Z).unwrap();
             assert_eq!(
-                (body.to.account_id, opened),
+                (body.to.actor().account_id, opened),
                 (recipient.address(), recipient)
             );
             let mut altered = sealed.clone();

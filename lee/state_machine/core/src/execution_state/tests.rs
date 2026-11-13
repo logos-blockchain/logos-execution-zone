@@ -255,7 +255,7 @@ impl ExecutionEnvironment for Script {
         index: u64,
         body: &MessageBody,
     ) -> Result<bool, ExecutionError> {
-        self.offered.push((placement, index, body.to));
+        self.offered.push((placement, index, body.to.actor()));
         Ok(match placement {
             Placement::Public => self.public_promotions.remove(&index),
             Placement::Private => self.private_promotions.remove(&index),
@@ -293,7 +293,7 @@ fn data(bytes: &[u8]) -> ActorState {
 
 fn send_to(receiver: Actor) -> SyncMessage {
     SyncMessage {
-        to: receiver,
+        to: receiver.into(),
         message: Vec::new(),
         pda_seeds: BTreeSet::new(),
     }
@@ -302,7 +302,7 @@ fn send_to(receiver: Actor) -> SyncMessage {
 // The private holder of `Keys::new(1)`, entered from a public transition.
 fn enter(message: &[u8]) -> SyncMessage {
     SyncMessage {
-        to: holder(&Keys::new(1)),
+        to: holder(&Keys::new(1)).into(),
         message: message.to_vec(),
         pda_seeds: BTreeSet::new(),
     }
@@ -312,7 +312,7 @@ fn delivery<S>(from: S, to: Actor, message: &[u8]) -> Delivery<S> {
     Delivery {
         envelope: MessageEnvelope {
             from,
-            to,
+            to: to.into(),
             message: message.to_vec(),
         },
         inherited_authorizations: BTreeSet::new(),
@@ -343,7 +343,7 @@ fn sending_when(
 ) -> impl Fn(&ReceiveInput) -> Transition {
     let send = sending(sync_messages);
     move |input| {
-        if input.from == from {
+        if input.from == from.map(Target::Local) {
             send(input)
         } else {
             echo(input, Response::keep_state())
@@ -353,7 +353,7 @@ fn sending_when(
 
 fn root_call(to: Actor) -> RootCall {
     RootCall {
-        to,
+        to: to.into(),
         message: Vec::new(),
     }
 }
@@ -455,7 +455,7 @@ fn order(script: &Script) -> Vec<(Actor, Option<Actor>)> {
     script
         .log
         .iter()
-        .map(|input| (input.receiver, input.from))
+        .map(|input| (input.receiver, input.from.and_then(Target::local)))
         .collect()
 }
 
@@ -489,7 +489,7 @@ fn public_pda(program: AccountId, seed: PdaSeed) -> Actor {
 fn stored(from: Actor, to: Actor, message: &[u8]) -> MessageBody {
     MessageBody {
         from,
-        to,
+        to: to.into(),
         message: message.to_vec(),
     }
 }
@@ -824,7 +824,7 @@ fn a_private_root_records_its_public_call_and_the_predicted_reply() {
     let owner = holder(&keys);
     let vault = actor(2, 9);
     let credit = SyncMessage {
-        to: vault,
+        to: vault.into(),
         message: b"credit".to_vec(),
         pda_seeds: BTreeSet::new(),
     };
@@ -1523,7 +1523,7 @@ fn claims_run_before_the_root_and_only_privately() {
     };
     let claim = MessageBody {
         from: sender,
-        to: claimant,
+        to: claimant.into(),
         message: borsh::to_vec(&native_token::Message::Credit(0)).unwrap(),
     };
     let actors = vec![ENTRY];
@@ -1791,7 +1791,7 @@ fn a_parents_async_messages_precede_its_childrens_and_never_run_their_recipients
                 Response::keep_state()
                     .send(send_to(CALLEE))
                     .send(AsyncMessage {
-                        to: outer_target,
+                        to: outer_target.into(),
                         message: b"x".to_vec(),
                     })
                     .send(send_to(BYSTANDER)),
@@ -1801,7 +1801,7 @@ fn a_parents_async_messages_precede_its_childrens_and_never_run_their_recipients
             echo(
                 input,
                 Response::keep_state().send(AsyncMessage {
-                    to: inner_target,
+                    to: inner_target.into(),
                     message: b"y".to_vec(),
                 }),
             )
@@ -1829,12 +1829,12 @@ fn a_parents_async_messages_precede_its_childrens_and_never_run_their_recipients
         vec![
             MessageBody {
                 from: ENTRY,
-                to: outer_target,
+                to: outer_target.into(),
                 message: b"x".to_vec(),
             },
             MessageBody {
                 from: CALLEE,
-                to: inner_target,
+                to: inner_target.into(),
                 message: b"y".to_vec(),
             },
         ]
@@ -1867,7 +1867,7 @@ fn a_private_part_keeps_its_async_messages_out_of_the_boundary_and_a_public_part
     let (private_target, public_target) = (actor(6, 7), actor(7, 7));
     let private_async_message = MessageBody {
         from: holder(&keys),
-        to: private_target,
+        to: private_target.into(),
         message: b"x".to_vec(),
     };
     let mut private_script = Script::default().on(holder(&keys), move |input| {
@@ -1876,7 +1876,7 @@ fn a_private_part_keeps_its_async_messages_out_of_the_boundary_and_a_public_part
             Response::keep_state()
                 .send(send_to(ENTRY))
                 .send(AsyncMessage {
-                    to: private_target,
+                    to: private_target.into(),
                     message: b"x".to_vec(),
                 }),
         )
@@ -1907,7 +1907,7 @@ fn a_private_part_keeps_its_async_messages_out_of_the_boundary_and_a_public_part
         echo(
             input,
             Response::keep_state().send(AsyncMessage {
-                to: public_target,
+                to: public_target.into(),
                 message: b"y".to_vec(),
             }),
         )
@@ -1925,7 +1925,7 @@ fn a_private_part_keeps_its_async_messages_out_of_the_boundary_and_a_public_part
         async_messages,
         vec![MessageBody {
             from: ENTRY,
-            to: public_target,
+            to: public_target.into(),
             message: b"y".to_vec(),
         }]
     );
@@ -1933,7 +1933,7 @@ fn a_private_part_keeps_its_async_messages_out_of_the_boundary_and_a_public_part
 
 fn sync_message(to: Actor, message: &[u8]) -> SyncMessage {
     SyncMessage {
-        to,
+        to: to.into(),
         message: message.to_vec(),
         pda_seeds: BTreeSet::new(),
     }
@@ -2117,7 +2117,7 @@ fn a_failing_descendant_of_c1_stops_the_transaction_before_c2() {
             let response = if input.message == b"c1" {
                 Response::set_state(b"1".to_vec())
                     .send(AsyncMessage {
-                        to: stranger,
+                        to: stranger.into(),
                         message: b"x".to_vec(),
                     })
                     .send(send_to(stranger))
@@ -2273,7 +2273,7 @@ fn a_reply_to_a_presented_alias_returns_to_the_account_in_every_part() {
                 echo(input, response)
             })
             .on(ENTRY, |input| {
-                let caller = input.from.expect("a call has a sender");
+                let caller = input.from.expect("a call has a sender").actor();
                 echo(
                     input,
                     Response::keep_state().send(sync_message(caller, b"reply")),
@@ -2326,7 +2326,7 @@ fn a_reply_presents_the_address_its_sender_reached() {
                 echo(input, response)
             })
             .on(owner, |input| {
-                let sender = input.from.expect("a query has a sender");
+                let sender = input.from.expect("a query has a sender").actor();
                 echo(
                     input,
                     Response::keep_state().send(sync_message(sender, b"answer")),
@@ -2391,7 +2391,7 @@ fn an_async_reply_to_a_private_call_can_blind_its_sender() {
         outcome.async_messages,
         vec![MessageBody {
             from: alias(callee, [6; 32]),
-            to: alias(caller, [5; 32]),
+            to: alias(caller, [5; 32]).into(),
             message: b"reply".to_vec(),
         }]
     );
@@ -2436,7 +2436,7 @@ fn each_message_of_a_private_transition_presents_the_sender_its_presentation_sel
                 Response::keep_state()
                     .send(send_to(ENTRY))
                     .send(AsyncMessage {
-                        to: target,
+                        to: target.into(),
                         message: Vec::new(),
                     })
                     .send(send_to(BYSTANDER)),
@@ -2463,7 +2463,7 @@ fn each_message_of_a_private_transition_presents_the_sender_its_presentation_sel
         outcome.async_messages,
         vec![MessageBody {
             from: alias(owner, [2; 32]),
-            to: target,
+            to: target.into(),
             message: Vec::new(),
         }]
     );
@@ -2491,7 +2491,7 @@ fn an_async_message_at_an_opened_alias_is_received_privately_by_the_account() {
 
 fn async_message(to: Actor, message: &[u8]) -> AsyncMessage {
     AsyncMessage {
-        to,
+        to: to.into(),
         message: message.to_vec(),
     }
 }
@@ -2824,7 +2824,7 @@ fn a_promoted_async_message_inside_a_nested_detour_clears_only_its_own_callbacks
         Script::default()
             .on(owner, sending(vec![seeded_to(custody, seed)]))
             .on(custody, move |input| {
-                let sync_messages = if input.from == Some(owner) {
+                let sync_messages = if input.from == Some(owner.into()) {
                     vec![send_to(peer)]
                 } else if input.message == ENTER {
                     vec![send_to(relay)]
@@ -3347,7 +3347,7 @@ fn a_receipt_root_to_a_private_pda_grants_its_receiver_nothing() {
         script.log,
         vec![ReceiveInput {
             receiver: custody,
-            from: Some(actor(4, 5)),
+            from: Some(actor(4, 5).into()),
             is_authorized: false,
             pre_state: ActorState::empty(),
             message: b"stored".to_vec(),
@@ -3386,7 +3386,7 @@ fn a_selected_async_message_whose_boundary_step_misstates_its_sender_destination
             ..selected.envelope.clone()
         }),
         envelope(MessageEnvelope {
-            to: holder(&Keys::new(2)),
+            to: holder(&Keys::new(2)).into(),
             ..selected.envelope.clone()
         }),
         Delivery {
@@ -3484,7 +3484,7 @@ fn a_generated_call_graph_runs_the_same_whole_and_split() {
         let witnesses: Vec<PrivateWitness> =
             graph.keys.iter().map(|keys| keys.regular(false)).collect();
         let entry = RootCall {
-            to: graph.root,
+            to: graph.root.into(),
             message: vec![GENERATED_DEPTH],
         };
 

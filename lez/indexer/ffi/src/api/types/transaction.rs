@@ -576,7 +576,7 @@ mod tests {
         Delivery {
             envelope: MessageEnvelope {
                 from,
-                to,
+                to: to.into(),
                 message: vec![message],
             },
             inherited_authorizations: vec![],
@@ -605,7 +605,7 @@ mod tests {
                         promotions: vec![],
                     },
                     root: RootCall {
-                        to: actor(5, 8),
+                        to: actor(5, 8).into(),
                         message: vec![9],
                     },
                     fee,
@@ -664,7 +664,7 @@ mod tests {
                 ],
                 recovery_bindings: vec![],
                 public_root: Some(RootCall {
-                    to: actor(27, 28),
+                    to: actor(27, 28).into(),
                     message: vec![29; 2],
                 }),
                 nonces: vec![],

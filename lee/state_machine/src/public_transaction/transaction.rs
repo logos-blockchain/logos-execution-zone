@@ -48,7 +48,9 @@ impl PublicTransaction {
             .signer_account_ids()
             .into_iter()
             .collect::<HashSet<_>>();
-        acc_set.insert(self.message.execution.root.to.account_id);
+        if let Some(to) = self.message.execution.root.to.local() {
+            acc_set.insert(to.account_id);
+        }
         acc_set.extend(
             self.message
                 .public_context

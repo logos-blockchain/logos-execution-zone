@@ -136,7 +136,7 @@ pub fn credit(from: Actor, to: Actor, amount: Balance) -> Delivery<Actor> {
     Delivery {
         envelope: MessageEnvelope {
             from,
-            to,
+            to: to.into(),
             message: borsh::to_vec(&NativeMessage::Credit(amount)).unwrap(),
         },
         inherited_authorizations: BTreeSet::new(),
@@ -153,7 +153,7 @@ pub fn self_sends(actor: Actor, depth: usize) -> Script {
 
 pub fn root(to: Actor, message: &impl BorshSerialize) -> TransactionEntry<MessageWitness> {
     TransactionEntry::Sync(RootCall {
-        to,
+        to: to.into(),
         message: borsh::to_vec(message).unwrap(),
     })
 }

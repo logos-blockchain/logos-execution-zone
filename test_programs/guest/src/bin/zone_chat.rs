@@ -115,6 +115,7 @@ fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
             deliverer: input
                 .from
                 .expect("a delivery has a sender")
+                .actor()
                 .program_account_id,
             src_zone,
             src_account_id,

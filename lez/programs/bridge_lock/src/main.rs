@@ -202,7 +202,7 @@ mod tests {
     ) -> Transition {
         let input = ReceiveInput {
             receiver,
-            from: origin.map(|sender| Actor::new(sender, sender)),
+            from: origin.map(|sender| Actor::new(sender, sender).into()),
             is_authorized,
             pre_state: ActorState::from(pre),
             message: borsh::to_vec(&message).unwrap(),

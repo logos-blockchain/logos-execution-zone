@@ -275,7 +275,13 @@ impl V03State {
         self.check_recovery_bindings_are_new(&recovery_bindings)?;
         for publication in &published {
             if let Publication::Clear { body, recovery } = publication {
-                let address = body.to.account_id;
+                let address = body
+                    .to
+                    .local()
+                    .ok_or_else(|| {
+                        LeeError::InvalidInput("A clear publication addresses a remote zone".into())
+                    })?
+                    .account_id;
                 ensure!(
                     self.bound_note(&recovery_bindings, address) == Some(recovery),
                     LeeError::InvalidInput(format!(
@@ -387,7 +393,12 @@ impl V03State {
                     StoredPublication::Clear(body) => Publication::Clear {
                         body: body.clone(),
                         recovery: self
-                            .recovery_binding(body.to.account_id)
+                            .recovery_binding(
+                                body.to
+                                    .local()
+                                    .expect("a stored clear publication addresses a local account")
+                                    .account_id,
+                            )
                             .expect("a clear publication's address was bound when it was applied")
                             .clone(),
                     },

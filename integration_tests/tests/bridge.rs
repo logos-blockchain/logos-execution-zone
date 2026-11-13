@@ -198,7 +198,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
         lee::ProvingInput {
             claims: Vec::new(),
             root: TransactionEntry::Sync(RootCall {
-                to: receipt,
+                to: receipt.into(),
                 message: deposit,
             }),
             public_context: lee::PublicExecutionContext::new(public_actors, []),

@@ -99,7 +99,10 @@ async fn receive_sealed_transfer(ctx: &mut TestContext, to: AccountId) -> Result
         "a private sender's async message to a private account is sealed"
     );
     assert_eq!(
-        (pending.body.to.account_id, pending.recipient.account_id()),
+        (
+            pending.body.to.actor().account_id,
+            pending.recipient.account_id()
+        ),
         (to, to)
     );
 

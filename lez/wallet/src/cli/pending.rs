@@ -85,8 +85,8 @@ impl WalletSubcommand for PendingSubcommand {
                 {
                     println!(
                         "Message {position}: to {} at program {}, from {} at program {}, {} bytes",
-                        body.to.account_id,
-                        body.to.program_account_id,
+                        body.to.actor().account_id,
+                        body.to.actor().program_account_id,
                         body.from.account_id,
                         body.from.program_account_id,
                         body.message.len()

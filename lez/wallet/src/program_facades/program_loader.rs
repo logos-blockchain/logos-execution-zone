@@ -261,7 +261,10 @@ impl<C: WalletSequencerClient> ProgramLoader<'_, C> {
         &self,
         root: &RootCall,
     ) -> Result<Vec<(AccountId, ActorState)>> {
-        if root.to.program_account_id != PROGRAM_LOADER_ACCOUNT_ID {
+        let Some(to) = root.to.local() else {
+            return Ok(Vec::new());
+        };
+        if to.program_account_id != PROGRAM_LOADER_ACCOUNT_ID {
             return Ok(Vec::new());
         }
         match borsh::from_slice(&root.message) {

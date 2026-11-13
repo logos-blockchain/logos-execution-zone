@@ -589,7 +589,7 @@ mod tests {
     ) -> ReceiveInput {
         ReceiveInput {
             receiver: Actor::new(account, program),
-            from: origin.map(|sender| Actor::new(sender, sender)),
+            from: origin.map(|sender| Actor::new(sender, sender).into()),
             is_authorized,
             pre_state: ActorState::from(pre_state.to_vec()),
             message: borsh::to_vec(message).unwrap(),

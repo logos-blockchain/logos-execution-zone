@@ -8,7 +8,7 @@ use std::{
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, Nullifier, ProgramImageClaim, ProvenExecution,
     RecoveryBinding, RootCall, Timestamp,
-    account::{Account, AccountId, Actor, ActorState, Cycles, Nonce},
+    account::{Account, AccountId, Actor, ActorState, Cycles, Nonce, Target},
     execution_state::{
         BoundaryStep, PublicExecutionContext, PublicOutcome, PublicPart, TransactionEntry,
         TransitionView, WholeExecution,
@@ -199,7 +199,7 @@ impl ValidatedStateDiff {
     /// not read as a general escape hatch. `authorized` is the guest's
     /// `is_authorized` set — the payer for the reserve, empty for the refund.
     pub fn from_fee_settlement_invocation(
-        to: Actor,
+        to: impl Into<Target>,
         message: &[u8],
         public_actors: &BTreeSet<Actor>,
         authorized: &HashSet<AccountId>,
@@ -210,7 +210,7 @@ impl ValidatedStateDiff {
         let mut cycles_used = 0; // dont care
         Self::execute_authorized(
             RootCall {
-                to,
+                to: to.into(),
                 message: message.to_vec(),
             },
             PublicExecutionContext::new(public_actors.iter().copied(), authorized.iter().copied()),
@@ -267,7 +267,9 @@ impl ValidatedStateDiff {
         cycles_used: &mut u64,
     ) -> Result<Self, LeeError> {
         ensure!(
-            public_context.runs_publicly(root.to),
+            root.to
+                .local()
+                .is_some_and(|to| public_context.runs_publicly(to)),
             LeeError::InvalidInput("Root actor is not declared".into())
         );
         let backend = PublicBackend::new(
@@ -573,8 +575,13 @@ fn publish(
     introduced: &[RecoveryBinding],
     body: MessageBody,
 ) -> Result<Publication, LeeError> {
+    let address = body
+        .to
+        .local()
+        .ok_or(LeeError::UnboundAsyncDestination { actor: body.to })?
+        .account_id;
     let recovery = state
-        .bound_note(introduced, body.to.account_id)
+        .bound_note(introduced, address)
         .ok_or(LeeError::UnboundAsyncDestination { actor: body.to })?
         .clone();
     Ok(Publication::Clear { body, recovery })

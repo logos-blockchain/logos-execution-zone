@@ -162,7 +162,7 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_accounts() {
     assert_eq!(
         output.execution.public_root,
         Some(RootCall {
-            to: sender,
+            to: sender.into(),
             message: borsh::to_vec(&root_transfer).unwrap(),
         })
     );
@@ -612,7 +612,7 @@ fn the_prover_never_reads_a_public_actor_state() {
     assert_eq!(
         output.execution.public_root,
         Some(RootCall {
-            to: root_actor,
+            to: root_actor.into(),
             message: borsh::to_vec(&script).unwrap(),
         })
     );

@@ -355,7 +355,7 @@ fn via_proxy(
     let entry = Actor::new(authority, target);
     let config = Actor::new(config, target);
     let script = Script::default().send(SyncMessage {
-        to: entry,
+        to: entry.into(),
         message: forwarded,
         pda_seeds: delegated.into_iter().collect(),
     });
@@ -3174,7 +3174,7 @@ fn a_chained_post_is_refused_and_a_top_level_post_is_a_no_op() {
     let seed = lee_core::program::PdaSeed::new([3; 32]);
     let caller = Actor::new(AccountId::for_public_pda(&proxy_id, &seed), proxy_id);
     let script = Script::default().send(SyncMessage {
-        to: entry,
+        to: entry.into(),
         message: bytes_of!(&ChatMessage::post(emission.clone())),
         pda_seeds: std::collections::BTreeSet::new(),
     });

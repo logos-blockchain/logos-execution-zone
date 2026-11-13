@@ -92,7 +92,7 @@ mod tests {
         let receiver = Actor::new(account_id, CLOCK);
         let input = ReceiveInput {
             receiver,
-            from,
+            from: from.map(Into::into),
             is_authorized: false,
             pre_state: ActorState::from(pre.to_bytes()),
             message: borsh::to_vec(&message).unwrap(),

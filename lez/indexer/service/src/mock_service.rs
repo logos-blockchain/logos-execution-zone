@@ -515,7 +515,7 @@ fn mock_public_tx(
                 promotions: vec![],
             },
             root: RootCall {
-                to,
+                to: to.into(),
                 message: vec![1, 2, 3, 4],
             },
             fee: None,
@@ -551,7 +551,7 @@ fn mock_privacy_preserving_tx(
             async_messages: vec![],
             recovery_bindings: vec![],
             public_root: Some(RootCall {
-                to,
+                to: to.into(),
                 message: vec![0xdd, 0xee],
             }),
             nonces: vec![],

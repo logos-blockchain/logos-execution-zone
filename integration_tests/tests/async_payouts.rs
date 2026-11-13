@@ -122,7 +122,7 @@ fn prove_trade(
         ProvingInput {
             claims: Vec::new(),
             root: TransactionEntry::Sync(RootCall {
-                to: Actor::new(input, programs.scripted),
+                to: Actor::new(input, programs.scripted).into(),
                 message: Program::serialize_message(script)?,
             }),
             // The fee inbox is declared so the reserve crosses to it rather than being published.
@@ -252,7 +252,7 @@ async fn trades_proven_at_one_custody_balance_pay_out_at_the_live_balance() -> R
             (body.from, body.to),
             (
                 Actor::native_balance(custody),
-                Actor::native_balance(*output)
+                Actor::native_balance(*output).into()
             ),
             "the custody sends the payout asynchronously to the output account"
         );
@@ -323,7 +323,7 @@ async fn a_public_payout_reaches_a_private_pda_its_recipient_discovers_by_key() 
         let Publication::Clear { body, recovery } = &pending.publication else {
             anyhow::bail!("a public sender's payout is published clear");
         };
-        assert_eq!(body.to, Actor::native_balance(payout_id));
+        assert_eq!(body.to, Actor::native_balance(payout_id).into());
         assert_eq!(
             borsh::from_slice::<native_token::Message>(&body.message)?,
             native_token::Message::Credit(amount)
