@@ -1,0 +1,490 @@
+//! `system_upgrader`: upgrades and installs the system programs, each one of its PDAs
+//! (`PdaSeed::for_system_program(name)`). Pending upgrades live in its registry. Every change but
+//! `Apply` must be approved by the zone's sequencer committee, and only the block producer
+//! includes its transactions.
+
+use std::collections::BTreeMap;
+
+use borsh::{BorshDeserialize, BorshSerialize};
+pub use lee_core::program::{SYSTEM_UPGRADER_ACCOUNT_ID, SystemProgramName};
+use lee_core::{
+    BlockId,
+    account::{AccountId, Actor},
+    program::{PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramId},
+};
+pub use sequencer_stake_core::{CommitteeApproval as Approval, SequencerKey};
+use sequencer_stake_core::{
+    committee_approval_message, sequencer_stake_account_id, sequencer_stake_config_account_id,
+};
+
+/// Separates the committee's approvals of system changes from its other approvals.
+pub const APPROVAL_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/SystemApproval/0000000";
+const REGISTRY_SEED: [u8; 32] = *b"/LEZ/v0.3/SystemRegistry/0000000";
+const STAGING_PREFIX: [u8; 32] = *b"/LEZ/v0.3/SystemStaging/00000000";
+
+/// Sent at the top level to the registry's actor ([`registry_actor`]). Variants are append-only.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum Message {
+    /// Schedules `name` to switch to the chain at `first_segment` in block `activation_height`.
+    /// Lands before that height; the loader validates the chain into a staging header.
+    Schedule {
+        name: SystemProgramName,
+        first_segment: AccountId,
+        image_id: ProgramId,
+        immutable: bool,
+        activation_height: BlockId,
+        approvals: Vec<Approval>,
+    },
+    /// Applies `name`'s pending upgrade and clears it. Valid only in block `activation_height`.
+    Apply {
+        name: SystemProgramName,
+        activation_height: BlockId,
+    },
+    /// Clears `name`'s pending upgrade, before its activation height, if it is exactly this one.
+    Cancel {
+        name: SystemProgramName,
+        first_segment: AccountId,
+        activation_height: BlockId,
+        approvals: Vec<Approval>,
+    },
+    /// Deploys a new system program `name` from the chain at `first_segment`.
+    Install {
+        name: SystemProgramName,
+        first_segment: AccountId,
+        image_id: ProgramId,
+        immutable: bool,
+        approvals: Vec<Approval>,
+    },
+}
+
+impl Message {
+    /// The message carrying out `proposal`, with `approvals` of it.
+    #[must_use]
+    pub const fn approved(proposal: Proposal, approvals: Vec<Approval>) -> Self {
+        match proposal {
+            Proposal::Schedule {
+                name,
+                first_segment,
+                image_id,
+                immutable,
+                activation_height,
+            } => Self::Schedule {
+                name,
+                first_segment,
+                image_id,
+                immutable,
+                activation_height,
+                approvals,
+            },
+            Proposal::Cancel {
+                name,
+                first_segment,
+                activation_height,
+            } => Self::Cancel {
+                name,
+                first_segment,
+                activation_height,
+                approvals,
+            },
+            Proposal::Install {
+                name,
+                first_segment,
+                image_id,
+                immutable,
+            } => Self::Install {
+                name,
+                first_segment,
+                image_id,
+                immutable,
+                approvals,
+            },
+        }
+    }
+
+    /// The actors a transaction carrying this message declares: the registry's, then those the
+    /// message reaches.
+    #[must_use]
+    pub fn actors(&self) -> Vec<Actor> {
+        let reached = match self {
+            Self::Schedule {
+                name,
+                first_segment,
+                image_id,
+                immutable,
+                activation_height,
+                ..
+            } => vec![
+                committee_actor(),
+                loader_actor(name),
+                staging_actor(
+                    name,
+                    &ScheduledUpgrade {
+                        first_segment: *first_segment,
+                        image_id: *image_id,
+                        immutable: *immutable,
+                        activation_height: *activation_height,
+                    },
+                ),
+            ],
+            Self::Apply { name, .. } => vec![loader_actor(name)],
+            Self::Cancel { .. } => vec![committee_actor()],
+            Self::Install { name, .. } => vec![committee_actor(), loader_actor(name)],
+        };
+        std::iter::once(registry_actor()).chain(reached).collect()
+    }
+
+    /// The change the committee approves, with its approvals; `None` for `Apply`.
+    #[must_use]
+    pub fn proposal(&self) -> Option<(Proposal, &[Approval])> {
+        match self {
+            Self::Schedule {
+                name,
+                first_segment,
+                image_id,
+                immutable,
+                activation_height,
+                approvals,
+            } => Some((
+                Proposal::Schedule {
+                    name: *name,
+                    first_segment: *first_segment,
+                    image_id: *image_id,
+                    immutable: *immutable,
+                    activation_height: *activation_height,
+                },
+                approvals,
+            )),
+            Self::Cancel {
+                name,
+                first_segment,
+                activation_height,
+                approvals,
+            } => Some((
+                Proposal::Cancel {
+                    name: *name,
+                    first_segment: *first_segment,
+                    activation_height: *activation_height,
+                },
+                approvals,
+            )),
+            Self::Install {
+                name,
+                first_segment,
+                image_id,
+                immutable,
+                approvals,
+            } => Some((
+                Proposal::Install {
+                    name: *name,
+                    first_segment: *first_segment,
+                    image_id: *image_id,
+                    immutable: *immutable,
+                },
+                approvals,
+            )),
+            Self::Apply { .. } => None,
+        }
+    }
+}
+
+/// What the committee approves: the change itself, naming the action so an approval for one can't
+/// be used for another, and the image ID of the code it installs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
+pub enum Proposal {
+    Schedule {
+        name: SystemProgramName,
+        first_segment: AccountId,
+        image_id: ProgramId,
+        immutable: bool,
+        activation_height: BlockId,
+    },
+    Cancel {
+        name: SystemProgramName,
+        first_segment: AccountId,
+        activation_height: BlockId,
+    },
+    Install {
+        name: SystemProgramName,
+        first_segment: AccountId,
+        image_id: ProgramId,
+        immutable: bool,
+    },
+}
+
+impl Proposal {
+    /// What the committee signs over, after [`APPROVAL_DOMAIN`] and the channel id.
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        borsh::to_vec(self).expect("a proposal serializes")
+    }
+
+    /// SHA-256 of [`Proposal::to_bytes`]: committee members who compare it have signed the same
+    /// proposal, byte for byte.
+    #[must_use]
+    pub fn hash(&self) -> [u8; 32] {
+        use sha2::{Digest as _, Sha256};
+
+        Sha256::digest(self.to_bytes()).into()
+    }
+}
+
+/// A pending upgrade, stored in the [`Registry`] under the system program's name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ScheduledUpgrade {
+    pub first_segment: AccountId,
+    /// What the chain at `first_segment` computes to, checked by the loader at `Schedule`.
+    pub image_id: ProgramId,
+    /// Whether `Apply` leaves the header immutable.
+    pub immutable: bool,
+    pub activation_height: BlockId,
+}
+
+/// Every upgradable system program, by name, with its pending upgrade, if any. Held in the
+/// registry's actor state ([`registry_actor`]): seeded at genesis, extended by `Install`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Registry {
+    pub programs: BTreeMap<SystemProgramName, Option<ScheduledUpgrade>>,
+}
+
+impl Registry {
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        borsh::to_vec(self).expect("a registry serializes")
+    }
+
+    /// An empty registry for an empty actor state.
+    #[must_use]
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.is_empty() {
+            return Some(Self::default());
+        }
+        borsh::from_slice(bytes).ok()
+    }
+
+    /// `name`'s pending upgrade; `None` if nothing is pending or `name` isn't registered.
+    #[must_use]
+    pub fn scheduled(&self, name: &SystemProgramName) -> Option<ScheduledUpgrade> {
+        self.programs.get(name).copied().flatten()
+    }
+}
+
+/// One committee member's approval together with the proposal it approves: what an operator
+/// signs offline and hands to the nodes.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SignedApproval {
+    pub proposal: Proposal,
+    pub approval: Approval,
+}
+
+/// Bytes a committee member signs. The channel id keeps an approval to one zone.
+#[must_use]
+pub fn approval_message(
+    channel_id: [u8; 32],
+    proposal: &Proposal,
+    valid_until: BlockId,
+) -> Vec<u8> {
+    committee_approval_message(
+        APPROVAL_DOMAIN,
+        channel_id,
+        &proposal.to_bytes(),
+        valid_until,
+    )
+}
+
+/// Whether `approval`'s signature is its signer's over exactly what `sequencer_stake` verifies for
+/// `proposal` on the zone `channel_id`. Says nothing about committee membership.
+#[must_use]
+pub fn verify_approval(approval: &Approval, channel_id: [u8; 32], proposal: &Proposal) -> bool {
+    use sequencer_stake_core::ed25519_dalek::{Signature, VerifyingKey};
+
+    let Ok(key) = VerifyingKey::from_bytes(&approval.signer.to_bytes()) else {
+        return false;
+    };
+    let Ok(signature) = Signature::from_slice(&approval.signature) else {
+        return false;
+    };
+    key.verify_strict(
+        &approval_message(channel_id, proposal, approval.valid_until),
+        &signature,
+    )
+    .is_ok()
+}
+
+/// The sequencer committee's config, under `sequencer_stake`: it verifies approvals.
+#[must_use]
+pub fn committee_actor() -> Actor {
+    let program = sequencer_stake_account_id();
+    Actor::new(sequencer_stake_config_account_id(program), program)
+}
+
+/// Where the [`Registry`] lives: a PDA of `system_upgrader`.
+#[must_use]
+pub fn registry_account_id() -> AccountId {
+    AccountId::for_public_pda(&SYSTEM_UPGRADER_ACCOUNT_ID, &PdaSeed::new(REGISTRY_SEED))
+}
+
+/// The actor every `system_upgrader` message is sent to: the registry, under `system_upgrader`.
+#[must_use]
+pub fn registry_actor() -> Actor {
+    Actor::new(registry_account_id(), SYSTEM_UPGRADER_ACCOUNT_ID)
+}
+
+/// Where `Schedule` has the loader validate `upgrade`'s chain into a header, under the program
+/// loader: a PDA of `system_upgrader`, one per proposal.
+#[must_use]
+pub fn staging_actor(name: &SystemProgramName, upgrade: &ScheduledUpgrade) -> Actor {
+    Actor::new(
+        AccountId::for_public_pda(&SYSTEM_UPGRADER_ACCOUNT_ID, &staging_seed(name, upgrade)),
+        PROGRAM_LOADER_ACCOUNT_ID,
+    )
+}
+
+/// The PDA seed of [`staging_actor`].
+#[must_use]
+pub fn staging_seed(name: &SystemProgramName, upgrade: &ScheduledUpgrade) -> PdaSeed {
+    use sha2::{Digest as _, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(STAGING_PREFIX);
+    hasher.update(name.as_bytes());
+    hasher.update(upgrade.first_segment.value());
+    hasher.update(borsh::to_vec(&upgrade.image_id).expect("an image ID serializes"));
+    hasher.update(upgrade.activation_height.to_le_bytes());
+    PdaSeed::new(hasher.finalize().into())
+}
+
+/// The system program `name`'s header, under the program loader.
+#[must_use]
+pub fn loader_actor(name: &SystemProgramName) -> Actor {
+    Actor::new(
+        AccountId::from_system_program_name(name),
+        PROGRAM_LOADER_ACCOUNT_ID,
+    )
+}
+
+/// `system_upgrader`'s fixed address.
+#[must_use]
+pub const fn system_upgrader_account_id() -> AccountId {
+    SYSTEM_UPGRADER_ACCOUNT_ID
+}
+
+#[cfg(test)]
+mod tests {
+    use sequencer_stake_core::ed25519_dalek::{Signer as _, SigningKey};
+
+    use super::*;
+
+    const CHANNEL_ID: [u8; 32] = [5; 32];
+
+    fn proposal() -> Proposal {
+        Proposal::Schedule {
+            name: SystemProgramName::new(b"clock"),
+            first_segment: AccountId::new([1; 32]),
+            image_id: [2; 8],
+            immutable: false,
+            activation_height: 10,
+        }
+    }
+
+    fn approval_of(proposal: &Proposal, channel_id: [u8; 32]) -> Approval {
+        let key = SigningKey::from_bytes(&[7; 32]);
+        Approval {
+            signer: SequencerKey::new(key.verifying_key().to_bytes()).unwrap(),
+            valid_until: 9,
+            signature: key
+                .sign(&approval_message(channel_id, proposal, 9))
+                .to_bytes()
+                .to_vec(),
+        }
+    }
+
+    #[test]
+    fn an_approval_verifies_only_for_its_proposal_and_zone() {
+        let approval = approval_of(&proposal(), CHANNEL_ID);
+        assert!(verify_approval(&approval, CHANNEL_ID, &proposal()));
+
+        let cancel = Proposal::Cancel {
+            name: SystemProgramName::new(b"clock"),
+            first_segment: AccountId::new([1; 32]),
+            activation_height: 10,
+        };
+        assert!(
+            !verify_approval(&approval, CHANNEL_ID, &cancel),
+            "another action"
+        );
+        assert!(
+            !verify_approval(&approval, [6; 32], &proposal()),
+            "another zone"
+        );
+
+        let mut extended = approval;
+        extended.valid_until = 10;
+        assert!(
+            !verify_approval(&extended, CHANNEL_ID, &proposal()),
+            "a changed expiry"
+        );
+    }
+
+    #[test]
+    fn an_approved_message_carries_its_proposal() {
+        let approvals = vec![approval_of(&proposal(), CHANNEL_ID)];
+        let message = Message::approved(proposal(), approvals.clone());
+        assert_eq!(message.proposal(), Some((proposal(), approvals.as_slice())));
+    }
+
+    #[test]
+    fn a_proposal_hash_tells_proposals_apart() {
+        let Proposal::Schedule {
+            name,
+            first_segment,
+            image_id,
+            immutable,
+            activation_height,
+        } = proposal()
+        else {
+            unreachable!();
+        };
+        let later = Proposal::Schedule {
+            name,
+            first_segment,
+            image_id,
+            immutable,
+            activation_height: activation_height + 1,
+        };
+        assert_eq!(proposal().hash(), proposal().hash());
+        assert_ne!(proposal().hash(), later.hash());
+    }
+
+    #[test]
+    fn a_schedule_declares_its_loader_and_staging_headers() {
+        let message = Message::approved(proposal(), Vec::new());
+        let Proposal::Schedule {
+            name,
+            first_segment,
+            image_id,
+            immutable,
+            activation_height,
+        } = proposal()
+        else {
+            unreachable!();
+        };
+        let staging = staging_actor(
+            &name,
+            &ScheduledUpgrade {
+                first_segment,
+                image_id,
+                immutable,
+                activation_height,
+            },
+        );
+        assert_eq!(
+            message.actors(),
+            vec![
+                registry_actor(),
+                committee_actor(),
+                loader_actor(&name),
+                staging
+            ]
+        );
+    }
+}

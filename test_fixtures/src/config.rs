@@ -26,8 +26,8 @@ pub const TEST_POSTING_TIMEFRAME: u32 = 13;
 /// Idle slots before the turn passes on; the production 25 outlasts the shortened timeframe.
 pub const TEST_POSTING_TIMEOUT: u32 = TEST_POSTING_TIMEFRAME;
 
-/// Blocks an unstake waits; the production 100 would outlast the exit tests.
-pub const TEST_EXIT_DELAY: u64 = 3;
+/// L1 blocks on top of a key's removal config before its whole stake is released.
+pub const TEST_FINALITY_DEPTH: u64 = 11;
 
 // Balances are LGO-scale (`testnet_initial_state` precedent): a charged public
 // transaction reserves `gas_limit x base_fee` up front (~16M at wallet defaults)
@@ -39,9 +39,9 @@ pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000, 20_0
 /// The charged bytes of the shield that funds a private account at setup, which genesis must
 /// price before any transaction exists; setup checks it against what the wallet measures.
 ///
-/// It is the fixed `PROOF_BYTES` (223,047) plus the rest of the serialized transaction (13,992),
+/// It is the fixed `PROOF_BYTES` (223,047) plus the rest of the serialized transaction (13,993),
 /// mostly its padded private slots.
-pub const SHIELD_BYTES: u64 = 237_039;
+pub const SHIELD_BYTES: u64 = 237_040;
 
 /// The public account for funding the private accounts' balances at genesis.
 pub(crate) const PRIVATE_FUNDER_INDEX: usize = 0;
@@ -102,7 +102,7 @@ impl Default for SequencerPartialConfig {
             channel_params: ChannelParams {
                 posting_timeframe: TEST_POSTING_TIMEFRAME,
                 posting_timeout: TEST_POSTING_TIMEOUT,
-                exit_delay: TEST_EXIT_DELAY,
+                finality_depth: TEST_FINALITY_DEPTH,
                 ..sequencer_core::config::default_channel_params()
             },
         }

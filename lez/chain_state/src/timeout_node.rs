@@ -5,7 +5,6 @@ use std::{future::Future, time::Duration};
 
 use async_trait::async_trait;
 use futures::StreamExt as _;
-use log::warn;
 use logos_blockchain_core::mantle::ledger::verification_mode::StandardMode;
 use logos_blockchain_zone_sdk::{
     adapter::{BoxStream, Node},
@@ -16,6 +15,7 @@ use logos_blockchain_zone_sdk::{
         WalletFundResponseBody,
     },
 };
+use tracing::warn;
 
 pub const NODE_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -111,7 +111,9 @@ fn idle_bounded<T: Send + 'static>(stream: BoxStream<T>, kind: &'static str) -> 
             let mut live = state?;
             let Ok(item) = tokio::time::timeout(NODE_STREAM_IDLE_TIMEOUT, live.next()).await else {
                 warn!(
-                    "Node {kind} delivered nothing for {NODE_STREAM_IDLE_TIMEOUT:?}; ending it so its reader reconnects"
+                    stream = kind,
+                    idle_timeout = ?NODE_STREAM_IDLE_TIMEOUT,
+                    "Node stream delivered nothing for too long, ending it so its reader reconnects"
                 );
                 return None;
             };

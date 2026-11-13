@@ -24,7 +24,7 @@
           "links": [
             {
               "title": "Show this actor",
-              "url": "/d/sequencer-actors?var-sequencer=${sequencer}&var-actor=${__field.labels.actor}&${__url_time_range}"
+              "url": "/d/sequencer-actors?var-sequencer=${sequencer}&var-actor=${__field.labels.actor}%7C.*&${__url_time_range}"
             }
           ]
         },
@@ -68,7 +68,7 @@
           "links": [
             {
               "title": "Show this actor",
-              "url": "/d/sequencer-actors?var-sequencer=${sequencer}&var-actor=${__field.labels.actor}&${__url_time_range}"
+              "url": "/d/sequencer-actors?var-sequencer=${sequencer}&var-actor=${__field.labels.key}&${__url_time_range}"
             }
           ]
         },
@@ -91,9 +91,9 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sort_desc(label_replace(histogram_quantile(${percentile}, sum by (le, actor_name) (rate(actor_message_handling_time_seconds_bucket{sequencer=\"$sequencer\"}[$__range]))), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"))",
+          "expr": "sort_desc(label_replace(label_replace(label_replace(label_join(label_join(label_replace(histogram_quantile(${percentile}, sum by (le, actor_name, actor_instance) (rate(actor_message_handling_time_seconds_bucket{sequencer=\"$sequencer\"}[$__range]))), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"), \"key\", \"|\", \"actor\", \"actor_instance\"), \"title\", \" · \", \"actor\", \"actor_instance\"), \"key\", \"$1|.*\", \"key\", \"(.*)\\\\|\"), \"title\", \"$1\", \"title\", \"(.*) · \"), \"title\", \"$1 · $2…\", \"title\", \"(.*) · (.{8}).+\"))",
           "instant": true,
-          "legendFormat": "{{actor}}",
+          "legendFormat": "{{title}}",
           "range": false,
           "refId": "A"
         }
@@ -121,7 +121,7 @@
           "links": [
             {
               "title": "Show this actor",
-              "url": "/d/sequencer-actors?var-sequencer=${sequencer}&var-actor=${__field.labels.actor}&${__url_time_range}"
+              "url": "/d/sequencer-actors?var-sequencer=${sequencer}&var-actor=${__field.labels.actor}%7C.*&${__url_time_range}"
             }
           ]
         },
@@ -169,7 +169,7 @@
           "links": [
             {
               "title": "Show this actor",
-              "url": "/d/sequencer-actors?var-sequencer=${sequencer}&var-actor=${__field.labels.actor}&${__url_time_range}"
+              "url": "/d/sequencer-actors?var-sequencer=${sequencer}&var-actor=${__field.labels.key}&${__url_time_range}"
             }
           ]
         },
@@ -192,15 +192,61 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sort_desc(label_replace(sum by (actor_name) (changes(actor_start_time_seconds{sequencer=\"$sequencer\"}[$__range])), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"))",
+          "expr": "sort_desc(label_replace(label_replace(label_replace(label_join(label_join(label_replace(sum by (actor_name, actor_instance) (changes(actor_start_time_seconds{sequencer=\"$sequencer\"}[$__range])), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"), \"key\", \"|\", \"actor\", \"actor_instance\"), \"title\", \" · \", \"actor\", \"actor_instance\"), \"key\", \"$1|.*\", \"key\", \"(.*)\\\\|\"), \"title\", \"$1\", \"title\", \"(.*) · \"), \"title\", \"$1 · $2…\", \"title\", \"(.*) · (.{8}).+\"))",
           "instant": true,
-          "legendFormat": "{{actor}}",
+          "legendFormat": "{{title}}",
           "range": false,
           "refId": "A"
         }
       ],
       "title": "All actors · restarts over the time range",
       "type": "bargauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "An arrow from what sent messages to the actor that handled them, at messages per second; a circle per actor, at all it handled. A sender is the actor whose code sent the message, else the span it was sent in, e.g. `rpc` for an RPC call; `none` outside any span, e.g. the scheduler's timer.",
+      "fieldConfig": { "defaults": { "unit": "msg/s", "decimals": 2 }, "overrides": [ ] },
+      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 8 },
+      "id": 5,
+      "options": {
+        "edges": { "mainStatUnit": "msg/s" },
+        "nodes": { "mainStatUnit": "msg/s" },
+        "zoomMode": "cooperative"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "label_replace(label_replace(sum by (id) (label_replace(label_join(label_replace(rate(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\"}[$__range]), \"id\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"), \"id\", \" · \", \"id\", \"actor_instance\"), \"id\", \"$1\", \"id\", \"(.*) · \")) or (sum by (id) (label_replace(label_join(label_replace(rate(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\"}[$__range]), \"id\", \"$1\", \"sender\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"), \"id\", \" · \", \"id\", \"sender_instance\"), \"id\", \"$1\", \"id\", \"(.*) · \")) > 0) * 0, \"title\", \"$1\", \"id\", \"(.*)\"), \"title\", \"$1 · $2…\", \"id\", \"(.*) · (.{8}).+\")",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "",
+          "range": false,
+          "refId": "nodes"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "label_join(sum by (source, target) (label_replace(label_join(label_replace(label_replace(label_join(label_replace(rate(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\"}[$__range]), \"source\", \"$1\", \"sender\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"), \"source\", \" · \", \"source\", \"sender_instance\"), \"source\", \"$1\", \"source\", \"(.*) · \"), \"target\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"), \"target\", \" · \", \"target\", \"actor_instance\"), \"target\", \"$1\", \"target\", \"(.*) · \")) > 0, \"id\", \"->\", \"source\", \"target\")",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "",
+          "range": false,
+          "refId": "edges"
+        }
+      ],
+      "title": "All actors · who sends messages to whom over the time range",
+      "transformations": [
+        {
+          "id": "calculateField",
+          "options": {
+            "alias": "mainstat",
+            "mode": "reduceRow",
+            "reduce": { "reducer": "sum" },
+            "replaceFields": false,
+            "timeSeries": false
+          }
+        }
+      ],
+      "type": "nodeGraph"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -223,14 +269,14 @@
           "links": [
             {
               "title": "Show this actor",
-              "url": "/d/sequencer-actors?var-sequencer=${sequencer}&var-actor=${__field.labels.actor}&${__url_time_range}"
+              "url": "/d/sequencer-actors?var-sequencer=${sequencer}&var-actor=${__field.labels.key}&${__url_time_range}"
             }
           ]
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
-      "id": 5,
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 22 },
+      "id": 6,
       "options": {
         "alignValue": "left",
         "legend": { "displayMode": "list", "placement": "bottom", "calcs": [ ] },
@@ -242,8 +288,8 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "label_replace(max by (actor_name) (actor_state{sequencer=\"$sequencer\"}), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\")",
-          "legendFormat": "{{actor}}",
+          "expr": "label_replace(label_replace(label_replace(label_join(label_join(label_replace(max by (actor_name, actor_instance) (actor_state{sequencer=\"$sequencer\"}), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"), \"key\", \"|\", \"actor\", \"actor_instance\"), \"title\", \" · \", \"actor\", \"actor_instance\"), \"key\", \"$1|.*\", \"key\", \"(.*)\\\\|\"), \"title\", \"$1\", \"title\", \"(.*) · \"), \"title\", \"$1 · $2…\", \"title\", \"(.*) · (.{8}).+\")",
+          "legendFormat": "{{title}}",
           "refId": "A"
         }
       ],
@@ -261,14 +307,14 @@
           "links": [
             {
               "title": "Show this actor",
-              "url": "/d/sequencer-actors?var-sequencer=${sequencer}&var-actor=${__field.labels.actor}&${__url_time_range}"
+              "url": "/d/sequencer-actors?var-sequencer=${sequencer}&var-actor=${__field.labels.actor}%7C.*&${__url_time_range}"
             }
           ]
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 16 },
-      "id": 6,
+      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 30 },
+      "id": 7,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -296,14 +342,14 @@
           "links": [
             {
               "title": "Show this actor",
-              "url": "/d/sequencer-actors?var-sequencer=${sequencer}&var-actor=${__field.labels.actor}&${__url_time_range}"
+              "url": "/d/sequencer-actors?var-sequencer=${sequencer}&var-actor=${__field.labels.actor}%7C.*&${__url_time_range}"
             }
           ]
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 9, "w": 8, "x": 8, "y": 16 },
-      "id": 7,
+      "gridPos": { "h": 9, "w": 8, "x": 8, "y": 30 },
+      "id": 8,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -331,14 +377,14 @@
           "links": [
             {
               "title": "Show this actor",
-              "url": "/d/sequencer-actors?var-sequencer=${sequencer}&var-actor=${__field.labels.actor}&${__url_time_range}"
+              "url": "/d/sequencer-actors?var-sequencer=${sequencer}&var-actor=${__field.labels.key}&${__url_time_range}"
             }
           ]
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 16 },
-      "id": 8,
+      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 30 },
+      "id": 9,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -346,8 +392,8 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "100 * label_replace(sum by (actor_name) (rate(actor_message_handling_time_seconds_sum{sequencer=\"$sequencer\"}[$__rate_interval])), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\")",
-          "legendFormat": "{{actor}}",
+          "expr": "100 * label_replace(label_replace(label_replace(label_join(label_join(label_replace(sum by (actor_name, actor_instance) (rate(actor_message_handling_time_seconds_sum{sequencer=\"$sequencer\"}[$__rate_interval])), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"), \"key\", \"|\", \"actor\", \"actor_instance\"), \"title\", \" · \", \"actor\", \"actor_instance\"), \"key\", \"$1|.*\", \"key\", \"(.*)\\\\|\"), \"title\", \"$1\", \"title\", \"(.*) · \"), \"title\", \"$1 · $2…\", \"title\", \"(.*) · (.{8}).+\")",
+          "legendFormat": "{{title}}",
           "refId": "A"
         }
       ],
@@ -360,31 +406,7 @@
         "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" }, "unit": "short", "decimals": 0 },
         "overrides": [ ]
       },
-      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 25 },
-      "id": 9,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }
-      },
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(kameo_messages_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"})",
-          "legendFormat": "handled",
-          "refId": "A"
-        }
-      ],
-      "title": "${actor} · messages handled since startup",
-      "type": "stat"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": {
-        "defaults": { "color": { "mode": "fixed", "fixedColor": "green" }, "unit": "short", "decimals": 2 },
-        "overrides": [ ]
-      },
-      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 25 },
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 39 },
       "id": 10,
       "options": {
         "colorMode": "value",
@@ -394,22 +416,21 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(rate(kameo_messages_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}[$__rate_interval]))",
-          "legendFormat": "handled/s",
+          "expr": "sum(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"})",
+          "legendFormat": "handled",
           "refId": "A"
         }
       ],
-      "title": "${actor} · messages handled per second",
+      "title": "${actor:text} · messages handled since startup",
       "type": "stat"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "Messages sent to the actor and not yet taken off its mailbox.",
       "fieldConfig": {
-        "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" }, "unit": "short", "decimals": 0 },
+        "defaults": { "color": { "mode": "fixed", "fixedColor": "green" }, "unit": "short", "decimals": 2 },
         "overrides": [ ]
       },
-      "gridPos": { "h": 5, "w": 4, "x": 8, "y": 25 },
+      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 39 },
       "id": 11,
       "options": {
         "colorMode": "value",
@@ -419,17 +440,42 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(kameo_messages_sent_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}) - sum(kameo_messages_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"})",
-          "legendFormat": "queued",
+          "expr": "sum(rate(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "handled/s",
           "refId": "A"
         }
       ],
-      "title": "${actor} · backlog",
+      "title": "${actor:text} · messages handled per second",
       "type": "stat"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "Messages the mailbox holds before senders wait, as read off the mailbox at startup.",
+      "description": "Messages sent to the actor and not yet taken off its mailbox. Of all the actors of its type: kameo counts per type, not per instance.",
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" }, "unit": "short", "decimals": 0 },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 8, "y": 39 },
+      "id": 12,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(kameo_messages_sent_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\"}) - sum(kameo_messages_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\"})",
+          "legendFormat": "queued",
+          "refId": "A"
+        }
+      ],
+      "title": "${actor_type} · backlog",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Messages the mailbox holds before senders wait, as read off the mailbox at startup. Of all the actors of its type: kameo counts per type, not per instance.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "fixed", "fixedColor": "text" },
@@ -441,8 +487,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 5, "w": 4, "x": 12, "y": 25 },
-      "id": 12,
+      "gridPos": { "h": 5, "w": 4, "x": 12, "y": 39 },
+      "id": 13,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -451,12 +497,12 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(actor_mailbox_capacity{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"})",
+          "expr": "sum(actor_mailbox_capacity{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\"})",
           "legendFormat": "capacity",
           "refId": "A"
         }
       ],
-      "title": "${actor} · mailbox capacity",
+      "title": "${actor_type} · mailbox capacity",
       "type": "stat"
     },
     {
@@ -477,8 +523,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 25 },
-      "id": 13,
+      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 39 },
+      "id": 14,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -487,12 +533,12 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "100 * sum(rate(actor_message_handling_time_seconds_sum{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}[$__rate_interval]))",
+          "expr": "100 * sum(rate(actor_message_handling_time_seconds_sum{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__rate_interval]))",
           "legendFormat": "busy",
           "refId": "A"
         }
       ],
-      "title": "${actor} · busy",
+      "title": "${actor:text} · busy",
       "type": "stat"
     },
     {
@@ -509,8 +555,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 25 },
-      "id": 14,
+      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 39 },
+      "id": 15,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -519,17 +565,17 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(changes(actor_start_time_seconds{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}[$__range]))",
+          "expr": "sum(changes(actor_start_time_seconds{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__range]))",
           "legendFormat": "restarts",
           "refId": "A"
         }
       ],
-      "title": "${actor} · restarts",
+      "title": "${actor:text} · restarts",
       "type": "stat"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "Backlog as a share of the mailbox capacity: at 100%, senders wait. An unbounded mailbox never fills, so it has no fill.",
+      "description": "Backlog as a share of the mailbox capacity: at 100%, senders wait. An unbounded mailbox never fills, so it has no fill. Of all the actors of its type: kameo counts per type, not per instance.",
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
@@ -547,8 +593,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 30 },
-      "id": 15,
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 44 },
+      "id": 16,
       "options": {
         "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
         "showThresholdLabels": false,
@@ -557,17 +603,17 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "100 * (sum(kameo_messages_sent_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}) - sum(kameo_messages_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"})) / (sum(actor_mailbox_capacity{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}) < +Inf)",
+          "expr": "100 * (sum(kameo_messages_sent_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\"}) - sum(kameo_messages_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\"})) / (sum(actor_mailbox_capacity{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\"}) < +Inf)",
           "legendFormat": "fill",
           "refId": "A"
         }
       ],
-      "title": "${actor} · mailbox fill",
+      "title": "${actor_type} · mailbox fill",
       "type": "gauge"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "Messages sent to the actor and not yet taken off its mailbox.",
+      "description": "Messages sent to the actor and not yet taken off its mailbox. Of all the actors of its type: kameo counts per type, not per instance.",
       "fieldConfig": {
         "defaults": {
           "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
@@ -588,8 +634,8 @@
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 30 },
-      "id": 16,
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 44 },
+      "id": 17,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -597,18 +643,18 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(kameo_messages_sent_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}) - sum(kameo_messages_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"})",
+          "expr": "sum(kameo_messages_sent_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\"}) - sum(kameo_messages_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\"})",
           "legendFormat": "queued",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(actor_mailbox_capacity{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}) < +Inf",
+          "expr": "sum(actor_mailbox_capacity{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\"}) < +Inf",
           "legendFormat": "capacity",
           "refId": "B"
         }
       ],
-      "title": "${actor} · mailbox backlog vs capacity",
+      "title": "${actor_type} · mailbox backlog vs capacity",
       "type": "timeseries"
     },
     {
@@ -618,46 +664,7 @@
         "defaults": { "color": { "mode": "fixed", "fixedColor": "purple" }, "unit": "s", "min": 0.0 },
         "overrides": [ ]
       },
-      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 38 },
-      "id": 17,
-      "options": {
-        "displayMode": "basic",
-        "maxVizHeight": 300,
-        "minVizHeight": 36,
-        "minVizWidth": 8,
-        "namePlacement": "top",
-        "orientation": "horizontal",
-        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
-        "showUnfilled": true,
-        "sizing": "manual",
-        "valueMode": "text"
-      },
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sort_desc(label_replace(sum by (message_name) (increase(actor_message_handling_time_seconds_sum{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}[$__range])), \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\") > 0)",
-          "instant": true,
-          "legendFormat": "{{message}}",
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "${actor} · time spent per message over the time range",
-      "type": "bargauge"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "Messages the actor finished handling. Whether it keeps up with the ones sent shows in the backlog.",
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "fixed", "fixedColor": "blue" },
-          "unit": "short",
-          "decimals": 0,
-          "min": 0.0
-        },
-        "overrides": [ ]
-      },
-      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 38 },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 52 },
       "id": 18,
       "options": {
         "displayMode": "basic",
@@ -674,25 +681,37 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sort_desc(label_replace(sum by (message_name) (increase(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}[$__range])), \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\") > 0)",
+          "expr": "sort_desc(label_replace(sum by (message_name) (increase(actor_message_handling_time_seconds_sum{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__range])), \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\") > 0)",
           "instant": true,
           "legendFormat": "{{message}}",
           "range": false,
           "refId": "A"
         }
       ],
-      "title": "${actor} · messages handled over the time range",
+      "title": "${actor:text} · time spent per message over the time range",
       "type": "bargauge"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "At the percentile picked above. From taking a message off the mailbox to its handler returning, awaits included. A handler that replies from a background task counts only until it hands the work off.",
+      "description": "Messages the actor finished handling. Whether it keeps up with the ones sent shows in the backlog.",
       "fieldConfig": {
-        "defaults": { "color": { "mode": "fixed", "fixedColor": "purple" }, "unit": "s", "min": 0.0 },
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "blue" },
+          "unit": "short",
+          "decimals": 0,
+          "min": 0.0
+        },
         "overrides": [ ]
       },
-      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 38 },
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 52 },
       "id": 19,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "Each message, with what it sent",
+          "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}"
+        }
+      ],
       "options": {
         "displayMode": "basic",
         "maxVizHeight": 300,
@@ -708,24 +727,24 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sort_desc(label_replace(histogram_quantile(${percentile}, sum by (le, message_name) (rate(actor_message_handling_time_seconds_bucket{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}[$__range]))) >= 0, \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"))",
+          "expr": "sort_desc(label_replace(sum by (message_name) (increase(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__range])), \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\") > 0)",
           "instant": true,
           "legendFormat": "{{message}}",
           "range": false,
           "refId": "A"
         }
       ],
-      "title": "${actor} · ${percentile:text} handling time per message over the time range",
+      "title": "${actor:text} · messages handled over the time range",
       "type": "bargauge"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "From taking a message off the mailbox to its handler returning, awaits included. A handler that replies from a background task counts only until it hands the work off.",
+      "description": "At the percentile picked above. From taking a message off the mailbox to its handler returning, awaits included. A handler that replies from a background task counts only until it hands the work off.",
       "fieldConfig": {
         "defaults": { "color": { "mode": "fixed", "fixedColor": "purple" }, "unit": "s", "min": 0.0 },
         "overrides": [ ]
       },
-      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 38 },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 52 },
       "id": 20,
       "options": {
         "displayMode": "basic",
@@ -742,14 +761,48 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sort_desc(label_replace(sum by (message_name) (rate(actor_message_handling_time_seconds_sum{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}[$__range])) / (sum by (message_name) (rate(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}[$__range])) > 0), \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"))",
+          "expr": "sort_desc(label_replace(histogram_quantile(${percentile}, sum by (le, message_name) (rate(actor_message_handling_time_seconds_bucket{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__range]))) >= 0, \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"))",
           "instant": true,
           "legendFormat": "{{message}}",
           "range": false,
           "refId": "A"
         }
       ],
-      "title": "${actor} · average handling time per message over the time range",
+      "title": "${actor:text} · ${percentile:text} handling time per message over the time range",
+      "type": "bargauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "From taking a message off the mailbox to its handler returning, awaits included. A handler that replies from a background task counts only until it hands the work off.",
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "fixed", "fixedColor": "purple" }, "unit": "s", "min": 0.0 },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 52 },
+      "id": 21,
+      "options": {
+        "displayMode": "basic",
+        "maxVizHeight": 300,
+        "minVizHeight": 36,
+        "minVizWidth": 8,
+        "namePlacement": "top",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
+        "showUnfilled": true,
+        "sizing": "manual",
+        "valueMode": "text"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sort_desc(label_replace(sum by (message_name) (rate(actor_message_handling_time_seconds_sum{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__range])) / (sum by (message_name) (rate(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__range])) > 0), \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"))",
+          "instant": true,
+          "legendFormat": "{{message}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "${actor:text} · average handling time per message over the time range",
       "type": "bargauge"
     },
     {
@@ -769,8 +822,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 46 },
-      "id": 21,
+      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 60 },
+      "id": 22,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -778,12 +831,12 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "label_replace(sum by (message_name) (rate(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}[$__rate_interval])), \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\")",
+          "expr": "label_replace(sum by (message_name) (rate(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__rate_interval])), \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\")",
           "legendFormat": "{{message}}",
           "refId": "A"
         }
       ],
-      "title": "${actor} · messages handled per second",
+      "title": "${actor:text} · messages handled per second",
       "type": "timeseries"
     },
     {
@@ -803,8 +856,8 @@
           }
         ]
       },
-      "gridPos": { "h": 9, "w": 8, "x": 8, "y": 46 },
-      "id": 22,
+      "gridPos": { "h": 9, "w": 8, "x": 8, "y": 60 },
+      "id": 23,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -812,18 +865,18 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "label_replace(histogram_quantile(${percentile}, sum by (le, message_name) (rate(actor_message_handling_time_seconds_bucket{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}[$__rate_interval]))) >= 0, \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\")",
+          "expr": "label_replace(histogram_quantile(${percentile}, sum by (le, message_name) (rate(actor_message_handling_time_seconds_bucket{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__rate_interval]))) >= 0, \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\")",
           "legendFormat": "{{message}} · ${percentile:text}",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "label_replace(sum by (message_name) (rate(actor_message_handling_time_seconds_sum{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}[$__rate_interval])) / (sum by (message_name) (rate(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}[$__rate_interval])) > 0), \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\")",
+          "expr": "label_replace(sum by (message_name) (rate(actor_message_handling_time_seconds_sum{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__rate_interval])) / (sum by (message_name) (rate(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__rate_interval])) > 0), \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\")",
           "legendFormat": "{{message}} · avg",
           "refId": "B"
         }
       ],
-      "title": "${actor} · handling time per message",
+      "title": "${actor:text} · handling time per message",
       "type": "timeseries"
     },
     {
@@ -843,8 +896,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 46 },
-      "id": 23,
+      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 60 },
+      "id": 24,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -852,17 +905,244 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "100 * label_replace(sum by (message_name) (rate(actor_message_handling_time_seconds_sum{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}[$__rate_interval])), \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\")",
+          "expr": "100 * label_replace(sum by (message_name) (rate(actor_message_handling_time_seconds_sum{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__rate_interval])), \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\")",
           "legendFormat": "{{message}}",
           "refId": "A"
         }
       ],
-      "title": "${actor} · busy per message",
+      "title": "${actor:text} · busy per message",
       "type": "timeseries"
     },
     {
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "description": "Messages the actor sent over the time range, newest first. Only the newest 200, counted under the table. The link in the header opens all of them, up to the newest 10 000, on the Messages dashboard. A click on one selects it on the Messages dashboard, with the messages it sent in turn.",
+      "fieldConfig": {
+        "defaults": { },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Start time" },
+            "properties": [ { "id": "unit", "value": "time:HH:mm:ss.SSS" }, { "id": "custom.width", "value": 110 } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Duration" },
+            "properties": [ { "id": "custom.width", "value": 90 } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Message" },
+            "properties": [
+              { "id": "custom.width", "value": 260 },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Select this message",
+                    "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}&var-trace=${__data.fields.traceIdHidden}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Sent from" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Select the message it was sent from",
+                    "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}&var-trace=${__data.fields.sentFromTrace}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "traceIdHidden" },
+            "properties": [ { "id": "custom.hidden", "value": true } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "sentFromTrace" },
+            "properties": [ { "id": "custom.hidden", "value": true } ]
+          }
+        ]
+      },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 69 },
+      "id": 25,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "All of them",
+          "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}"
+        }
+      ],
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": true, "fields": "", "reducer": [ "count" ], "show": true },
+        "showHeader": true,
+        "sortBy": [ { "desc": true, "displayName": "Start time" } ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "limit": 200,
+          "query": "{ span.sequencer = \"$sequencer\" && span.sender = \"$actor_type\" && (span.sender_instance =~ \"$instance\" || span.sender_instance = nil) } | select(span.sender, span.cause, span.instance, link:traceID) with(most_recent=true)",
+          "queryType": "traceql",
+          "refId": "A",
+          "spss": 1,
+          "tableType": "spans"
+        }
+      ],
+      "title": "${actor:text} · messages sent, newest 200",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Name": true,
+              "Span ID": true,
+              "Trace Service": true,
+              "actor": true,
+              "nestedSetParent": true,
+              "sender": true,
+              "sequencer": true
+            },
+            "indexByName": {
+              "Duration": 5,
+              "Start time": 0,
+              "Trace Name": 1,
+              "cause": 4,
+              "instance": 2,
+              "link:traceID": 6,
+              "sender": 3
+            },
+            "renameByName": {
+              "Trace Name": "Message",
+              "cause": "Sent from",
+              "instance": "Instance",
+              "link:traceID": "sentFromTrace",
+              "sender": "Sender"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "description": "Messages the actor handled over the time range, newest first. Only the newest 200, counted under the table. The link in the header opens all of them, up to the newest 10 000, on the Messages dashboard. A click on one selects it on the Messages dashboard, with the messages it sent in turn.",
+      "fieldConfig": {
+        "defaults": { },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Start time" },
+            "properties": [ { "id": "unit", "value": "time:HH:mm:ss.SSS" }, { "id": "custom.width", "value": 110 } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Duration" },
+            "properties": [ { "id": "custom.width", "value": 90 } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Message" },
+            "properties": [
+              { "id": "custom.width", "value": 260 },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Select this message",
+                    "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}&var-trace=${__data.fields.traceIdHidden}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Sent from" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Select the message it was sent from",
+                    "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}&var-trace=${__data.fields.sentFromTrace}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "traceIdHidden" },
+            "properties": [ { "id": "custom.hidden", "value": true } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "sentFromTrace" },
+            "properties": [ { "id": "custom.hidden", "value": true } ]
+          }
+        ]
+      },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 69 },
+      "id": 26,
+      "links": [
+        {
+          "targetBlank": false,
+          "title": "All of them",
+          "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&${__url_time_range}"
+        }
+      ],
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": true, "fields": "", "reducer": [ "count" ], "show": true },
+        "showHeader": true,
+        "sortBy": [ { "desc": true, "displayName": "Start time" } ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "limit": 200,
+          "query": "{ span.sequencer = \"$sequencer\" && span.actor = \"$actor_type\" && (span.instance =~ \"$instance\" || span.instance = nil) } | select(span.sender, span.cause, span.instance, link:traceID) with(most_recent=true)",
+          "queryType": "traceql",
+          "refId": "A",
+          "spss": 1,
+          "tableType": "spans"
+        }
+      ],
+      "title": "${actor:text} · messages handled, newest 200",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Name": true,
+              "Span ID": true,
+              "Trace Service": true,
+              "actor": true,
+              "nestedSetParent": true,
+              "sequencer": true
+            },
+            "indexByName": {
+              "Duration": 5,
+              "Start time": 0,
+              "Trace Name": 1,
+              "cause": 4,
+              "instance": 2,
+              "link:traceID": 6,
+              "sender": 3
+            },
+            "renameByName": {
+              "Trace Name": "Message",
+              "cause": "Sent from",
+              "instance": "Instance",
+              "link:traceID": "sentFromTrace",
+              "sender": "Sender"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "Running, stopped, restarting by its supervisor, or failed by a panic or error; empty while the actor does not exist, e.g. the sequencer is down. A state shorter than a scrape may not show; restarts are counted under Restarts.",
+      "description": "Running, stopped, restarting by its supervisor, or failed by a panic or error; empty while the actor does not exist, e.g. the sequencer is down. A state shorter than a scrape may not show; restarts are counted under Restarts. With all of a type picked, a line per instance, e.g. the Bedrock actor of each channel.",
       "fieldConfig": {
         "defaults": {
           "custom": { "lineWidth": 0, "fillOpacity": 70 },
@@ -881,8 +1161,8 @@
         },
         "overrides": [ ]
       },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 55 },
-      "id": 24,
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 79 },
+      "id": 27,
       "options": {
         "alignValue": "left",
         "legend": { "displayMode": "list", "placement": "bottom", "calcs": [ ] },
@@ -894,17 +1174,17 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "max(actor_state{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"})",
-          "legendFormat": "${actor}",
+          "expr": "label_replace(label_replace(label_replace(label_join(label_join(label_replace(max by (actor_name, actor_instance) (actor_state{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"), \"key\", \"|\", \"actor\", \"actor_instance\"), \"title\", \" · \", \"actor\", \"actor_instance\"), \"key\", \"$1|.*\", \"key\", \"(.*)\\\\|\"), \"title\", \"$1\", \"title\", \"(.*) · \"), \"title\", \"$1 · $2…\", \"title\", \"(.*) · (.{8}).+\")",
+          "legendFormat": "{{title}}",
           "refId": "A"
         }
       ],
-      "title": "${actor} · lifecycle",
+      "title": "${actor:text} · lifecycle",
       "type": "state-timeline"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "Signals the actor took off its mailbox, as running totals: starts, stops and restarts, and deaths of actors linked to it, as under supervision.",
+      "description": "Signals the actor took off its mailbox, as running totals: starts, stops and restarts, and deaths of actors linked to it, as under supervision. Of all the actors of its type: kameo counts per type, not per instance.",
       "fieldConfig": {
         "defaults": {
           "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
@@ -922,8 +1202,8 @@
           }
         ]
       },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 55 },
-      "id": 25,
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 79 },
+      "id": 28,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -931,44 +1211,189 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(kameo_lifecycle_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"})",
+          "expr": "sum(kameo_lifecycle_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\"})",
           "legendFormat": "starts and stops",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(kameo_link_died_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"})",
+          "expr": "sum(kameo_link_died_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\"})",
           "legendFormat": "linked actor deaths",
           "refId": "B"
         }
       ],
-      "title": "${actor} · lifecycle and link signals since startup",
+      "title": "${actor_type} · lifecycle and link signals since startup",
       "type": "timeseries"
     },
     {
       "datasource": { "type": "loki", "uid": "loki" },
-      "description": "Lines logged from the actor's crate: code it calls in other crates, e.g. the sequencer core, logs under those.",
+      "description": "Lines logged while an actor of its type ran, from its own crate or from code it calls, e.g. the sequencer core. Tasks it spawns log without it. Of all the actors of its type: the logs name the type, not the instance.",
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [ ] },
-      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 62 },
-      "id": 26,
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 86 },
+      "id": 29,
       "links": [
         {
           "targetBlank": false,
           "title": "All logs in Explore",
-          "url": "/explore?schemaVersion=1&panes={\"logs\":{\"datasource\":\"loki\",\"queries\":[{\"datasource\":{\"type\":\"loki\",\"uid\":\"loki\"},\"expr\":\"{sequencer=\\\"$sequencer\\\"}%20|~%20`^\\\\[\\\\S%2B%20%2B[A-Z]%2B%20%2B${actor_crate}(::\\\\S*)?\\\\]`\",\"refId\":\"A\"}],\"range\":{\"from\":\"${__from}\",\"to\":\"${__to}\"}}}"
+          "url": "/explore?schemaVersion=1&panes={\"logs\":{\"datasource\":\"loki\",\"queries\":[{\"datasource\":{\"type\":\"loki\",\"uid\":\"loki\"},\"expr\":\"{sequencer=\\\"$sequencer\\\",%20actor=\\\"$actor_type\\\"}\",\"refId\":\"A\"}],\"range\":{\"from\":\"${__from}\",\"to\":\"${__to}\"}}}"
         }
       ],
       "options": { "enableLogDetails": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true },
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "loki" },
-          "expr": "{sequencer=\"$sequencer\", level=~\"WARN|ERROR\"} |~ `^\\[\\S+ +[A-Z]+ +${actor_crate}(::\\S*)?\\]`",
+          "expr": "{sequencer=\"$sequencer\", actor=\"$actor_type\", level=~\"WARN|ERROR\"}",
           "legendFormat": "",
           "refId": "A"
         }
       ],
-      "title": "${actor} · warnings and errors",
+      "title": "${actor_type} · warnings and errors",
       "type": "logs"
+    },
+    {
+      "collapsed": true,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 98 },
+      "id": 33,
+      "panels": [
+        {
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "description": "At the percentile picked above. From taking a message off the mailbox to its handler returning, awaits included. A handler that replies from a background task counts only until it hands the work off. Read from the traces, one span per message: exact rather than from histogram buckets. The points are exemplars, single messages; a click on one offers its trace in Explore. A click on a line offers the messages around that moment on the Messages dashboard.",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+              "unit": "s",
+              "min": 0.0,
+              "links": [
+                {
+                  "title": "These messages around this moment",
+                  "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&time=${__value.time}&time.window=60000&var-message=${__field.displayName}"
+                }
+              ]
+            },
+            "overrides": [ ]
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 99 },
+          "id": 30,
+          "options": {
+            "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "tempo", "uid": "tempo" },
+              "query": "{ span.sequencer = \"$sequencer\" && span.actor = \"$actor_type\" && (span.instance =~ \"$instance\" || span.instance = nil) } | quantile_over_time(duration, $percentile) by (name)",
+              "queryType": "traceql",
+              "refId": "A",
+              "step": "30s"
+            }
+          ],
+          "title": "${actor:text} · ${percentile:text} handling time per message, from traces",
+          "transformations": [
+            {
+              "id": "renameByRegex",
+              "options": { "regex": "^\\{[^=]+=\"?([^\",}]*)\"?.*\\}$", "renamePattern": "$1" }
+            }
+          ],
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "description": "Who keeps the actor busy. Read from the traces, one span per message: exact rather than from histogram buckets. The points are exemplars, single messages; a click on one offers its trace in Explore. A click on a line offers the messages around that moment on the Messages dashboard.",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "stacking": { "mode": "normal", "group": "A" }
+              },
+              "unit": "msg/s",
+              "min": 0.0,
+              "links": [
+                {
+                  "title": "The messages around this moment",
+                  "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&time=${__value.time}&time.window=60000"
+                }
+              ]
+            },
+            "overrides": [ ]
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 99 },
+          "id": 31,
+          "options": {
+            "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "tempo", "uid": "tempo" },
+              "query": "{ span.sequencer = \"$sequencer\" && span.actor = \"$actor_type\" && (span.instance =~ \"$instance\" || span.instance = nil) } | rate() by (span.sender)",
+              "queryType": "traceql",
+              "refId": "A",
+              "step": "30s"
+            }
+          ],
+          "title": "${actor:text} · handled per second by sender, from traces",
+          "transformations": [
+            {
+              "id": "renameByRegex",
+              "options": { "regex": "^\\{[^=]+=\"?([^\",}]*)\"?.*\\}$", "renamePattern": "$1" }
+            }
+          ],
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "description": "What the actor asks of others. Read from the traces, one span per message: exact rather than from histogram buckets. The points are exemplars, single messages; a click on one offers its trace in Explore. A click on a line offers the messages around that moment on the Messages dashboard.",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "stacking": { "mode": "normal", "group": "A" }
+              },
+              "unit": "msg/s",
+              "min": 0.0,
+              "links": [
+                {
+                  "title": "These messages around this moment",
+                  "url": "/d/sequencer-messages?var-sequencer=${sequencer}&var-actor=${actor}&time=${__value.time}&time.window=60000&var-message=${__field.displayName}"
+                }
+              ]
+            },
+            "overrides": [ ]
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 99 },
+          "id": 32,
+          "options": {
+            "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "tempo", "uid": "tempo" },
+              "query": "{ span.sequencer = \"$sequencer\" && span.sender = \"$actor_type\" && (span.sender_instance =~ \"$instance\" || span.sender_instance = nil) } | rate() by (name)",
+              "queryType": "traceql",
+              "refId": "A",
+              "step": "30s"
+            }
+          ],
+          "title": "${actor:text} · sent per second, from traces",
+          "transformations": [
+            {
+              "id": "renameByRegex",
+              "options": { "regex": "^\\{[^=]+=\"?([^\",}]*)\"?.*\\}$", "renamePattern": "$1" }
+            }
+          ],
+          "type": "timeseries"
+        }
+      ],
+      "title": "${actor:text} · from traces",
+      "type": "row"
     }
   ],
   "refresh": "5s",
@@ -991,28 +1416,42 @@
       {
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "prometheus" },
-        "definition": "label_values(kameo_messages_received_total{sequencer=\"$sequencer\"}, actor_name)",
+        "definition": "query_result(group by (key, title) (label_replace(label_replace(label_replace(label_join(label_join(label_replace(group by (actor_name, actor_instance) (actor_state{sequencer=\"$sequencer\"}), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"), \"key\", \"|\", \"actor\", \"actor_instance\"), \"title\", \" · \", \"actor\", \"actor_instance\"), \"key\", \"$1|.*\", \"key\", \"(.*)\\\\|\"), \"title\", \"$1\", \"title\", \"(.*) · \"), \"title\", \"$1 · $2…\", \"title\", \"(.*) · (.{8}).+\") or label_replace(label_replace(label_replace(label_join(label_join(label_replace(group by (actor_name) (actor_state{sequencer=\"$sequencer\"}), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"), \"key\", \"|\", \"actor\", \"actor_instance\"), \"title\", \" · \", \"actor\", \"actor_instance\"), \"key\", \"$1|.*\", \"key\", \"(.*)\\\\|\"), \"title\", \"$1\", \"title\", \"(.*) · \"), \"title\", \"$1 · $2…\", \"title\", \"(.*) · (.{8}).+\")))",
         "includeAll": false,
         "label": "Actor",
         "multi": false,
         "name": "actor",
-        "query": "label_values(kameo_messages_received_total{sequencer=\"$sequencer\"}, actor_name)",
+        "query": "query_result(group by (key, title) (label_replace(label_replace(label_replace(label_join(label_join(label_replace(group by (actor_name, actor_instance) (actor_state{sequencer=\"$sequencer\"}), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"), \"key\", \"|\", \"actor\", \"actor_instance\"), \"title\", \" · \", \"actor\", \"actor_instance\"), \"key\", \"$1|.*\", \"key\", \"(.*)\\\\|\"), \"title\", \"$1\", \"title\", \"(.*) · \"), \"title\", \"$1 · $2…\", \"title\", \"(.*) · (.{8}).+\") or label_replace(label_replace(label_replace(label_join(label_join(label_replace(group by (actor_name) (actor_state{sequencer=\"$sequencer\"}), \"actor\", \"$1\", \"actor_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"), \"key\", \"|\", \"actor\", \"actor_instance\"), \"title\", \" · \", \"actor\", \"actor_instance\"), \"key\", \"$1|.*\", \"key\", \"(.*)\\\\|\"), \"title\", \"$1\", \"title\", \"(.*) · \"), \"title\", \"$1 · $2…\", \"title\", \"(.*) · (.{8}).+\")))",
         "refresh": 2,
-        "regex": "/^(?:[a-z0-9_]+::)*([A-Za-z0-9_]+)/",
+        "regex": "/key=\"(?<value>[^\"]*)\".*title=\"(?<text>[^\"]*)\"/",
         "sort": 7
       },
       {
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "prometheus" },
-        "definition": "label_values(kameo_messages_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}, actor_name)",
+        "definition": "query_result(label_replace(vector(1), \"key\", \"$actor\", \"\", \"\"))",
         "hide": 2,
         "includeAll": false,
-        "label": "Actor crate",
+        "label": "actor_type",
         "multi": false,
-        "name": "actor_crate",
-        "query": "label_values(kameo_messages_received_total{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor(?:<.*)?\"}, actor_name)",
+        "name": "actor_type",
+        "query": "query_result(label_replace(vector(1), \"key\", \"$actor\", \"\", \"\"))",
         "refresh": 2,
-        "regex": "/^([a-z0-9_]+)::/",
+        "regex": "/key=\"([^|\"]*)/",
+        "sort": 7
+      },
+      {
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "query_result(label_replace(vector(1), \"key\", \"$actor\", \"\", \"\"))",
+        "hide": 2,
+        "includeAll": false,
+        "label": "instance",
+        "multi": false,
+        "name": "instance",
+        "query": "query_result(label_replace(vector(1), \"key\", \"$actor\", \"\", \"\"))",
+        "refresh": 2,
+        "regex": "/key=\"[^|\"]*\\|([^\"]*)\"/",
         "sort": 7
       },
       {

@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::Result;
 use common::{HashType, block::Block, transaction::LeeTransaction};
 use lee_core::BlockId;
-use log::warn;
+use tracing::warn;
 
 use crate::{WalletSequencerClient, config::WalletConfig};
 
@@ -33,9 +33,9 @@ impl<C: WalletSequencerClient> TxPoller<C> {
     pub async fn poll_tx(&self, tx_hash: HashType) -> Result<(LeeTransaction, BlockId)> {
         let max_blocks_to_query = self.polling_max_blocks_to_query;
 
-        log::info!("Starting poll for transaction {tx_hash}");
+        tracing::info!(%tx_hash, "Starting poll for transaction");
         for poll_id in 1..max_blocks_to_query {
-            log::info!("Poll {poll_id}");
+            tracing::info!(poll_id, "Polling");
 
             let mut try_error_counter = 0_u64;
 
@@ -44,7 +44,7 @@ impl<C: WalletSequencerClient> TxPoller<C> {
                     Ok(Some((tx, block_id))) => return Ok((tx, block_id)),
                     Ok(None) => {}
                     Err(err) => {
-                        warn!("Failed to get transaction by hash {tx_hash} with error: {err:#?}");
+                        warn!(%tx_hash, error = ?err, "Failed to get transaction by hash");
                     }
                 }
 

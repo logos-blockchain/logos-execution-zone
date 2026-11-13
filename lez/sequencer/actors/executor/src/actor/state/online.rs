@@ -4,7 +4,6 @@ use common::{
     transaction::LeeTransaction,
 };
 use kameo::actor::ActorRef;
-use log::info;
 use mempool::{MemPool, MemPoolHandle};
 use sequencer_actors_common::SendErrorExt;
 use sequencer_bedrock_actor::{
@@ -14,6 +13,7 @@ use sequencer_bedrock_actor::{
 use sequencer_core::{SequencerCore, TransactionOrigin, config::SequencerConfig};
 use sequencer_storage_actor::{StorageActorTrait, protocol::AtomicUpdate};
 use sharding_pool_actor::ShardingPoolActor;
+use tracing::info;
 
 use self::turn::Turn;
 use crate::{
@@ -195,7 +195,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             .get(&own_sequencer_key)
             .map(|entry| entry.account_id)
         {
-            info!("Producer reward account (stake ownership): {reward_account}");
+            info!(%reward_account, "Producer reward account (stake ownership)");
         }
 
         let mempool = MemPool::new(config.mempool_max_size);
@@ -398,11 +398,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
     }
 }
 
-/// The view entry a publish of `block` produced.
+/// The view entry a publish of `block` produced; our own blocks are trusted for every key they
+/// name.
 fn published_entry(outcome: &PublishOutcome, block: &Block) -> ChannelEntry {
     ChannelEntry {
         msg: outcome.this_msg,
         parent: outcome.parent,
         block: Some(block.clone()),
+        finally_absent_keys: chain_state::full_stake_releases::finalize_unstake_keys(block),
+        final_slot: None,
     }
 }

@@ -1,7 +1,7 @@
 #![allow(dead_code, reason = "TODO")]
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     path::Path,
     sync::Arc,
     time::Instant,
@@ -10,10 +10,11 @@ use std::{
 use anyhow::{Context as _, Result, anyhow};
 use borsh::BorshDeserialize as _;
 use bridge_core::DepositMetadata;
-use chain_state::{AcceptOutcome, ChainState, ChannelEntry, PublishRecord};
+use chain_state::{AcceptOutcome, ChainState, ChannelEntry, PublishRecord, full_stake_releases};
 use common::{
     HashType,
     block::{BedrockStatus, Block, BlockMeta, HashableBlockData},
+    system_upgrades::ProposalApprovals,
     transaction::{FeePayee, LeeTransaction, clock_invocation, fee_invocation},
 };
 use config::SequencerConfig;
@@ -23,7 +24,6 @@ use kameo::actor::ActorRef;
 use kameo_actors::pubsub::PubSub;
 use lee::{AccountId, Actor, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
-use log::{debug, error, info, warn};
 use logos_blockchain_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 pub use logos_blockchain_core::mantle::{NoteId, ops::channel::MsgId};
 pub use logos_blockchain_key_management_system_service::keys::Ed25519PublicKey;
@@ -53,14 +53,15 @@ use sequencer_storage_actor::{
         AtomicUpdate, CrossZoneMessageKey, DeadLetterDispatch, DeadLetterRequeue, DispatchFailure,
         DispatchOrigin, DropSettledCrossZoneDispatches, GetAllBlocks, GetDeadLetterDispatchCount,
         GetDeadLetterDispatchRetainedCount, GetDeadLetterDispatches, GetLeeState,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetZoneCheckpoint,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RecordDispatchFailure,
-        RequeueDeadLetterDispatch, StoreUpdateOutcome, WithdrawalReconciliationKey,
-        ZoneCheckpointRecord,
+        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSystemApprovalsBytes,
+        GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+        RecordDispatchFailure, RequeueDeadLetterDispatch, StoreUpdateOutcome,
+        WithdrawalReconciliationKey, ZoneCheckpointRecord,
     },
 };
 use sharding_pool_actor::ShardingPoolActor;
 use tokio::sync::Mutex;
+use tracing::{debug, error, info, warn};
 
 use crate::{
     cross_zone_watcher::record_pending_dispatch_gauge,
@@ -74,6 +75,8 @@ pub mod cross_zone_watcher;
 pub mod faults;
 pub mod fees;
 pub mod logging;
+pub mod release_finality;
+pub mod system_approvals;
 pub mod task_group;
 
 /// Failed production attempts before a cross-zone dispatch is given up on.
@@ -198,6 +201,8 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     finalized_config: MsgId,
     /// Channel sequence of the last thing `BedrockActor` handed us.
     applied_seq: Option<sequencer_bedrock_actor::protocol::ChannelSeq>,
+    /// Committee approvals of `system_upgrader` changes, until a threshold builds one.
+    system_approvals: system_approvals::SystemApprovals,
     /// Deposits seen on L1 but not yet final, minted in a block pinned on
     /// their notes. In memory only: after a restart they mint once final.
     observed_deposits: Vec<DepositInfo>,
@@ -280,6 +285,19 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .await?
             .map_or_else(MsgId::root, |checkpoint| checkpoint.finalized_config);
 
+        let system_approvals = storage_ref
+            .ask(GetSystemApprovalsBytes)
+            .await
+            .context("Failed to read the system_upgrader approvals")?
+            .and_then(|bytes| {
+                let approvals = system_approvals::SystemApprovals::from_bytes(&bytes);
+                if approvals.is_none() {
+                    warn!("Dropping persisted system_upgrader approvals that don't decode");
+                }
+                approvals
+            })
+            .unwrap_or_default();
+
         let mut sequencer = Self {
             channel_id,
             chain: Arc::new(Mutex::new(chain)),
@@ -296,6 +314,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             applied_seq,
             channel_signing_key,
             sequencer_config: config,
+            system_approvals,
             observed_deposits: Vec::new(),
         };
         sequencer_core_metrics::record_mempool_max_size(
@@ -335,6 +354,20 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 ViewChange::Extension(adopted) => !adopted.is_empty(),
                 ViewChange::Conflict { .. } => true,
             };
+
+        // Read off L1 before the lock is taken.
+        let release_finality::JudgedUpdate {
+            finalized,
+            view,
+            held_finally_absent_keys,
+        } = &release_finality::judged_update(
+            &self.bedrock_pool_ref,
+            self.channel_id,
+            &self.chain,
+            finalized,
+            view,
+        )
+        .await;
 
         let checkpoint_record = ZoneCheckpointRecord {
             bytes: checkpoint_bytes(checkpoint).unwrap_or_else(|err| {
@@ -377,6 +410,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             let pin_before = chain.pin();
             log_update(view, finalized, head_tip_before);
 
+            // Set before the finalized entries, which apply these held entries to the final tier.
+            chain.set_finally_absent_keys(held_finally_absent_keys.iter().cloned());
+
             // Finalized first: the view below is what lies above it.
             let mut irreversible_redelivered: Vec<Block> = Vec::new();
             let mut events = Vec::new();
@@ -384,7 +420,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             for entry in finalized {
                 // A root lineage over a held tier is a store restored without its view.
                 let judgeable = chain.final_tip().is_some() && chain.final_msg() != MsgId::root();
-                let outcome = chain.apply_finalized(entry.msg, entry.parent, entry.block.as_ref());
+                let outcome = chain.apply_finalized(
+                    entry.msg,
+                    entry.parent,
+                    entry.block.as_ref(),
+                    &entry.finally_absent_keys,
+                );
                 let (Some(block), Some(outcome)) = (&entry.block, outcome) else {
                     continue;
                 };
@@ -403,10 +444,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     }
                     AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) => {
                         warn!(
-                            "Finalized block {} did not apply, the final tier stays at {:?}: {:#}",
-                            block.header.block_id,
-                            chain.final_tip().map(|tip| tip.block_id),
-                            anyhow!(err.clone()),
+                            block_id = block.header.block_id,
+                            final_tip = chain.final_tip().map(|tip| tip.block_id),
+                            error = format_args!("{:#}", anyhow!(err.clone())),
+                            "Finalized block did not apply, the final tier stays where it was"
                         );
                     }
                 }
@@ -432,7 +473,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
             let pin_after = chain.pin();
             if pin_before != pin_after {
-                info!("Channel pin moved to {pin_after}");
+                info!(pin = %pin_after, "Channel pin moved");
             }
             let head_tip_after = chain.head_tip().map(|tip| tip.block_id);
             log_rewind(head_tip_before, head_tip_after, pin_after);
@@ -528,24 +569,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         log_recorded_deposits(&outcome);
         log_unmatched_withdrawals(&outcome);
 
-        // Rebuild orphaned work: return its user txs to the mempool so the
-        // next on-turn production re-includes them on the new head.
-        //
-        // TODO: a full mempool still drops the transaction; a durable resubmit
-        // queue is a follow-up.
-        for tx in resubmit_txs {
-            let tx_hash = tx.hash();
-            if let Err(err) = self
-                .mempool
-                .handle()
-                .try_push((TransactionOrigin::User, tx))
-            {
-                warn!(
-                    "Dropping orphaned transaction {tx_hash} on resubmit: {:#}",
-                    anyhow!(err)
-                );
-            }
-        }
+        self.resubmit_orphaned(resubmit_txs);
 
         self.finalized_config = checkpoint.finalized_config;
 
@@ -553,6 +577,28 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             self.refresh_committee()
                 .await
                 .expect("Failed to refresh committee");
+        }
+    }
+
+    /// Returns orphaned user txs to the mempool so the next on-turn production
+    /// re-includes them on the new head.
+    ///
+    /// TODO: a full mempool still drops the transaction; a durable resubmit
+    /// queue is a follow-up.
+    fn resubmit_orphaned(&self, txs: Vec<LeeTransaction>) {
+        for tx in txs {
+            let tx_hash = tx.hash();
+            if let Err(err) = self
+                .mempool
+                .handle()
+                .try_push((TransactionOrigin::User, tx))
+            {
+                warn!(
+                    %tx_hash,
+                    error = format_args!("{:#}", anyhow!(err)),
+                    "Dropping orphaned transaction on resubmit"
+                );
+            }
         }
     }
 
@@ -570,8 +616,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         );
         if let Err(err) = self.channel_signer.tell(observed).await {
             warn!(
-                "Failed to tell the channel-signing actor of observed deposits: {:#}",
-                anyhow!(err)
+                error = format_args!("{:#}", anyhow!(err)),
+                "Failed to tell the channel-signing actor of observed deposits"
             );
         }
         for deposit in deposits {
@@ -594,8 +640,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let final_mints = channel_signing::FinalMints(op_ids.iter().map(|op_id| op_id.0).collect());
         if let Err(err) = self.channel_signer.tell(final_mints).await {
             warn!(
-                "Failed to tell the channel-signing actor of final mints: {:#}",
-                anyhow!(err)
+                error = format_args!("{:#}", anyhow!(err)),
+                "Failed to tell the channel-signing actor of final mints"
             );
         }
     }
@@ -621,7 +667,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         {
             Ok(notes) => notes,
             Err(err) => {
-                warn!("Pinning no deposits this turn: {:#}", anyhow!(err));
+                warn!(
+                    error = format_args!("{:#}", anyhow!(err)),
+                    "Pinning no deposits this turn"
+                );
                 return Vec::new();
             }
         };
@@ -647,9 +696,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 build_bridge_deposit_tx_from_event(&pending_deposit_event_record(deposit))
                     .map_err(|err| {
                         warn!(
-                            "Skipping observed deposit {} due to tx build failure: {:#}",
-                            hex::encode(deposit.op_id),
-                            anyhow!(err)
+                            deposit = %hex::encode(deposit.op_id),
+                            error = format_args!("{:#}", anyhow!(err)),
+                            "Skipping observed deposit due to tx build failure"
                         );
                     })
                     .ok()
@@ -675,8 +724,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         };
         if let Err(err) = self.channel_signer.tell(view).await {
             warn!(
-                "Failed to refresh the channel-signing actor: {:#}",
-                anyhow!(err)
+                error = format_args!("{:#}", anyhow!(err)),
+                "Failed to refresh the channel-signing actor"
             );
         }
     }
@@ -692,7 +741,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .as_ref()
             .is_some_and(|draft| !draft.submitted)
         {
-            warn!("A channel-config draft is still unsigned; funding another");
+            warn!("A channel-config draft is still unsigned, funding another");
             self.discard_config_draft().await;
         }
 
@@ -730,9 +779,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 pinned => {
                     if let Err(err) = pinned {
                         warn!(
-                            "Failed to pin block {}: {:#}",
-                            built.block.header.block_id,
-                            anyhow!(err)
+                            block_id = built.block.header.block_id,
+                            error = format_args!("{:#}", anyhow!(err)),
+                            "Failed to pin block"
                         );
                     }
                     built = self.build_block_without_pins(built).await?;
@@ -779,8 +828,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // Height and pin together: both come from the view, read under one lock.
         // Bundled withdrawals take the unpinned path, where the sdk picks the parent.
         info!(
-            "Publishing block {} on pin {}",
-            built.block.header.block_id, built.parent
+            block_id = built.block.header.block_id,
+            pin = %built.parent,
+            "Publishing block"
         );
 
         self.bedrock_pool_ref
@@ -805,13 +855,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let block_id = built.block.header.block_id;
         // A pin publishes on an explicit parent, which cannot carry withdrawals.
         if !built.withdrawals.is_empty() {
-            error!("Block {block_id} pins deposits but carries withdrawals; not pinning it");
+            error!(
+                block_id,
+                "Block pins deposits but carries withdrawals, not pinning it"
+            );
             return Ok(None);
         }
         info!(
-            "Pinning block {block_id} on {} deposit note(s) at pin {}",
-            built.pinned_deposit_notes.len(),
-            built.parent
+            block_id,
+            deposit_notes = built.pinned_deposit_notes.len(),
+            pin = %built.parent,
+            "Pinning block on deposit notes"
         );
         let prepared = self
             .bedrock_pool_ref
@@ -841,15 +895,18 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             Ok(signatures) => Ok(signatures.map(|signatures| (prepared, signatures))),
             Err(kameo::error::SendError::Timeout(_)) => {
                 warn!(
-                    "Pin signatures for block {block_id} took longer than {wait:?}; rebuilding it \
-                     without its pinned deposits, which mint once final"
+                    block_id,
+                    ?wait,
+                    "Pin signatures took too long, rebuilding the block without its pinned \
+                     deposits, which mint once final"
                 );
                 Ok(None)
             }
             Err(err) => {
                 warn!(
-                    "Failed to collect the pin signatures of block {block_id}: {:#}",
-                    anyhow!(err)
+                    block_id,
+                    error = format_args!("{:#}", anyhow!(err)),
+                    "Failed to collect the pin signatures of block"
                 );
                 Ok(None)
             }
@@ -866,8 +923,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             ..
         } = built;
         warn!(
-            "Block {} goes out without its pin; its deposits mint once final",
-            block.header.block_id
+            block_id = block.header.block_id,
+            "Block goes out without its pin, its deposits mint once final"
         );
         self.observed_deposits.retain(|deposit| {
             deposit
@@ -906,8 +963,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             Ok(action) => action,
             Err(err) => {
                 warn!(
-                    "Failed to ask the channel-signing actor what to do: {:#}",
-                    anyhow!(err)
+                    error = format_args!("{:#}", anyhow!(err)),
+                    "Failed to ask the channel-signing actor what to do"
                 );
                 return;
             }
@@ -916,8 +973,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             channel_signing::Action::Idle => return,
             channel_signing::Action::Submit(submission) => {
                 info!(
-                    "Channel-config draft {} was found complete on our turn",
-                    hex::encode(submission.tx_hash)
+                    draft_tx_hash = %hex::encode(submission.tx_hash),
+                    "Channel-config draft was found complete on our turn"
                 );
                 return self.submit_config(*submission).await;
             }
@@ -940,7 +997,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         {
             Ok(prepared) => prepared,
             Err(err) => {
-                warn!("Failed to fund a channel-config draft: {:#}", anyhow!(err));
+                warn!(
+                    error = format_args!("{:#}", anyhow!(err)),
+                    "Failed to fund a channel-config draft"
+                );
                 return;
             }
         };
@@ -960,15 +1020,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         match self.channel_signer.ask(message).await {
             Ok(channel_signing::Action::Submit(submission)) => {
                 info!(
-                    "Channel-config draft {} needs only our own signature",
-                    hex::encode(submission.tx_hash)
+                    draft_tx_hash = %hex::encode(submission.tx_hash),
+                    "Channel-config draft needs only our own signature"
                 );
                 self.submit_config(*submission).await;
             }
             Ok(_) => {}
             Err(err) => warn!(
-                "The channel-signing actor is gone; dropping the draft: {:#}",
-                anyhow!(err)
+                error = format_args!("{:#}", anyhow!(err)),
+                "The channel-signing actor is gone, dropping the draft"
             ),
         }
     }
@@ -982,7 +1042,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 == submission.tx_hash
         }) else {
             // The turn this raced funded a draft of its own.
-            debug!("No funded channel-config draft matches the signatures; dropping them");
+            debug!("No funded channel-config draft matches the signatures, dropping them");
             return;
         };
         let submitted = draft.submitted;
@@ -999,7 +1059,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         {
             Ok(tip_slot) => tip_slot,
             Err(err) => {
-                warn!("Failed to read the channel tip slot: {:#}", anyhow!(err));
+                warn!(
+                    error = format_args!("{:#}", anyhow!(err)),
+                    "Failed to read the channel tip slot"
+                );
                 None
             }
         };
@@ -1013,9 +1076,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             in_flight.submitted_at = in_flight.submitted_at.or(tip_slot);
             if Self::landing_deadline_passed(in_flight.submitted_at, tip_slot) {
                 warn!(
-                    "Channel-config draft {} has not landed in {} channel slots; funding another",
-                    hex::encode(submission.tx_hash),
-                    Self::CONFIG_LANDING_DEADLINE,
+                    draft_tx_hash = %hex::encode(submission.tx_hash),
+                    deadline_slots = Self::CONFIG_LANDING_DEADLINE,
+                    "Channel-config draft has not landed in time, funding another"
                 );
                 self.discard_config_draft().await;
             }
@@ -1034,8 +1097,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             // Left unsubmitted: zone-sdk never took it, so the next turn
             // discards it and funds another.
             warn!(
-                "Failed to submit the committee channel-config update: {:#}",
-                anyhow!(err)
+                error = format_args!("{:#}", anyhow!(err)),
+                "Failed to submit the committee channel-config update"
             );
             return;
         }
@@ -1052,8 +1115,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         self.config_draft = None;
         if let Err(err) = self.channel_signer.tell(channel_signing::Reset).await {
             warn!(
-                "Failed to reset the channel-signing actor: {:#}",
-                anyhow!(err)
+                error = format_args!("{:#}", anyhow!(err)),
+                "Failed to reset the channel-signing actor"
             );
         }
     }
@@ -1062,8 +1125,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// no inscription, so the channel does not gate it.
     pub async fn submit_signed_config(&mut self, submission: channel_signing::Submission) {
         info!(
-            "Channel-config draft {} was completed by a peer; it needs no turn",
-            hex::encode(submission.tx_hash)
+            draft_tx_hash = %hex::encode(submission.tx_hash),
+            "Channel-config draft was completed by a peer, it needs no turn"
         );
         self.submit_config(submission).await;
     }
@@ -1093,11 +1156,16 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             msg: this_msg,
             parent,
             block: Some(block.clone()),
+            finally_absent_keys: full_stake_releases::finalize_unstake_keys(&block),
+            final_slot: None,
         });
         match record {
             PublishRecord::Extended | PublishRecord::Skipped => {
                 if record == PublishRecord::Skipped {
-                    warn!("Produced block {block_id} does not apply on the head it was built on");
+                    warn!(
+                        block_id,
+                        "Produced block does not apply on the head it was built on"
+                    );
                 }
                 self.storage_ref
                     .ask(AtomicUpdate {
@@ -1125,8 +1193,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             // holds as pending chains on an entry the view moved past.
             PublishRecord::Stale => {
                 warn!(
-                    "Produced block {block_id} chains on {parent}, but the channel moved on; \
-                     dropping it"
+                    block_id,
+                    %parent,
+                    "Produced block's parent is no longer the channel tip, dropping it"
                 );
             }
         }
@@ -1162,9 +1231,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // Only the sequencer mints deposits, from their L1 events.
                 if extract_bridge_deposit_id(tx).is_some() {
                     if matches!(origin, TransactionOrigin::Gossip) {
-                        debug!("Dropping gossiped bridge deposit {tx_hash}");
+                        debug!(%tx_hash, "Dropping gossiped bridge deposit");
                     } else {
-                        log::warn!("Dropping user-submitted bridge deposit {tx_hash}");
+                        warn!(%tx_hash, "Dropping user-submitted bridge deposit");
                     }
                     return None;
                 }
@@ -1173,9 +1242,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // candidate is dropped before paying for the scratch clone and
                 // the settlement's guest executions.
                 if let Err(rejection) = fees::screen(tx, state) {
-                    log::debug!(
-                        "Dropping candidate {tx_hash:?} at the fee screen: {:#}",
-                        anyhow!(rejection)
+                    debug!(
+                        %tx_hash,
+                        error = format_args!("{:#}", anyhow!(rejection)),
+                        "Dropping candidate at the fee screen"
                     );
                     return None;
                 }
@@ -1196,7 +1266,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     &mut scratch_summary,
                 ) {
                     Ok((_events, tx_reverted)) => {
-                        if let Some(withdraw_data) = extract_bridge_withdraw_data(tx) {
+                        if !tx_reverted
+                            && let Some(withdraw_data) = extract_bridge_withdraw_data(tx)
+                        {
                             withdrawals.push(withdraw_data);
                         }
                         *state = scratch;
@@ -1209,15 +1281,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                             // fail here (e.g. on nonce) for every other node on its
                             // turn; that is steady-state noise, not an error.
                             debug!(
-                                "Transaction with hash {tx_hash} failed settlement: {:#}, skipping it",
-                                anyhow!(err)
+                                %tx_hash,
+                                error = format_args!("{:#}", anyhow!(err)),
+                                "Transaction failed settlement, skipping it"
                             );
                         } else {
                             // A user-submitted failure is the user's, not the node's,
                             // so it is only a warning.
                             warn!(
-                                "Transaction with hash {tx_hash} failed settlement: {:#}, skipping it",
-                                anyhow!(err)
+                                %tx_hash,
+                                error = format_args!("{:#}", anyhow!(err)),
+                                "Transaction failed settlement, skipping it"
                             );
                         }
                         return None;
@@ -1244,22 +1318,19 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     state.transition_from_public_transaction(public_tx, block_height, timestamp)
                 {
                     error!(
-                        "Sequencer-generated transaction {tx_hash} failed execution: {:#}, skipping it",
-                        anyhow!(err)
+                        %tx_hash,
+                        error = format_args!("{:#}", anyhow!(err)),
+                        "Sequencer-generated transaction failed execution, skipping it"
                     );
                     return None;
                 }
             }
         }
 
-        debug!("Validated transaction with hash {tx_hash}, including it in block");
+        debug!(%tx_hash, "Validated transaction, including it in block");
         Some(reverted)
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "Slop has won the battle, but our war is not over"
-    )]
     async fn build_block_from_mempool(&mut self) -> Result<BlockWithMeta> {
         let now = Instant::now();
 
@@ -1284,9 +1355,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     }
                     Err(err) => {
                         warn!(
-                            "Dropping pending cross-zone dispatch {} that does not decode: {:#}",
-                            hex::encode(record.message_key),
-                            anyhow!(err)
+                            message_key = %hex::encode(record.message_key),
+                            error = format_args!("{:#}", anyhow!(err)),
+                            "Dropping pending cross-zone dispatch that does not decode"
                         );
                         settled.push(record.message_key);
                         None
@@ -1301,19 +1372,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // The delivery records are classified in here rather than after, so the
         // final state can be read by reference. Cloning it cost a full state
         // copy on every block of every zone, cross-zone or not.
-        let (
-            prev_block_hash,
-            new_block_height,
-            mut working_state,
-            pending_dispatches,
-            finalize_unstake_txs,
-            parent,
-        ) = {
+        let (prev_block_hash, new_block_height, mut working_state, pending_dispatches, parent) = {
             let chain = self.chain.lock().await;
             if let Some(entry) = chain.check_for_gaps_in_lineage() {
                 error!(
-                    "Channel view entry {} chains on {}, which the view does not hold before it; skipping the turn",
-                    entry.msg, entry.parent
+                    msg_id = %entry.msg,
+                    parent = %entry.parent,
+                    "Channel view entry chains on a message the view does not hold before it, \
+                     skipping the turn"
                 );
                 return Err(anyhow!("Channel view has a gap before entry {}", entry.msg));
             }
@@ -1363,14 +1429,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 .collect();
             let pending = round_robin(queues, MAX_DISPATCHES_PER_BLOCK);
 
-            (
-                prev,
-                height,
-                chain.head_state().clone(),
-                pending,
-                build_finalize_unstake_txs(chain.head_state()),
-                parent,
-            )
+            (prev, height, chain.head_state().clone(), pending, parent)
         };
 
         // A Slash executes against the head config, so it is proposed from it.
@@ -1380,7 +1439,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 .ask(Propose { config })
                 .await
                 .unwrap_or_else(|err| {
-                    warn!("Proposing no slashes this turn: {:#}", anyhow!(err));
+                    warn!(
+                        error = format_args!("{:#}", anyhow!(err)),
+                        "Proposing no slashes this turn"
+                    );
                     Vec::new()
                 }),
             None => Vec::new(),
@@ -1397,9 +1459,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // Only bookkeeping: the deliveries themselves are irreversible,
                 // and the next turn tries again.
                 warn!(
-                    "Failed to drop {} settled delivery record(s): {:#}",
-                    settled.len(),
-                    anyhow!(err)
+                    records = settled.len(),
+                    error = format_args!("{:#}", anyhow!(err)),
+                    "Failed to drop settled delivery records"
                 );
             }
             // A settled delivery may be one this node had given up on, which
@@ -1410,6 +1472,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let mut valid_transactions = Vec::new();
         let mut reverted = Vec::new();
         let mut withdrawals = Vec::new();
+        let releasable_keys = release_finality::producible_releases(
+            &self.bedrock_pool_ref,
+            self.channel_id,
+            &working_state,
+        )
+        .await;
+        let finalize_unstake_txs = build_finalize_unstake_txs(&working_state, &releasable_keys);
 
         // Bridge deposit mints are drained from the store, not the mempool: the
         // follow path records the event durably but cannot enqueue the mint
@@ -1434,9 +1503,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 build_bridge_deposit_tx_from_event(&record)
                     .map_err(|err| {
                         warn!(
-                            "Skipping pending deposit event {} due to tx build failure: {:#}",
-                            hex::encode(record.deposit_op_id),
-                            anyhow!(err)
+                            deposit = %hex::encode(record.deposit_op_id),
+                            error = format_args!("{:#}", anyhow!(err)),
+                            "Skipping pending deposit event due to tx build failure"
                         );
                     })
                     .ok()
@@ -1484,6 +1553,23 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         ));
         let clock_tx = clock_invocation(new_block_height, new_block_timestamp);
         let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
+        // The slot before the fee takes one `system_upgrader` transaction: the due `Apply`, which
+        // its block must carry, else the first approved change. Its room is held from the start,
+        // with the fee's and the clock's; the slot itself is filled after the mempool.
+        let due_apply = build_due_apply_tx(&working_state, new_block_height)?;
+        let first_approved =
+            committee_discovery::read_config(&working_state).and_then(|committee| {
+                build_approved_txs(self.system_approvals.ready(&committee, new_block_height))
+                    .into_iter()
+                    .next()
+                    .map(|(_, tx, _)| tx)
+            });
+        let trailing: Vec<LeeTransaction> = due_apply
+            .clone()
+            .or(first_approved)
+            .into_iter()
+            .chain([placeholder_fee_lee_tx.clone(), clock_lee_tx.clone()])
+            .collect();
 
         sequencer_core_metrics::record_mempool_size(self.mempool.len());
         // Everything drained from the store first, then user work. `from_store`
@@ -1491,6 +1577,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // record behind it and so needs no requeue, where the origin only says
         // it was not submitted by a user.
         let mut mempool_transactions = Vec::new();
+        // `system_upgrader` changes in the mempool, returned by a reorg, wait for the one slot
+        // before the fee.
+        let mut upgrade_candidates = Vec::new();
         let mut pending_from_store = pending_deposits;
         pending_from_store.extend(pending_dispatches);
         pending_from_store.extend(slash_txs);
@@ -1501,6 +1590,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .or_else(|| self.mempool.pop().map(|(origin, tx)| (origin, tx, false)))
         {
             let tx_hash = tx.hash();
+
+            if common::system_upgrades::is_system_upgrader_tx(&tx) {
+                upgrade_candidates.push((origin, tx));
+                continue;
+            }
 
             // A deposit whose notes would take the pin past Bedrock's input limit waits for the
             // next block.
@@ -1521,8 +1615,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             let temp_valid_transactions = [
                 valid_transactions.as_slice(),
                 std::slice::from_ref(&tx),
-                std::slice::from_ref(&placeholder_fee_lee_tx),
-                std::slice::from_ref(&clock_lee_tx),
+                trailing.as_slice(),
             ]
             .concat();
             let temp_hashable_data = HashableBlockData {
@@ -1554,15 +1647,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // merely does not fit *today* is the ordinary deferral below.
                 if !Self::fits_in_an_empty_block(
                     &tx,
-                    &[placeholder_fee_lee_tx.clone(), clock_lee_tx.clone()],
+                    &trailing,
                     max_block_size,
                     new_block_height,
                     prev_block_hash,
                     new_block_timestamp,
                 )? {
                     warn!(
-                        "Transaction {tx_hash} cannot fit in any block under the \
-                         {max_block_size} byte limit; giving up on it rather than stalling production",
+                        %tx_hash,
+                        max_block_size,
+                        "Transaction cannot fit in any block, giving up on it rather than stalling \
+                         production"
                     );
                     if from_store {
                         self.count_dispatch_failure(&tx).await;
@@ -1571,8 +1666,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 }
 
                 warn!(
-                    "Transaction with hash {tx_hash} deferred to next block: \
-                     block size {block_size} bytes would exceed limit of {max_block_size} bytes",
+                    %tx_hash,
+                    block_size,
+                    max_block_size,
+                    "Transaction deferred to next block: it would exceed the block size limit"
                 );
                 // Anything drained from the store needs no requeue: its record
                 // stays there and is drained again on the next turn.
@@ -1604,19 +1701,21 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // but gossip ingest does not, so drop it here instead.
                 if !DeclaredGasBudget::fits_empty(view) {
                     warn!(
-                        "Transaction with hash {tx_hash} declares gas beyond the block caps \
-                         (limit {}, bytes {}); dropping it rather than stalling production",
-                        view.gas_limit(),
-                        view.gas_stor(),
+                        %tx_hash,
+                        gas_limit = view.gas_limit(),
+                        gas_stor = view.gas_stor(),
+                        "Transaction declares gas beyond the block caps, dropping it rather than \
+                         stalling production"
                     );
                     self.count_dispatch_failure(&tx).await;
                     continue;
                 }
                 warn!(
-                    "Transaction with hash {tx_hash} deferred to next block: declared gas \
-                     (limit {}, bytes {}) would exceed the block gas caps",
-                    view.gas_limit(),
-                    view.gas_stor(),
+                    %tx_hash,
+                    gas_limit = view.gas_limit(),
+                    gas_stor = view.gas_stor(),
+                    "Transaction deferred to next block: its declared gas would exceed the block \
+                     gas caps"
                 );
                 // Anything drained from the store needs no requeue: its record
                 // stays there and is drained again on the next turn.
@@ -1627,6 +1726,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             }
 
             let before_tx_apply = Instant::now();
+            // Taken before a transaction that may release a stake.
+            let snapshot = (!full_stake_releases::releases_no_stake(&tx)).then(|| {
+                (
+                    full_stake_releases::stake_entries(&working_state),
+                    working_state.clone(),
+                    summary,
+                    withdrawals.len(),
+                )
+            });
             let applied = Self::apply_mempool_transaction(
                 &mut working_state,
                 origin,
@@ -1638,6 +1746,30 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 valid_transactions.len().try_into().expect("fits u64"),
                 &mut summary,
             );
+            if applied.is_some()
+                && let Some((stake_entries_before, state, summary_before, withdrawal_count)) =
+                    snapshot
+            {
+                let stake_entries_after = full_stake_releases::stake_entries(&working_state);
+                let released =
+                    full_stake_releases::full_releases(&stake_entries_before, &stake_entries_after);
+                // Only a public `FinalizeUnstake` call's own key may be released.
+                let refused = released.into_iter().find(|key| {
+                    full_stake_releases::finalize_unstake_key(&tx) != Some(*key)
+                        || !releasable_keys.contains(key)
+                });
+                if let Some(key) = refused {
+                    info!(
+                        %tx_hash,
+                        sequencer_key = %hex::encode(key.to_bytes()),
+                        "Leaving out a transaction releasing a whole stake before its removal is final"
+                    );
+                    working_state = state;
+                    summary = summary_before;
+                    withdrawals.truncate(withdrawal_count);
+                    continue;
+                }
+            }
             if let Some(tx_reverted) = applied {
                 if tx_reverted {
                     reverted.push(u64::try_from(valid_transactions.len()).expect("fits u64"));
@@ -1679,6 +1811,99 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             self.mempool.push_front((origin, tx));
         }
 
+        // At most one `system_upgrader` transaction, directly before the fee: the due `Apply`
+        // first, then changes a threshold of collected approvals carries, then approved changes a
+        // reorg returned, the first that fits and applies. Untried returned changes go back to
+        // the mempool.
+        let approved = committee_discovery::read_config(&working_state)
+            .map(|committee| self.system_approvals.ready(&committee, new_block_height))
+            .unwrap_or_default();
+        let mut candidates = due_apply
+            .into_iter()
+            .map(|tx| (TransactionOrigin::Sequencer, tx, None))
+            .chain(build_approved_txs(approved))
+            .chain(
+                upgrade_candidates
+                    .into_iter()
+                    .map(|(origin, tx)| (origin, tx, None)),
+            )
+            .collect::<VecDeque<_>>();
+        while let Some((origin, tx, proposal)) = candidates.pop_front() {
+            let block_size = borsh::to_vec(&HashableBlockData {
+                block_id: new_block_height,
+                transactions: [
+                    valid_transactions.as_slice(),
+                    &[
+                        tx.clone(),
+                        placeholder_fee_lee_tx.clone(),
+                        clock_lee_tx.clone(),
+                    ],
+                ]
+                .concat(),
+                prev_block_hash,
+                timestamp: new_block_timestamp,
+                reverted: reverted.clone(),
+            })
+            .context("Failed to serialize block for size check")?
+            .len();
+            if block_size > max_block_size {
+                warn!(
+                    tx_hash = %tx.hash(),
+                    "system_upgrader transaction deferred: block is full"
+                );
+                if !matches!(origin, TransactionOrigin::Sequencer) {
+                    self.mempool.push_front((origin, tx));
+                }
+                continue;
+            }
+            if let Some(tx_reverted) = Self::apply_mempool_transaction(
+                &mut working_state,
+                origin,
+                &tx,
+                new_block_height,
+                new_block_timestamp,
+                &mut withdrawals,
+                &opening,
+                valid_transactions.len().try_into().expect("fits u64"),
+                &mut summary,
+            ) {
+                if tx_reverted {
+                    reverted.push(u64::try_from(valid_transactions.len()).expect("fits u64"));
+                }
+                if !matches!(origin, TransactionOrigin::Sequencer) {
+                    mempool_transactions.push((origin, tx.clone()));
+                }
+                valid_transactions.push(tx);
+                break;
+            }
+            warn!(tx_hash = %tx.hash(), "system_upgrader transaction failed to apply");
+            // An approved change that no longer applies (already carried out, or invalid) is
+            // dropped; one that applied stays until a later attempt finds it done, so an orphaned
+            // block doesn't lose it.
+            if let Some(proposal) = proposal {
+                self.system_approvals.remove(&proposal);
+            }
+        }
+        for (origin, tx, _) in candidates {
+            if !matches!(origin, TransactionOrigin::Sequencer) {
+                self.mempool.push_front((origin, tx));
+            }
+        }
+        if let Err(err) = self.persist_system_approvals().await {
+            warn!(
+                error = format_args!("{err:#}"),
+                "system_upgrader approvals not persisted"
+            );
+        }
+        // Peers reject a block that leaves its due upgrade pending, so never publish one.
+        if let Some(name) = common::system_upgrades::due_at(&working_state, new_block_height)? {
+            anyhow::bail!(
+                "Block {new_block_height} would leave system program {}'s upgrade unapplied; \
+                 aborting block production",
+                String::from_utf8_lossy(name.as_bytes()).trim_end_matches('\0')
+            );
+        }
+
         let fee_tx = fee_invocation(
             summary,
             chain_state::apply::block_payout(&opening, &summary),
@@ -1705,10 +1930,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
         let block = hashable_data.clone().into_pending_block();
 
-        log::info!(
-            "Created block with {} transactions in {} seconds",
-            hashable_data.transactions.len(),
-            now.elapsed().as_secs()
+        info!(
+            transactions = hashable_data.transactions.len(),
+            elapsed = ?now.elapsed(),
+            "Created block"
         );
 
         sequencer_core_metrics::record_block_creation_time(now.elapsed());
@@ -1731,6 +1956,60 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     #[must_use]
     pub const fn storage_ref(&self) -> &ActorRef<S> {
         &self.storage_ref
+    }
+
+    /// Verifies a committee member's approval of a `system_upgrader` change against the head's
+    /// committee, and keeps it until a threshold of approvals lets the producer build the change.
+    pub async fn submit_system_approval(
+        &mut self,
+        signed: system_upgrader_core::SignedApproval,
+    ) -> Result<()> {
+        let (committee, next_block) = {
+            let chain = self.chain.lock().await;
+            let committee = committee_discovery::read_config(chain.head_state())
+                .context("the head state has no committee config")?;
+            let next_block = chain
+                .head_tip()
+                .map_or(GENESIS_BLOCK_ID, |tip| tip.block_id.saturating_add(1));
+            (committee, next_block)
+        };
+        self.system_approvals.add(signed, &committee, next_block)?;
+        self.persist_system_approvals().await
+    }
+
+    /// The approvals the head's committee must reach for a change, and every proposal held with
+    /// its approvals.
+    pub async fn system_proposals(&self) -> Result<system_approvals::SystemProposals> {
+        let committee = committee_discovery::read_config(self.chain.lock().await.head_state())
+            .context("the head state has no committee config")?;
+        let threshold = sequencer_stake_core::slash_approval_threshold(
+            committee.accredited_committee_members_count(),
+        );
+        let proposals = self
+            .system_approvals
+            .proposals()
+            .map(|(proposal, approvals)| ProposalApprovals {
+                proposal: *proposal,
+                approvals: approvals.cloned().collect(),
+            })
+            .collect();
+        Ok(system_approvals::SystemProposals {
+            threshold,
+            proposals,
+        })
+    }
+
+    /// Writes the approval pool to storage if it changed, so a restart keeps it.
+    async fn persist_system_approvals(&mut self) -> Result<()> {
+        if self.system_approvals.take_changed() {
+            self.storage_ref
+                .ask(sequencer_storage_actor::protocol::PutSystemApprovalsBytes {
+                    bytes: self.system_approvals.to_bytes(),
+                })
+                .await
+                .context("Failed to persist the system_upgrader approvals")?;
+        }
+        Ok(())
     }
 
     pub async fn chain_height(&self) -> u64 {
@@ -1829,29 +2108,33 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 self.record_dead_letter_gauge().await;
                 record_pending_dispatch_gauge(&self.storage_ref).await;
                 error!(
-                    "Giving up on cross-zone delivery {} from peer zone {} block {} transaction {} ({} bytes) after {} failed attempts. This node will not retry it; unless another sequencer carries it, the message is not delivered. Kept in the dead letter; requeueCrossZoneDeadLetter restores it.",
-                    hex::encode(key),
-                    hex::encode(origin.src_zone),
-                    origin.src_block_id,
-                    origin.src_tx_index,
-                    record.transaction.len(),
-                    record.failed_attempts
+                    message_key = %hex::encode(key),
+                    peer_zone = %hex::encode(origin.src_zone),
+                    peer_block_id = origin.src_block_id,
+                    peer_tx_index = origin.src_tx_index,
+                    size_bytes = record.transaction.len(),
+                    failed_attempts = record.failed_attempts,
+                    "Giving up on cross-zone delivery. This node will not retry it; unless another \
+                     sequencer carries it, the message is not delivered. Kept in the dead letter; \
+                     requeueCrossZoneDeadLetter restores it."
                 );
             }
             Ok(DispatchFailure::Retried { failed_attempts }) => warn!(
-                "Cross-zone delivery {} failed to execute ({failed_attempts} of {RETIRE_DISPATCH_AFTER_FAILURES} attempts), will retry next block",
-                hex::encode(key)
+                message_key = %hex::encode(key),
+                failed_attempts,
+                max_attempts = RETIRE_DISPATCH_AFTER_FAILURES,
+                "Cross-zone delivery failed to execute, will retry next block"
             ),
             // Not a give-up: the ordinary case is a delivery that already
             // settled, so its record is gone and there is nothing left to lose.
             Ok(DispatchFailure::Absent) => debug!(
-                "Cross-zone delivery {} failed to execute but has no pending record; nothing to count",
-                hex::encode(key)
+                message_key = %hex::encode(key),
+                "Cross-zone delivery failed to execute but has no pending record, nothing to count"
             ),
             Err(err) => error!(
-                "Failed to count the failed attempt for cross-zone delivery {}: {:#}",
-                hex::encode(key),
-                anyhow!(err)
+                message_key = %hex::encode(key),
+                error = format_args!("{:#}", anyhow!(err)),
+                "Failed to count the failed attempt for cross-zone delivery"
             ),
         }
     }
@@ -1911,8 +2194,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             }
             Err(err) => {
                 warn!(
-                    "Failed to read the cross-zone dead letter for its gauge: {:#}",
-                    anyhow!(err)
+                    error = format_args!("{:#}", anyhow!(err)),
+                    "Failed to read the cross-zone dead letter for its gauge"
                 );
             }
         }
@@ -2120,7 +2403,7 @@ fn config_target(
     finalized_config: MsgId,
 ) -> Option<channel_signing::ConfigTarget> {
     if finalized_config != live.config_tip {
-        debug!("A channel config is still in flight; not targeting another");
+        debug!("A channel config is still in flight, not targeting another");
         return None;
     }
     let live_keys: Vec<_> = live
@@ -2130,12 +2413,16 @@ fn config_target(
         .collect();
     let new_keys = committee_discovery::committee_update(
         final_state,
-        &live_keys,
-        live.required_signatures,
-        live.transfer_threshold,
+        &committee_discovery::LiveChannel {
+            accredited_keys: &live_keys,
+            configuration_threshold: live.required_signatures,
+            transfer_threshold: live.transfer_threshold,
+            posting_timeframe: live.posting_timeframe,
+            posting_timeout: live.posting_timeout,
+        },
     )?;
     let Some(channel_params) = committee_discovery::channel_params(final_state) else {
-        warn!("sequencer_stake config carries no channel posting params; no committee update");
+        warn!("sequencer_stake config carries no channel posting params, no committee update");
         return None;
     };
     let keys: Vec<Ed25519PublicKey> = new_keys
@@ -2200,9 +2487,9 @@ pub fn max_transaction_size(state: &lee::V03State) -> Option<u64> {
 /// Logs the deposits a store update recorded.
 pub fn log_recorded_deposits(outcome: &StoreUpdateOutcome) {
     if outcome.accepted_deposits > 0 {
-        log::info!(
-            "Recorded {} Bedrock Deposit event(s); their mints are drained from the store on our next turn",
-            outcome.accepted_deposits
+        info!(
+            deposits = outcome.accepted_deposits,
+            "Recorded Bedrock Deposit events, their mints are drained from the store on our next turn"
         );
     }
 }
@@ -2211,8 +2498,8 @@ pub fn log_recorded_deposits(outcome: &StoreUpdateOutcome) {
 pub fn log_unmatched_withdrawals(outcome: &StoreUpdateOutcome) {
     for withdrawal in &outcome.unmatched_withdrawals {
         warn!(
-            "Unexpected Bedrock Withdraw event releasing channel note {}: this node published no withdrawal for it",
-            hex::encode(withdrawal.released_note_id)
+            note_id = %hex::encode(withdrawal.released_note_id),
+            "Unexpected Bedrock Withdraw event releasing a channel note this node published no withdrawal for"
         );
     }
 }
@@ -2255,13 +2542,93 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
     ))
 }
 
-/// A `FinalizeUnstake` for every release whose exit delay has passed in `state`.
-fn build_finalize_unstake_txs(state: &lee::V03State) -> VecDeque<LeeTransaction> {
+/// The `Apply` of the upgrade that activates in block `block_id`, if any.
+fn build_due_apply_tx(
+    state: &lee::V03State,
+    block_id: lee_core::BlockId,
+) -> Result<Option<LeeTransaction>, common::system_upgrades::UndecodableRegistry> {
+    let Some(name) = common::system_upgrades::due_at(state, block_id)? else {
+        return Ok(None);
+    };
+    Ok(system_upgrader_tx(system_upgrader_core::Message::Apply {
+        name,
+        activation_height: block_id,
+    })
+    .map_err(|err| {
+        error!(
+            program = String::from_utf8_lossy(name.as_bytes()).trim_end_matches('\0'),
+            error = format_args!("{err:#}"),
+            "Failed to build the due Apply of system program"
+        );
+    })
+    .ok())
+}
+
+/// The `Schedule`, `Cancel` or `Install` carrying out each approved proposal, with the proposal.
+fn build_approved_txs(
+    approved: Vec<ProposalApprovals>,
+) -> Vec<(
+    TransactionOrigin,
+    LeeTransaction,
+    Option<system_upgrader_core::Proposal>,
+)> {
+    approved
+        .into_iter()
+        .filter_map(|approved| {
+            let proposal = approved.proposal;
+            system_upgrader_tx(system_upgrader_core::Message::approved(
+                proposal,
+                approved.approvals,
+            ))
+            .map_err(|err| {
+                warn!(
+                    error = format_args!("{err:#}"),
+                    "Skipping an approved system_upgrader change"
+                );
+            })
+            .ok()
+            .map(|tx| (TransactionOrigin::Sequencer, tx, Some(proposal)))
+        })
+        .collect()
+}
+
+/// An unsigned, fee-exempt `system_upgrader` transaction to its registry, declaring the actors
+/// its message reaches.
+fn system_upgrader_tx(message: system_upgrader_core::Message) -> Result<LeeTransaction> {
+    let message = Message::try_new(
+        system_upgrader_core::registry_actor(),
+        message.actors(),
+        BTreeMap::new(),
+        message,
+    )
+    .context("Failed to build system_upgrader message")?;
+    let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![]);
+    Ok(LeeTransaction::Public(PublicTransaction::new(
+        message,
+        witness_set,
+    )))
+}
+
+/// A `FinalizeUnstake` for every partial release in `state` and every full one in `releasable`.
+fn build_finalize_unstake_txs(
+    state: &lee::V03State,
+    releasable: &BTreeSet<sequencer_stake_core::SequencerKey>,
+) -> VecDeque<LeeTransaction> {
+    let fully_pending =
+        full_stake_releases::fully_pending_keys(&full_stake_releases::stake_entries(state));
     committee_discovery::finalize_unstake_candidates(state)
         .into_iter()
+        .filter(|(_, sequencer_key, _)| {
+            !fully_pending.contains(sequencer_key) || releasable.contains(sequencer_key)
+        })
         .filter_map(|(ownership_id, sequencer_key, destination)| {
             build_finalize_unstake_tx(state, ownership_id, sequencer_key, destination)
-                .map_err(|err| warn!("Failed to build FinalizeUnstake tx: {:#}", anyhow!(err)))
+                .map_err(|err| {
+                    warn!(
+                        error = format_args!("{:#}", anyhow!(err)),
+                        "Failed to build FinalizeUnstake tx"
+                    );
+                })
                 .ok()
         })
         .collect()
@@ -2303,16 +2670,32 @@ fn build_finalize_unstake_tx(
 /// User transactions of an orphaned block to return to the mempool: everything
 /// except the trailing clock tx, sequencer-generated bridge deposits (replayed
 /// from their own bedrock events) and sequencer-only txs — cross-zone dispatches
-/// (replayed by the watcher) and the fee tx (regenerated every block; the
-/// ingress guard rejects them as `User`).
+/// (replayed by the watcher), the fee tx (regenerated every block; the ingress
+/// guard rejects them as `User`) and `system_upgrader`'s `Apply` (rebuilt from
+/// the registry). An approved `system_upgrader` change can't be rebuilt, so it
+/// is returned.
 fn resubmittable_txs(block: &Block) -> Vec<LeeTransaction> {
     let Some((_clock, rest)) = block.body.transactions.split_last() else {
         return Vec::new();
     };
     rest.iter()
-        .filter(|tx| extract_bridge_deposit_id(tx).is_none() && !is_sequencer_only_tx(tx))
+        .filter(|tx| {
+            extract_bridge_deposit_id(tx).is_none()
+                && (!is_sequencer_only_tx(tx) || is_approved_system_change(tx))
+        })
         .cloned()
         .collect()
+}
+
+/// Whether `tx` is a `system_upgrader` change other than `Apply`.
+fn is_approved_system_change(tx: &LeeTransaction) -> bool {
+    common::system_upgrades::is_system_upgrader_tx(tx)
+        && tx.public_call().is_some_and(|(_, message)| {
+            !matches!(
+                borsh::from_slice(message),
+                Ok(system_upgrader_core::Message::Apply { .. }) | Err(_)
+            )
+        })
 }
 
 #[must_use]
@@ -2373,8 +2756,10 @@ pub async fn settled_dispatch_keys<S: StorageActorTrait>(
     let (keys, forged) = classify_settled_deliveries(&recorded, block);
     for key in forged {
         error!(
-            "Cross-zone delivery {} settled with a transaction that is not the one this node recorded for that key. The message key does not cover the payload, so a peer's sequencer can publish a different delivery under it.",
-            hex::encode(key)
+            message_key = %hex::encode(key),
+            "Cross-zone delivery settled with a transaction that is not the one this node recorded \
+             for that key. The message key does not cover the payload, so a peer's sequencer can \
+             publish a different delivery under it."
         );
     }
     keys
@@ -2522,6 +2907,15 @@ fn load_or_create_key_bytes(path: &Path) -> Result<[u8; ED25519_SECRET_KEY_SIZE]
             .write_all(&key_bytes)?;
         Ok(key_bytes)
     }
+}
+
+/// Load an existing signing key; fails rather than creating one.
+pub fn load_signing_key(path: &Path) -> Result<Ed25519Key> {
+    let bytes: [u8; ED25519_SECRET_KEY_SIZE] = std::fs::read(path)
+        .with_context(|| format!("Failed to read the signing key at {}", path.display()))?
+        .try_into()
+        .map_err(|_bytes| anyhow!("Found key with incorrect length"))?;
+    Ok(Ed25519Key::from_bytes(&bytes))
 }
 
 /// Load signing key from file or generate a new one if it doesn't exist.

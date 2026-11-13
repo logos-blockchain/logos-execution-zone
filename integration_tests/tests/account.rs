@@ -36,7 +36,7 @@ async fn get_existing_account() -> Result<()> {
     // It also gets used as a funder for private accounts on genesis twice.
     assert_eq!(account.nonce.0, 2);
 
-    log::info!("Successfully retrieved account with correct details");
+    tracing::info!("Successfully retrieved account with correct details");
 
     Ok(())
 }
@@ -63,7 +63,7 @@ async fn new_public_account_with_label() -> Result<()> {
 
     assert_eq!(resolved, Some(AccountIdWithPrivacy::Public(account_id)));
 
-    log::info!("Successfully created public account with label");
+    tracing::info!("Successfully created public account with label");
 
     Ok(())
 }
@@ -85,7 +85,7 @@ async fn add_label_to_existing_account() -> Result<()> {
 
     assert_eq!(resolved, Some(AccountIdWithPrivacy::Private(account_id)));
 
-    log::info!("Successfully set label on existing private account");
+    tracing::info!("Successfully set label on existing private account");
 
     Ok(())
 }
@@ -106,7 +106,7 @@ async fn new_public_account_without_label() -> Result<()> {
         "No label should be stored when not provided"
     );
 
-    log::info!("Successfully created public account without label");
+    tracing::info!("Successfully created public account without label");
 
     Ok(())
 }

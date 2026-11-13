@@ -147,7 +147,7 @@ pub unsafe extern "C" fn free_ffi_block(val: FfiBlock) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_ffi_block_opt(val: *mut FfiBlockOpt) {
     if val.is_null() {
-        log::error!("Trying to free a null pointer. Exiting");
+        tracing::error!("Trying to free a null pointer. Exiting");
         return;
     }
     // Reclaim the outer box, then the inner block box (if any).
@@ -181,7 +181,7 @@ pub unsafe extern "C" fn free_ffi_block_opt(val: *mut FfiBlockOpt) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_ffi_block_vec(val: *mut FfiVec<FfiBlock>) {
     if val.is_null() {
-        log::error!("Trying to free a null pointer. Exiting");
+        tracing::error!("Trying to free a null pointer. Exiting");
         return;
     }
     // Reclaim the outer box, then the backing buffer and each block.

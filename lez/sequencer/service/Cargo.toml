@@ -19,6 +19,7 @@ sequencer_storage_actor = { workspace = true, features = ["actor"] }
 sequencer_bedrock_actor = { workspace = true, features = ["actor"] }
 sharding_pool_actor = { workspace = true, features = ["actor"] }
 lee.workspace = true
+lee_core = { workspace = true, optional = true }
 common.workspace = true
 borsh = { workspace = true, optional = true }
 programs.workspace = true
@@ -27,20 +28,24 @@ wallet.workspace = true
 sequencer_stake_core.workspace = true
 sequencer_service_rpc.workspace = true
 sequencer_service_metrics = { workspace = true, features = ["record"] }
+system_upgrader_core = { workspace = true, optional = true }
 
 clap = { workspace = true, features = ["derive", "env"] }
 anyhow.workspace = true
 axum.workspace = true
-env_logger.workspace = true
 kameo = { workspace = true, features = ["metrics"] }
 kameo_actors.workspace = true
 hex.workspace = true
 libp2p.workspace = true
-log.workspace = true
+logging = { workspace = true, features = ["otel"] }
 metrics-exporter-prometheus.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-otlp.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
+tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 futures.workspace = true
 glob.workspace = true
@@ -48,6 +53,7 @@ serde_json.workspace = true
 
 [dev-dependencies]
 metrics.workspace = true
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 
 [[bin]]
 name = "sequencer_service"
@@ -58,6 +64,11 @@ required-features = ["rpc"]
 name = "inscribe_garbage"
 path = "src/bin/inscribe_garbage.rs"
 required-features = ["inscribe_garbage"]
+
+[[bin]]
+name = "approve_system_change"
+path = "src/bin/approve_system_change.rs"
+required-features = ["approve_system_change"]
 
 [features]
 default = ["rpc"]
@@ -75,4 +86,10 @@ inscribe_garbage = [
   "sequencer_storage_actor/mock",
   "sequencer_bedrock_actor/test-utils",
   "dep:borsh",
+]
+# Needed only by the approve_system_change bin.
+approve_system_change = [
+  "dep:lee_core",
+  "dep:borsh",
+  "dep:system_upgrader_core",
 ]

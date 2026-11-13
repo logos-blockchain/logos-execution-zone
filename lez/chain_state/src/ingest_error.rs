@@ -33,6 +33,19 @@ pub enum BlockIngestError {
         /// Why the fee transaction's reward account is not allowed.
         reason: String,
     },
+    #[error(
+        "Transaction {tx_index} invokes system_upgrader outside the one slot before the fee \
+         transaction"
+    )]
+    MisplacedSystemUpgraderTransaction {
+        /// Index of the offending transaction within the block body.
+        tx_index: u64,
+    },
+    #[error("The block activates system program {name}'s upgrade but does not apply it")]
+    MissedSystemUpgrade {
+        /// The system program whose upgrade is due.
+        name: String,
+    },
     #[error("Transaction {tx_index} failed fee classification: {reason}")]
     InvalidFeeClass {
         /// Index of the failing transaction within the block body.
@@ -60,6 +73,13 @@ pub enum BlockIngestError {
     NonPublicGenesisTransaction,
     #[error("the block lists transactions {listed:?} as reverted, settlement reverted {settled:?}")]
     RevertMismatch { listed: Vec<u64>, settled: Vec<u64> },
+    #[error("Transaction {tx_index} releases the whole stake of {key} before its removal is final")]
+    UnfinalizedRelease {
+        /// Index of the offending transaction within the block body.
+        tx_index: u64,
+        /// The released sequencer key, hex.
+        key: String,
+    },
     #[error("State transition failed at transaction {tx_index}: {reason}")]
     StateTransition {
         /// Index of the failing transaction within the block body.
@@ -70,6 +90,14 @@ pub enum BlockIngestError {
         /// cannot store it directly.
         reason: String,
     },
+    #[error("system_upgrader's registry in this node's state does not decode")]
+    UndecodableSystemRegistry,
+}
+
+impl From<common::system_upgrades::UndecodableRegistry> for BlockIngestError {
+    fn from(_: common::system_upgrades::UndecodableRegistry) -> Self {
+        Self::UndecodableSystemRegistry
+    }
 }
 
 impl BlockIngestError {
@@ -83,23 +111,34 @@ impl BlockIngestError {
         matches!(self, Self::StateTransition { .. })
     }
 
+    /// Whether the failure is the block's producer's doing, rather than this node's own state.
+    #[must_use]
+    pub const fn blames_producer(&self) -> bool {
+        !matches!(self, Self::UndecodableSystemRegistry)
+    }
+
     /// Whether the block is invalid in itself, rather than out of place on the tip.
     #[must_use]
     pub const fn is_invalid_block(&self) -> bool {
         match self {
-            Self::UnexpectedBlockId { .. } | Self::BrokenChainLink { .. } => false,
+            Self::UnexpectedBlockId { .. }
+            | Self::BrokenChainLink { .. }
+            | Self::UndecodableSystemRegistry => false,
             Self::Deserialize(_)
             | Self::HashMismatch { .. }
             | Self::EmptyBlock
             | Self::InvalidClockTransaction
             | Self::InvalidFeeTransaction
             | Self::InvalidRewardTarget { .. }
+            | Self::MisplacedSystemUpgraderTransaction { .. }
+            | Self::MissedSystemUpgrade { .. }
             | Self::InvalidFeeClass { .. }
             | Self::MissingFeeDeclaration { .. }
             | Self::GasCapExceeded { .. }
             | Self::RestrictedAccountModification { .. }
             | Self::NonPublicGenesisTransaction
             | Self::RevertMismatch { .. }
+            | Self::UnfinalizedRelease { .. }
             | Self::StateTransition { .. } => true,
         }
     }

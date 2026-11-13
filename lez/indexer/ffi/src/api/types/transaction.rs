@@ -220,7 +220,15 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                         .map(public_account_evidence_from_ffi)
                         .collect()
                 },
-                fee: proven_fee_from_ffi(value.message.has_fee, value.message.fee).map(Into::into),
+                proven_fee: proven_fee_from_ffi(
+                    value.message.has_proven_fee,
+                    value.message.proven_fee,
+                )
+                .map(Into::into),
+                fee: value
+                    .message
+                    .has_fee
+                    .then(|| lee::FeeDeclaration::from(value.message.fee).into()),
             },
             witness_set: WitnessSet {
                 signatures_and_public_keys: {
@@ -254,8 +262,11 @@ pub struct FfiPrivacyPreservingMessage {
     pub block_validity_window: [u64; 2],
     pub timestamp_validity_window: [u64; 2],
     pub admission_evidence: FfiPublicAccountEvidenceList,
+    pub has_proven_fee: bool,
+    pub proven_fee: FfiProvenFee,
+    /// The fee declaration, paid by a public signer instead of inside the proof.
     pub has_fee: bool,
-    pub fee: FfiProvenFee,
+    pub fee: FfiFeeDeclaration,
 }
 
 impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
@@ -271,12 +282,17 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
             block_validity_window,
             timestamp_validity_window,
             admission_evidence,
+            proven_fee,
             fee,
         } = value;
 
         Self {
+            has_proven_fee: proven_fee.is_some(),
+            proven_fee: proven_fee.map(lee_core::ProvenFee::from).into(),
             has_fee: fee.is_some(),
-            fee: fee.map(lee_core::ProvenFee::from).into(),
+            fee: fee
+                .map(|fee| lee::FeeDeclaration::from(fee).into())
+                .unwrap_or_default(),
             public_context: lee::PublicExecutionContext::from(public_context).into(),
             boundary: boundary
                 .into_iter()
@@ -408,7 +424,7 @@ pub unsafe extern "C" fn free_ffi_transaction(val: FfiTransaction) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_ffi_transaction_opt(val: *mut FfiOption<FfiTransaction>) {
     if val.is_null() {
-        log::error!("Trying to free a null pointer. Exiting");
+        tracing::error!("Trying to free a null pointer. Exiting");
         return;
     }
     // Reclaim the outer box, then the inner transaction box (if any).
@@ -458,7 +474,7 @@ pub(crate) fn free_transaction_vec_value(val: FfiVec<FfiTransaction>) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_ffi_transaction_vec(val: *mut FfiVec<FfiTransaction>) {
     if val.is_null() {
-        log::error!("Trying to free a null pointer. Exiting");
+        tracing::error!("Trying to free a null pointer. Exiting");
         return;
     }
     // Reclaim the outer box, then the backing buffer and each transaction.
@@ -656,7 +672,7 @@ mod tests {
                 block_validity_window: ValidityWindow((None, None)),
                 timestamp_validity_window: ValidityWindow((None, None)),
                 admission_evidence: admission_evidence(),
-                fee: Some(ProvenFee {
+                proven_fee: Some(ProvenFee {
                     refund_to: Some(account_id(70)),
                     fallback: Some(FeeFallback {
                         action: PrivateAction {
@@ -673,6 +689,12 @@ mod tests {
                             BoundaryStep::EndPublicSubtree,
                         ],
                     }),
+                }),
+                fee: Some(FeeDeclaration {
+                    payer: account_id(76),
+                    gas_limit: 500_000,
+                    tip: 3,
+                    max_fee: 9_000_000,
                 }),
             },
             witness_set: WitnessSet {

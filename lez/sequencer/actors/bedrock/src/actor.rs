@@ -1,4 +1,8 @@
-use std::{collections::HashSet, num::NonZero};
+use std::{
+    collections::{BTreeSet, HashMap, HashSet},
+    num::NonZero,
+    time::Duration,
+};
 
 use anyhow::anyhow;
 use chain_state::timeout_node::TimeoutNode;
@@ -14,7 +18,6 @@ use kameo::{
     message::{Context, Message},
 };
 use kameo_actors::broker::Broker;
-use log::warn;
 use logos_blockchain_common_http_client::BasicAuthCredentials;
 use logos_blockchain_core::mantle::NoteId;
 use logos_blockchain_zone_sdk::{
@@ -22,28 +25,38 @@ use logos_blockchain_zone_sdk::{
     adapter::{Node as _, NodeHttpClient},
     sequencer::{InscriptionInfo, PendingTx},
 };
-use sequencer_storage_actor::{StorageActorTrait, protocol::GetZoneCheckpoint};
+use sequencer_storage_actor::{
+    StorageActorTrait,
+    protocol::{GetFinalConfigsBytes, GetZoneCheckpoint, PutFinalConfigsBytes},
+};
 use tokio::select;
+use tracing::{Instrument as _, info_span, warn};
 
 #[cfg(feature = "test-utils")]
 use crate::protocol::PublishRawInscription;
 use crate::{
     BedrockActorTrait, Result, Url,
+    actor::finality::{BlockSummary, ConfigIndex, L1Reader},
     error::Error,
     protocol::{
         AccreditedKeys, ChangeChannelConfig, ChannelEvent, ChannelId, ChannelReadStream,
-        ChannelSeq, CheckChannelExists, CheckIsOurTurn, CreateChannel, Ed25519PublicKey,
-        FollowChannel, GetAccreditedKeys, GetChannelNotes, GetChannelTipMessageId,
-        GetChannelTipSlot, InitializeChannelPublisher, LiveChannelConfig, MsgId, PrepareConfig,
-        PreparePin, PreparedConfig, PreparedPin, PublishBlock, PublishOutcome, PublishPin,
-        ReadChannel, Slot, UnverifiedEd25519PublicKey,
+        ChannelSeq, CheckChannelExists, CheckIsOurTurn, CreateChannel, DeserializeOp as _,
+        Ed25519PublicKey, FilterFinallyAbsent, FollowChannel, GetAccreditedKeys, GetChannelNotes,
+        GetChannelTipMessageId, GetChannelTipSlot, HeaderId, InitializeChannelPublisher,
+        LiveChannelConfig, MsgId, PrepareConfig, PreparePin, PreparedConfig, PreparedPin,
+        PublishBlock, PublishOutcome, PublishPin, ReadChannel, SequencerCheckpoint, SequencerKey,
+        Slot, UnverifiedEd25519PublicKey,
     },
 };
 
+mod finality;
 mod node_stream;
 mod publisher;
 #[cfg(test)]
 mod tests;
+
+/// Time one [`FilterFinallyAbsent`] may hold the actor; the blocks and configs it read are kept.
+const FILTER_FINALLY_ABSENT_BUDGET: Duration = Duration::from_secs(10);
 
 pub struct Args<S: StorageActorTrait> {
     pub node_url: Url,
@@ -93,6 +106,11 @@ pub struct BedrockActor<S: StorageActorTrait> {
     publisher: Option<publisher::Publisher>,
     broker_ref: ActorRef<Broker<ChannelEvent>>,
     storage_ref: ActorRef<S>,
+    /// Summaries of the L1 blocks [`FilterFinallyAbsent`] walked, by id.
+    block_summary_cache: HashMap<HeaderId, BlockSummary>,
+    /// The channel's final configs, from zone-sdk's finalized events and [`FilterFinallyAbsent`]
+    /// reads.
+    config_index: ConfigIndex,
 }
 
 impl<S: StorageActorTrait> BedrockActor<S> {
@@ -104,6 +122,16 @@ impl<S: StorageActorTrait> BedrockActor<S> {
         self.publisher
             .as_mut()
             .ok_or(Error::ChannelPublisherIsNotInitialized)
+    }
+
+    /// Stores the config index when its bytes are due.
+    async fn store_config_index(&mut self) {
+        let Some(bytes) = self.config_index.bytes_to_store() else {
+            return;
+        };
+        if let Err(err) = self.storage_ref.ask(PutFinalConfigsBytes { bytes }).await {
+            warn!(error = %err, "Failed to store the channel's final configs");
+        }
     }
 }
 
@@ -128,6 +156,24 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
             node_url,
         ));
 
+        // The publisher starts zone-sdk from this stored checkpoint: a cold start backfills from
+        // slot 0, a restart's events start after its LIB.
+        let config_index = match storage_ref.ask(GetZoneCheckpoint).await? {
+            None => ConfigIndex::starting_at(0),
+            Some(stored) => {
+                let restored = storage_ref
+                    .ask(GetFinalConfigsBytes)
+                    .await?
+                    .and_then(|bytes| ConfigIndex::from_bytes(&bytes));
+                if let Some(index) = restored {
+                    index
+                } else {
+                    let checkpoint = SequencerCheckpoint::from_bytes(&stored.bytes)?;
+                    ConfigIndex::starting_at(checkpoint.lib_slot.into_inner().saturating_add(1))
+                }
+            }
+        };
+
         Ok(Self {
             channel_id,
             node_stream: None,
@@ -136,6 +182,8 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
             broker_ref,
             storage_ref,
             backfill_batch_slots,
+            block_summary_cache: HashMap::new(),
+            config_index,
         })
     }
 
@@ -151,10 +199,19 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
         loop {
             select! {
                 Some(Some(item)) = OptionFuture::from(self.node_stream.as_mut().map(node_stream::NodeStream::next_item)) => {
-                    self.node_stream.as_mut().expect("Channel is followed").on_item(item?).await?;
+                    let item = item?;
+                    let span = info_span!("bedrock_event", otel.name = item.span_name());
+                    self.node_stream.as_mut().expect("Channel is followed").on_item(item).instrument(span).await?;
                 }
                 Some(event) = OptionFuture::from(self.publisher.as_mut().map(publisher::Publisher::next_event)) => {
-                    self.publisher().expect("Publisher is initialized").on_event(event).await?;
+                    let span = info_span!("bedrock_event", otel.name = publisher::span_name(&event));
+                    self.publisher
+                        .as_mut()
+                        .expect("Publisher is initialized")
+                        .on_event(event, &mut self.config_index)
+                        .instrument(span)
+                        .await?;
+                    self.store_config_index().await;
                 }
                 signal = mailbox_rx.recv() => {
                     return Ok(signal)
@@ -211,6 +268,20 @@ impl<S: StorageActorTrait> Message<InitializeChannelPublisher> for BedrockActor<
         }
 
         let initial_checkpoint = self.storage_ref.ask(GetZoneCheckpoint).await?;
+        // zone-sdk's events start after the checkpoint's LIB, so the index is read up to it.
+        if let Some(stored) = &initial_checkpoint {
+            let lib_slot = SequencerCheckpoint::from_bytes(&stored.bytes)?
+                .lib_slot
+                .into_inner();
+            let mut reader = NodeReader {
+                node: &self.node,
+                block_summary_cache: &mut self.block_summary_cache,
+                channel_id,
+            };
+            self.config_index
+                .cover_through(&mut reader, lib_slot)
+                .await?;
+        }
 
         let (publisher, start_seq) = publisher::Publisher::new(
             publisher::PublisherConfig {
@@ -226,9 +297,11 @@ impl<S: StorageActorTrait> Message<InitializeChannelPublisher> for BedrockActor<
             initial_checkpoint,
             replayed_up_to,
             self.broker_ref.clone(),
+            &mut self.config_index,
         )
         .await?;
         self.publisher = Some(publisher);
+        self.store_config_index().await;
         Ok(Some(start_seq))
     }
 }
@@ -485,6 +558,118 @@ impl<S: StorageActorTrait> Message<GetChannelTipMessageId> for BedrockActor<S> {
     }
 }
 
+impl<S: StorageActorTrait> Message<FilterFinallyAbsent> for BedrockActor<S> {
+    type Reply = Result<BTreeSet<SequencerKey>>;
+
+    async fn handle(
+        &mut self,
+        FilterFinallyAbsent {
+            channel_id,
+            at,
+            keys,
+            depth,
+        }: FilterFinallyAbsent,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.assert_channel_id(channel_id);
+
+        let mut reader = NodeReader {
+            node: &self.node,
+            block_summary_cache: &mut self.block_summary_cache,
+            channel_id,
+        };
+        let walk =
+            finality::filter_finally_absent(&mut reader, &mut self.config_index, at, &keys, depth);
+        let verdict = tokio::time::timeout(FILTER_FINALLY_ABSENT_BUDGET, walk)
+            .await
+            .unwrap_or(Err(Error::VerdictTimedOut));
+        self.store_config_index().await;
+        if verdict.is_ok() && self.block_summary_cache.len() >= NodeReader::CACHE_CAPACITY {
+            keep_newest_block_summaries(&mut self.block_summary_cache);
+        }
+        verdict
+    }
+}
+
+/// [`L1Reader`] over the node, caching the block summaries it reads by id.
+struct NodeReader<'actor> {
+    node: &'actor TimeoutNode<NodeHttpClient>,
+    block_summary_cache: &'actor mut HashMap<HeaderId, BlockSummary>,
+    channel_id: ChannelId,
+}
+
+impl NodeReader<'_> {
+    /// Block summaries cached before a walk that returns a verdict drops all but the newest
+    /// [`Self::CACHE_KEPT`].
+    const CACHE_CAPACITY: usize = 4096;
+    /// Block summaries a full cache keeps, the newest by slot, so a walk over fewer blocks stays
+    /// cached.
+    const CACHE_KEPT: usize = 2048;
+
+    fn summarize(&self, block: &logos_blockchain_zone_sdk::node_types::ApiBlock) -> BlockSummary {
+        BlockSummary::new(
+            block.header.id,
+            block.header.parent_block,
+            block.header.slot.into_inner(),
+            &block.transactions,
+            self.channel_id,
+        )
+    }
+}
+
+impl L1Reader for NodeReader<'_> {
+    async fn tip_block_summary(&mut self) -> Result<BlockSummary> {
+        let tip = self
+            .node
+            .consensus_info()
+            .await
+            .map_err(|err| Error::NodeRequestFailed(err.into()))?
+            .cryptarchia_info
+            .tip;
+        self.block_summary(tip).await
+    }
+
+    async fn block_summary(&mut self, id: HeaderId) -> Result<BlockSummary> {
+        if let Some(block_summary) = self.block_summary_cache.get(&id) {
+            return Ok(block_summary.clone());
+        }
+        let block = self
+            .node
+            .block(id)
+            .await
+            .map_err(|err| Error::NodeRequestFailed(err.into()))?
+            .ok_or(Error::BlockMissing(id))?;
+        let block_summary = self.summarize(&block);
+        self.block_summary_cache
+            .insert(block_summary.id, block_summary.clone());
+        Ok(block_summary)
+    }
+
+    async fn final_block_summaries(&mut self, from: u64, to: u64) -> Result<Vec<BlockSummary>> {
+        let lib_slot = self
+            .node
+            .consensus_info()
+            .await
+            .map_err(|err| Error::NodeRequestFailed(err.into()))?
+            .cryptarchia_info
+            .lib_slot
+            .into_inner();
+        // A slot past the node's LIB is refused, not read as empty.
+        if to > lib_slot {
+            return Err(Error::SlotNotFinal(to));
+        }
+        let blocks = self
+            .node
+            .immutable_blocks(Slot::from(from), Slot::from(to))
+            .await
+            .map_err(|err| Error::NodeRequestFailed(err.into()))?;
+        Ok(blocks
+            .into_iter()
+            .map(|block| self.summarize(&block))
+            .collect())
+    }
+}
+
 // TODO: Remove when cross zones become actor(-s)
 impl<S: StorageActorTrait> Message<ReadChannel> for BedrockActor<S> {
     type Reply = Result<ChannelReadStream>;
@@ -575,8 +760,23 @@ impl TryFrom<&logos_blockchain_zone_sdk::node_types::ChannelState> for LiveChann
             config_tip: state.config_tip_hash,
             required_signatures: state.configuration_threshold,
             transfer_threshold: state.transfer_threshold,
+            posting_timeframe: state.posting_timeframe.clone().into(),
+            posting_timeout: state.posting_timeout.clone().into(),
         })
     }
+}
+
+/// Drops all but the newest [`NodeReader::CACHE_KEPT`] summaries of `cache` by slot.
+fn keep_newest_block_summaries(cache: &mut HashMap<HeaderId, BlockSummary>) {
+    let mut slots: Vec<u64> = cache
+        .values()
+        .map(|block_summary| block_summary.slot)
+        .collect();
+    let Some(oldest_kept) = slots.len().checked_sub(NodeReader::CACHE_KEPT) else {
+        return;
+    };
+    let (_, &mut cutoff, _) = slots.select_nth_unstable(oldest_kept);
+    cache.retain(|_, block_summary| block_summary.slot >= cutoff);
 }
 
 /// Deserialize an inscription payload into `(this_msg, Block)`. Bad payloads are
@@ -584,7 +784,7 @@ impl TryFrom<&logos_blockchain_zone_sdk::node_types::ChannelState> for LiveChann
 fn block_from_inscription(inscription: &InscriptionInfo) -> Option<Block> {
     borsh::from_slice::<Block>(&inscription.payload)
         .inspect_err(|err| {
-            warn!("Failed to deserialize block from inscription: {err:?}");
+            warn!(error = ?err, "Failed to deserialize block from inscription");
         })
         .ok()
 }

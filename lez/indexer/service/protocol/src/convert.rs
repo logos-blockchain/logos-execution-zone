@@ -297,8 +297,9 @@ impl From<lee::public_transaction::Message> for PublicMessage {
     fn from(value: lee::public_transaction::Message) -> Self {
         let lee::TransactionMessage {
             public_context,
-            execution: lee::public_transaction::PublicExecution { root, fee },
+            execution: lee::public_transaction::PublicExecution { root },
             nonces,
+            fee,
             admission_evidence,
         } = value;
         Self {
@@ -324,11 +325,9 @@ impl TryFrom<PublicMessage> for lee::public_transaction::Message {
         } = value;
         Ok(Self {
             public_context: public_context.into(),
-            execution: lee::public_transaction::PublicExecution {
-                root: root.into(),
-                fee: fee.map(Into::into),
-            },
+            execution: lee::public_transaction::PublicExecution { root: root.into() },
             nonces: nonce_map(nonces)?,
+            fee: fee.map(Into::into),
             admission_evidence: admission_evidence
                 .into_iter()
                 .map(TryInto::try_into)
@@ -582,9 +581,10 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
                     // on `lee_core::ProvenExecution`. FFI/wallet plumbing for address-flexible
                     // program dispatch is tracked separately.
                     program_image_claims: _,
-                    fee,
+                    proven_fee,
                 },
             nonces,
+            fee,
             admission_evidence,
         } = value;
         Self {
@@ -598,6 +598,7 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
             block_validity_window: validity.blocks.into(),
             timestamp_validity_window: validity.timestamps.into(),
             admission_evidence: admission_evidence.into_iter().map(Into::into).collect(),
+            proven_fee: proven_fee.map(Into::into),
             fee: fee.map(Into::into),
         }
     }
@@ -661,6 +662,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             block_validity_window,
             timestamp_validity_window,
             admission_evidence,
+            proven_fee,
             fee,
         } = value;
 
@@ -686,9 +688,10 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
                 // A privacy-preserving tx submitted through this protocol will fail proof
                 // verification for any program not at its bijection address until this is wired.
                 program_image_claims: Vec::new(),
-                fee: fee.map(Into::into),
+                proven_fee: proven_fee.map(Into::into),
             },
             nonces: nonce_map(nonces)?,
+            fee: fee.map(Into::into),
             admission_evidence: admission_evidence
                 .into_iter()
                 .map(TryInto::try_into)
@@ -1119,6 +1122,12 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
             indexer_core::BlockIngestError::InvalidRewardTarget { reason } => {
                 Self::InvalidRewardTarget { reason }
             }
+            indexer_core::BlockIngestError::MisplacedSystemUpgraderTransaction { tx_index } => {
+                Self::MisplacedSystemUpgraderTransaction { tx_index }
+            }
+            indexer_core::BlockIngestError::MissedSystemUpgrade { name } => {
+                Self::MissedSystemUpgrade { name }
+            }
             indexer_core::BlockIngestError::InvalidFeeClass { tx_index, reason } => {
                 Self::InvalidFeeClass { tx_index, reason }
             }
@@ -1137,8 +1146,14 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
             indexer_core::BlockIngestError::RevertMismatch { listed, settled } => {
                 Self::RevertMismatch { listed, settled }
             }
+            indexer_core::BlockIngestError::UnfinalizedRelease { tx_index, key } => {
+                Self::UnfinalizedRelease { tx_index, key }
+            }
             indexer_core::BlockIngestError::StateTransition { tx_index, reason } => {
                 Self::StateTransition { tx_index, reason }
+            }
+            indexer_core::BlockIngestError::UndecodableSystemRegistry => {
+                Self::UndecodableSystemRegistry
             }
         }
     }
@@ -1314,13 +1329,13 @@ mod tests {
         let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&signer]);
         let tx = lee::PublicTransaction::new(message, witness_set);
         let original_hash = tx.hash();
-        assert_eq!(tx.message().execution.fee, Some(fee));
+        assert_eq!(tx.message().fee, Some(fee));
 
         let protocol_tx: PublicTransaction = tx.into();
         let restored: lee::PublicTransaction = protocol_tx.try_into().expect("converts back");
 
         assert_eq!(
-            restored.message().execution.fee,
+            restored.message().fee,
             Some(fee),
             "the fee declaration must survive the round trip",
         );
@@ -1352,7 +1367,7 @@ mod tests {
         let protocol_tx: PublicTransaction = tx.into();
         let restored: lee::PublicTransaction = protocol_tx.try_into().expect("converts back");
 
-        assert_eq!(restored.message().execution.fee, None);
+        assert_eq!(restored.message().fee, None);
         assert_eq!(restored.hash(), original_hash);
     }
 
@@ -1433,7 +1448,7 @@ mod tests {
             },
             execution: lee_core::ProvenExecution {
                 // The proof commits to its fee, so a mirror dropping it breaks verification.
-                fee: Some(lee_core::ProvenFee {
+                proven_fee: Some(lee_core::ProvenFee {
                     refund_to: Some(account_id(70)),
                     fallback: Some(lee_core::FeeFallback {
                         action: lee_core::PrivateAction::default(),
@@ -1510,6 +1525,12 @@ mod tests {
                 program_image_claims: vec![],
             },
             nonces: BTreeMap::new(),
+            fee: Some(lee::FeeDeclaration::new(
+                account_id(71),
+                500_000,
+                3,
+                9_000_000,
+            )),
             admission_evidence: admission_evidence(),
         };
 

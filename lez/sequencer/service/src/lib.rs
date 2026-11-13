@@ -13,7 +13,6 @@ use kameo_actors::{
     pubsub::PubSub,
     scheduler::{Scheduler, SetInterval},
 };
-use log::info;
 #[cfg(feature = "rpc")]
 use sequencer_bedrock_actor::{BasicAuthCredentials, Url, protocol::ChannelId};
 use sequencer_channel_signing_actor::{
@@ -24,13 +23,14 @@ pub use sequencer_core::config::*;
 use sequencer_core::load_or_create_signing_key;
 use sequencer_gossip_actor::{
     GossipActor,
-    protocol::{PublishConfig, PublishTransaction},
+    protocol::{Publish, PublishConfig},
 };
 use sequencer_rpc_server_actor::RpcServerActor;
 use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActor;
 use sharding_pool_actor::ShardingPoolActor;
 use tokio::select;
+use tracing::info;
 
 use crate::{actor_handle::ActorHandle, supervisor::SequencerSupervisor};
 
@@ -288,6 +288,8 @@ pub fn run(
         let config_clone = config.clone();
         let storage_ref_clone = storage_ref.clone();
         let bedrock_broker_ref_clone = bedrock_broker_ref.clone();
+        let bedrock_instances =
+            sequencer_service_metrics::instances::expect(<BedrockActor as kameo::Actor>::name());
         let bedrock_pool = ShardingPoolActor::<BedrockActor, ChannelId>::new(
             sharding_pool_actor::RestartConfig {
                 policy: RestartPolicy::Permanent,
@@ -315,15 +317,18 @@ pub fn run(
                 within: Duration::ZERO,
             },
         )
-        .with_on_worker_spawned(actor_handle::record_mailbox_capacity);
+        .with_on_worker_spawned(move |channel_id, worker| {
+            actor_handle::record_mailbox_capacity(worker);
+            bedrock_instances.name(worker.id(), channel_id);
+        });
         let bedrock_pool_ref = ShardingPoolActor::spawn(bedrock_pool);
         info!("Bedrock Sharding Pool Actor spawned");
 
         let channel_signing_key = load_or_create_signing_key(&channel_signing_key_path)
             .context("Failed to load or create the channel signing key")?;
-        log::info!(
-            "Channel signing public key: {}",
-            hex::encode(channel_signing_key.public_key().to_bytes())
+        info!(
+            public_key = %hex::encode(channel_signing_key.public_key().to_bytes()),
+            "Channel signing key loaded"
         );
 
         let stake_config_pubsub_ref = PubSub::spawn(PubSub::new(DeliveryStrategy::Guaranteed));
@@ -466,7 +471,7 @@ pub async fn setup_gossip(
     slasher_ref: &ActorRef<SlasherActor<StorageActor>>,
     channel_signer_ref: &ActorRef<ChannelSigningActor>,
     scheduler_ref: &ActorRef<Scheduler>,
-) -> Result<(Gossip, Recipient<PublishTransaction>)> {
+) -> Result<(Gossip, Recipient<Publish>)> {
     // The node's L1 channel signing key is deliberately reused as the
     // libp2p identity; `GossipActor::new` derives the keypair.
     let signing_key = load_or_create_signing_key(channel_signing_key_path)?;
@@ -486,6 +491,19 @@ pub async fn setup_gossip(
         })
     });
 
+    // Gossiped system_upgrader approvals go to the executor's approval pool, as RPC submissions do.
+    let approval_ref = executor_ref.clone();
+    let submit_system_approval: sequencer_gossip_actor::SystemApprovalSubmit =
+        std::sync::Arc::new(move |approval| {
+            let approval_executor_ref = approval_ref.clone();
+            Box::pin(async move {
+                approval_executor_ref
+                    .ask(sequencer_executor_actor::protocol::SubmitSystemApproval { approval })
+                    .await
+                    .map_err(Into::into)
+            })
+        });
+
     // note on `Box::pin` here: the swarm construction makes this awaited future large,
     // and it would otherwise sit inline in every future that awaits the service start.
     //
@@ -499,10 +517,11 @@ pub async fn setup_gossip(
         submit,
         // Screened inbound channel-config messages go straight to the actor.
         channel_signer_ref.clone().recipient(),
+        submit_system_approval,
     ))
     .await
     .context("Failed to start sequencer gossip network")?;
-    info!("Gossip network started as {}", gossip_actor.local_peer_id());
+    info!(peer_id = %gossip_actor.local_peer_id(), "Gossip network started");
     let bootstrap_addrs = gossip_actor.bootstrap_addrs();
 
     let gossip_ref = gossip_actor_prepared.actor_ref().clone();
@@ -612,7 +631,7 @@ async fn setup_executor(
 async fn setup_rpc_server(
     listen_addr: SocketAddr,
     executor_ref: ActorRef<ExecutorActor>,
-    gossip_publisher: Option<Recipient<PublishTransaction>>,
+    gossip_publisher: Option<Recipient<Publish>>,
 ) -> Result<RpcServer> {
     let rpc_server = RpcServerActor::new(listen_addr, executor_ref, gossip_publisher)
         .await

@@ -10,7 +10,6 @@ use std::{
 use anyhow::{Context as _, Result, bail};
 use indexer_service::{ChannelId, IndexerHandle};
 use lee::{AccountId, PrivateKey, PublicKey};
-use log::{debug, warn};
 use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
 use sequencer_service::{GenesisAction, SequencerConfig, SequencerHandle};
 use sequencer_service_protocol::SequencerStatus;
@@ -18,6 +17,7 @@ use sequencer_service_rpc::{ClientError, RpcClient as _, SequencerClient, Sequen
 use sequencer_storage_actor::{StorageActor, protocol::DbDump};
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
+use tracing::{debug, warn};
 use wallet::{
     WalletCore,
     cli::{Command, programs::native_token_transfer::AuthTransferSubcommand},
@@ -165,7 +165,7 @@ impl SequencerSetup {
             joining,
         } = self;
 
-        debug!("Using sequencer home at {}", home.display());
+        debug!(home = %home.display(), "Using sequencer home");
 
         let channel_signing_key = channel_signing_key.or_else(|| {
             genesis_transactions
@@ -235,7 +235,7 @@ async fn wait_until_online(client: &SequencerClient) -> Result<()> {
             match client.get_sequencer_status().await {
                 Ok(SequencerStatus::Online { .. }) => return Ok(()),
                 Ok(status @ SequencerStatus::Bootstrapping { .. }) => {
-                    debug!("Sequencer is not online yet: {status:?}");
+                    debug!(?status, "Sequencer is not online yet");
                     last_status = Some(status);
                 }
                 // Going online can keep the sequencer busy past a request's timeout.
@@ -502,10 +502,13 @@ pub async fn setup_bedrock_node_with_settings(
             Ok(port) => return Ok((compose, SocketAddr::from(([127, 0, 0, 1], port)))),
             Err(err) => {
                 warn!(
-                    "Failed to bring up Bedrock services: {err:?}, attempt {attempt}/{max_attempts}"
+                    error = ?err,
+                    attempt,
+                    max_attempts,
+                    "Failed to bring up Bedrock services"
                 );
                 if let Err(down_err) = compose.down().await {
-                    warn!("Failed to tear down the failed Bedrock services: {down_err:?}");
+                    warn!(error = ?down_err, "Failed to tear down the failed Bedrock services");
                 }
             }
         }
@@ -542,7 +545,7 @@ pub async fn setup_indexer_at(
 ) -> Result<IndexerHandle> {
     std::fs::create_dir_all(home).context("Failed to create indexer home")?;
 
-    debug!("Using indexer home at {}", home.display());
+    debug!(home = %home.display(), "Using indexer home");
 
     let indexer_config = config::indexer_config(bedrock_addr, channel_id, cross_zone)
         .context("Failed to create Indexer config")?;

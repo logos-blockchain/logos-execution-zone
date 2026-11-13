@@ -223,11 +223,12 @@ fn prepare_mock_storage_with_stake(
                     minimum_sequencer_stake: 0,
                     posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
                     posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
-                    exit_delay: system_accounts::DEFAULT_SEQUENCER_EXIT_DELAY,
                     max_block_size: system_accounts::DEFAULT_MAX_BLOCK_SIZE,
+                    finality_depth: system_accounts::DEFAULT_FINALITY_DEPTH,
                 }),
                 channel_id: Some([0xC1; 32]),
                 entries,
+                params_votes: BTreeMap::new(),
             }
             .to_bytes()
             .into(),
@@ -288,6 +289,10 @@ fn prepare_mock_storage_with_stake(
 
     mock_storage
         .expect_handle_get_slash_record_bytes()
+        .returning(|_, _| Ok(None));
+
+    mock_storage
+        .expect_handle_get_system_approvals_bytes()
         .returning(|_, _| Ok(None));
 
     mock_storage
@@ -485,7 +490,7 @@ pub(super) fn finalized_at(block: &Block, slot: u64) -> FinalizedBlock {
 /// failure either.
 #[test]
 async fn a_publish_refused_as_stale_returns_its_transactions_to_the_mempool() -> Result<()> {
-    let _res = env_logger::try_init();
+    let _res = logging::try_init();
 
     let (config, _home, sequencer_key) = staked_sequencer_config();
     let mut mock_storage = prepare_mock_storage_with_stake(stake_entries(sequencer_key));
@@ -592,7 +597,7 @@ async fn a_publish_refused_as_stale_returns_its_transactions_to_the_mempool() ->
 /// the publisher started at.
 #[test]
 async fn a_publish_expects_the_sequence_the_publisher_started_at() -> Result<()> {
-    let _res = env_logger::try_init();
+    let _res = logging::try_init();
 
     let (config, _home, sequencer_key) = staked_sequencer_config();
     let mut mock_storage = prepare_mock_storage_with_stake(stake_entries(sequencer_key));
@@ -728,7 +733,7 @@ async fn settled(publisher_inits: &mut mpsc::UnboundedReceiver<()>) -> bool {
 /// a fresh one's publisher up.
 #[test]
 async fn the_executor_restarts_once_its_bedrock_actor_dies() -> Result<()> {
-    let _res = env_logger::try_init();
+    let _res = logging::try_init();
 
     let (config, _home) = sequencer_config();
     let channel_id = config.bedrock_config.channel_id;
@@ -747,7 +752,7 @@ async fn the_executor_restarts_once_its_bedrock_actor_dies() -> Result<()> {
 /// A restarted executor replaces its Bedrock actor, whose death does not restart it again.
 #[test]
 async fn a_restarted_executor_replaces_its_bedrock_actor_once() -> Result<()> {
-    let _res = env_logger::try_init();
+    let _res = logging::try_init();
 
     let (config, _home) = sequencer_config();
     let (_supervisor, executor, _bedrock_pool_ref, mut publisher_inits) =
@@ -767,7 +772,7 @@ async fn a_restarted_executor_replaces_its_bedrock_actor_once() -> Result<()> {
 /// would end block production permanently.
 #[test]
 async fn a_failed_production_turn_does_not_stop_the_actor() -> Result<()> {
-    let _res = env_logger::try_init();
+    let _res = logging::try_init();
 
     let (config, _home) = sequencer_config();
     let mut mock_storage = prepare_mock_storage_with_empty_genesis();
@@ -806,7 +811,7 @@ async fn a_failed_production_turn_does_not_stop_the_actor() -> Result<()> {
 
 #[test]
 async fn handle_transaction_fails_on_full_mempool() -> Result<()> {
-    let _res = env_logger::try_init();
+    let _res = logging::try_init();
 
     let (config, _home) = sequencer_config();
     let mempool_max_size = config.mempool_max_size;
@@ -858,7 +863,7 @@ async fn get_block_range_keeps_executor_responsive() -> Result<()> {
     const STALLED_FIRST: u64 = 100;
     const STALLED_LAST: u64 = 105;
 
-    let _res = env_logger::try_init();
+    let _res = logging::try_init();
 
     let (config, _home) = sequencer_config();
 
@@ -929,7 +934,7 @@ async fn get_block_range_keeps_executor_responsive() -> Result<()> {
 
 #[test]
 async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
-    let _res = env_logger::try_init();
+    let _res = logging::try_init();
 
     let (config, _home) = sequencer_config();
     let mock_storage = prepare_mock_storage_with_empty_genesis();
@@ -980,7 +985,7 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
 
 #[test]
 async fn handle_transaction_rejects_a_transaction_too_large_for_any_block() -> Result<()> {
-    let _res = env_logger::try_init();
+    let _res = logging::try_init();
 
     let (config, _home) = sequencer_config();
     let storage_ref = MockStorageActor::spawn(prepare_mock_storage_with_empty_genesis());

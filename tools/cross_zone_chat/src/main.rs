@@ -62,7 +62,6 @@ use lee::{
     public_transaction::{Message, WitnessSet},
 };
 use lee_core::account::Nonce;
-use log::{info, warn};
 use ping_core::{
     CrossZoneEmission, ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id,
     sender_config_account_id,
@@ -74,6 +73,7 @@ use test_fixtures::{
     setup::{SequencerSetup, setup_bedrock_node},
 };
 use testnet_initial_state::{PublicAccountPrivateInitialData, initial_pub_accounts_private_keys};
+use tracing::{info, warn};
 
 const HTTP_PORT: u16 = 8088;
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -191,7 +191,12 @@ impl AppState {
                 created: Instant::now(),
                 delivered_secs: None,
             });
-        log::info!("[stage] msg {id} submitted {source_label}->{dest_label}");
+        info!(
+            msg = id,
+            source = source_label,
+            dest = dest_label,
+            "Message submitted"
+        );
         id
     }
 
@@ -202,10 +207,12 @@ impl AppState {
             m.source_label == source_label && m.ordinal == ordinal && m.source_block.is_none()
         }) {
             message.source_block = Some(block_id);
-            log::info!(
-                "[stage] msg {} in source block {source_label}#{block_id} (+{}s)",
-                message.id,
-                message.created.elapsed().as_secs()
+            info!(
+                msg = message.id,
+                source = source_label,
+                block_id,
+                elapsed_secs = message.created.elapsed().as_secs(),
+                "Message in a source block"
             );
         }
     }
@@ -226,9 +233,12 @@ impl AppState {
             message.delivered_block = Some(block_id);
             let secs = message.created.elapsed().as_secs();
             message.delivered_secs = Some(secs);
-            log::info!(
-                "[stage] msg {} delivered {dest_label}#{block_id} (+{secs}s total)",
-                message.id
+            info!(
+                msg = message.id,
+                dest = dest_label,
+                block_id,
+                elapsed_secs = secs,
+                "Message delivered"
             );
         }
     }
@@ -257,10 +267,12 @@ impl AppState {
                 && !message.finalized
             {
                 message.finalized = true;
-                log::info!(
-                    "[stage] msg {} source block {source_label}#{block_id} finalized on Bedrock (+{}s)",
-                    message.id,
-                    message.created.elapsed().as_secs()
+                info!(
+                    msg = message.id,
+                    source = source_label,
+                    block_id,
+                    elapsed_secs = message.created.elapsed().as_secs(),
+                    "Message's source block finalized on Bedrock"
                 );
             }
         }
@@ -289,7 +301,7 @@ impl AppState {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init();
+    logging::init();
 
     // Declared first so Bedrock outlives both zones (drops run in reverse order).
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
@@ -330,7 +342,7 @@ async fn main() -> Result<()> {
     let ordinal_b = next_free_ordinal(&client_b, &zone_a)
         .await
         .context("Failed to find a free outbox ordinal for zone B")?;
-    info!("Outbox ordinals start at A={ordinal_a} B={ordinal_b}");
+    info!(ordinal_a, ordinal_b, "Outbox ordinals found");
 
     let payer_id = initial_pub_accounts_private_keys()[0].account_id;
     let payer_nonce_a = payer_nonce(&client_a, payer_id).await?;
@@ -450,7 +462,12 @@ async fn next_free_ordinal(client: &SequencerClient, target_zone: &ZoneId) -> Re
                 Ok(account) => break account,
                 Err(err) if attempt < RPC_RETRY_LIMIT => {
                     attempt += 1;
-                    warn!("Outbox probe failed, retrying ({attempt}/{RPC_RETRY_LIMIT}): {err}");
+                    warn!(
+                        attempt,
+                        max_attempts = RPC_RETRY_LIMIT,
+                        error = %err,
+                        "Outbox probe failed, retrying"
+                    );
                     tokio::time::sleep(POLL_INTERVAL).await;
                 }
                 Err(err) => {
@@ -487,7 +504,11 @@ async fn scan_zone(state: Arc<AppState>, label: &'static str) {
         let last = match client.get_last_block_id().await {
             Ok(last) => last,
             Err(err) => {
-                warn!("[{label}] get_last_block_id failed: {err:#}");
+                warn!(
+                    zone = label,
+                    error = format_args!("{err:#}"),
+                    "get_last_block_id failed"
+                );
                 continue;
             }
         };
@@ -517,7 +538,12 @@ async fn scan_zone(state: Arc<AppState>, label: &'static str) {
                 }
                 Ok(None) => {}
                 Err(err) => {
-                    warn!("[{label}] get_block({next}) failed: {err:#}");
+                    warn!(
+                        zone = label,
+                        block_id = next,
+                        error = format_args!("{err:#}"),
+                        "get_block failed"
+                    );
                     break;
                 }
             }
@@ -539,7 +565,12 @@ async fn poll_finality(state: Arc<AppState>) {
                     }
                 }
                 Ok(None) => {}
-                Err(err) => warn!("[{label}] finality get_block({block_id}) failed: {err:#}"),
+                Err(err) => warn!(
+                    zone = label,
+                    block_id,
+                    error = format_args!("{err:#}"),
+                    "Finality get_block failed"
+                ),
             }
         }
     }

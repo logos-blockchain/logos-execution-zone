@@ -153,8 +153,13 @@ typedef struct FfiPrivacyPreservingMessage {
   uint64_t block_validity_window[2];
   uint64_t timestamp_validity_window[2];
   FfiPublicAccountEvidenceList admission_evidence;
+  bool has_proven_fee;
+  struct FfiProvenFee proven_fee;
+  /**
+   * The fee declaration, paid by a public signer instead of inside the proof.
+   */
   bool has_fee;
-  struct FfiProvenFee fee;
+  FfiFeeDeclaration fee;
 } FfiPrivacyPreservingMessage;
 
 typedef FfiVecU8 FfiProof;
@@ -406,7 +411,7 @@ enum OperationStatus stop_indexer(struct IndexerServiceFFI *indexer);
  * - `level` is a null-terminated string (`off`/`error`/`warn`/`info`/`debug`/ `trace`,
  *   case-insensitive); null or unparseable falls back to `info`.
  *
- * Only the `indexer_ffi` and `indexer_core` targets are enabled!
+ * `RUST_LOG`, when set, overrides `level` (e.g. `info,indexer_core=debug`).
  *
  * # Safety
  * - `level` must be a valid null-terminated C string, or null.

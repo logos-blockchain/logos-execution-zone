@@ -6,6 +6,7 @@
     clippy::tests_outside_test_module,
     clippy::undocumented_unsafe_blocks,
     clippy::multiple_unsafe_ops_per_block,
+    clippy::arithmetic_side_effects,
     reason = "We don't care about these in tests"
 )]
 
@@ -39,7 +40,7 @@ fn wallet_ffi_public_credit_creates_only_the_native_actor_state() -> Result<()> 
         sequencer_home,
     } = sequencer_ffi_helpers::joining_setup(true)?;
 
-    log::info!("Joining sequencer home: {sequencer_home:?}");
+    tracing::info!(?sequencer_home, "Joining sequencer home");
 
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -116,7 +117,7 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
         sequencer_home,
     } = sequencer_ffi_helpers::joining_setup(true)?;
 
-    log::info!("Joining sequencer home: {sequencer_home:?}");
+    tracing::info!(?sequencer_home, "Joining sequencer home");
 
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -142,7 +143,7 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
         .unwrap();
     }
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     let declared = transfer_result.fee;
@@ -208,7 +209,7 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
         sequencer_home,
     } = sequencer_ffi_helpers::joining_setup(true)?;
 
-    log::info!("Joining sequencer home: {sequencer_home:?}");
+    tracing::info!(?sequencer_home, "Joining sequencer home");
 
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -293,7 +294,7 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
         sequencer_home,
     } = sequencer_ffi_helpers::joining_setup(true)?;
 
-    log::info!("Joining sequencer home: {sequencer_home:?}");
+    tracing::info!(?sequencer_home, "Joining sequencer home");
 
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -383,7 +384,7 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
         sequencer_home,
     } = sequencer_ffi_helpers::joining_setup(true)?;
 
-    log::info!("Joining sequencer home: {sequencer_home:?}");
+    tracing::info!(?sequencer_home, "Joining sequencer home");
 
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -479,7 +480,7 @@ fn test_wallet_ffi_dry_runs_report_without_sending() -> Result<()> {
         sequencer_home,
     } = sequencer_ffi_helpers::joining_setup(true)?;
 
-    log::info!("Joining sequencer home: {sequencer_home:?}");
+    tracing::info!(home = ?sequencer_home, "Joining sequencer home");
 
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -664,7 +665,7 @@ fn test_wallet_ffi_refuses_a_public_send_whose_simulation_reverts() -> Result<()
         sequencer_home,
     } = sequencer_ffi_helpers::joining_setup(true)?;
 
-    log::info!("Joining sequencer home: {sequencer_home:?}");
+    tracing::info!(home = ?sequencer_home, "Joining sequencer home");
 
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {

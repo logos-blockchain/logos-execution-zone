@@ -1,22 +1,23 @@
 use std::net::SocketAddr;
 
 use bytesize::ByteSize;
-use jsonrpsee::server::ServerHandle;
+use jsonrpsee::server::{ServerHandle, middleware::rpc::RpcServiceBuilder};
 use kameo::{
     Actor,
     actor::{ActorRef, Recipient, WeakActorRef},
     error::ActorStopReason,
     mailbox::{MailboxReceiver, Signal},
 };
-use log::info;
 use sequencer_executor_actor::ExecutorActorTrait;
-use sequencer_gossip_actor::protocol::PublishTransaction;
+use sequencer_gossip_actor::protocol::Publish;
 use sequencer_service_rpc::RpcServer as _;
 use tokio::select;
+use tracing::info;
 
 use crate::{Result, error::Error};
 
 mod service;
+mod spans;
 
 const REQUEST_BODY_MAX_SIZE: ByteSize = ByteSize::mib(10);
 
@@ -29,7 +30,7 @@ impl RpcServerActor {
     pub async fn new<E: ExecutorActorTrait>(
         listen_addr: SocketAddr,
         executor_ref: ActorRef<E>,
-        gossip: Option<Recipient<PublishTransaction>>,
+        gossip: Option<Recipient<Publish>>,
     ) -> Result<Self> {
         let server = jsonrpsee::server::ServerBuilder::with_config(
             jsonrpsee::server::ServerConfigBuilder::new()
@@ -39,6 +40,7 @@ impl RpcServerActor {
                 )
                 .build(),
         )
+        .set_rpc_middleware(RpcServiceBuilder::new().layer_fn(spans::RpcSpans))
         .build(listen_addr)
         .await
         .map_err(Error::RpcServerSetupFailed)?;
@@ -47,7 +49,7 @@ impl RpcServerActor {
             .local_addr()
             .map_err(Error::LocalAddrRetrievingFailed)?;
 
-        info!("Starting RPC Server on {addr}");
+        info!(%addr, "Starting RPC server");
 
         let service = service::Service::new(executor_ref, gossip);
         let server_handle = server.start(service.into_rpc());

@@ -554,8 +554,13 @@ typedef struct FfiPrivacyPreservingMessage {
   uint64_t timestamp_validity_window[2];
   FfiProgramImageClaims program_image_claims;
   FfiPublicAccountEvidenceList admission_evidence;
+  bool has_proven_fee;
+  struct FfiProvenFee proven_fee;
+  /**
+   * The fee declaration, paid by a public signer instead of inside the proof.
+   */
   bool has_fee;
-  struct FfiProvenFee fee;
+  struct FfiFeeDeclaration fee;
 } FfiPrivacyPreservingMessage;
 
 typedef FfiVecU8 FfiProof;
@@ -998,10 +1003,12 @@ typedef struct FfiFeeParams {
   bool has_headroom_blocks;
   uint64_t headroom_blocks;
   /**
-   * Private: the owned private account paying every in-proof fee, else each send picks its
-   * payer.
+   * Privacy-preserving: the account paying every fee, else each send picks its payer. An owned
+   * private account pays inside the proof; with `payer_is_public`, a public account the
+   * transaction already signs with declares the fee.
    */
   bool has_payer;
+  bool payer_is_public;
   FfiAccountId payer;
   /**
    * Private: the public account the surplus is refunded to, else the payer's alias. Any
@@ -1493,7 +1500,7 @@ enum FfiOperationError sequencer_ffi_stop_sequencer(struct SequencerServiceFFI *
  * - `level` is a null-terminated string (`off`/`error`/`warn`/`info`/`debug`/ `trace`,
  *   case-insensitive); null or unparseable falls back to `info`.
  *
- * Only the `sequencer_ffi` and `sequencer_core` targets are enabled!
+ * `RUST_LOG`, when set, overrides `level` (e.g. `info,sequencer_core=debug`).
  *
  * # Safety
  * - `level` must be a valid null-terminated C string, or null.

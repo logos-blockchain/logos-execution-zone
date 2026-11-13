@@ -28,8 +28,8 @@ macro_rules! actor_entrypoint {
 /// that runs its `Instruction` variants as Rust rather than interpreting a guest ELF.
 pub const PROGRAM_LOADER_ACCOUNT_ID: AccountId = AccountId::new([0xFE; 32]);
 
-/// Hard cap on a deployed program's segment chain length, bounding a resolution walk.
-pub const MAX_PROGRAM_SEGMENTS: usize = 20;
+/// The fixed address of `system_upgrader`; every system program's address is one of its PDAs.
+pub const SYSTEM_UPGRADER_ACCOUNT_ID: AccountId = AccountId::new([0xFD; 32]);
 
 pub type ProgramId = [u32; 8];
 
@@ -45,25 +45,54 @@ impl AccountId {
         Self::new(bytes.try_into().expect("8 u32 words are exactly 32 bytes"))
     }
 
+    /// A system program's address: the `system_upgrader` PDA whose seed is
+    /// [`PdaSeed::for_system_program`] of `name`.
     #[must_use]
-    pub fn from_builtin_program_name(name: &[u8]) -> Self {
-        use risc0_zkvm::sha::rust_crypto::{Digest as _, Sha256};
-        const BUILTIN_PROGRAM_NAME_PREFIX: &[u8; 32] = b"/LEE-BuiltinProgram/v1/AccountId";
-
-        let mut hasher = Sha256::new();
-        hasher.update(BUILTIN_PROGRAM_NAME_PREFIX);
-        hasher.update(name);
-        Self::new(
-            hasher
-                .finalize()
-                .as_slice()
-                .try_into()
-                .expect("Hash output must be exactly 32 bytes long"),
+    pub fn from_system_program_name(name: &SystemProgramName) -> Self {
+        Self::for_public_pda(
+            &SYSTEM_UPGRADER_ACCOUNT_ID,
+            &PdaSeed::for_system_program(name),
         )
     }
 }
 
 pub type MessageData = Vec<u8>;
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    BorshSerialize,
+    BorshDeserialize,
+)]
+pub struct SystemProgramName([u8; 32]);
+
+impl SystemProgramName {
+    /// Fails to compile, in a constant, for an empty name or one longer than 32 bytes.
+    #[must_use]
+    pub const fn new(name: &[u8]) -> Self {
+        assert!(
+            !name.is_empty() && name.len() <= 32,
+            "a system program name is 1 to 32 bytes"
+        );
+        let mut bytes = [0_u8; 32];
+        let (head, _) = bytes.split_at_mut(name.len());
+        head.copy_from_slice(name);
+        Self(bytes)
+    }
+
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
 
 /// A 32-byte seed used to compute a *Program-Derived `AccountId`* (PDA).
 ///
@@ -90,6 +119,24 @@ impl PdaSeed {
     #[must_use]
     pub const fn new(value: [u8; 32]) -> Self {
         Self(value)
+    }
+
+    #[must_use]
+    pub fn for_system_program(name: &SystemProgramName) -> Self {
+        use risc0_zkvm::sha::rust_crypto::{Digest as _, Sha256};
+        const SYSTEM_PROGRAM_SEED_PREFIX: &[u8; 32] =
+            b"/LEE/SystemUpgrader/v1/Name\x00\x00\x00\x00\x00";
+
+        let mut hasher = Sha256::new();
+        hasher.update(SYSTEM_PROGRAM_SEED_PREFIX);
+        hasher.update(name.as_bytes());
+        Self(
+            hasher
+                .finalize()
+                .as_slice()
+                .try_into()
+                .expect("Hash output must be exactly 32 bytes long"),
+        )
     }
 
     #[must_use]
@@ -523,66 +570,6 @@ pub struct ProgramHeader {
     pub immutable: bool,
 }
 
-impl ProgramHeader {
-    #[must_use]
-    pub fn to_loader_actor_state(self) -> Vec<u8> {
-        LoaderEntry::Header(self).to_bytes()
-    }
-
-    #[must_use]
-    pub fn from_loader_actor_state(bytes: &[u8]) -> Option<Self> {
-        match LoaderEntry::from_bytes(bytes)? {
-            LoaderEntry::Header(header) => Some(header),
-            LoaderEntry::Segment(_) => None,
-        }
-    }
-}
-
-/// One link in a program's bytecode chain: a chunk of the ELF plus where the next chunk lives,
-/// tail-to-head — the account itself carries no notion of "first" or "last".
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct ProgramSegment {
-    pub bytecode: Vec<u8>,
-    /// The next segment toward the head of the chain, or `None` if this is the head (the first
-    /// segment executed, chronologically the last one written).
-    pub next_segment: Option<AccountId>,
-}
-
-impl ProgramSegment {
-    #[must_use]
-    pub fn to_loader_actor_state(self) -> Vec<u8> {
-        LoaderEntry::Segment(self).to_bytes()
-    }
-
-    #[must_use]
-    pub fn from_loader_actor_state(bytes: &[u8]) -> Option<Self> {
-        match LoaderEntry::from_bytes(bytes)? {
-            LoaderEntry::Segment(segment) => Some(segment),
-            LoaderEntry::Header(_) => None,
-        }
-    }
-}
-
-/// What the loader's actor state in an account holds. The tag keeps a header and a segment from
-/// decoding as each other; variants are append-only.
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub enum LoaderEntry {
-    Header(ProgramHeader),
-    Segment(ProgramSegment),
-}
-
-impl LoaderEntry {
-    #[must_use]
-    pub fn to_bytes(&self) -> Vec<u8> {
-        borsh::to_vec(self).expect("loader entry serializes")
-    }
-
-    #[must_use]
-    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        borsh::from_slice(bytes).ok()
-    }
-}
-
 pub type BlockValidityWindow = ValidityWindow<BlockId>;
 pub type TimestampValidityWindow = ValidityWindow<Timestamp>;
 
@@ -784,29 +771,6 @@ pub fn write_once(pre_state: &[u8], data: Vec<u8>) -> Vec<u8> {
         "actor state already holds different data"
     );
     data
-}
-
-#[must_use]
-pub fn get_program_via<'state>(
-    account_id: AccountId,
-    loader_actor_state: impl Fn(AccountId) -> Option<&'state ActorState>,
-) -> Option<(ProgramId, Vec<u8>)> {
-    let header = ProgramHeader::from_loader_actor_state(loader_actor_state(account_id)?)?;
-
-    let mut elf = Vec::new();
-    let mut next = Some(header.program_first_segment);
-    let mut segment_count = 0_usize;
-    while let Some(segment_id) = next {
-        segment_count = segment_count.checked_add(1)?;
-        if segment_count > MAX_PROGRAM_SEGMENTS {
-            return None;
-        }
-        let segment = ProgramSegment::from_loader_actor_state(loader_actor_state(segment_id)?)?;
-        elf.extend_from_slice(&segment.bytecode);
-        next = segment.next_segment;
-    }
-
-    Some((header.image_id, elf))
 }
 
 /// Builds the `Commitment` mirroring an immutable header's finalized `ProgramHeader` into private

@@ -1,5 +1,7 @@
 //! Reexports of types used by sequencer rpc specification.
 
+use std::{fmt::Display, str::FromStr};
+
 pub use common::{HashType, PageLimit, block::Block, transaction::LeeTransaction};
 pub use lee::{Account, AccountData, AccountId, Actor, EncryptedNote, ProgramId, Publication};
 pub use lee_core::{
@@ -7,7 +9,7 @@ pub use lee_core::{
     account::Nonce,
 };
 use serde::{Deserialize, Serialize};
-use serde_with::{hex::Hex, serde_as};
+use serde_with::{DeserializeFromStr, SerializeDisplay, hex::Hex, serde_as};
 
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -139,4 +141,66 @@ mod tests {
             })
         );
     }
+}
+
+/// A sequencer's Ed25519 public key, hex on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr)]
+pub struct SequencerPublicKey(pub [u8; 32]);
+
+impl Display for SequencerPublicKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.0))
+    }
+}
+
+impl FromStr for SequencerPublicKey {
+    type Err = hex::FromHexError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut bytes = [0_u8; 32];
+        hex::decode_to_slice(s, &mut bytes)?;
+        Ok(Self(bytes))
+    }
+}
+
+/// Bytes, hex on the wire.
+#[derive(Debug, Clone, PartialEq, Eq, SerializeDisplay, DeserializeFromStr)]
+pub struct HexBytes(pub Vec<u8>);
+
+impl Display for HexBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(&self.0))
+    }
+}
+
+impl FromStr for HexBytes {
+    type Err = hex::FromHexError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        hex::decode(s.trim()).map(Self)
+    }
+}
+
+/// The `system_upgrader` changes a sequencer holds committee approvals of.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemProposalReport {
+    /// Approvals the committee must reach for a change.
+    pub threshold: u32,
+    pub proposals: Vec<SystemProposal>,
+}
+
+/// A proposed `system_upgrader` change and the approvals held of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemProposal {
+    /// SHA-256 of the proposal's bytes, as `approve_system_change` prints it.
+    pub proposal_hash: HashType,
+    /// The proposal, borsh-encoded.
+    pub proposal: HexBytes,
+    pub approvals: Vec<SystemProposalApproval>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemProposalApproval {
+    pub signer: SequencerPublicKey,
+    pub valid_until: u64,
 }

@@ -81,24 +81,36 @@ fn receiver_config(state: &V03State, config_id: AccountId) -> ping_core::Receive
 
 /// State registering the cross-zone builtins these tests exercise.
 fn base_state() -> V03State {
-    V03State::new().with_named_programs([
+    V03State::new().with_programs_at([
         (
             programs::cross_zone_inbox_account_id(),
             programs::cross_zone_inbox(),
+            true,
         ),
         (
             programs::cross_zone_outbox_account_id(),
             programs::cross_zone_outbox(),
+            true,
         ),
-        (programs::ping_sender_account_id(), programs::ping_sender()),
+        (
+            programs::ping_sender_account_id(),
+            programs::ping_sender(),
+            true,
+        ),
         (
             programs::ping_receiver_account_id(),
             programs::ping_receiver(),
+            true,
         ),
-        (programs::bridge_lock_account_id(), programs::bridge_lock()),
+        (
+            programs::bridge_lock_account_id(),
+            programs::bridge_lock(),
+            true,
+        ),
         (
             programs::wrapped_token_account_id(),
             programs::wrapped_token(),
+            true,
         ),
     ])
 }
@@ -2126,7 +2138,7 @@ fn the_governance_path_holds() {
     let seed = lee_core::program::PdaSeed::new([3; 32]);
     let authority = AccountId::for_public_pda(&proxy_id, &seed);
 
-    let mut state = base_state().with_named_programs([(proxy_id, test_programs::scripted())]);
+    let mut state = base_state().with_programs_at([(proxy_id, test_programs::scripted(), true)]);
     seed_wrapped_config_with_governance(&mut state, Some(proxy_id), Some(authority), &[]);
 
     let update = |sources: Vec<([u8; 32], AccountId)>| {
@@ -2243,7 +2255,7 @@ fn the_governance_path_guards_hold() {
     };
 
     // A perfect call shape from a program that is not the configured governance.
-    let mut other = base_state().with_named_programs([(proxy_id, test_programs::scripted())]);
+    let mut other = base_state().with_programs_at([(proxy_id, test_programs::scripted(), true)]);
     seed_wrapped_config_with_governance(
         &mut other,
         Some(programs::ping_sender_account_id()),
@@ -2258,7 +2270,7 @@ fn the_governance_path_guards_hold() {
     );
 
     // No governance configured: every chained caller is refused.
-    let mut closed = base_state().with_named_programs([(proxy_id, test_programs::scripted())]);
+    let mut closed = base_state().with_programs_at([(proxy_id, test_programs::scripted(), true)]);
     seed_wrapped_config(&mut closed, Some(authority), &[]);
     seed_receiver_config(&mut closed, Some(authority), vec![]);
     rejects_at(
@@ -2307,7 +2319,8 @@ fn the_governance_path_guards_hold() {
     }
 
     // The configured governance itself, but not delegating the authority.
-    let mut undelegated = base_state().with_named_programs([(proxy_id, test_programs::scripted())]);
+    let mut undelegated =
+        base_state().with_programs_at([(proxy_id, test_programs::scripted(), true)]);
     seed_wrapped_config_with_governance(&mut undelegated, Some(proxy_id), Some(authority), &[]);
     rejects_at(
         &undelegated,
@@ -2329,7 +2342,7 @@ fn the_receiver_governance_path_holds() {
     let seed = lee_core::program::PdaSeed::new([3; 32]);
     let authority = AccountId::for_public_pda(&proxy_id, &seed);
 
-    let mut state = base_state().with_named_programs([(proxy_id, test_programs::scripted())]);
+    let mut state = base_state().with_programs_at([(proxy_id, test_programs::scripted(), true)]);
     seed_receiver_config_with_governance(&mut state, Some(proxy_id), Some(authority), vec![]);
 
     let tx = via_proxy(
@@ -2380,7 +2393,7 @@ fn a_shared_authority_serves_both_targets() {
     let seed = lee_core::program::PdaSeed::new([3; 32]);
     let authority = AccountId::for_public_pda(&proxy_id, &seed);
 
-    let mut state = base_state().with_named_programs([(proxy_id, test_programs::scripted())]);
+    let mut state = base_state().with_programs_at([(proxy_id, test_programs::scripted(), true)]);
     seed_wrapped_config_with_governance(&mut state, Some(proxy_id), Some(authority), &[]);
     seed_receiver_config_with_governance(&mut state, Some(proxy_id), Some(authority), vec![]);
 
@@ -2925,7 +2938,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
 /// receiver and generic emitter with no builtin privileges.
 fn chat_state(self_zone: [u8; 32]) -> (V03State, AccountId) {
     let chat_id = AccountId::from_builtin_program(test_programs::zone_chat().id());
-    let mut state = base_state().with_named_programs([(chat_id, test_programs::zone_chat())]);
+    let mut state = base_state().with_programs_at([(chat_id, test_programs::zone_chat(), true)]);
     seed_inbox_config(&mut state, self_zone);
     (state, chat_id)
 }
@@ -3073,7 +3086,7 @@ fn a_direct_write_to_the_chat_log_is_refused() {
 fn a_deployer_signed_claim_at_the_program_account_writes_the_config() {
     let key = PrivateKey::try_new([77; 32]).expect("valid key");
     let chat_id = AccountId::from(&PublicKey::new_from_private_key(&key));
-    let mut state = base_state().with_named_programs([(chat_id, test_programs::zone_chat())]);
+    let mut state = base_state().with_programs_at([(chat_id, test_programs::zone_chat(), true)]);
     seed_inbox_config(&mut state, [1_u8; 32]);
 
     let src_zone = [2_u8; 32];
@@ -3143,9 +3156,9 @@ fn an_unauthorized_claim_at_the_program_account_is_refused() {
 fn a_chained_post_is_refused_and_a_top_level_post_is_a_no_op() {
     let chat_id = AccountId::from_builtin_program(test_programs::zone_chat().id());
     let proxy_id = AccountId::from_builtin_program(test_programs::scripted().id());
-    let mut state = base_state().with_named_programs([
-        (chat_id, test_programs::zone_chat()),
-        (proxy_id, test_programs::scripted()),
+    let mut state = base_state().with_programs_at([
+        (chat_id, test_programs::zone_chat(), true),
+        (proxy_id, test_programs::scripted(), true),
     ]);
     seed_inbox_config(&mut state, [1_u8; 32]);
 

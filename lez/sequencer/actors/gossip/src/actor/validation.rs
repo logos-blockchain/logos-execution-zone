@@ -9,6 +9,7 @@ use common::transaction::LeeTransaction;
 use sequencer_channel_signing_actor::protocol::Wire;
 use sequencer_core::config::BLOCK_OVERHEAD;
 use sequencer_slasher_actor::protocol::Approval;
+use system_upgrader_core::SignedApproval;
 
 #[derive(Debug)]
 // `Accept` is intentionally left unboxed: it is the common outcome and the enum
@@ -19,6 +20,15 @@ pub enum TxEvaluation {
     Accept(Box<LeeTransaction>),
     /// Malformed / forbidden; do not forward. `GossipSub` peer scoring is not
     /// configured, so this does not currently penalize the propagating peer.
+    Reject(String),
+}
+
+#[derive(Debug)]
+pub enum SystemApprovalEvaluation {
+    /// Correctly signed by an accredited key; forward and hand to the approval pool.
+    Accept(SignedApproval),
+    /// Nothing this node can use, but not the sender's fault.
+    Ignore(String),
     Reject(String),
 }
 
@@ -99,6 +109,33 @@ pub fn evaluate_approval(
     }
 }
 
+/// Decodes a gossiped `system_upgrader` approval, drops it if the committee does not accredit the
+/// key it names, then checks its signature. Accreditation comes first, as for slash approvals, so a
+/// minted key buys no signature check. Expiry is left to the pool, which knows the head.
+#[must_use]
+pub fn evaluate_system_approval(
+    data: &[u8],
+    channel_id: [u8; 32],
+    accredited_keys: Option<&HashSet<[u8; 32]>>,
+) -> SystemApprovalEvaluation {
+    let signed: SignedApproval = match borsh::from_slice(data) {
+        Ok(signed) => signed,
+        Err(err) => {
+            return SystemApprovalEvaluation::Reject(format!("undecodable approval: {err}"));
+        }
+    };
+
+    if accredited_keys.is_some_and(|keys| !keys.contains(&signed.approval.signer.to_bytes())) {
+        return SystemApprovalEvaluation::Ignore("signer is not an accredited key".to_owned());
+    }
+
+    if system_upgrader_core::verify_approval(&signed.approval, channel_id, &signed.proposal) {
+        SystemApprovalEvaluation::Accept(signed)
+    } else {
+        SystemApprovalEvaluation::Reject("approval signature does not verify".to_owned())
+    }
+}
+
 /// Decodes a gossiped channel-config message and drops it unless `origin`
 /// has stake on record.
 ///
@@ -172,6 +209,54 @@ mod tests {
         ));
     }
 
+    /// A `system_upgrader` approval by `secret`, encoded as gossiped, and the signer's key.
+    fn signed_system_approval(secret: [u8; 32], valid_until: u64) -> (Vec<u8>, [u8; 32]) {
+        use sequencer_stake_core::ed25519_dalek::{Signer as _, SigningKey};
+        use system_upgrader_core::{Approval, Proposal, SystemProgramName, approval_message};
+
+        let key = SigningKey::from_bytes(&secret);
+        let signer = key.verifying_key().to_bytes();
+        let proposal = Proposal::Install {
+            name: SystemProgramName::new(b"new"),
+            first_segment: lee::AccountId::new([9; 32]),
+            image_id: [7; 8],
+            immutable: false,
+        };
+        let signed = SignedApproval {
+            proposal,
+            approval: Approval {
+                signer: sequencer_stake_core::SequencerKey::new(signer).unwrap(),
+                valid_until,
+                signature: key
+                    .sign(&approval_message(CHANNEL, &proposal, valid_until))
+                    .to_bytes()
+                    .to_vec(),
+            },
+        };
+        (borsh::to_vec(&signed).unwrap(), signer)
+    }
+
+    #[test]
+    fn system_approvals_are_screened_by_accreditation_then_signature() {
+        let (bytes, signer) = signed_system_approval([5; 32], 40);
+        assert!(matches!(
+            evaluate_system_approval(&bytes, CHANNEL, Some(&HashSet::from([signer]))),
+            SystemApprovalEvaluation::Accept(_)
+        ));
+        assert!(matches!(
+            evaluate_system_approval(&bytes, CHANNEL, Some(&HashSet::from([[1; 32]]))),
+            SystemApprovalEvaluation::Ignore(_)
+        ));
+        assert!(matches!(
+            evaluate_system_approval(&bytes, [6; 32], Some(&HashSet::from([signer]))),
+            SystemApprovalEvaluation::Reject(_)
+        ));
+        assert!(matches!(
+            evaluate_system_approval(&[0xff], CHANNEL, None),
+            SystemApprovalEvaluation::Reject(_)
+        ));
+    }
+
     #[test]
     fn an_accredited_signer_is_accepted() {
         let (bytes, signer) = signed_approval([5; 32]);
@@ -214,6 +299,30 @@ mod tests {
         assert!(matches!(
             evaluate_transaction(&bytes, 1 << 20),
             TxEvaluation::Accept(_)
+        ));
+    }
+
+    #[test]
+    fn a_system_upgrader_tx_from_a_peer_is_rejected() {
+        let registry = system_upgrader_core::registry_actor();
+        let message = lee::public_transaction::Message::try_new(
+            registry,
+            [registry],
+            std::collections::BTreeMap::new(),
+            system_upgrader_core::Message::Apply {
+                name: system_upgrader_core::SystemProgramName::new(b"clock"),
+                activation_height: 1,
+            },
+        )
+        .unwrap();
+        let tx = LeeTransaction::Public(lee::PublicTransaction::new(
+            message,
+            lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        ));
+        let bytes = borsh::to_vec(&tx).unwrap();
+        assert!(matches!(
+            evaluate_transaction(&bytes, 1 << 20),
+            TxEvaluation::Reject(reason) if reason == "sequencer-only program"
         ));
     }
 

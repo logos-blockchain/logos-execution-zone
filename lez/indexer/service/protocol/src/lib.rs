@@ -357,7 +357,10 @@ pub struct PrivacyPreservingMessage {
     pub block_validity_window: ValidityWindow,
     pub timestamp_validity_window: ValidityWindow,
     pub admission_evidence: Vec<PublicAccountEvidence>,
-    pub fee: Option<ProvenFee>,
+    /// The fee transfer's refund target and fallback, when the proof runs one.
+    pub proven_fee: Option<ProvenFee>,
+    /// The fee declaration, paid by a public signer instead of inside the proof.
+    pub fee: Option<FeeDeclaration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -586,6 +589,12 @@ pub enum BlockIngestError {
     InvalidRewardTarget {
         reason: String,
     },
+    MisplacedSystemUpgraderTransaction {
+        tx_index: u64,
+    },
+    MissedSystemUpgrade {
+        name: String,
+    },
     InvalidFeeClass {
         tx_index: u64,
         reason: String,
@@ -606,11 +615,17 @@ pub enum BlockIngestError {
         listed: Vec<u64>,
         settled: Vec<u64>,
     },
+    UnfinalizedRelease {
+        tx_index: u64,
+        /// The released sequencer key, hex.
+        key: String,
+    },
     StateTransition {
         /// Index of the failing transaction within the block body.
         tx_index: u64,
         reason: String,
     },
+    UndecodableSystemRegistry,
 }
 
 /// Diagnostic record of the first block that broke the L2 chain.

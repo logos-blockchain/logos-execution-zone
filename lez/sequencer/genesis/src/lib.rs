@@ -89,9 +89,9 @@ pub fn build_initial_state(cross_zone: bool) -> lee::V03State {
 
     // Stamped on fresh genesis and restore-replay: compare against the
     // indexer's on divergence.
-    log::info!(
-        "Genesis fingerprint: {}",
-        hex::encode(base.genesis_fingerprint())
+    tracing::info!(
+        fingerprint = %hex::encode(base.genesis_fingerprint()),
+        "Genesis fingerprint"
     );
     base
 }
@@ -518,8 +518,8 @@ mod tests {
                 minimum_sequencer_stake: system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE,
                 posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
                 posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
-                exit_delay: system_accounts::DEFAULT_SEQUENCER_EXIT_DELAY,
                 max_block_size: system_accounts::DEFAULT_MAX_BLOCK_SIZE,
+                finality_depth: system_accounts::DEFAULT_FINALITY_DEPTH,
             },
             cross_zone: Some(cross_zone),
             actions,

@@ -135,7 +135,7 @@ async fn wait_until_tip(
     reason = "the inscription ids on stdout are this binary's output"
 )]
 async fn main() -> Result<()> {
-    env_logger::init();
+    logging::init();
     let Args {
         home,
         payload,
@@ -174,6 +174,9 @@ async fn main() -> Result<()> {
     storage
         .expect_handle_get_zone_checkpoint()
         .returning(|_msg, _ctx| Ok(None));
+    storage
+        .expect_handle_put_final_configs_bytes()
+        .returning(|_msg, _ctx| Ok(()));
     let storage_ref = MockStorageActor::spawn(storage);
 
     let bedrock_ref = BedrockActor::spawn(sequencer_bedrock_actor::actor::Args {

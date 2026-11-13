@@ -1,4 +1,4 @@
-use std::num::NonZero;
+use std::{collections::HashMap, num::NonZero};
 
 use common::{
     HashType,
@@ -26,9 +26,12 @@ use logos_blockchain_core::{
     },
 };
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use logos_blockchain_zone_sdk::sequencer::ChannelUpdateTx;
+use logos_blockchain_zone_sdk::{node_types::HeaderId, sequencer::ChannelUpdateTx};
 
-use super::publisher::{channel_entries, genesis_config_op, genesis_config_proof};
+use super::{
+    BlockSummary, NodeReader, keep_newest_block_summaries,
+    publisher::{channel_entries, genesis_config_op, genesis_config_proof},
+};
 use crate::protocol::ChannelParams;
 
 /// A tx wrapping `block` in one inscribe op on `channel`.
@@ -100,8 +103,8 @@ fn the_genesis_config_op_and_its_proof_pass_bedrock_verification() {
             minimum_sequencer_stake: 0,
             posting_timeframe: 10,
             posting_timeout: 20,
-            exit_delay: 10,
             max_block_size: 1 << 20,
+            finality_depth: 5,
         },
         NonZero::<u16>::MIN,
         NonZero::<u16>::MIN,
@@ -120,4 +123,40 @@ fn the_genesis_config_op_and_its_proof_pass_bedrock_verification() {
             tx_hash_view: &tx_hash_view,
         })
         .expect("Bedrock accepts the channel-creating config op");
+}
+
+#[test]
+fn a_full_cache_keeps_the_newest_block_summaries_by_slot() {
+    let summary = |n: u64, slot: u64| {
+        let mut id = [0_u8; 32];
+        id[..8].copy_from_slice(&n.to_le_bytes());
+        BlockSummary {
+            id: HeaderId::from(id),
+            parent: HeaderId::from([0; 32]),
+            slot,
+            inscription_msgs: Vec::new(),
+            config_keys: Vec::new(),
+        }
+    };
+    let capacity = u64::try_from(NodeReader::CACHE_CAPACITY).unwrap();
+    let cutoff = capacity.saturating_sub(u64::try_from(NodeReader::CACHE_KEPT).unwrap());
+    // One block per slot, plus a fork block at the cutoff slot.
+    let mut cache: HashMap<_, _> = (0..capacity)
+        .map(|slot| summary(slot, slot))
+        .chain([summary(capacity, cutoff)])
+        .map(|block_summary| (block_summary.id, block_summary))
+        .collect();
+
+    keep_newest_block_summaries(&mut cache);
+
+    assert_eq!(
+        cache.len(),
+        NodeReader::CACHE_KEPT.saturating_add(1),
+        "the newest summaries and the fork block at the cutoff slot should be kept"
+    );
+    assert!(
+        cache
+            .values()
+            .all(|block_summary| block_summary.slot >= cutoff)
+    );
 }

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use chain_state::{AcceptOutcome, AnchorConsistencyCheck, ChainConsistency, ChainState};
 use common::{
@@ -6,20 +6,20 @@ use common::{
     block::{Block, BlockMeta},
 };
 use kameo::actor::ActorRef;
-use log::warn;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
     protocol::{
-        BlockData, DepositInfo, Ed25519Key, FinalizedBlock, FinalizedUpTo, MsgId, Slot,
+        BlockData, DepositInfo, Ed25519Key, FinalizedBlock, FinalizedUpTo, L1Position, MsgId, Slot,
         WithdrawInfo,
     },
 };
-use sequencer_core::{config::SequencerConfig, faults};
+use sequencer_core::{config::SequencerConfig, faults, release_finality};
 use sequencer_slasher_actor::protocol::{Report, ReportedOffence};
 use sequencer_storage_actor::{
     StorageActorTrait,
     protocol::{AtomicUpdate, ZoneAnchorRecord},
 };
+use tracing::warn;
 
 use crate::{
     Result,
@@ -89,9 +89,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
                 // An offence the channel already carries, so replaying it must not
                 // be fatal: the entry carries no block, and the lineage moves past it.
                 warn!(
-                    "Skipping an undecodable inscription {:?} at slot {}",
-                    finalized.msg_id,
-                    finalized.slot.into_inner(),
+                    msg_id = ?finalized.msg_id,
+                    slot = finalized.slot.into_inner(),
+                    "Skipping an undecodable inscription"
                 );
                 None
             }
@@ -120,9 +120,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
 
         if !self.on_lineage {
             warn!(
-                "Bootstrapping never re-read the stored final entry {}, so it left the lineage \
-                 untouched; the Bedrock node's finality may lag behind it",
-                self.stored_final
+                stored_final = %self.stored_final,
+                "Bootstrapping never re-read the stored final entry, so it left the lineage \
+                 untouched; the Bedrock node's finality may lag behind it"
             );
         }
         Ok(State::Online(
@@ -180,6 +180,19 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
     ) -> Result<()> {
         let msg = finalized.msg_id;
         let slot = finalized.slot;
+        let finally_absent_keys = match entry_block {
+            Some(block) => {
+                release_finality::finally_absent_keys(
+                    &self.actors.bedrock_pool_ref,
+                    self.config.bedrock_config.channel_id,
+                    L1Position::FinalSlot(slot.into_inner()),
+                    block,
+                    release_finality::finality_depth(self.chain.final_state()),
+                )
+                .await
+            }
+            None => BTreeSet::new(),
+        };
         let storage_ref = &self.actors.storage_ref;
         let head_before: HashSet<HashType> = self
             .chain
@@ -190,9 +203,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
         // A root lineage over a held tier is a store restored without its view.
         let judgeable = !was_empty && self.chain.final_msg() != MsgId::root();
         let outcome = if self.on_lineage {
-            self.chain.apply_reconstructed(msg, entry_block)
+            self.chain
+                .apply_reconstructed(msg, entry_block, &finally_absent_keys)
         } else {
-            self.chain.apply_finalized_redelivery(msg, entry_block)
+            self.chain
+                .apply_finalized_redelivery(msg, entry_block, &finally_absent_keys)
         };
 
         // The channel's first finalized block is its genesis: one that is not
@@ -294,9 +309,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
                 }
                 Some(AcceptOutcome::AlreadyApplied) | None => {}
                 Some(AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err)) => {
+                    let err = anyhow::anyhow!(err);
                     warn!(
-                        "Finalized channel block {block_id} does not apply, skipping it: {:#}",
-                        anyhow::anyhow!(err)
+                        block_id,
+                        error = format_args!("{err:#}"),
+                        "Finalized channel block does not apply, skipping it"
                     );
                 }
             }

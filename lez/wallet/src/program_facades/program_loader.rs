@@ -10,7 +10,7 @@ use lee_core::{
     RootCall,
     program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader},
 };
-use program_loader_core::{MAX_PROGRAM_SEGMENTS, Message, build_segments};
+use program_loader_core::{LoaderActorState as _, MAX_PROGRAM_SEGMENTS, Message, build_segments};
 
 use crate::{AccountIdentity, ExecutionFailureKind, WalletCore, WalletSequencerClient};
 
@@ -282,9 +282,10 @@ impl<C: WalletSequencerClient> ProgramLoader<'_, C> {
             }
             Ok(
                 Message::CreateHeader { first_segment, .. }
+                | Message::CreateHeaderOf { first_segment, .. }
                 | Message::UpdateHeader { first_segment, .. },
             ) => self.segments(first_segment).await,
-            Ok(Message::WriteSegment { .. }) | Err(_) => Ok(Vec::new()),
+            Ok(Message::WriteSegment { .. } | Message::AssertMutable) | Err(_) => Ok(Vec::new()),
         }
     }
 
