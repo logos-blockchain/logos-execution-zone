@@ -1622,11 +1622,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 transactions: temp_valid_transactions,
                 prev_block_hash,
                 timestamp: new_block_timestamp,
-                // Receipts are fixed-size, so a placeholder sizes this transaction's exactly.
+                // Receipts are fixed-size, so placeholders size them exactly: one for this
+                // transaction and one for the reserved `system_upgrader` slot, if any.
                 receipts: receipts
                     .iter()
                     .copied()
-                    .chain([TransactionReceipt::EXEMPT])
+                    .chain(reserved_receipts(&trailing))
                     .collect(),
             };
 
@@ -2059,7 +2060,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         timestamp: u64,
     ) -> Result<bool> {
         let alone = HashableBlockData {
-            receipts: vec![TransactionReceipt::EXEMPT],
+            receipts: reserved_receipts(system_txs).collect(),
             block_id,
             transactions: [std::slice::from_ref(tx), system_txs].concat(),
             prev_block_hash,
@@ -2473,6 +2474,12 @@ pub fn chain_update(chain: &ChainState) -> AtomicUpdate {
         zone_anchor: None,
         events: Vec::new(),
     }
+}
+
+/// Placeholder receipts for a transaction being sized and the `system_upgrader` slot `trailing`
+/// reserves, if any; the trailing fee and clock txs carry none.
+fn reserved_receipts(trailing: &[LeeTransaction]) -> impl Iterator<Item = TransactionReceipt> {
+    std::iter::repeat_n(TransactionReceipt::EXEMPT, trailing.len().saturating_sub(1))
 }
 
 /// The largest transaction a block under `state`'s `max_block_size` can carry, [`None`] if
