@@ -168,7 +168,8 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     /// Two-tier chain state: production builds on its head; the publisher's
     /// `on_follow` sink feeds adopted/orphaned/finalized peer blocks into it.
     chain: Arc<Mutex<ChainState>>,
-    mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
+    /// Ordered by declared tip, one lane per signer's nonce sequence.
+    mempool: SequencerMemPool,
     /// Which transaction holds each pending `(account, nonce)` slot.
     pending: Box<pending::PendingIndex>,
     sequencer_config: SequencerConfig,
@@ -222,7 +223,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     )]
     pub async fn new(
         config: SequencerConfig,
-        mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
+        mempool: SequencerMemPool,
         chain: ChainState,
         finalized_config: MsgId,
         channel_signing_key: Ed25519Key,
@@ -2008,6 +2009,34 @@ type PublishError = kameo::error::SendError<(), sequencer_bedrock_actor::error::
 #[derive(Debug, thiserror::Error)]
 #[error("Channel moved by an update not applied yet while a block was being built")]
 pub struct ChannelMovedWhileBuilding;
+
+/// The sequencer's mempool: ordered by declared tip, one lane per signer's
+/// nonce sequence.
+pub type SequencerMemPool = MemPool<(TransactionOrigin, LeeTransaction), u64, AccountId>;
+
+#[must_use]
+pub fn new_mempool(max_size: usize) -> SequencerMemPool {
+    MemPool::new(max_size, |(_, tx)| declared_tip(tx), |(_, tx)| signers(tx))
+}
+
+/// The tip a transaction declares; zero for exempt or unclassifiable ones.
+fn declared_tip(tx: &LeeTransaction) -> u64 {
+    match chain_state::classify::classify(tx, false) {
+        Ok(chain_state::classify::FeeClass::Charged(view)) => view.tip(),
+        Ok(chain_state::classify::FeeClass::Exempt) | Err(_) => 0,
+    }
+}
+
+/// The accounts whose nonce sequences a transaction belongs to: every signer,
+/// a co-signing payer included. A private tx signs for its public accounts the
+/// same way, one nonce per signature; a purely private one has none.
+fn signers(tx: &LeeTransaction) -> Vec<AccountId> {
+    let nonces = match tx {
+        LeeTransaction::Public(tx) => &tx.message().nonces,
+        LeeTransaction::PrivacyPreserving(tx) => &tx.message().nonces,
+    };
+    nonces.keys().copied().collect()
+}
 
 /// Whether `deposit_op_id`'s mint is already reflected in `state` — the bridge
 /// owns its receipt PDA. The receipt is the exactly-once ledger the bridge
