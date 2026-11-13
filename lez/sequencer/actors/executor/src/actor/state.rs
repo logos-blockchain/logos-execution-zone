@@ -30,6 +30,10 @@ const CHANNEL_PROBE_DELAY: Duration = Duration::from_secs(2);
 /// the start.
 const CHANNEL_PROBE_RETRIES: u32 = 29;
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "One per executor, moved only on its rare state transitions"
+)]
 pub enum State<S: StorageActorTrait, B: BedrockActorTrait> {
     /// An error or future cancellation happened during [`Self::modify()`].
     Error(String),

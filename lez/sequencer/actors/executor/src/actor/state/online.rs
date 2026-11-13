@@ -4,7 +4,7 @@ use common::{
     transaction::LeeTransaction,
 };
 use kameo::actor::ActorRef;
-use mempool::{MemPool, MemPoolHandle};
+use mempool::MemPoolHandle;
 use sequencer_actors_common::SendErrorExt;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
@@ -198,7 +198,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             info!(%reward_account, "Producer reward account (stake ownership)");
         }
 
-        let mempool = MemPool::new(config.mempool_max_size);
+        let mempool = sequencer_core::new_mempool(config.mempool_max_size);
         let mempool_handle = mempool.handle().clone();
 
         let is_our_turn = bedrock_pool_ref
