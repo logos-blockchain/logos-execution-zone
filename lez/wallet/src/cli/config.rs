@@ -54,6 +54,10 @@ impl ConfigSubcommand {
                 "gas_limit" => {
                     println!("{}", config.gas_limit);
                 }
+                "indexer_url" => match &config.indexer_url {
+                    Some(url) => println!("{url}"),
+                    None => println!("Not set"),
+                },
                 _ => {
                     println!("Unknown field");
                 }
@@ -90,6 +94,13 @@ impl ConfigSubcommand {
             }
             "gas_limit" => {
                 config.gas_limit = value.parse()?;
+            }
+            "indexer_url" => {
+                config.indexer_url = if value.is_empty() {
+                    None
+                } else {
+                    Some(value.parse()?)
+                };
             }
             _ => {
                 anyhow::bail!("Unknown field");
@@ -136,6 +147,11 @@ impl ConfigSubcommand {
             "gas_limit" => {
                 println!(
                     "Execution gas declared by public transactions this wallet builds: raise it for programs costing more cycles than the default"
+                );
+            }
+            "indexer_url" => {
+                println!(
+                    "Indexer the wallet reads an account's history from, to find a manually rotated key it has no record of (empty to unset)"
                 );
             }
             _ => {

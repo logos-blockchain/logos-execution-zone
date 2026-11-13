@@ -63,6 +63,10 @@ pub struct WalletConfig {
         alias = "private_fee_headroom_blocks"
     )]
     pub fee_headroom_blocks: u64,
+    /// The indexer the wallet reads an account's history from, to find a manually rotated key
+    /// it has no record of, as after a restore. Without it, such a key is an error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexer_url: Option<Url>,
 }
 
 impl Default for WalletConfig {
@@ -79,6 +83,7 @@ impl Default for WalletConfig {
             gas_limit: default_gas_limit(),
             public_gas_margin_percent: default_public_gas_margin_percent(),
             fee_headroom_blocks: default_fee_headroom_blocks(),
+            indexer_url: None,
         }
     }
 }
@@ -131,6 +136,7 @@ impl WalletConfig {
             gas_limit,
             public_gas_margin_percent,
             fee_headroom_blocks,
+            indexer_url,
         } = self;
 
         let WalletConfigOverrides {
@@ -142,6 +148,7 @@ impl WalletConfig {
             gas_limit: o_gas_limit,
             public_gas_margin_percent: o_public_gas_margin_percent,
             fee_headroom_blocks: o_fee_headroom_blocks,
+            indexer_url: o_indexer_url,
         } = overrides;
 
         if let Some(v) = o_sequencer {
@@ -175,6 +182,10 @@ impl WalletConfig {
         if let Some(v) = o_gas_limit {
             warn!("Overriding wallet config 'gas_limit' to {v}");
             *gas_limit = v;
+        }
+        if let Some(v) = o_indexer_url {
+            warn!("Overriding wallet config 'indexer_url' to {v:?}");
+            *indexer_url = v;
         }
     }
 }

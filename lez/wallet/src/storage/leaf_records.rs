@@ -36,6 +36,9 @@ struct AccountLeaves {
     /// Signatures sent with each tree, by nonce, then counter.
     spent: BTreeMap<u128, BTreeMap<u32, u8>>,
     foreign: Foreign,
+    /// The rotation counter of the account's key at each nonce it was manually rotated at.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    counters: BTreeMap<u128, u32>,
 }
 
 impl AccountLeaves {
@@ -154,6 +157,27 @@ impl LeafRecords {
         self.save()
     }
 
+    /// The rotation counter recorded for `account`'s key at `nonce`: 0 unless it was rotated
+    /// manually there.
+    #[must_use]
+    pub fn counter(&self, account: AccountId, nonce: Nonce) -> u32 {
+        self.records
+            .get(&account)
+            .and_then(|leaves| leaves.counters.get(&nonce.0))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Records that `account`'s key at `nonce` is the one at `counter`, and saves.
+    pub fn record_counter(&mut self, account: AccountId, nonce: Nonce, counter: u32) -> Result<()> {
+        self.records
+            .entry(account)
+            .or_default()
+            .counters
+            .insert(nonce.0, counter);
+        self.save()
+    }
+
     /// Marks an account this wallet did not create: it takes leaves from the end of the tree at
     /// `nonce`, or at whatever nonce it next signs at, unless it already has a record.
     pub fn mark_foreign(&mut self, account: AccountId, nonce: Option<Nonce>) -> Result<()> {
@@ -165,6 +189,7 @@ impl LeafRecords {
             AccountLeaves {
                 spent: BTreeMap::new(),
                 foreign: nonce.map_or(Foreign::NextSigned, |nonce| Foreign::At(nonce.0)),
+                counters: BTreeMap::new(),
             },
         );
         self.save()
@@ -316,5 +341,16 @@ mod tests {
         let (mut records, _dir) = records();
         records.mark_foreign(ACCOUNT, Some(Nonce(4))).unwrap();
         assert_eq!(records.next_leaf(ACCOUNT, Nonce(4), 1), Ok(7));
+    }
+
+    #[test]
+    fn a_recorded_counter_survives_reopening() {
+        let (mut records, dir) = records();
+        assert_eq!(records.counter(ACCOUNT, Nonce(3)), 0);
+        records.record_counter(ACCOUNT, Nonce(3), 2).unwrap();
+        assert_eq!(records.counter(ACCOUNT, Nonce(3)), 2);
+        assert_eq!(records.counter(ACCOUNT, Nonce(4)), 0);
+        let reopened = LeafRecords::open(dir.path().join("wallet.leaves")).unwrap();
+        assert_eq!(reopened.counter(ACCOUNT, Nonce(3)), 2);
     }
 }

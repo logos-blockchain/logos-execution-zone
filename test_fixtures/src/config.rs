@@ -337,6 +337,7 @@ pub fn wallet_config(sequencer_addr: &SocketAddr) -> Result<WalletConfig> {
         // Test chains never leave the floor base fees, so an exact reserve needs no refund and
         // the balance assertions need no refund accounting.
         fee_headroom_blocks: 0,
+        indexer_url: None,
     })
 }
 

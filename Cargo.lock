@@ -14433,6 +14433,8 @@ dependencies = [
  "hex",
  "humantime",
  "humantime-serde",
+ "indexer_service_protocol",
+ "indexer_service_rpc",
  "indicatif",
  "itertools 0.14.0",
  "jsonrpsee",

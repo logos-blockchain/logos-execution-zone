@@ -332,6 +332,8 @@ enum State {
         secret: Option<PublicAccountSecret>,
         /// The type of the account's current key, which a signing account signs with.
         key_type: KeyType,
+        /// The rotation counter of that key: 0 unless it was rotated manually.
+        counter: u32,
         admission: Admission,
     },
     PublicKeycard {
@@ -950,12 +952,13 @@ impl AccountManager {
                     account,
                     secret: Some(secret),
                     key_type,
+                    counter,
                     ..
                 } => {
                     let nonce = *nonces
                         .get(&account.account_id)
                         .expect("every signing account is in the message's nonces");
-                    Some(signer(secret, nonce, *key_type, next))
+                    Some(signer(secret, nonce, *key_type, *counter, next))
                 }
                 State::Public { secret: None, .. }
                 | State::PublicKeycard { .. }
@@ -1103,18 +1106,19 @@ async fn prepare_account<C: WalletSequencerClient>(
             ))));
         }
     };
-    let key_type = match secret {
-        Some(_) => wallet
-            .current_key_type(account_id)
+    let (key_type, counter) = match &secret {
+        Some(secret) => wallet
+            .current_signing_key(account_id, secret)
             .await
             .map_err(ExecutionFailureKind::SequencerError)?,
-        None => INITIAL_KEY_TYPE,
+        None => (INITIAL_KEY_TYPE, 0),
     };
     let (account, present) = prepare_public_account(wallet, actor_state_selector).await?;
     Ok(State::Public {
         account,
         secret,
         key_type,
+        counter,
         admission: Admission::of(present, evidence),
     })
 }
@@ -1322,14 +1326,15 @@ pub fn recipient<C: WalletSequencerClient>(
 }
 
 /// What `WitnessSet::sign` takes for an account signing at `nonce` with its key of type
-/// `current`, rotating to a key of type `next`, or of type `current`.
+/// `current` at `counter`, rotating to a key of type `next`, or of type `current`.
 pub fn signer(
     secret: &PublicAccountSecret,
     nonce: Nonce,
     current: KeyType,
+    counter: u32,
     next: Option<KeyType>,
 ) -> Signer {
-    Signer::new(secret, nonce, current, next.unwrap_or(current))
+    Signer::new_with_counter(secret, nonce, counter, current, next.unwrap_or(current))
 }
 
 pub fn random_bytes() -> [u8; 32] {
@@ -1421,6 +1426,7 @@ mod tests {
             account,
             secret: None,
             key_type: KeyType::Wots,
+            counter: 0,
             admission: Admission::Present,
         }
     }
@@ -1439,6 +1445,7 @@ mod tests {
             },
             secret: Some(secret),
             key_type: KeyType::Wots,
+            counter: 0,
             admission: Admission::Present,
         }
     }
@@ -1788,6 +1795,7 @@ mod tests {
             account: account(),
             secret: None,
             key_type: KeyType::Wots,
+            counter: 0,
             admission: Admission::Present,
         }]);
         assert!(!unsigned.selected_actor_states()[0].is_authorized);
@@ -1822,6 +1830,7 @@ mod tests {
             },
             secret,
             key_type: KeyType::Wots,
+            counter: 0,
             admission,
         };
         let manager = manager(vec![
@@ -1850,6 +1859,7 @@ mod tests {
             },
             secret,
             key_type: KeyType::Wots,
+            counter: 0,
             admission,
         };
         let pda = PublicAccountEvidence::Pda {

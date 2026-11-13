@@ -30,7 +30,7 @@ use lee::{
         circuit::{Dependency, ProgramCatalog, ProgramKind},
         message::Message,
     },
-    signature::{INITIAL_KEY_TYPE, Signer},
+    signature::{INITIAL_KEY_TYPE, PublicAccountSecret, Signer},
 };
 use lee_core::{
     BlockId, Commitment, CommitmentPosition, CommitmentSetDigest, EphemeralSecretKey, FeeTransfer,
@@ -70,6 +70,7 @@ mod fees;
 mod keycard_support;
 pub mod poller;
 pub mod program_facades;
+mod rotation;
 pub mod storage;
 pub mod utils;
 
@@ -1373,20 +1374,65 @@ impl<C: WalletSequencerClient> WalletCore<C> {
 
     /// A public account's nonce and the type of its key at that nonce.
     async fn current_key(&self, account_id: AccountId) -> Result<(Nonce, KeyType)> {
+        let (nonce, stored) = self.stored_key(account_id).await?;
+        Ok((nonce, stored.map_or(INITIAL_KEY_TYPE, |key| key.key_type)))
+    }
+
+    /// A public account's nonce and its stored key, if it has one.
+    async fn stored_key(&self, account_id: AccountId) -> Result<(Nonce, Option<SigningKeyState>)> {
         let Some(account) = self
             .get_account_view(Actor::new(account_id, signature_program_id()))
             .await?
         else {
-            return Ok((Nonce(0), INITIAL_KEY_TYPE));
+            return Ok((Nonce(0), None));
         };
         let stored = account.data.actor_state(signature_program_id());
         if stored.is_empty() {
-            return Ok((account.nonce, INITIAL_KEY_TYPE));
+            return Ok((account.nonce, None));
         }
-        let key_type = SigningKeyState::try_from(stored)
-            .context("The account's stored key does not decode")?
-            .key_type;
-        Ok((account.nonce, key_type))
+        let key = SigningKeyState::try_from(stored)
+            .context("The account's stored key does not decode")?;
+        Ok((account.nonce, Some(key)))
+    }
+
+    /// The type and rotation counter of a held public account's current key: counter 0 unless
+    /// it was rotated manually. The wallet's recorded counter is tried first; failing that, the
+    /// account's history on the indexer (as after a restore), whose manual rotations since its
+    /// last signed transaction bound the search.
+    pub async fn current_signing_key(
+        &self,
+        account_id: AccountId,
+        secret: &PublicAccountSecret,
+    ) -> Result<(KeyType, u32)> {
+        let (nonce, stored) = self.stored_key(account_id).await?;
+        let Some(stored) = stored else {
+            return Ok((INITIAL_KEY_TYPE, 0));
+        };
+        let recorded = self
+            .leaf_records
+            .lock()
+            .expect("the leaf records are not poisoned")
+            .counter(account_id, nonce);
+        if let Some(counter) = rotation::matching_counter(secret, stored, nonce, [recorded, 0]) {
+            return Ok((stored.key_type, counter));
+        }
+        let Some(indexer_url) = &self.config.indexer_url else {
+            anyhow::bail!(
+                "The key of {account_id} was rotated manually and this wallet has no record of \
+                 it: set `indexer_url` to find it in the account's history"
+            );
+        };
+        let history = rotation::history(indexer_url, account_id).await?;
+        let rotations = rotation::manual_rotations_since_last_signed(account_id, &history);
+        let counter = rotation::matching_counter(secret, stored, nonce, (1..=rotations).rev())
+            .with_context(|| {
+                format!("The stored key of {account_id} was not derived from its secret")
+            })?;
+        self.leaf_records
+            .lock()
+            .expect("the leaf records are not poisoned")
+            .record_counter(account_id, nonce, counter)?;
+        Ok((stored.key_type, counter))
     }
 
     #[must_use]
@@ -2651,8 +2697,8 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                     .map_err(ExecutionFailureKind::SequencerError)?
                     .unwrap_or_default();
                 nonces.insert(payer, account.nonce);
-                let key_type = self
-                    .current_key_type(payer)
+                let (key_type, counter) = self
+                    .current_signing_key(payer, &secret)
                     .await
                     .map_err(ExecutionFailureKind::SequencerError)?;
                 (
@@ -2661,6 +2707,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                         &secret,
                         account.nonce,
                         key_type,
+                        counter,
                         self.next_key_type,
                     )),
                 )
@@ -3908,10 +3955,80 @@ mod tests {
     ) -> Result<Vec<u8>, ExecutionFailureKind> {
         let account = lee::signature::public_account_id(secret);
         wallet.sign_with_leaves(
-            vec![account_manager::signer(secret, Nonce(0), current, None)],
+            vec![account_manager::signer(secret, Nonce(0), current, 0, None)],
             &BTreeMap::from([(account, Nonce(0))]),
             |signers| signers.first().unwrap().auth_data(&[0; 32]),
         )
+    }
+
+    /// A sequencer whose only account is `account` at `nonce`, holding `stored`.
+    fn sequencer_with_key(
+        account: AccountId,
+        nonce: Nonce,
+        stored: lee_core::signing_key::SigningKeyState,
+    ) -> RpcModule<()> {
+        let held = Account {
+            nonce,
+            ..Account::default()
+        }
+        .with_actor_state(lee_core::signing_key::signature_program_id(), stored.into());
+        let mut sequencer = RpcModule::new(());
+        sequencer
+            .register_method("getAccountView", move |params, (), _| {
+                let actor = params.one::<Actor>()?;
+                Ok::<_, ErrorObjectOwned>((actor.account_id == account).then(|| held.clone()))
+            })
+            .unwrap();
+        sequencer
+    }
+
+    #[tokio::test]
+    async fn current_key_uses_the_recorded_counter_without_the_indexer() {
+        let secret = lee::signature::PublicAccountSecret::new([3; 32]);
+        let account = lee::signature::public_account_id(&secret);
+        let stored = lee::signature::key_state_with_counter(&secret, KeyType::Schnorr, Nonce(4), 2);
+        let (wallet, _home, _sequencer) =
+            served_wallet(sequencer_with_key(account, Nonce(4), stored)).await;
+        wallet
+            .leaf_records
+            .lock()
+            .unwrap()
+            .record_counter(account, Nonce(4), 2)
+            .unwrap();
+
+        assert_eq!(
+            wallet.current_signing_key(account, &secret).await.unwrap(),
+            (KeyType::Schnorr, 2)
+        );
+    }
+
+    #[tokio::test]
+    async fn current_key_is_counter_zero_normally() {
+        let secret = lee::signature::PublicAccountSecret::new([3; 32]);
+        let account = lee::signature::public_account_id(&secret);
+        let stored = lee::signature::key_state(&secret, KeyType::Wots, Nonce(4));
+        let (wallet, _home, _sequencer) =
+            served_wallet(sequencer_with_key(account, Nonce(4), stored)).await;
+
+        assert_eq!(
+            wallet.current_signing_key(account, &secret).await.unwrap(),
+            (KeyType::Wots, 0)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_manually_rotated_key_without_an_indexer_is_an_error() {
+        let secret = lee::signature::PublicAccountSecret::new([3; 32]);
+        let account = lee::signature::public_account_id(&secret);
+        let stored = lee::signature::key_state_with_counter(&secret, KeyType::Wots, Nonce(4), 1);
+        let (wallet, _home, _sequencer) =
+            served_wallet(sequencer_with_key(account, Nonce(4), stored)).await;
+
+        let error = wallet
+            .current_signing_key(account, &secret)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("indexer_url"), "{error:#}");
     }
 
     #[tokio::test]
