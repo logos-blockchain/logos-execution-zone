@@ -2,6 +2,7 @@ use std::ops::RangeInclusive;
 
 use common::{HashType, PageLimit, transaction::LeeTransaction};
 use kameo::Reply;
+use lee::PublicationsPage;
 use lee_core::{
     BlockId, Commitment, CommitmentPosition, CommitmentSetDigest, MembershipProof,
     account::{AccountId, Actor},
@@ -141,6 +142,11 @@ pub struct GetAccountView {
 pub struct GetPublications {
     pub from_position: CommitmentPosition,
     pub limit: PageLimit,
+}
+
+#[derive(Reply)]
+pub struct GetPublicationsReply {
+    pub page: PublicationsPage,
 }
 
 pub struct GetMessagePath {

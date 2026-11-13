@@ -7,7 +7,7 @@ pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as Sequenc
 use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
     CommitmentSetDigest, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, EncryptedNote,
-    HashType, LeeTransaction, MembershipProof, Nonce, PageLimit, ProgramId, Publication,
+    HashType, LeeTransaction, MembershipProof, Nonce, PageLimit, ProgramId, PublicationsPage,
     SequencerStatus, SystemProposalReport, TransactionReceipt,
 };
 pub use sequencer_service_protocol::{FeeStateQuote, HexBytes};
@@ -114,7 +114,7 @@ pub trait Rpc {
         &self,
         from_position: CommitmentPosition,
         limit: PageLimit,
-    ) -> Result<Vec<(CommitmentPosition, Publication)>, ErrorObjectOwned>;
+    ) -> Result<PublicationsPage, ErrorObjectOwned>;
 
     #[method(name = "getMessagePath")]
     async fn get_message_path(

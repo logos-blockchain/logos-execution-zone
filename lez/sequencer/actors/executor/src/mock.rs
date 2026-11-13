@@ -15,9 +15,8 @@ use kameo::{
 };
 use lee::Account;
 use lee_core::{
-    BlockId, CommitmentPosition, EncryptedNote, MembershipProof,
+    BlockId, EncryptedNote, MembershipProof,
     account::{Balance, Nonce},
-    program::Publication,
 };
 use sequencer_actors_common::Reply;
 pub use sequencer_actors_common::mock::{Checkpoint, Replace, ReplaceReply};
@@ -29,10 +28,10 @@ use crate::{
         ChannelId, ExecutorStatus, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces,
         GetAccountView, GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
         GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetMessagePath,
-        GetProofsAndRoot, GetProofsAndRootReply, GetPublications, GetRecoveryBinding, GetStatus,
-        GetSystemProposals, GetSystemProposalsReply, GetTransaction, GetTransactionReceipt,
-        ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
-        SubmitSystemApproval, Transaction,
+        GetProofsAndRoot, GetProofsAndRootReply, GetPublications, GetPublicationsReply,
+        GetRecoveryBinding, GetStatus, GetSystemProposals, GetSystemProposalsReply, GetTransaction,
+        GetTransactionReceipt, ProduceBlock, RequeueCrossZoneDeadLetter,
+        RequeueCrossZoneDeadLetterReply, SubmitSystemApproval, Transaction,
     },
 };
 
@@ -113,8 +112,8 @@ mockall::mock! {
         pub fn handle_get_publications(
             &mut self,
             msg: GetPublications,
-            ctx: &mut Context<Self, Result<Vec<(CommitmentPosition, Publication)>>>
-        ) -> Result<Vec<(CommitmentPosition, Publication)>>;
+            ctx: &mut Context<Self, Result<GetPublicationsReply>>
+        ) -> Result<GetPublicationsReply>;
 
         pub fn handle_get_message_path(
             &mut self,
@@ -349,7 +348,7 @@ impl Message<GetAccountView> for MockExecutorActor {
 }
 
 impl Message<GetPublications> for MockExecutorActor {
-    type Reply = Result<Vec<(CommitmentPosition, Publication)>>;
+    type Reply = Result<GetPublicationsReply>;
 
     async fn handle(
         &mut self,

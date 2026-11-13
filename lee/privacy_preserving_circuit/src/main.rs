@@ -20,7 +20,7 @@ fn main() {
         shadow_program_witnesses,
         responses,
         sender_presentations,
-        message_seals,
+        publication_modes,
         predicted_cross_messages,
     } = borsh::from_slice(&read_input_frame()).expect("circuit input must be valid borsh");
     let public_root = input.public_root();
@@ -133,7 +133,7 @@ fn main() {
         ciphertext_padding,
         program_image_claims,
         &recoveries,
-        message_seals,
+        publication_modes,
         fee,
     );
 

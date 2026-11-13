@@ -388,7 +388,7 @@ pub struct FeeFallback {
 pub struct PrivacyPreservingMessage {
     pub public_context: PublicExecutionContext,
     pub boundary: Boundary,
-    pub async_messages: Vec<SealedMessage>,
+    pub async_messages: Vec<Publication>,
     pub recovery_bindings: Vec<RecoveryBinding>,
     pub public_root: Option<RootCall>,
     pub nonces: Vec<(AccountId, Nonce)>,
@@ -425,6 +425,12 @@ pub struct RecoveryBinding {
 pub struct SealedMessage {
     pub commitment: Commitment,
     pub note: EncryptedNote,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum Publication {
+    Clear(MessageEnvelope<Actor>),
+    Sealed(SealedMessage),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

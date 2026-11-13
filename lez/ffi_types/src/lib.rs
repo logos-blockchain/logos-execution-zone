@@ -5,8 +5,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use common::HashType;
 use indexer_service_protocol as protocol;
 use lee::{
-    AccountId, Actor, BoundaryStep, Delivery, EphemeralPublicKey, FeeDeclaration, MessageEnvelope,
-    PublicAccountEvidence, PublicExecutionContext, PublicKey, RootCall, Signature, error::LeeError,
+    AccountId, Actor, BoundaryStep, Delivery, EphemeralPublicKey, FeeDeclaration, MessageBody,
+    MessageEnvelope, PublicAccountEvidence, PublicExecutionContext, PublicKey, Publication,
+    RootCall, Signature, error::LeeError,
 };
 use lee_core::{
     Commitment, EncryptedNote, FeeFallback, Nullifier, PrivateAction, ProvenFee, RecoveryBinding,
@@ -212,7 +213,7 @@ pub type FfiSignaturePubKeyList = FfiVec<FfiSignaturePubKeyEntry>;
 
 pub type FfiBoundaryStepList = FfiVec<FfiBoundaryStep>;
 
-pub type FfiSealedMessageList = FfiVec<FfiSealedMessage>;
+pub type FfiPublicationList = FfiVec<FfiPublication>;
 
 pub type FfiPublicAccountEvidenceList = FfiVec<FfiPublicAccountEvidence>;
 
@@ -502,7 +503,6 @@ impl From<FfiBoundaryStep> for BoundaryStep {
     }
 }
 
-/// One async message a proof publishes.
 #[repr(C)]
 pub struct FfiSealedMessage {
     pub commitment: FfiBytes32,
@@ -533,6 +533,85 @@ impl From<FfiSealedMessage> for SealedMessage {
                 epk: EphemeralPublicKey(value.epk.into()),
                 ciphertext: Ciphertext::from_inner(value.ciphertext.into()),
             },
+        }
+    }
+}
+
+/// cbindgen:prefix-with-name
+#[expect(
+    clippy::doc_paragraphs_missing_punctuation,
+    reason = "a cbindgen annotation takes no punctuation"
+)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub enum FfiPublicationKind {
+    Clear = 0,
+    Sealed,
+}
+
+#[repr(C)]
+pub struct FfiMessageBody {
+    pub from: FfiActor,
+    pub to: FfiActor,
+    pub message: FfiMessageDataList,
+}
+
+impl From<MessageBody> for FfiMessageBody {
+    fn from(value: MessageBody) -> Self {
+        let MessageEnvelope { from, to, message } = value;
+
+        Self {
+            from: from.into(),
+            to: to.into(),
+            message: message.into(),
+        }
+    }
+}
+
+impl From<FfiMessageBody> for MessageBody {
+    fn from(value: FfiMessageBody) -> Self {
+        Self {
+            from: value.from.into(),
+            to: value.to.into(),
+            message: value.message.into(),
+        }
+    }
+}
+
+/// One async message a proof publishes. Both `body` and `sealed` are read and freed for every
+/// kind, so the part `kind` does not select must be empty, not uninitialized.
+#[repr(C)]
+pub struct FfiPublication {
+    pub kind: FfiPublicationKind,
+    pub body: FfiMessageBody,
+    pub sealed: FfiSealedMessage,
+}
+
+impl From<Publication> for FfiPublication {
+    fn from(value: Publication) -> Self {
+        let (kind, body, sealed) = match value {
+            Publication::Clear(body) => (
+                FfiPublicationKind::Clear,
+                body.into(),
+                empty_sealed_message(),
+            ),
+            Publication::Sealed(sealed) => (
+                FfiPublicationKind::Sealed,
+                empty_message_body(),
+                sealed.into(),
+            ),
+        };
+        Self { kind, body, sealed }
+    }
+}
+
+impl From<FfiPublication> for Publication {
+    fn from(value: FfiPublication) -> Self {
+        let body = MessageBody::from(value.body);
+        let sealed = SealedMessage::from(value.sealed);
+        match value.kind {
+            FfiPublicationKind::Clear => Self::Clear(body),
+            FfiPublicationKind::Sealed => Self::Sealed(sealed),
         }
     }
 }
@@ -758,6 +837,22 @@ fn empty_delivery() -> FfiDelivery {
         inherited_authorizations: Vec::new().into(),
         inherits_entry_authorizations: false,
         pda_seeds: Vec::new().into(),
+    }
+}
+
+fn empty_message_body() -> FfiMessageBody {
+    FfiMessageBody {
+        from: FfiActor::default(),
+        to: FfiActor::default(),
+        message: Vec::new().into(),
+    }
+}
+
+fn empty_sealed_message() -> FfiSealedMessage {
+    FfiSealedMessage {
+        commitment: FfiBytes32::default(),
+        epk: Vec::new().into(),
+        ciphertext: Vec::new().into(),
     }
 }
 

@@ -4784,7 +4784,7 @@ fn pending_payouts(
     state
         .publications_from(0)
         .filter_map(|(position, publication)| match publication {
-            lee::Publication::Clear { body, .. } => Some((position, body)),
+            lee::Publication::Clear(body) => Some((position, body)),
             lee::Publication::Sealed(_) => None,
         })
         .filter(|(_, body)| {
@@ -6083,15 +6083,10 @@ fn a_private_owners_fee_revenue_is_published_under_its_recovery_binding() {
     else {
         panic!("exactly the tips should be pending for the owner");
     };
-    let Some((_, lee::Publication::Clear { recovery, .. })) =
-        state.publications_from(position).next()
-    else {
+    let Some((_, lee::Publication::Clear(_))) = state.publications_from(position).next() else {
         panic!("the tips should be published clear");
     };
-    assert_eq!(
-        Some(&recovery),
-        state.recovery_binding(ownership.account_id())
-    );
+    assert!(state.recovery_binding(ownership.account_id()).is_some());
     assert!(
         state
             .get_account_by_id_ref(ownership.account_id())
@@ -6173,8 +6168,8 @@ fn a_private_withdrawal_to_a_private_destination_is_received_only_by_proof() {
         panic!("exactly one native credit should be pending for the destination");
     };
     assert_eq!(paid, amount);
-    // The keeper knows no key or opening: its release carries the binding the request proved.
-    let lee::Publication::Clear { body, recovery } = state
+    // The keeper knows no key or opening: its release relies on the binding the request proved.
+    let lee::Publication::Clear(body) = state
         .publications_from(position)
         .next()
         .expect("the payout should be published")
@@ -6182,10 +6177,7 @@ fn a_private_withdrawal_to_a_private_destination_is_received_only_by_proof() {
     else {
         panic!("a public keeper publishes the payout clear");
     };
-    assert_eq!(
-        Some(&recovery),
-        state.recovery_binding(destination.account_id())
-    );
+    assert!(state.recovery_binding(destination.account_id()).is_some());
 
     let nsk = destination.nsk();
     let commitment = lee_core::Commitment::for_message(&body);
@@ -6243,7 +6235,7 @@ fn a_private_genesis_allocation_is_a_pending_credit_its_owner_receives_once() {
     else {
         panic!("exactly the allocation should be pending for the owner");
     };
-    let lee::Publication::Clear { body, recovery } = state
+    let lee::Publication::Clear(body) = state
         .publications_from(position)
         .next()
         .expect("the allocation should be published")
@@ -6255,10 +6247,12 @@ fn a_private_genesis_allocation_is_a_pending_credit_its_owner_receives_once() {
         body.from,
         Actor::native_balance(system_accounts::bridge_account_id())
     );
-    assert_eq!(state.recovery_binding(address), Some(&recovery));
+    let recovery = state
+        .recovery_binding(address)
+        .expect("the allocation's address is bound");
     let vsk = &owner.key_chain.private_key_holder.viewing_secret_key;
     assert_eq!(
-        lee::Recipient::recover(address, &recovery, &vsk.d, &vsk.z),
+        lee::Recipient::recover(address, recovery, &vsk.d, &vsk.z),
         Some(owner.recipient())
     );
     // Nothing is pre-funded: the account's first marker is unspent.

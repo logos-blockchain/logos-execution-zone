@@ -23,9 +23,8 @@ use kameo_actors::{
 };
 use lee::Account;
 use lee_core::{
-    BlockId, CommitmentPosition, EncryptedNote, MembershipProof,
+    BlockId, EncryptedNote, MembershipProof,
     account::{Actor, Balance, Nonce},
-    program::Publication,
 };
 use sequencer_actors_common::{Reply, SendErrorExt};
 use sequencer_bedrock_actor::{
@@ -51,9 +50,10 @@ use crate::{
         GetAccountTransactions, GetAccountView, GetBlock, GetBlockByHash, GetBlockRange,
         GetChannelId, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply, GetFeeQuote,
         GetLastBlockId, GetMessagePath, GetProofsAndRoot, GetProofsAndRootReply, GetPublications,
-        GetRecoveryBinding, GetStatus, GetSystemProposals, GetSystemProposalsReply, GetTransaction,
-        GetTransactionReceipt, ProduceBlock, RequeueCrossZoneDeadLetter,
-        RequeueCrossZoneDeadLetterReply, SubmitSystemApproval, Transaction,
+        GetPublicationsReply, GetRecoveryBinding, GetStatus, GetSystemProposals,
+        GetSystemProposalsReply, GetTransaction, GetTransactionReceipt, ProduceBlock,
+        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, SubmitSystemApproval,
+        Transaction,
     },
 };
 
@@ -632,7 +632,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountView> for Exe
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetPublications> for ExecutorActor<S, B> {
-    type Reply = Result<Vec<(CommitmentPosition, Publication)>>;
+    type Reply = Result<GetPublicationsReply>;
 
     async fn handle(
         &mut self,
@@ -644,12 +644,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetPublications> for Ex
     ) -> Self::Reply {
         let limit = usize::try_from(limit.min(MAX_PUBLICATIONS_PER_REQUEST))
             .expect("the request limit fits in usize");
-        Ok(self
-            .state
-            .online()?
-            .sequencer()
-            .with_state(|state| state.publications_from(from_position).take(limit).collect())
-            .await)
+        Ok(GetPublicationsReply {
+            page: self
+                .state
+                .online()?
+                .sequencer()
+                .with_state(|state| state.publications_page(from_position, limit))
+                .await,
+        })
     }
 }
 

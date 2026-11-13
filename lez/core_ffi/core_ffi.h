@@ -17,6 +17,11 @@ typedef enum FfiBoundaryStepKind {
   FfiBoundaryStepKind_EndPublicSubtree,
 } FfiBoundaryStepKind;
 
+typedef enum FfiPublicationKind {
+  FfiPublicationKind_Clear = 0,
+  FfiPublicationKind_Sealed,
+} FfiPublicationKind;
+
 typedef enum FfiProgramImageClaimKind {
   FfiProgramImageClaimKind_Disclosed = 0,
   FfiProgramImageClaimKind_Undisclosed,
@@ -463,22 +468,35 @@ typedef struct FfiVec_FfiBoundaryStep {
 
 typedef struct FfiVec_FfiBoundaryStep FfiBoundaryStepList;
 
-/**
- * One async message a proof publishes.
- */
+typedef struct FfiMessageBody {
+  struct FfiActor from;
+  struct FfiActor to;
+  FfiMessageDataList message;
+} FfiMessageBody;
+
 typedef struct FfiSealedMessage {
   struct FfiBytes32 commitment;
   FfiVecU8 epk;
   FfiVecU8 ciphertext;
 } FfiSealedMessage;
 
-typedef struct FfiVec_FfiSealedMessage {
-  struct FfiSealedMessage *entries;
+/**
+ * One async message a proof publishes. Both `body` and `sealed` are read and freed for every
+ * kind, so the part `kind` does not select must be empty, not uninitialized.
+ */
+typedef struct FfiPublication {
+  enum FfiPublicationKind kind;
+  struct FfiMessageBody body;
+  struct FfiSealedMessage sealed;
+} FfiPublication;
+
+typedef struct FfiVec_FfiPublication {
+  struct FfiPublication *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiSealedMessage;
+} FfiVec_FfiPublication;
 
-typedef struct FfiVec_FfiSealedMessage FfiSealedMessageList;
+typedef struct FfiVec_FfiPublication FfiPublicationList;
 
 typedef struct FfiRecoveryBinding {
   FfiAccountId address;
@@ -544,7 +562,7 @@ typedef struct FfiProvenFee {
 typedef struct FfiPrivacyPreservingMessage {
   struct FfiPublicExecutionContext public_context;
   FfiBoundaryStepList boundary;
-  FfiSealedMessageList async_messages;
+  FfiPublicationList async_messages;
   FfiRecoveryBindingList recovery_bindings;
   bool has_public_root;
   struct FfiRootCall public_root;

@@ -5,7 +5,7 @@ use common::HashType;
 use kameo::actor::ActorRef;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee_core::{
-    RecipientEncryption,
+    PublicationMode,
     account::{AccountId, Actor},
     program::MessageBody,
 };
@@ -37,7 +37,10 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Maximum time two sequencers may disagree at their unfinalized tips.
 const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(60);
 
-pub fn no_seal(_body: &MessageBody) -> Result<RecipientEncryption, lee::error::LeeError> {
+pub fn no_seal(bodies: &[MessageBody]) -> Result<Vec<PublicationMode>, lee::error::LeeError> {
+    if bodies.is_empty() {
+        return Ok(Vec::new());
+    }
     Err(lee::error::LeeError::InvalidInput(
         "No durable async message is sealed".to_owned(),
     ))

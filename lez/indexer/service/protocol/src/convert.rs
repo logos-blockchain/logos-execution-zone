@@ -11,9 +11,9 @@ use crate::{
     FeeDeclaration, FeeFallback, FeeReceipt, HashType, IndexerStatus, IndexerSyncState,
     MessageEnvelope, Nullifier, PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, Proof, ProvenFee, PublicAccountEvidence,
-    PublicExecutionContext, PublicKey, PublicMessage, PublicTransaction, RecoveryBinding, RootCall,
-    SealedMessage, Selector, Signature, StallReason, Transaction, TransactionReceipt,
-    ValidityWindow, WitnessSet,
+    PublicExecutionContext, PublicKey, PublicMessage, PublicTransaction, Publication,
+    RecoveryBinding, RootCall, SealedMessage, Selector, Signature, StallReason, Transaction,
+    TransactionReceipt, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -562,6 +562,24 @@ impl From<SealedMessage> for lee_core::SealedMessage {
         Self {
             commitment: commitment.into(),
             note: note.into(),
+        }
+    }
+}
+
+impl From<lee_core::program::Publication> for Publication {
+    fn from(value: lee_core::program::Publication) -> Self {
+        match value {
+            lee_core::program::Publication::Clear(body) => Self::Clear(body.into()),
+            lee_core::program::Publication::Sealed(sealed) => Self::Sealed(sealed.into()),
+        }
+    }
+}
+
+impl From<Publication> for lee_core::program::Publication {
+    fn from(value: Publication) -> Self {
+        match value {
+            Publication::Clear(body) => Self::Clear(body.into()),
+            Publication::Sealed(sealed) => Self::Sealed(sealed.into()),
         }
     }
 }
@@ -1506,6 +1524,11 @@ mod tests {
             inherits_entry_authorizations: true,
             pda_seeds: BTreeSet::new(),
         };
+        let clear = lee_core::program::Publication::Clear(lee_core::program::MessageEnvelope {
+            from: actor(44, 94),
+            to: actor(45, 46),
+            message: vec![47],
+        });
         let message = lee::privacy_preserving_transaction::message::Message {
             public_context: lee_core::execution_state::PublicExecutionContext {
                 promotions: BTreeSet::from([27, 28]),
@@ -1568,14 +1591,15 @@ mod tests {
                     lee_core::execution_state::BoundaryStep::EndPublicSubtree,
                 ],
                 async_messages: vec![
-                    lee_core::SealedMessage {
+                    lee_core::program::Publication::Sealed(lee_core::SealedMessage {
                         commitment: lee_core::Commitment::from_byte_array([22; 32]),
                         note: lee_core::EncryptedNote {
                             epk: lee_core::EphemeralPublicKey(vec![23; 2]),
                             ciphertext: lee_core::encryption::Ciphertext::from_inner(vec![24; 3]),
                         },
-                    };
-                    2
+                    }),
+                    clear.clone(),
+                    clear,
                 ],
                 recovery_bindings: vec![],
                 public_root: Some(lee_core::RootCall {

@@ -13,10 +13,7 @@ use lee_core::{
         BoundaryStep, PublicExecutionContext, PublicOutcome, PublicPart, TransactionEntry,
         TransitionView, WholeExecution,
     },
-    program::{
-        MessageBody, PROGRAM_LOADER_ACCOUNT_ID, Publication, ReceiveInput, TransactionEvent,
-        Transition,
-    },
+    program::{PROGRAM_LOADER_ACCOUNT_ID, Publication, ReceiveInput, TransactionEvent, Transition},
 };
 use public_backend::PublicBackend;
 
@@ -408,7 +405,18 @@ impl ValidatedStateDiff {
                 recovery_bindings: execution.recovery_bindings.clone(),
                 ..StateDiff::default()
             },
-        );
+        )
+        .and_then(|mut diff| {
+            // The proven private async messages follow the live public ones.
+            for publication in &execution.async_messages {
+                diff.published.push(publish(
+                    state,
+                    &diff.recovery_bindings,
+                    publication.clone(),
+                )?);
+            }
+            Ok(diff)
+        });
         // As for a public action.
         let cycles = charged_cycles(&result, cycles_used, cycle_budget);
         let fallback = execution
@@ -416,17 +424,7 @@ impl ValidatedStateDiff {
             .as_ref()
             .and_then(|fee| fee.fallback.as_ref());
         let (diff, revert) = match (result, fallback) {
-            (Ok(mut diff), _) => {
-                // The proven private async messages follow the live public ones.
-                diff.published.extend(
-                    execution
-                        .async_messages
-                        .iter()
-                        .cloned()
-                        .map(Publication::Sealed),
-                );
-                (diff, None)
-            }
+            (Ok(diff), _) => (diff, None),
             (Err(err), Some(fallback)) if err.is_chargeable() => {
                 state.check_commitments_are_new(&[fallback.action.commitment])?;
                 let fallback_request = PublicPart::new(
@@ -509,16 +507,17 @@ fn loader_actor_state<'state>(
         .or_else(|| state.loader_actor_state(account_id))
 }
 
-/// The cycles a public action is charged: what it metered, plus a failing call's own count on a
-/// non-zero exit, since execution bailed before adding them; a panic or session-limit bail loses
-/// the count and pays the full budget.
+/// The cycles a public action is charged: what it metered, also when it ran whole and then
+/// published to an unbound destination; plus a failing call's own count on a non-zero exit, since
+/// execution bailed before adding them; a panic or session-limit bail loses the count and pays
+/// the full budget.
 pub const fn charged_cycles<T>(
     result: &Result<T, LeeError>,
     cycles_used: Cycles,
     cycle_budget: Cycles,
 ) -> Cycles {
     match result {
-        Ok(_) => cycles_used,
+        Ok(_) | Err(LeeError::UnboundAsyncDestination { .. }) => cycles_used,
         Err(LeeError::ProgramExitedWithCode { cycles, .. }) => cycles_used.saturating_add(*cycles),
         Err(_) => cycle_budget,
     }
@@ -571,13 +570,15 @@ pub fn catch_program_loader_panic<T>(run: impl FnOnce() -> T) -> Result<T, LeeEr
 fn publish(
     state: &V03State,
     introduced: &[RecoveryBinding],
-    body: MessageBody,
+    publication: Publication,
 ) -> Result<Publication, LeeError> {
-    let recovery = state
-        .bound_note(introduced, body.to.account_id)
-        .ok_or(LeeError::UnboundAsyncDestination { actor: body.to })?
-        .clone();
-    Ok(Publication::Clear { body, recovery })
+    if let Publication::Clear(body) = &publication {
+        ensure!(
+            state.bound_note(introduced, body.to.account_id).is_some(),
+            LeeError::UnboundAsyncDestination { actor: body.to }
+        );
+    }
+    Ok(publication)
 }
 
 fn settle(
@@ -620,7 +621,7 @@ fn settle(
         .collect();
     diff.published = async_messages
         .into_iter()
-        .map(|body| publish(state, &diff.recovery_bindings, body))
+        .map(|body| publish(state, &diff.recovery_bindings, Publication::Clear(body)))
         .collect::<Result<_, _>>()?;
     Ok(diff)
 }

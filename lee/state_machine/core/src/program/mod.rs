@@ -5,7 +5,7 @@ use risc0_zkvm::guest::env;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    BlockId, Commitment, EncryptedNote, NullifierPublicKey, SealedMessage, Timestamp,
+    BlockId, Commitment, NullifierPublicKey, SealedMessage, Timestamp,
     account::{Account, AccountId, Actor, ActorState},
     encryption::ViewingPublicKey,
 };
@@ -321,15 +321,12 @@ pub struct MessageEnvelope<S> {
 
 pub type MessageBody = MessageEnvelope<Actor>;
 
-/// A publication mode for asynchronous messages.
+/// An asynchronous message as published.
 #[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
 pub enum Publication {
-    /// A message whose contents are hidden other than the private receiver.
-    Clear {
-        body: MessageBody,
-        recovery: EncryptedNote,
-    },
+    /// A message in the clear.
+    Clear(MessageBody),
     /// A message whose contents and metadata are shielded.
     Sealed(SealedMessage),
 }
@@ -338,7 +335,7 @@ impl Publication {
     #[must_use]
     pub fn commitment(&self) -> Commitment {
         match self {
-            Self::Clear { body, .. } => Commitment::for_message(body),
+            Self::Clear(body) => Commitment::for_message(body),
             Self::Sealed(sealed) => sealed.commitment,
         }
     }

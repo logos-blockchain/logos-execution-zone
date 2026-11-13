@@ -1,8 +1,8 @@
 pub use ffi_types::{
     FfiActor, FfiBoundaryStep, FfiBoundaryStepKind, FfiDelivery, FfiEncryptedAccountData,
     FfiFeeDeclaration, FfiPrivateAction, FfiProvenFee, FfiPublicAccountEvidence,
-    FfiPublicAccountEvidenceKind, FfiPublicExecutionContext, FfiRecoveryBinding, FfiRootCall,
-    FfiSealedMessage, FfiSignaturePubKeyEntry,
+    FfiPublicAccountEvidenceKind, FfiPublicExecutionContext, FfiPublication, FfiRecoveryBinding,
+    FfiRootCall, FfiSignaturePubKeyEntry,
 };
 use ffi_types::{empty_root_call, proven_fee_from_ffi};
 use indexer_service_protocol::{
@@ -15,7 +15,7 @@ use crate::api::types::{
     FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiPublicKey, FfiVec,
     vectors::{
         FfiBoundaryStepList, FfiNonceList, FfiPrivateActionList, FfiProof,
-        FfiPublicAccountEvidenceList, FfiRecoveryBindingList, FfiSealedMessageList,
+        FfiPublicAccountEvidenceList, FfiPublicationList, FfiRecoveryBindingList,
         FfiSignaturePubKeyList,
     },
 };
@@ -182,10 +182,10 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                         .collect()
                 },
                 async_messages: {
-                    let std_vec: Vec<FfiSealedMessage> = value.message.async_messages.into();
+                    let std_vec: Vec<FfiPublication> = value.message.async_messages.into();
                     std_vec
                         .into_iter()
-                        .map(|sealed| lee::SealedMessage::from(sealed).into())
+                        .map(|publication| lee::Publication::from(publication).into())
                         .collect()
                 },
                 recovery_bindings: {
@@ -253,7 +253,7 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
 pub struct FfiPrivacyPreservingMessage {
     pub public_context: FfiPublicExecutionContext,
     pub boundary: FfiBoundaryStepList,
-    pub async_messages: FfiSealedMessageList,
+    pub async_messages: FfiPublicationList,
     pub recovery_bindings: FfiRecoveryBindingList,
     pub has_public_root: bool,
     pub public_root: FfiRootCall,
@@ -301,7 +301,7 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
                 .into(),
             async_messages: async_messages
                 .into_iter()
-                .map(|sealed| FfiSealedMessage::from(lee::SealedMessage::from(sealed)))
+                .map(|publication| FfiPublication::from(lee::Publication::from(publication)))
                 .collect::<Vec<_>>()
                 .into(),
             recovery_bindings: recovery_bindings
@@ -546,7 +546,7 @@ mod tests {
     use indexer_service_protocol::{
         AccountId, Actor, BoundaryStep, Ciphertext, Commitment, CommitmentSetDigest, Delivery,
         EncryptedNote, EphemeralPublicKey, FeeDeclaration, FeeFallback, MessageEnvelope, Nullifier,
-        PrivateAction, ProvenFee, PublicExecutionContext, RootCall, SealedMessage,
+        PrivateAction, ProvenFee, PublicExecutionContext, Publication, RootCall, SealedMessage,
     };
 
     use super::*;
@@ -629,6 +629,11 @@ mod tests {
         // A repeated send to one actor, and not a palindrome: a set would collapse the
         // sequence and a reversal would show, and execution replays them in emission order.
         let repeated = delivery(actor(3, 53), actor(5, 6), 7);
+        let clear = Publication::Clear(MessageEnvelope {
+            from: actor(44, 94),
+            to: actor(45, 46),
+            message: vec![47],
+        });
         PrivacyPreservingTransaction {
             hash: HashType([4; 32]),
             message: PrivacyPreservingMessage {
@@ -653,14 +658,15 @@ mod tests {
                     BoundaryStep::EndPublicSubtree,
                 ],
                 async_messages: vec![
-                    SealedMessage {
+                    Publication::Sealed(SealedMessage {
                         commitment: Commitment([23; 32]),
                         note: EncryptedNote {
                             epk: EphemeralPublicKey(vec![24; 2]),
                             ciphertext: Ciphertext(vec![25; 3]),
                         },
-                    };
-                    2
+                    }),
+                    clear.clone(),
+                    clear,
                 ],
                 recovery_bindings: vec![],
                 public_root: Some(RootCall {

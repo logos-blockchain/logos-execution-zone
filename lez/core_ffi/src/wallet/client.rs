@@ -92,6 +92,16 @@ impl WalletSequencerClient for WalletClient {
         }
     }
 
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: common::HashType,
+    ) -> Result<Option<common::block::TransactionReceipt>, Self::Error> {
+        match self {
+            Self::Embedded(client) => Ok(client.get_transaction_receipt(tx_hash).await?),
+            Self::Http(client) => Ok(client.get_transaction_receipt(tx_hash).await?),
+        }
+    }
+
     async fn get_accounts_nonces(
         &self,
         account_ids: Vec<lee::AccountId>,
@@ -162,7 +172,7 @@ impl WalletSequencerClient for WalletClient {
         &self,
         from_position: CommitmentPosition,
         limit: common::PageLimit,
-    ) -> Result<Vec<(CommitmentPosition, lee::Publication)>, Self::Error> {
+    ) -> Result<lee::PublicationsPage, Self::Error> {
         match self {
             Self::Embedded(client) => Ok(client.get_publications(from_position, limit).await?),
             Self::Http(client) => Ok(client.get_publications(from_position, limit).await?),

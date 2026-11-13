@@ -1,6 +1,6 @@
 use lee_core::{
-    EphemeralSecretKey, InvalidMessageSeal, MessageWitness, PrivateAccountKind, Recipient,
-    RecipientEncryption,
+    EphemeralSecretKey, InvalidPublicationMode, MessageWitness, PrivateAccountKind,
+    PublicationMode, Recipient, RecipientEncryption,
     program::{MessageBody, Publication},
 };
 
@@ -31,19 +31,24 @@ fn destination() -> Actor {
 
 fn sealed_to(
     recipient: Recipient,
-) -> impl FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError> {
-    move |_| {
-        Ok(RecipientEncryption {
-            recipient: recipient.clone(),
-            esk: EphemeralSecretKey([0; 32]),
-        })
+) -> impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, LeeError> {
+    move |bodies| {
+        Ok(bodies
+            .iter()
+            .map(|_| {
+                PublicationMode::Sealed(RecipientEncryption {
+                    recipient: recipient.clone(),
+                    esk: EphemeralSecretKey([0; 32]),
+                })
+            })
+            .collect())
     }
 }
 
-// The sender's proof of sending a write asynchronously to the destination, sealed as `choose_seal`
-// chooses.
+// The sender's proof of sending a write asynchronously to the destination, published as
+// `choose_publications` chooses.
 fn proven_async_message(
-    choose_seal: impl FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
+    choose_publications: impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, LeeError>,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     execute_and_prove(
         ProvingInput {
@@ -57,8 +62,40 @@ fn proven_async_message(
         &scripted_programs(),
         |_| SenderPresentation::Canonical,
         |_, _| false,
-        choose_seal,
+        choose_publications,
     )
+}
+
+// The sender's proof of running `script`, which calls no public actor: through
+// `execute_and_prove`, or through `execute_and_prove_with_cross_messages` given none.
+fn proven_script(
+    script: &Script,
+    given_cross_messages: bool,
+    choose_publications: impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, LeeError>,
+) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
+    let input = ProvingInput {
+        private_witnesses: vec![init_witness(&test_private_account_keys_1())],
+        ..proving_input(root(sender(), script))
+    };
+    if given_cross_messages {
+        execute_and_prove_with_cross_messages(
+            input,
+            Vec::new(),
+            &scripted_programs(),
+            |_| SenderPresentation::Canonical,
+            |_, _| false,
+            choose_publications,
+        )
+    } else {
+        execute_and_prove(
+            input,
+            &Simulation::default(),
+            &scripted_programs(),
+            |_| SenderPresentation::Canonical,
+            |_, _| false,
+            choose_publications,
+        )
+    }
 }
 
 #[test]
@@ -148,7 +185,7 @@ fn a_private_async_message_to_a_private_account_without_a_fitting_seal_fails_to_
     assert!(matches!(
         result,
         Err(LeeError::CircuitProvingError(message))
-            if message.contains(&InvalidMessageSeal::MisaddressedSeal.to_string())
+            if message.contains(&InvalidPublicationMode::MisaddressedSeal.to_string())
     ));
 }
 
@@ -165,10 +202,67 @@ fn a_tampered_sealed_message_is_rejected() {
         "the unmodified statement must verify"
     );
 
-    tx.message.execution.async_messages[0].note.epk.0[0] ^= 0xFF;
+    let Publication::Sealed(sealed) = &mut tx.message.execution.async_messages[0] else {
+        panic!("the async message to a private account is sealed");
+    };
+    sealed.note.epk.0[0] ^= 0xFF;
 
     assert!(matches!(
         ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0),
         Err(LeeError::InvalidPrivacyPreservingProof)
     ));
+}
+
+#[test]
+fn a_proof_asks_once_how_to_publish_its_durable_async_messages_even_when_it_sends_none() {
+    let received = Script::write(b"received".to_vec());
+    let sent = MessageBody {
+        from: sender(),
+        to: destination(),
+        message: borsh::to_vec(&received).unwrap(),
+    };
+    for given_cross_messages in [false, true] {
+        for (script, durable) in [
+            (
+                Script::default().send_async(destination(), &received),
+                vec![sent.clone()],
+            ),
+            (Script::default(), Vec::new()),
+        ] {
+            let mut seal = sealed_to(recipient());
+            let mut asked = Vec::new();
+
+            proven_script(&script, given_cross_messages, |bodies| {
+                asked.push(bodies.to_vec());
+                seal(bodies)
+            })
+            .unwrap();
+
+            assert_eq!(
+                asked,
+                [durable],
+                "given cross messages: {given_cross_messages}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_refused_publication_stops_the_proof_even_of_no_durable_async_message() {
+    let received = Script::write(b"received".to_vec());
+    for given_cross_messages in [false, true] {
+        for script in [
+            Script::default().send_async(destination(), &received),
+            Script::default(),
+        ] {
+            let result = proven_script(&script, given_cross_messages, |_| {
+                Err(LeeError::InvalidInput("refused".to_owned()))
+            });
+
+            assert!(
+                matches!(result, Err(LeeError::InvalidInput(message)) if message == "refused"),
+                "given cross messages: {given_cross_messages}"
+            );
+        }
+    }
 }

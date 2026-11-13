@@ -11,11 +11,10 @@ use crate::{
     encryption::{EncryptedNote, ViewingPublicKey},
     execution_state::{Boundary, PredictedCrossMessages, PublicExecutionContext, TransactionEntry},
     program::{
-        MessageBody, MessageData, PdaSeed, PrivateAccountKind, ProgramHeader, ProgramId, Response,
-        ValidityWindows, immutable_mirror_commitment,
+        MessageBody, MessageData, PdaSeed, PrivateAccountKind, ProgramHeader, ProgramId,
+        Publication, Response, ValidityWindows, immutable_mirror_commitment,
     },
     recovery::{RecipientEncryption, RecoveryBinding},
-    sealing::SealedMessage,
 };
 
 /// `circuit_io` is shared by host and guest, so this can't live in the host-only `error` module.
@@ -262,7 +261,7 @@ pub struct PrivacyPreservingCircuitInput {
     /// Specifying whether a private sender is represented in plaintext or blinded.
     pub sender_presentations: Vec<SenderPresentation>,
     /// One per durable async message of private execution, in the order it publishes them.
-    pub message_seals: Vec<RecipientEncryption>,
+    pub publication_modes: Vec<PublicationMode>,
     /// Predicted messages sent between public and private actors.
     pub predicted_cross_messages: PredictedCrossMessages,
 }
@@ -284,6 +283,12 @@ pub struct PrivateWitness {
 pub enum SenderPresentation {
     Canonical,
     Blinded([u8; 32]),
+}
+
+#[derive(BorshSerialize, BorshDeserialize)]
+pub enum PublicationMode {
+    Clear,
+    Sealed(RecipientEncryption),
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
@@ -498,8 +503,8 @@ pub struct PrivacyPreservingCircuitOutput {
 pub struct ProvenExecution {
     /// A vector designating messages passing private-public boundary in either direction.
     pub boundary: Boundary,
-    /// The sealed asynchronous messages between private actors.
-    pub async_messages: Vec<SealedMessage>,
+    /// The asynchronous messages between private actors, each clear or sealed.
+    pub async_messages: Vec<Publication>,
     /// Bindings tying an address to the private account behind it.
     pub recovery_bindings: Vec<RecoveryBinding>,
     /// How the transaction starts, as far as the proof reveals it: a public call, or `None` for a
@@ -553,7 +558,7 @@ mod tests {
         account::{Account, AccountId, Actor},
         encryption::{Ciphertext, EphemeralPublicKey},
         execution_state::{BoundaryStep, Delivery},
-        program::{MessageBody, MessageEnvelope},
+        program::{MessageBody, MessageEnvelope, Publication},
     };
 
     const NSK: NullifierSecretKey = [0; 32];
@@ -645,13 +650,20 @@ mod tests {
                     BoundaryStep::EndPrivateSubtree,
                     BoundaryStep::EndPublicSubtree,
                 ],
-                async_messages: vec![SealedMessage {
-                    commitment: Commitment::from_byte_array([10; 32]),
-                    note: EncryptedNote {
-                        ciphertext: Ciphertext(vec![11; 3]),
-                        epk: EphemeralPublicKey(vec![12; 2]),
-                    },
-                }],
+                async_messages: vec![
+                    Publication::Clear(MessageEnvelope {
+                        from: private,
+                        to: Actor::new(AccountId::new([27; 32]), AccountId::new([28; 32])),
+                        message: vec![29],
+                    }),
+                    Publication::Sealed(SealedMessage {
+                        commitment: Commitment::from_byte_array([10; 32]),
+                        note: EncryptedNote {
+                            ciphertext: Ciphertext(vec![11; 3]),
+                            epk: EphemeralPublicKey(vec![12; 2]),
+                        },
+                    }),
+                ],
                 recovery_bindings: vec![RecoveryBinding {
                     address: AccountId::new([13; 32]),
                     note: EncryptedNote {
@@ -688,7 +700,7 @@ mod tests {
         };
 
         let expected: Vec<u8> = [
-            &[109, 3, 0, 0][..], // frame length: the 877 bytes below
+            &[244, 3, 0, 0][..], // frame length: the 1012 bytes below
             &[1, 0, 0, 0],       // public_context.actors: one actor
             &[0; 32],
             &[1; 32],
@@ -721,7 +733,15 @@ mod tests {
             &[0, 0, 0, 0], // pda_seeds: none
             &[2],          // BoundaryStep::EndPrivateSubtree
             &[3],          // BoundaryStep::EndPublicSubtree
-            &[1, 0, 0, 0], // async_messages: one sealed message
+            &[2, 0, 0, 0], // async_messages: two publications
+            &[0],          // Publication::Clear
+            &[2; 32],      // from
+            &[3; 32],
+            &[27; 32], // to
+            &[28; 32],
+            &[1, 0, 0, 0], // message
+            &[29],
+            &[1],          // Publication::Sealed
             &[10; 32],     // commitment
             &[3, 0, 0, 0], // note.ciphertext
             &[11; 3],
