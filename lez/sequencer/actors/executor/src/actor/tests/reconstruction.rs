@@ -1,7 +1,10 @@
 //! Startup reconstruction: a starting executor replays the finalized channel
 //! history its store misses.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use anyhow::Result;
 use chain_state::{ChainState, ChannelEntry, Tip};
@@ -344,13 +347,15 @@ fn final_through(block2: &Block, final_msg: Option<MsgId>, held: &[Block]) -> Sh
     store.final_snapshot = Some((final_state.clone(), BlockMeta::from(block2)));
     let mut chain = ChainState::from_final(final_state, Some(Tip::from(BlockMeta::from(block2))));
     let mut parent = final_msg.unwrap_or_else(MsgId::root);
-    chain.apply_reconstructed(parent, None);
+    chain.apply_reconstructed(parent, None, &BTreeSet::new());
     for block in held {
         store = with_head(store, block.clone());
         chain.apply_extension(vec![ChannelEntry {
             msg: mock_msg_of(block),
             parent,
             block: Some(block.clone()),
+            finally_absent_keys: BTreeSet::new(),
+            final_slot: None,
         }]);
         parent = mock_msg_of(block);
     }

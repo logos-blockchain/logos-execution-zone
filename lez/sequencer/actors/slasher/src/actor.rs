@@ -461,7 +461,6 @@ mod tests {
     const FULL_UNSTAKE: PendingUnstake = PendingUnstake {
         amount: 1,
         destination: AccountId::new([8; 32]),
-        requested_at: 0,
     };
 
     type Slasher = ActorRef<SlasherActor<MockStorageActor>>;
@@ -575,8 +574,8 @@ mod tests {
                 minimum_sequencer_stake: 1,
                 posting_timeframe: 300,
                 posting_timeout: 25,
-                exit_delay: 10,
                 max_block_size: 1 << 20,
+                finality_depth: 5,
             }),
             channel_id: Some(CHANNEL),
             entries: keys
@@ -592,6 +591,7 @@ mod tests {
                     )
                 })
                 .collect(),
+            params_votes: BTreeMap::new(),
         }
     }
 

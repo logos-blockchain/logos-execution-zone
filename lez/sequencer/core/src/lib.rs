@@ -1,7 +1,7 @@
 #![allow(dead_code, reason = "TODO")]
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     path::Path,
     sync::Arc,
     time::Instant,
@@ -10,7 +10,7 @@ use std::{
 use anyhow::{Context as _, Result, anyhow};
 use borsh::BorshDeserialize as _;
 use bridge_core::DepositMetadata;
-use chain_state::{AcceptOutcome, ChainState, ChannelEntry, PublishRecord};
+use chain_state::{AcceptOutcome, ChainState, ChannelEntry, PublishRecord, full_stake_releases};
 use common::{
     HashType,
     block::{BedrockStatus, Block, BlockMeta, HashableBlockData},
@@ -75,6 +75,7 @@ pub mod cross_zone_watcher;
 pub mod faults;
 pub mod fees;
 pub mod logging;
+pub mod release_finality;
 pub mod system_approvals;
 pub mod task_group;
 
@@ -354,6 +355,20 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 ViewChange::Conflict { .. } => true,
             };
 
+        // Read off L1 before the lock is taken.
+        let release_finality::JudgedUpdate {
+            finalized,
+            view,
+            held_finally_absent_keys,
+        } = &release_finality::judged_update(
+            &self.bedrock_pool_ref,
+            self.channel_id,
+            &self.chain,
+            finalized,
+            view,
+        )
+        .await;
+
         let checkpoint_record = ZoneCheckpointRecord {
             bytes: checkpoint_bytes(checkpoint).unwrap_or_else(|err| {
                 panic!(
@@ -395,6 +410,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             let pin_before = chain.pin();
             log_update(view, finalized, head_tip_before);
 
+            // Set before the finalized entries, which apply these held entries to the final tier.
+            chain.set_finally_absent_keys(held_finally_absent_keys.iter().cloned());
+
             // Finalized first: the view below is what lies above it.
             let mut irreversible_redelivered: Vec<Block> = Vec::new();
             let mut events = Vec::new();
@@ -402,7 +420,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             for entry in finalized {
                 // A root lineage over a held tier is a store restored without its view.
                 let judgeable = chain.final_tip().is_some() && chain.final_msg() != MsgId::root();
-                let outcome = chain.apply_finalized(entry.msg, entry.parent, entry.block.as_ref());
+                let outcome = chain.apply_finalized(
+                    entry.msg,
+                    entry.parent,
+                    entry.block.as_ref(),
+                    &entry.finally_absent_keys,
+                );
                 let (Some(block), Some(outcome)) = (&entry.block, outcome) else {
                     continue;
                 };
@@ -546,12 +569,24 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         log_recorded_deposits(&outcome);
         log_unmatched_withdrawals(&outcome);
 
-        // Rebuild orphaned work: return its user txs to the mempool so the
-        // next on-turn production re-includes them on the new head.
-        //
-        // TODO: a full mempool still drops the transaction; a durable resubmit
-        // queue is a follow-up.
-        for tx in resubmit_txs {
+        self.resubmit_orphaned(resubmit_txs);
+
+        self.finalized_config = checkpoint.finalized_config;
+
+        if moved_head {
+            self.refresh_committee()
+                .await
+                .expect("Failed to refresh committee");
+        }
+    }
+
+    /// Returns orphaned user txs to the mempool so the next on-turn production
+    /// re-includes them on the new head.
+    ///
+    /// TODO: a full mempool still drops the transaction; a durable resubmit
+    /// queue is a follow-up.
+    fn resubmit_orphaned(&self, txs: Vec<LeeTransaction>) {
+        for tx in txs {
             let tx_hash = tx.hash();
             if let Err(err) = self
                 .mempool
@@ -564,14 +599,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     "Dropping orphaned transaction on resubmit"
                 );
             }
-        }
-
-        self.finalized_config = checkpoint.finalized_config;
-
-        if moved_head {
-            self.refresh_committee()
-                .await
-                .expect("Failed to refresh committee");
         }
     }
 
@@ -1129,6 +1156,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             msg: this_msg,
             parent,
             block: Some(block.clone()),
+            finally_absent_keys: full_stake_releases::finalize_unstake_keys(&block),
+            final_slot: None,
         });
         match record {
             PublishRecord::Extended | PublishRecord::Skipped => {
@@ -1237,7 +1266,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     &mut scratch_summary,
                 ) {
                     Ok((_events, tx_reverted)) => {
-                        if let Some(withdraw_data) = extract_bridge_withdraw_data(tx) {
+                        if !tx_reverted
+                            && let Some(withdraw_data) = extract_bridge_withdraw_data(tx)
+                        {
                             withdrawals.push(withdraw_data);
                         }
                         *state = scratch;
@@ -1341,14 +1372,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // The delivery records are classified in here rather than after, so the
         // final state can be read by reference. Cloning it cost a full state
         // copy on every block of every zone, cross-zone or not.
-        let (
-            prev_block_hash,
-            new_block_height,
-            mut working_state,
-            pending_dispatches,
-            finalize_unstake_txs,
-            parent,
-        ) = {
+        let (prev_block_hash, new_block_height, mut working_state, pending_dispatches, parent) = {
             let chain = self.chain.lock().await;
             if let Some(entry) = chain.check_for_gaps_in_lineage() {
                 error!(
@@ -1405,14 +1429,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 .collect();
             let pending = round_robin(queues, MAX_DISPATCHES_PER_BLOCK);
 
-            (
-                prev,
-                height,
-                chain.head_state().clone(),
-                pending,
-                build_finalize_unstake_txs(chain.head_state()),
-                parent,
-            )
+            (prev, height, chain.head_state().clone(), pending, parent)
         };
 
         // A Slash executes against the head config, so it is proposed from it.
@@ -1455,6 +1472,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let mut valid_transactions = Vec::new();
         let mut reverted = Vec::new();
         let mut withdrawals = Vec::new();
+        let releasable_keys = release_finality::producible_releases(
+            &self.bedrock_pool_ref,
+            self.channel_id,
+            &working_state,
+        )
+        .await;
+        let finalize_unstake_txs = build_finalize_unstake_txs(&working_state, &releasable_keys);
 
         // Bridge deposit mints are drained from the store, not the mempool: the
         // follow path records the event durably but cannot enqueue the mint
@@ -1702,6 +1726,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             }
 
             let before_tx_apply = Instant::now();
+            // Taken before a transaction that may release a stake.
+            let snapshot = (!full_stake_releases::releases_no_stake(&tx)).then(|| {
+                (
+                    full_stake_releases::stake_entries(&working_state),
+                    working_state.clone(),
+                    summary,
+                    withdrawals.len(),
+                )
+            });
             let applied = Self::apply_mempool_transaction(
                 &mut working_state,
                 origin,
@@ -1713,6 +1746,30 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 valid_transactions.len().try_into().expect("fits u64"),
                 &mut summary,
             );
+            if applied.is_some()
+                && let Some((stake_entries_before, state, summary_before, withdrawal_count)) =
+                    snapshot
+            {
+                let stake_entries_after = full_stake_releases::stake_entries(&working_state);
+                let released =
+                    full_stake_releases::full_releases(&stake_entries_before, &stake_entries_after);
+                // Only a public `FinalizeUnstake` call's own key may be released.
+                let refused = released.into_iter().find(|key| {
+                    full_stake_releases::finalize_unstake_key(&tx) != Some(*key)
+                        || !releasable_keys.contains(key)
+                });
+                if let Some(key) = refused {
+                    info!(
+                        %tx_hash,
+                        sequencer_key = %hex::encode(key.to_bytes()),
+                        "Leaving out a transaction releasing a whole stake before its removal is final"
+                    );
+                    working_state = state;
+                    summary = summary_before;
+                    withdrawals.truncate(withdrawal_count);
+                    continue;
+                }
+            }
             if let Some(tx_reverted) = applied {
                 if tx_reverted {
                     reverted.push(u64::try_from(valid_transactions.len()).expect("fits u64"));
@@ -2356,9 +2413,13 @@ fn config_target(
         .collect();
     let new_keys = committee_discovery::committee_update(
         final_state,
-        &live_keys,
-        live.required_signatures,
-        live.transfer_threshold,
+        &committee_discovery::LiveChannel {
+            accredited_keys: &live_keys,
+            configuration_threshold: live.required_signatures,
+            transfer_threshold: live.transfer_threshold,
+            posting_timeframe: live.posting_timeframe,
+            posting_timeout: live.posting_timeout,
+        },
     )?;
     let Some(channel_params) = committee_discovery::channel_params(final_state) else {
         warn!("sequencer_stake config carries no channel posting params, no committee update");
@@ -2548,10 +2609,18 @@ fn system_upgrader_tx(message: system_upgrader_core::Message) -> Result<LeeTrans
     )))
 }
 
-/// A `FinalizeUnstake` for every release whose exit delay has passed in `state`.
-fn build_finalize_unstake_txs(state: &lee::V03State) -> VecDeque<LeeTransaction> {
+/// A `FinalizeUnstake` for every partial release in `state` and every full one in `releasable`.
+fn build_finalize_unstake_txs(
+    state: &lee::V03State,
+    releasable: &BTreeSet<sequencer_stake_core::SequencerKey>,
+) -> VecDeque<LeeTransaction> {
+    let fully_pending =
+        full_stake_releases::fully_pending_keys(&full_stake_releases::stake_entries(state));
     committee_discovery::finalize_unstake_candidates(state)
         .into_iter()
+        .filter(|(_, sequencer_key, _)| {
+            !fully_pending.contains(sequencer_key) || releasable.contains(sequencer_key)
+        })
         .filter_map(|(ownership_id, sequencer_key, destination)| {
             build_finalize_unstake_tx(state, ownership_id, sequencer_key, destination)
                 .map_err(|err| {

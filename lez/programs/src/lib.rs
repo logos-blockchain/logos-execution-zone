@@ -230,11 +230,12 @@ mod inner {
                         minimum_sequencer_stake: 1,
                         posting_timeframe: 1,
                         posting_timeout: 2,
-                        exit_delay: 1,
                         max_block_size: 1 << 20,
+                        finality_depth: 1,
                     }),
                     channel_id: Some(CHANNEL_ID),
                     entries,
+                    params_votes: BTreeMap::new(),
                 };
                 (
                     committee_actor().account_id,

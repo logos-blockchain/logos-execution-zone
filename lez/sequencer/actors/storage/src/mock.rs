@@ -26,14 +26,14 @@ use crate::{
         DropSettledCrossZoneDispatches, DumpDb, EventFilter, GetAccountTransactions, GetAllBlocks,
         GetBlock, GetBlockByHash, GetChannelViewBytes, GetCrossZonePeerFloorBytes,
         GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatchRetainedCount,
-        GetDeadLetterDispatches, GetEventFilter, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
-        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatchCount,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,
-        GetSystemApprovalsBytes, GetTransactionByHash, GetZoneAnchor, GetZoneCheckpoint,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutSlashRecordBytes,
-        PutSystemApprovalsBytes, RecordDispatchFailure, RequeueDeadLetterDispatch,
-        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome,
-        UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
+        GetDeadLetterDispatches, GetEventFilter, GetFinalConfigsBytes, GetFinalSnapshot,
+        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
+        GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        GetSlashRecordBytes, GetSystemApprovalsBytes, GetTransactionByHash, GetZoneAnchor,
+        GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+        PutFinalConfigsBytes, PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
+        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
+        StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
 
@@ -122,6 +122,18 @@ mockall::mock! {
         pub fn handle_put_system_approvals_bytes(
             &mut self,
             msg: PutSystemApprovalsBytes,
+            ctx: &mut Context<Self, Result<()>>
+        ) -> Result<()>;
+
+        pub fn handle_get_final_configs_bytes(
+            &mut self,
+            msg: GetFinalConfigsBytes,
+            ctx: &mut Context<Self, Result<Option<Vec<u8>>>>
+        ) -> Result<Option<Vec<u8>>>;
+
+        pub fn handle_put_final_configs_bytes(
+            &mut self,
+            msg: PutFinalConfigsBytes,
             ctx: &mut Context<Self, Result<()>>
         ) -> Result<()>;
 
@@ -468,6 +480,30 @@ impl Message<PutSlashRecordBytes> for MockStorageActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_put_slash_record_bytes(msg, ctx)
+    }
+}
+
+impl Message<GetFinalConfigsBytes> for MockStorageActor {
+    type Reply = Result<Option<Vec<u8>>>;
+
+    async fn handle(
+        &mut self,
+        msg: GetFinalConfigsBytes,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_final_configs_bytes(msg, ctx)
+    }
+}
+
+impl Message<PutFinalConfigsBytes> for MockStorageActor {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        msg: PutFinalConfigsBytes,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_put_final_configs_bytes(msg, ctx)
     }
 }
 

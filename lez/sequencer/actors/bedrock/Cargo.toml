@@ -39,7 +39,7 @@ futures.workspace = true
 logos-blockchain-key-management-system-service.workspace = true
 logos-blockchain-common-http-client = { workspace = true, optional = true }
 kameo_actors = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["time"], optional = true }
 borsh = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }

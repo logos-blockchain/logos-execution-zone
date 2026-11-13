@@ -203,8 +203,8 @@ mod tests {
                 minimum_sequencer_stake: 1,
                 posting_timeframe: 1,
                 posting_timeout: 2,
-                exit_delay: 1,
                 max_block_size: 1 << 20,
+                finality_depth: 1,
             }),
             channel_id: Some(CHANNEL_ID),
             entries: (1..=3)
@@ -219,6 +219,7 @@ mod tests {
                     )
                 })
                 .collect(),
+            params_votes: BTreeMap::new(),
         }
     }
 

@@ -73,6 +73,12 @@ pub struct PutSystemApprovalsBytes {
     pub bytes: Vec<u8>,
 }
 
+pub struct GetFinalConfigsBytes;
+
+pub struct PutFinalConfigsBytes {
+    pub bytes: Vec<u8>,
+}
+
 pub struct GetZoneAnchor;
 
 pub struct SetZoneAnchor {
