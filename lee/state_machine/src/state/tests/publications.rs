@@ -84,6 +84,7 @@ fn clear_credit(state: &V03State) -> PrivacyPreservingTransaction {
                 recipient: INBOX,
                 amount: FEE,
                 refund_to: None,
+                tip: 0,
             }),
             ..proving_input(root(
                 Actor::native_balance(alice()),
@@ -122,6 +123,7 @@ fn fee_paying_public_root(state: &V03State, script: &Script) -> PrivacyPreservin
                 recipient: INBOX,
                 amount: FEE,
                 refund_to: None,
+                tip: 0,
             }),
             ..proving_input(root(sender(), script))
         },

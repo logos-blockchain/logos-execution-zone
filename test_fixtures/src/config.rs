@@ -41,7 +41,7 @@ pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000, 20_0
 ///
 /// It is the fixed `PROOF_BYTES` (223,047) plus the rest of the serialized transaction (13,993),
 /// mostly its padded private slots.
-pub const SHIELD_BYTES: u64 = 237_040;
+pub const SHIELD_BYTES: u64 = 237_048;
 
 /// The public account for funding the private accounts' balances at genesis.
 pub(crate) const PRIVATE_FUNDER_INDEX: usize = 0;

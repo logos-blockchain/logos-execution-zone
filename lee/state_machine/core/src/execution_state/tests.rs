@@ -1586,6 +1586,7 @@ fn a_fee_transfer_runs_after_the_root_in_every_mode() {
         recipient: inbox.account_id,
         amount: 0,
         refund_to: None,
+        tip: 0,
     };
     let native = |input: &ReceiveInput| {
         native_token::handle_message(input).unwrap_or_else(|error| panic!("{error}"))
@@ -1680,6 +1681,7 @@ fn a_fee_only_payer_authorizes_the_fee_entry_alone() {
         recipient: inbox.account_id,
         amount: 0,
         refund_to: None,
+        tip: 0,
     };
     let run = |kind: RegularKey| {
         let mut script = Script::default().on(payer, |input| echo(input, Response::keep_state()));

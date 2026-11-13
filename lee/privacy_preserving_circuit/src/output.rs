@@ -44,6 +44,7 @@ pub fn compute_circuit_output(
             .unwrap_or_else(|e| panic!("{e}"));
     let fee = fee.map(|fee| ProvenFee {
         refund_to: fee.refund_to,
+        tip: fee.tip,
         fallback: fee_fallback(&fee, &boundary, private_witnesses, ciphertext_padding),
     });
     let mut output = ProvenExecution {
@@ -465,6 +466,7 @@ mod tests {
             recipient: inbox,
             amount: 30,
             refund_to: None,
+            tip: 0,
         };
         let crossing = |amount| {
             BoundaryStep::PrivateToPublic(lee_core::execution_state::Delivery {

@@ -133,7 +133,8 @@ pub struct Args {
     /// the headroom's base fees. The sequencer rejects a cap below the reserve a dry run reports.
     #[arg(long, global = true, value_name = "AMOUNT")]
     pub max_fee: Option<u128>,
-    /// Tip a public transaction this amount on top of its base fees for this command.
+    /// Tip a transaction this amount on top of its base fees for this command, declared or paid
+    /// inside the proof.
     #[arg(long, global = true, value_name = "AMOUNT", default_value_t = 0)]
     pub tip: u64,
     /// Price a transaction's fee (a public `max_fee`, a privacy-preserving reserve) at the base

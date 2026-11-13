@@ -206,6 +206,7 @@ pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, Class
                 payer,
                 reserve,
                 data_bytes: tx.charged_bytes()?,
+                tip: execution.proven_fee.as_ref().map_or(0, |fee| fee.tip),
             }));
         }
         LeeTransaction::Public(public_tx) => public_tx,
@@ -289,7 +290,7 @@ mod tests {
         let class = classify(&tx, false).unwrap();
         assert!(matches!(
             class,
-            FeeClass::Charged(FeeTxView::Private { payer, reserve: 42, data_bytes })
+            FeeClass::Charged(FeeTxView::Private { payer, reserve: 42, data_bytes, tip: 0 })
                 if payer == self::payer().account_id && data_bytes == size
         ));
     }
@@ -349,6 +350,7 @@ mod tests {
             message.execution.boundary = crediting();
             message.execution.proven_fee = Some(lee_core::ProvenFee {
                 refund_to: Some(target),
+                tip: 7,
                 fallback: None,
             });
             tx(message)
@@ -359,7 +361,11 @@ mod tests {
         ));
         assert!(matches!(
             classify(&targeting(AccountId::new([3; 32])), false),
-            Ok(FeeClass::Charged(FeeTxView::Private { reserve: 42, .. }))
+            Ok(FeeClass::Charged(FeeTxView::Private {
+                reserve: 42,
+                tip: 7,
+                ..
+            }))
         ));
     }
 
@@ -377,6 +383,7 @@ mod tests {
             };
             message.execution.proven_fee = proven_fee.then_some(lee_core::ProvenFee {
                 refund_to: None,
+                tip: 0,
                 fallback: None,
             });
             if crossing_inbox {
@@ -424,6 +431,7 @@ mod tests {
             message.execution.boundary = vec![credit.clone(), BoundaryStep::EndPublicSubtree];
             message.execution.proven_fee = Some(lee_core::ProvenFee {
                 refund_to: None,
+                tip: 0,
                 fallback: Some(lee_core::FeeFallback {
                     action: lee_core::PrivateAction::default(),
                     boundary,

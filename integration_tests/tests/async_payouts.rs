@@ -144,6 +144,7 @@ fn prove_trade(
                 recipient: system_accounts::fee_inbox_account_id(),
                 amount: fee_reserve(),
                 refund_to: None,
+                tip: 0,
             }),
         },
         // One public segment each for the deposit and the request; neither sends anything back.

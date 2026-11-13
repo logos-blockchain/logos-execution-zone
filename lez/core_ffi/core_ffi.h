@@ -554,6 +554,7 @@ typedef struct FfiVec_FfiProgramImageClaim FfiProgramImageClaims;
 typedef struct FfiProvenFee {
   bool has_refund_to;
   FfiAccountId refund_to;
+  uint64_t tip;
   bool has_fallback;
   struct FfiPrivateAction fallback_action;
   FfiBoundaryStepList fallback_boundary;
@@ -977,12 +978,14 @@ typedef struct FfiDryRunReport {
 /**
  * The in-proof fee of a privacy-preserving transaction.
  *
- * Its proof debits `reserve` from `payer`. The surplus over the fee charged is refunded to
- * `refund_to` when `has_refund_to`, else to the payer's alias.
+ * Its proof debits `reserve` from `payer` and pays `tip` of it to the producer. The surplus over
+ * the fee charged and the tip is refunded to `refund_to` when `has_refund_to`, else to the
+ * payer's alias.
  */
 typedef struct FfiPrivateFee {
   FfiAccountId payer;
   struct FfiU128 reserve;
+  uint64_t tip;
   bool has_refund_to;
   FfiAccountId refund_to;
 } FfiPrivateFee;
@@ -1041,7 +1044,7 @@ typedef struct FfiFeeParams {
   bool has_max_fee;
   struct FfiU128 max_fee;
   /**
-   * Public: the tip, charged on top of the base fees.
+   * The tip, charged on top of the base fees: declared, or paid inside the proof.
    */
   uint64_t tip;
   /**

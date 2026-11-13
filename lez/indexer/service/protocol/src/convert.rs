@@ -627,10 +627,12 @@ impl From<lee_core::ProvenFee> for ProvenFee {
     fn from(value: lee_core::ProvenFee) -> Self {
         let lee_core::ProvenFee {
             refund_to,
+            tip,
             fallback,
         } = value;
         Self {
             refund_to: refund_to.map(Into::into),
+            tip,
             fallback: fallback.map(|lee_core::FeeFallback { action, boundary }| FeeFallback {
                 action: action.into(),
                 boundary: boundary.into_iter().map(Into::into).collect(),
@@ -643,10 +645,12 @@ impl From<ProvenFee> for lee_core::ProvenFee {
     fn from(value: ProvenFee) -> Self {
         let ProvenFee {
             refund_to,
+            tip,
             fallback,
         } = value;
         Self {
             refund_to: refund_to.map(Into::into),
+            tip,
             fallback: fallback.map(|FeeFallback { action, boundary }| lee_core::FeeFallback {
                 action: action.into(),
                 boundary: boundary.into_iter().map(Into::into).collect(),
@@ -1538,6 +1542,7 @@ mod tests {
                 // The proof commits to its fee, so a mirror dropping it breaks verification.
                 proven_fee: Some(lee_core::ProvenFee {
                     refund_to: Some(account_id(70)),
+                    tip: 9,
                     fallback: Some(lee_core::FeeFallback {
                         action: lee_core::PrivateAction::default(),
                         boundary: vec![
