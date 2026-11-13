@@ -1,5 +1,8 @@
 //! A tree of 8 WOTS+ one-time keys built from FIPS 205's components through `slh-dsa`'s
 //! `hazmat` API, specified in `SPEC.md` beside this file.
+//!
+//! The signature guest (`lez/programs/signature`) compiles this file by path, so it may only depend
+//! on `std`, `sha2`, `slh-dsa` and `zeroize`.
 
 use std::fmt;
 

@@ -1,4 +1,4 @@
-use lee_core::signing_key::{SIGNATURE_PROGRAM_ID, SignatureMessage, SigningKeyState};
+use lee_core::signing_key::{SignatureMessage, SigningKeyState, signature_program_id};
 
 use super::*;
 use crate::{ValidatedStateDiff, signature::program::SetKeyError};
@@ -274,7 +274,11 @@ fn a_declared_account_no_transition_changes_stays_out_of_the_diff_and_the_state(
 fn planted_signature_program() -> V03State {
     V03State::new()
         .with_programs([crate::test_methods::scripted()])
-        .with_programs_at([(SIGNATURE_PROGRAM_ID, crate::test_methods::scripted(), true)])
+        .with_programs_at([(
+            signature_program_id(),
+            crate::test_methods::scripted(),
+            true,
+        )])
 }
 
 fn set_key(next: SigningKeyState) -> SignatureMessage {
@@ -318,7 +322,7 @@ fn assert_charged_as_a_foreign_sender(
             nonce: Nonce(1),
             ..Account::default()
         }
-        .with_actor_state(SIGNATURE_PROGRAM_ID, signer.key_state(Nonce(1)).into())
+        .with_actor_state(signature_program_id(), signer.key_state(Nonce(1)).into())
     );
     state
 }
@@ -326,7 +330,7 @@ fn assert_charged_as_a_foreign_sender(
 #[test]
 fn a_root_call_to_the_signature_program_is_charged_and_reverted() {
     let key = TestSigner::new(1);
-    let signature = Actor::new(key.account_id(), SIGNATURE_PROGRAM_ID);
+    let signature = Actor::new(key.account_id(), signature_program_id());
     let tx = public_tx(
         signature,
         vec![signature],
@@ -342,7 +346,7 @@ fn a_root_call_to_the_signature_program_is_charged_and_reverted() {
 fn a_chained_call_to_the_signature_program_is_charged_and_reverted() {
     let key = TestSigner::new(1);
     let sender = Actor::new(key.account_id(), scripted_id());
-    let signature = Actor::new(key.account_id(), SIGNATURE_PROGRAM_ID);
+    let signature = Actor::new(key.account_id(), signature_program_id());
     let tx = public_tx(
         sender,
         vec![sender, signature],
@@ -358,7 +362,7 @@ fn a_chained_call_to_the_signature_program_is_charged_and_reverted() {
 fn an_async_message_to_the_signature_program_is_charged_and_reverted() {
     let key = TestSigner::new(1);
     let sender = Actor::new(key.account_id(), scripted_id());
-    let signature = Actor::new(key.account_id(), SIGNATURE_PROGRAM_ID);
+    let signature = Actor::new(key.account_id(), signature_program_id());
     let tx = public_tx(
         sender,
         vec![sender, signature],
@@ -381,10 +385,10 @@ fn a_public_program_cannot_send_set_key() {
             nonce: Nonce(3),
             ..Account::default()
         }
-        .with_actor_state(SIGNATURE_PROGRAM_ID, victim_key.into()),
+        .with_actor_state(signature_program_id(), victim_key.into()),
     )]);
     let sender = Actor::new(key.account_id(), scripted_id());
-    let target = Actor::new(victim.account_id(), SIGNATURE_PROGRAM_ID);
+    let target = Actor::new(victim.account_id(), signature_program_id());
     let tx = public_tx(
         sender,
         vec![sender, target],
@@ -398,7 +402,7 @@ fn a_public_program_cannot_send_set_key() {
         state
             .get_account_by_id(victim.account_id())
             .data
-            .actor_state(SIGNATURE_PROGRAM_ID),
+            .actor_state(signature_program_id()),
         &ActorState::from(victim_key)
     );
 }
@@ -407,7 +411,7 @@ fn a_public_program_cannot_send_set_key() {
 fn an_account_cannot_set_its_own_key_by_message() {
     let key = TestSigner::new(1);
     let sender = Actor::new(key.account_id(), scripted_id());
-    let signature = Actor::new(key.account_id(), SIGNATURE_PROGRAM_ID);
+    let signature = Actor::new(key.account_id(), signature_program_id());
     let other_key = TestSigner::new(2).key_state(Nonce(0));
     let tx = public_tx(
         sender,

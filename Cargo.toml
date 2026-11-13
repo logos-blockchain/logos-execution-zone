@@ -65,6 +65,8 @@ members = [
   "lez/programs/ping_sender",
   "lez/programs/ping_receiver",
   "lez/programs/sequencer_stake",
+  "lez/programs/signature",
+  "lez/programs/signature/core",
   "lez/cross_zone",
   "lez/core_ffi",
 
@@ -143,6 +145,7 @@ bridge_lock_core = { path = "lez/programs/bridge_lock/core" }
 wrapped_token_core = { path = "lez/programs/wrapped_token/core" }
 ping_core = { path = "lez/programs/ping_core" }
 sequencer_stake_core = { path = "lez/programs/sequencer_stake/core" }
+signature_core = { path = "lez/programs/signature/core" }
 cross_zone = { path = "lez/cross_zone" }
 build_utils = { path = "build_utils" }
 test_guest_core = { path = "test_guest_core" }
@@ -297,6 +300,8 @@ codegen-units = 1
 
 # Keccak speedup for in-guest ML KEM
 [patch.crates-io]
+# Accelerated SHA-256 in the zkVM for `slh-dsa`, which the signature guest's key derivation uses.
+sha2 = { git = "https://github.com/risc0/RustCrypto-hashes", tag = "sha2-v0.11.0-risczero.0" }
 keccak = { git = "https://github.com/logos-blockchain/sponges", rev = "3a56e99771beedf04946eab21a4a62adc2951377" }
 curve25519-dalek = { git = "https://github.com/risc0/curve25519-dalek", rev = "385adda1fa3b66d9aaa8b8fcc99ddc324d33ba32" }
 crypto-bigint = { git = "https://github.com/risc0/RustCrypto-crypto-bigint", rev = "3ab63a6f1048833f7047d5a50532e4a4cc789384" }

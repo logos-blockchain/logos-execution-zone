@@ -33,6 +33,16 @@ use crate::{
     },
 };
 
+/// A public account secret whose account id is pinned as [`PINNED_ACCOUNT_ID`]. `lee`, the wallet
+/// and the signature guest each derive the id their own way and compare it with the pin.
+pub const PINNED_SECRET: [u8; 32] = [7; 32];
+
+/// The account id [`PINNED_SECRET`] owns.
+pub const PINNED_ACCOUNT_ID: AccountId = AccountId::new([
+    250, 11, 229, 255, 51, 48, 169, 10, 66, 153, 146, 211, 139, 0, 30, 250, 190, 160, 210, 247,
+    101, 192, 51, 213, 236, 139, 205, 148, 42, 150, 151, 60,
+]);
+
 /// A public account's signing key material, as tests sign with it: its initial key type at
 /// nonce 0, and any rotations to other types from given nonces on.
 #[derive(Debug, Clone)]

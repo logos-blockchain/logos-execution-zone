@@ -1190,6 +1190,18 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_public_account_id_matches_the_pinned_vector() {
+        let mut kc = UserKeyChain::default();
+        kc.add_imported_public_account(PublicAccountSecret::new(lee::test_utils::PINNED_SECRET));
+
+        // The default key chain also holds its root account.
+        assert!(
+            kc.public_account_ids()
+                .any(|(id, _)| id == lee::test_utils::PINNED_ACCOUNT_ID)
+        );
+    }
+
+    #[test]
     fn a_key_node_opens_only_recovery_notes_naming_its_nullifier_key() {
         let mut kc = UserKeyChain::default();
         let chain_index = kc.create_private_accounts_key(None);

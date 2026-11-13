@@ -427,4 +427,12 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn public_account_id_known_answer() {
+        assert_eq!(
+            public_account_id(&PublicAccountSecret::new(crate::test_utils::PINNED_SECRET)),
+            crate::test_utils::PINNED_ACCOUNT_ID
+        );
+    }
 }

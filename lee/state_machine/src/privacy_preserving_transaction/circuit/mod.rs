@@ -15,6 +15,7 @@ use lee_core::{
     program::{
         MessageBody, PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ReceiveInput, Response, Transition,
     },
+    signing_key::signature_program_id,
     to_frame,
 };
 use risc0_zkvm::{
@@ -258,6 +259,11 @@ impl ExecutionEnvironment for Simulator<'_> {
         }
         // A private transition is bounded only by what its prover can prove, as when it is proven.
         let runs_privately = view.runs_privately(input.receiver.account_id);
+        // Publicly, a signature actor is native, as in settlement; privately, it runs the guest.
+        if input.receiver.program_account_id == signature_program_id() && !runs_privately {
+            return Ok(crate::signature::program::handle_message(input)
+                .map_err(InvalidProgramBehaviorError::SetKeyFailed)?);
+        }
         handle_message_with(self.programs, input, |program| {
             if runs_privately {
                 Ok(program.handle_message(input, Cycles::MAX)?.0)

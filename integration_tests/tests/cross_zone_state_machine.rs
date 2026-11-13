@@ -25,7 +25,7 @@ use lee::{
 };
 use lee_core::{
     account::Account, native_token::TransferError, program::SyncMessage,
-    signing_key::SIGNATURE_PROGRAM_ID,
+    signing_key::signature_program_id,
 };
 use ping_core::{
     CrossZoneEmission, ReceiverMessage, outbox_bytes, ping_record_pda, ping_record_seed,
@@ -2946,7 +2946,7 @@ fn holds_only_its_key(state: &V03State, account: AccountId) -> bool {
         .data
         .actor_states
         .keys()
-        .all(|program| *program == SIGNATURE_PROGRAM_ID)
+        .all(|program| *program == signature_program_id())
 }
 
 /// State registering the `zone_chat` test guest alongside the builtins: a

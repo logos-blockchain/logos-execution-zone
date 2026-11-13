@@ -6,7 +6,7 @@ use lee_core::{
     execution_state::{ExecutionEnvironment, ExecutionError, Placement, TransitionView},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{MessageBody, PROGRAM_LOADER_ACCOUNT_ID, ReceiveInput, Transition},
-    signing_key::SIGNATURE_PROGRAM_ID,
+    signing_key::signature_program_id,
 };
 use log::debug;
 
@@ -68,7 +68,7 @@ impl ExecutionEnvironment for PublicBackend<'_> {
         let state = self.state;
         let program_account_id = input.receiver.program_account_id;
         debug!("Program {program_account_id:?} input: {input:?}");
-        let transition = if program_account_id == SIGNATURE_PROGRAM_ID {
+        let transition = if program_account_id == signature_program_id() {
             signature::program::handle_message(input)
                 .map_err(InvalidProgramBehaviorError::SetKeyFailed)?
         } else if program_account_id == PROGRAM_LOADER_ACCOUNT_ID {

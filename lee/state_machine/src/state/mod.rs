@@ -6,7 +6,7 @@ use lee_core::{
     MembershipProof, Nullifier, RecoveryBinding, SealedMessage, Timestamp,
     account::{Account, AccountId, ActorState},
     program::{MessageBody, PROGRAM_LOADER_ACCOUNT_ID, ProgramId, Publication, TransactionEvent},
-    signing_key::SIGNATURE_PROGRAM_ID,
+    signing_key::signature_program_id,
 };
 use program_loader_core::get_program_via;
 use rpds::{HashTrieMapSync, HashTrieSetSync, RedBlackTreeMapSync, RedBlackTreeSetSync};
@@ -299,7 +299,7 @@ impl V03State {
             account.nonce.public_account_nonce_increment();
             account
                 .data
-                .set_actor_state(SIGNATURE_PROGRAM_ID, next.into());
+                .set_actor_state(signature_program_id(), next.into());
         }
         let messages: Vec<Commitment> = published.iter().map(Publication::commitment).collect();
         let positions = self.private_state.0.append(&new_commitments, &messages);

@@ -46,6 +46,7 @@ use lee_core::{
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID, encode_balance},
     program::{MessageData, PROGRAM_LOADER_ACCOUNT_ID, ReceiveInput, Transition},
+    signing_key::signature_program_id,
 };
 use risc0_zkvm::{ExecutorEnv, default_executor, default_prover};
 use serde::Serialize;
@@ -314,6 +315,9 @@ impl ExecutionEnvironment for Meter {
             return Ok(native_token::handle_message(input)?);
         }
         // Native, like the token program: no guest cycles to record.
+        if program_account_id == signature_program_id() && input.from_own_program() {
+            return Ok(lee::signature::program::handle_message(input)?);
+        }
         if program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
             const ABSENT: &ActorState = &ActorState::empty();
             let (transition, _) = program_loader_core::handle_message(input, |account_id| {
@@ -361,6 +365,11 @@ fn guest(program_account_id: AccountId) -> Option<(&'static str, Program)> {
             "sequencer_stake",
             programs::sequencer_stake_account_id(),
             programs::sequencer_stake(),
+        ),
+        (
+            "signature",
+            signature_program_id(),
+            programs::signature_program(),
         ),
     ]
     .into_iter()
@@ -565,7 +574,7 @@ fn schedule_case(label: &'static str, committee_size: usize) -> Result<Case> {
     )
 }
 
-fn cases() -> Result<[Case; 10]> {
+fn cases() -> Result<[Case; 11]> {
     Ok([
         tick_case("Tick", 1)?,
         Case::new(
@@ -594,7 +603,42 @@ fn cases() -> Result<[Case; 10]> {
         schedule_case("Schedule (committee 7)", 7)?,
         schedule_case("Schedule (committee 10)", 10)?,
         schedule_case("Schedule (committee 20)", 20)?,
+        manual_rotation_case()?,
     ])
+}
+
+/// One account's manual rotation: the guest derives the account's WOTS+ initial key (its cost)
+/// and sends `SetKey`, which the sequencer handles natively.
+fn manual_rotation_case() -> Result<Case> {
+    let secret = lee::signature::PublicAccountSecret::new([7; 32]);
+    let account = lee::signature::public_account_id(&secret);
+    let next = lee::signature::key_state_with_counter(
+        &secret,
+        lee_core::signing_key::KeyType::Wots,
+        lee_core::account::Nonce(0),
+        1,
+    );
+    let root = Actor::new(AccountId::new([80; 32]), signature_program_id());
+    Case::new(
+        "ManualRotation (1 account)",
+        root,
+        vec![
+            Fixture::new(
+                root.account_id,
+                true,
+                signature_program_id(),
+                ActorState::empty(),
+            ),
+            Fixture::new(account, false, signature_program_id(), ActorState::empty()),
+        ],
+        &signature_core::Message::ManualRotation {
+            rotations: vec![signature_core::AccountRotation {
+                secret: *secret.value(),
+                account,
+                next,
+            }],
+        },
+    )
 }
 
 fn main() -> Result<()> {

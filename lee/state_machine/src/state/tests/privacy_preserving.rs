@@ -1,4 +1,8 @@
-use lee_core::{RootCall, execution_state::BoundaryStep, signing_key::SIGNATURE_PROGRAM_ID};
+use lee_core::{
+    RootCall,
+    execution_state::BoundaryStep,
+    signing_key::{KeyType, SignatureMessage, signature_program_id},
+};
 
 use super::*;
 
@@ -125,8 +129,10 @@ fn transition_from_privacy_preserving_transaction_shielded() {
         let post_balance = this.data.native_balance().unwrap() - balance_to_move;
         this.data
             .set_actor_state(NATIVE_TOKEN_PROGRAM_ID, encode_balance(post_balance));
-        this.data
-            .set_actor_state(SIGNATURE_PROGRAM_ID, sender_keys.key_state(Nonce(1)).into());
+        this.data.set_actor_state(
+            signature_program_id(),
+            sender_keys.key_state(Nonce(1)).into(),
+        );
         this.nonce.public_account_nonce_increment();
         this
     };
@@ -789,4 +795,58 @@ fn a_public_transition_departing_from_its_predicted_cross_message_is_rejected_an
             .is_none()
     );
     assert!(nested.state.publications_from(0).next().is_none());
+}
+
+#[test]
+fn a_private_set_key_from_the_signature_address_rotates_without_a_nonce_bump() {
+    let keys = test_private_account_keys_1();
+    let payer = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk());
+    let pre_account = Account::funded(100);
+    let victim = TestSigner::new(2);
+    let mut state = V03State::new()
+        .with_test_programs()
+        .with_programs_at([(
+            signature_program_id(),
+            crate::test_methods::scripted(),
+            false,
+        )])
+        .with_private_account(&keys, &pre_account);
+    state.force_insert_account(
+        victim.account_id(),
+        Account {
+            nonce: Nonce(3),
+            ..Account::default()
+        }
+        .with_actor_state(signature_program_id(), victim.key_state(Nonce(3)).into()),
+    );
+    let next = victim.key_state_with_counter(KeyType::Wots, Nonce(3), 1);
+    let target = Actor::new(victim.account_id(), signature_program_id());
+    let script = Script::default().send_sync(target, &SignatureMessage::SetKey { next });
+    let membership_proof = state
+        .get_proof_for_commitment(&Commitment::new(&payer, &pre_account))
+        .expect("the payer's commitment must be in state");
+
+    let proven = execute_and_prove(
+        ProvingInput {
+            public_context: PublicExecutionContext::new(vec![target], []),
+            private_witnesses: vec![update_witness(&keys, pre_account, membership_proof)],
+            ..proving_input(root(Actor::new(payer, signature_program_id()), &script))
+        },
+        &Simulation::default(),
+        &ProgramCatalog::from([(signature_program_id(), crate::test_methods::scripted())]),
+        |_| SenderPresentation::Canonical,
+        |_, _| false,
+        no_seal,
+    )
+    .unwrap();
+    state
+        .transition_from_privacy_preserving_transaction(&private_tx(proven, vec![], &[]), 1, 0)
+        .expect("the SetKey settles");
+
+    let account = state.get_account_by_id(victim.account_id());
+    assert_eq!(account.nonce, Nonce(3));
+    assert_eq!(
+        account.data.actor_state(signature_program_id()),
+        &ActorState::from(next)
+    );
 }

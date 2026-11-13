@@ -12,7 +12,7 @@ use lee::{AccountId, program::Program, test_utils::TestSigner};
 use lee_core::{
     account::{ActorState, Nonce},
     native_token::Message,
-    signing_key::{KeyType, SIGNATURE_PROGRAM_ID},
+    signing_key::{KeyType, signature_program_id},
 };
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
@@ -65,7 +65,7 @@ async fn stored_key(ctx: &TestContext, account_id: AccountId) -> Result<(Nonce, 
     let account = get_account(ctx, account_id).await?;
     Ok((
         account.nonce,
-        account.data.actor_state(SIGNATURE_PROGRAM_ID).clone(),
+        account.data.actor_state(signature_program_id()).clone(),
     ))
 }
 

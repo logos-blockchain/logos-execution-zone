@@ -17,7 +17,7 @@ use lee_core::{
         MessageBody, PROGRAM_LOADER_ACCOUNT_ID, Publication, ReceiveInput, TransactionEvent,
         Transition,
     },
-    signing_key::{SIGNATURE_PROGRAM_ID, SigningKeyState},
+    signing_key::{SigningKeyState, signature_program_id},
 };
 use public_backend::PublicBackend;
 
@@ -712,7 +712,7 @@ fn authenticate_signer(
     };
     let account = state.get_account_by_id_ref(signer);
     let stored = account
-        .map(|account| account.data.actor_state(SIGNATURE_PROGRAM_ID))
+        .map(|account| account.data.actor_state(signature_program_id()))
         .filter(|key| !key.is_empty())
         .map(SigningKeyState::try_from)
         .transpose()?;

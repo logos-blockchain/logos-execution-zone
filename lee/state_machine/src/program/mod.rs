@@ -90,6 +90,18 @@ impl Program {
         Ok((transition_journal(&journal)?, cycles))
     }
 
+    /// Runs the guest on `input` within `cycle_budget`, for tests outside this crate: a guest that
+    /// public execution never reaches, such as the signature program's.
+    #[cfg(feature = "test-utils")]
+    pub fn handle_message_for_tests(
+        &self,
+        input: &ReceiveInput,
+        cycle_budget: Cycles,
+    ) -> Result<Transition, LeeError> {
+        self.handle_message(input, cycle_budget)
+            .map(|(transition, _)| transition)
+    }
+
     pub(crate) fn handle_message_metered(
         &self,
         input: &ReceiveInput,

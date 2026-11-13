@@ -6,7 +6,6 @@ use lee_core::{
     execution_state::{PrivatePart, TransactionEntry},
     native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramId, read_input_frame},
-    signing_key::SIGNATURE_PROGRAM_ID,
 };
 use private_backend::PrivateBackend;
 use risc0_zkvm::guest::env;
@@ -39,14 +38,12 @@ fn main() {
 
     // The sequencer checks disclosed images against chain state.
     // For undisclosed images, `to_claim` checks header immutability and derives the membership
-    // root. The native token, loader and signature program accounts belong to the protocol and
-    // cannot claim guest images.
+    // root. The native token and loader accounts belong to the protocol and cannot claim guest
+    // images.
     assert!(
         !program_image_witnesses.iter().any(|witness| {
             let account_id = witness.account_id();
-            account_id == NATIVE_TOKEN_PROGRAM_ID
-                || account_id == PROGRAM_LOADER_ACCOUNT_ID
-                || account_id == SIGNATURE_PROGRAM_ID
+            account_id == NATIVE_TOKEN_PROGRAM_ID || account_id == PROGRAM_LOADER_ACCOUNT_ID
         }),
         "A reserved program account has no deployable bytecode to claim"
     );

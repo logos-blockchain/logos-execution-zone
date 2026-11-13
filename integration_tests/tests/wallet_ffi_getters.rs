@@ -28,7 +28,7 @@ use lee_core::{
     account::Nonce,
     native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::PROGRAM_LOADER_ACCOUNT_ID,
-    signing_key::{SIGNATURE_PROGRAM_ID, SigningKeyState},
+    signing_key::{SigningKeyState, signature_program_id},
 };
 
 #[test]
@@ -121,7 +121,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
     assert_eq!(
         account.data,
         Account::funded(INITIAL_PUBLIC_BALANCES_FOR_WALLET[0])
-            .with_actor_state(SIGNATURE_PROGRAM_ID, signer.key_state(Nonce(2)).into())
+            .with_actor_state(signature_program_id(), signer.key_state(Nonce(2)).into())
             .data
     );
     assert_eq!(account.nonce.0, 2);

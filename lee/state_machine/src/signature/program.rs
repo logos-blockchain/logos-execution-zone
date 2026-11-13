@@ -44,14 +44,16 @@ fn handle_message_with(
 mod tests {
     use lee_core::{
         account::{AccountId, Actor, ActorState},
-        signing_key::{SIGNATURE_PROGRAM_ID, SigningKeyState},
+        signing_key::{SigningKeyState, signature_program_id},
     };
 
     use super::*;
 
     const ACCOUNT: AccountId = AccountId::new([1; 32]);
-    const FROM_THE_SIGNATURE_PROGRAM: Option<Actor> =
-        Some(Actor::new(AccountId::new([9; 32]), SIGNATURE_PROGRAM_ID));
+
+    fn signature_sender() -> Actor {
+        Actor::new(AccountId::new([9; 32]), signature_program_id())
+    }
 
     fn key(key_type: KeyType, byte: u8) -> SigningKeyState {
         SigningKeyState {
@@ -66,7 +68,7 @@ mod tests {
 
     fn input(from: Option<Actor>, message: Vec<u8>) -> ReceiveInput {
         ReceiveInput {
-            receiver: Actor::new(ACCOUNT, SIGNATURE_PROGRAM_ID),
+            receiver: Actor::new(ACCOUNT, signature_program_id()),
             from,
             is_authorized: false,
             pre_state: ActorState::from(key(KeyType::Wots, 2)),
@@ -77,7 +79,7 @@ mod tests {
     #[test]
     fn set_key_from_the_signature_program_sets_next() {
         let next = key(KeyType::Schnorr, 3);
-        let transition = handle_message(&input(FROM_THE_SIGNATURE_PROGRAM, set_key(next))).unwrap();
+        let transition = handle_message(&input(Some(signature_sender()), set_key(next))).unwrap();
 
         assert_eq!(transition.response.post_state, Some(ActorState::from(next)));
         assert!(transition.response.sync_messages.is_empty());
@@ -106,7 +108,7 @@ mod tests {
         unknown_type[1] = 2;
         for message in [vec![0xFF; 5], unknown_type, trailing] {
             assert_eq!(
-                handle_message(&input(FROM_THE_SIGNATURE_PROGRAM, message)).err(),
+                handle_message(&input(Some(signature_sender()), message)).err(),
                 Some(SetKeyError::InvalidMessage)
             );
         }
@@ -116,7 +118,7 @@ mod tests {
     fn a_disallowed_type_is_refused() {
         let message = set_key(key(KeyType::Schnorr, 3));
         assert_eq!(
-            handle_message_with(&input(FROM_THE_SIGNATURE_PROGRAM, message), |key_type| {
+            handle_message_with(&input(Some(signature_sender()), message), |key_type| {
                 key_type != KeyType::Schnorr
             })
             .err(),
