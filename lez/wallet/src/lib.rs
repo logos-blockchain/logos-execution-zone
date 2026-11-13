@@ -19,7 +19,11 @@ pub use account_manager::{
 };
 use anyhow::{Context as _, Result, ensure};
 use bip39::Mnemonic;
-use common::{HashType, PageLimit, block::Block, transaction::LeeTransaction};
+use common::{
+    HashType, PageLimit,
+    block::{Block, TransactionReceipt},
+    transaction::LeeTransaction,
+};
 use config::WalletConfig;
 pub use fees::{DeclaredFee, DryRunReport, FeeParams, PrivateFee};
 use futures::TryFutureExt as _;
@@ -326,6 +330,11 @@ pub trait WalletSequencerClient: Clone {
         tx_hash: HashType,
     ) -> Result<Option<(LeeTransaction, BlockId)>, Self::Error>;
 
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: HashType,
+    ) -> Result<Option<TransactionReceipt>, Self::Error>;
+
     async fn get_accounts_nonces(
         &self,
         account_ids: Vec<AccountId>,
@@ -402,6 +411,13 @@ impl WalletSequencerClient for SequencerClient {
         tx_hash: HashType,
     ) -> Result<Option<(LeeTransaction, BlockId)>, Self::Error> {
         RpcClient::get_transaction(self, tx_hash).await
+    }
+
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: HashType,
+    ) -> Result<Option<TransactionReceipt>, Self::Error> {
+        RpcClient::get_transaction_receipt(self, tx_hash).await
     }
 
     async fn get_accounts_nonces(
@@ -1334,16 +1350,16 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             }
         };
         if let LeeTransaction::PrivacyPreserving(tx) = tx {
-            let block = self
-                .get_block(block_id)
+            let reverted = !self
+                .sequencer_client
+                .get_transaction_receipt(tx_hash)
                 .await?
-                .ok_or_else(|| anyhow::anyhow!("Block {block_id} including {tx_hash} not found"))?;
-            let reverted = block
-                .body
-                .transactions
-                .iter()
-                .position(|included| included.hash() == tx_hash)
-                .is_some_and(|position| block.body.is_reverted(position));
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Transaction {tx_hash} included in block {block_id} has no receipt"
+                    )
+                })?
+                .success;
             if reverted {
                 println!("Transaction reverted: its fee was charged and nothing else applied");
                 self.forget_swept(tx_hash);
@@ -3621,8 +3637,14 @@ mod tests {
             })
             .unwrap();
         sequencer
-            .register_method("getBlock", |_, included, _| {
-                Ok::<_, ErrorObjectOwned>(included.lock().unwrap().clone())
+            .register_method("getTransactionReceipt", |_, included, _| {
+                Ok::<_, ErrorObjectOwned>(
+                    included
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .and_then(|block| block.body.receipts.first().copied()),
+                )
             })
             .unwrap();
         let (mut wallet, _home, _sequencer) = served_wallet(sequencer).await;

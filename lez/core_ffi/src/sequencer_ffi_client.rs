@@ -7,7 +7,7 @@ use lee_core::CommitmentPosition;
 use sequencer_executor_actor::protocol::{
     GetAccount, GetAccountBalance, GetAccountNonces, GetAccountView, GetBlock, GetBlockRange,
     GetFeeQuote, GetLastBlockId, GetProofsAndRoot, GetPublications, GetRecoveryBinding,
-    GetTransaction, Transaction, TransactionOrigin,
+    GetTransaction, GetTransactionReceipt, Transaction, TransactionOrigin,
 };
 use sequencer_gossip_actor::protocol::Publish;
 use wallet::{ExecutionFailureKind, WalletSequencerClient};
@@ -149,6 +149,18 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
             .0
             .executor_ref()
             .ask(GetTransaction { tx_hash })
+            .send()
+            .await?)
+    }
+
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: common::HashType,
+    ) -> Result<Option<common::block::TransactionReceipt>, Self::Error> {
+        Ok(self
+            .0
+            .executor_ref()
+            .ask(GetTransactionReceipt { tx_hash })
             .send()
             .await?)
     }
