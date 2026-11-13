@@ -7,7 +7,7 @@ use lee::{
     signature::Signer,
 };
 use lee_core::signing_key::KeyType;
-use program_deployment::deploy_program;
+use program_deployment::{deploy_program, fee_paid_by};
 use sequencer_service_rpc::RpcClient as _;
 use wallet::WalletCore;
 
@@ -47,7 +47,7 @@ async fn main() {
         .unwrap()
         .parse()
         .unwrap();
-    // Third argument is an existing, funded account to pay the deployment fee
+    // Third argument is an existing, funded account to pay the deployment and transaction fees
     let payer: AccountId = std::env::args_os()
         .nth(3)
         .unwrap()
@@ -79,16 +79,22 @@ async fn main() {
         .get_accounts_nonces(&[account_id])
         .await
         .expect("Node should be reachable to query account data")[0];
-    let nonces = BTreeMap::from([(account_id, nonce)]);
+    let mut nonces = BTreeMap::from([(account_id, nonce)]);
     // Sign with the account's current key, committing to the WOTS+ key at the next nonce, which
     // the account rotates to
     let key_type = wallet_core
         .current_key_type(account_id)
         .await
         .expect("Node should be reachable to query the account's key");
-    let signing_keys = [Signer::new(&secret, nonce, key_type, KeyType::Wots)];
+    let mut signing_keys = vec![Signer::new(&secret, nonce, key_type, KeyType::Wots)];
+    // The fee is charged to `payer`, which must also sign (unless it is `account_id` itself).
+    let (fee, payer_nonce, payer_key) = fee_paid_by(&wallet_core, payer).await.unwrap();
+    if payer != account_id {
+        nonces.insert(payer, payer_nonce);
+        signing_keys.push(payer_key);
+    }
     let hello = Actor::new(account_id, program_account_id);
-    let message = Message::try_new(hello, vec![hello], nonces, greeting).unwrap();
+    let message = Message::try_new_with_fees(hello, vec![hello], nonces, greeting, fee).unwrap();
     // Pass the signing key to sign the message. This will be used by the node
     // to flag the pre_state as `is_authorized` when executing the program
     let witness_set = WitnessSet::sign(&message, &signing_keys);

@@ -41,11 +41,12 @@ struct Programs {
     live_payout: AccountId,
 }
 
-/// The in-proof fee reserve of a trade, generous for the payout's guest cycles at the floor base
-/// fees. The input note is presented canonically and unbound, so settlement keeps the surplus as
-/// tip rather than refunding it, and a settled trade spends the note whole.
+/// The in-proof fee reserve of a trade, generous for the payout's guest cycles and the trade's
+/// bytes at the floor base fees. The input note is presented canonically and unbound, so
+/// settlement keeps the surplus as tip rather than refunding it, and a settled trade spends the
+/// note whole.
 fn fee_reserve() -> u128 {
-    fee_core::assess::private_fee_required(2_000_000, 8, 8)
+    fee_core::assess::private_fee_required(2_000_000, fee_core::market::PROOF_BYTES + 100_000, 8, 8)
 }
 
 // Deploys `program` immutably through the loader, paid by the context's first public account.

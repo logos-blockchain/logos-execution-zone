@@ -10,7 +10,7 @@ use lee_core::{
 };
 use log::debug;
 
-use super::{catch_program_loader_panic, loader_actor_state};
+use super::{loader_actor_state, run_program_loader};
 use crate::{
     V03State,
     error::{InvalidProgramBehaviorError, LeeError},
@@ -73,13 +73,13 @@ impl ExecutionEnvironment for PublicBackend<'_> {
             });
         }
         let transition = if program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
-            // `program_loader` runs as Rust, not a guest ELF, so there is no session to charge.
             const ABSENT: &ActorState = &ActorState::empty();
-            let (transition, new_commitment) = catch_program_loader_panic(|| {
-                program_loader_core::handle_message(input, |account_id| {
-                    loader_actor_state(view, state, account_id).unwrap_or(ABSENT)
-                })
-            })?;
+            let (transition, new_commitment) = run_program_loader(
+                input,
+                |account_id| loader_actor_state(view, state, account_id).unwrap_or(ABSENT),
+                self.cycle_budget,
+                self.cycles_used,
+            )?;
             self.program_commitments.extend(new_commitment);
             transition
         } else if program_account_id == NATIVE_TOKEN_PROGRAM_ID {

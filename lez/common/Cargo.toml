@@ -17,6 +17,7 @@ bridge_lock_core.workspace = true
 cross_zone_inbox_core.workspace = true
 programs.workspace = true
 system_accounts.workspace = true
+system_upgrader_core.workspace = true
 
 anyhow.workspace = true
 thiserror.workspace = true

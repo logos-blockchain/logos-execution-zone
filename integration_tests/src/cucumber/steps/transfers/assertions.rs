@@ -222,8 +222,14 @@ async fn assert_sender_private_balance_decreased(
     let artifact = transfer_artifact(world, &transfer_name)?;
     let account = artifact.sender;
     let initial_balance = artifact.sender_balance_before;
-    // The private sender also pays the in-proof fee.
-    let fee = crate::config::min_private_fee();
+    // The private sender also pays the in-proof fee, priced off the transfer's charged bytes.
+    let (transaction, _) =
+        get_transfer_transaction(world.lez()?.sequencer_client(), artifact.hash).await?;
+    let fee = crate::config::private_fee(transaction.charged_bytes().map_err(|err| {
+        StepError::QueryFailed {
+            message: format!("the transfer does not serialize: {err}"),
+        }
+    })?);
     let amount = artifact
         .amount
         .checked_add(fee)

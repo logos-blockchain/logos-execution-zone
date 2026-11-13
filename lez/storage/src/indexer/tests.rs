@@ -82,10 +82,11 @@ fn initial_state() -> lee::V03State {
     .map(|(id, balance)| (id, Account::funded(balance)))
     .collect::<Vec<_>>();
 
-    // push clock system accounts
-    for clock_id in system_accounts::clock_account_ids() {
-        public_accounts.push((clock_id, system_accounts::clock_account()));
-    }
+    // push clock system account
+    public_accounts.push((
+        system_accounts::clock_account_id(),
+        system_accounts::clock_account(),
+    ));
 
     // push fee system accounts
     public_accounts.push((
@@ -105,9 +106,9 @@ fn initial_state() -> lee::V03State {
 
     lee::V03State::new()
         .with_public_accounts(public_accounts)
-        .with_named_programs([
-            (programs::clock_account_id(), programs::clock()),
-            (programs::fee_account_id(), programs::fee()),
+        .with_programs_at([
+            (programs::clock_account_id(), programs::clock(), true),
+            (programs::fee_account_id(), programs::fee(), true),
         ])
 }
 

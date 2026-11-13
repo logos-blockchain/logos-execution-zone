@@ -10,6 +10,11 @@ use thiserror::Error;
 pub struct Label(String);
 
 impl Label {
+    /// Characters an account label can't contain: `@`, `:` and `/` are the separators of an
+    /// actor (`<account>[@program][:sign]`, `pda:<owner>/<seed>`, `ik:<hex>`, `Public/<id>`,
+    /// `m/<path>`), so a label holding one would be read as something else.
+    pub const RESERVED_CHARS: [char; 3] = ['@', ':', '/'];
+
     #[expect(
         clippy::needless_pass_by_value,
         reason = "Convenience for caller and negligible cost"
@@ -17,6 +22,17 @@ impl Label {
     #[must_use]
     pub fn new(label: impl ToString) -> Self {
         Self(label.to_string())
+    }
+
+    /// Checks that this can name an account: it holds none of [`Self::RESERVED_CHARS`].
+    pub fn validate_for_account(&self) -> anyhow::Result<()> {
+        if let Some(reserved) = self.0.chars().find(|c| Self::RESERVED_CHARS.contains(c)) {
+            anyhow::bail!(
+                "Label `{self}` can't contain `{reserved}`: `@`, `:` and `/` are reserved for \
+                 account syntax"
+            );
+        }
+        Ok(())
     }
 }
 

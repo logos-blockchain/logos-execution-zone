@@ -272,7 +272,7 @@ fn a_declared_account_no_transition_changes_stays_out_of_the_diff_and_the_state(
 fn planted_signature_program() -> V03State {
     V03State::new()
         .with_programs([crate::test_methods::scripted()])
-        .with_named_programs([(SIGNATURE_PROGRAM_ID, crate::test_methods::scripted())])
+        .with_programs_at([(SIGNATURE_PROGRAM_ID, crate::test_methods::scripted(), true)])
 }
 
 fn assert_charged_as_an_unknown_callee(tx: &PublicTransaction, signer: &TestSigner) {

@@ -21,7 +21,7 @@ tempfile.workspace = true
 
 [dev-dependencies]
 common = { workspace = true, features = ["test-utils"] }
-lee = { workspace = true, features = ["test-signer"] }
+lee = { workspace = true, features = ["test-utils"] }
 lee_core = { workspace = true, features = ["host"] }
 programs.workspace = true
 system_accounts.workspace = true

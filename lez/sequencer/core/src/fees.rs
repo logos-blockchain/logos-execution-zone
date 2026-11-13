@@ -58,14 +58,12 @@ pub fn screen(tx: &LeeTransaction, state: &lee::V03State) -> Result<()> {
 
     validate_static_tx(&view, &fee_state)?;
 
-    let (public_tx, payer) = match (tx, &view) {
-        // A private transaction's fee is paid inside its proof,
-        // so nothing is left to check against the payer.
-        (LeeTransaction::PrivacyPreserving(_), FeeTxView::Private { .. }) => return Ok(()),
-        (LeeTransaction::Public(public_tx), FeeTxView::Public { payer, .. }) => (public_tx, *payer),
-        _ => unreachable!("classify pairs each transaction kind with its own fee view"),
+    let payer = match view {
+        // A fee paid inside the proof leaves nothing to check against the payer.
+        FeeTxView::Private { .. } => return Ok(()),
+        FeeTxView::Public { payer, .. } => payer,
     };
-    if !lee::is_fee_authorized(public_tx.message()) {
+    if !tx.is_fee_authorized() {
         return Err(Error::UnauthorizedPayer { payer });
     }
 
@@ -321,7 +319,6 @@ mod tests {
         };
 
         let state = initial_state(true);
-        let flat = fee_core::assess::private_fee_required(0, 8, 8);
         let private_tx = |reserve: Option<u128>| {
             let mut message = PrivateMessage::default();
             message.execution.boundary = reserve
@@ -346,6 +343,9 @@ mod tests {
             ))
         };
 
+        // The reserve's value leaves the size alone.
+        let size = private_tx(Some(0)).charged_bytes().unwrap();
+        let flat = fee_core::assess::private_fee_required(0, size, 8, 8);
         screen(&private_tx(Some(flat)), &state).expect("a well-priced reserve is admitted");
         assert!(matches!(
             screen(&private_tx(None), &state),
@@ -354,6 +354,54 @@ mod tests {
         assert!(matches!(
             screen(&private_tx(Some(flat - 1)), &state),
             Err(Error::FeeCore(FeeError::PrivateFeeBelowRequired { .. }))
+        ));
+    }
+
+    /// A private transaction whose fee a public signer declares is screened as a public one: the
+    /// payer must sign and hold the reserve.
+    #[test]
+    fn a_private_transaction_declaring_its_fee_is_screened_on_its_signer() {
+        use std::collections::BTreeMap;
+
+        use lee::{
+            privacy_preserving_transaction::{
+                Message as PrivateMessage, PrivacyPreservingTransaction, circuit::Proof,
+            },
+            test_utils::privacy_witness_for,
+        };
+
+        let state = initial_state(true);
+        let funded = TestSigner::from(&initial_pub_accounts_private_keys()[0].secret);
+        let unfunded = TestSigner::new(7);
+        let declared = |payer, signer: &TestSigner| {
+            let message = PrivateMessage {
+                nonces: BTreeMap::from([(
+                    signer.account_id(),
+                    state.get_account_by_id(signer.account_id()).nonce,
+                )]),
+                fee: Some(FeeDeclaration::new(
+                    payer,
+                    market::PRIVATE_VERIFY_GAS,
+                    0,
+                    u128::MAX >> 1,
+                )),
+                ..PrivateMessage::default()
+            };
+            LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+                message.clone(),
+                privacy_witness_for(&message, Proof::from_inner(vec![]), &[signer]),
+            ))
+        };
+
+        screen(&declared(funded.account_id(), &funded), &state)
+            .expect("a funded signer pays its declared fee");
+        assert!(matches!(
+            screen(&declared(unfunded.account_id(), &funded), &state),
+            Err(Error::UnauthorizedPayer { .. })
+        ));
+        assert!(matches!(
+            screen(&declared(unfunded.account_id(), &unfunded), &state),
+            Err(Error::PayerCannotFund { .. })
         ));
     }
 

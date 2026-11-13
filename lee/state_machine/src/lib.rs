@@ -3,7 +3,7 @@
     reason = "We prefer to group methods by functionality rather than by type for encoding"
 )]
 
-pub use fees::{FeeDeclaration, SignedMessage, is_fee_authorized};
+pub use fees::{FeeDeclaration, is_fee_authorized};
 pub use lee_core::{
     DummyOutput, EncryptedNote, GENESIS_BLOCK_ID, MessageWitness, ProvingInput, Recipient,
     RecipientEncryption, RecoveryBinding, RootCall, SealedMessage, SenderPresentation,
@@ -26,13 +26,14 @@ pub use privacy_preserving_circuit::{
 pub use privacy_preserving_transaction::{
     PrivacyPreservingTransaction,
     circuit::{
-        Simulation, execute_and_prove, execute_and_prove_with_cross_messages,
-        simulate_privacy_preserving_transaction, simulate_public_transaction,
+        Simulation, execute_and_prove, execute_and_prove_with_cross_messages, execute_unproven,
+        execute_unproven_with_cross_messages, simulate_privacy_preserving_transaction,
+        simulate_public_transaction,
     },
 };
 pub use public_transaction::PublicTransaction;
 pub use signature::{PrivateKey, PublicKey, Signature};
-pub use state::V03State;
+pub use state::{GenesisBuilder, V03State};
 pub use transaction_message::{
     InvalidTransaction, PublicAccountEvidence, TransactionMessage, nonce_map,
 };

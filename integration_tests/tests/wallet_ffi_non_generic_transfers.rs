@@ -15,15 +15,19 @@ use anyhow::Result;
 use core_ffi::{
     error,
     primitives::types::{FfiBytes32, FfiPrivateAccountKeys, account::FfiAccount},
-    wallet::{FfiTransferResult, lifecycle::FfiCreateWalletOutput},
+    wallet::{
+        FfiTransferResult,
+        fees::{FfiFeeKind, FfiFeeParams, FfiFeeState},
+        lifecycle::FfiCreateWalletOutput,
+    },
 };
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS,
-    config::{INITIAL_PRIVATE_BALANCES_FOR_WALLET, min_private_fee},
+    config::{INITIAL_PRIVATE_BALANCES_FOR_WALLET, private_fee},
     ffi_helpers::{sequencer as sequencer_ffi_helpers, wallet::*},
 };
 use lee::Account;
-use wallet::DEFAULT_MAX_FEE;
+use wallet::DEFAULT_GAS_LIMIT;
 
 #[test]
 fn wallet_ffi_public_credit_creates_only_the_native_actor_state() -> Result<()> {
@@ -141,6 +145,14 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
     log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
+    let declared = transfer_result.fee;
+    assert!(!transfer_result.is_dry_run);
+    assert_eq!(declared.kind, FfiFeeKind::Public);
+    assert_eq!(declared.public_fee.payer, from);
+    // The gas limit is measured, well below the configured ceiling.
+    assert!(declared.public_fee.gas_limit < DEFAULT_GAS_LIMIT);
+    let declared_max_fee = u128::from(declared.public_fee.max_fee);
+
     // The sleep is barely longer than one block period, so on a loaded machine the
     // transfer may still be unconfirmed. Balances only move once the transaction is
     // in a block, so wait for it rather than reading a pre-transfer state.
@@ -170,8 +182,8 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
         .and_then(|rest| rest.checked_sub(from_balance))
         .expect("sender must be debited at least the transferred amount");
     assert!(
-        fee > 0 && fee <= DEFAULT_MAX_FEE,
-        "a charged transfer pays a positive fee within the ceiling, got {fee}"
+        fee > 0 && fee <= declared_max_fee,
+        "a charged transfer pays a positive fee within its cap {declared_max_fee}, got {fee}"
     );
 
     unsafe {
@@ -306,6 +318,13 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
     }
     .unwrap();
 
+    // The sender pays the in-proof fee out of a reserve of at least the fee it is charged.
+    let declared = transfer_result.fee;
+    assert_eq!(declared.kind, FfiFeeKind::Private);
+    assert_eq!(declared.private_fee.payer, from);
+    let fee = u128::from(declared.private_fee.reserve);
+    assert!(!declared.private_fee.has_refund_to);
+
     wait_for_inclusion(wallet_ffi_handle, &transfer_result);
 
     // Sync private account local storage with onchain encrypted state
@@ -337,7 +356,7 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
     // amount.
     assert_eq!(
         from_balance,
-        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0] - 100 - min_private_fee()
+        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0] - 100 - fee
     );
     assert_eq!(to_balance, to_before + 100);
 
@@ -405,7 +424,8 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
         wallet_ffi_sync_to_block(wallet_ffi_handle, current_height).unwrap();
     };
     // Sent by keys, the credit is pending until the owner receives it.
-    receive_pending(wallet_ffi_handle);
+    let fee = u128::from(transfer_result.fee.private_fee.reserve);
+    let receipt_fee = receive_pending(wallet_ffi_handle);
 
     let from_balance = unsafe {
         let mut out_balance: [u8; 16] = [0; 16];
@@ -432,12 +452,253 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
     // The recipient holds 100, below the fee, so the wallet pays its receipt from `from` too.
     assert_eq!(
         from_balance,
-        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0] - 100 - 2 * min_private_fee()
+        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0] - 100 - fee - receipt_fee
     );
     assert_eq!(to_balance, 100);
 
     unsafe {
         wallet_ffi_free_transfer_result(&raw mut transfer_result);
+        wallet_ffi_destroy(wallet_ffi_handle);
+    }
+
+    // SAFETY: sequencer_ffi created by FFI, it is valid.
+    unsafe {
+        sequencer_ffi_helpers::sequencer_ffi_stop_sequencer(sequencer_ffi_res.value);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_wallet_ffi_dry_runs_report_without_sending() -> Result<()> {
+    let sequencer_ffi_helpers::JoiningSetup {
+        ctx,
+        node: _,
+        ownership_id: _,
+        sequencer_ffi: sequencer_ffi_res,
+        sequencer_home,
+    } = sequencer_ffi_helpers::joining_setup(true)?;
+
+    log::info!("Joining sequencer home: {sequencer_home:?}");
+
+    let home = tempfile::tempdir()?;
+    let FfiCreateWalletOutput {
+        wallet: wallet_ffi_handle,
+        mnemonic: _,
+    } = new_wallet_ffi_with_test_context_config(&ctx, home.path(), sequencer_ffi_res.value)?;
+    let public: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
+    let other_public: FfiBytes32 = ctx.ctx().existing_public_accounts()[1].into();
+    let private: FfiBytes32 = ctx.ctx().existing_private_accounts()[0].into();
+    let amount: [u8; 16] = 100_u128.to_le_bytes();
+
+    let mut fee_state = FfiFeeState::default();
+    unsafe {
+        wallet_ffi_get_fee_state(wallet_ffi_handle, &raw mut fee_state).unwrap();
+        wallet_ffi_set_dry_run(wallet_ffi_handle, true).unwrap();
+    }
+    assert!(fee_state.base_fee_exec > 0 && fee_state.base_fee_stor > 0);
+
+    let mut public_result = FfiTransferResult::default();
+    unsafe {
+        wallet_ffi_transfer_public(
+            wallet_ffi_handle,
+            &raw const public,
+            &raw const other_public,
+            &raw const amount,
+            &raw mut public_result,
+        )
+        .unwrap();
+    }
+    assert!(public_result.success && public_result.tx_hash.is_null());
+    let public_send = &public_result;
+    assert!(public_send.is_dry_run);
+    assert_eq!(public_send.fee.kind, FfiFeeKind::Public);
+    assert_eq!(public_send.fee.public_fee.payer, public);
+    // The test wallet prices no headroom, so the default cap is the reserve at head, and the
+    // gas limit is the measured cycles plus the 25% margin.
+    assert_eq!(
+        public_send.fee.public_fee.gas_limit,
+        (public_send.dry_run.cycles * 125).div_ceil(100)
+    );
+    assert_eq!(
+        u128::from(public_send.fee.public_fee.max_fee),
+        u128::from(public_send.dry_run.reserve_at_head)
+    );
+    assert!(public_send.dry_run.wire_bytes > 0);
+    assert!(
+        public_send.dry_run.revert_reason.is_null(),
+        "a funded transfer applies"
+    );
+    assert_eq!(
+        u128::from(public_send.dry_run.fee_at_head),
+        u128::from(public_send.dry_run.cycles)
+            * u128::from(public_send.dry_run.fee_state.base_fee_exec)
+            + u128::from(public_send.dry_run.wire_bytes)
+                * u128::from(public_send.dry_run.fee_state.base_fee_stor)
+    );
+
+    let mut private_result = FfiTransferResult::default();
+    unsafe {
+        wallet_ffi_transfer_deshielded(
+            wallet_ffi_handle,
+            &raw const private,
+            &raw const public,
+            &raw const amount,
+            &raw mut private_result,
+        )
+        .unwrap();
+    }
+    assert!(private_result.success && private_result.tx_hash.is_null());
+    let private_send = &private_result;
+    assert!(private_send.is_dry_run);
+    assert_eq!(private_send.fee.kind, FfiFeeKind::Private);
+    assert_eq!(private_send.fee.private_fee.payer, private);
+    // The test wallet prices no headroom, so the reserve is the fee at head.
+    assert_eq!(private_send.dry_run.headroom_blocks, 0);
+    assert_eq!(
+        u128::from(private_send.fee.private_fee.reserve),
+        u128::from(private_send.dry_run.fee_at_head)
+    );
+    assert!(
+        u128::from(private_send.dry_run.fee_at_head) >= private_fee(fee_core::market::PROOF_BYTES)
+    );
+
+    // Fee params replace the defaults a send declares.
+    let params = FfiFeeParams {
+        has_gas_limit: true,
+        gas_limit: 500_000,
+        tip: 7,
+        has_headroom_blocks: true,
+        headroom_blocks: 2,
+        ..FfiFeeParams::default()
+    };
+    let mut tuned_public_result = FfiTransferResult::default();
+    let mut tuned_private_result = FfiTransferResult::default();
+    unsafe {
+        wallet_ffi_set_fee_params(wallet_ffi_handle, &raw const params).unwrap();
+        wallet_ffi_transfer_public(
+            wallet_ffi_handle,
+            &raw const public,
+            &raw const other_public,
+            &raw const amount,
+            &raw mut tuned_public_result,
+        )
+        .unwrap();
+        wallet_ffi_transfer_deshielded(
+            wallet_ffi_handle,
+            &raw const private,
+            &raw const public,
+            &raw const amount,
+            &raw mut tuned_private_result,
+        )
+        .unwrap();
+    }
+    let tuned_public = &tuned_public_result;
+    let declared = tuned_public.fee.public_fee;
+    assert_eq!(declared.gas_limit, 500_000);
+    assert_eq!(declared.tip, 7);
+    // The cap is the reserve at the base fees after the 2 headroom blocks of the steepest climb.
+    let state = tuned_public.dry_run.fee_state;
+    let climb = |base, max_gas, target, damping, lo, hi| {
+        (0..2).fold(base, |fee, _| {
+            fee_core::market::next_base_fee(fee, max_gas, target, damping, lo, hi)
+        })
+    };
+    let exec_ceiling = climb(
+        state.base_fee_exec,
+        fee_core::market::MAX_GAS_EXEC,
+        fee_core::market::TARGET_GAS_EXEC,
+        fee_core::market::D_EXEC,
+        fee_core::market::BASE_FEE_EXEC_MIN,
+        fee_core::market::BASE_FEE_EXEC_MAX,
+    );
+    let stor_ceiling = climb(
+        state.base_fee_stor,
+        fee_core::market::MAX_GAS_STOR,
+        fee_core::market::TARGET_GAS_STOR,
+        fee_core::market::D_STOR,
+        fee_core::market::BASE_FEE_STOR_MIN,
+        fee_core::market::BASE_FEE_STOR_MAX,
+    );
+    assert_eq!(
+        u128::from(declared.max_fee),
+        500_000 * u128::from(exec_ceiling)
+            + u128::from(tuned_public.dry_run.wire_bytes) * u128::from(stor_ceiling)
+            + 7
+    );
+    // The sequencer admits a cap of at least the reserve, priced at the gas limit.
+    assert_eq!(
+        u128::from(tuned_public.dry_run.reserve_at_head),
+        500_000 * u128::from(tuned_public.dry_run.fee_state.base_fee_exec)
+            + u128::from(tuned_public.dry_run.wire_bytes)
+                * u128::from(tuned_public.dry_run.fee_state.base_fee_stor)
+            + 7
+    );
+    let tuned_private = &tuned_private_result.dry_run;
+    assert_eq!(tuned_private.headroom_blocks, 2);
+    assert!(u128::from(tuned_private.headroom_reserve) >= u128::from(tuned_private.fee_at_head));
+
+    unsafe {
+        wallet_ffi_free_transfer_result(&raw mut tuned_public_result);
+        wallet_ffi_free_transfer_result(&raw mut tuned_private_result);
+        wallet_ffi_free_transfer_result(&raw mut public_result);
+        wallet_ffi_free_transfer_result(&raw mut private_result);
+        wallet_ffi_destroy(wallet_ffi_handle);
+    }
+
+    // SAFETY: sequencer_ffi created by FFI, it is valid.
+    unsafe {
+        sequencer_ffi_helpers::sequencer_ffi_stop_sequencer(sequencer_ffi_res.value);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_wallet_ffi_refuses_a_public_send_whose_simulation_reverts() -> Result<()> {
+    let sequencer_ffi_helpers::JoiningSetup {
+        ctx,
+        node: _,
+        ownership_id: _,
+        sequencer_ffi: sequencer_ffi_res,
+        sequencer_home,
+    } = sequencer_ffi_helpers::joining_setup(true)?;
+
+    log::info!("Joining sequencer home: {sequencer_home:?}");
+
+    let home = tempfile::tempdir()?;
+    let FfiCreateWalletOutput {
+        wallet: wallet_ffi_handle,
+        mnemonic: _,
+    } = new_wallet_ffi_with_test_context_config(&ctx, home.path(), sequencer_ffi_res.value)?;
+    let from: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
+    let bedrock_account_pk = FfiBytes32::from_bytes([1; 32]);
+
+    // A guest program call runs out of a 1000-cycle limit, and a failed action is charged its
+    // whole limit.
+    let params = FfiFeeParams {
+        has_gas_limit: true,
+        gas_limit: 1000,
+        ..FfiFeeParams::default()
+    };
+    let mut result = FfiTransferResult::default();
+    unsafe {
+        wallet_ffi_set_fee_params(wallet_ffi_handle, &raw const params).unwrap();
+        assert_eq!(
+            wallet_ffi_bridge_withdraw(
+                wallet_ffi_handle,
+                &raw const from,
+                100,
+                &raw const bedrock_account_pk,
+                &raw mut result,
+            ),
+            error::FfiOperationError::WouldRevert
+        );
+    }
+    assert!(!result.success && result.tx_hash.is_null());
+
+    unsafe {
+        wallet_ffi_free_transfer_result(&raw mut result);
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 

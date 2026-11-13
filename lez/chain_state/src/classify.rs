@@ -2,7 +2,8 @@
 //!
 //! User public transactions are charged through their fee declaration. Private
 //! transactions are charged through the reserve they paid inside the proof: one
-//! native credit crossing into the fee inbox, settled at the block's base fees.
+//! native credit crossing into the fee inbox, settled at the block's base fees;
+//! or through a declaration by one of their public signers, as public ones are.
 //! System injections and genesis transactions are exempt by design. Programs
 //! are deployed through ordinary public transactions (via `program_loader`),
 //! so deployment is charged like any other user action.
@@ -15,7 +16,7 @@ use common::transaction::{
     LeeTransaction, is_cross_zone_lock, is_sequencer_stake_operation, validate_reward_target,
 };
 use fee_core::{assess::FeeTxView, market};
-use lee::privacy_preserving_transaction::Message as PrivateMessage;
+use lee::{FeeDeclaration, privacy_preserving_transaction::Message as PrivateMessage};
 use lee_core::{
     account::{AccountId, Actor, Balance},
     execution_state::{BoundaryStep, Delivery},
@@ -45,8 +46,7 @@ pub enum ClassifyError {
     /// into the fee inbox, or that crossing is not a native credit.
     #[error("private transaction omits its required in-proof fee")]
     MissingPrivateFee,
-    /// A private transaction carries more private actions than its flat
-    /// storage price covers.
+    /// A private transaction carries more private actions than allowed.
     #[error(
         "private transaction carries {count} private actions, more than the {} allowed",
         market::MAX_PRIVATE_ACTIONS
@@ -60,18 +60,35 @@ pub enum ClassifyError {
     /// its reserve is priced from.
     #[error("private fee fallback does not replay the fee transfer alone")]
     InvalidFeeFallback,
+    /// A private transaction declaring its fee also pays one inside its proof
+    /// or crosses into the fee inbox.
+    #[error("private transaction pays its fee both in its proof and by declaration")]
+    DoubleFee,
+    /// A private transaction's declared gas limit does not cover its proof's
+    /// verification.
+    #[error(
+        "private transaction declares gas limit {gas_limit}, below the {} its proof's \
+         verification costs",
+        market::PRIVATE_VERIFY_GAS
+    )]
+    GasLimitBelowVerification { gas_limit: u64 },
+    /// A private transaction's proof is longer than the fixed size its storage
+    /// is charged at.
+    #[error(
+        "private transaction's proof is {size} bytes, more than the {} allowed",
+        market::PROOF_BYTES
+    )]
+    OversizedProof { size: usize },
 }
 
-/// The reserve a private transaction credits to the fee inbox inside its proof,
-/// the address it came from and the crossing carrying it, if the boundary
-/// carries exactly one crossing into the inbox and it is a native credit.
-fn private_fee_reserve(message: &PrivateMessage) -> Option<(AccountId, Balance, &Delivery<Actor>)> {
+/// The crossings of a private transaction's boundary into the fee inbox.
+fn inbox_crossings(message: &PrivateMessage) -> impl Iterator<Item = &Delivery<Actor>> {
     let inbox = Actor::native_balance(system_accounts::fee_inbox_account_id());
-    let mut crossings = message
+    message
         .execution
         .boundary
         .iter()
-        .filter_map(|step| match step {
+        .filter_map(move |step| match step {
             BoundaryStep::PrivateToPublic(delivery) if delivery.envelope.to == inbox => {
                 Some(delivery)
             }
@@ -79,7 +96,25 @@ fn private_fee_reserve(message: &PrivateMessage) -> Option<(AccountId, Balance, 
             | BoundaryStep::PublicToPrivate(_)
             | BoundaryStep::EndPrivateSubtree
             | BoundaryStep::EndPublicSubtree => None,
-        });
+        })
+}
+
+/// The view a declared fee is priced and settled by.
+const fn declared_view(fee: FeeDeclaration, data_bytes: u64) -> FeeTxView {
+    FeeTxView::Public {
+        payer: fee.payer,
+        gas_limit: fee.gas_limit,
+        data_bytes,
+        tip: fee.tip,
+        max_fee: fee.max_fee,
+    }
+}
+
+/// The reserve a private transaction credits to the fee inbox inside its proof,
+/// the address it came from and the crossing carrying it, if the boundary
+/// carries exactly one crossing into the inbox and it is a native credit.
+fn private_fee_reserve(message: &PrivateMessage) -> Option<(AccountId, Balance, &Delivery<Actor>)> {
+    let mut crossings = inbox_crossings(message);
     let delivery = crossings.next()?;
     if crossings.next().is_some() {
         return None;
@@ -102,12 +137,18 @@ fn private_fee_reserve(message: &PrivateMessage) -> Option<(AccountId, Balance, 
 ///
 /// - [`ClassifyError::MissingFeeDeclaration`] if a user public transaction that is not an exempt
 ///   shape omits its fee
-/// - [`ClassifyError::MissingPrivateFee`] if a private transaction omits its in-proof fee,
+/// - [`ClassifyError::MissingPrivateFee`] if a private transaction declares no fee and omits its
+///   in-proof fee,
+/// - [`ClassifyError::DoubleFee`] if it both declares a fee and pays one in its proof or crosses
+///   into the fee inbox,
+/// - [`ClassifyError::GasLimitBelowVerification`] if its declared gas limit is below
+///   [`market::PRIVATE_VERIFY_GAS`],
 /// - [`ClassifyError::TooManyPrivateActions`] if it carries more private actions than
 ///   [`market::MAX_PRIVATE_ACTIONS`],
 /// - [`ClassifyError::InvalidRefundTarget`] if it names a restricted account as its refund target,
 /// - [`ClassifyError::InvalidFeeFallback`] if its fee fallback replays anything but that fee
 ///   transfer's crossing,
+/// - [`ClassifyError::OversizedProof`] if its proof is longer than [`market::PROOF_BYTES`],
 /// - [`ClassifyError::Unserializable`] if a charged transaction cannot be serialized to price its
 ///   storage gas.
 pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, ClassifyError> {
@@ -117,12 +158,38 @@ pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, Class
     let public_tx = match tx {
         LeeTransaction::PrivacyPreserving(private_tx) => {
             let execution = &private_tx.message().execution;
+            let count = execution.private_actions.len();
+            if count > market::MAX_PRIVATE_ACTIONS {
+                return Err(ClassifyError::TooManyPrivateActions { count });
+            }
+            let size = private_tx.witness_set().proof().size();
+            if u64::try_from(size).map_or(true, |size| size > market::PROOF_BYTES) {
+                return Err(ClassifyError::OversizedProof { size });
+            }
+            // A public signer's declaration pays like a public transaction whose gas limit also
+            // covers the proof's verification.
+            if let Some(fee) = private_tx.message().fee {
+                if execution.proven_fee.is_some()
+                    || inbox_crossings(private_tx.message()).next().is_some()
+                {
+                    return Err(ClassifyError::DoubleFee);
+                }
+                if fee.gas_limit < market::PRIVATE_VERIFY_GAS {
+                    return Err(ClassifyError::GasLimitBelowVerification {
+                        gas_limit: fee.gas_limit,
+                    });
+                }
+                return Ok(FeeClass::Charged(declared_view(fee, tx.charged_bytes()?)));
+            }
             let Some((payer, reserve, crossing)) = private_fee_reserve(private_tx.message()) else {
                 return Err(ClassifyError::MissingPrivateFee);
             };
             // The fallback is applied in place of the proven actions, so it must pay exactly
             // the reserve priced here: the same crossing, alone.
-            if let Some(fallback) = execution.fee.as_ref().and_then(|fee| fee.fallback.as_ref())
+            if let Some(fallback) = execution
+                .proven_fee
+                .as_ref()
+                .and_then(|fee| fee.fallback.as_ref())
                 && fallback.boundary
                     != [
                         BoundaryStep::PrivateToPublic(crossing.clone()),
@@ -131,15 +198,15 @@ pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, Class
             {
                 return Err(ClassifyError::InvalidFeeFallback);
             }
-            let count = execution.private_actions.len();
-            if count > market::MAX_PRIVATE_ACTIONS {
-                return Err(ClassifyError::TooManyPrivateActions { count });
-            }
-            if let Some(target) = execution.fee.as_ref().and_then(|fee| fee.refund_to) {
+            if let Some(target) = execution.proven_fee.as_ref().and_then(|fee| fee.refund_to) {
                 validate_reward_target(target)
                     .map_err(|reason| ClassifyError::InvalidRefundTarget { reason })?;
             }
-            return Ok(FeeClass::Charged(FeeTxView::Private { payer, reserve }));
+            return Ok(FeeClass::Charged(FeeTxView::Private {
+                payer,
+                reserve,
+                data_bytes: tx.charged_bytes()?,
+            }));
         }
         LeeTransaction::Public(public_tx) => public_tx,
     };
@@ -163,18 +230,11 @@ pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, Class
     }
 
     // a non-exempt user public transaction must declare a fee
-    let Some(fee) = public_tx.message().execution.fee else {
+    let Some(fee) = public_tx.message().fee else {
         return Err(ClassifyError::MissingFeeDeclaration);
     };
 
-    let data_bytes = u64::try_from(borsh::to_vec(tx)?.len()).expect("tx size fits u64");
-    Ok(FeeClass::Charged(FeeTxView::Public {
-        payer: fee.payer,
-        gas_limit: fee.gas_limit,
-        data_bytes,
-        tip: fee.tip,
-        max_fee: fee.max_fee,
-    }))
+    Ok(FeeClass::Charged(declared_view(fee, tx.charged_bytes()?)))
 }
 
 #[cfg(test)]
@@ -224,11 +284,38 @@ mod tests {
             crossing(inbox(), &native_token::Message::Credit(42)),
             BoundaryStep::EndPublicSubtree,
         ];
-        let class = classify(&private_tx(boundary), false).unwrap();
+        let tx = private_tx(boundary);
+        let size = tx.charged_bytes().unwrap();
+        let class = classify(&tx, false).unwrap();
         assert!(matches!(
             class,
-            FeeClass::Charged(FeeTxView::Private { payer, reserve: 42 })
-                if payer == self::payer().account_id
+            FeeClass::Charged(FeeTxView::Private { payer, reserve: 42, data_bytes })
+                if payer == self::payer().account_id && data_bytes == size
+        ));
+    }
+
+    #[test]
+    fn a_private_transaction_is_charged_a_fixed_proof_it_may_not_exceed() {
+        let with_proof = |size| {
+            let mut message = Message::default();
+            message.execution.boundary = vec![
+                crossing(inbox(), &native_token::Message::Credit(42)),
+                BoundaryStep::EndPublicSubtree,
+            ];
+            LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+                message,
+                WitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![0; size])),
+            ))
+        };
+        let cap = usize::try_from(market::PROOF_BYTES).unwrap();
+        assert_eq!(
+            with_proof(0).charged_bytes().unwrap(),
+            with_proof(cap).charged_bytes().unwrap()
+        );
+        assert!(classify(&with_proof(cap), false).is_ok());
+        assert!(matches!(
+            classify(&with_proof(cap + 1), false),
+            Err(ClassifyError::OversizedProof { size }) if size == cap + 1
         ));
     }
 
@@ -260,7 +347,7 @@ mod tests {
         let targeting = |target| {
             let mut message = Message::default();
             message.execution.boundary = crediting();
-            message.execution.fee = Some(lee_core::ProvenFee {
+            message.execution.proven_fee = Some(lee_core::ProvenFee {
                 refund_to: Some(target),
                 fallback: None,
             });
@@ -277,12 +364,65 @@ mod tests {
     }
 
     #[test]
+    fn a_private_transaction_declaring_its_fee_is_priced_as_a_public_one() {
+        let declared = |gas_limit, proven_fee: bool, crossing_inbox: bool| {
+            let mut message = Message {
+                fee: Some(lee::FeeDeclaration::new(
+                    payer().account_id,
+                    gas_limit,
+                    3,
+                    99,
+                )),
+                ..Message::default()
+            };
+            message.execution.proven_fee = proven_fee.then_some(lee_core::ProvenFee {
+                refund_to: None,
+                fallback: None,
+            });
+            if crossing_inbox {
+                message.execution.boundary = vec![
+                    crossing(inbox(), &native_token::Message::Credit(42)),
+                    BoundaryStep::EndPublicSubtree,
+                ];
+            }
+            LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+                message,
+                WitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![])),
+            ))
+        };
+        let gas_limit = market::PRIVATE_VERIFY_GAS;
+        let tx = declared(gas_limit, false, false);
+        let size = tx.charged_bytes().unwrap();
+        assert!(matches!(
+            classify(&tx, false),
+            Ok(FeeClass::Charged(FeeTxView::Public {
+                payer,
+                gas_limit: limit,
+                data_bytes,
+                tip: 3,
+                max_fee: 99,
+            })) if payer == self::payer().account_id && limit == gas_limit && data_bytes == size
+        ));
+        assert!(matches!(
+            classify(&declared(gas_limit - 1, false, false), false),
+            Err(ClassifyError::GasLimitBelowVerification { gas_limit: limit })
+                if limit == gas_limit - 1
+        ));
+        for (proven_fee, crossing_inbox) in [(true, false), (false, true)] {
+            assert!(matches!(
+                classify(&declared(gas_limit, proven_fee, crossing_inbox), false),
+                Err(ClassifyError::DoubleFee)
+            ));
+        }
+    }
+
+    #[test]
     fn a_fee_fallback_must_replay_the_priced_inbox_credit_alone() {
         let credit = crossing(inbox(), &native_token::Message::Credit(42));
         let with_fallback = |boundary| {
             let mut message = Message::default();
             message.execution.boundary = vec![credit.clone(), BoundaryStep::EndPublicSubtree];
-            message.execution.fee = Some(lee_core::ProvenFee {
+            message.execution.proven_fee = Some(lee_core::ProvenFee {
                 refund_to: None,
                 fallback: Some(lee_core::FeeFallback {
                     action: lee_core::PrivateAction::default(),

@@ -26,6 +26,7 @@ impl Message {
             public_context,
             execution,
             nonces,
+            fee: None,
             admission_evidence: Vec::new(),
         }
     }
@@ -130,9 +131,10 @@ pub mod tests {
                 }],
                 validity: ValidityWindows::new_unbounded(),
                 program_image_claims: vec![],
-                fee: None,
+                proven_fee: None,
             },
             nonces,
+            fee: None,
             admission_evidence: vec![],
         }
     }
@@ -160,10 +162,11 @@ pub mod tests {
             &[0, 0],           // execution.validity.blocks: from None, to None
             &[0, 0],           // execution.validity.timestamps: from None, to None
             &[0, 0, 0, 0],     // execution.program_image_claims: none
-            &[0],              // execution.fee: None
+            &[0],              // execution.proven_fee: None
             &[1, 0, 0, 0],     // nonces: one account's nonce, a little-endian u128
             &[2; 32],
             &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            &[0],          // fee: None
             &[1, 0, 0, 0], // admission_evidence: one entry
             &[1],          // PublicAccountEvidence::Pda
             &[0; 32],      // program
@@ -181,11 +184,11 @@ pub mod tests {
         let message = pinned_message();
         assert_eq!(
             message.message_with_keys(&[key(7)]),
-            hex!("8a3f24ce59592ca5fd3f0ebb236e4e8a096827eace51d44b5e558ab9f74f5f27")
+            hex!("61b322dfb487c6d8ae289bae627ed10df1a2ecd6d67907a652172ecab8344e58")
         );
         assert_eq!(
             message.message_with_keys(&[key(1), key(2), key(3)]),
-            hex!("4bbf392c96d717f0a19722489a96cd19d0754f6af475adb6daaccc2e4dfc598c")
+            hex!("0196415377194d129a9180dcb0d4eb82117e85d437cb855486385603a2113d1d")
         );
     }
 
@@ -205,7 +208,7 @@ pub mod tests {
 
         assert_eq!(
             as_privacy,
-            hex!("7d10fab90723366cb16ae3e207a25e0aeafacf65a196ff33e23a0f6f3c601f5a")
+            hex!("b9d8f57f8b9a92be3fd134986bb66df50a207738445c5d44f0f0b3c136183d68")
         );
         assert_ne!(public.message_with_keys(&next), as_privacy);
     }

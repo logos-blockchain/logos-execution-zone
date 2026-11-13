@@ -22,7 +22,7 @@ All three draw from a genesis-funded public account and move the native token; n
 |---|---|---|
 | Wall time per step | same in both modes | real adds the PPE prove time per private step |
 | `public_tx_bytes` | same in both modes | same in both modes |
-| `ppe_tx_bytes` | n/a | dev ≈ 24 KB stub → real ≈ 223 KB (matches `S_agg` from cycle_bench) |
+| `ppe_tx_bytes` | n/a | dev: the message plus a stub proof pruned to a digest → real: the message plus 223 KB (`PROOF_BYTES` from cycle_bench) |
 | `block_bytes` | same in both modes | real adds about 223 KB per PPE tx in the block |
 | `bedrock_finality_s` | same in both modes | same in both modes (L1 cadence, not LEZ prover) |
 | Blocks captured | similar in both modes | real captures more empty clock-only ticks that fill prove wall-time |
@@ -67,7 +67,7 @@ In dev mode every submitting step costs about 30 s, which is block cadence and n
 
 Signatures are WOTS+ (625 B each, one per signer). The public means mix the per-block system transactions (303 B, no signature) with the signed transfers.
 
-The `private_chained_flow` `ppe_tx_bytes` above are dev-mode stubs. Under real proving they become the `S_agg` figure from cycle_bench, about 223 KB each.
+The `private_chained_flow` `ppe_tx_bytes` above are dev-mode stubs, measured before the proof's claim was pruned to a digest; a dev-mode stub is now far smaller. Under real proving each grows by the 223 KB proof from cycle_bench.
 
 ## Findings
 

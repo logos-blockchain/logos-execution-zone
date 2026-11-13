@@ -38,40 +38,30 @@ async fn modify_config_field() -> Result<()> {
 }
 
 #[test]
-async fn transactions_declare_the_configured_gas_limit() -> Result<()> {
+async fn a_gas_limit_above_the_per_transaction_cap_is_clamped() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     let accounts = ctx.existing_public_accounts();
     let from = accounts[0];
     let to = accounts[1];
+    let over_cap = fee_core::market::MAX_GAS_EXEC + 1;
 
-    // One past the per-transaction ceiling, which the sequencer refuses before
-    // it executes anything. Nothing else about a plain transfer can produce
-    // that refusal, so it can only have come from the configured limit.
+    // The configured limit is the ceiling of a measured one, held to the cap the sequencer
+    // enforces.
     let command = Command::Config(ConfigSubcommand::Set {
         key: "gas_limit".to_owned(),
-        value: (fee_core::market::MAX_GAS_EXEC + 1).to_string(),
+        value: over_cap.to_string(),
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-    assert_eq!(
-        ctx.wallet().config().gas_limit,
-        fee_core::market::MAX_GAS_EXEC + 1
-    );
+    assert_eq!(ctx.wallet().config().gas_limit, over_cap);
+    send(&mut ctx, public_mention(from), public_mention(to), 100).await?;
 
-    let over_cap = send(&mut ctx, public_mention(from), public_mention(to), 100).await;
-    assert!(
-        over_cap.is_err(),
-        "a transfer declaring more gas than the per-transaction cap should be refused"
-    );
-
-    // The same transfer at the default limit, so the refusal above is the
-    // declared gas and nothing else about these accounts.
-    let command = Command::Config(ConfigSubcommand::Set {
-        key: "gas_limit".to_owned(),
-        value: wallet::DEFAULT_GAS_LIMIT.to_string(),
+    // An explicit limit is declared as given, held to the same cap: unclamped, the sequencer
+    // refuses it before executing anything.
+    ctx.wallet_mut().set_fee_params(wallet::FeeParams {
+        gas_limit: Some(over_cap),
+        ..wallet::FeeParams::default()
     });
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-
     send(&mut ctx, public_mention(from), public_mention(to), 100).await?;
 
     Ok(())

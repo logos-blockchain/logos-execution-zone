@@ -1,5 +1,5 @@
 [package]
-name = "program_loader_core"
+name = "cross_zone_receiver_core"
 version = "0.1.0"
 edition = "2024"
 license = { workspace = true }
@@ -8,7 +8,6 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
-lee_core.workspace = true
 borsh.workspace = true
-risc0-binfmt.workspace = true
-risc0-zkos-v1compat.workspace = true
+lee_core.workspace = true
+cross_zone_marker_core.workspace = true

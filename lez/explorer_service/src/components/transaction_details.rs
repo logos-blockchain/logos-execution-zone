@@ -1,6 +1,7 @@
 use indexer_service_protocol::{
-    AccountId, BoundaryStep, PrivacyPreservingMessage, PrivacyPreservingTransaction,
-    PublicExecutionContext, PublicMessage, PublicTransaction, RootCall, WitnessEntry, WitnessSet,
+    AccountId, BoundaryStep, FeeDeclaration, PrivacyPreservingMessage,
+    PrivacyPreservingTransaction, PublicExecutionContext, PublicMessage, PublicTransaction,
+    RootCall, WitnessEntry, WitnessSet,
 };
 use leptos::prelude::*;
 
@@ -30,15 +31,7 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
     let proof_len = proof.map_or(0, |p| p.0.len());
     let witness_entries_str = witness_entries(&entries);
     let signer_nonces_str = signer_nonces(&nonces);
-    let (fee_payer_str, fee_amounts_str) = fee.map_or_else(
-        || ("None (exempt)".to_owned(), "None (exempt)".to_owned()),
-        |fee| {
-            (
-                fee.payer.to_string(),
-                format!("{} / {} / {}", fee.gas_limit, fee.tip, fee.max_fee),
-            )
-        },
-    );
+    let (fee_payer_str, fee_amounts_str) = fee_strs(fee, "None (exempt)");
 
     view! {
         <div class="transaction-details">
@@ -103,8 +96,10 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
         timestamp_validity_window,
         admission_evidence: _,
         // TODO: show the fee's refund target, and whether a fallback was committed.
-        fee: _,
+        proven_fee: _,
+        fee,
     } = message;
+    let (fee_payer_str, fee_amounts_str) = fee_strs(fee, "None (in proof or exempt)");
     let PublicExecutionContext {
         actors: public_actors,
         authorized_accounts,
@@ -162,6 +157,14 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
                     <span class="info-value">{format!("{proof_len} bytes")}</span>
                 </div>
                 <div class="info-row">
+                    <span class="info-label">"Fee Payer:"</span>
+                    <span class="info-value hash">{fee_payer_str}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">"Gas Limit / Tip / Max Fee:"</span>
+                    <span class="info-value">{fee_amounts_str}</span>
+                </div>
+                <div class="info-row">
                     <span class="info-label">"Block Validity Window:"</span>
                     <span class="info-value">{block_validity_window.to_string()}</span>
                 </div>
@@ -204,6 +207,18 @@ fn witness_entries(entries: &[WitnessEntry]) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn fee_strs(fee: Option<FeeDeclaration>, none_label: &str) -> (String, String) {
+    fee.map_or_else(
+        || (none_label.to_owned(), none_label.to_owned()),
+        |fee| {
+            (
+                fee.payer.to_string(),
+                format!("{} / {} / {}", fee.gas_limit, fee.tip, fee.max_fee),
+            )
+        },
+    )
 }
 
 fn signer_nonces(nonces: &[(AccountId, u128)]) -> String {

@@ -23,7 +23,7 @@ use core_ffi::{
 };
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS,
-    config::min_private_fee,
+    config::shield_fee,
     ffi_helpers::{
         primitives as primitives_ffi_helpers, sequencer as sequencer_ffi_helpers, wallet::*,
     },
@@ -455,8 +455,10 @@ fn a_pending_private_credit_survives_seed_restoration_ffi() -> Result<()> {
         (FfiBytes32::from(account_id), out_keys)
     };
     let from: FfiBytes32 = ctx.ctx().existing_private_accounts()[0].into();
-    // The restored account pays the receipt's fee out of the credit it receives.
-    let amount: [u8; 16] = (100 + min_private_fee()).to_le_bytes();
+    // The restored account pays the receipt's fee out of the credit it receives; a shield's
+    // fee is more than enough to cover it.
+    let credit = 100 + 2 * shield_fee();
+    let amount: [u8; 16] = credit.to_le_bytes();
 
     let mut transfer_result = FfiTransferResult::default();
     unsafe {
@@ -475,11 +477,11 @@ fn a_pending_private_credit_survives_seed_restoration_ffi() -> Result<()> {
         wallet_ffi_restore_data(wallet_ffi_handle, mnemonic.as_ptr(), 5).unwrap();
     }
 
-    receive_pending(wallet_ffi_handle);
+    let receipt_fee = receive_pending(wallet_ffi_handle);
 
     assert_eq!(
         ffi_balance(wallet_ffi_handle, &private_account_id, false),
-        100
+        credit - receipt_fee
     );
 
     Ok(())

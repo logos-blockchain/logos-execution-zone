@@ -12,9 +12,11 @@ mod inner {
         BRIDGE_ELF, BRIDGE_ID, BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID, CLOCK_ELF, CLOCK_ID,
         CROSS_ZONE_INBOX_ELF, CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID,
         FEE_ELF, FEE_ID, PING_RECEIVER_ELF, PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID,
-        SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID, WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
+        SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID, SYSTEM_UPGRADER_ELF, SYSTEM_UPGRADER_ID,
+        WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
     };
-    use lee::program::Program;
+    use lee::{AccountId, program::Program};
+    use system_upgrader_core::SystemProgramName;
 
     mod guests {
         include!(concat!(env!("OUT_DIR"), "/lez/programs/mod.rs"));
@@ -29,6 +31,14 @@ mod inner {
     pub use ping_core::{PING_RECEIVER_NAME, PING_SENDER_NAME};
     pub use sequencer_stake_core::SEQUENCER_STAKE_NAME;
     pub use wrapped_token_core::WRAPPED_TOKEN_NAME;
+
+    #[must_use]
+    #[inline]
+    pub const fn system_upgrader() -> Program {
+        Program::new_unchecked(SYSTEM_UPGRADER_ID, Cow::Borrowed(SYSTEM_UPGRADER_ELF))
+    }
+
+    pub use system_upgrader_core::system_upgrader_account_id;
 
     #[must_use]
     #[inline]
@@ -110,11 +120,1174 @@ mod inner {
 
     pub use sequencer_stake_core::sequencer_stake_account_id;
 
+    /// System programs every zone registers at genesis, by name.
+    #[must_use]
+    pub fn builtin_core_programs() -> [(SystemProgramName, Program); 4] {
+        [
+            (CLOCK_NAME, clock()),
+            (FEE_NAME, fee()),
+            (BRIDGE_NAME, bridge()),
+            (SEQUENCER_STAKE_NAME, sequencer_stake()),
+        ]
+    }
+
+    #[must_use]
+    pub fn builtin_cross_zone_programs() -> [(SystemProgramName, Program); 6] {
+        [
+            (CROSS_ZONE_INBOX_NAME, cross_zone_inbox()),
+            (CROSS_ZONE_OUTBOX_NAME, cross_zone_outbox()),
+            (PING_SENDER_NAME, ping_sender()),
+            (PING_RECEIVER_NAME, ping_receiver()),
+            (BRIDGE_LOCK_NAME, bridge_lock()),
+            (WRAPPED_TOKEN_NAME, wrapped_token()),
+        ]
+    }
+
+    /// `system_upgrader`, then the system programs at their name-derived addresses.
+    ///
+    /// The refusal list and the elf check derive from this, genesis from its parts. The fixed
+    /// lengths are the enforcement: adding to either half fails to compile until every length
+    /// here is updated too.
+    #[must_use]
+    pub fn builtin_programs() -> [(AccountId, Program); 11] {
+        let at_name = |(name, program): (SystemProgramName, Program)| {
+            (AccountId::from_system_program_name(&name), program)
+        };
+        let [clock, fee, bridge, stake] = builtin_core_programs().map(at_name);
+        let [inbox, outbox, sender, receiver, lock, wrapped] =
+            builtin_cross_zone_programs().map(at_name);
+        [
+            (system_upgrader_account_id(), system_upgrader()),
+            clock,
+            fee,
+            bridge,
+            stake,
+            inbox,
+            outbox,
+            sender,
+            receiver,
+            lock,
+            wrapped,
+        ]
+    }
+
+    #[must_use]
+    pub fn builtin_program_account_ids() -> [AccountId; 11] {
+        builtin_programs().map(|(account_id, _)| account_id)
+    }
+
     #[cfg(test)]
     mod tests {
         use lee::{Account, AccountId, Actor, PublicTransaction, V03State, public_transaction};
 
         use super::*;
+
+        mod system_upgrade {
+            use std::collections::BTreeMap;
+
+            use lee::{Account, AccountId, Actor, PublicTransaction, V03State, public_transaction};
+            use lee_core::{
+                BlockId,
+                program::{
+                    PROGRAM_LOADER_ACCOUNT_ID, SYSTEM_UPGRADER_ACCOUNT_ID, SystemProgramName,
+                },
+            };
+            use program_loader_core::{LoaderActorState as _, Message as LoaderMessage};
+            use system_upgrader_core::{
+                Approval, Message, Proposal, Registry, ScheduledUpgrade, approval_message,
+                committee_actor, loader_actor, registry_account_id, registry_actor, staging_actor,
+            };
+
+            use super::super::*;
+
+            const ACTIVATION_HEIGHT: BlockId = 5;
+            const VALID_UNTIL: BlockId = 100;
+            const CHANNEL_ID: [u8; 32] = [5; 32];
+
+            /// The committee: three accredited keys, so two approvals meet the threshold.
+            fn committee_key(seed: u8) -> sequencer_stake_core::ed25519_dalek::SigningKey {
+                sequencer_stake_core::ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+            }
+
+            fn committee_config() -> (AccountId, Account) {
+                let entries = (1..=3)
+                    .map(|seed| {
+                        (
+                            sequencer_stake_core::SequencerKey::new(
+                                committee_key(seed).verifying_key().to_bytes(),
+                            )
+                            .unwrap(),
+                            sequencer_stake_core::SequencerEntry {
+                                account_id: AccountId::new([seed; 32]),
+                                total_staked: 10,
+                                pending_unstake: None,
+                            },
+                        )
+                    })
+                    .collect();
+                let config = sequencer_stake_core::SequencerStakeConfig {
+                    channel_params: Some(sequencer_stake_core::ChannelParams {
+                        minimum_sequencer_stake: 1,
+                        posting_timeframe: 1,
+                        posting_timeout: 2,
+                        exit_delay: 1,
+                        max_block_size: 1 << 20,
+                    }),
+                    channel_id: Some(CHANNEL_ID),
+                    entries,
+                };
+                (
+                    committee_actor().account_id,
+                    Account::default()
+                        .with_actor_state(sequencer_stake_account_id(), config.to_bytes().into()),
+                )
+            }
+
+            /// Approvals of `proposal` by the committee keys `seeds`, each through `valid_until`.
+            fn approvals_for(proposal: &Proposal, seeds: &[u8], valid_until: u64) -> Vec<Approval> {
+                use sequencer_stake_core::ed25519_dalek::Signer as _;
+
+                seeds
+                    .iter()
+                    .map(|seed| {
+                        let key = committee_key(*seed);
+                        Approval {
+                            signer: sequencer_stake_core::SequencerKey::new(
+                                key.verifying_key().to_bytes(),
+                            )
+                            .unwrap(),
+                            valid_until,
+                            signature: key
+                                .sign(&approval_message(CHANNEL_ID, proposal, valid_until))
+                                .to_bytes()
+                                .to_vec(),
+                        }
+                    })
+                    .collect()
+            }
+
+            fn schedule_proposal(name: SystemProgramName, first_segment: AccountId) -> Proposal {
+                schedule_proposal_for(name, first_segment, false)
+            }
+
+            fn schedule_proposal_for(
+                name: SystemProgramName,
+                first_segment: AccountId,
+                immutable: bool,
+            ) -> Proposal {
+                Proposal::Schedule {
+                    name,
+                    first_segment,
+                    image_id: ping_receiver().id(),
+                    immutable,
+                    activation_height: ACTIVATION_HEIGHT,
+                }
+            }
+
+            /// An unsigned transaction to the registry, as the producer builds it.
+            fn system_upgrader_tx(actors: &[Actor], message: &Message) -> PublicTransaction {
+                let message = public_transaction::Message::try_new(
+                    registry_actor(),
+                    std::iter::once(registry_actor()).chain(actors.iter().copied()),
+                    BTreeMap::new(),
+                    message,
+                )
+                .unwrap();
+                PublicTransaction::new(
+                    message,
+                    public_transaction::WitnessSet::from_raw_parts(vec![]),
+                )
+            }
+
+            /// `clock` deployed upgradable and registered, and `ping_receiver`'s code uploaded
+            /// as the new version's segment chain. Returns the chain's account ids.
+            fn staged() -> (V03State, Vec<AccountId>) {
+                staged_with([(clock_account_id(), clock(), false)])
+            }
+
+            /// `programs` deployed, `clock` registered, and the new chain uploaded.
+            fn staged_with(
+                programs: impl IntoIterator<Item = (AccountId, Program, bool)>,
+            ) -> (V03State, Vec<AccountId>) {
+                let new_code = ping_receiver();
+                let user_elf = risc0_binfmt::ProgramBinary::decode(new_code.elf())
+                    .unwrap()
+                    .user_elf
+                    .to_vec();
+                let ids: Vec<AccountId> = (0..program_loader_core::segment_count(&user_elf))
+                    .map(|i| AccountId::new([0x40_u8.wrapping_add(u8::try_from(i).unwrap()); 32]))
+                    .collect();
+                let segments = program_loader_core::build_segments(&user_elf, &ids).unwrap();
+                let registry = Registry {
+                    programs: BTreeMap::from([(CLOCK_NAME, None), (FEE_NAME, None)]),
+                };
+                let state = V03State::new()
+                    .with_programs_at(
+                        [
+                            (system_upgrader_account_id(), system_upgrader(), true),
+                            (sequencer_stake_account_id(), sequencer_stake(), false),
+                        ]
+                        .into_iter()
+                        .chain(programs),
+                    )
+                    .with_public_accounts([
+                        committee_config(),
+                        (
+                            registry_account_id(),
+                            Account::default().with_actor_state(
+                                SYSTEM_UPGRADER_ACCOUNT_ID,
+                                registry.to_bytes().into(),
+                            ),
+                        ),
+                    ])
+                    .with_public_accounts(ids.iter().zip(segments).map(|(id, segment)| {
+                        (
+                            *id,
+                            Account::default().with_actor_state(
+                                PROGRAM_LOADER_ACCOUNT_ID,
+                                segment.to_loader_actor_state().into(),
+                            ),
+                        )
+                    }));
+                (state, ids)
+            }
+
+            fn schedule_tx(first_segment: AccountId) -> PublicTransaction {
+                schedule_tx_with(
+                    CLOCK_NAME,
+                    first_segment,
+                    approvals_for(
+                        &schedule_proposal(CLOCK_NAME, first_segment),
+                        &[1, 2],
+                        VALID_UNTIL,
+                    ),
+                )
+            }
+
+            fn schedule_tx_with(
+                name: SystemProgramName,
+                first_segment: AccountId,
+                approvals: Vec<Approval>,
+            ) -> PublicTransaction {
+                schedule_tx_for(name, first_segment, false, approvals)
+            }
+
+            fn schedule_tx_for(
+                name: SystemProgramName,
+                first_segment: AccountId,
+                immutable: bool,
+                approvals: Vec<Approval>,
+            ) -> PublicTransaction {
+                let upgrade = ScheduledUpgrade {
+                    first_segment,
+                    image_id: ping_receiver().id(),
+                    immutable,
+                    activation_height: ACTIVATION_HEIGHT,
+                };
+                system_upgrader_tx(
+                    &[
+                        committee_actor(),
+                        loader_actor(&name),
+                        staging_actor(&name, &upgrade),
+                    ],
+                    &Message::Schedule {
+                        name,
+                        first_segment,
+                        image_id: ping_receiver().id(),
+                        immutable,
+                        activation_height: ACTIVATION_HEIGHT,
+                        approvals,
+                    },
+                )
+            }
+
+            /// An approved `Schedule` of `clock`'s upgrade to the chain at `first_segment`.
+            fn approved_schedule_tx_for(
+                first_segment: AccountId,
+                immutable: bool,
+            ) -> PublicTransaction {
+                schedule_tx_for(
+                    CLOCK_NAME,
+                    first_segment,
+                    immutable,
+                    approvals_for(
+                        &schedule_proposal_for(CLOCK_NAME, first_segment, immutable),
+                        &[1, 2],
+                        VALID_UNTIL,
+                    ),
+                )
+            }
+
+            /// The same `Schedule` as [`schedule_tx`], for another activation height.
+            fn schedule_tx_at(
+                first_segment: AccountId,
+                activation_height: u64,
+            ) -> PublicTransaction {
+                let upgrade = ScheduledUpgrade {
+                    first_segment,
+                    image_id: ping_receiver().id(),
+                    immutable: false,
+                    activation_height,
+                };
+                let proposal = Proposal::Schedule {
+                    name: CLOCK_NAME,
+                    first_segment,
+                    image_id: ping_receiver().id(),
+                    immutable: false,
+                    activation_height,
+                };
+                system_upgrader_tx(
+                    &[
+                        committee_actor(),
+                        loader_actor(&CLOCK_NAME),
+                        staging_actor(&CLOCK_NAME, &upgrade),
+                    ],
+                    &Message::Schedule {
+                        name: CLOCK_NAME,
+                        first_segment,
+                        image_id: ping_receiver().id(),
+                        immutable: false,
+                        activation_height,
+                        approvals: approvals_for(&proposal, &[1, 2], VALID_UNTIL),
+                    },
+                )
+            }
+
+            fn approved_schedule_tx(
+                name: SystemProgramName,
+                first_segment: AccountId,
+            ) -> PublicTransaction {
+                schedule_tx_with(
+                    name,
+                    first_segment,
+                    approvals_for(
+                        &schedule_proposal(name, first_segment),
+                        &[1, 2],
+                        VALID_UNTIL,
+                    ),
+                )
+            }
+
+            fn apply_tx(activation_height: u64) -> PublicTransaction {
+                system_upgrader_tx(
+                    &[loader_actor(&CLOCK_NAME)],
+                    &Message::Apply {
+                        name: CLOCK_NAME,
+                        activation_height,
+                    },
+                )
+            }
+
+            fn cancel_tx(first_segment: AccountId) -> PublicTransaction {
+                let proposal = Proposal::Cancel {
+                    name: CLOCK_NAME,
+                    first_segment,
+                    activation_height: ACTIVATION_HEIGHT,
+                };
+                system_upgrader_tx(
+                    &[committee_actor()],
+                    &Message::Cancel {
+                        name: CLOCK_NAME,
+                        first_segment,
+                        activation_height: ACTIVATION_HEIGHT,
+                        approvals: approvals_for(&proposal, &[1, 2], VALID_UNTIL),
+                    },
+                )
+            }
+
+            fn install_tx(name: SystemProgramName, first_segment: AccountId) -> PublicTransaction {
+                install_tx_for(name, first_segment, false)
+            }
+
+            fn install_tx_for(
+                name: SystemProgramName,
+                first_segment: AccountId,
+                immutable: bool,
+            ) -> PublicTransaction {
+                let proposal = Proposal::Install {
+                    name,
+                    first_segment,
+                    image_id: ping_receiver().id(),
+                    immutable,
+                };
+                system_upgrader_tx(
+                    &[committee_actor(), loader_actor(&name)],
+                    &Message::Install {
+                        name,
+                        first_segment,
+                        image_id: ping_receiver().id(),
+                        immutable,
+                        approvals: approvals_for(&proposal, &[1, 2], VALID_UNTIL),
+                    },
+                )
+            }
+
+            fn registry(state: &V03State) -> Registry {
+                Registry::from_bytes(
+                    state
+                        .get_account_by_id(registry_account_id())
+                        .data
+                        .actor_state(SYSTEM_UPGRADER_ACCOUNT_ID),
+                )
+                .unwrap()
+            }
+
+            fn header(state: &V03State, program: AccountId) -> lee_core::program::ProgramHeader {
+                lee_core::program::ProgramHeader::from_loader_actor_state(
+                    state
+                        .get_account_by_id(program)
+                        .data
+                        .actor_state(PROGRAM_LOADER_ACCOUNT_ID),
+                )
+                .unwrap()
+            }
+
+            fn has_mirror(state: &V03State, program: AccountId) -> bool {
+                let commitment = lee_core::program::immutable_mirror_commitment(
+                    program,
+                    &header(state, program),
+                );
+                state.get_proof_for_commitment(&commitment).is_some()
+            }
+
+            fn schedule(state: &V03State) -> Option<ScheduledUpgrade> {
+                registry(state).scheduled(&CLOCK_NAME)
+            }
+
+            fn scheduled_at(ids: &[AccountId]) -> Option<ScheduledUpgrade> {
+                Some(ScheduledUpgrade {
+                    first_segment: ids[0],
+                    image_id: ping_receiver().id(),
+                    immutable: false,
+                    activation_height: ACTIVATION_HEIGHT,
+                })
+            }
+
+            #[test]
+            fn a_scheduled_upgrade_applies_from_its_height() {
+                let (mut state, ids) = staged();
+                assert_eq!(
+                    state.get_program_image_id(clock_account_id()),
+                    Some(clock().id())
+                );
+
+                state
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
+                    .expect("scheduling succeeds");
+                assert_eq!(schedule(&state), scheduled_at(&ids));
+
+                state
+                    .transition_from_public_transaction(
+                        &apply_tx(ACTIVATION_HEIGHT),
+                        ACTIVATION_HEIGHT - 1,
+                        0,
+                    )
+                    .expect_err("an upgrade can't apply before its height");
+
+                state
+                    .transition_from_public_transaction(
+                        &apply_tx(ACTIVATION_HEIGHT),
+                        ACTIVATION_HEIGHT,
+                        0,
+                    )
+                    .expect("the upgrade applies at its height");
+                assert_eq!(
+                    state.get_program_image_id(clock_account_id()),
+                    Some(ping_receiver().id())
+                );
+                assert_eq!(schedule(&state), None, "applying clears the schedule");
+                assert!(!header(&state, clock_account_id()).immutable);
+            }
+
+            #[test]
+            fn an_immutable_upgrade_freezes_the_program() {
+                let (mut state, ids) = staged();
+                state
+                    .transition_from_public_transaction(
+                        &approved_schedule_tx_for(ids[0], true),
+                        1,
+                        0,
+                    )
+                    .expect("scheduling an immutable upgrade succeeds");
+
+                state
+                    .transition_from_public_transaction(
+                        &apply_tx(ACTIVATION_HEIGHT),
+                        ACTIVATION_HEIGHT,
+                        0,
+                    )
+                    .expect("the upgrade applies at its height");
+                assert_eq!(
+                    state.get_program_image_id(clock_account_id()),
+                    Some(ping_receiver().id())
+                );
+                assert!(header(&state, clock_account_id()).immutable);
+                assert!(has_mirror(&state, clock_account_id()));
+
+                let err = state
+                    .transition_from_public_transaction(
+                        &schedule_tx_at(ids[0], ACTIVATION_HEIGHT + 10),
+                        ACTIVATION_HEIGHT + 1,
+                        0,
+                    )
+                    .expect_err("an immutable system program can't be scheduled");
+                assert!(
+                    err.to_string()
+                        .contains("AssertMutable target is immutable"),
+                    "got: {err}"
+                );
+                assert_eq!(schedule(&state), None);
+            }
+
+            #[test]
+            fn scheduling_an_unregistered_system_program_is_refused() {
+                // Deployed at its name-derived address, but not in the registry.
+                let name = SystemProgramName::new(b"unregistered");
+                let (mut state, ids) = staged_with([
+                    (clock_account_id(), clock(), false),
+                    (AccountId::from_system_program_name(&name), fee(), false),
+                ]);
+                let err = state
+                    .transition_from_public_transaction(
+                        &schedule_tx_with(
+                            name,
+                            ids[0],
+                            approvals_for(&schedule_proposal(name, ids[0]), &[1, 2], VALID_UNTIL),
+                        ),
+                        1,
+                        0,
+                    )
+                    .expect_err("only registered system programs can be scheduled");
+                assert!(
+                    err.to_string().contains("system program is not registered"),
+                    "got: {err}"
+                );
+            }
+
+            #[test]
+            fn scheduling_a_system_program_without_a_header_is_refused() {
+                let (mut state, ids) = staged_with([]);
+
+                let err = state
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
+                    .expect_err("there is no clock header to upgrade");
+                assert!(
+                    format!("{err:?}").contains("UnadmittedPublicActor"),
+                    "got: {err:?}"
+                );
+                assert_eq!(schedule(&state), None);
+            }
+
+            #[test]
+            fn scheduling_an_immutable_system_program_is_refused() {
+                let (mut state, ids) = staged_with([(clock_account_id(), clock(), true)]);
+
+                let err = state
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
+                    .expect_err("an immutable system program can't be upgraded");
+                assert!(
+                    err.to_string()
+                        .contains("AssertMutable target is immutable"),
+                    "got: {err}"
+                );
+                assert_eq!(schedule(&state), None);
+            }
+
+            /// `system_upgrader`'s header is immutable, so only a protocol upgrade can repoint it.
+            #[test]
+            fn system_upgrader_header_cannot_be_updated() {
+                let (mut state, ids) = staged();
+                let header_before = state.get_account_by_id(system_upgrader_account_id());
+                let signer = lee::test_utils::TestSigner::new(0x44);
+                let signer_id = signer.account_id();
+                let header = Actor::new(system_upgrader_account_id(), PROGRAM_LOADER_ACCOUNT_ID);
+
+                let message = public_transaction::Message::try_new(
+                    header,
+                    [header],
+                    BTreeMap::from([(signer_id, lee_core::account::Nonce(0))]),
+                    LoaderMessage::UpdateHeader {
+                        first_segment: ids[0],
+                        immutable: false,
+                    },
+                )
+                .unwrap();
+                let witness_set = lee::test_utils::witness_for(&message, &[&signer]);
+                let err = state
+                    .transition_from_public_transaction(
+                        &PublicTransaction::new(message, witness_set),
+                        1,
+                        0,
+                    )
+                    .expect_err("system_upgrader's header is immutable");
+                assert!(
+                    err.to_string().contains("immutable and cannot be updated"),
+                    "got: {err}"
+                );
+                assert_eq!(
+                    state.get_account_by_id(system_upgrader_account_id()),
+                    header_before
+                );
+            }
+
+            #[test]
+            fn a_cancelled_upgrade_never_applies_and_frees_the_system_program() {
+                let (mut state, ids) = staged();
+                state
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
+                    .unwrap();
+
+                state
+                    .transition_from_public_transaction(&cancel_tx(ids[0]), 2, 0)
+                    .expect("the pending upgrade is cancelled");
+                assert_eq!(schedule(&state), None);
+
+                state
+                    .transition_from_public_transaction(
+                        &apply_tx(ACTIVATION_HEIGHT),
+                        ACTIVATION_HEIGHT,
+                        0,
+                    )
+                    .expect_err("a cancelled upgrade can't apply");
+                assert_eq!(
+                    state.get_program_image_id(clock_account_id()),
+                    Some(clock().id())
+                );
+
+                state
+                    .transition_from_public_transaction(&schedule_tx_at(ids[0], 9), 3, 0)
+                    .expect("the system program can be scheduled again");
+            }
+
+            #[test]
+            fn an_upgrade_can_be_cancelled_only_before_its_height() {
+                let (mut state, ids) = staged();
+                state
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
+                    .unwrap();
+
+                state
+                    .transition_from_public_transaction(&cancel_tx(ids[0]), ACTIVATION_HEIGHT, 0)
+                    .expect_err("the upgrade's own block must carry its Apply");
+                state
+                    .transition_from_public_transaction(
+                        &cancel_tx(ids[0]),
+                        ACTIVATION_HEIGHT - 1,
+                        0,
+                    )
+                    .expect("cancelling is valid before its height");
+                assert_eq!(schedule(&state), None);
+            }
+
+            #[test]
+            fn an_upgrade_applies_only_at_its_height() {
+                let (mut state, ids) = staged();
+                state
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
+                    .unwrap();
+
+                state
+                    .transition_from_public_transaction(
+                        &apply_tx(ACTIVATION_HEIGHT),
+                        ACTIVATION_HEIGHT + 1,
+                        0,
+                    )
+                    .expect_err("an upgrade can't apply after its height");
+                assert_eq!(schedule(&state), scheduled_at(&ids));
+            }
+
+            #[test]
+            fn scheduling_at_or_past_the_activation_height_is_refused() {
+                let (mut state, ids) = staged();
+
+                state
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), ACTIVATION_HEIGHT, 0)
+                    .expect_err("a schedule must land before its activation height");
+                assert_eq!(schedule(&state), None);
+            }
+
+            #[test]
+            fn a_second_upgrade_at_the_same_height_is_refused() {
+                let (mut state, ids) = staged();
+                state
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
+                    .unwrap();
+
+                let err = state
+                    .transition_from_public_transaction(
+                        &approved_schedule_tx(FEE_NAME, ids[0]),
+                        2,
+                        0,
+                    )
+                    .expect_err("one upgrade per height");
+                assert!(
+                    err.to_string()
+                        .contains("an upgrade is already scheduled at this height"),
+                    "got: {err}"
+                );
+                assert_eq!(registry(&state).scheduled(&FEE_NAME), None);
+            }
+
+            /// The loader validates the chain at `Schedule`, so `Apply` can't fail on it.
+            #[test]
+            fn scheduling_an_invalid_chain_is_refused() {
+                let (mut state, _) = staged();
+
+                let err = state
+                    .transition_from_public_transaction(
+                        &schedule_tx(AccountId::new([0x77; 32])),
+                        1,
+                        0,
+                    )
+                    .expect_err("no segment chain starts there");
+                assert!(
+                    err.to_string()
+                        .contains("must decode as a valid ProgramSegment"),
+                    "got: {err}"
+                );
+                assert_eq!(schedule(&state), None);
+            }
+
+            /// Approvers sign the code, not just where it lives: a chain computing to another image
+            /// ID is refused by the loader.
+            #[test]
+            fn scheduling_a_chain_with_another_image_id_is_refused() {
+                let (mut state, ids) = staged();
+                let image_id = clock().id();
+                let upgrade = ScheduledUpgrade {
+                    first_segment: ids[0],
+                    image_id,
+                    immutable: false,
+                    activation_height: ACTIVATION_HEIGHT,
+                };
+                let proposal = Proposal::Schedule {
+                    name: CLOCK_NAME,
+                    first_segment: ids[0],
+                    image_id,
+                    immutable: false,
+                    activation_height: ACTIVATION_HEIGHT,
+                };
+                let tx = system_upgrader_tx(
+                    &[
+                        committee_actor(),
+                        loader_actor(&CLOCK_NAME),
+                        staging_actor(&CLOCK_NAME, &upgrade),
+                    ],
+                    &Message::Schedule {
+                        name: CLOCK_NAME,
+                        first_segment: ids[0],
+                        image_id,
+                        immutable: false,
+                        activation_height: ACTIVATION_HEIGHT,
+                        approvals: approvals_for(&proposal, &[1, 2], VALID_UNTIL),
+                    },
+                );
+
+                let err = state
+                    .transition_from_public_transaction(&tx, 1, 0)
+                    .expect_err("the chain is ping_receiver's code, not clock's");
+                assert!(
+                    err.to_string()
+                        .contains("the chain's image ID is not the expected one"),
+                    "got: {err}"
+                );
+                assert_eq!(schedule(&state), None);
+            }
+
+            #[test]
+            fn installing_a_chain_with_another_image_id_is_refused() {
+                let (mut state, ids) = staged();
+                let name = SystemProgramName::new(b"new_system_program");
+                let image_id = clock().id();
+                let proposal = Proposal::Install {
+                    name,
+                    first_segment: ids[0],
+                    image_id,
+                    immutable: false,
+                };
+                let tx = system_upgrader_tx(
+                    &[committee_actor(), loader_actor(&name)],
+                    &Message::Install {
+                        name,
+                        first_segment: ids[0],
+                        image_id,
+                        immutable: false,
+                        approvals: approvals_for(&proposal, &[1, 2], VALID_UNTIL),
+                    },
+                );
+
+                let err = state
+                    .transition_from_public_transaction(&tx, 1, 0)
+                    .expect_err("the chain is ping_receiver's code, not clock's");
+                assert!(
+                    err.to_string()
+                        .contains("the chain's image ID is not the expected one"),
+                    "got: {err}"
+                );
+                assert_eq!(registry(&state).programs.get(&name), None);
+            }
+
+            /// Its staging header already holds the cancelled proposal's chain.
+            #[test]
+            fn rescheduling_a_cancelled_upgrade_unchanged_is_refused() {
+                let (mut state, ids) = staged();
+                state
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
+                    .unwrap();
+                state
+                    .transition_from_public_transaction(&cancel_tx(ids[0]), 2, 0)
+                    .unwrap();
+
+                let err = state
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 3, 0)
+                    .expect_err("the staging header is taken");
+                assert!(
+                    err.to_string().contains("header target already deployed"),
+                    "got: {err}"
+                );
+            }
+
+            #[test]
+            fn scheduling_validates_the_chain_into_a_staging_header() {
+                let (mut state, ids) = staged();
+                state
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
+                    .unwrap();
+
+                let staging = staging_actor(&CLOCK_NAME, &scheduled_at(&ids).unwrap());
+                assert_eq!(
+                    state.get_program_image_id(staging.account_id),
+                    Some(ping_receiver().id())
+                );
+            }
+
+            #[test]
+            fn cancelling_a_different_upgrade_is_refused() {
+                let (mut state, ids) = staged();
+                state
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
+                    .unwrap();
+
+                let err = state
+                    .transition_from_public_transaction(
+                        &cancel_tx(AccountId::new([0x77; 32])),
+                        2,
+                        0,
+                    )
+                    .expect_err("only the pending upgrade can be cancelled");
+                assert!(
+                    err.to_string()
+                        .contains("the upgrade does not match the system program's schedule"),
+                    "got: {err}"
+                );
+                assert!(schedule(&state).is_some(), "the pending upgrade is kept");
+            }
+
+            #[test]
+            fn cancelling_with_nothing_scheduled_is_refused() {
+                let (mut state, ids) = staged();
+
+                state
+                    .transition_from_public_transaction(&cancel_tx(ids[0]), 1, 0)
+                    .expect_err("there is nothing to cancel");
+            }
+
+            #[test]
+            fn a_second_schedule_while_one_is_pending_is_refused() {
+                let (mut state, ids) = staged();
+                state
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
+                    .unwrap();
+
+                let err = state
+                    .transition_from_public_transaction(
+                        &schedule_tx_at(AccountId::new([0x77; 32]), 9),
+                        2,
+                        0,
+                    )
+                    .expect_err("one upgrade may be pending at a time");
+                assert!(
+                    err.to_string()
+                        .contains("system program already has a scheduled upgrade"),
+                    "got: {err}"
+                );
+                assert_eq!(
+                    schedule(&state),
+                    scheduled_at(&ids),
+                    "the pending upgrade is kept"
+                );
+            }
+
+            #[test]
+            fn system_upgrader_refuses_a_message_from_another_actor() {
+                let (state, ids) = staged();
+                let sender = test_programs::scripted();
+                let sender_actor = Actor::new(
+                    AccountId::new([0x55; 32]),
+                    AccountId::from_builtin_program(sender.id()),
+                );
+                let mut state = state.with_programs([sender]);
+                state.force_insert_account(sender_actor.account_id, Account::default());
+
+                let script = test_guest_core::Script::default().send_sync(
+                    registry_actor(),
+                    &Message::Schedule {
+                        name: CLOCK_NAME,
+                        first_segment: ids[0],
+                        image_id: ping_receiver().id(),
+                        immutable: false,
+                        activation_height: ACTIVATION_HEIGHT,
+                        approvals: approvals_for(
+                            &schedule_proposal(CLOCK_NAME, ids[0]),
+                            &[1, 2],
+                            VALID_UNTIL,
+                        ),
+                    },
+                );
+                let message = public_transaction::Message::try_new(
+                    sender_actor,
+                    [sender_actor, registry_actor()],
+                    BTreeMap::new(),
+                    script,
+                )
+                .unwrap();
+                let tx = PublicTransaction::new(
+                    message,
+                    public_transaction::WitnessSet::from_raw_parts(vec![]),
+                );
+
+                let err = state
+                    .transition_from_public_transaction(&tx, 1, 0)
+                    .expect_err("system_upgrader runs only at the top level");
+                assert!(
+                    err.to_string()
+                        .contains("system_upgrader may only be invoked at the top level"),
+                    "got: {err}"
+                );
+                assert_eq!(schedule(&state), None);
+            }
+
+            #[test]
+            fn installing_a_new_system_program_deploys_it_mutable() {
+                let (mut state, ids) = staged();
+                let name = SystemProgramName::new(b"new_system_program");
+                let program = AccountId::from_system_program_name(&name);
+
+                state
+                    .transition_from_public_transaction(&install_tx(name, ids[0]), 1, 0)
+                    .expect("a new system program installs");
+                assert_eq!(
+                    state.get_program_image_id(program),
+                    Some(ping_receiver().id())
+                );
+                let header = lee_core::program::ProgramHeader::from_loader_actor_state(
+                    state
+                        .get_account_by_id(program)
+                        .data
+                        .actor_state(PROGRAM_LOADER_ACCOUNT_ID),
+                )
+                .unwrap();
+                assert!(
+                    !header.immutable,
+                    "an installed system program is upgradable"
+                );
+                assert_eq!(
+                    registry(&state).programs.get(&name),
+                    Some(&None),
+                    "an installed system program is registered, with nothing pending"
+                );
+            }
+
+            #[test]
+            fn installing_a_system_program_immutable_freezes_it() {
+                let (mut state, ids) = staged();
+                let name = SystemProgramName::new(b"new_system_program");
+                let program = AccountId::from_system_program_name(&name);
+
+                state
+                    .transition_from_public_transaction(&install_tx_for(name, ids[0], true), 1, 0)
+                    .expect("a new system program installs immutable");
+                assert_eq!(
+                    state.get_program_image_id(program),
+                    Some(ping_receiver().id())
+                );
+                assert!(header(&state, program).immutable);
+                assert!(has_mirror(&state, program));
+                assert_eq!(registry(&state).programs.get(&name), Some(&None));
+
+                let err = state
+                    .transition_from_public_transaction(
+                        &schedule_tx_for(
+                            name,
+                            ids[0],
+                            false,
+                            approvals_for(&schedule_proposal(name, ids[0]), &[1, 2], VALID_UNTIL),
+                        ),
+                        2,
+                        0,
+                    )
+                    .expect_err("an immutable system program can't be scheduled");
+                assert!(
+                    err.to_string()
+                        .contains("AssertMutable target is immutable"),
+                    "got: {err}"
+                );
+            }
+
+            /// A system program installed through `system_upgrader` is the one genesis seeds under
+            /// the same name: same code, same image ID, as upgradable. Only its segment accounts
+            /// differ.
+            #[test]
+            fn an_installed_system_program_matches_a_genesis_seeded_one() {
+                let name = SystemProgramName::new(b"new_system_program");
+                let program = AccountId::from_system_program_name(&name);
+
+                let (mut installed, ids) = staged();
+                installed
+                    .transition_from_public_transaction(&install_tx(name, ids[0]), 1, 0)
+                    .expect("a new system program installs");
+                let seeded = V03State::new().with_programs_at([(program, ping_receiver(), false)]);
+
+                let reconstructed = installed.get_builtin_program(program);
+                assert!(
+                    reconstructed.is_some(),
+                    "the installed program reconstructs"
+                );
+                assert_eq!(
+                    reconstructed,
+                    seeded.get_builtin_program(program),
+                    "the same image ID and bytecode reconstruct from both"
+                );
+                assert_eq!(
+                    header(&installed, program).immutable,
+                    header(&seeded, program).immutable
+                );
+            }
+
+            #[test]
+            fn installing_over_an_existing_system_program_is_refused() {
+                let (mut state, ids) = staged();
+
+                let err = state
+                    .transition_from_public_transaction(&install_tx(CLOCK_NAME, ids[0]), 1, 0)
+                    .expect_err("clock is already registered");
+                assert!(
+                    err.to_string()
+                        .contains("system program is already registered"),
+                    "got: {err}"
+                );
+                assert_eq!(
+                    state.get_program_image_id(clock_account_id()),
+                    Some(clock().id())
+                );
+            }
+
+            fn refused_schedule(approvals: Vec<Approval>, block: u64, expected: &str) {
+                let (mut state, ids) = staged();
+                let err = state
+                    .transition_from_public_transaction(
+                        &schedule_tx_with(CLOCK_NAME, ids[0], approvals),
+                        block,
+                        0,
+                    )
+                    .expect_err("the approvals don't authorize this schedule");
+                assert!(err.to_string().contains(expected), "got: {err}");
+                assert_eq!(schedule(&state), None);
+            }
+
+            #[test]
+            fn a_schedule_below_the_approval_threshold_is_refused() {
+                let (_, ids) = staged();
+                refused_schedule(
+                    approvals_for(&schedule_proposal(CLOCK_NAME, ids[0]), &[1], VALID_UNTIL),
+                    1,
+                    "fewer approvals than the threshold",
+                );
+            }
+
+            #[test]
+            fn an_approval_from_outside_the_committee_is_refused() {
+                let (_, ids) = staged();
+                refused_schedule(
+                    approvals_for(&schedule_proposal(CLOCK_NAME, ids[0]), &[1, 9], VALID_UNTIL),
+                    1,
+                    "does not accredit",
+                );
+            }
+
+            #[test]
+            fn a_duplicate_approver_is_refused() {
+                let (_, ids) = staged();
+                refused_schedule(
+                    approvals_for(&schedule_proposal(CLOCK_NAME, ids[0]), &[1, 1], VALID_UNTIL),
+                    1,
+                    "the same key approved twice",
+                );
+            }
+
+            #[test]
+            fn an_approval_for_another_action_is_refused() {
+                let (_, ids) = staged();
+                let cancel = Proposal::Cancel {
+                    name: CLOCK_NAME,
+                    first_segment: ids[0],
+                    activation_height: ACTIVATION_HEIGHT,
+                };
+                refused_schedule(
+                    approvals_for(&cancel, &[1, 2], VALID_UNTIL),
+                    1,
+                    "should verify against its signer",
+                );
+            }
+
+            #[test]
+            fn an_expired_approval_is_refused() {
+                let (_, ids) = staged();
+                refused_schedule(
+                    approvals_for(&schedule_proposal(CLOCK_NAME, ids[0]), &[1, 2], 3),
+                    4,
+                    "outside of the validity window",
+                );
+            }
+
+            #[test]
+            fn an_unscheduled_upgrade_is_refused() {
+                let (mut state, _) = staged();
+
+                state
+                    .transition_from_public_transaction(
+                        &apply_tx(ACTIVATION_HEIGHT),
+                        ACTIVATION_HEIGHT,
+                        0,
+                    )
+                    .expect_err("nothing was scheduled");
+                assert_eq!(
+                    state.get_program_image_id(clock_account_id()),
+                    Some(clock().id())
+                );
+            }
+
+            #[test]
+            fn an_apply_for_another_height_is_refused() {
+                let (mut state, ids) = staged();
+                state
+                    .transition_from_public_transaction(&schedule_tx(ids[0]), 1, 0)
+                    .unwrap();
+
+                state
+                    .transition_from_public_transaction(
+                        &apply_tx(ACTIVATION_HEIGHT + 1),
+                        ACTIVATION_HEIGHT + 1,
+                        0,
+                    )
+                    .expect_err("the height differs from the scheduled one");
+                assert_eq!(
+                    state.get_program_image_id(clock_account_id()),
+                    Some(clock().id())
+                );
+                assert_eq!(schedule(&state), scheduled_at(&ids));
+            }
+        }
 
         fn deposit_tx(
             op_id: [u8; 32],
@@ -168,7 +1341,7 @@ mod inner {
                     ),
                     (recipient_id, Account::default()),
                 ])
-                .with_named_programs([(bridge_account_id(), bridge())]);
+                .with_programs_at([(bridge_account_id(), bridge(), true)]);
 
             let tx = deposit_tx(op_id, recipient_id, amount);
             let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
@@ -198,7 +1371,7 @@ mod inner {
         }
 
         #[test]
-        fn builtin_programs() {
+        fn builtin_constructors_carry_their_ids_and_elfs() {
             let bridge_program = bridge();
             let sequencer_stake_program = sequencer_stake();
 
@@ -210,22 +1383,40 @@ mod inner {
 
         #[test]
         fn builtin_program_ids_match_elfs() {
-            let cases: &[(&[u8], [u32; 8])] = &[
-                (CLOCK_ELF, CLOCK_ID),
-                (FEE_ELF, FEE_ID),
-                (BRIDGE_ELF, BRIDGE_ID),
-                (CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID),
-                (CROSS_ZONE_INBOX_ELF, CROSS_ZONE_INBOX_ID),
-                (PING_SENDER_ELF, PING_SENDER_ID),
-                (PING_RECEIVER_ELF, PING_RECEIVER_ID),
-                (BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID),
-                (WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID),
-                (SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID),
-            ];
-            for (elf, expected_id) in cases {
-                let program = Program::new((*elf).into()).unwrap();
-                assert_eq!(program.id(), *expected_id);
+            for (_, program) in builtin_programs() {
+                let rebuilt = Program::new(program.elf().to_vec().into()).unwrap();
+                assert_eq!(rebuilt.id(), program.id());
             }
+        }
+
+        #[test]
+        fn builtin_account_ids_are_distinct() {
+            let ids = builtin_program_account_ids();
+            let unique: std::collections::BTreeSet<_> = ids.iter().collect();
+            assert_eq!(unique.len(), ids.len());
+        }
+
+        /// Genesis registers in this order and each registration takes the next
+        /// merkle leaf, so reordering either half moves every later builtin's
+        /// leaf and with it the genesis fingerprint.
+        #[test]
+        fn builtin_registration_order_is_pinned() {
+            assert_eq!(
+                builtin_program_account_ids(),
+                [
+                    system_upgrader_account_id(),
+                    clock_account_id(),
+                    fee_account_id(),
+                    bridge_account_id(),
+                    sequencer_stake_account_id(),
+                    cross_zone_inbox_account_id(),
+                    cross_zone_outbox_account_id(),
+                    ping_sender_account_id(),
+                    ping_receiver_account_id(),
+                    bridge_lock_account_id(),
+                    wrapped_token_account_id(),
+                ]
+            );
         }
     }
 }

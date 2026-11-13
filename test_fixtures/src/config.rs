@@ -9,13 +9,11 @@ use lee::{
 };
 use logos_blockchain_key_management_system_service::keys::{UnsecuredEd25519Key, ZkPublicKey};
 use num_bigint::BigUint;
-use sequencer_core::{
-    config::{
-        BedrockConfig, ChannelParams, CrossZoneConfig, DepositRecipient, GenesisAction,
-        GenesisConfig, GossipConfig, SequencerConfig,
-    },
-    sign_genesis_stake,
+use sequencer_core::config::{
+    BedrockConfig, ChannelParams, CrossZoneConfig, DepositRecipient, GenesisAction, GenesisConfig,
+    GossipConfig, SequencerConfig,
 };
+use sequencer_genesis::sign_genesis_stake;
 use sequencer_stake_core::SequencerKey;
 use url::Url;
 use wallet::config::{SequencerConnectionData, WalletConfig};
@@ -36,10 +34,21 @@ pub const TEST_EXIT_DELAY: u64 = 3;
 
 // Balances are LGO-scale (`testnet_initial_state` precedent): a charged public
 // transaction reserves `gas_limit x base_fee` up front (~16M at wallet defaults)
-// and a privacy-preserving one pays at least [`min_private_fee`] (~5M), so
+// and a privacy-preserving one pays at least [`shield_fee`] (~5M), so
 // pre-fee-scale balances cannot afford a single transfer.
 pub const INITIAL_PUBLIC_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000_000, 20_000_000_000_000];
 pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000, 20_000_000_000];
+
+/// The charged bytes of a shield that funds a private account at setup, signed at a nonzero
+/// nonce, which genesis must price before any transaction exists; setup checks it against what
+/// the wallet measures.
+///
+/// It is the fixed `PROOF_BYTES` (223,047) plus the rest of the serialized transaction (14,559),
+/// mostly its padded private slots.
+pub const SHIELD_BYTES: u64 = 237_606;
+
+/// The funder's initial key, which its signature carries at nonce 0, so in the first shield only.
+const INITIAL_KEY_BYTES: u64 = 33;
 
 /// The public account for funding the private accounts' balances at genesis.
 pub(crate) const PRIVATE_FUNDER_INDEX: usize = 0;
@@ -173,6 +182,7 @@ pub fn sequencer_config(
             auth: None,
             priority_fee_percent,
             stale_refund_slots: 0,
+            backfill_batch_slots: sequencer_core::config::default_backfill_batch_slots(),
         },
         cross_zone,
         metrics_listen_address: Some(SequencerConfig::DEFAULT_METRICS_LISTEN_ADDRESS),
@@ -244,24 +254,43 @@ pub fn private_total(private_accounts: &[InitialPrivateAccountForWallet]) -> u12
     private_accounts.iter().map(|account| account.balance).sum()
 }
 
-/// The fee a privacy-preserving transaction without guest-evaluated effects pays while the base
-/// fees sit at their floor. Test chains run far below the gas targets, so they never leave it.
+/// The fee a privacy-preserving transaction of `bytes` charged bytes pays at the floor base fees.
+///
+/// Without guest-evaluated effects; test chains run far below the gas targets, so they never
+/// leave the floor.
 #[must_use]
-pub fn min_private_fee() -> u128 {
+pub fn private_fee(bytes: u64) -> u128 {
     fee_core::assess::private_fee_required(
         0,
+        bytes,
         fee_core::market::BASE_FEE_EXEC_MIN,
         fee_core::market::BASE_FEE_STOR_MIN,
     )
+}
+
+/// The fee of a shield that funds a private account at setup, after the first.
+#[must_use]
+pub fn shield_fee() -> u128 {
+    private_fee(SHIELD_BYTES)
+}
+
+/// The fee of the `index`-th shield that funds a private account at setup.
+#[must_use]
+pub fn shield_fee_at(index: usize) -> u128 {
+    if index == 0 {
+        private_fee(SHIELD_BYTES.saturating_add(INITIAL_KEY_BYTES))
+    } else {
+        shield_fee()
+    }
 }
 
 /// What funding the private accounts costs the funder: every balance plus the fee of each
 /// shielding transaction, which the funder pays since the recipients hold nothing yet.
 #[must_use]
 pub fn private_funding_cost(private_accounts: &[InitialPrivateAccountForWallet]) -> u128 {
-    let fees = u128::try_from(private_accounts.len())
-        .expect("account count fits u128")
-        .checked_mul(min_private_fee())
+    let fees = (0..private_accounts.len())
+        .map(shield_fee_at)
+        .try_fold(0_u128, u128::checked_add)
         .expect("private funding fees overflow");
     private_total(private_accounts)
         .checked_add(fees)
@@ -304,9 +333,10 @@ pub fn wallet_config(sequencer_addr: &SocketAddr) -> Result<WalletConfig> {
         seq_poll_max_retries: 10,
         seq_block_poll_max_amount: 100,
         gas_limit: wallet::DEFAULT_GAS_LIMIT,
+        public_gas_margin_percent: 25,
         // Test chains never leave the floor base fees, so an exact reserve needs no refund and
         // the balance assertions need no refund accounting.
-        private_fee_headroom_blocks: 0,
+        fee_headroom_blocks: 0,
     })
 }
 
@@ -326,6 +356,7 @@ pub fn indexer_config(
         channel_id,
         cross_zone,
         peer_block_cache_window: NonZeroU32::new(1024).expect("1024 is nonzero"),
+        backfill_batch_slots: indexer_service::default_backfill_batch_slots(),
         allow_chain_reset: false,
         event_filter: EventFilterConfig::Archival,
     })
@@ -446,13 +477,23 @@ pub const fn bedrock_funding_key_id() -> &'static str {
     BEDROCK_FUNDING_KEY_HEX
 }
 
-/// A source-only zone: programs registered, `InitConfig`s emitted, nobody watched.
+/// A source-only zone: programs registered, `InitConfig`s emitted, nobody
+/// watched and nowhere to lock to.
 #[must_use]
 pub const fn source_only_cross_zone() -> CrossZoneConfig {
     CrossZoneConfig {
         peers: Vec::new(),
+        lock_target_zones: Vec::new(),
         source_authority: None,
         source_governance: None,
+    }
+}
+
+#[must_use]
+pub fn source_only_cross_zone_locking_to(lock_target_zones: Vec<[u8; 32]>) -> CrossZoneConfig {
+    CrossZoneConfig {
+        lock_target_zones,
+        ..source_only_cross_zone()
     }
 }
 

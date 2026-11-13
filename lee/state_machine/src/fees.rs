@@ -1,17 +1,13 @@
 //! Fee fields and payer authorization shared by signed message kinds.
 
-use std::collections::BTreeMap;
-
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::account::Nonce;
 
-use crate::{AccountId, Balance, Fee, Gas};
+use crate::{AccountId, Balance, Fee, Gas, TransactionMessage};
 
 /// The signed fee fields of a charged transaction.
 ///
-/// Carried as `Option<FeeDeclaration>` on each message kind (`None` =
-/// fee-exempt) and covered by the message hash, so every witness signature
-/// authorizes them.
+/// Carried on [`crate::TransactionMessage::fee`] and covered by the message
+/// hash, so every witness signature authorizes them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct FeeDeclaration {
     /// The account debited for this transaction's fee. Designated explicitly
@@ -35,13 +31,6 @@ impl FeeDeclaration {
     }
 }
 
-/// A message kind that carries an optional fee.
-pub trait SignedMessage {
-    /// The designated fee payer, or `None` for a fee-exempt message.
-    fn payer(&self) -> Option<AccountId>;
-    fn nonces(&self) -> &BTreeMap<AccountId, Nonce>;
-}
-
 /// Whether the transaction's fee is authorized: a fee-exempt message always is;
 /// a charged message requires its designated payer to be a signer.
 ///
@@ -50,10 +39,10 @@ pub trait SignedMessage {
 /// signer and a failure rejects the transaction at ingress and invalidates the
 /// block.
 #[must_use]
-pub fn is_fee_authorized<M: SignedMessage>(message: &M) -> bool {
+pub fn is_fee_authorized<P>(message: &TransactionMessage<P>) -> bool {
     message
-        .payer()
-        .is_none_or(|payer| message.nonces().contains_key(&payer))
+        .fee
+        .is_none_or(|fee| message.nonces.contains_key(&fee.payer))
 }
 
 #[cfg(test)]
@@ -133,7 +122,7 @@ mod tests {
     #[test]
     fn an_exempt_message_is_always_authorized() {
         let message = exempt_message();
-        assert_eq!(message.execution.fee, None);
+        assert_eq!(message.fee, None);
         assert!(is_fee_authorized(&message));
     }
 
@@ -147,7 +136,6 @@ mod tests {
 
         let mut tampered = message;
         tampered
-            .execution
             .fee
             .as_mut()
             .expect("charged message has a fee")

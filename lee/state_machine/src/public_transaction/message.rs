@@ -20,8 +20,6 @@ const KEYED_PREFIX: &[u8; 32] = b"/LEE/v0.3/KeyedMessage/Public/\x00\x00";
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PublicExecution {
     pub root: RootCall,
-    /// The fee declaration, or `None` for a fee-exempt (system) transaction.
-    pub fee: Option<FeeDeclaration>,
 }
 
 pub type Message = TransactionMessage<PublicExecution>;
@@ -40,9 +38,9 @@ impl Message {
             public_context: PublicExecutionContext::new(public_actors, nonces.keys().copied()),
             execution: PublicExecution {
                 root: RootCall { to, message },
-                fee,
             },
             nonces,
+            fee,
             admission_evidence,
         }
     }
@@ -104,16 +102,6 @@ impl Message {
     }
 }
 
-impl crate::fees::SignedMessage for Message {
-    fn payer(&self) -> Option<AccountId> {
-        self.execution.fee.map(|fee| fee.payer)
-    }
-
-    fn nonces(&self) -> &BTreeMap<AccountId, Nonce> {
-        &self.nonces
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -167,10 +155,10 @@ mod tests {
             &[0; 32],      // execution.root.to.program_account_id: the native token program
             &[1, 0, 0, 0], // execution.root.message
             &[0],
-            &[0],          // execution.fee: None
             &[1, 0, 0, 0], // nonces: one account's nonce, a little-endian u128
             &[42; 32],
             &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            &[0],          // fee: None
             &[0, 0, 0, 0], // admission_evidence: none
         ]
         .concat();
@@ -185,11 +173,11 @@ mod tests {
         let message = pinned_message();
         assert_eq!(
             message.message_with_keys(&[key(7)]),
-            hex!("0c7db897f9d813e0fbc8a7be1f850f73801e1cbea65b3b1b8154a319656c8399")
+            hex!("7d9f055f57a1b24c784aabd3f6cd84df22fab56ed99007f43ed97b1a487c2276")
         );
         assert_eq!(
             message.message_with_keys(&[key(1), key(2), key(3)]),
-            hex!("4f7bf181a68bffc9df4d2278ef39211314517388b92bc16ece0cde390c6df31f")
+            hex!("17996069ba0439c7c4e6f671fb692bf672d4f5307f65a84bab7272de4ad30506")
         );
     }
 

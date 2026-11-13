@@ -16,9 +16,12 @@ use test_fixtures::{
 };
 use tokio::test;
 use wallet::{
+    AccountIdentity, DryRunReport, ExecutionFailureKind,
     cli::{Command, programs::program_loader::ProgramLoaderSubcommand},
     config::WalletConfigOverrides,
 };
+
+mod system_upgrade;
 
 #[test]
 async fn deploy_and_execute_program() -> Result<()> {
@@ -50,6 +53,36 @@ async fn deploy_and_execute_program() -> Result<()> {
             Some(payer_id),
         )
         .await?;
+
+    // A dry run of a call into the deployed program declares its metered cycles plus the 25%
+    // margin; the fixture prices no headroom, so the cap is the reserve at head.
+    ctx.wallet_mut().set_dry_run(true);
+    let dry_run = ctx
+        .wallet()
+        .send_pub_tx(
+            vec![AccountIdentity::Public(payer_id).select_program_actor_state(account_id)],
+            0,
+            lee::program::Program::serialize_message(test_guest_core::Script::write(vec![1]))?,
+        )
+        .await;
+    ctx.wallet_mut().set_dry_run(false);
+    let Err(ExecutionFailureKind::DryRun(report)) = dry_run else {
+        panic!("a dry run reports instead of sending, got {dry_run:?}");
+    };
+    let DryRunReport::Public {
+        fee,
+        cycles,
+        reserve_at_head,
+        revert_reason,
+        ..
+    } = *report
+    else {
+        panic!("a public send reports a public dry run");
+    };
+    assert_eq!(revert_reason, None);
+    assert!(cycles > 0, "a guest program call meters cycles");
+    assert_eq!(fee.gas_limit, (cycles * 125).div_ceil(100));
+    assert_eq!(fee.max_fee, reserve_at_head);
 
     let target_id = new_account(&mut ctx, false, None).await?;
 

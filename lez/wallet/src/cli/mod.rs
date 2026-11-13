@@ -27,7 +27,7 @@ use crate::{
         pending::PendingSubcommand,
         programs::{
             bridge::BridgeSubcommand, native_token_transfer::AuthTransferSubcommand,
-            program_loader::ProgramLoaderSubcommand,
+            program::ProgramSubcommand, program_loader::ProgramLoaderSubcommand,
         },
     },
     config::SequencerConnectionData,
@@ -70,6 +70,9 @@ pub enum Command {
     /// `program_loader` program interaction subcommand (deploy/update a program).
     #[command(subcommand)]
     ProgramLoader(ProgramLoaderSubcommand),
+    /// Call any program with a message you encoded yourself.
+    #[command(subcommand)]
+    Program(ProgramSubcommand),
     /// Group key management (create, invite, join, derive keys).
     #[command(subcommand)]
     Group(GroupSubcommand),
@@ -122,14 +125,31 @@ pub struct Args {
     /// Simulate the transaction a command would send and report its cost instead of sending it.
     #[arg(long, global = true)]
     pub dry_run: bool,
-    /// Reserve a privacy-preserving transaction's fee at the base fees this many blocks of the
-    /// steepest climb past the quote for this command, instead of the configured headroom.
+    /// Send a public transaction even though its simulation reverts; it still pays its fee.
+    #[arg(long, global = true)]
+    pub allow_revert: bool,
+    /// Declare this execution gas limit on a public transaction for this command, instead of the
+    /// cycles a simulation measures plus the configured margin. A proof paid by a public signer
+    /// adds its verification gas on top.
+    #[arg(long, global = true, value_name = "GAS")]
+    pub gas_limit: Option<u64>,
+    /// Cap a public transaction's fee at this amount for this command, instead of its reserve at
+    /// the headroom's base fees. The sequencer rejects a cap below the reserve a dry run reports.
+    #[arg(long, global = true, value_name = "AMOUNT")]
+    pub max_fee: Option<u128>,
+    /// Tip a public transaction this amount on top of its base fees for this command.
+    #[arg(long, global = true, value_name = "AMOUNT", default_value_t = 0)]
+    pub tip: u64,
+    /// Price a transaction's fee (a public `max_fee`, a privacy-preserving reserve) at the base
+    /// fees this many blocks of the steepest climb past the quote for this command, instead of
+    /// the configured headroom.
     #[arg(long, global = true, value_name = "BLOCKS")]
     pub fee_headroom: Option<u64>,
-    /// Pay a privacy-preserving transaction's fee from this owned private account for this
-    /// command, whether or not the transaction mentions it.
-    #[arg(long, global = true, value_name = "ACCOUNT_ID")]
-    pub fee_payer: Option<lee::AccountId>,
+    /// Pay a privacy-preserving transaction's fee from this account for this command:
+    /// `Private/<id>`, an owned private account, whether or not the transaction mentions it, or
+    /// `Public/<id>`, a public account the transaction already signs with.
+    #[arg(long, global = true, value_name = "ACCOUNT_ID_WITH_PRIVACY")]
+    pub fee_payer: Option<AccountIdWithPrivacy>,
     /// Refund a privacy-preserving transaction's fee surplus to this public account for this
     /// command, instead of the payer's blinded alias. Meant for a transaction that already
     /// credits that account publicly, such as a deshield; any other target links the transaction
@@ -294,6 +314,9 @@ pub async fn execute_subcommand<C: WalletSequencerClient>(
             program_loader_subcommand
                 .handle_subcommand(wallet_core)
                 .await?
+        }
+        Command::Program(program_subcommand) => {
+            program_subcommand.handle_subcommand(wallet_core).await?
         }
         Command::Group(group_subcommand) => group_subcommand.handle_subcommand(wallet_core).await?,
         Command::Pending(pending_subcommand) => {

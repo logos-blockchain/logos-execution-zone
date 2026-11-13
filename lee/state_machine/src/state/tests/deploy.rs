@@ -2,8 +2,8 @@
 //! `ValidatedStateDiff::execute_authorized`, and `get_program_via`'s segment-chain resolution
 //! that a live deploy (or a hand-assembled one, here) must decode back out of.
 
-use lee_core::program::{MAX_PROGRAM_SEGMENTS, ProgramHeader, ReceiveInput};
-use program_loader_core::Message as LoaderMessage;
+use lee_core::program::{ProgramHeader, ReceiveInput};
+use program_loader_core::{MAX_PROGRAM_SEGMENTS, Message as LoaderMessage};
 
 use super::*;
 
@@ -59,7 +59,7 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
                         bytecode: chunk.to_vec(),
                         next_segment: segment_account_ids.get(i + 1).copied(),
                     }
-                    .to_bytes(),
+                    .to_loader_actor_state(),
                 ),
             ),
         );
@@ -79,7 +79,7 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
                     program_first_segment: segment_account_ids[0],
                     immutable: true,
                 }
-                .to_bytes(),
+                .to_loader_actor_state(),
             ),
         ),
     );
@@ -168,7 +168,7 @@ fn program_with_more_than_max_segments_is_rejected() {
                         bytecode: vec![],
                         next_segment,
                     }
-                    .to_bytes(),
+                    .to_loader_actor_state(),
                 ),
             ),
         );
@@ -186,7 +186,7 @@ fn program_with_more_than_max_segments_is_rejected() {
                     program_first_segment: segment_account_ids[0],
                     immutable: true,
                 }
-                .to_bytes(),
+                .to_loader_actor_state(),
             ),
         ),
     );
@@ -219,7 +219,7 @@ fn program_with_more_than_max_segments_is_rejected_at_deploy_time() {
                         bytecode: vec![],
                         next_segment: segment_account_ids.get(i + 1).copied(),
                     }
-                    .to_bytes(),
+                    .to_loader_actor_state(),
                 ),
             ),
         );
@@ -292,7 +292,7 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
     // Deployed at an arbitrary key-derived address rather than its builtin address, so
     // resolution goes through `get_program_via` directly.
     let (image_id, user_elf) =
-        lee_core::program::get_program_via(header_account_id, |id| state.loader_actor_state(id))
+        program_loader_core::get_program_via(header_account_id, |id| state.loader_actor_state(id))
             .expect("the newly-deployed program must be resolvable by its header address");
     assert_eq!(image_id, program.id());
     assert_eq!(
@@ -348,6 +348,53 @@ fn create_header_rejects_a_shadow_derived_target_the_signer_does_not_control() {
         state.get_account_by_id(shadow_addr),
         Account::default(),
         "the shadow-derived account must remain unclaimed after a rejected deploy"
+    );
+}
+
+#[test]
+fn a_header_sized_segment_is_stored_as_a_segment_not_a_header() {
+    let mut state = V03State::new();
+    let program = crate::test_methods::scripted();
+    let segments = force_insert_segment_chain(&mut state, program.elf(), 0x31);
+
+    let key = TestSigner::new(0x78);
+    let target = key.account_id();
+
+    let mut bytecode = vec![0_u8; 28];
+    bytecode.extend_from_slice(segments[0].value());
+    let untagged = borsh::to_vec(&ProgramSegment {
+        bytecode: bytecode.clone(),
+        next_segment: None,
+    })
+    .unwrap();
+    let spoofed: ProgramHeader =
+        borsh::from_slice(&untagged).expect("untagged, this segment parses as a header");
+    assert_eq!(spoofed.program_first_segment, segments[0]);
+
+    let tx = loader_tx(
+        target,
+        vec![Nonce(0)],
+        &LoaderMessage::WriteSegment {
+            bytecode: bytecode.clone(),
+            next_segment: None,
+        },
+        &[&key],
+    );
+
+    state
+        .transition_from_public_transaction(&tx, 1, 0)
+        .expect("an authorized segment write succeeds");
+
+    let stored = state
+        .loader_actor_state(target)
+        .expect("the segment was written");
+    assert_eq!(
+        ProgramSegment::from_loader_actor_state(stored).map(|segment| segment.bytecode),
+        Some(bytecode)
+    );
+    assert!(
+        program_loader_core::get_program_via(target, |id| state.loader_actor_state(id)).is_none(),
+        "no program may resolve at the target"
     );
 }
 
@@ -551,7 +598,7 @@ fn a_program_deployed_earlier_in_the_transaction_is_dispatchable_by_a_later_call
         .expect("the header written by the first send must dispatch the second");
 
     let (image_id, _) =
-        lee_core::program::get_program_via(header_account_id, |id| state.loader_actor_state(id))
+        program_loader_core::get_program_via(header_account_id, |id| state.loader_actor_state(id))
             .unwrap();
     assert_eq!(image_id, program.id());
     assert_eq!(

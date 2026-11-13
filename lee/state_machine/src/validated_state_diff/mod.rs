@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     hash::Hash,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -12,7 +13,10 @@ use lee_core::{
         BoundaryStep, PublicExecutionContext, PublicOutcome, PublicPart, TransactionEntry,
         TransitionView, WholeExecution,
     },
-    program::{MessageBody, PROGRAM_LOADER_ACCOUNT_ID, Publication, TransactionEvent},
+    program::{
+        MessageBody, PROGRAM_LOADER_ACCOUNT_ID, Publication, ReceiveInput, TransactionEvent,
+        Transition,
+    },
     signing_key::{SIGNATURE_PROGRAM_ID, SigningKeyState},
 };
 use public_backend::PublicBackend;
@@ -26,6 +30,10 @@ use crate::{
 };
 
 mod public_backend;
+
+/// Cycles charged per loader actor state byte read, as the native loader records none. ~3.7x
+/// below measured cost, kept so the default wallet gas limit covers any legal chain.
+pub const LOADER_CYCLES_PER_BYTE: Cycles = 1;
 
 /// A signer and its next key.
 type Signer = (AccountId, SigningKeyState);
@@ -334,8 +342,8 @@ impl ValidatedStateDiff {
     /// carries one: the diff then spends only the payer's nullifier, commits its post-state
     /// after the fee transfer and replays that transfer's crossing. Of the recovery bindings it
     /// keeps only the payer's, which a refund is published through; the notes the others bind
-    /// never exist. Without a fallback the
-    /// failure is an error, as every pre-execution check is.
+    /// never exist. A transaction whose fee a public signer declares reverts to the signers'
+    /// nonce advances alone. Otherwise the failure is an error, as every pre-execution check is.
     pub fn from_privacy_preserving_transaction_metered(
         tx: &PrivacyPreservingTransaction,
         state: &V03State,
@@ -427,7 +435,10 @@ impl ValidatedStateDiff {
         );
         // As for a public action.
         let cycles = charged_cycles(&result, cycles_used, cycle_budget);
-        let fallback = execution.fee.as_ref().and_then(|fee| fee.fallback.as_ref());
+        let fallback = execution
+            .proven_fee
+            .as_ref()
+            .and_then(|fee| fee.fallback.as_ref());
         let (diff, revert) = match (result, fallback) {
             (Ok(mut diff), _) => {
                 // The proven private async messages follow the live public ones.
@@ -483,6 +494,15 @@ impl ValidatedStateDiff {
                 )?;
                 (diff, Some(err.to_string()))
             }
+            // A declared fee is paid outside the proof: the revert keeps only the signers' nonce
+            // advances and key rotations.
+            (Err(err), None) if err.is_chargeable() && message.fee.is_some() => (
+                StateDiff {
+                    signers,
+                    ..StateDiff::default()
+                },
+                Some(err.to_string()),
+            ),
             (Err(err), _) => return Err(err),
         };
         Ok((Self(diff), ExecutionCharge { cycles, revert }))
@@ -526,6 +546,35 @@ pub const fn charged_cycles<T>(
         Err(LeeError::ProgramExitedWithCode { cycles, .. }) => cycles_used.saturating_add(*cycles),
         Err(_) => cycle_budget,
     }
+}
+
+/// Runs a loader message as Rust, charging [`LOADER_CYCLES_PER_BYTE`] for its pre-state and
+/// every actor state it reads.
+pub fn run_program_loader<'state>(
+    input: &ReceiveInput,
+    actor_state: impl Fn(AccountId) -> &'state ActorState,
+    cycle_budget: Cycles,
+    cycles_used: &mut Cycles,
+) -> Result<(Transition, Option<Commitment>), LeeError> {
+    let bytes_read = Cell::new(byte_len(&input.pre_state));
+    let output = catch_program_loader_panic(|| {
+        program_loader_core::handle_message(input, |account_id| {
+            let read = actor_state(account_id);
+            bytes_read.set(bytes_read.get().saturating_add(byte_len(read)));
+            read
+        })
+    })?;
+    let call_cycles = bytes_read.get().saturating_mul(LOADER_CYCLES_PER_BYTE);
+    let budget = cycle_budget.saturating_sub(*cycles_used);
+    ensure!(call_cycles <= budget, LeeError::OutOfGas { budget });
+    *cycles_used = cycles_used
+        .checked_add(call_cycles)
+        .expect("cycle sums fit u64: the charge is within the budget");
+    Ok(output)
+}
+
+fn byte_len(actor_state: &ActorState) -> u64 {
+    u64::try_from(actor_state.len()).expect("an actor state's length fits u64")
 }
 
 /// `program_loader_core`'s functions panic on malformed input, mirroring the assert-based style

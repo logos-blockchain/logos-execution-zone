@@ -163,40 +163,6 @@ fn response_try_with_block_validity_window_empty_range_fails() {
 }
 
 #[test]
-fn get_program_via_reads_the_loader_actor_state() {
-    let program_account = AccountId::new([1; 32]);
-    let segment_account = AccountId::new([2; 32]);
-    let header = ProgramHeader {
-        image_id: [7; 8],
-        program_first_segment: segment_account,
-        immutable: false,
-    };
-    let segment = ProgramSegment {
-        bytecode: vec![1, 2, 3],
-        next_segment: None,
-    };
-    let program_actor_state: ActorState = header.to_bytes().into();
-    let segment_actor_state: ActorState = segment.to_bytes().into();
-    let lookup = |id| {
-        if id == program_account {
-            Some(&program_actor_state)
-        } else if id == segment_account {
-            Some(&segment_actor_state)
-        } else {
-            None
-        }
-    };
-    assert_eq!(
-        get_program_via(program_account, lookup),
-        Some(([7; 8], vec![1, 2, 3]))
-    );
-
-    let deleted = ActorState::empty();
-    let deleted_header = |id| (id == program_account).then_some(&deleted);
-    assert_eq!(get_program_via(program_account, deleted_header), None);
-}
-
-#[test]
 fn blinded_account_id_matches_pinned_value() {
     let expected = AccountId::new([
         148, 161, 160, 119, 29, 201, 192, 211, 184, 174, 163, 247, 46, 96, 251, 199, 214, 114, 33,

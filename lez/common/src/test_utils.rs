@@ -83,7 +83,18 @@ pub fn state_and_diff(
 pub fn produce_dummy_block(
     id: u64,
     prev_hash: Option<HashType>,
+    transactions: Vec<LeeTransaction>,
+) -> Block {
+    produce_dummy_block_with_reverted(id, prev_hash, transactions, Vec::new())
+}
+
+/// Like [`produce_dummy_block`], with `reverted` indices into the final transaction list.
+#[must_use]
+pub fn produce_dummy_block_with_reverted(
+    id: u64,
+    prev_hash: Option<HashType>,
     mut transactions: Vec<LeeTransaction>,
+    reverted: Vec<u64>,
 ) -> Block {
     transactions.push(LeeTransaction::Public(fee_invocation(
         fee_core::BlockFeeSummary::default(),
@@ -100,7 +111,7 @@ pub fn produce_dummy_block(
         prev_block_hash: prev_hash.unwrap_or_default(),
         timestamp: id.saturating_mul(100),
         transactions,
-        reverted: Vec::new(),
+        reverted,
     };
 
     block_data.into_pending_block()

@@ -19,13 +19,14 @@ use core_ffi::{
     primitives::types::{FfiBytes32, account::FfiAccount},
     wallet::{
         FfiAccountIdentity, FfiAccountMention,
+        fees::FfiFeeKind,
         generic_transaction::{FfiDependency, FfiProgramCatalog, FfiTransactionResult},
         lifecycle::FfiCreateWalletOutput,
     },
 };
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS,
-    config::{INITIAL_PRIVATE_BALANCES_FOR_WALLET, min_private_fee},
+    config::INITIAL_PRIVATE_BALANCES_FOR_WALLET,
     ffi_helpers::{sequencer as sequencer_ffi_helpers, wallet::*},
 };
 use lee::{Account, program::Program};
@@ -103,6 +104,7 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
         )
         .unwrap();
     }
+    assert_eq!(transaction_result.fee.kind, FfiFeeKind::Public);
 
     log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
@@ -239,6 +241,9 @@ fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
         )
         .unwrap();
     }
+    assert_eq!(transaction_result.fee.kind, FfiFeeKind::Private);
+    let fee = u128::from(transaction_result.fee.private_fee.reserve);
+    assert!(transaction_result.secrets_size > 0);
 
     assert_eq!(transaction_result.secrets_size, 2);
 
@@ -281,7 +286,7 @@ fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
     // The private sender pays the amount and the in-proof fee.
     assert_eq!(
         new_from_balance,
-        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0] - 100 - min_private_fee()
+        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0] - 100 - fee
     );
     assert_eq!(new_to_balance, INITIAL_PRIVATE_BALANCES_FOR_WALLET[1] + 100);
 

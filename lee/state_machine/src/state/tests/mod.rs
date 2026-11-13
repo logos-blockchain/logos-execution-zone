@@ -18,9 +18,10 @@ use lee_core::{
     },
     program::{
         BlockValidityWindow, MessageEnvelope, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent,
-        ProgramId, ProgramSegment, SyncMessage, TimestampValidityWindow, TransactionEvent,
+        ProgramId, SyncMessage, TimestampValidityWindow, TransactionEvent,
     },
 };
+use program_loader_core::{LoaderActorState as _, ProgramSegment};
 use test_guest_core::{ForgeField, Script};
 
 pub use crate::test_utils::{TestPrivateKeys, init_witness, no_seal, update_witness};
@@ -67,7 +68,7 @@ impl V03State {
             crate::test_methods::flash_swap_initiator(),
             crate::test_methods::flash_swap_callback(),
         ])
-        .with_named_programs([(TWIN, crate::test_methods::scripted())])
+        .with_programs_at([(TWIN, crate::test_methods::scripted(), true)])
     }
 
     #[must_use]
@@ -321,7 +322,7 @@ fn force_insert_segment_chain(state: &mut V03State, elf: &[u8], key_seed: u8) ->
                         bytecode: chunks[i].to_vec(),
                         next_segment: segment_ids.get(i + 1).copied(),
                     }
-                    .to_bytes(),
+                    .to_loader_actor_state(),
                 ),
             ),
         );

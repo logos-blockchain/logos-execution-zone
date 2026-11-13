@@ -29,7 +29,11 @@ const MIN_BLOCK_ID: u64 = 2;
 async fn two_zones_share_one_bedrock_and_both_advance() -> Result<()> {
     let channel_a = config::bedrock_channel_id();
     let channel_b = config::bedrock_channel_id_b();
-    let partial = SequencerPartialConfig::default();
+    let partial = SequencerPartialConfig {
+        // Covers the storage price doubling at the devnet's first epoch rotations.
+        priority_fee_percent: 150,
+        ..SequencerPartialConfig::default()
+    };
 
     let ctx = MultiZoneTestContextBuilder::default()
         .with_zone(

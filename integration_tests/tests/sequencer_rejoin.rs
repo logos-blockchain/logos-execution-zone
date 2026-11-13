@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result, ensure};
 use integration_tests::{
-    account_balance, assert_same_chain, committee, get_account, init_logger, wait_until,
+    account_balance, committee, get_account, init_logger, wait_for_same_chain, wait_until,
 };
 use lee::{AccountId, program::Program, test_utils::TestSigner};
 use log::info;
@@ -54,7 +54,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     let stake_key_b = sequencer_stake_core::SequencerKey::new(key_b.to_bytes())
         .context("Sequencer B's channel signing public key is not a valid Ed25519 point")?;
 
-    let observer = spawn_channel_observer(ctx.bedrock_addr(), channel).await?;
+    let observer = spawn_channel_observer(ctx.bedrock_addr(), channel)?;
 
     // B's genesis stake sits on an account only this key can sign for.
     let owner_b = config::founding_stake_owner_secret(1);
@@ -72,7 +72,10 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         TestSigner::from(&config::default_public_accounts_for_wallet()[0].0).account_id();
 
     wait_until("both staked keys to be accredited", || async {
-        Ok(committee(&observer).await?.0.contains(&key_b.to_bytes()))
+        Ok(committee(&observer, channel)
+            .await?
+            .0
+            .contains(&key_b.to_bytes()))
     })
     .await?;
     info!("Both sequencers accredited from channel creation");
@@ -100,7 +103,10 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     info!("B requested a full unstake");
 
     wait_until("B to leave the committee", || async {
-        Ok(!committee(&observer).await?.0.contains(&key_b.to_bytes()))
+        Ok(!committee(&observer, channel)
+            .await?
+            .0
+            .contains(&key_b.to_bytes()))
     })
     .await?;
     info!("B removed from the Bedrock committee");
@@ -147,14 +153,17 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     info!("B staked again");
 
     wait_until("B to be accredited again", || async {
-        Ok(committee(&observer).await?.0.contains(&key_b.to_bytes()))
+        Ok(committee(&observer, channel)
+            .await?
+            .0
+            .contains(&key_b.to_bytes()))
     })
     .await?;
     info!("B back in the Bedrock committee");
 
     // Rejoining is only real if B writes to the channel again.
     wait_until("the round-robin turn to reach B again", || async {
-        Ok(committee(&observer).await?.1 == Some(key_b))
+        Ok(committee(&observer, channel).await?.1 == Some(key_b))
     })
     .await?;
 
@@ -169,7 +178,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         Ok(a.get_last_block_id().await? > resumed_at)
     })
     .await?;
-    assert_same_chain(a, b).await?;
+    wait_for_same_chain(a, b).await?;
     info!("B produces again and both sequencers agree on the chain");
 
     Ok(())
