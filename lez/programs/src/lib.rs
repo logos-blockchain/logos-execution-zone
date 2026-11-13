@@ -130,12 +130,13 @@ mod inner {
 
     /// System programs every zone registers at genesis, by name.
     #[must_use]
-    pub fn builtin_core_programs() -> [(SystemProgramName, Program); 4] {
+    pub fn builtin_core_programs() -> [(SystemProgramName, Program); 5] {
         [
             (CLOCK_NAME, clock()),
             (FEE_NAME, fee()),
             (BRIDGE_NAME, bridge()),
             (SEQUENCER_STAKE_NAME, sequencer_stake()),
+            (SIGNATURE_PROGRAM_NAME, signature_program()),
         ]
     }
 
@@ -157,11 +158,11 @@ mod inner {
     /// lengths are the enforcement: adding to either half fails to compile until every length
     /// here is updated too.
     #[must_use]
-    pub fn builtin_programs() -> [(AccountId, Program); 11] {
+    pub fn builtin_programs() -> [(AccountId, Program); 12] {
         let at_name = |(name, program): (SystemProgramName, Program)| {
             (AccountId::from_system_program_name(&name), program)
         };
-        let [clock, fee, bridge, stake] = builtin_core_programs().map(at_name);
+        let [clock, fee, bridge, stake, signature] = builtin_core_programs().map(at_name);
         let [inbox, outbox, sender, receiver, lock, wrapped] =
             builtin_cross_zone_programs().map(at_name);
         [
@@ -170,6 +171,7 @@ mod inner {
             fee,
             bridge,
             stake,
+            signature,
             inbox,
             outbox,
             sender,
@@ -180,7 +182,7 @@ mod inner {
     }
 
     #[must_use]
-    pub fn builtin_program_account_ids() -> [AccountId; 11] {
+    pub fn builtin_program_account_ids() -> [AccountId; 12] {
         builtin_programs().map(|(account_id, _)| account_id)
     }
 
@@ -317,6 +319,14 @@ mod inner {
             fn staged_with(
                 programs: impl IntoIterator<Item = (AccountId, Program, bool)>,
             ) -> (V03State, Vec<AccountId>) {
+                staged_registering(programs, [CLOCK_NAME, FEE_NAME])
+            }
+
+            /// `programs` deployed, `names` registered, and the new chain uploaded.
+            fn staged_registering(
+                programs: impl IntoIterator<Item = (AccountId, Program, bool)>,
+                names: impl IntoIterator<Item = SystemProgramName>,
+            ) -> (V03State, Vec<AccountId>) {
                 let new_code = ping_receiver();
                 let user_elf = risc0_binfmt::ProgramBinary::decode(new_code.elf())
                     .unwrap()
@@ -327,7 +337,7 @@ mod inner {
                     .collect();
                 let segments = program_loader_core::build_segments(&user_elf, &ids).unwrap();
                 let registry = Registry {
-                    programs: BTreeMap::from([(CLOCK_NAME, None), (FEE_NAME, None)]),
+                    programs: names.into_iter().map(|name| (name, None)).collect(),
                 };
                 let state = V03State::new()
                     .with_programs_at(
@@ -477,10 +487,14 @@ mod inner {
             }
 
             fn apply_tx(activation_height: u64) -> PublicTransaction {
+                apply_tx_for(CLOCK_NAME, activation_height)
+            }
+
+            fn apply_tx_for(name: SystemProgramName, activation_height: u64) -> PublicTransaction {
                 system_upgrader_tx(
-                    &[loader_actor(&CLOCK_NAME)],
+                    &[loader_actor(&name)],
                     &Message::Apply {
-                        name: CLOCK_NAME,
+                        name,
                         activation_height,
                     },
                 )
@@ -605,6 +619,65 @@ mod inner {
                 );
                 assert_eq!(schedule(&state), None, "applying clears the schedule");
                 assert!(!header(&state, clock_account_id()).immutable);
+            }
+
+            #[test]
+            fn the_signature_program_can_be_scheduled_and_applied() {
+                let (mut state, ids) = staged_registering(
+                    [(signature_program_id(), signature_program(), false)],
+                    [SIGNATURE_PROGRAM_NAME],
+                );
+                assert_eq!(
+                    state.get_program_image_id(signature_program_id()),
+                    Some(signature_program().id())
+                );
+
+                state
+                    .transition_from_public_transaction(
+                        &approved_schedule_tx(SIGNATURE_PROGRAM_NAME, ids[0]),
+                        1,
+                        0,
+                    )
+                    .expect("scheduling succeeds");
+                state
+                    .transition_from_public_transaction(
+                        &apply_tx_for(SIGNATURE_PROGRAM_NAME, ACTIVATION_HEIGHT),
+                        ACTIVATION_HEIGHT,
+                        0,
+                    )
+                    .expect("the upgrade applies at its height");
+
+                assert_eq!(
+                    state.get_program_image_id(signature_program_id()),
+                    Some(ping_receiver().id())
+                );
+                assert!(!header(&state, signature_program_id()).immutable);
+            }
+
+            /// Settlement accepts a disclosed claim only for the image an account holds now, so
+            /// once the upgrade applies, a proof of the old guest is refused.
+            #[test]
+            fn a_proof_of_the_old_guest_is_refused_after_an_upgrade() {
+                let (mut state, ids) = staged_registering(
+                    [(signature_program_id(), signature_program(), false)],
+                    [SIGNATURE_PROGRAM_NAME],
+                );
+                for (tx, block) in [
+                    (approved_schedule_tx(SIGNATURE_PROGRAM_NAME, ids[0]), 1),
+                    (
+                        apply_tx_for(SIGNATURE_PROGRAM_NAME, ACTIVATION_HEIGHT),
+                        ACTIVATION_HEIGHT,
+                    ),
+                ] {
+                    state
+                        .transition_from_public_transaction(&tx, block, 0)
+                        .unwrap();
+                }
+
+                assert_ne!(
+                    state.get_program_image_id(signature_program_id()),
+                    Some(signature_program().id())
+                );
             }
 
             #[test]
@@ -1407,7 +1480,11 @@ mod inner {
             assert!(
                 !reserved
                     .into_iter()
-                    .chain(builtin_program_account_ids())
+                    .chain(
+                        builtin_program_account_ids()
+                            .into_iter()
+                            .filter(|&account_id| account_id != signature_program_id())
+                    )
                     .any(|account_id| account_id == signature_program_id())
             );
         }
@@ -1551,6 +1628,7 @@ mod inner {
                     fee_account_id(),
                     bridge_account_id(),
                     sequencer_stake_account_id(),
+                    signature_program_id(),
                     cross_zone_inbox_account_id(),
                     cross_zone_outbox_account_id(),
                     ping_sender_account_id(),

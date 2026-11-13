@@ -502,4 +502,37 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn genesis_seeds_the_signature_program_at_its_address() {
+        for cross_zone in [false, true] {
+            let state = initial_state(cross_zone);
+            let signature = lee_core::signing_key::signature_program_id();
+            assert_eq!(
+                state.get_program_image_id(signature),
+                Some(programs::signature_program().id())
+            );
+            let header = lee_core::program::ProgramHeader::from_loader_actor_state(
+                state
+                    .get_account_by_id(signature)
+                    .data
+                    .actor_state(lee_core::program::PROGRAM_LOADER_ACCOUNT_ID),
+            )
+            .unwrap();
+            assert!(!header.immutable);
+            let registry = system_upgrader_core::Registry::from_bytes(
+                state
+                    .get_account_by_id(system_upgrader_core::registry_account_id())
+                    .data
+                    .actor_state(system_upgrader_core::SYSTEM_UPGRADER_ACCOUNT_ID),
+            )
+            .unwrap();
+            assert_eq!(
+                registry
+                    .programs
+                    .get(&lee_core::signing_key::SIGNATURE_PROGRAM_NAME),
+                Some(&None)
+            );
+        }
+    }
 }
