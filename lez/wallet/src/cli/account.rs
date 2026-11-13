@@ -14,6 +14,7 @@ use crate::{
     WalletCore, WalletSequencerClient,
     account::{AccountIdWithPrivacy, HumanReadableAccount, Label},
     cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand, confirm},
+    program_facades::signature::Signature,
 };
 
 #[derive(Debug, Clone)]
@@ -107,6 +108,20 @@ pub enum AccountSubcommand {
         /// Either 32 byte base58 account id string with privacy prefix or a label.
         #[arg(long)]
         account_id: CliAccountMention,
+    },
+    /// Replace the keys of public accounts without signing with them, in one privacy
+    /// transaction: for a key that is exhausted or unsafe. The accounts' nonces do not change.
+    #[command(name = "rotate-key")]
+    RotateKey {
+        /// A public account this wallet holds; repeat to rotate several at once.
+        #[arg(long = "account", required = true)]
+        accounts: Vec<CliAccountMention>,
+        /// The type of the new keys: `wots` or `schnorr`.
+        #[arg(long, value_parser = super::parse_key_type)]
+        to: lee_core::signing_key::KeyType,
+        /// A private account this wallet holds, which pays the fee and runs the rotation.
+        #[arg(long)]
+        fee_payer: CliAccountMention,
     },
 }
 
@@ -351,6 +366,36 @@ impl WalletSubcommand for NewSubcommand {
 }
 
 impl AccountSubcommand {
+    async fn handle_rotate_key<C: WalletSequencerClient>(
+        accounts: &[CliAccountMention],
+        to: lee_core::signing_key::KeyType,
+        fee_payer: &CliAccountMention,
+        wallet_core: &mut WalletCore<C>,
+    ) -> Result<SubcommandReturnValue> {
+        let accounts = accounts
+            .iter()
+            .map(|mention| match mention.resolve(wallet_core.storage())? {
+                AccountIdWithPrivacy::Public(account) => Ok(account),
+                AccountIdWithPrivacy::Private(_) => {
+                    anyhow::bail!("Only a public account's key can be rotated: {mention}")
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let AccountIdWithPrivacy::Private(fee_payer) = fee_payer.resolve(wallet_core.storage())?
+        else {
+            anyhow::bail!(
+                "The fee payer must be a private account: a public one would link itself to the \
+                 rotated accounts"
+            );
+        };
+        let (tx_hash, planned) = Signature(wallet_core)
+            .manual_rotation(&accounts, to, fee_payer)
+            .await?;
+        let finished = wallet_core.finish_transaction(tx_hash).await?;
+        Signature(wallet_core).record_landed(&planned).await?;
+        Ok(finished)
+    }
+
     fn confirm_scan(blocks: u64, scan: &str) -> Result<()> {
         if blocks == 0
             || confirm(&format!(
@@ -640,6 +685,11 @@ impl WalletSubcommand for AccountSubcommand {
                 import_subcommand.handle_subcommand(wallet_core).await
             }
             Self::ShowKeys { account_id } => Self::handle_show_keys(&account_id, wallet_core),
+            Self::RotateKey {
+                accounts,
+                to,
+                fee_payer,
+            } => Self::handle_rotate_key(&accounts, to, &fee_payer, wallet_core).await,
         }
     }
 }

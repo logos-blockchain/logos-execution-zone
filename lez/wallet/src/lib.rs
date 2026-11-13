@@ -1379,7 +1379,10 @@ impl<C: WalletSequencerClient> WalletCore<C> {
     }
 
     /// A public account's nonce and its stored key, if it has one.
-    async fn stored_key(&self, account_id: AccountId) -> Result<(Nonce, Option<SigningKeyState>)> {
+    pub(crate) async fn stored_key(
+        &self,
+        account_id: AccountId,
+    ) -> Result<(Nonce, Option<SigningKeyState>)> {
         let Some(account) = self
             .get_account_view(Actor::new(account_id, signature_program_id()))
             .await?
@@ -3980,6 +3983,153 @@ mod tests {
             })
             .unwrap();
         sequencer
+    }
+
+    /// A sequencer holding the signature program's header for `image_id` and, if given, one
+    /// account at `nonce` with `stored`.
+    fn sequencer_with_guest(
+        image_id: lee_core::program::ProgramId,
+        account: Option<(AccountId, Nonce, lee_core::signing_key::SigningKeyState)>,
+    ) -> RpcModule<()> {
+        use program_loader_core::LoaderActorState as _;
+        let signature = lee_core::signing_key::signature_program_id();
+        let header = Account::default().with_actor_state(
+            lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+            lee_core::program::ProgramHeader {
+                image_id,
+                program_first_segment: AccountId::new([1; 32]),
+                immutable: false,
+            }
+            .to_loader_actor_state()
+            .into(),
+        );
+        let mut sequencer = RpcModule::new(());
+        sequencer
+            .register_method("getAccountView", move |params, (), _| {
+                let actor = params.one::<Actor>()?;
+                let held = match account {
+                    _ if actor.account_id == signature => Some(header.clone()),
+                    Some((id, nonce, stored)) if actor.account_id == id => Some(
+                        Account {
+                            nonce,
+                            ..Account::default()
+                        }
+                        .with_actor_state(signature, stored.into()),
+                    ),
+                    _ => None,
+                };
+                Ok::<_, ErrorObjectOwned>(held)
+            })
+            .unwrap();
+        sequencer
+    }
+
+    fn rotation_error<T: std::fmt::Debug>(result: Result<T, ExecutionFailureKind>) -> String {
+        match result {
+            Err(ExecutionFailureKind::TransactionBuildError(error)) => error.to_string(),
+            other => panic!("expected a refused manual rotation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_rotation_requires_a_private_fee_payer() {
+        let (wallet, _home, _sequencer) = served_wallet(sequencer_with_guest(
+            programs::signature_program().id(),
+            None,
+        ))
+        .await;
+        let error = rotation_error(
+            crate::program_facades::signature::Signature(&wallet)
+                .manual_rotation(
+                    &[AccountId::new([2; 32])],
+                    KeyType::Wots,
+                    AccountId::new([3; 32]),
+                )
+                .await,
+        );
+        assert!(
+            error.contains("private account this wallet holds"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_rotation_refuses_a_stale_guest() {
+        let (mut wallet, _home, _sequencer) =
+            served_wallet(sequencer_with_guest([9; 8], None)).await;
+        let (payer, _) = wallet.create_new_account_private(None);
+        let error = rotation_error(
+            crate::program_facades::signature::Signature(&wallet)
+                .manual_rotation(&[AccountId::new([2; 32])], KeyType::Wots, payer)
+                .await,
+        );
+        assert!(error.contains("out of date"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn manual_rotation_refuses_an_account_the_wallet_does_not_hold() {
+        let (mut wallet, _home, _sequencer) = served_wallet(sequencer_with_guest(
+            programs::signature_program().id(),
+            None,
+        ))
+        .await;
+        let (payer, _) = wallet.create_new_account_private(None);
+        let error = rotation_error(
+            crate::program_facades::signature::Signature(&wallet)
+                .manual_rotation(&[AccountId::new([2; 32])], KeyType::Wots, payer)
+                .await,
+        );
+        assert!(error.contains("holds no secret"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn manual_rotation_refuses_no_accounts() {
+        let (mut wallet, _home, _sequencer) = served_wallet(sequencer_with_guest(
+            programs::signature_program().id(),
+            None,
+        ))
+        .await;
+        let (payer, _) = wallet.create_new_account_private(None);
+        let error = rotation_error(
+            crate::program_facades::signature::Signature(&wallet)
+                .manual_rotation(&[], KeyType::Wots, payer)
+                .await,
+        );
+        assert!(error.contains("at least one account"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_landed_manual_rotation_records_the_counter() {
+        let secret = lee::signature::PublicAccountSecret::new([3; 32]);
+        let account = lee::signature::public_account_id(&secret);
+        let landed = lee::signature::key_state_with_counter(&secret, KeyType::Schnorr, Nonce(4), 1);
+        let planned = |next| crate::program_facades::signature::PlannedRotation {
+            account,
+            nonce: Nonce(4),
+            counter: 1,
+            next,
+        };
+        let (wallet, _home, _sequencer) = served_wallet(sequencer_with_guest(
+            programs::signature_program().id(),
+            Some((account, Nonce(4), landed)),
+        ))
+        .await;
+        let signature = crate::program_facades::signature::Signature(&wallet);
+        let counter = || {
+            wallet
+                .leaf_records
+                .lock()
+                .unwrap()
+                .counter(account, Nonce(4))
+        };
+
+        // A key that never landed records nothing.
+        let other = lee::signature::key_state_with_counter(&secret, KeyType::Wots, Nonce(4), 1);
+        signature.record_landed(&[planned(other)]).await.unwrap();
+        assert_eq!(counter(), 0);
+
+        signature.record_landed(&[planned(landed)]).await.unwrap();
+        assert_eq!(counter(), 1);
     }
 
     #[tokio::test]

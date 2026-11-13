@@ -389,7 +389,7 @@ async fn execute_restore_keys<C: WalletSequencerClient>(
     wallet_core.restore_keys(depth).await
 }
 
-fn parse_key_type(name: &str) -> Result<KeyType> {
+pub(crate) fn parse_key_type(name: &str) -> Result<KeyType> {
     match name.to_lowercase().as_str() {
         "wots" => Ok(KeyType::Wots),
         "schnorr" => Ok(KeyType::Schnorr),
