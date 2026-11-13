@@ -7,12 +7,13 @@ use crate::account::AccountIdWithPrivacy;
 
 /// The in-proof fee of a privacy-preserving transaction.
 ///
-/// Its proof debits `reserve` from `payer`. The surplus over the fee charged is refunded to
-/// `refund_to`, or to the payer's alias.
+/// Its proof debits `reserve` from `payer` and pays `tip` of it to the producer. The surplus
+/// over the fee charged and the tip is refunded to `refund_to`, or to the payer's alias.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PrivateFee {
     pub payer: AccountId,
     pub reserve: u128,
+    pub tip: u64,
     pub refund_to: Option<AccountId>,
 }
 
@@ -24,7 +25,7 @@ pub struct FeeParams {
     pub gas_limit: Option<u64>,
     /// Public: the fee cap, else the reserve at the headroom's base fees plus the tip.
     pub max_fee: Option<u128>,
-    /// Public: the tip, charged on top of the base fees.
+    /// The tip, charged on top of the base fees: declared, or paid inside the proof.
     pub tip: u64,
     /// Blocks of steepest base fee climb a fee is priced to cover, else the configured ones.
     pub headroom_blocks: Option<u64>,
@@ -167,7 +168,11 @@ impl std::fmt::Display for DryRunReport {
                     "  headroom:       {headroom_blocks} blocks, up to exec {exec_ceiling} / \
                      stor {stor_ceiling} ({headroom_reserve})"
                 )?;
-                writeln!(f, "  reserve:        {} (surplus refunded)", fee.reserve)?;
+                writeln!(
+                    f,
+                    "  reserve:        {} (tip {}, surplus refunded)",
+                    fee.reserve, fee.tip
+                )?;
                 writeln!(f, "  fee payer:      {}", fee.payer)?;
                 writeln!(
                     f,

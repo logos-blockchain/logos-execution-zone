@@ -116,14 +116,16 @@ pub fn PrivacyPreservingTxDetails(
         "None (exempt)"
     };
     let (fee_payer_str, fee_amounts_str) = fee_strs(fee, none_label);
-    let (refund_target_str, fallback_str) = proven_fee.map_or_else(
-        || ("-".to_owned(), "-"),
+    let (refund_target_str, tip_str, fallback_str) = proven_fee.map_or_else(
+        || ("-".to_owned(), "-".to_owned(), "-"),
         |ProvenFee {
              refund_to,
+             tip,
              fallback,
          }| {
             (
                 refund_to.map_or_else(|| "Payer's alias".to_owned(), |id| id.to_string()),
+                tip.to_string(),
                 if fallback.is_some() {
                     "Committed"
                 } else {
@@ -202,6 +204,10 @@ pub fn PrivacyPreservingTxDetails(
                 <div class="info-row">
                     <span class="info-label">"Proven Fee Refund Target:"</span>
                     <span class="info-value hash">{refund_target_str}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">"Proven Fee Tip:"</span>
+                    <span class="info-value">{tip_str}</span>
                 </div>
                 <div class="info-row">
                     <span class="info-label">"Proven Fee Fallback:"</span>

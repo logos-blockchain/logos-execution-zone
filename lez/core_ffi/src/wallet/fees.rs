@@ -31,13 +31,15 @@ pub enum FfiFeeKind {
 
 /// The in-proof fee of a privacy-preserving transaction.
 ///
-/// Its proof debits `reserve` from `payer`. The surplus over the fee charged is refunded to
-/// `refund_to` when `has_refund_to`, else to the payer's alias.
+/// Its proof debits `reserve` from `payer` and pays `tip` of it to the producer. The surplus over
+/// the fee charged and the tip is refunded to `refund_to` when `has_refund_to`, else to the
+/// payer's alias.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FfiPrivateFee {
     pub payer: FfiAccountId,
     pub reserve: FfiU128,
+    pub tip: u64,
     pub has_refund_to: bool,
     pub refund_to: FfiAccountId,
 }
@@ -63,12 +65,14 @@ impl From<Option<DeclaredFee>> for FfiDeclaredFee {
             Some(DeclaredFee::Private(PrivateFee {
                 payer,
                 reserve,
+                tip,
                 refund_to,
             })) => Self {
                 kind: FfiFeeKind::Private,
                 private_fee: FfiPrivateFee {
                     payer: payer.into(),
                     reserve: reserve.into(),
+                    tip,
                     has_refund_to: refund_to.is_some(),
                     refund_to: refund_to.unwrap_or_default().into(),
                 },
@@ -298,7 +302,7 @@ pub struct FfiFeeParams {
     /// run's `reserve_at_head` is rejected by the sequencer.
     pub has_max_fee: bool,
     pub max_fee: FfiU128,
-    /// Public: the tip, charged on top of the base fees.
+    /// The tip, charged on top of the base fees: declared, or paid inside the proof.
     pub tip: u64,
     /// Blocks of steepest base fee climb a fee is priced to cover (a public cap, a private
     /// reserve), else the configured ones.

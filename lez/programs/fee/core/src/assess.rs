@@ -22,11 +22,12 @@ pub enum FeeTxView {
     },
     /// The fee is paid inside the proof: `reserve` is the amount the proof
     /// credited to the fee inbox from `payer`, the address a refund of the
-    /// surplus goes back to.
+    /// surplus goes back to; `tip` is the part of it the proof pays the producer.
     Private {
         payer: AccountId,
         reserve: Balance,
         data_bytes: Gas,
+        tip: Fee,
     },
 }
 
@@ -53,8 +54,7 @@ impl FeeTxView {
     #[must_use]
     pub const fn tip(&self) -> Fee {
         match self {
-            Self::Public { tip, .. } => *tip,
-            Self::Private { .. } => 0,
+            Self::Public { tip, .. } | Self::Private { tip, .. } => *tip,
         }
     }
 }
