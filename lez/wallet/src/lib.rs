@@ -800,8 +800,9 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 let nonce = *nonces
                     .get(&account)
                     .expect("every signing account is in the message's nonces");
-                let leaf = records.next_leaf(account, nonce)?;
-                spent.push((account, nonce));
+                let counter = signer.counter();
+                let leaf = records.next_leaf(account, nonce, counter)?;
+                spent.push((account, nonce, counter));
                 Ok(signer.with_leaf(leaf))
             })
             .collect::<Result<Vec<_>, LeafError>>()?;
@@ -3923,7 +3924,7 @@ mod tests {
                 .leaf_records
                 .lock()
                 .unwrap()
-                .next_leaf(account, Nonce(0))
+                .next_leaf(account, Nonce(0), 0)
         };
 
         let first = auth_data_at_nonce_zero(&wallet, &secret, KeyType::Wots).unwrap();
@@ -3936,7 +3937,7 @@ mod tests {
         assert_eq!(next_leaf(&wallet), Ok(2));
 
         let saved = LeafRecords::open(home.path().join("storage.leaves")).unwrap();
-        assert_eq!(saved.next_leaf(account, Nonce(0)), Ok(2));
+        assert_eq!(saved.next_leaf(account, Nonce(0), 0), Ok(2));
     }
 
     #[tokio::test]
@@ -4014,10 +4015,10 @@ mod tests {
 
         let records = wallet.leaf_records.lock().unwrap();
         let wots_id = lee::signature::public_account_id(&on_wots);
-        assert_eq!(records.next_leaf(wots_id, Nonce(3)), Ok(7));
-        assert_eq!(records.next_leaf(wots_id, Nonce(4)), Ok(0));
+        assert_eq!(records.next_leaf(wots_id, Nonce(3), 0), Ok(7));
+        assert_eq!(records.next_leaf(wots_id, Nonce(4), 0), Ok(0));
         let schnorr_id = lee::signature::public_account_id(&on_schnorr);
-        assert_eq!(records.next_leaf(schnorr_id, Nonce(3)), Ok(0));
+        assert_eq!(records.next_leaf(schnorr_id, Nonce(3), 0), Ok(0));
     }
 
     #[tokio::test]

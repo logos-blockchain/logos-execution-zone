@@ -183,7 +183,7 @@ async fn restore_keys_from_seed() -> Result<()> {
     // did not use.
     let leaves_path = ctx.wallet().storage_path().with_extension("leaves");
     let leaves = || LeafRecords::open(leaves_path.clone());
-    assert_eq!(leaves()?.next_leaf(to_account_id3, Nonce(0)), Ok(7));
+    assert_eq!(leaves()?.next_leaf(to_account_id3, Nonce(0), 0), Ok(7));
 
     // Test that restored accounts can send transactions
     send(
@@ -200,7 +200,7 @@ async fn restore_keys_from_seed() -> Result<()> {
         11,
     )
     .await?;
-    assert_eq!(leaves()?.next_leaf(to_account_id3, Nonce(0)), Ok(6));
+    assert_eq!(leaves()?.next_leaf(to_account_id3, Nonce(0), 0), Ok(6));
 
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 

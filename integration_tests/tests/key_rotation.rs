@@ -154,7 +154,7 @@ async fn a_second_transfer_at_a_pending_nonce_signs_with_the_next_leaf() -> Resu
         matches!(second, Err(ExecutionFailureKind::SequencerClientError(_))),
         "the mempool refuses a second transaction at a pending nonce, got {second:?}"
     );
-    assert_eq!(leaf_records(&ctx)?.next_leaf(sender, nonce), Ok(2));
+    assert_eq!(leaf_records(&ctx)?.next_leaf(sender, nonce, 0), Ok(2));
 
     wait_for_inclusion(&ctx, first).await?;
     let third = transfer(12).await?;
@@ -265,7 +265,7 @@ async fn a_charged_revert_rotates_the_key_and_the_next_transfer_follows() -> Res
     let (next, next_key) = stored_key(&ctx, sender).await?;
     assert_eq!(next.0, before.0 + 2);
     assert_eq!(next_key, signer.key_state(next).into());
-    assert_eq!(leaf_records(&ctx)?.next_leaf(sender, nonce), Ok(1));
+    assert_eq!(leaf_records(&ctx)?.next_leaf(sender, nonce, 0), Ok(1));
 
     Ok(())
 }

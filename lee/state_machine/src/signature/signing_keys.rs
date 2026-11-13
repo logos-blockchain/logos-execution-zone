@@ -70,6 +70,7 @@ enum SigningSecret {
 pub struct Signer {
     account_id: AccountId,
     secret: SigningSecret,
+    counter: u32,
     initial: Option<SigningKeyState>,
     next: SigningKeyState,
 }
@@ -79,14 +80,15 @@ impl SigningSecret {
         secret: &PublicAccountSecret,
         key_type: KeyType,
         nonce: Nonce,
+        counter: u32,
     ) -> (Self, SigningKeyState) {
         match key_type {
             KeyType::Wots => {
-                let (sk, pk) = signing_key::<Wots>(secret, nonce);
+                let (sk, pk) = signing_key_with_counter::<Wots>(secret, nonce, counter);
                 (Self::Wots(sk), Wots::key_state(&pk))
             }
             KeyType::Schnorr => {
-                let (sk, pk) = signing_key::<Schnorr>(secret, nonce);
+                let (sk, pk) = signing_key_with_counter::<Schnorr>(secret, nonce, counter);
                 (Self::Schnorr(sk), Schnorr::key_state(&pk))
             }
         }
@@ -114,8 +116,37 @@ impl Signer {
         current: KeyType,
         next: KeyType,
     ) -> Self {
-        let (signing_secret, current_key) = SigningSecret::new(secret, current, nonce);
+        let (signing_secret, current_key) = SigningSecret::new(secret, current, nonce, 0);
         let initial = (nonce == Nonce(0)).then_some(current_key);
+        Self::build(secret, nonce, signing_secret, 0, initial, next)
+    }
+
+    /// Signs with the manually rotated key of type `current` at `(nonce, counter)` and rotates to
+    /// the key of type `next` at the next nonce. A manually rotated key is stored on chain, so the
+    /// entry never carries the initial key. At counter 0 this is [`Self::new`].
+    #[must_use]
+    pub fn new_with_counter(
+        secret: &PublicAccountSecret,
+        nonce: Nonce,
+        counter: u32,
+        current: KeyType,
+        next: KeyType,
+    ) -> Self {
+        if counter == 0 {
+            return Self::new(secret, nonce, current, next);
+        }
+        let (signing_secret, _) = SigningSecret::new(secret, current, nonce, counter);
+        Self::build(secret, nonce, signing_secret, counter, None, next)
+    }
+
+    fn build(
+        secret: &PublicAccountSecret,
+        nonce: Nonce,
+        signing_secret: SigningSecret,
+        counter: u32,
+        initial: Option<SigningKeyState>,
+        next: KeyType,
+    ) -> Self {
         let mut next_nonce = nonce;
         next_nonce.public_account_nonce_increment();
         Self {
@@ -123,6 +154,7 @@ impl Signer {
                 .and_then(|key| AccountId::for_initial_key(&key))
                 .unwrap_or_else(|| public_account_id(secret)),
             secret: signing_secret,
+            counter,
             initial,
             next: key_state(secret, next, next_nonce),
         }
@@ -144,6 +176,12 @@ impl Signer {
     #[must_use]
     pub const fn account_id(&self) -> AccountId {
         self.account_id
+    }
+
+    /// The rotation counter of the key it signs with: 0 unless the key was manually rotated.
+    #[must_use]
+    pub const fn counter(&self) -> u32 {
+        self.counter
     }
 
     /// Whether the key signs with one of a tree's leaves, see [`Self::with_leaf`].
@@ -169,14 +207,20 @@ impl Signer {
     }
 }
 
-/// Per-nonce seed for one key type: `Sha256(DS_KEY_SEED || secret || key_type byte || nonce as
-/// 16 bytes LE)`.
-fn key_seed(secret: &PublicAccountSecret, key_type: KeyType, nonce: Nonce) -> [u8; 32] {
+/// Seed for one key type at `(nonce, counter)`: `Sha256(DS_KEY_SEED || secret || key_type byte ||
+/// nonce as 16 bytes LE || counter as 4 bytes LE)`.
+fn key_seed(
+    secret: &PublicAccountSecret,
+    key_type: KeyType,
+    nonce: Nonce,
+    counter: u32,
+) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(DS_KEY_SEED);
     hasher.update(secret.value());
     hasher.update(borsh::to_vec(&key_type).expect("a key type encodes to its discriminant byte"));
     hasher.update(nonce.0.to_le_bytes());
+    hasher.update(counter.to_le_bytes());
     hasher.finalize().into()
 }
 
@@ -186,7 +230,17 @@ pub fn signing_key<K: KeyScheme>(
     secret: &PublicAccountSecret,
     nonce: Nonce,
 ) -> (K::SecretKey, K::PublicKey) {
-    let mut seed = key_seed(secret, K::TYPE, nonce);
+    signing_key_with_counter::<K>(secret, nonce, 0)
+}
+
+/// The account's key pair of scheme `K` at `(nonce, counter)`.
+#[must_use]
+pub fn signing_key_with_counter<K: KeyScheme>(
+    secret: &PublicAccountSecret,
+    nonce: Nonce,
+    counter: u32,
+) -> (K::SecretKey, K::PublicKey) {
+    let mut seed = key_seed(secret, K::TYPE, nonce, counter);
     let keys = K::keygen(&seed);
     seed.zeroize();
     keys
@@ -207,7 +261,18 @@ pub fn public_account_id(secret: &PublicAccountSecret) -> AccountId {
 /// The account's key state of type `key_type` at `nonce`.
 #[must_use]
 pub fn key_state(secret: &PublicAccountSecret, key_type: KeyType, nonce: Nonce) -> SigningKeyState {
-    SigningSecret::new(secret, key_type, nonce).1
+    key_state_with_counter(secret, key_type, nonce, 0)
+}
+
+/// The account's key state of type `key_type` at `(nonce, counter)`.
+#[must_use]
+pub fn key_state_with_counter(
+    secret: &PublicAccountSecret,
+    key_type: KeyType,
+    nonce: Nonce,
+    counter: u32,
+) -> SigningKeyState {
+    SigningSecret::new(secret, key_type, nonce, counter).1
 }
 
 #[cfg(test)]
@@ -215,7 +280,9 @@ mod tests {
     use hex_literal::hex;
 
     use super::*;
-    use crate::signature::Schnorr;
+    use crate::signature::{Schnorr, authenticate, current_key};
+
+    const KEY_TYPES: [KeyType; 2] = [KeyType::Wots, KeyType::Schnorr];
 
     #[test]
     fn signing_key_is_deterministic() {
@@ -239,12 +306,16 @@ mod tests {
     fn key_seed_known_answers() {
         let secret = PublicAccountSecret::new([7; 32]);
         assert_eq!(
-            key_seed(&secret, KeyType::Schnorr, Nonce(0)),
-            hex!("fae55c59b7c627ad9eb58de366afbf662930f73911a32ef952b3a3710a251987")
+            key_seed(&secret, KeyType::Schnorr, Nonce(0), 0),
+            hex!("eaca7ec391673b7eff1df595c6b49178370eac6f058513a106a23aabd9cc5146")
         );
         assert_eq!(
-            key_seed(&secret, KeyType::Schnorr, Nonce(1)),
-            hex!("2e1b5e08998e9898270f477fc5868d07b07af996ac3b224250ffc2ded738289d")
+            key_seed(&secret, KeyType::Schnorr, Nonce(1), 0),
+            hex!("bf06851877a683d6458f2ccd513e3c192c8ebb8b3ed03222a977d6dcfd6a5f50")
+        );
+        assert_eq!(
+            key_seed(&secret, KeyType::Schnorr, Nonce(0), 1),
+            hex!("15fec2392e5f990abb6fe3913855fa3b2dca89421274bf7f10b6108c6125323b")
         );
     }
 
@@ -254,11 +325,11 @@ mod tests {
         for (nonce, expected_pk) in [
             (
                 Nonce(0),
-                hex!("5e4e66008d467f622ed19ccdecd33ac044cefc9e820da3f796cd79c6577c8139"),
+                hex!("131a37437833c9d76999d08d8c3de6b3cfec3fb78183df83ccd79dc2cf777b27"),
             ),
             (
                 Nonce(1),
-                hex!("a24726717ac98b48fa5cf7cdc1878926de157bb84d3d11306436302caa78ee9a"),
+                hex!("d9c211fd55ac00606f57e677521eceed1bc6a7a88c1cf9197f2b3e56b3de633e"),
             ),
         ] {
             let (_sk, pk) = signing_key::<Schnorr>(&secret, nonce);
@@ -281,5 +352,79 @@ mod tests {
             Schnorr::authenticate(&state.key_commitment, &message, &auth),
             Ok(())
         );
+    }
+
+    #[test]
+    fn keys_differ_per_counter() {
+        let secret = PublicAccountSecret::new([7; 32]);
+        for key_type in KEY_TYPES {
+            assert_ne!(
+                key_state_with_counter(&secret, key_type, Nonce(3), 0),
+                key_state_with_counter(&secret, key_type, Nonce(3), 1)
+            );
+        }
+    }
+
+    #[test]
+    fn new_with_counter_at_zero_matches_new() {
+        let secret = PublicAccountSecret::new([7; 32]);
+        let message = [1; 32];
+        for key_type in KEY_TYPES {
+            // At nonce 0 the current key is the initial key, which is always WOTS+.
+            let nonces = if key_type == INITIAL_KEY_TYPE {
+                vec![Nonce(0), Nonce(1)]
+            } else {
+                vec![Nonce(1)]
+            };
+            for nonce in nonces {
+                let plain = Signer::new(&secret, nonce, key_type, KeyType::Wots);
+                let counted = Signer::new_with_counter(&secret, nonce, 0, key_type, KeyType::Wots);
+                assert_eq!(counted.account_id(), plain.account_id());
+                assert_eq!(counted.next(), plain.next());
+                assert_eq!(counted.counter(), 0);
+
+                let stored = (nonce != Nonce(0)).then(|| key_state(&secret, key_type, nonce));
+                let auth_plain = plain.auth_data(&message);
+                let auth_counted = counted.auth_data(&message);
+                let (current_plain, rest_plain) =
+                    current_key(stored, plain.account_id(), &auth_plain).unwrap();
+                let (current_counted, rest_counted) =
+                    current_key(stored, counted.account_id(), &auth_counted).unwrap();
+                assert_eq!(current_counted, current_plain);
+                for rest in [rest_plain, rest_counted] {
+                    assert_eq!(
+                        authenticate(&current_plain, &message, rest, &plain.next()),
+                        Ok(plain.next())
+                    );
+                }
+                if key_type == KeyType::Wots {
+                    assert_eq!(auth_counted, auth_plain);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn new_with_counter_authenticates_against_the_stored_key() {
+        let secret = PublicAccountSecret::new([7; 32]);
+        let message = [1; 32];
+        for key_type in KEY_TYPES {
+            for (nonce, next_nonce) in [(Nonce(0), Nonce(1)), (Nonce(1), Nonce(2))] {
+                let signer = Signer::new_with_counter(&secret, nonce, 1, key_type, KeyType::Wots);
+                let stored = key_state_with_counter(&secret, key_type, nonce, 1);
+                let auth_data = signer.auth_data(&message);
+
+                let (current, rest) =
+                    current_key(Some(stored), signer.account_id(), &auth_data).unwrap();
+                assert_eq!(current, stored);
+                assert_eq!(
+                    authenticate(&current, &message, rest, &signer.next()),
+                    Ok(signer.next())
+                );
+                assert_eq!(signer.next(), key_state(&secret, KeyType::Wots, next_nonce));
+                assert_eq!(signer.account_id(), public_account_id(&secret));
+                assert_eq!(signer.counter(), 1);
+            }
+        }
     }
 }
