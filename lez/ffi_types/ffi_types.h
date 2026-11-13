@@ -51,6 +51,15 @@ typedef struct FfiVec_FfiActor {
 
 typedef struct FfiVec_FfiActor FfiActorList;
 
+/**
+ * `zone` is read only when `is_remote` is set; local targets carry a zeroed one.
+ */
+typedef struct FfiTarget {
+  bool is_remote;
+  uint8_t zone[32];
+  struct FfiActor actor;
+} FfiTarget;
+
 typedef struct FfiVec_u8 {
   uint8_t *entries;
   uintptr_t len;
@@ -69,7 +78,7 @@ typedef struct FfiVec_FfiBytes32 FfiPdaSeedList;
 
 typedef struct FfiDelivery {
   struct FfiActor from;
-  struct FfiActor to;
+  struct FfiTarget to;
   FfiMessageDataList message;
   FfiAccountIdList inherited_authorizations;
   bool inherits_entry_authorizations;
@@ -208,7 +217,7 @@ typedef struct FfiVec_FfiRecoveryBinding FfiRecoveryBindingList;
  * How a proven transaction starts, as far as its proof discloses: a call to a public actor.
  */
 typedef struct FfiRootCall {
-  struct FfiActor to;
+  struct FfiTarget to;
   FfiMessageDataList message;
 } FfiRootCall;
 

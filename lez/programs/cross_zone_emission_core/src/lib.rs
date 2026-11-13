@@ -3,14 +3,12 @@
 //! Changing either silently strands every peer.
 
 use borsh::{BorshDeserialize, BorshSerialize};
+pub use lee_core::account::ZoneId;
 use lee_core::account::{AccountId, Actor};
 
 /// The domain separator a generic emitter's tag-0 variant opens with, before
 /// the [`CrossZoneEmission`] fields.
 pub const EMITTER_MAGIC: [u8; 8] = *b"LEZXZEM1";
-
-/// Raw 32-byte zone (channel) id; the host maps it to the zone-sdk `ChannelId`.
-pub type ZoneId = [u8; 32];
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct CrossZoneEmission {

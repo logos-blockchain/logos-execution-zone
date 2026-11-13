@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use lee::{
     AccountId, Actor, BoundaryStep, Delivery, EncryptedNote, EphemeralPublicKey, MessageEnvelope,
     PublicAccountEvidence, PublicExecutionContext, PublicKey, RecoveryBinding, RootCall,
-    SealedMessage, Signature, error::LeeError,
+    SealedMessage, Signature, Target, error::LeeError,
 };
 use lee_core::{
     Commitment, Nullifier, PrivateAction, account::Nonce, encryption::Ciphertext, program::PdaSeed,
@@ -64,10 +64,49 @@ impl From<(AccountId, Nonce)> for FfiNonceEntry {
     }
 }
 
+/// `zone` is read only when `is_remote` is set; local targets carry a zeroed one.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FfiTarget {
+    pub is_remote: bool,
+    pub zone: [u8; 32],
+    pub actor: FfiActor,
+}
+
+impl From<Target> for FfiTarget {
+    fn from(value: Target) -> Self {
+        match value {
+            Target::Local(actor) => Self {
+                is_remote: false,
+                zone: [0; 32],
+                actor: actor.into(),
+            },
+            Target::Remote { zone, actor } => Self {
+                is_remote: true,
+                zone,
+                actor: actor.into(),
+            },
+        }
+    }
+}
+
+impl From<FfiTarget> for Target {
+    fn from(value: FfiTarget) -> Self {
+        if value.is_remote {
+            Self::Remote {
+                zone: value.zone,
+                actor: value.actor.into(),
+            }
+        } else {
+            Self::Local(value.actor.into())
+        }
+    }
+}
+
 /// How a proven transaction starts, as far as its proof discloses: a call to a public actor.
 #[repr(C)]
 pub struct FfiRootCall {
-    pub to: FfiActor,
+    pub to: FfiTarget,
     pub message: FfiMessageDataList,
 }
 
@@ -139,7 +178,7 @@ impl TryFrom<FfiPublicAccountEvidence> for PublicAccountEvidence {
 #[repr(C)]
 pub struct FfiDelivery {
     pub from: FfiActor,
-    pub to: FfiActor,
+    pub to: FfiTarget,
     pub message: FfiMessageDataList,
     pub inherited_authorizations: FfiAccountIdList,
     pub inherits_entry_authorizations: bool,
@@ -425,7 +464,7 @@ impl From<(Signature, PublicKey)> for FfiSignaturePubKeyEntry {
 #[must_use]
 pub fn empty_root_call() -> FfiRootCall {
     FfiRootCall {
-        to: FfiActor::default(),
+        to: FfiTarget::default(),
         message: Vec::new().into(),
     }
 }
@@ -433,7 +472,7 @@ pub fn empty_root_call() -> FfiRootCall {
 fn empty_delivery() -> FfiDelivery {
     FfiDelivery {
         from: FfiActor::default(),
-        to: FfiActor::default(),
+        to: FfiTarget::default(),
         message: Vec::new().into(),
         inherited_authorizations: Vec::new().into(),
         inherits_entry_authorizations: false,
@@ -513,7 +552,7 @@ mod tests {
         let delivery = Delivery {
             envelope: MessageEnvelope {
                 from: actor(1, 51),
-                to: actor(2, 3),
+                to: actor(2, 3).into(),
                 message: vec![4],
             },
             inherited_authorizations: BTreeSet::from([account_id(5)]),
@@ -523,7 +562,7 @@ mod tests {
         let cross_message = Delivery {
             envelope: MessageEnvelope {
                 from: actor(7, 8),
-                to: actor(9, 10),
+                to: actor(9, 10).into(),
                 message: vec![11],
             },
             inherited_authorizations: BTreeSet::from([account_id(12)]),
@@ -577,7 +616,7 @@ mod tests {
             note: note(13, 14),
         };
         let root = RootCall {
-            to: actor(15, 16),
+            to: actor(15, 16).into(),
             message: vec![17; 2],
         };
         let fee = FeeDeclaration {

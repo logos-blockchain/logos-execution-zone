@@ -79,7 +79,10 @@ impl LeeTransaction {
             return None;
         };
         let root = &tx.message().execution.root;
-        Some((root.to, root.message.as_slice()))
+        match root.to {
+            lee::Target::Local(to) => Some((to, root.message.as_slice())),
+            lee::Target::Remote { .. } => None,
+        }
     }
 
     #[must_use]
@@ -303,6 +306,9 @@ pub fn is_system_injection(tx: &LeeTransaction) -> bool {
         return false;
     }
     let lee::RootCall { to, message } = &public_tx.message().execution.root;
+    let lee::Target::Local(to) = to else {
+        return false;
+    };
     let program_account_id = to.program_account_id;
     if program_account_id == programs::bridge_account_id() {
         return matches!(
@@ -1048,7 +1054,7 @@ mod tests {
                     async_messages: Vec::new(),
                     recovery_bindings: Vec::new(),
                     public_root: Some(lee::RootCall {
-                        to: registry,
+                        to: registry.into(),
                         message: registry_message(),
                     }),
                     private_actions: Vec::new(),

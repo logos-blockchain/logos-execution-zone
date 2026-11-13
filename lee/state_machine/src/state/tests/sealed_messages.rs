@@ -92,7 +92,7 @@ fn a_private_async_message_to_a_private_account_is_sealed_and_received_by_its_re
             .is_none()
     );
     let (body, opened, rho) = sealed.open(keys.npk(), &keys.d, &keys.z).unwrap();
-    assert_eq!((body.to, opened), (destination(), recipient()));
+    assert_eq!((body.to, opened), (destination().into(), recipient()));
 
     let membership_proof = state.get_proof_for_position(position).unwrap();
     let receive = |rho| {

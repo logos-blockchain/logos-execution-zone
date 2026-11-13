@@ -1294,7 +1294,9 @@ mod tests {
             .message()
             .execution
             .root
-            .to;
+            .to
+            .local()
+            .expect("the fee invocation targets a local actor");
         let message = lee::public_transaction::Message::try_new_with_fees(
             fee_state,
             vec![
@@ -1690,7 +1692,7 @@ mod tests {
             lee::ProvingInput {
                 claims: Vec::new(),
                 root: TransactionEntry::Sync(RootCall {
-                    to: Actor::native_balance(keys.account_id()),
+                    to: Actor::native_balance(keys.account_id()).into(),
                     message: borsh::to_vec(&native_token::Message::Transfer {
                         to: recipient,
                         amount,
@@ -1805,7 +1807,7 @@ mod tests {
     /// A call of the scripted program at `scripted` that keeps its state.
     fn scripted_call(scripted: Actor) -> RootCall {
         RootCall {
-            to: scripted,
+            to: scripted.into(),
             message: borsh::to_vec(&Script::default()).unwrap(),
         }
     }
@@ -1821,7 +1823,7 @@ mod tests {
             declared.map(|_| initial_pub_accounts_private_keys()[1].pub_sign_key.clone());
         let signer = declared.map(|_| public_payer());
         let public_actors = vec![
-            root.to,
+            root.to.actor(),
             Actor::native_balance(system_accounts::fee_inbox_account_id()),
         ];
         let public_actor_states = public_actors
@@ -1912,7 +1914,9 @@ mod tests {
         state
             .publications_from(0)
             .find_map(|(_, publication)| match publication {
-                Publication::Clear { body, .. } if body.to == Actor::native_balance(alias) => {
+                Publication::Clear { body, .. }
+                    if body.to == Actor::native_balance(alias).into() =>
+                {
                     match borsh::from_slice(&body.message).unwrap() {
                         native_token::Message::Credit(amount) => Some(amount),
                         native_token::Message::Transfer { .. }
@@ -2377,7 +2381,7 @@ mod tests {
             &state,
             &sender,
             RootCall {
-                to: Actor::native_balance(payer),
+                to: Actor::native_balance(payer).into(),
                 message: borsh::to_vec(&native_token::Message::Transfer {
                     to: inbox,
                     amount: 1,

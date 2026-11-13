@@ -353,7 +353,7 @@ fn a_mixed_transaction_publishes_its_live_async_messages_before_its_proven_async
         body,
         MessageBody {
             from: sender(),
-            to: private_actor(),
+            to: private_actor().into(),
             message: borsh::to_vec(&replying()).unwrap(),
         }
     );
@@ -1228,7 +1228,7 @@ fn a_private_receipt_whose_live_async_message_cannot_settle_spends_nothing() {
     );
 
     assert!(
-        matches!(result, Err(LeeError::UnboundAsyncDestination { actor }) if actor == stranger),
+        matches!(result, Err(LeeError::UnboundAsyncDestination { actor }) if actor == stranger.into()),
         "{result:?}"
     );
     assert_eq!(state, before);

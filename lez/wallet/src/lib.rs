@@ -139,7 +139,8 @@ impl PendingMessage {
     /// if it is a native credit.
     #[must_use]
     pub fn native_credit(&self) -> Option<u128> {
-        if self.body.to.program_account_id != NATIVE_TOKEN_PROGRAM_ID {
+        let to = self.body.to.local()?;
+        if to.program_account_id != NATIVE_TOKEN_PROGRAM_ID {
             return None;
         }
         match borsh::from_slice(&self.body.message).ok()? {
@@ -1119,7 +1120,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 let (recipient, nsk) = self
                     .storage
                     .key_chain()
-                    .recover(body.to.account_id, recovery)?;
+                    .recover(body.to.local()?.account_id, recovery)?;
                 Some((body.clone(), recipient, None, nsk))
             }
             Publication::Sealed(sealed) => {
@@ -1411,7 +1412,10 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         } else {
             self.send_proven(
                 accounts,
-                TransactionEntry::Sync(RootCall { to, message }),
+                TransactionEntry::Sync(RootCall {
+                    to: to.into(),
+                    message,
+                }),
                 async_delivery,
                 programs,
                 cross_messages,
@@ -1562,7 +1566,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         tx_pre_check: impl FnOnce(&[SelectedActorState]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let root = TransactionEntry::Sync(RootCall {
-            to: root_actor(&accounts, root)?,
+            to: root_actor(&accounts, root)?.into(),
             message,
         });
         self.send_proven(
@@ -1737,11 +1741,24 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 )
             })
             .collect();
-        let select =
-            move |_, body: &MessageBody| !listed_only && witnessed.contains(&body.to.account_id);
+        let select = move |_, body: &MessageBody| {
+            !listed_only
+                && body
+                    .to
+                    .local()
+                    .is_some_and(|to| witnessed.contains(&to.account_id))
+        };
         let choose_seal_with = |seals: Vec<Recipient>| {
             move |body: &MessageBody| {
-                let to = body.to.account_id;
+                let to = body
+                    .to
+                    .local()
+                    .ok_or_else(|| {
+                        lee::error::LeeError::InvalidInput(
+                            "No recipient material seals an async message to a remote zone".into(),
+                        )
+                    })?
+                    .account_id;
                 seals
                     .iter()
                     .find(|recipient| recipient.address() == to)
@@ -2765,7 +2782,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         let identity = self
             .resolve_private_account(account_id)
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-        let receiver = Actor::new(account_id, body.to.program_account_id);
+        let receiver = Actor::new(account_id, body.to.actor().program_account_id);
         let index = accounts
             .iter()
             .position(|mention| mention.actor() == receiver)
@@ -3845,7 +3862,7 @@ mod tests {
             .map(|position| {
                 let body = MessageBody {
                     from: Actor::native_balance(AccountId::new([1; 32])),
-                    to: Actor::native_balance(address),
+                    to: Actor::native_balance(address).into(),
                     message: borsh::to_vec(&native_token::Message::Credit(u128::from(position)))
                         .unwrap(),
                 };
@@ -4013,7 +4030,7 @@ mod tests {
         };
         *body = MessageBody {
             from,
-            to: Actor::new(body.to.account_id, program),
+            to: Actor::new(body.to.actor().account_id, program).into(),
             message: borsh::to_vec(message).unwrap(),
         };
     }
@@ -4215,7 +4232,8 @@ mod tests {
                 .any(|step| matches!(
                     step,
                     BoundaryStep::PrivateToPublic(delivery)
-                        if delivery.envelope.to == listener && delivery.envelope.message == [7]
+                        if delivery.envelope.to == listener.into()
+                            && delivery.envelope.message == [7]
                 ))
         );
     }

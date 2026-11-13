@@ -466,7 +466,13 @@ fn assert_block_tail(block: &common::block::Block, user_txs: &[LeeTransaction]) 
         panic!("fee tx must be public");
     };
     assert_eq!(
-        fee_tx.message().execution.root.to.program_account_id,
+        fee_tx
+            .message()
+            .execution
+            .root
+            .to
+            .actor()
+            .program_account_id,
         programs::fee_account_id()
     );
     assert_eq!(
@@ -523,7 +529,7 @@ fn tx_is_bridge_deposit(
     };
 
     let lee::RootCall { to, message } = &public_tx.message.execution.root;
-    if to.program_account_id != programs::bridge_account_id() {
+    if to.actor().program_account_id != programs::bridge_account_id() {
         return false;
     }
 
@@ -4746,7 +4752,7 @@ fn pending_payouts(
         })
         .filter(|(_, body)| {
             body.from.program_account_id == lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID
-                && body.to == Actor::native_balance(destination)
+                && body.to == Actor::native_balance(destination).into()
         })
         .map(|(position, body)| (position, borsh::from_slice(&body.message).unwrap()))
         .collect()
@@ -5891,7 +5897,7 @@ fn privately_staked_state(
     prove_and_settle(
         &mut state,
         TransactionEntry::Sync(RootCall {
-            to: Actor::new(ownership.account_id(), program_id),
+            to: Actor::new(ownership.account_id(), program_id).into(),
             message: borsh::to_vec(&sequencer_stake_core::Message::Stake {
                 sequencer_key,
                 amount,
@@ -6080,7 +6086,7 @@ fn a_private_withdrawal_to_a_private_destination_is_received_only_by_proof() {
     prove_and_settle(
         &mut state,
         TransactionEntry::Sync(RootCall {
-            to: Actor::new(ownership.account_id(), program_id),
+            to: Actor::new(ownership.account_id(), program_id).into(),
             message: borsh::to_vec(&sequencer_stake_core::Message::UnstakeRequest {
                 sequencer_key,
                 amount,
@@ -6330,7 +6336,7 @@ async fn a_slash_lands_over_a_pending_partial_unstake() {
             return None;
         };
         let lee::RootCall { to, message } = &tx.message().execution.root;
-        (to.program_account_id == stake_program_id)
+        (to.actor().program_account_id == stake_program_id)
             .then(|| borsh::from_slice(message).ok())
             .flatten()
     };
@@ -6868,7 +6874,15 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
         programs::wrapped_token_account_id(),
     ];
     let tx_program = |tx: &LeeTransaction| match tx {
-        LeeTransaction::Public(public) => public.message().execution.root.to.program_account_id,
+        LeeTransaction::Public(public) => {
+            public
+                .message()
+                .execution
+                .root
+                .to
+                .actor()
+                .program_account_id
+        }
         LeeTransaction::PrivacyPreserving(_) => {
             unreachable!("genesis holds only public transactions")
         }
@@ -7119,7 +7133,7 @@ fn a_bridge_deposit_carries_its_receipts_and_its_recipients_evidence() {
         .unwrap();
 
         for tx in [event, genesis] {
-            let receipt = tx.message.execution.root.to.account_id;
+            let receipt = tx.message.execution.root.to.actor().account_id;
             assert_eq!(
                 tx.message
                     .admission_evidence

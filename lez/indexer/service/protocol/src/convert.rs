@@ -12,7 +12,8 @@ use crate::{
     Nullifier, PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, Proof, ProvenFee, PublicAccountEvidence,
     PublicExecutionContext, PublicKey, PublicMessage, PublicTransaction, RecoveryBinding, RootCall,
-    SealedMessage, Selector, Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
+    SealedMessage, Selector, Signature, StallReason, Target, Transaction, ValidityWindow,
+    WitnessSet,
 };
 
 // ============================================================================
@@ -333,6 +334,30 @@ impl TryFrom<PublicMessage> for lee::public_transaction::Message {
                 .map(TryInto::try_into)
                 .collect::<Result<Vec<_>, Self::Error>>()?,
         })
+    }
+}
+
+impl From<lee_core::account::Target> for Target {
+    fn from(value: lee_core::account::Target) -> Self {
+        match value {
+            lee_core::account::Target::Local(actor) => Self::Local(actor.into()),
+            lee_core::account::Target::Remote { zone, actor } => Self::Remote {
+                zone,
+                actor: actor.into(),
+            },
+        }
+    }
+}
+
+impl From<Target> for lee_core::account::Target {
+    fn from(value: Target) -> Self {
+        match value {
+            Target::Local(actor) => Self::Local(actor.into()),
+            Target::Remote { zone, actor } => Self::Remote {
+                zone,
+                actor: actor.into(),
+            },
+        }
     }
 }
 
@@ -1434,7 +1459,7 @@ mod tests {
         let repeated = lee_core::execution_state::Delivery {
             envelope: lee_core::program::MessageEnvelope {
                 from: actor(3, 53),
-                to: actor(4, 5),
+                to: actor(4, 5).into(),
                 message: vec![6],
             },
             inherited_authorizations: BTreeSet::new(),
@@ -1466,7 +1491,7 @@ mod tests {
                         lee_core::execution_state::Delivery {
                             envelope: lee_core::program::MessageEnvelope {
                                 from: actor(11, 61),
-                                to: actor(8, 9),
+                                to: actor(8, 9).into(),
                                 message: vec![10],
                             },
                             inherited_authorizations: BTreeSet::from([account_id(14)]),
@@ -1478,7 +1503,7 @@ mod tests {
                         lee_core::execution_state::Delivery {
                             envelope: lee_core::program::MessageEnvelope {
                                 from: actor(40, 90),
-                                to: actor(41, 42),
+                                to: actor(41, 42).into(),
                                 message: vec![43],
                             },
                             inherited_authorizations: BTreeSet::new(),
@@ -1491,7 +1516,7 @@ mod tests {
                         lee_core::execution_state::Delivery {
                             envelope: lee_core::program::MessageEnvelope {
                                 from: actor(16, 17),
-                                to: actor(18, 19),
+                                to: actor(18, 19).into(),
                                 message: vec![20],
                             },
                             inherited_authorizations: BTreeSet::new(),
@@ -1517,7 +1542,8 @@ mod tests {
                     to: lee_core::account::Actor::new(
                         lee_core::account::AccountId::new([25; 32]),
                         lee_core::account::AccountId::new([26; 32]),
-                    ),
+                    )
+                    .into(),
                     message: vec![27; 2],
                 }),
                 private_actions: vec![],

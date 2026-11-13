@@ -10,11 +10,11 @@ lee_core::actor_entrypoint!(raw handle_message);
 
 fn handle_message(input: &ReceiveInput) -> Response {
     let clock = clock_core::clock_actor();
-    if input.from == Some(clock) {
+    if input.from == Some(clock.into()) {
         return Response::set_state(input.message.clone());
     }
     Response::keep_state().send(SyncMessage {
-        to: clock,
+        to: clock.into(),
         message: input.message.clone(),
         pda_seeds: BTreeSet::new(),
     })

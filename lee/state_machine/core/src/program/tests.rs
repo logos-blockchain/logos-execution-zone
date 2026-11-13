@@ -390,7 +390,7 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
         response: Response {
             post_state: Some(ActorState::from(b"xyz".to_vec())),
             sync_messages: vec![SyncMessage {
-                to: Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32])),
+                to: Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32])).into(),
                 message: b"q".to_vec(),
                 pda_seeds: BTreeSet::from([PdaSeed::new([9; 32])]),
             }],
@@ -401,7 +401,7 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
     };
 
     let expected: Vec<u8> = [
-        &[206, 0, 0, 0][..], // frame length: the 206 bytes below
+        &[207, 0, 0, 0][..], // frame length: the 207 bytes below
         &[1; 32],            // input.receiver.account_id
         &[2; 32],            // input.receiver.program_account_id
         &[0],                // input.from: None
@@ -414,7 +414,8 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
         &[3, 0, 0, 0],
         b"xyz",
         &[1, 0, 0, 0], // sync_messages: one message
-        &[3; 32],      // to
+        &[0],          // to: the local variant
+        &[3; 32],
         &[4; 32],
         &[1, 0, 0, 0], // message
         b"q",

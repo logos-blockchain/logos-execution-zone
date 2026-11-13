@@ -83,7 +83,9 @@ pub enum ClassifyError {
 
 /// The crossings of a private transaction's boundary into the fee inbox.
 fn inbox_crossings(message: &PrivateMessage) -> impl Iterator<Item = &Delivery<Actor>> {
-    let inbox = Actor::native_balance(system_accounts::fee_inbox_account_id());
+    let inbox = lee::Target::Local(Actor::native_balance(
+        system_accounts::fee_inbox_account_id(),
+    ));
     message
         .execution
         .boundary
@@ -260,7 +262,7 @@ mod tests {
         BoundaryStep::PrivateToPublic(Delivery {
             envelope: MessageEnvelope {
                 from: payer(),
-                to,
+                to: to.into(),
                 message: borsh::to_vec(message).expect("serializes"),
             },
             inherited_authorizations: BTreeSet::new(),

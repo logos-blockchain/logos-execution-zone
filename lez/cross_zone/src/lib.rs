@@ -232,6 +232,9 @@ pub fn extract_emission(
     src_block_id: u64,
 ) -> Option<Emission> {
     let lee::RootCall { to, message } = &tx.message().execution.root;
+    let lee::Target::Local(to) = to else {
+        return None;
+    };
     if to.program_account_id == programs::ping_sender_account_id() {
         // Not every transaction to an emitter emits: `InitConfig` is one of its
         // messages, so a non-`Send` decode is an ordinary non-emitting tx.
@@ -831,7 +834,7 @@ mod tests {
             build_bridge_lock_init_config_tx(&cross_zone),
             build_ping_receiver_init_config_tx(&cross_zone),
         ] {
-            let root = tx.message.execution.root.to;
+            let root = tx.message.execution.root.to.actor();
             assert!(
                 matches!(
                     &*tx.message.admission_evidence,

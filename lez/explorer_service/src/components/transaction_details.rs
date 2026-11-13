@@ -28,6 +28,7 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
         proof,
     } = witness_set;
 
+    let to = to.actor();
     let program_id_str = to.program_account_id.to_string();
     let message_str = format!("{} bytes", data.len());
     let root_actors = vec![to];
@@ -127,7 +128,7 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
     for step in boundary {
         match step {
             BoundaryStep::PrivateToPublic(delivery) => {
-                delivery_receivers.push(delivery.envelope.to);
+                delivery_receivers.push(delivery.envelope.to.actor());
             }
             BoundaryStep::PublicToPrivate(cross_message) => {
                 cross_message_senders.push(cross_message.envelope.from);

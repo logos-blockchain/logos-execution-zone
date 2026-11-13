@@ -153,7 +153,7 @@ fn a_private_account_may_act_under_two_actor_states_in_one_transaction() {
             BoundaryStep::PrivateToPublic(Delivery {
                 envelope: MessageEnvelope {
                     from: Actor::native_balance(sender_id),
-                    to: recipient,
+                    to: recipient.into(),
                     message: credit,
                 },
                 inherited_authorizations: BTreeSet::new(),
@@ -326,7 +326,7 @@ fn a_delegated_public_pda_is_authorized_at_settlement_but_not_exported_as_a_gran
     else {
         panic!("the statement makes exactly one public call");
     };
-    assert_eq!(delegated.envelope.to, callee);
+    assert_eq!(delegated.envelope.to, callee.into());
     assert!(delegated.inherited_authorizations.is_empty());
     assert_eq!(delegated.pda_seeds, BTreeSet::from([DELEGATED_SEED]));
 

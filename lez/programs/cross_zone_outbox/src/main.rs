@@ -1,5 +1,8 @@
 use cross_zone_outbox_core::{Message, OutboxRecord, outbox_pda};
-use lee_core::program::{ReceiveInput, Response};
+use lee_core::{
+    account::Target,
+    program::{ReceiveInput, Response},
+};
 
 lee_core::actor_entrypoint!(handle_message);
 
@@ -8,7 +11,11 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
     // sets `from`, the sender cannot claim it. Note this is the immediate sender,
     // not the top-level program that cross-zone discovery names; the two coincide only
     // while every emitter refuses messages from another program, which both do today.
-    let Some(emitter) = input.from.map(|from| from.program_account_id) else {
+    let Some(emitter) = input
+        .from
+        .and_then(Target::local)
+        .map(|from| from.program_account_id)
+    else {
         panic!("Outbox is only callable through a chain call from a user program");
     };
 
@@ -94,7 +101,7 @@ mod tests {
         let receiver = Actor::new(outbox_pda(OUTBOX, EMITTER, &[1; 32], 7), OUTBOX);
         let input = ReceiveInput {
             receiver,
-            from: origin.map(|sender| Actor::new(sender, sender)),
+            from: origin.map(|sender| Actor::new(sender, sender).into()),
             is_authorized: false,
             pre_state: ActorState::from(pre),
             message: borsh::to_vec(&emit()).unwrap(),

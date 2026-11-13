@@ -527,7 +527,11 @@ pub fn simulate_public_transaction(
         cycles_used: 0,
     };
     let root = message.execution.root.clone();
-    let result = if message.public_context.runs_publicly(root.to) {
+    let result = if root
+        .to
+        .local()
+        .is_some_and(|to| message.public_context.runs_publicly(to))
+    {
         WholeExecution::new(
             message.public_context.clone(),
             TransactionEntry::Sync(root),

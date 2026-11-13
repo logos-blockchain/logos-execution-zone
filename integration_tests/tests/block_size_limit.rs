@@ -233,6 +233,7 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
                     return None;
                 };
                 let lee::RootCall { to, message } = &public_tx.message.execution.root;
+                let to = to.actor();
                 if to.program_account_id != lee_core::program::PROGRAM_LOADER_ACCOUNT_ID {
                     return None;
                 }

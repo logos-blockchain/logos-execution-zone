@@ -71,7 +71,7 @@ fn a_public_root_publishes_its_live_async_message_with_the_recovery_note_its_pro
         Publication::Clear {
             body: MessageBody {
                 from: sender(),
-                to: payout(),
+                to: payout().into(),
                 message: borsh::to_vec(&credit(7)).unwrap(),
             },
             recovery: note,
@@ -108,7 +108,8 @@ fn the_recipient_recovers_and_receives_an_async_message_at_an_alias_it_never_rec
         panic!("the async message to a private alias carries its recovery note");
     };
 
-    let recovered = Recipient::recover(body.to.account_id, &note, &keys.d, &keys.z).unwrap();
+    let recovered =
+        Recipient::recover(body.to.actor().account_id, &note, &keys.d, &keys.z).unwrap();
     assert_eq!(recovered, bob());
     let commitment = Commitment::for_message(&body);
     let membership_proof = state.get_proof_for_position(position).unwrap();
@@ -219,7 +220,7 @@ fn a_durable_async_message_to_an_unbound_address_is_charged_and_publishes_nothin
             panic!("an async message to {to:?} must not publish");
         };
         assert!(
-            matches!(error, LeeError::UnboundAsyncDestination { actor } if actor == to),
+            matches!(error, LeeError::UnboundAsyncDestination { actor } if actor == to.into()),
             "{error:?}"
         );
         assert!(error.is_chargeable());
