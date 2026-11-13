@@ -361,7 +361,7 @@ pub unsafe extern "C" fn query_transaction_receipt(
     hash: FfiHashType,
 ) -> PointerResult<FfiOption<FfiTransactionReceipt>, OperationStatus> {
     if indexer.is_null() {
-        log::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(OperationStatus::NullPointer);
     }
 
@@ -373,7 +373,10 @@ pub unsafe extern "C" fn query_transaction_receipt(
         .get_transaction_receipt_by_hash(hash.data)
         .map_or_else(
             |e| {
-                log::error!("Failed to query transaction receipt: {e:#}");
+                tracing::error!(
+                    error = format_args!("{e:#}"),
+                    "Failed to query transaction receipt"
+                );
                 PointerResult::from_error(OperationStatus::ClientError)
             },
             |receipt| {

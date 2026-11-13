@@ -262,7 +262,7 @@ pub unsafe extern "C" fn free_ffi_block_vec(val: *mut FfiVec<FfiBlock>) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_ffi_transaction_receipt_opt(val: *mut FfiTransactionReceiptOpt) {
     if val.is_null() {
-        log::error!("Trying to free a null pointer. Exiting");
+        tracing::error!("Trying to free a null pointer. Exiting");
         return;
     }
     let opt = unsafe { Box::from_raw(val) };
