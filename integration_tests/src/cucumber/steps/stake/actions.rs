@@ -1,15 +1,17 @@
 use cucumber::{gherkin::Step, when};
+use lee_core::account::Actor;
 use wallet::{AccountIdentity, AccountMention};
 
 use super::{
     super::log_step,
     helpers::{
         first_configured_public_account, has_stake_record, stake_accounts, submit_and_record,
+        submit_and_record_paid_by,
     },
 };
 use crate::cucumber::{
     error::{StepError, StepResult},
-    stake_scenario::{raw_stake_message, stake_message, transfer_message},
+    stake_scenario::{raw_stake_message, relayed_message, stake, stake_message, transfer_message},
     world::CucumberWorld,
 };
 
@@ -38,6 +40,44 @@ async fn submit_stake(world: &mut CucumberWorld, step: &Step, expression: String
     let scenario = world.stake()?;
     let accounts = stake_accounts(scenario.funding_id()?, scenario.ownership_id()?);
     submit_stake_with_accounts(world, &expression, accounts).await
+}
+
+#[when(expr = "a Stake of {string} is sent from the scripted test program")]
+async fn submit_stake_from_another_actor(
+    world: &mut CucumberWorld,
+    step: &Step,
+    expression: String,
+) -> StepResult {
+    log_step(step);
+    let scenario = world.stake()?;
+    let amount = scenario.amount(&expression)?;
+    let ownership_id = scenario.ownership_id()?;
+    let funding_id = scenario.funding_id()?;
+    let relay_program_id = scenario.deployed_program(&test_programs::scripted())?;
+    let context = world.lez()?;
+    // The transaction is delivered to a fresh account's actor under the
+    // scripted program, whose script sends an otherwise well-formed Stake on
+    // to the ownership account's sequencer_stake actor. That actor sees the
+    // relay, not the transaction, as its sender, so sequencer_stake's
+    // root-origin guard is the only assert that can reject it.
+    let relay_id = context.new_public_account().await?;
+    let has_record = has_stake_record(context, ownership_id).await?;
+    let stake_actor = Actor::new(ownership_id, programs::sequencer_stake_account_id());
+    let message = relayed_message(
+        stake_actor,
+        &stake(scenario.sequencer_key(), amount, has_record, funding_id),
+    )?;
+    // The relay heads the declared accounts as the root; the Stake's own
+    // canonical accounts follow, since the relayed Stake reaches all of them.
+    let mut accounts =
+        vec![AccountIdentity::Public(relay_id).select_program_actor_state(relay_program_id)];
+    accounts.extend(stake_accounts(funding_id, ownership_id));
+    // The transaction is not delivered to sequencer_stake, so it is
+    // fee-charged. The funding account holds only its stake, far below the
+    // wallet's default fee reserve, so a genesis supply account pays instead;
+    // that also keeps the fee off the accounts the scenario asserts on.
+    let payer_id = first_configured_public_account(context).await?;
+    submit_and_record_paid_by(world, accounts, 0, message, Some(payer_id), amount).await
 }
 
 #[when(expr = "a Stake of {string} is submitted without the ownership account's signature")]
