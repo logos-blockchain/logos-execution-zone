@@ -239,7 +239,10 @@ async fn a_charged_revert_rotates_the_key_and_the_next_transfer_follows() -> Res
     let sender_balance = account_balance(&ctx, sender).await?;
     let recipient_balance = account_balance(&ctx, recipient).await?;
 
+    // The transfer reverts in simulation; let the wallet send it to be charged.
+    ctx.wallet_mut().set_allow_revert(true);
     raw_transfer(&ctx, sender, recipient, sender_balance * 2, None).await?;
+    ctx.wallet_mut().set_allow_revert(false);
 
     assert_eq!(account_balance(&ctx, recipient).await?, recipient_balance);
     assert!(account_balance(&ctx, sender).await? < sender_balance);
