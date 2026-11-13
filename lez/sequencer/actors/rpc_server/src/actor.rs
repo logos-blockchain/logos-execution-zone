@@ -9,7 +9,7 @@ use kameo::{
     mailbox::{MailboxReceiver, Signal},
 };
 use sequencer_executor_actor::ExecutorActorTrait;
-use sequencer_gossip_actor::protocol::PublishTransaction;
+use sequencer_gossip_actor::protocol::Publish;
 use sequencer_service_rpc::RpcServer as _;
 use tokio::select;
 use tracing::info;
@@ -30,7 +30,7 @@ impl RpcServerActor {
     pub async fn new<E: ExecutorActorTrait>(
         listen_addr: SocketAddr,
         executor_ref: ActorRef<E>,
-        gossip: Option<Recipient<PublishTransaction>>,
+        gossip: Option<Recipient<Publish>>,
     ) -> Result<Self> {
         let server = jsonrpsee::server::ServerBuilder::with_config(
             jsonrpsee::server::ServerConfigBuilder::new()

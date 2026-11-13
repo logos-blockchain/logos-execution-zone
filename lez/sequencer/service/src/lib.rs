@@ -23,7 +23,7 @@ pub use sequencer_core::config::*;
 use sequencer_core::load_or_create_signing_key;
 use sequencer_gossip_actor::{
     GossipActor,
-    protocol::{PublishConfig, PublishTransaction},
+    protocol::{Publish, PublishConfig},
 };
 use sequencer_rpc_server_actor::RpcServerActor;
 use sequencer_slasher_actor::SlasherActor;
@@ -131,23 +131,6 @@ impl SequencerHandle {
         slasher.shutdown().await;
         bedrock.shutdown().await;
         storage.shutdown().await;
-    }
-
-    /// Hands `transaction` straight to the executor, past the RPC and gossip entry points, which
-    /// refuse `system_upgrader` transactions. Until approval tooling lands, this is how tests
-    /// reach `Schedule`.
-    pub async fn submit_transaction(
-        &self,
-        transaction: common::transaction::LeeTransaction,
-    ) -> Result<()> {
-        use sequencer_executor_actor::protocol::{Transaction, TransactionOrigin};
-        self.executor_ref
-            .ask(Transaction {
-                transaction,
-                origin: TransactionOrigin::User,
-            })
-            .await
-            .context("Failed to submit the transaction")
     }
 
     /// Wait for any of the sequencer tasks to fail and return the error.
@@ -488,7 +471,7 @@ pub async fn setup_gossip(
     slasher_ref: &ActorRef<SlasherActor<StorageActor>>,
     channel_signer_ref: &ActorRef<ChannelSigningActor>,
     scheduler_ref: &ActorRef<Scheduler>,
-) -> Result<(Gossip, Recipient<PublishTransaction>)> {
+) -> Result<(Gossip, Recipient<Publish>)> {
     // The node's L1 channel signing key is deliberately reused as the
     // libp2p identity; `GossipActor::new` derives the keypair.
     let signing_key = load_or_create_signing_key(channel_signing_key_path)?;
@@ -508,6 +491,19 @@ pub async fn setup_gossip(
         })
     });
 
+    // Gossiped system_upgrader approvals go to the executor's approval pool, as RPC submissions do.
+    let approval_ref = executor_ref.clone();
+    let submit_system_approval: sequencer_gossip_actor::SystemApprovalSubmit =
+        std::sync::Arc::new(move |approval| {
+            let approval_executor_ref = approval_ref.clone();
+            Box::pin(async move {
+                approval_executor_ref
+                    .ask(sequencer_executor_actor::protocol::SubmitSystemApproval { approval })
+                    .await
+                    .map_err(Into::into)
+            })
+        });
+
     // note on `Box::pin` here: the swarm construction makes this awaited future large,
     // and it would otherwise sit inline in every future that awaits the service start.
     //
@@ -521,6 +517,7 @@ pub async fn setup_gossip(
         submit,
         // Screened inbound channel-config messages go straight to the actor.
         channel_signer_ref.clone().recipient(),
+        submit_system_approval,
     ))
     .await
     .context("Failed to start sequencer gossip network")?;
@@ -634,7 +631,7 @@ async fn setup_executor(
 async fn setup_rpc_server(
     listen_addr: SocketAddr,
     executor_ref: ActorRef<ExecutorActor>,
-    gossip_publisher: Option<Recipient<PublishTransaction>>,
+    gossip_publisher: Option<Recipient<Publish>>,
 ) -> Result<RpcServer> {
     let rpc_server = RpcServerActor::new(listen_addr, executor_ref, gossip_publisher)
         .await

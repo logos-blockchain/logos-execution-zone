@@ -27,7 +27,8 @@ use crate::{
         GetAccountView, GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
         GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetMessagePath,
         GetProofsAndRoot, GetProofsAndRootReply, GetPublications, GetRecoveryBinding, GetStatus,
-        GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
+        GetSystemProposals, GetSystemProposalsReply, GetTransaction, ProduceBlock,
+        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, SubmitSystemApproval,
         Transaction,
     },
 };
@@ -141,6 +142,18 @@ mockall::mock! {
             msg: RequeueCrossZoneDeadLetter,
             ctx: &mut Context<Self, Result<RequeueCrossZoneDeadLetterReply>>
         ) -> Result<RequeueCrossZoneDeadLetterReply>;
+
+        pub fn handle_get_system_proposals(
+            &mut self,
+            msg: GetSystemProposals,
+            ctx: &mut Context<Self, Result<GetSystemProposalsReply>>
+        ) -> Result<GetSystemProposalsReply>;
+
+        pub fn handle_submit_system_approval(
+            &mut self,
+            msg: SubmitSystemApproval,
+            ctx: &mut Context<Self, Result<()>>
+        ) -> Result<()>;
 
         pub fn handle_get_fee_quote(
             &mut self,
@@ -395,6 +408,30 @@ impl Message<RequeueCrossZoneDeadLetter> for MockExecutorActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_requeue_cross_zone_dead_letter(msg, ctx)
+    }
+}
+
+impl Message<GetSystemProposals> for MockExecutorActor {
+    type Reply = Result<GetSystemProposalsReply>;
+
+    async fn handle(
+        &mut self,
+        msg: GetSystemProposals,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_system_proposals(msg, ctx)
+    }
+}
+
+impl Message<SubmitSystemApproval> for MockExecutorActor {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        msg: SubmitSystemApproval,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_submit_system_approval(msg, ctx)
     }
 }
 

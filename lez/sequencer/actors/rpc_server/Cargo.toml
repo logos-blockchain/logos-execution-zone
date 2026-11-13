@@ -22,6 +22,8 @@ tokio.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 jsonrpsee.workspace = true
+borsh.workspace = true
+system_upgrader_core.workspace = true
 bytesize.workspace = true
 
 [dev-dependencies]

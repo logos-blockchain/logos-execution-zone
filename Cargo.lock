@@ -12094,6 +12094,7 @@ dependencies = [
  "sequencer_storage_actor",
  "sharding_pool_actor",
  "system_accounts",
+ "system_upgrader_core",
  "tempfile",
  "testnet_initial_state",
  "thiserror 2.0.18",
@@ -12159,6 +12160,7 @@ dependencies = [
 name = "sequencer_rpc_server_actor"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "bytesize",
  "common",
  "jsonrpsee",
@@ -12170,6 +12172,7 @@ dependencies = [
  "sequencer_rpc_server_actor_metrics",
  "sequencer_service_protocol",
  "sequencer_service_rpc",
+ "system_upgrader_core",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -12197,6 +12200,7 @@ dependencies = [
  "kameo",
  "kameo_actors",
  "lee",
+ "lee_core",
  "libp2p 0.57.1",
  "logging",
  "metrics",
@@ -12219,6 +12223,7 @@ dependencies = [
  "serde_json",
  "sharding_pool_actor",
  "system_accounts",
+ "system_upgrader_core",
  "tokio",
  "tokio-util",
  "tracing",
@@ -12240,6 +12245,7 @@ name = "sequencer_service_protocol"
 version = "0.1.0"
 dependencies = [
  "common",
+ "hex",
  "lee",
  "lee_core",
  "serde",

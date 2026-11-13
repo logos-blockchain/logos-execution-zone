@@ -3,10 +3,18 @@
 use lee::V03State;
 use lee_core::BlockId;
 use system_upgrader_core::{
-    Registry, SYSTEM_UPGRADER_ACCOUNT_ID, ScheduledUpgrade, SystemProgramName, registry_account_id,
+    Approval, Proposal, Registry, SYSTEM_UPGRADER_ACCOUNT_ID, ScheduledUpgrade, SystemProgramName,
+    registry_account_id,
 };
 
 use crate::transaction::LeeTransaction;
+
+/// A `system_upgrader` change and the committee approvals of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProposalApprovals {
+    pub proposal: Proposal,
+    pub approvals: Vec<Approval>,
+}
 
 /// The registry's bytes don't decode as this node's [`Registry`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]

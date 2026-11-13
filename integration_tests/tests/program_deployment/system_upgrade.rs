@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
@@ -78,7 +78,7 @@ async fn image_id(sequencer: &SequencerClient, program: AccountId) -> Result<Pro
     Ok(header.image_id)
 }
 
-/// A two-sequencer zone: the approval threshold needs both.
+/// A two-sequencer zone, gossiping: the approval threshold needs both.
 async fn two_node_zone() -> Result<TestContext> {
     MultiZoneTestContextBuilder::default()
         .with_zone(
@@ -86,7 +86,8 @@ async fn two_node_zone() -> Result<TestContext> {
                 num_nodes: 2,
                 ..MultiNodeTestContextConfig::default()
             })
-            .with_sequencer_partial_config(fast_blocks()),
+            .with_sequencer_partial_config(fast_blocks())
+            .with_gossip(),
         )
         .build()
         .await
@@ -118,40 +119,57 @@ async fn upload(ctx: &mut TestContext, user_elf: &[u8]) -> Result<Vec<AccountId>
     Ok(segment_ids)
 }
 
-/// Hands the producer a `system_upgrader` transaction to the registry and `actors`, and waits
-/// for it to be included. Until approval tooling lands, the test hands it to the node directly.
-async fn submit_system_change(
+/// Submits the whole committee's approvals of `proposal` to one sequencer and waits until gossip
+/// has carried both to the other; whichever produces next builds the change from them.
+async fn submit_approvals(
     ctx: &TestContext,
-    actors: impl IntoIterator<Item = Actor>,
-    message: system_upgrader_core::Message,
+    proposal: &system_upgrader_core::Proposal,
 ) -> Result<()> {
-    let registry = system_upgrader_core::registry_actor();
-    let tx = LeeTransaction::Public(lee::PublicTransaction::new(
-        lee::public_transaction::Message::try_new(
-            registry,
-            std::iter::once(registry).chain(actors),
-            BTreeMap::new(),
-            message,
-        )?,
-        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
-    ));
-    let tx_hash = tx.hash();
-    ctx.default_sequencer_component()
-        .sequencer_handle
-        .submit_transaction(tx)
-        .await?;
-    wait_until("the system change to be included", || async {
-        Ok(ctx
-            .sequencer_client()
-            .get_transaction(tx_hash)
-            .await?
-            .is_some())
+    let now = ctx.sequencer_client().get_last_block_id().await?;
+    for approval in
+        committee_approvals(ctx, proposal, now.saturating_add(APPROVAL_LIFETIME)).await?
+    {
+        let signed = system_upgrader_core::SignedApproval {
+            proposal: *proposal,
+            approval,
+        };
+        ctx.sequencer_client()
+            .submit_system_approval(sequencer_service_rpc::HexBytes(borsh::to_vec(&signed)?))
+            .await?;
+    }
+    let (channel_id, _) = ctx.zones_iter().next().context("the test has a zone")?;
+    let other = ctx
+        .sequencer_components_iter(*channel_id)
+        .context("the zone has sequencers")?
+        .nth(1)
+        .context("the zone has a second sequencer")?;
+    wait_until("the other sequencer to hold both approvals", || async {
+        let report = other.sequencer_client.get_system_proposals().await?;
+        Ok(report
+            .proposals
+            .iter()
+            .any(|held| held.proposal_hash.0 == proposal.hash() && held.approvals.len() == 2))
     })
     .await
 }
 
-/// Schedules `bridge`'s upgrade to the chain at `first_segment` with the committee's approvals;
-/// returns its activation height.
+/// `name`'s pending upgrade, as the registry holds it.
+async fn scheduled(
+    ctx: &TestContext,
+    name: &SystemProgramName,
+) -> Result<Option<system_upgrader_core::ScheduledUpgrade>> {
+    let registry = get_account_view(ctx, system_upgrader_core::registry_actor()).await?;
+    let registry = system_upgrader_core::Registry::from_bytes(
+        registry
+            .data
+            .actor_state(system_upgrader_core::SYSTEM_UPGRADER_ACCOUNT_ID),
+    )
+    .context("the registry decodes")?;
+    Ok(registry.scheduled(name))
+}
+
+/// Has the committee approve `bridge`'s upgrade to the chain at `first_segment`, and waits until
+/// the producer has scheduled it; returns its activation height.
 async fn schedule_bridge_upgrade(
     ctx: &TestContext,
     first_segment: AccountId,
@@ -159,40 +177,26 @@ async fn schedule_bridge_upgrade(
 ) -> Result<BlockId> {
     let now = ctx.sequencer_client().get_last_block_id().await?;
     let activation_height = now.saturating_add(UPGRADE_DELAY);
-    let proposal = system_upgrader_core::Proposal::Schedule {
-        name: programs::BRIDGE_NAME,
-        first_segment,
-        image_id,
-        immutable: false,
-        activation_height,
-    };
-    let approvals =
-        committee_approvals(ctx, &proposal, now.saturating_add(APPROVAL_LIFETIME)).await?;
-    let staging = system_upgrader_core::staging_actor(
-        &programs::BRIDGE_NAME,
-        &system_upgrader_core::ScheduledUpgrade {
-            first_segment,
-            image_id,
-            immutable: false,
-            activation_height,
-        },
-    );
-    submit_system_change(
+    submit_approvals(
         ctx,
-        [
-            system_upgrader_core::committee_actor(),
-            system_upgrader_core::loader_actor(&programs::BRIDGE_NAME),
-            staging,
-        ],
-        system_upgrader_core::Message::Schedule {
+        &system_upgrader_core::Proposal::Schedule {
             name: programs::BRIDGE_NAME,
             first_segment,
             image_id,
             immutable: false,
             activation_height,
-            approvals,
         },
     )
+    .await?;
+    let expected = system_upgrader_core::ScheduledUpgrade {
+        first_segment,
+        image_id,
+        immutable: false,
+        activation_height,
+    };
+    wait_until("the upgrade to be scheduled", || async {
+        Ok(scheduled(ctx, &programs::BRIDGE_NAME).await? == Some(expected))
+    })
     .await?;
     Ok(activation_height)
 }
@@ -254,8 +258,9 @@ async fn run_scripted_write(ctx: &mut TestContext, program: AccountId) -> Result
     Ok(())
 }
 
-/// The new code is uploaded, the committee approves `bridge`'s upgrade and the producer schedules
-/// it, and from the block it activates in `bridge` runs it while blocks keep coming.
+/// The new code is uploaded, the committee's approvals of `bridge`'s upgrade are submitted to one
+/// sequencer and gossiped to the other, the producer schedules it, and from the block it activates
+/// in `bridge` runs it while blocks keep coming.
 #[test]
 async fn an_approved_system_upgrade_goes_live_at_its_height() -> Result<()> {
     let new_code = test_programs::scripted();
@@ -318,24 +323,18 @@ async fn a_cancelled_system_upgrade_never_goes_live() -> Result<()> {
     let segment_ids = upload(&mut ctx, &new_code.user_elf()?).await?;
     let activation_height = schedule_bridge_upgrade(&ctx, segment_ids[0], new_code.id()).await?;
 
-    let now = ctx.sequencer_client().get_last_block_id().await?;
-    let proposal = system_upgrader_core::Proposal::Cancel {
-        name: programs::BRIDGE_NAME,
-        first_segment: segment_ids[0],
-        activation_height,
-    };
-    let approvals =
-        committee_approvals(&ctx, &proposal, now.saturating_add(APPROVAL_LIFETIME)).await?;
-    submit_system_change(
+    submit_approvals(
         &ctx,
-        [system_upgrader_core::committee_actor()],
-        system_upgrader_core::Message::Cancel {
+        &system_upgrader_core::Proposal::Cancel {
             name: programs::BRIDGE_NAME,
             first_segment: segment_ids[0],
             activation_height,
-            approvals,
         },
     )
+    .await?;
+    wait_until("the upgrade to be cancelled", || async {
+        Ok(scheduled(&ctx, &programs::BRIDGE_NAME).await?.is_none())
+    })
     .await?;
 
     wait_until(
@@ -358,7 +357,7 @@ async fn a_cancelled_system_upgrade_never_goes_live() -> Result<()> {
     Ok(())
 }
 
-/// The committee approves installing a new system program; the producer includes the `Install`,
+/// The committee approves installing a new system program; the producer builds the `Install`,
 /// and every sequencer runs the program at its system address while every block validates.
 #[test]
 async fn an_approved_system_program_installs_and_runs() -> Result<()> {
@@ -368,27 +367,13 @@ async fn an_approved_system_program_installs_and_runs() -> Result<()> {
     let mut ctx = two_node_zone().await?;
     let segment_ids = upload(&mut ctx, &new_code.user_elf()?).await?;
 
-    let now = ctx.sequencer_client().get_last_block_id().await?;
-    let proposal = system_upgrader_core::Proposal::Install {
-        name,
-        first_segment: segment_ids[0],
-        image_id: new_code.id(),
-        immutable: false,
-    };
-    let approvals =
-        committee_approvals(&ctx, &proposal, now.saturating_add(APPROVAL_LIFETIME)).await?;
-    submit_system_change(
+    submit_approvals(
         &ctx,
-        [
-            system_upgrader_core::committee_actor(),
-            system_upgrader_core::loader_actor(&name),
-        ],
-        system_upgrader_core::Message::Install {
+        &system_upgrader_core::Proposal::Install {
             name,
             first_segment: segment_ids[0],
             image_id: new_code.id(),
             immutable: false,
-            approvals,
         },
     )
     .await?;

@@ -67,6 +67,12 @@ pub struct PutSlashRecordBytes {
     pub bytes: Vec<u8>,
 }
 
+pub struct GetSystemApprovalsBytes;
+
+pub struct PutSystemApprovalsBytes {
+    pub bytes: Vec<u8>,
+}
+
 pub struct GetFinalConfigsBytes;
 
 pub struct PutFinalConfigsBytes {

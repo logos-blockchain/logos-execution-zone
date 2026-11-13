@@ -31,6 +31,7 @@ actor = [
 mdns = ["actor"]
 
 [dependencies]
+system_upgrader_core.workspace = true
 common.workspace = true
 lee = { workspace = true, optional = true }
 sequencer_channel_signing_actor = { workspace = true, optional = true }

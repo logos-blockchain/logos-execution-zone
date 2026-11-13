@@ -9,7 +9,7 @@ use sequencer_executor_actor::protocol::{
     GetFeeQuote, GetLastBlockId, GetProofsAndRoot, GetPublications, GetRecoveryBinding,
     GetTransaction, Transaction, TransactionOrigin,
 };
-use sequencer_gossip_actor::protocol::PublishTransaction;
+use sequencer_gossip_actor::protocol::Publish;
 use wallet::{ExecutionFailureKind, WalletSequencerClient};
 
 use crate::sequencer::SequencerServiceFFI;
@@ -185,7 +185,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
 
         if let Some(gossip_ref) = self.0.gossip_ref() {
             gossip_ref
-                .tell(PublishTransaction(authenticated_tx))
+                .tell(Publish::Transaction(Box::new(authenticated_tx)))
                 .await?;
         }
 

@@ -19,6 +19,7 @@ sequencer_storage_actor = { workspace = true, features = ["actor"] }
 sequencer_bedrock_actor = { workspace = true, features = ["actor"] }
 sharding_pool_actor = { workspace = true, features = ["actor"] }
 lee.workspace = true
+lee_core = { workspace = true, optional = true }
 common.workspace = true
 borsh = { workspace = true, optional = true }
 programs.workspace = true
@@ -27,6 +28,7 @@ wallet.workspace = true
 sequencer_stake_core.workspace = true
 sequencer_service_rpc.workspace = true
 sequencer_service_metrics = { workspace = true, features = ["record"] }
+system_upgrader_core = { workspace = true, optional = true }
 
 clap = { workspace = true, features = ["derive", "env"] }
 anyhow.workspace = true
@@ -63,6 +65,11 @@ name = "inscribe_garbage"
 path = "src/bin/inscribe_garbage.rs"
 required-features = ["inscribe_garbage"]
 
+[[bin]]
+name = "approve_system_change"
+path = "src/bin/approve_system_change.rs"
+required-features = ["approve_system_change"]
+
 [features]
 default = ["rpc"]
 # Serves the sequencer over the JSON-RPC API. Off for embedders that hold a
@@ -79,4 +86,10 @@ inscribe_garbage = [
   "sequencer_storage_actor/mock",
   "sequencer_bedrock_actor/test-utils",
   "dep:borsh",
+]
+# Needed only by the approve_system_change bin.
+approve_system_change = [
+  "dep:lee_core",
+  "dep:borsh",
+  "dep:system_upgrader_core",
 ]
