@@ -5,7 +5,8 @@ use wallet::{AccountIdentity, WalletCore};
 // Before running this example, compile the `simple_tail_call.rs` and `hello_world.rs` guest
 // programs with:
 //
-//   cargo risczero build --manifest-path examples/program_deployment/methods/guest/Cargo.toml
+//   RISC0_DOCKER_CONTAINER_TAG=r0.1.91.1 cargo risczero build \
+//     --manifest-path examples/program_deployment/methods/guest/Cargo.toml
 //
 // Note: you must run the above command from the root of the `logos-execution-zone` repository.
 // Note: The compiled binaries are stored in
