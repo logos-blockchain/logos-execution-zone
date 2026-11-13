@@ -434,7 +434,7 @@ fn settled_peer_block(
     producer: lee::AccountId,
 ) -> common::block::Block {
     let timestamp = id.saturating_mul(100);
-    let (summary, payout, reverted) =
+    let (summary, payout, receipts) =
         chain_state::apply::derive_block_summary(state, &txs, id, timestamp)
             .expect("test transactions settle");
     let mut transactions = txs;
@@ -449,7 +449,7 @@ fn settled_peer_block(
         prev_block_hash: prev_hash,
         timestamp,
         transactions,
-        reverted,
+        receipts,
     }
     .into_pending_block()
 }
@@ -680,7 +680,7 @@ async fn a_reverted_withdraw_releases_nothing_on_l1() {
 
     // Withdrawing more than the payer holds reverts.
     assert_block_tail(&built.block, std::slice::from_ref(&withdraw));
-    assert_eq!(built.block.body.reverted, vec![0]);
+    assert!(built.block.body.is_reverted(0));
     assert!(built.withdrawals.is_empty());
 }
 
@@ -1489,6 +1489,11 @@ async fn a_block_full_of_charged_gas_defers_the_rest() {
         .unwrap()
         .unwrap();
     assert_block_tail(&block, &transfers[..1]);
+    // One receipt per user transaction; the reverted transfer is charged its whole budget.
+    assert_eq!(block.body.receipts.len(), block.body.transactions.len() - 2);
+    let receipt = block.body.receipts.last().unwrap();
+    assert!(!receipt.success);
+    assert_eq!(receipt.fee.gas_exec, fee_core::market::MAX_GAS_EXEC >> 1);
 
     // Deferred, not dropped: it leads the next block.
     let block_id = sequencer.run_production_turn().await.unwrap();
@@ -2556,7 +2561,7 @@ fn resubmittable_txs_keeps_an_approved_system_change_and_drops_apply() {
 fn resubmittable_txs_of_blocks_without_user_txs_is_empty() {
     // No transactions at all (not even the mandatory clock tx).
     let empty = HashableBlockData {
-        reverted: Vec::new(),
+        receipts: Vec::new(),
         block_id: 1,
         prev_block_hash: HashType([0; 32]),
         timestamp: 0,

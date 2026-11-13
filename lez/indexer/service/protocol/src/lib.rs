@@ -207,9 +207,48 @@ impl FromStr for Signature {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct BlockBody {
     pub transactions: Vec<Transaction>,
-    /// Indices into `transactions` of the charged transactions whose action reverted.
-    #[serde(default)]
-    pub reverted: Vec<u64>,
+    /// One per user transaction, parallel to `transactions`; the trailing fee and clock
+    /// transactions have none.
+    pub receipts: Vec<TransactionReceipt>,
+}
+
+/// See `common::block::FeeReceipt`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct FeeReceipt {
+    pub gas_exec: u64,
+    pub gas_stor: u64,
+    pub fee_base: u128,
+    pub tip: u128,
+    pub refund: u128,
+}
+
+/// See `common::block::TransactionReceipt`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct TransactionReceipt {
+    /// `true`: applied; `false`: the action reverted, and its fee was still charged.
+    pub success: bool,
+    /// All zeros for a fee-exempt transaction.
+    pub fee: FeeReceipt,
+}
+
+impl TransactionReceipt {
+    #[must_use]
+    pub const fn is_exempt(&self) -> bool {
+        let FeeReceipt {
+            gas_exec,
+            gas_stor,
+            fee_base,
+            tip,
+            refund,
+        } = self.fee;
+        gas_exec == 0 && gas_stor == 0 && fee_base == 0 && tip == 0 && refund == 0
+    }
+
+    /// What the payer paid: the base fee and the tip.
+    #[must_use]
+    pub const fn fee_paid(&self) -> u128 {
+        self.fee.fee_base.saturating_add(self.fee.tip)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -611,9 +650,10 @@ pub enum BlockIngestError {
         reason: String,
     },
     NonPublicGenesisTransaction,
-    RevertMismatch {
-        listed: Vec<u64>,
-        settled: Vec<u64>,
+    ReceiptMismatch {
+        tx_index: u64,
+        listed: Option<TransactionReceipt>,
+        settled: Option<TransactionReceipt>,
     },
     UnfinalizedRelease {
         tx_index: u64,

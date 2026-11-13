@@ -8,7 +8,7 @@ use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
     CommitmentSetDigest, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, EncryptedNote,
     HashType, LeeTransaction, MembershipProof, Nonce, PageLimit, ProgramId, Publication,
-    SequencerStatus, SystemProposalReport,
+    SequencerStatus, SystemProposalReport, TransactionReceipt,
 };
 pub use sequencer_service_protocol::{FeeStateQuote, HexBytes};
 
@@ -87,6 +87,13 @@ pub trait Rpc {
         &self,
         tx_hash: HashType,
     ) -> Result<Option<(LeeTransaction, BlockId)>, ErrorObjectOwned>;
+
+    /// `None` for an unknown transaction, and for a block's trailing fee and clock transactions.
+    #[method(name = "getTransactionReceipt")]
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: HashType,
+    ) -> Result<Option<TransactionReceipt>, ErrorObjectOwned>;
 
     #[method(name = "getAccountsNonces")]
     async fn get_accounts_nonces(

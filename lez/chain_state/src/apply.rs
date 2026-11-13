@@ -6,7 +6,7 @@ use std::collections::{BTreeSet, HashSet};
 
 use common::{
     HashType,
-    block::{Block, BlockMeta},
+    block::{Block, BlockMeta, FeeReceipt, TransactionReceipt},
     transaction::{
         LeeTransaction, TxEvents, clock_invocation, fee_invocation, fee_refund_invocation,
         fee_reserve_invocation, private_fee_refund_invocation, validate_private_fee_credit,
@@ -195,7 +195,7 @@ pub fn apply_judged_block_to_state(
     let opening = opening_fee_state(state);
     let mut summary = BlockFeeSummary::default();
     let mut block_events = Vec::new();
-    let mut reverted = Vec::new();
+    let mut receipts = Vec::with_capacity(user_txs.len());
 
     let is_genesis = block.header.block_id == GENESIS_BLOCK_ID;
     for (tx_index, transaction) in user_txs.iter().enumerate() {
@@ -207,22 +207,23 @@ pub fn apply_judged_block_to_state(
 
         // Genesis transactions transition directly; every other user transaction
         // settles its fee. Both surface the events their execution emitted.
-        let events = if is_genesis {
+        let (events, receipt) = if is_genesis {
             let LeeTransaction::Public(public_tx) = transaction else {
                 return Err(BlockIngestError::NonPublicGenesisTransaction);
             };
-            state
+            let events = state
                 .transition_from_public_transaction(
                     public_tx,
                     block.header.block_id,
                     block.header.timestamp,
                 )
-                .map_err(|err| state_transition(err.into()))?
+                .map_err(|err| state_transition(err.into()))?;
+            (events, TransactionReceipt::EXEMPT)
         } else {
             let entries_before = finally_absent_keys
                 .filter(|_| !full_stake_releases::releases_no_stake(transaction))
                 .map(|_| full_stake_releases::stake_entries(state));
-            let (events, tx_reverted) = settle_transaction(
+            let (events, receipt) = settle_transaction(
                 transaction,
                 state,
                 &opening,
@@ -231,9 +232,6 @@ pub fn apply_judged_block_to_state(
                 tx_index_u64,
                 &mut summary,
             )?;
-            if tx_reverted {
-                reverted.push(tx_index_u64);
-            }
             if let (Some(allowed), Some(before)) = (finally_absent_keys, entries_before) {
                 let after = full_stake_releases::stake_entries(state);
                 let released = full_stake_releases::full_releases(&before, &after);
@@ -244,14 +242,19 @@ pub fn apply_judged_block_to_state(
                     });
                 }
             }
-            events
+            (events, receipt)
         };
+        receipts.push(receipt);
         collect_tx_events(&mut block_events, tx_index, transaction, events);
     }
-    if block.body.reverted != reverted {
-        return Err(BlockIngestError::RevertMismatch {
-            listed: block.body.reverted.clone(),
-            settled: reverted,
+    let listed = &block.body.receipts;
+    if let Some(tx_index) =
+        (0..listed.len().max(receipts.len())).find(|&i| listed.get(i) != receipts.get(i))
+    {
+        return Err(BlockIngestError::ReceiptMismatch {
+            tx_index: u64::try_from(tx_index).expect("tx index fits in u64"),
+            listed: listed.get(tx_index).copied().map(Box::new),
+            settled: receipts.get(tx_index).copied().map(Box::new),
         });
     }
 
@@ -350,21 +353,21 @@ pub fn block_payout(opening: &FeeState, summary: &BlockFeeSummary) -> u128 {
     opening.clone().apply_block(summary)
 }
 
-/// The fee summary, producer payout and reverted transaction indices a block of `transactions`
-/// settles to on `state`.
+/// The fee summary, producer payout and receipts a block of `transactions` settles to on
+/// `state`.
 pub fn derive_block_summary(
     state: &V03State,
     transactions: &[LeeTransaction],
     block_id: BlockId,
     timestamp: Timestamp,
-) -> Result<(BlockFeeSummary, u128, Vec<u64>), BlockIngestError> {
+) -> Result<(BlockFeeSummary, u128, Vec<TransactionReceipt>), BlockIngestError> {
     let mut scratch = state.clone();
     let opening = opening_fee_state(&scratch);
     let mut summary = BlockFeeSummary::default();
-    let mut reverted = Vec::new();
+    let mut receipts = Vec::with_capacity(transactions.len());
     for (tx_index, transaction) in transactions.iter().enumerate() {
         let tx_index = u64::try_from(tx_index).expect("tx index fits in u64");
-        let (_events, tx_reverted) = settle_transaction(
+        let (_events, receipt) = settle_transaction(
             transaction,
             &mut scratch,
             &opening,
@@ -373,16 +376,14 @@ pub fn derive_block_summary(
             tx_index,
             &mut summary,
         )?;
-        if tx_reverted {
-            reverted.push(tx_index);
-        }
+        receipts.push(receipt);
     }
     let payout = block_payout(&opening, &summary);
-    Ok((summary, payout, reverted))
+    Ok((summary, payout, receipts))
 }
 
 /// Classifies and applies one user transaction at its turn, accumulating the
-/// block summary. Returns its events and whether its action reverted.
+/// block summary. Returns its events and receipt.
 ///
 /// Shared by the apply path (any `Err` invalidates the block), the sequencer's
 /// builder (which runs it on a scratch clone and drops the transaction on
@@ -395,7 +396,7 @@ pub fn settle_transaction(
     timestamp: Timestamp,
     tx_index: u64,
     summary: &mut BlockFeeSummary,
-) -> Result<(Vec<TransactionEvent>, bool), BlockIngestError> {
+) -> Result<(Vec<TransactionEvent>, TransactionReceipt), BlockIngestError> {
     let class = classify(transaction, false).map_err(|err| match err {
         ClassifyError::Unserializable(err) => BlockIngestError::InvalidFeeClass {
             tx_index,
@@ -440,7 +441,7 @@ pub fn settle_transaction(
                         tx_index,
                         reason: format!("{:#}", anyhow::Error::from(err)),
                     })?;
-            (events, false)
+            (events, TransactionReceipt::EXEMPT)
         }
         FeeClass::Charged(view @ FeeTxView::Private { .. }) => settle_private_transaction(
             transaction,
@@ -476,7 +477,7 @@ pub fn settle_transaction(
 /// pays the reserve in; a proof without one has no revert that keeps the fee,
 /// so its failure invalidates the transaction, as every other failure does.
 ///
-/// Also returns whether the action reverted.
+/// Also returns its receipt.
 #[expect(
     clippy::too_many_arguments,
     reason = "the settlement threads exactly the block-transition context"
@@ -490,7 +491,7 @@ fn settle_private_transaction(
     timestamp: Timestamp,
     tx_index: u64,
     summary: &mut BlockFeeSummary,
-) -> Result<(Vec<TransactionEvent>, bool), BlockIngestError> {
+) -> Result<(Vec<TransactionEvent>, TransactionReceipt), BlockIngestError> {
     let fee_validity = |reason: String| BlockIngestError::InvalidFeeClass { tx_index, reason };
     let gas_cap = |err: FeeError| BlockIngestError::GasCapExceeded {
         tx_index,
@@ -612,7 +613,19 @@ fn settle_private_transaction(
         .revenue_tip
         .checked_add(tip)
         .expect("block tips fit u128");
-    Ok((events, charge.revert.is_some()))
+    let receipt = TransactionReceipt {
+        success: charge.revert.is_none(),
+        fee: FeeReceipt {
+            gas_exec: market::PRIVATE_VERIFY_GAS
+                .checked_add(charged_cycles)
+                .expect("the accumulator is cap-checked"),
+            gas_stor: *data_bytes,
+            fee_base: actual,
+            tip,
+            refund,
+        },
+    };
+    Ok((events, receipt))
 }
 
 /// The reserve → action → refund cycle for one charged transaction.
@@ -625,7 +638,7 @@ fn settle_private_transaction(
 ///   paid its fee, its effects just did not take. It reverts, keeping the fee and burning the
 ///   signers' replay nonces.
 ///
-/// Also returns whether the action reverted.
+/// Also returns its receipt.
 #[expect(
     clippy::too_many_arguments,
     reason = "the settlement threads exactly the block-transition context the spec names"
@@ -639,7 +652,7 @@ fn settle_charged_transaction(
     timestamp: Timestamp,
     tx_index: u64,
     summary: &mut BlockFeeSummary,
-) -> Result<(Vec<TransactionEvent>, bool), BlockIngestError> {
+) -> Result<(Vec<TransactionEvent>, TransactionReceipt), BlockIngestError> {
     let fee_validity = |reason: String| BlockIngestError::InvalidFeeClass { tx_index, reason };
     let FeeTxView::Public { payer, .. } = view else {
         unreachable!("only a declared fee classifies as a public fee view");
@@ -775,7 +788,17 @@ fn settle_charged_transaction(
         .revenue_tip
         .checked_add(u128::from(view.tip()))
         .expect("block tips fit u128");
-    Ok((action_events, charge.revert.is_some()))
+    let receipt = TransactionReceipt {
+        success: charge.revert.is_none(),
+        fee: FeeReceipt {
+            gas_exec: charged_cycles,
+            gas_stor: view.gas_stor(),
+            fee_base,
+            tip: u128::from(view.tip()),
+            refund,
+        },
+    };
+    Ok((action_events, receipt))
 }
 
 #[cfg(test)]
@@ -901,7 +924,7 @@ mod tests {
         let mut state = initial_state(true);
         // A block with no transactions at all (not even the mandatory clock tx).
         let block = HashableBlockData {
-            reverted: Vec::new(),
+            receipts: Vec::new(),
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
             timestamp: 0,
@@ -959,7 +982,7 @@ mod tests {
         let mut state = initial_state(true);
         // Correct clock tail but no fee tx before it.
         let block = HashableBlockData {
-            reverted: Vec::new(),
+            receipts: Vec::new(),
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
             timestamp: 100,
@@ -981,7 +1004,7 @@ mod tests {
             ..fee_core::BlockFeeSummary::default()
         };
         let block = HashableBlockData {
-            reverted: Vec::new(),
+            receipts: Vec::new(),
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
             timestamp: 100,
@@ -1018,6 +1041,7 @@ mod tests {
             0,
             FeePayee::Present(producer_account_for_testing()),
         ));
+        let receipts = vec![TransactionReceipt::EXEMPT; transactions.len()];
         HashableBlockData {
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
@@ -1027,7 +1051,7 @@ mod tests {
                 vec![fee, LeeTransaction::Public(clock_invocation(1, 100))],
             ]
             .concat(),
-            reverted: Vec::new(),
+            receipts,
         }
         .into_pending_block()
     }
@@ -1171,7 +1195,7 @@ mod tests {
         let mut state = initial_state(true);
         // Last tx is not the expected clock invocation for the timestamp.
         let block = HashableBlockData {
-            reverted: Vec::new(),
+            receipts: Vec::new(),
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
             timestamp: 50,
@@ -1471,11 +1495,14 @@ mod tests {
         );
 
         let mut summary = BlockFeeSummary::default();
-        let (events, reverted) =
+        let (events, receipt) =
             settle_transaction(&tx, &mut state, &opening, 2, 200, 0, &mut summary)
                 .expect("a reverted action is charged, not block-rejected");
         assert!(events.is_empty(), "a reverted action emits no user events");
-        assert!(reverted, "the revert is reported for the block to list");
+        assert!(
+            !receipt.success,
+            "the revert is reported for the block to list"
+        );
 
         // The transfer moved nothing.
         assert_eq!(
@@ -1506,6 +1533,18 @@ mod tests {
         assert!(
             summary.revenue_base > 0,
             "the charged revert accrues real fee revenue",
+        );
+        assert_eq!(receipt.fee.gas_exec, summary.gas_used_exec);
+        assert_eq!(receipt.fee.fee_base, summary.revenue_base);
+        assert_eq!(
+            payer_before
+                - state
+                    .get_account_by_id(payer)
+                    .data
+                    .native_balance()
+                    .unwrap(),
+            receipt.fee.fee_base + receipt.fee.tip,
+            "the receipt's fee is what the payer paid",
         );
     }
 
@@ -2025,7 +2064,7 @@ mod tests {
 
         let mut settled = state;
         let mut summary = BlockFeeSummary::default();
-        settle_transaction(
+        let (_, receipt) = settle_transaction(
             &tx,
             &mut settled,
             &FeeState::genesis(),
@@ -2037,6 +2076,19 @@ mod tests {
         .expect("settles");
         assert_eq!(summary.revenue_base, required);
         assert_eq!(summary.revenue_tip, fee_core::market::MIN_PRIVATE_REFUND);
+        assert_eq!(
+            receipt,
+            TransactionReceipt {
+                success: true,
+                fee: FeeReceipt {
+                    gas_exec: summary.gas_used_exec,
+                    gas_stor: summary.gas_used_stor,
+                    fee_base: required,
+                    tip: fee_core::market::MIN_PRIVATE_REFUND,
+                    refund: 0,
+                },
+            }
+        );
         assert_eq!(
             native_balance(&settled, system_accounts::fee_inbox_account_id()),
             reserve
@@ -2069,7 +2121,7 @@ mod tests {
 
         let mut settled = state;
         let mut summary = BlockFeeSummary::default();
-        let (_, reverted) = settle_transaction(
+        let (_, receipt) = settle_transaction(
             &tx,
             &mut settled,
             &FeeState::genesis(),
@@ -2079,7 +2131,19 @@ mod tests {
             &mut summary,
         )
         .expect("settles");
-        assert!(!reverted);
+        assert_eq!(
+            receipt,
+            TransactionReceipt {
+                success: true,
+                fee: FeeReceipt {
+                    gas_exec: summary.gas_used_exec,
+                    gas_stor: summary.gas_used_stor,
+                    fee_base: required,
+                    tip: 0,
+                    refund: surplus,
+                },
+            }
+        );
         assert_eq!(summary.revenue_base, required);
         assert_eq!(summary.revenue_tip, 0);
         assert_eq!(
@@ -2136,7 +2200,7 @@ mod tests {
                 - budget,
             ..BlockFeeSummary::default()
         };
-        let (events, reverted) = settle_transaction(
+        let (events, receipt) = settle_transaction(
             &tx,
             &mut settled,
             &FeeState::genesis(),
@@ -2146,7 +2210,19 @@ mod tests {
             &mut summary,
         )
         .expect("a failing public part reverts to the fallback");
-        assert!(reverted);
+        assert_eq!(
+            receipt,
+            TransactionReceipt {
+                success: false,
+                fee: FeeReceipt {
+                    gas_exec: fee_core::market::PRIVATE_VERIFY_GAS + budget,
+                    gas_stor: summary.gas_used_stor,
+                    fee_base: required,
+                    tip: 0,
+                    refund: surplus,
+                },
+            }
+        );
         assert!(events.is_empty());
         assert_eq!(summary.gas_used_exec, fee_core::market::MAX_GAS_EXEC);
         assert_eq!(summary.revenue_base, required);
@@ -2197,7 +2273,7 @@ mod tests {
 
         let mut settled = state;
         let mut summary = BlockFeeSummary::default();
-        let (_, reverted) = settle_transaction(
+        let (_, receipt) = settle_transaction(
             &tx,
             &mut settled,
             &FeeState::genesis(),
@@ -2207,7 +2283,7 @@ mod tests {
             &mut summary,
         )
         .expect("a public part out of its reserve's cycles reverts to the fallback");
-        assert!(reverted);
+        assert!(!receipt.success);
         assert_eq!(
             summary.gas_used_exec,
             fee_core::market::PRIVATE_VERIFY_GAS + budget
@@ -2238,7 +2314,7 @@ mod tests {
 
         let mut settled = state;
         let mut summary = BlockFeeSummary::default();
-        let (_, reverted) = settle_transaction(
+        let (_, receipt) = settle_transaction(
             &tx,
             &mut settled,
             &FeeState::genesis(),
@@ -2248,7 +2324,7 @@ mod tests {
             &mut summary,
         )
         .expect("a declared fee settles");
-        assert!(!reverted);
+        assert!(receipt.success);
         // The root needs more than the 5,000 cycles the revert test leaves it.
         let cycles = summary.gas_used_exec - fee_core::market::PRIVATE_VERIFY_GAS;
         assert!(cycles > 5_000 && cycles < fee_core::market::PRIVATE_VERIFY_GAS);
@@ -2256,6 +2332,12 @@ mod tests {
         assert_eq!(summary.gas_used_stor, size_of(&tx));
         assert_eq!(summary.revenue_base, base);
         assert_eq!(summary.revenue_tip, 3);
+        assert_eq!(
+            receipt.fee.gas_exec, summary.gas_used_exec,
+            "verification gas included"
+        );
+        assert_eq!(receipt.fee.gas_stor, size_of(&tx));
+        assert_eq!((receipt.fee.fee_base, receipt.fee.tip), (base, 3));
         // The signer pays the actual fee and its tip; the proof pays nothing.
         assert_eq!(native_balance(&settled, payer), payer_pre - base - 3);
         assert_eq!(
@@ -2291,7 +2373,7 @@ mod tests {
 
         let mut settled = state;
         let mut summary = BlockFeeSummary::default();
-        let (events, reverted) = settle_transaction(
+        let (events, receipt) = settle_transaction(
             &tx,
             &mut settled,
             &FeeState::genesis(),
@@ -2301,10 +2383,12 @@ mod tests {
             &mut summary,
         )
         .expect("a failing public part is a charged revert");
-        assert!(reverted);
+        assert!(!receipt.success);
         assert!(events.is_empty());
         assert_eq!(summary.gas_used_exec, gas_limit);
         let charged = fee_core::assess::fee_for(gas_limit, size_of(&tx), 0, 8, 8);
+        assert_eq!(receipt.fee.gas_exec, gas_limit);
+        assert_eq!(receipt.fee.fee_base + receipt.fee.tip, charged);
         assert_eq!(native_balance(&settled, payer), payer_pre - charged);
         assert_eq!(
             settled.get_account_by_id(payer).nonce,
@@ -2410,24 +2494,61 @@ mod tests {
     }
 
     #[test]
-    fn a_block_listing_a_revert_that_did_not_happen_is_rejected() {
+    fn a_block_with_a_tampered_receipt_is_rejected() {
         let mut state =
             initial_state(true).with_public_accounts([common::test_utils::producer_seed()]);
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
         let tip = tip_of(&genesis);
 
-        let block = HashableBlockData {
-            reverted: vec![0],
-            ..HashableBlockData::from(settled_block(2, tip.hash, vec![], &state))
-        }
-        .into_pending_block();
+        let accounts = initial_pub_accounts_private_keys();
+        let tx = create_transaction_native_token_transfer(
+            accounts[0].account_id,
+            0,
+            accounts[1].account_id,
+            10,
+            &accounts[0].pub_sign_key,
+        );
+        let block = settled_block(2, tip.hash, vec![tx], &state);
+        let receipt = block.body.receipts[0];
+        assert!(receipt.success);
+        apply_block(Some(&tip), &block, &mut state.clone()).expect("the honest block applies");
 
-        assert!(matches!(
-            apply_block(Some(&tip), &block, &mut state),
-            Err(BlockIngestError::RevertMismatch { listed, settled })
-                if listed == vec![0] && settled.is_empty()
-        ));
+        let wrong_fee = TransactionReceipt {
+            fee: FeeReceipt {
+                fee_base: receipt.fee.fee_base + 1,
+                ..receipt.fee
+            },
+            ..receipt
+        };
+        let wrong_status = TransactionReceipt {
+            success: false,
+            ..receipt
+        };
+        let exempt = TransactionReceipt::EXEMPT;
+        for (receipts, tx_index, listed, settled) in [
+            (vec![wrong_fee], 0, Some(wrong_fee), Some(receipt)),
+            (vec![wrong_status], 0, Some(wrong_status), Some(receipt)),
+            (vec![exempt], 0, Some(exempt), Some(receipt)),
+            (vec![], 0, None, Some(receipt)),
+            (vec![receipt, receipt], 1, Some(receipt), None),
+        ] {
+            let tampered = HashableBlockData {
+                receipts,
+                ..HashableBlockData::from(block.clone())
+            }
+            .into_pending_block();
+            let err = apply_block(Some(&tip), &tampered, &mut state.clone())
+                .expect_err("a tampered receipt is rejected");
+            assert!(
+                matches!(
+                    &err,
+                    BlockIngestError::ReceiptMismatch { tx_index: i, listed: l, settled: s }
+                        if (*i, l.as_deref().copied(), s.as_deref().copied()) == (tx_index, listed, settled)
+                ),
+                "got {err:?}",
+            );
+        }
     }
 
     #[test]
@@ -2552,7 +2673,7 @@ mod tests {
         reward: FeePayee,
     ) -> common::block::Block {
         let timestamp = id.saturating_mul(100);
-        let (summary, payout, reverted) =
+        let (summary, payout, receipts) =
             super::derive_block_summary(state, &transactions, id, timestamp)
                 .expect("test transactions settle");
         transactions.push(LeeTransaction::Public(fee_invocation(
@@ -2564,7 +2685,7 @@ mod tests {
             prev_block_hash: prev_hash,
             timestamp,
             transactions,
-            reverted,
+            receipts,
         }
         .into_pending_block()
     }

@@ -105,6 +105,11 @@ pub struct GetTransaction {
     pub tx_hash: HashType,
 }
 
+/// `None` also for a block's trailing fee and clock transactions, which have no receipt.
+pub struct GetTransactionReceipt {
+    pub tx_hash: HashType,
+}
+
 pub struct GetAccountNonces {
     pub account_ids: Vec<AccountId>,
 }

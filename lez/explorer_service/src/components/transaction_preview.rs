@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use indexer_service_protocol::Transaction;
+use indexer_service_protocol::{Transaction, TransactionReceipt};
 use leptos::prelude::*;
 use leptos_router::components::A;
 
@@ -18,7 +18,10 @@ const fn transaction_type_info(tx: &Transaction) -> (&'static str, &'static str)
     clippy::needless_pass_by_value,
     reason = "Leptos component props are passed by value by framework convention"
 )]
-pub fn TransactionPreview(transaction: Transaction) -> impl IntoView {
+pub fn TransactionPreview(
+    transaction: Transaction,
+    #[prop(default = None)] receipt: Option<TransactionReceipt>,
+) -> impl IntoView {
     let hash = transaction.hash();
     let hash_str = hash.to_string();
     let (type_name, type_class) = transaction_type_info(&transaction);
@@ -53,6 +56,14 @@ pub fn TransactionPreview(transaction: Transaction) -> impl IntoView {
         }
     };
 
+    let metadata = match receipt {
+        Some(receipt) if !receipt.is_exempt() => {
+            format!("{metadata}, fee {}", receipt.fee_paid())
+        }
+        _ => metadata,
+    };
+    let reverted = receipt.is_some_and(|receipt| !receipt.success);
+
     view! {
         <div class="transaction-preview">
             <A href=format!("/transaction/{}", hash_str) attr:class="transaction-preview-link">
@@ -60,6 +71,7 @@ pub fn TransactionPreview(transaction: Transaction) -> impl IntoView {
                     <div class="tx-id">
                         <span class="label">"Transaction"</span>
                     </div>
+                    {reverted.then(|| view! { <div class="tx-type tx-status-reverted">"Reverted"</div> })}
                     <div class=format!("tx-type {}", type_class)>
                         {type_name}
                     </div>

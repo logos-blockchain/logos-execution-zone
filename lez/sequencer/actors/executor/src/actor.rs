@@ -1,6 +1,10 @@
 use std::ops::ControlFlow;
 
-use common::{PageLimit, block::Block, transaction::LeeTransaction};
+use common::{
+    PageLimit,
+    block::{Block, TransactionReceipt},
+    transaction::LeeTransaction,
+};
 use fee_core::validity::FeeError;
 use futures::{
     FutureExt as _, StreamExt as _, TryFutureExt as _, TryStreamExt as _, future::ready, stream,
@@ -48,8 +52,8 @@ use crate::{
         GetChannelId, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply, GetFeeQuote,
         GetLastBlockId, GetMessagePath, GetProofsAndRoot, GetProofsAndRootReply, GetPublications,
         GetRecoveryBinding, GetStatus, GetSystemProposals, GetSystemProposalsReply, GetTransaction,
-        ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
-        SubmitSystemApproval, Transaction,
+        GetTransactionReceipt, ProduceBlock, RequeueCrossZoneDeadLetter,
+        RequeueCrossZoneDeadLetterReply, SubmitSystemApproval, Transaction,
     },
 };
 
@@ -501,6 +505,23 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetTransaction> for Exe
     ) -> Self::Reply {
         self.storage_ref
             .ask(sequencer_storage_actor::protocol::GetTransactionByHash { hash: tx_hash })
+            .await
+            .map_err(Into::into)
+    }
+}
+
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetTransactionReceipt>
+    for ExecutorActor<S, B>
+{
+    type Reply = Result<Option<TransactionReceipt>>;
+
+    async fn handle(
+        &mut self,
+        GetTransactionReceipt { tx_hash }: GetTransactionReceipt,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.storage_ref
+            .ask(sequencer_storage_actor::protocol::GetTransactionReceiptByHash { hash: tx_hash })
             .await
             .map_err(Into::into)
     }

@@ -20,12 +20,15 @@ pub fn TransactionPage() -> impl IntoView {
             HashType::from_str(&s).ok()
         },
         |hash_opt| async move {
-            match hash_opt {
-                Some(hash) => api::get_transaction(hash).await,
-                None => Err(leptos::prelude::ServerFnError::ServerError(
+            let Some(hash) = hash_opt else {
+                return Err(ServerFnError::ServerError(
                     "Invalid transaction hash".to_owned(),
-                )),
-            }
+                ));
+            };
+            Ok::<_, ServerFnError>((
+                api::get_transaction(hash).await?,
+                api::get_transaction_receipt(hash).await?,
+            ))
         },
     );
 
@@ -36,7 +39,7 @@ pub fn TransactionPage() -> impl IntoView {
                     transaction_resource
                         .get()
                         .map(|result| match result {
-                            Ok(tx) => {
+                            Ok((tx, receipt)) => {
                                 let tx_hash = tx.hash().to_string();
                                 let tx_type = match &tx {
                                     Transaction::Public(_) => "Public Transaction",
@@ -65,10 +68,10 @@ pub fn TransactionPage() -> impl IntoView {
                                         {
                                             match tx {
                                                 Transaction::Public(ptx) => {
-                                                    view! { <PublicTxDetails tx=ptx /> }.into_any()
+                                                    view! { <PublicTxDetails tx=ptx receipt=receipt /> }.into_any()
                                                 }
                                                 Transaction::PrivacyPreserving(pptx) => {
-                                                    view! { <PrivacyPreservingTxDetails tx=pptx /> }.into_any()
+                                                    view! { <PrivacyPreservingTxDetails tx=pptx receipt=receipt /> }.into_any()
                                                 }
                                             }
                                         }

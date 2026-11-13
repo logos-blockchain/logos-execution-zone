@@ -3,7 +3,10 @@
     reason = "`handle*` prefix is used for convenience with `Message` trait"
 )]
 
-use common::{block::Block, transaction::LeeTransaction};
+use common::{
+    block::{Block, TransactionReceipt},
+    transaction::LeeTransaction,
+};
 use kameo::{
     Actor,
     actor::ActorRef,
@@ -27,9 +30,9 @@ use crate::{
         GetAccountView, GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
         GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetMessagePath,
         GetProofsAndRoot, GetProofsAndRootReply, GetPublications, GetRecoveryBinding, GetStatus,
-        GetSystemProposals, GetSystemProposalsReply, GetTransaction, ProduceBlock,
-        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, SubmitSystemApproval,
-        Transaction,
+        GetSystemProposals, GetSystemProposalsReply, GetTransaction, GetTransactionReceipt,
+        ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
+        SubmitSystemApproval, Transaction,
     },
 };
 
@@ -76,6 +79,12 @@ mockall::mock! {
             msg: GetTransaction,
             ctx: &mut Context<Self, Result<Option<(LeeTransaction, BlockId)>>>
         ) -> Result<Option<(LeeTransaction, BlockId)>>;
+
+        pub fn handle_get_transaction_receipt(
+            &mut self,
+            msg: GetTransactionReceipt,
+            ctx: &mut Context<Self, Result<Option<TransactionReceipt>>>
+        ) -> Result<Option<TransactionReceipt>>;
 
         pub fn handle_get_account_nonces(
             &mut self,
@@ -276,6 +285,18 @@ impl Message<GetTransaction> for MockExecutorActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_transaction(msg, ctx)
+    }
+}
+
+impl Message<GetTransactionReceipt> for MockExecutorActor {
+    type Reply = Result<Option<TransactionReceipt>>;
+
+    async fn handle(
+        &mut self,
+        msg: GetTransactionReceipt,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_transaction_receipt(msg, ctx)
     }
 }
 

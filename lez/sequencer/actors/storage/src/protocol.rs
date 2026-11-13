@@ -29,6 +29,11 @@ pub struct GetTransactionByHash {
     pub hash: HashType,
 }
 
+/// `None` also for a block's trailing fee and clock transactions, which have no receipt.
+pub struct GetTransactionReceiptByHash {
+    pub hash: HashType,
+}
+
 pub struct DeleteBlock {
     pub block_id: BlockId,
 }

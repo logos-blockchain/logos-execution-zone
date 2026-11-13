@@ -3,7 +3,9 @@ use std::{collections::HashSet, path::Path, sync::Arc};
 use common::{
     HashType,
     block::{BedrockStatus, Block, BlockMeta, PeerChainTip},
-    test_utils::{produce_dummy_block, produce_dummy_empty_transaction},
+    test_utils::{
+        produce_dummy_block, produce_dummy_block_with_reverted, produce_dummy_empty_transaction,
+    },
     transaction::{TxEvents, clock_invocation},
 };
 use kameo::actor::{ActorRef, Spawn as _};
@@ -24,10 +26,10 @@ use crate::{
         GetDeadLetterDispatchRetainedCount, GetDeadLetterDispatches, GetFinalSnapshot,
         GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
         GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
-        GetTransactionByHash, GetZoneCheckpoint, PendingCrossZoneDispatchRecord,
-        PendingDepositEventRecord, RecordDispatchFailure, RequeueDeadLetterDispatch,
-        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, UpdateZoneCheckpoint,
-        WithdrawalReconciliationKey, ZoneCheckpointRecord,
+        GetTransactionByHash, GetTransactionReceiptByHash, GetZoneCheckpoint,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RecordDispatchFailure,
+        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip,
+        UpdateZoneCheckpoint, WithdrawalReconciliationKey, ZoneCheckpointRecord,
     },
 };
 
@@ -272,6 +274,48 @@ async fn recorded_transaction_is_looked_up_by_hash() {
             .await
             .expect("Failed to look the transaction up"),
         Some((transaction, 1))
+    );
+}
+
+#[tokio::test]
+async fn recorded_transaction_receipt_is_looked_up_by_hash() {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let transaction = produce_dummy_empty_transaction();
+    let block = produce_dummy_block_with_reverted(1, None, vec![transaction.clone()], &[0]);
+    let clock_hash = block
+        .body
+        .transactions
+        .last()
+        .expect("has a clock tx")
+        .hash();
+    let storage_ref =
+        spawn_with_blocks(dir.path(), vec![produce_dummy_block(0, None, vec![])]).await;
+    storage_ref
+        .ask(AtomicUpdate::from_block(
+            block.clone(),
+            Arc::new(V03State::new()),
+            Vec::new(),
+        ))
+        .await
+        .expect("Failed to record the block");
+
+    assert_eq!(
+        storage_ref
+            .ask(GetTransactionReceiptByHash {
+                hash: transaction.hash()
+            })
+            .await
+            .expect("Failed to look the receipt up"),
+        Some(block.body.receipts[0]),
+    );
+    assert!(!block.body.receipts[0].success);
+    assert_eq!(
+        storage_ref
+            .ask(GetTransactionReceiptByHash { hash: clock_hash })
+            .await
+            .expect("Failed to look the receipt up"),
+        None,
+        "the clock transaction has no receipt",
     );
 }
 
