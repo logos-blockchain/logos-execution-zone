@@ -301,4 +301,61 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn each_async_message_is_published_as_its_mode_selects() {
+        let [recipient, ..] = recipients();
+        let anywhere = body(AccountId::new([12; 32]));
+        let to_recipient = body(recipient.address());
+        let seal = || RecipientEncryption {
+            recipient: recipient.clone(),
+            esk: ESK,
+        };
+
+        let [Publication::Clear(clear), Publication::Sealed(sealed)] = <[_; 2]>::try_from(
+            publish_messages(
+                vec![anywhere.clone(), to_recipient.clone()],
+                vec![PublicationMode::Clear, PublicationMode::Sealed(seal())],
+                None,
+            )
+            .unwrap(),
+        )
+        .unwrap() else {
+            panic!("each publication follows its mode, in order");
+        };
+        assert_eq!(clear, anywhere);
+        assert_eq!(
+            sealed.open(NPK, &D, &Z).map(|(body, ..)| body),
+            Some(to_recipient.clone())
+        );
+
+        for (case, async_messages, modes, refusal) in [
+            (
+                "a missing seal",
+                vec![to_recipient],
+                vec![],
+                InvalidPublicationMode::Unpaired,
+            ),
+            (
+                "a surplus seal",
+                vec![],
+                vec![PublicationMode::Sealed(seal())],
+                InvalidPublicationMode::Unpaired,
+            ),
+            (
+                "a seal to another destination",
+                vec![anywhere],
+                vec![PublicationMode::Sealed(seal())],
+                InvalidPublicationMode::MisaddressedSeal,
+            ),
+        ] {
+            assert_eq!(
+                publish_messages(async_messages, modes, None)
+                    .unwrap_err()
+                    .to_string(),
+                refusal.to_string(),
+                "{case}"
+            );
+        }
+    }
 }

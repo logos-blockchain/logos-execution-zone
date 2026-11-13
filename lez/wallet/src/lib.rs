@@ -3404,10 +3404,11 @@ mod tests {
     };
     use lee_core::{
         Commitment, CommitmentPosition, EncryptedNote, EphemeralSecretKey, MembershipProof,
-        Nullifier, PrivateAccountKind, ProgramImageClaim, Recipient, RecipientEncryption,
-        RecoveryBinding,
+        Nullifier, NullifierPublicKey, PrivateAccountKind, ProgramImageClaim, PublicationMode,
+        Recipient, RecipientEncryption, RecoveryBinding,
         account::{Account, Actor, ActorState},
         compute_digest_for_path,
+        encryption::ViewingPublicKey,
         native_token::{self, TransferError},
         program::{MessageBody, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramHeader, Publication},
     };
@@ -3418,13 +3419,16 @@ mod tests {
 
     use super::{
         AccountIdentity, AccountMention, AsyncDelivery, ExecutionFailureKind,
-        NATIVE_TOKEN_PROGRAM_ID, PendingMessage, WalletCore,
+        NATIVE_TOKEN_PROGRAM_ID, PendingMessage, WalletCore, choose_publications_with,
     };
     use crate::{
         account::{AccountIdWithPrivacy, Label},
         cli::SubcommandReturnValue,
         config::{SequencerConnectionData, WalletConfig},
-        program_facades::{CreditDelivery, credit_destination, sequencer_stake::SequencerStake},
+        program_facades::{
+            CreditDelivery, credit_destination, native_token_transfer::NativeTokenTransfer,
+            sequencer_stake::SequencerStake,
+        },
         storage::{
             Storage, WrongPassword,
             key_chain::tests::{block_of, transition_message},
@@ -3809,6 +3813,125 @@ mod tests {
         assert_eq!(bound.recoveries[0].recipient, addressed);
     }
 
+    // Sealing material for a regular account under keys filled with `seed`.
+    fn recipient_of(seed: u8) -> Recipient {
+        Recipient {
+            npk: NullifierPublicKey([seed; 32]),
+            vpk: ViewingPublicKey::from_seed(&[seed; 32], &[seed; 32]),
+            kind: PrivateAccountKind::Regular,
+            opening: None,
+        }
+    }
+
+    fn credit_message(from: Actor, to: Actor, amount: u128) -> MessageBody {
+        MessageBody {
+            from,
+            to,
+            message: borsh::to_vec(&native_token::Message::Credit(amount)).unwrap(),
+        }
+    }
+
+    // The refusal of `count` clear messages that no durable async message matches, one of them
+    // requested to `to`.
+    fn unmatched(to: AccountId, count: usize) -> String {
+        format!(
+            "No durable async message matches the clear message requested to {to} ({count} \
+             unmatched)"
+        )
+    }
+
+    #[test]
+    fn each_requested_clear_message_takes_one_matching_async_message_or_refuses_them_all() {
+        let (recipient, elsewhere) = (recipient_of(1), recipient_of(2));
+        let to = Actor::native_balance(recipient.address());
+        let token = AccountId::new([3; 32]);
+        let (requested, other) = (AccountId::new([4; 32]), AccountId::new([5; 32]));
+        let (alias, other_alias) = (AccountId::new([6; 32]), AccountId::new([7; 32]));
+        let senders = HashMap::from([
+            (
+                Actor::native_balance(alias),
+                Actor::native_balance(requested),
+            ),
+            (
+                Actor::native_balance(other_alias),
+                Actor::native_balance(other),
+            ),
+            (Actor::new(alias, token), Actor::new(requested, token)),
+        ]);
+        let request = credit_message(Actor::native_balance(requested), to, 20);
+        let sent = credit_message(Actor::native_balance(alias), to, 20);
+        // Another amount, source account, source program, destination account and destination
+        // program.
+        let mismatched = [
+            credit_message(Actor::native_balance(alias), to, 21),
+            credit_message(Actor::native_balance(other_alias), to, 20),
+            MessageBody {
+                from: Actor::new(alias, token),
+                ..sent.clone()
+            },
+            MessageBody {
+                to: Actor::native_balance(elsewhere.address()),
+                ..sent.clone()
+            },
+            MessageBody {
+                to: Actor::new(to.account_id, token),
+                ..sent.clone()
+            },
+        ];
+        let seals = [recipient, elsewhere];
+        // Which messages are published clear, or why the batch is refused.
+        let choose = |material: &[Recipient], requests: usize, bodies: &[MessageBody]| {
+            choose_publications_with(
+                material.to_vec(),
+                vec![request.clone(); requests],
+                Arc::new(Mutex::new(senders.clone())),
+            )(bodies)
+            .map(|modes| {
+                modes
+                    .iter()
+                    .map(|mode| matches!(mode, PublicationMode::Clear))
+                    .collect::<Vec<_>>()
+            })
+            .map_err(|error| error.to_string())
+        };
+        let refused = |message: String| Err(LeeError::InvalidInput(message).to_string());
+
+        // Each mismatch is sealed where nothing is requested, so only the request it leaves
+        // unmatched refuses it.
+        assert_eq!(choose(&seals, 0, &mismatched), Ok(vec![false; 5]));
+        for mismatch in &mismatched {
+            assert_eq!(
+                choose(&seals, 1, std::slice::from_ref(mismatch)),
+                refused(unmatched(to.account_id, 1))
+            );
+        }
+        for (requests, bodies, expected) in [
+            (1, Vec::new(), refused(unmatched(to.account_id, 1))),
+            (2, vec![sent.clone()], refused(unmatched(to.account_id, 1))),
+            (2, vec![sent.clone(), sent.clone()], Ok(vec![true, true])),
+            (
+                1,
+                vec![mismatched[1].clone(), sent.clone(), sent.clone()],
+                Ok(vec![false, true, false]),
+            ),
+        ] {
+            assert_eq!(choose(&seals, requests, &bodies), expected);
+        }
+        // An unmatched request is reported before a missing seal, which a message no request
+        // takes still needs.
+        assert_eq!(
+            choose(&[], 1, std::slice::from_ref(&mismatched[0])),
+            refused(unmatched(to.account_id, 1))
+        );
+        assert_eq!(
+            choose(&[], 1, &[sent.clone(), sent]),
+            refused(format!(
+                "No recipient material seals an async message to {}",
+                to.account_id
+            ))
+        );
+    }
+
     #[tokio::test]
     async fn an_unstake_request_is_refused_before_submission_only_for_an_unpayable_destination() {
         let owner_key = lee::PrivateKey::try_new([3; 32]).unwrap();
@@ -3896,6 +4019,237 @@ mod tests {
             Err(ExecutionFailureKind::TransactionBuildError(
                 lee::error::LeeError::InvalidInput(message)
             )) if message.contains("FinalizeUnstake cannot pay")
+        ));
+        assert!(submitted.lock().unwrap().is_empty());
+    }
+
+    // A wallet holding the key of a funded public account, whose sequencer binds `bound` alone and
+    // keeps what it is sent.
+    async fn wallet_with_a_public_sender(
+        bound: AccountId,
+    ) -> (
+        WalletCore<SequencerClient>,
+        tempfile::TempDir,
+        ServerHandle,
+        Arc<Mutex<Vec<LeeTransaction>>>,
+        AccountId,
+    ) {
+        let key = lee::PrivateKey::try_new([1; 32]).unwrap();
+        let sender = AccountId::from(&lee::PublicKey::new_from_private_key(&key));
+        let submitted: Arc<Mutex<Vec<LeeTransaction>>> = Arc::default();
+        let mut sequencer = RpcModule::new(Arc::clone(&submitted));
+        sequencer
+            .register_method("getRecoveryBinding", move |params, _, _| {
+                let address = params.one::<AccountId>()?;
+                Ok::<_, ErrorObjectOwned>((address == bound).then(EncryptedNote::default))
+            })
+            .unwrap();
+        sequencer
+            .register_method("getAccountView", move |params, _, _| {
+                let actor = params.one::<Actor>()?;
+                Ok::<_, ErrorObjectOwned>(
+                    (actor.account_id == sender).then(|| Account::funded(100)),
+                )
+            })
+            .unwrap();
+        sequencer
+            .register_method("getProofsAndRoot", |_, _, _| {
+                Ok::<
+                    (
+                        Vec<Option<MembershipProof>>,
+                        Vec<Option<MembershipProof>>,
+                        [u8; 32],
+                    ),
+                    ErrorObjectOwned,
+                >((Vec::new(), Vec::new(), [0; 32]))
+            })
+            .unwrap();
+        sequencer
+            .register_method("sendTransaction", |params, submitted, _| {
+                let tx = params.one::<LeeTransaction>()?;
+                let hash = tx.hash();
+                submitted.lock().unwrap().push(tx);
+                Ok::<_, ErrorObjectOwned>(hash)
+            })
+            .unwrap();
+        let (mut wallet, home, handle) = served_wallet(sequencer).await;
+        wallet
+            .storage
+            .key_chain_mut()
+            .add_imported_public_account(key);
+        // The mock serves no fee quote to measure a public send against, so the fee is pinned.
+        wallet.set_fee_params(crate::FeeParams {
+            gas_limit: Some(crate::DEFAULT_GAS_LIMIT),
+            max_fee: Some(crate::DEFAULT_MAX_FEE),
+            ..crate::FeeParams::default()
+        });
+        (wallet, home, handle, submitted, sender)
+    }
+
+    #[tokio::test]
+    async fn a_clear_transfer_to_an_unbound_address_is_refused_before_it_is_prepared() {
+        let reached: Arc<Mutex<Vec<&'static str>>> = Arc::default();
+        let mut sequencer = RpcModule::new(Arc::clone(&reached));
+        sequencer
+            .register_method("getRecoveryBinding", |_, _, _| {
+                Ok::<_, ErrorObjectOwned>(None::<EncryptedNote>)
+            })
+            .unwrap();
+        // Preparation starts at the fee quote and ends at the submission.
+        for method in ["getFeeState", "sendTransaction"] {
+            sequencer
+                .register_method(method, move |_, reached, _| {
+                    reached.lock().unwrap().push(method);
+                    Ok::<_, ErrorObjectOwned>(())
+                })
+                .unwrap();
+        }
+        let (mut wallet, _home, _sequencer) = served_wallet(sequencer).await;
+        let (payer, _) = wallet
+            .storage
+            .key_chain_mut()
+            .generate_new_privacy_preserving_transaction_key_chain(None);
+        let address = AccountId::new([1; 32]);
+
+        assert!(matches!(
+            NativeTokenTransfer(&wallet)
+                .transfer_clear(AccountIdentity::PrivateOwned(payer), address, 40)
+                .await,
+            Err(ExecutionFailureKind::TransactionBuildError(
+                LeeError::UnboundAsyncDestination { actor }
+            )) if actor == Actor::native_balance(address)
+        ));
+        assert!(reached.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_clear_message_is_prepared_only_to_an_address_its_chain_or_its_delivery_binds() {
+        let bound = AccountId::new([1; 32]);
+        let mut sequencer = RpcModule::new(());
+        sequencer
+            .register_method("getRecoveryBinding", move |params, (), _| {
+                let address = params.one::<AccountId>()?;
+                Ok::<_, ErrorObjectOwned>((address == bound).then(EncryptedNote::default))
+            })
+            .unwrap();
+        let (wallet, _home, _sequencer) = served_wallet(sequencer).await;
+        let (recipient, stranger) = (recipient_of(2), recipient_of(3));
+        let request = |to| {
+            credit_message(
+                Actor::native_balance(AccountId::new([4; 32])),
+                Actor::native_balance(to),
+                40,
+            )
+        };
+        let recovery = |of: &Recipient| RecipientEncryption {
+            recipient: of.clone(),
+            esk: EphemeralSecretKey([5; 32]),
+        };
+
+        let prepared = wallet
+            .unbound(AsyncDelivery {
+                clear_messages: vec![request(bound)],
+                ..AsyncDelivery::default()
+            })
+            .await
+            .unwrap();
+        assert!(prepared.recoveries.is_empty());
+        assert_eq!(prepared.clear_messages, [request(bound)]);
+
+        let prepared = wallet
+            .unbound(AsyncDelivery {
+                recoveries: vec![recovery(&recipient)],
+                clear_messages: vec![request(recipient.address())],
+                ..AsyncDelivery::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(prepared.recoveries.len(), 1);
+        assert_eq!(prepared.recoveries[0].recipient, recipient);
+        assert_eq!(prepared.clear_messages, [request(recipient.address())]);
+
+        // A recovery of another address binds nothing of the destination.
+        assert!(matches!(
+            wallet
+                .unbound(AsyncDelivery {
+                    recoveries: vec![recovery(&stranger)],
+                    clear_messages: vec![request(recipient.address())],
+                    ..AsyncDelivery::default()
+                })
+                .await,
+            Err(ExecutionFailureKind::TransactionBuildError(
+                LeeError::UnboundAsyncDestination { actor }
+            )) if actor == Actor::native_balance(recipient.address())
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_public_transaction_refuses_a_requested_clear_message() {
+        let bound = AccountId::new([2; 32]);
+        let (wallet, _home, _sequencer, submitted, sender) =
+            wallet_with_a_public_sender(bound).await;
+
+        assert!(matches!(
+            wallet
+                .send_tx(
+                    vec![AccountIdentity::Public(sender).balance()],
+                    0,
+                    borsh::to_vec(&native_token::Message::Transfer {
+                        to: bound,
+                        amount: 40,
+                    })
+                    .unwrap(),
+                    &ProgramCatalog::default(),
+                    None,
+                    AsyncDelivery {
+                        clear_messages: vec![credit_message(
+                            Actor::native_balance(sender),
+                            Actor::native_balance(bound),
+                            40,
+                        )],
+                        ..AsyncDelivery::default()
+                    },
+                )
+                .await,
+            Err(ExecutionFailureKind::TransactionBuildError(LeeError::InvalidInput(message)))
+                if message.starts_with("A public transaction has no private execution")
+        ));
+        assert!(submitted.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_public_senders_clear_transfer_is_sent_publicly_only_to_a_bound_address() {
+        let (bound, absent) = (AccountId::new([2; 32]), AccountId::new([3; 32]));
+        let (wallet, _home, _sequencer, submitted, sender) =
+            wallet_with_a_public_sender(bound).await;
+
+        NativeTokenTransfer(&wallet)
+            .transfer_clear(AccountIdentity::Public(sender), bound, 40)
+            .await
+            .unwrap();
+        let Some(LeeTransaction::Public(tx)) = submitted.lock().unwrap().pop() else {
+            panic!("the transfer to a bound address should have been submitted publicly");
+        };
+        assert_eq!(
+            borsh::from_slice::<native_token::Message>(&tx.message.execution.root.message).unwrap(),
+            native_token::Message::Transfer {
+                to: bound,
+                amount: 40,
+            }
+        );
+        // The destination stays undeclared, so its credit is published and not executed at once.
+        assert_eq!(
+            tx.message.public_context.actors,
+            BTreeSet::from([Actor::native_balance(sender)])
+        );
+
+        assert!(matches!(
+            NativeTokenTransfer(&wallet)
+                .transfer_clear(AccountIdentity::Public(sender), absent, 40)
+                .await,
+            Err(ExecutionFailureKind::TransactionBuildError(
+                LeeError::UnboundAsyncDestination { actor }
+            )) if actor == Actor::native_balance(absent)
         ));
         assert!(submitted.lock().unwrap().is_empty());
     }
@@ -4230,6 +4584,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_page_without_a_clear_destinations_binding_is_an_error_not_an_absence() {
+        let (mut wallet, _home, _sequencer, served) = wallet_with_a_received_message().await;
+        served.lock().unwrap().recovery_bindings.clear();
+
+        let Err(scanned) = wallet.owned_pending_messages().await else {
+            panic!("a scan over an incomplete page fails");
+        };
+        let Err(found) = wallet.find_pending_message(1).await else {
+            panic!("a lookup in an incomplete page fails");
+        };
+        for error in [scanned, found] {
+            assert!(
+                error.to_string().starts_with("No recovery binding for "),
+                "{error}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn the_nullifier_cache_and_the_cursor_recover_together_from_a_torn_cache_or_a_reset() {
         let (mut wallet, home, _sequencer, _served) = wallet_with_a_received_message().await;
         wallet.owned_pending_messages().await.unwrap();
@@ -4410,6 +4783,123 @@ mod tests {
                         if delivery.envelope.to == listener && delivery.envelope.message == [7]
                 ))
         );
+    }
+
+    #[tokio::test]
+    async fn a_receipt_sending_nothing_durable_is_refused_its_requested_clear_message() {
+        let (mut wallet, _home, _sequencer, served) = wallet_with_a_received_message().await;
+        let listener = deploy(&served, &test_programs::listener(), 0x40);
+        publish(
+            &served,
+            Actor::new(AccountId::new([1; 32]), listener),
+            listener,
+            &(),
+        );
+        let pending = wallet.find_pending_message(1).await.unwrap().unwrap();
+        // The pending message's own address is bound, which the scan that found it required.
+        let to = pending.body.to;
+        let request = MessageBody {
+            from: Actor::new(pending.recipient.account_id(), listener),
+            to,
+            message: Vec::new(),
+        };
+
+        assert!(matches!(
+            wallet
+                .receive_pending_message_with(
+                    pending,
+                    Vec::new(),
+                    &ProgramCatalog::default(),
+                    None,
+                    AsyncDelivery {
+                        clear_messages: vec![request],
+                        ..AsyncDelivery::default()
+                    },
+                )
+                .await,
+            Err(ExecutionFailureKind::TransactionBuildError(LeeError::InvalidInput(message)))
+                if message == unmatched(to.account_id, 1)
+        ));
+        assert!(served.lock().unwrap().submitted.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_async_message_executed_at_once_does_not_fulfil_a_clear_request_for_it() {
+        let (mut wallet, _home, _sequencer, served) = wallet_with_a_received_message().await;
+        let scripted = deploy(&served, &test_programs::scripted(), 0x40);
+        let listener = Actor::new(
+            AccountId::new([9; 32]),
+            deploy(&served, &test_programs::listener(), 0x80),
+        );
+        served
+            .lock()
+            .unwrap()
+            .accounts
+            .insert(listener.account_id, Account::default());
+        served
+            .lock()
+            .unwrap()
+            .recovery_bindings
+            .insert(listener.account_id, EncryptedNote::default());
+        publish(
+            &served,
+            Actor::new(AccountId::new([1; 32]), scripted),
+            scripted,
+            &Script::default().send_async(listener, &7_u8),
+        );
+        let pending = wallet.find_pending_message(1).await.unwrap().unwrap();
+        let request = MessageBody {
+            from: Actor::new(pending.recipient.account_id(), scripted),
+            to: listener,
+            message: borsh::to_vec(&7_u8).unwrap(),
+        };
+
+        // Declared, the listener takes the message at once: nothing durable is left to match.
+        assert!(matches!(
+            wallet
+                .receive_pending_message_with(
+                    pending,
+                    vec![
+                        AccountIdentity::PublicNoSign(listener.account_id)
+                            .select_program_actor_state(listener.program_account_id),
+                    ],
+                    &ProgramCatalog::default(),
+                    None,
+                    AsyncDelivery {
+                        clear_messages: vec![request.clone()],
+                        ..AsyncDelivery::default()
+                    },
+                )
+                .await,
+            Err(ExecutionFailureKind::TransactionBuildError(LeeError::InvalidInput(message)))
+                if message == unmatched(listener.account_id, 1)
+        ));
+        assert!(served.lock().unwrap().submitted.is_empty());
+
+        // Undeclared, the same message stays durable and the same request publishes it clear.
+        let pending = wallet.find_pending_message(1).await.unwrap().unwrap();
+        wallet
+            .receive_pending_message_with(
+                pending,
+                Vec::new(),
+                &ProgramCatalog::default(),
+                None,
+                AsyncDelivery {
+                    clear_messages: vec![request],
+                    ..AsyncDelivery::default()
+                },
+            )
+            .await
+            .unwrap();
+        let Some(LeeTransaction::PrivacyPreserving(receipt)) =
+            served.lock().unwrap().submitted.pop()
+        else {
+            panic!("the receipt should have been submitted privately");
+        };
+        assert!(matches!(
+            receipt.message.execution.async_messages.as_slice(),
+            [Publication::Clear(body)] if body.to == listener && body.message == [7]
+        ));
     }
 
     // The recipient pays the receipt's fee, but its key authorizes only the fee entry: the transfer

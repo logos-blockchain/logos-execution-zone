@@ -824,7 +824,8 @@ mod tests {
         test_utils::{TestPrivateKeys, no_seal, update_witness},
     };
     use lee_core::{
-        EphemeralSecretKey, PrivateAccountKind, Recipient, RecipientEncryption, SenderPresentation,
+        EphemeralSecretKey, PrivateAccountKind, PublicationMode, Recipient, RecipientEncryption,
+        SenderPresentation,
         account::Nonce,
         native_token,
         program::{ProgramEvent, Publication, Response, SYSTEM_UPGRADER_ACCOUNT_ID},
@@ -1781,6 +1782,78 @@ mod tests {
         ))
     }
 
+    /// A transfer of `amount` from the private `sender` to the undeclared address `to`, its
+    /// credit published clear, paying `fee` as [`private_tx`] does.
+    fn clear_credit_tx(
+        state: &V03State,
+        (keys, funded): &(TestPrivateKeys, lee::Account),
+        to: AccountId,
+        amount: u128,
+        fee: lee_core::FeeTransfer,
+    ) -> LeeTransaction {
+        let public_actors = vec![Actor::native_balance(
+            system_accounts::fee_inbox_account_id(),
+        )];
+        let public_actor_states = public_actors
+            .iter()
+            .map(|actor| {
+                (
+                    *actor,
+                    state
+                        .get_account_by_id(actor.account_id)
+                        .data
+                        .actor_state(actor.program_account_id)
+                        .clone(),
+                )
+            })
+            .collect();
+        let membership_proof = state
+            .get_proof_for_commitment(&lee_core::Commitment::new(&keys.account_id(), funded))
+            .expect("the sender's commitment is in state");
+        let (output, proof) = lee::execute_and_prove(
+            lee::ProvingInput {
+                claims: Vec::new(),
+                root: TransactionEntry::Sync(RootCall {
+                    to: Actor::native_balance(keys.account_id()),
+                    message: borsh::to_vec(&native_token::Message::Transfer { to, amount })
+                        .unwrap(),
+                }),
+                fee: Some(fee),
+                public_context: lee::PublicExecutionContext::new(public_actors, []),
+                private_witnesses: vec![update_witness(keys, funded.clone(), membership_proof)],
+                dummy_inputs: Vec::new(),
+                ciphertext_padding: None,
+                recoveries: vec![RecipientEncryption {
+                    recipient: Recipient {
+                        npk: keys.npk(),
+                        vpk: keys.vpk(),
+                        kind: PrivateAccountKind::Regular,
+                        opening: Some(ALIAS_OPENING),
+                    },
+                    esk: EphemeralSecretKey([1; 32]),
+                }],
+                private_promotions: BTreeSet::new(),
+            },
+            &lee::Simulation {
+                public_actor_states,
+                admitted_accounts: None,
+            },
+            &ProgramCatalog::default(),
+            |_| SenderPresentation::Blinded(ALIAS_OPENING),
+            |_, _| false,
+            |bodies| Ok(bodies.iter().map(|_| PublicationMode::Clear).collect()),
+        )
+        .expect("the clear credit proves");
+        let message = lee::privacy_preserving_transaction::Message::from_circuit_output(
+            BTreeMap::new(),
+            output,
+        );
+        LeeTransaction::PrivacyPreserving(lee::PrivacyPreservingTransaction::new(
+            message,
+            lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(vec![], proof),
+        ))
+    }
+
     fn size_of(tx: &LeeTransaction) -> u64 {
         tx.charged_bytes().unwrap()
     }
@@ -2491,6 +2564,78 @@ mod tests {
             ),
             Err(BlockIngestError::RestrictedAccountModification { .. })
         ));
+    }
+
+    #[test]
+    fn a_clear_credit_to_an_unbound_alias_reverts_at_its_metered_fee_and_is_refunded_the_surplus() {
+        let (state, senders) = private_sender_state(&[0x59, 0x60]);
+        let sender = &senders[0];
+        let alias = sender.0.account_id().blinded(&ALIAS_OPENING);
+        // The recipient's alias, which no recovery binds.
+        let unbound = senders[1].0.account_id().blinded(&[10; 32]);
+        let build = |amount| {
+            clear_credit_tx(
+                &state,
+                sender,
+                unbound,
+                10,
+                inbox_fee(amount, sender.0.account_id()),
+            )
+        };
+        let required = required_for(0, build);
+        let surplus = fee_core::market::MIN_PRIVATE_REFUND + 1;
+        let tx = build(required + surplus);
+        let LeeTransaction::PrivacyPreserving(private_tx) = &tx else {
+            unreachable!("a privacy-preserving transaction was built");
+        };
+        let fallback = private_tx
+            .message
+            .execution
+            .proven_fee
+            .as_ref()
+            .and_then(|fee| fee.fallback.as_ref())
+            .expect("the payer's pre-state covers the reserve");
+        // The payment's proven post-state is not the fallback's own.
+        let paid = private_tx.message.execution.commitments();
+        assert!(!paid.is_empty());
+        assert!(!paid.contains(&fallback.action.commitment));
+
+        let mut settled = state;
+        let mut summary = BlockFeeSummary::default();
+        let (_, receipt) = settle_transaction(
+            &tx,
+            &mut settled,
+            &FeeState::genesis(),
+            1,
+            100,
+            0,
+            &mut summary,
+        )
+        .expect("a clear credit to an unbound alias reverts to the fallback");
+        assert!(!receipt.success);
+        // The native public part meters nothing, so the proof's verification is all that is
+        // charged.
+        assert_eq!(summary.gas_used_exec, fee_core::market::PRIVATE_VERIFY_GAS);
+        assert_eq!(summary.gas_used_stor, size_of(&tx));
+        assert_eq!(summary.revenue_base, required);
+        assert_eq!(summary.revenue_tip, 0);
+        // The inbox keeps the actual fee; the surplus is published back to the payer's alias.
+        assert_eq!(
+            native_balance(&settled, system_accounts::fee_inbox_account_id()),
+            required
+        );
+        assert_eq!(published_credit(&settled, alias), Some(surplus));
+        // The payment is neither published nor committed: the payer's note is spent for the
+        // fallback's state.
+        assert_eq!(published_credit(&settled, unbound), None);
+        assert!(
+            settled
+                .get_proof_for_commitment(&fallback.action.commitment)
+                .is_some()
+        );
+        for commitment in paid {
+            assert!(settled.get_proof_for_commitment(&commitment).is_none());
+        }
     }
 
     #[test]

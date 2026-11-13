@@ -1524,6 +1524,11 @@ mod tests {
             inherits_entry_authorizations: true,
             pda_seeds: BTreeSet::new(),
         };
+        let clear = lee_core::program::Publication::Clear(lee_core::program::MessageEnvelope {
+            from: actor(44, 94),
+            to: actor(45, 46),
+            message: vec![47],
+        });
         let message = lee::privacy_preserving_transaction::message::Message {
             public_context: lee_core::execution_state::PublicExecutionContext {
                 promotions: BTreeSet::from([27, 28]),
@@ -1586,19 +1591,15 @@ mod tests {
                     lee_core::execution_state::BoundaryStep::EndPublicSubtree,
                 ],
                 async_messages: vec![
-                    lee_core::program::Publication::Sealed(
-                        lee_core::SealedMessage {
-                            commitment: lee_core::Commitment::from_byte_array([22; 32]),
-                            note: lee_core::EncryptedNote {
-                                epk: lee_core::EphemeralPublicKey(vec![23; 2]),
-                                ciphertext: lee_core::encryption::Ciphertext::from_inner(vec![
-                                    24;
-                                    3
-                                ]),
-                            },
-                        }
-                    );
-                    2
+                    lee_core::program::Publication::Sealed(lee_core::SealedMessage {
+                        commitment: lee_core::Commitment::from_byte_array([22; 32]),
+                        note: lee_core::EncryptedNote {
+                            epk: lee_core::EphemeralPublicKey(vec![23; 2]),
+                            ciphertext: lee_core::encryption::Ciphertext::from_inner(vec![24; 3]),
+                        },
+                    }),
+                    clear.clone(),
+                    clear,
                 ],
                 recovery_bindings: vec![],
                 public_root: Some(lee_core::RootCall {

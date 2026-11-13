@@ -629,6 +629,11 @@ mod tests {
         // A repeated send to one actor, and not a palindrome: a set would collapse the
         // sequence and a reversal would show, and execution replays them in emission order.
         let repeated = delivery(actor(3, 53), actor(5, 6), 7);
+        let clear = Publication::Clear(MessageEnvelope {
+            from: actor(44, 94),
+            to: actor(45, 46),
+            message: vec![47],
+        });
         PrivacyPreservingTransaction {
             hash: HashType([4; 32]),
             message: PrivacyPreservingMessage {
@@ -659,8 +664,9 @@ mod tests {
                             epk: EphemeralPublicKey(vec![24; 2]),
                             ciphertext: Ciphertext(vec![25; 3]),
                         },
-                    });
-                    2
+                    }),
+                    clear.clone(),
+                    clear,
                 ],
                 recovery_bindings: vec![],
                 public_root: Some(RootCall {
