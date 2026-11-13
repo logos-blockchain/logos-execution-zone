@@ -131,6 +131,9 @@ jobs:
       - name: Test cache pruning
         run: python3 .github/scripts/test_prune_superseded_caches.py -v
 
+      - name: Test the flake report
+        run: python3 .github/scripts/test_flake_report.py -v
+
   fmt-rs:
     needs: ci-image
     runs-on: ubuntu-latest
