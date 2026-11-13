@@ -1,6 +1,6 @@
 //! The chains a mocked store holds when an executor starts.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chain_state::{ChainState, ChannelEntry, Tip};
 use common::{
@@ -111,6 +111,8 @@ pub(in crate::actor) fn with_view(mut store: CannedStore) -> CannedStore {
                 msg: mock_msg_of(block),
                 parent,
                 block: Some(block.clone()),
+                finally_absent_keys: BTreeSet::new(),
+                final_slot: None,
             };
             parent = entry.msg;
             entry

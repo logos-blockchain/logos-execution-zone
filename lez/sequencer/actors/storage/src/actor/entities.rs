@@ -140,6 +140,19 @@ impl db::Storable<ColumnFamily> for SlashRecord {
     const TYPE_NAME: &'static str = db::type_name!(SlashRecord);
 }
 
+/// The channel's final configs as opaque bytes, whose encoding the caller owns.
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct FinalConfigs {
+    pub bytes: Vec<u8>,
+}
+
+impl db::Storable<ColumnFamily> for FinalConfigs {
+    type Key = SingletonKey;
+
+    const COLUMN_FAMILY: ColumnFamily = ColumnFamily::Meta;
+    const TYPE_NAME: &'static str = db::type_name!(FinalConfigs);
+}
+
 /// The last channel block read back and verified from Bedrock, with the L1
 /// inscription slot it was found in.
 #[derive(BorshSerialize, BorshDeserialize)]

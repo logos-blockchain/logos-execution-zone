@@ -10,7 +10,6 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use common::{
-    HashType,
     block::Block,
     transaction::{FeePayee, LeeTransaction, fee_invocation_payee},
 };
@@ -22,7 +21,9 @@ use sequencer_core::config::{DepositRecipient, GenesisAction};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, TestContext, ZoneTestContextBuilder,
-    config::{MultiNodeTestContextConfig, SequencerPartialConfig, bedrock_channel_id},
+    config::{
+        MultiNodeTestContextConfig, SequencerPartialConfig, TEST_FINALITY_DEPTH, bedrock_channel_id,
+    },
     setup::{SequencerSetup, sequencer_client},
     spawn_channel_observer,
 };
@@ -32,6 +33,9 @@ use wallet::{AccountIdentity, program_facades::sequencer_stake::SequencerStake};
 
 /// Channel signing key of the sequencer that stakes its way in.
 const JOINER_SIGNING_KEY: [u8; 32] = [0x42; 32];
+
+/// Seconds the release may take: `2 * TEST_FINALITY_DEPTH - 1` L1 blocks at up to 12 s each.
+const RELEASE_WAIT_SECS: u64 = (2 * TEST_FINALITY_DEPTH - 1) * 12;
 
 /// Short block cadence for the demo.
 fn fast_blocks() -> SequencerPartialConfig {
@@ -217,64 +221,28 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     let destination_id = funding_id;
     let destination_balance = account_balance(&ctx, destination_id).await?;
 
-    let submit_unstake_request = async |requested_at: u64| -> Result<HashType> {
-        let unstake_request_message =
-            Program::serialize_message(sequencer_stake_core::Message::UnstakeRequest {
-                sequencer_key: demo_stake_key,
-                amount: u128::from(funding_balance),
-                destination: destination_id,
-                requested_at,
-            })
-            .context("Failed to serialize UnstakeRequest message")?;
-        let tx_hash = ctx
-            .wallet()
-            .send_pub_tx(
-                vec![
-                    AccountIdentity::Public(ownership_id).select_program_actor_state(stake_id),
-                    AccountIdentity::PublicNoSign(config_id).select_program_actor_state(stake_id),
-                ],
-                0,
-                unstake_request_message,
-            )
-            .await
-            .map_err(|err| {
-                anyhow::anyhow!("Failed to submit UnstakeRequest transaction: {err:?}")
-            })?;
-        info!(
-            valid_up_to_block = requested_at,
-            "Submitted full UnstakeRequest for the demo sequencer key"
-        );
-        Ok(tx_hash)
-    };
+    let unstake_request_message =
+        Program::serialize_message(sequencer_stake_core::Message::UnstakeRequest {
+            sequencer_key: demo_stake_key,
+            amount: u128::from(funding_balance),
+            destination: destination_id,
+        })
+        .context("Failed to serialize UnstakeRequest message")?;
+    ctx.wallet()
+        .send_pub_tx(
+            vec![
+                AccountIdentity::Public(ownership_id).select_program_actor_state(stake_id),
+                AccountIdentity::PublicNoSign(config_id).select_program_actor_state(stake_id),
+            ],
+            0,
+            unstake_request_message,
+        )
+        .await
+        .map_err(|err| anyhow::anyhow!("Failed to submit UnstakeRequest transaction: {err:?}"))?;
+    info!("Submitted full UnstakeRequest for the demo sequencer key");
 
-    // The request expires `UNSTAKE_REQUEST_WINDOW` blocks on, and without gossip
-    // only the sequencer it was sent to includes it, so a request sent while the
-    // joiner holds the turn can expire unseen: send a fresh one once it has.
-    let mut request: Option<(HashType, u64)> = None;
-    let mut included = false;
     let mut removed = false;
     for _ in 0..60 {
-        if !included {
-            let last_block_id = ctx.sequencer_client().get_last_block_id().await?;
-            match request {
-                Some((tx_hash, _))
-                    if ctx
-                        .sequencer_client()
-                        .get_transaction(tx_hash)
-                        .await?
-                        .is_some() =>
-                {
-                    included = true;
-                }
-                Some((_, requested_at)) if last_block_id <= requested_at => {}
-                _ => {
-                    let requested_at =
-                        last_block_id.saturating_add(sequencer_stake_core::UNSTAKE_REQUEST_WINDOW);
-                    request = Some((submit_unstake_request(requested_at).await?, requested_at));
-                }
-            }
-        }
-
         let accredited = observer
             .ask(GetAccreditedKeys { channel_id })
             .await
@@ -300,7 +268,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     // never submits one.
     poll_until(
         "FinalizeUnstake to drain the stake funds account",
-        90,
+        u32::try_from(RELEASE_WAIT_SECS)?,
         || async { Ok(account_balance(&ctx, funds_id).await? == 0) },
     )
     .await?;

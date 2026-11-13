@@ -1129,6 +1129,9 @@ pub fn spawn_standalone_bedrock_actor(
     storage
         .expect_handle_get_zone_checkpoint()
         .returning(|_msg, _ctx| Ok(None));
+    storage
+        .expect_handle_put_final_configs_bytes()
+        .returning(|_msg, _ctx| Ok(()));
     let storage_ref = MockStorageActor::spawn(storage);
 
     Ok(StandaloneBedrockActor::spawn(

@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     num::NonZero,
     sync::Arc,
     time::Duration,
@@ -39,7 +39,11 @@ use tracing::info;
 
 use crate::{
     Result,
-    actor::{block_from_inscription, released_notes, verified_keys},
+    actor::{
+        block_from_inscription,
+        finality::{self, ConfigIndex},
+        released_notes, verified_keys,
+    },
     error::Error,
     protocol::{
         ChannelEntry, ChannelEvent, ChannelEventKind, ChannelId, ChannelParams, ChannelSeq,
@@ -76,13 +80,15 @@ pub struct Publisher {
 }
 
 impl Publisher {
-    /// Starts a publisher, returning it with the sequence it started at.
+    /// Starts a publisher, returning it with the sequence it started at, feeding the configs
+    /// zone-sdk reports final to `config_index`.
     pub async fn new(
         config: PublisherConfig,
         node: TimeoutNode<NodeHttpClient>,
         initial_checkpoint: Option<ZoneCheckpointRecord>,
         replayed_up_to: Option<Slot>,
         broker_ref: ActorRef<Broker<ChannelEvent>>,
+        config_index: &mut ConfigIndex,
     ) -> Result<(Self, ChannelSeq)> {
         let PublisherConfig {
             channel_id,
@@ -150,7 +156,7 @@ impl Publisher {
         // way report the channel up to its tip, so they are published as well.
         while !publisher.sequencer.is_ready() {
             let event = publisher.sequencer.next_event().await;
-            publisher.on_event(event).await?;
+            publisher.on_event(event, config_index).await?;
         }
 
         Ok((publisher, seq))
@@ -161,8 +167,9 @@ impl Publisher {
         self.sequencer.next_event().await
     }
 
-    /// Publishes what `event` reports to the broker.
-    pub async fn on_event(&mut self, event: Event) -> Result<()> {
+    /// Publishes what `event` reports to the broker, after adding the configs it reports final to
+    /// `config_index`.
+    pub async fn on_event(&mut self, event: Event, config_index: &mut ConfigIndex) -> Result<()> {
         match event {
             Event::BlocksProcessed {
                 checkpoint,
@@ -170,6 +177,19 @@ impl Publisher {
                 finalized,
                 deposits: observed_deposits,
             } => {
+                let config_keys = finalized.iter().flat_map(|item| {
+                    item.ops.iter().filter_map(|op| {
+                        if let FinalizedOp::Config(info) = op {
+                            Some((
+                                item.l1_slot.into_inner(),
+                                finality::config_key_bytes(&info.config),
+                            ))
+                        } else {
+                            None
+                        }
+                    })
+                });
+                config_index.extend_final(config_keys, checkpoint.lib_slot.into_inner());
                 // Apart from the update: they carry no checkpoint and move no channel sequence.
                 if !observed_deposits.is_empty() {
                     self.publish("deposits", PublisherEvent::Deposits(observed_deposits))
@@ -238,10 +258,13 @@ impl Publisher {
         let mut withdrawals = Vec::new();
         let mut undecodable = Vec::new();
         let mut finalized_signers = Vec::new();
-        for op in finalized.into_iter().flat_map(|item| item.ops) {
+        for (slot, op) in finalized
+            .into_iter()
+            .flat_map(|item| item.ops.into_iter().map(move |op| (item.l1_slot, op)))
+        {
             match op {
                 FinalizedOp::Inscription(inscription) => {
-                    let entry = channel_entry(&inscription);
+                    let entry = channel_entry(&inscription, Some(slot.into_inner()));
                     let signed = inscription
                         .signer
                         .and_then(|signer| Ed25519PublicKey::try_from(signer).ok())
@@ -792,8 +815,9 @@ fn has_channel_activity(checkpoint: &SequencerCheckpoint) -> bool {
     checkpoint.last_msg_id != MsgId::root() || !checkpoint.pending_txs.is_empty()
 }
 
-/// A message-lineage entry, with its block when the payload decodes to one.
-fn channel_entry(inscription: &InscriptionInfo) -> ChannelEntry {
+/// A message-lineage entry, with its block when the payload decodes to one, in the final block at
+/// `final_slot` or in the view when `None`.
+fn channel_entry(inscription: &InscriptionInfo, final_slot: Option<u64>) -> ChannelEntry {
     let block = if <Inscription as AsRef<[u8]>>::as_ref(&inscription.payload).is_empty() {
         None
     } else {
@@ -803,6 +827,8 @@ fn channel_entry(inscription: &InscriptionInfo) -> ChannelEntry {
         msg: inscription.this_msg,
         parent: inscription.parent_msg,
         block,
+        finally_absent_keys: BTreeSet::new(),
+        final_slot,
     }
 }
 
@@ -811,14 +837,14 @@ fn channel_entry(inscription: &InscriptionInfo) -> ChannelEntry {
 /// A config op is on the config lineage, not this one, so it is skipped.
 pub(super) fn channel_entries(tx: &ChannelUpdateTx, channel_id: ChannelId) -> Vec<ChannelEntry> {
     match tx {
-        ChannelUpdateTx::Inscription(info) => vec![channel_entry(info)],
-        ChannelUpdateTx::AtomicWithdraw(bundle) => vec![channel_entry(&bundle.inscription)],
-        ChannelUpdateTx::PinDeposit(bundle) => vec![channel_entry(&bundle.inscription)],
+        ChannelUpdateTx::Inscription(info) => vec![channel_entry(info, None)],
+        ChannelUpdateTx::AtomicWithdraw(bundle) => vec![channel_entry(&bundle.inscription, None)],
+        ChannelUpdateTx::PinDeposit(bundle) => vec![channel_entry(&bundle.inscription, None)],
         ChannelUpdateTx::Config(_) => Vec::new(),
         ChannelUpdateTx::Custom(signed_tx) => {
             logos_blockchain_zone_sdk::sequencer::channel_inscriptions(signed_tx, channel_id)
                 .iter()
-                .map(channel_entry)
+                .map(|info| channel_entry(info, None))
                 .collect()
         }
     }
