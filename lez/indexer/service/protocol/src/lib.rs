@@ -238,6 +238,20 @@ pub struct BlockBody {
     /// Indices into `transactions` of the charged transactions whose action reverted.
     #[serde(default)]
     pub reverted: Vec<u64>,
+    /// Messages to other zones, in settlement order.
+    #[serde(default)]
+    pub outbound: Vec<OutboundMessage>,
+}
+
+/// A message to another zone, declared on the block that settled it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct OutboundMessage {
+    pub from: Actor,
+    #[serde(with = "base64::arr")]
+    #[schemars(with = "String", description = "base64-encoded zone id")]
+    pub zone: [u8; 32],
+    pub to: Actor,
+    pub message: MessageData,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -642,6 +656,14 @@ pub enum BlockIngestError {
     RevertMismatch {
         listed: Vec<u64>,
         settled: Vec<u64>,
+    },
+    OutboundMismatch {
+        listed: usize,
+        settled: usize,
+        first_difference: Option<usize>,
+    },
+    OutboundToOwnZone {
+        tx_index: u64,
     },
     StateTransition {
         /// Index of the failing transaction within the block body.

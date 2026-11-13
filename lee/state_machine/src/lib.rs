@@ -14,7 +14,7 @@ pub use lee_core::{
     },
     encryption::EphemeralPublicKey,
     execution_state::{
-        Boundary, BoundaryStep, Delivery, Placement, PredictedCrossMessages,
+        Boundary, BoundaryStep, Delivery, OutboundMessage, Placement, PredictedCrossMessages,
         PublicExecutionContext, TransactionEntry,
     },
     native_token,

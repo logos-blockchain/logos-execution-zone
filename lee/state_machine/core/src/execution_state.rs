@@ -98,6 +98,8 @@ pub struct PublicOutcome {
     pub events: Vec<(Actor, ProgramEvent)>,
     /// Emitted async messages in the course of execution.
     pub async_messages: Vec<MessageBody>,
+    /// Messages to other zones, in emission order.
+    pub outbound: Vec<OutboundMessage>,
 }
 
 /// Outcome for proving a private or hybrid transaction.
@@ -139,6 +141,15 @@ pub enum BoundaryStep {
 pub type Boundary = Vec<BoundaryStep>;
 
 pub type PredictedCrossMessages = Vec<Vec<Delivery<Actor>>>;
+
+/// A message to another zone, recorded as a block-level effect instead of being dispatched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct OutboundMessage {
+    pub from: Actor,
+    pub zone: ZoneId,
+    pub to: Actor,
+    pub message: MessageData,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Placement {
@@ -287,6 +298,12 @@ pub enum ExecutionError {
     #[error("A delivery targets {actor:?} in zone {zone:?}, which this executor does not route")]
     RemoteTargetUnrouted { zone: ZoneId, actor: Actor },
 
+    #[error(
+        "A private actor sent to {actor:?} in zone {zone:?}, and a private sender has no public \
+         outbound surface"
+    )]
+    RemoteSendFromPrivateActor { zone: ZoneId, actor: Actor },
+
     #[error("Boundary was not consumed exactly by the execution")]
     IncompleteBoundary,
 }
@@ -422,6 +439,8 @@ struct Executor<'witnesses, M: Mode> {
     events: Vec<(Actor, ProgramEvent)>,
     /// Asynchronous messages to be stored in the global mailbox.
     async_messages: Vec<MessageBody>,
+    /// Messages to other zones, surfaced as block-level effects.
+    outbound: Vec<OutboundMessage>,
     /// Numbers each async message offered for promotion, per sender placement.
     candidates: PromotionCounters,
     /// Public accounts admitted so far in this transaction.
@@ -1064,6 +1083,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             validity: ValidityWindows::new_unbounded(),
             events: Vec::new(),
             async_messages: Vec::new(),
+            outbound: Vec::new(),
             candidates: PromotionCounters::default(),
             admitted_public_accounts: HashSet::new(),
         };
@@ -1378,8 +1398,25 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             )
             .collect::<Result<Vec<_>, E::Error>>()?;
         for AsyncMessage { to, message } in transition.response.async_messages {
-            // Refused at emission: a mailboxed remote message would never see a delivery.
-            let destination = local_target(to)?;
+            let destination = match to {
+                Target::Local(destination) => destination,
+                // Surfaces on the block in the clear, so only a public sender; its
+                // presented actor is canonical.
+                Target::Remote { zone, actor: to } => {
+                    if self.is_private(&actor.account_id) {
+                        return Err(
+                            ExecutionError::RemoteSendFromPrivateActor { zone, actor: to }.into(),
+                        );
+                    }
+                    self.outbound.push(OutboundMessage {
+                        from: actor,
+                        zone,
+                        to,
+                        message,
+                    });
+                    continue;
+                }
+            };
             let body = MessageBody {
                 from: self.sender(actor, None, environment)?,
                 to,
@@ -1497,6 +1534,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
                 .collect(),
             events: self.events,
             async_messages: self.async_messages,
+            outbound: self.outbound,
         }
     }
 

@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::BlockId;
 pub use lee_core::Timestamp;
+use lee_core::{BlockId, execution_state::OutboundMessage};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256, digest::FixedOutput as _};
 
@@ -64,6 +64,8 @@ pub struct BlockBody {
     /// TODO: fold into a `receipts` vector parallel to `transactions`, one per transaction with
     /// its status and fee charged, once receipts are exposed.
     pub reverted: Vec<u64>,
+    /// Messages to other zones, in settlement order; hash-covered for peers to read off the block.
+    pub outbound: Vec<OutboundMessage>,
 }
 
 impl BlockBody {
@@ -101,6 +103,7 @@ impl Block {
             timestamp: self.header.timestamp,
             transactions: self.body.transactions.clone(),
             reverted: self.body.reverted.clone(),
+            outbound: self.body.outbound.clone(),
         }
         .compute_hash()
     }
@@ -126,6 +129,8 @@ pub struct HashableBlockData {
     pub transactions: Vec<LeeTransaction>,
     /// See [`BlockBody::reverted`].
     pub reverted: Vec<u64>,
+    /// See [`BlockBody::outbound`].
+    pub outbound: Vec<OutboundMessage>,
 }
 
 impl HashableBlockData {
@@ -161,6 +166,7 @@ impl HashableBlockData {
             body: BlockBody {
                 transactions: self.transactions,
                 reverted: self.reverted,
+                outbound: self.outbound,
             },
             bedrock_status: BedrockStatus::Pending,
         }
@@ -175,6 +181,7 @@ impl From<Block> for HashableBlockData {
             timestamp: value.header.timestamp,
             transactions: value.body.transactions,
             reverted: value.body.reverted,
+            outbound: value.body.outbound,
         }
     }
 }
@@ -196,6 +203,7 @@ mod tests {
     #[test]
     fn recompute_hash_matches_header_for_well_formed_block() {
         let block = HashableBlockData {
+            outbound: Vec::new(),
             reverted: Vec::new(),
             block_id: 5,
             prev_block_hash: HashType([9_u8; 32]),
@@ -209,6 +217,7 @@ mod tests {
     #[test]
     fn recompute_hash_covers_the_reverted_list() {
         let block = HashableBlockData {
+            outbound: Vec::new(),
             block_id: 5,
             prev_block_hash: HashType([9_u8; 32]),
             timestamp: 42,
@@ -227,6 +236,7 @@ mod tests {
     #[test]
     fn recompute_hash_detects_tampering() {
         let block = HashableBlockData {
+            outbound: Vec::new(),
             reverted: Vec::new(),
             block_id: 5,
             prev_block_hash: HashType([9_u8; 32]),

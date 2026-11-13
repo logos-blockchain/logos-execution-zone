@@ -677,7 +677,7 @@ mod tests {
             transaction::{FeePayee, LeeTransaction, clock_invocation, fee_invocation},
         };
         let timestamp = id.saturating_mul(100);
-        let (summary, payout, reverted) =
+        let (summary, payout, reverted, outbound) =
             crate::apply::derive_block_summary(state, &txs, id, timestamp)
                 .expect("test transactions settle");
         let producer = producer_account_for_testing();
@@ -689,6 +689,7 @@ mod tests {
         )));
         transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
         HashableBlockData {
+            outbound,
             block_id: id,
             prev_block_hash: prev,
             timestamp,

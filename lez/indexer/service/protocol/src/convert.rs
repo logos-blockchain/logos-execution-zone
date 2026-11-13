@@ -9,7 +9,7 @@ use crate::{
     BlockHeader, BlockId, BlockIngestError, BoundaryStep, Ciphertext, Commitment,
     CommitmentSetDigest, CrossZoneHalt, Delivery, EncryptedNote, EphemeralPublicKey, EventRecord,
     FeeDeclaration, FeeFallback, HashType, IndexerStatus, IndexerSyncState, MessageEnvelope,
-    Nullifier, PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage,
+    Nullifier, OutboundMessage, PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, Proof, ProvenFee, PublicAccountEvidence,
     PublicExecutionContext, PublicKey, PublicMessage, PublicTransaction, RecoveryBinding, RootCall,
     SealedMessage, Selector, Signature, StallReason, Target, Transaction, ValidityWindow,
@@ -918,6 +918,7 @@ impl From<common::block::BlockBody> for BlockBody {
         let common::block::BlockBody {
             transactions,
             reverted,
+            outbound,
         } = value;
 
         let transactions = transactions
@@ -933,6 +934,41 @@ impl From<common::block::BlockBody> for BlockBody {
         Self {
             transactions,
             reverted,
+            outbound: outbound.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<lee_core::execution_state::OutboundMessage> for OutboundMessage {
+    fn from(value: lee_core::execution_state::OutboundMessage) -> Self {
+        let lee_core::execution_state::OutboundMessage {
+            from,
+            zone,
+            to,
+            message,
+        } = value;
+        Self {
+            from: from.into(),
+            zone,
+            to: to.into(),
+            message,
+        }
+    }
+}
+
+impl From<OutboundMessage> for lee_core::execution_state::OutboundMessage {
+    fn from(value: OutboundMessage) -> Self {
+        let OutboundMessage {
+            from,
+            zone,
+            to,
+            message,
+        } = value;
+        Self {
+            from: from.into(),
+            zone,
+            to: to.into(),
+            message,
         }
     }
 }
@@ -944,6 +980,7 @@ impl TryFrom<BlockBody> for common::block::BlockBody {
         let BlockBody {
             transactions,
             reverted,
+            outbound,
         } = value;
 
         let transactions = transactions
@@ -957,6 +994,7 @@ impl TryFrom<BlockBody> for common::block::BlockBody {
         Ok(Self {
             transactions,
             reverted,
+            outbound: outbound.into_iter().map(Into::into).collect(),
         })
     }
 }
@@ -1170,6 +1208,18 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
             }
             indexer_core::BlockIngestError::RevertMismatch { listed, settled } => {
                 Self::RevertMismatch { listed, settled }
+            }
+            indexer_core::BlockIngestError::OutboundMismatch {
+                listed,
+                settled,
+                first_difference,
+            } => Self::OutboundMismatch {
+                listed,
+                settled,
+                first_difference,
+            },
+            indexer_core::BlockIngestError::OutboundToOwnZone { tx_index } => {
+                Self::OutboundToOwnZone { tx_index }
             }
             indexer_core::BlockIngestError::StateTransition { tx_index, reason } => {
                 Self::StateTransition { tx_index, reason }

@@ -618,6 +618,7 @@ fn build_mock_block(
             timestamp,
         },
         body: BlockBody {
+            outbound: Vec::new(),
             transactions: block_transactions,
             reverted: Vec::new(),
         },

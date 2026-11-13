@@ -45,6 +45,11 @@ pub fn fee_program_id() -> AccountId {
 }
 
 #[must_use]
+pub fn sequencer_stake_program_id() -> AccountId {
+    programs::sequencer_stake_account_id()
+}
+
+#[must_use]
 pub fn fee_state_account_id() -> AccountId {
     fee_core::compute_fee_state_account_id(programs::fee_account_id())
 }

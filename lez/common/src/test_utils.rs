@@ -99,6 +99,7 @@ pub fn produce_dummy_block_with_reverted(
     )));
 
     let block_data = HashableBlockData {
+        outbound: Vec::new(),
         block_id: id,
         prev_block_hash: prev_hash.unwrap_or_default(),
         timestamp: id.saturating_mul(100),

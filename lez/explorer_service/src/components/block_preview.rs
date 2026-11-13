@@ -24,10 +24,12 @@ pub fn BlockPreview(block: Block) -> impl IntoView {
                 hash,
                 timestamp,
             },
-        body: BlockBody {
-            transactions,
-            reverted: _,
-        },
+        body:
+            BlockBody {
+                transactions,
+                reverted: _,
+                outbound: _,
+            },
         bedrock_status,
     } = block;
 

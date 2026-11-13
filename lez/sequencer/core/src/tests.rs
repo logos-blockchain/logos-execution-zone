@@ -432,7 +432,7 @@ fn settled_peer_block(
     producer: lee::AccountId,
 ) -> common::block::Block {
     let timestamp = id.saturating_mul(100);
-    let (summary, payout, reverted) =
+    let (summary, payout, reverted, outbound) =
         chain_state::apply::derive_block_summary(state, &txs, id, timestamp)
             .expect("test transactions settle");
     let mut transactions = txs;
@@ -448,6 +448,7 @@ fn settled_peer_block(
         timestamp,
         transactions,
         reverted,
+        outbound,
     }
     .into_pending_block()
 }
@@ -609,6 +610,7 @@ async fn a_charged_bridge_deposit_is_dropped_by_the_builder_bridge_guard() {
         &forged,
         &mut state,
         &opening,
+        None,
         2,
         0,
         0,
@@ -919,6 +921,7 @@ async fn settlement_rejects_a_dispatch_a_user_signed() {
             tx,
             &mut state.clone(),
             &opening,
+            None,
             2,
             0,
             0,
@@ -2523,6 +2526,7 @@ fn resubmittable_txs_of_blocks_without_user_txs_is_empty() {
     // No transactions at all (not even the mandatory clock tx).
     let empty = HashableBlockData {
         reverted: Vec::new(),
+        outbound: Vec::new(),
         block_id: 1,
         prev_block_hash: HashType([0; 32]),
         timestamp: 0,

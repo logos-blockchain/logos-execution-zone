@@ -140,6 +140,7 @@ pub(in crate::actor) fn genesis() -> Block {
 pub(in crate::actor) fn block_at(id: u64, prev: HashType, timestamp: u64) -> Block {
     HashableBlockData {
         reverted: Vec::new(),
+        outbound: Vec::new(),
         block_id: id,
         prev_block_hash: prev,
         timestamp,

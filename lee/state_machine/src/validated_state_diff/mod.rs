@@ -10,8 +10,8 @@ use lee_core::{
     RecoveryBinding, RootCall, Timestamp,
     account::{Account, AccountId, Actor, ActorState, Cycles, Nonce, Target},
     execution_state::{
-        BoundaryStep, PublicExecutionContext, PublicOutcome, PublicPart, TransactionEntry,
-        TransitionView, WholeExecution,
+        BoundaryStep, OutboundMessage, PublicExecutionContext, PublicOutcome, PublicPart,
+        TransactionEntry, TransitionView, WholeExecution,
     },
     program::{
         MessageBody, PROGRAM_LOADER_ACCOUNT_ID, Publication, ReceiveInput, TransactionEvent,
@@ -42,6 +42,8 @@ pub struct StateDiff {
     pub events: Vec<TransactionEvent>,
     pub published: Vec<Publication>,
     pub recovery_bindings: Vec<RecoveryBinding>,
+    /// Messages to other zones, in emission order.
+    pub outbound: Vec<OutboundMessage>,
 }
 
 /// The validated output of executing or verifying a transaction, ready to be applied to the state.
@@ -495,6 +497,12 @@ impl ValidatedStateDiff {
         &self.0.public_diff
     }
 
+    /// The messages this transaction sends to other zones, in emission order.
+    #[must_use]
+    pub fn outbound(&self) -> &[OutboundMessage] {
+        &self.0.outbound
+    }
+
     pub(crate) fn into_state_diff(self) -> StateDiff {
         self.0
     }
@@ -599,6 +607,7 @@ fn settle(
         accounts,
         events,
         async_messages,
+        outbound,
     } = execute(&mut backend)?;
     ensure!(
         validity.is_valid_at(block_id, timestamp),
@@ -629,6 +638,7 @@ fn settle(
         .into_iter()
         .map(|body| publish(state, &diff.recovery_bindings, body))
         .collect::<Result<_, _>>()?;
+    diff.outbound = outbound;
     Ok(diff)
 }
 

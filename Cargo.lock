@@ -1594,6 +1594,7 @@ dependencies = [
  "logos-blockchain-zone-sdk",
  "program_loader_core",
  "programs",
+ "sequencer_stake_core",
  "serde",
  "serde_json",
  "system_accounts",

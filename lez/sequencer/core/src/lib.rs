@@ -1172,11 +1172,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         timestamp: u64,
         withdrawals: &mut Vec<WithdrawArg>,
         opening: &fee_core::state::FeeState,
+        self_zone: Option<lee::ZoneId>,
         tx_index: u64,
         summary: &mut fee_core::BlockFeeSummary,
-    ) -> Option<bool> {
+    ) -> Option<(bool, Vec<lee::OutboundMessage>)> {
         let tx_hash = tx.hash();
         let mut reverted = false;
+        let outbound;
         match origin {
             // Gossiped transactions arrive from untrusted peers, same as
             // user-submitted ones, so they get the same full state validation.
@@ -1213,18 +1215,20 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     tx,
                     &mut scratch,
                     opening,
+                    self_zone,
                     block_height,
                     timestamp,
                     tx_index,
                     &mut scratch_summary,
                 ) {
-                    Ok((_events, tx_reverted)) => {
+                    Ok((_events, tx_reverted, tx_outbound)) => {
                         if let Some(withdraw_data) = extract_bridge_withdraw_data(tx) {
                             withdrawals.push(withdraw_data);
                         }
                         *state = scratch;
                         *summary = scratch_summary;
                         reverted = tx_reverted;
+                        outbound = tx_outbound;
                     }
                     Err(err) => {
                         if matches!(origin, TransactionOrigin::Gossip) {
@@ -1265,21 +1269,39 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // every sequencer hits identically) abort production on all of
                 // them forever. Skipping keeps the record queued for retry
                 // without halting the node.
-                if let Err(err) =
-                    state.transition_from_public_transaction(public_tx, block_height, timestamp)
-                {
-                    error!(
-                        %tx_hash,
-                        error = format_args!("{:#}", anyhow!(err)),
-                        "Sequencer-generated transaction failed execution, skipping it"
-                    );
-                    return None;
+                let applied = lee::ValidatedStateDiff::from_public_transaction(
+                    public_tx,
+                    state,
+                    block_height,
+                    timestamp,
+                )
+                .map_err(anyhow::Error::from)
+                .and_then(|diff| {
+                    let tx_outbound = diff.outbound().to_vec();
+                    if let Some(self_zone) = self_zone
+                        && tx_outbound.iter().any(|message| message.zone == self_zone)
+                    {
+                        anyhow::bail!("the transaction sends an outbound message to this zone");
+                    }
+                    state.apply_state_diff(diff)?;
+                    Ok(tx_outbound)
+                });
+                match applied {
+                    Ok(tx_outbound) => outbound = tx_outbound,
+                    Err(err) => {
+                        error!(
+                            %tx_hash,
+                            error = format_args!("{:#}", anyhow!(err)),
+                            "Sequencer-generated transaction failed execution, skipping it"
+                        );
+                        return None;
+                    }
                 }
             }
         }
 
         debug!(%tx_hash, "Validated transaction, including it in block");
-        Some(reverted)
+        Some((reverted, outbound))
     }
 
     async fn build_block_from_mempool(&mut self) -> Result<BlockWithMeta> {
@@ -1500,7 +1522,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let payee = reward_payee(&working_state, own_sequencer_key)?;
 
         let opening = chain_state::apply::opening_fee_state(&working_state);
+        let self_zone = chain_state::apply::self_zone(&working_state);
         let mut summary = fee_core::BlockFeeSummary::default();
+        let mut outbound: Vec<lee::OutboundMessage> = Vec::new();
         let mut gas_budget = DeclaredGasBudget::default();
         // The fee tx's summary and payout are only known after the loop; a default-summary,
         // zero-payout placeholder sizes identically (both are fixed-size).
@@ -1574,8 +1598,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // Whether this transaction reverts is known only once it is settled below; if
                 // it does, its index joins the list and the block grows by one `u64`. Size the
                 // worst case now, with a placeholder index, so a revert doesn't push the block
-                // over the limit.
+                // over the limit. Outbound messages are sized by the guard below instead.
                 reverted: reverted.iter().copied().chain([0]).collect(),
+                outbound: outbound.clone(),
             };
 
             let block_size = borsh::to_vec(&temp_hashable_data)
@@ -1674,6 +1699,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             }
 
             let before_tx_apply = Instant::now();
+            let checkpoint_state = working_state.clone();
+            let checkpoint_summary = summary;
+            let checkpoint_withdrawals = withdrawals.len();
             let applied = Self::apply_mempool_transaction(
                 &mut working_state,
                 origin,
@@ -1682,10 +1710,64 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 new_block_timestamp,
                 &mut withdrawals,
                 &opening,
+                self_zone,
                 valid_transactions.len().try_into().expect("fits u64"),
                 &mut summary,
             );
-            if let Some(tx_reverted) = applied {
+            if let Some((tx_reverted, tx_outbound)) = applied {
+                // The settled outbound can overflow what the pre-check sized; roll back.
+                if !tx_outbound.is_empty() {
+                    let with_outbound = borsh::to_vec(&HashableBlockData {
+                        block_id: new_block_height,
+                        transactions: [
+                            valid_transactions.as_slice(),
+                            std::slice::from_ref(&tx),
+                            trailing.as_slice(),
+                        ]
+                        .concat(),
+                        prev_block_hash,
+                        timestamp: new_block_timestamp,
+                        reverted: reverted.iter().copied().chain([0]).collect(),
+                        outbound: outbound.iter().chain(&tx_outbound).cloned().collect(),
+                    })
+                    .context("Failed to serialize block for size check")?
+                    .len();
+                    if with_outbound > max_block_size {
+                        working_state = checkpoint_state;
+                        summary = checkpoint_summary;
+                        withdrawals.truncate(checkpoint_withdrawals);
+                        let alone = borsh::to_vec(&HashableBlockData {
+                            block_id: new_block_height,
+                            transactions: [std::slice::from_ref(&tx), trailing.as_slice()].concat(),
+                            prev_block_hash,
+                            timestamp: new_block_timestamp,
+                            reverted: vec![0],
+                            outbound: tx_outbound,
+                        })
+                        .context("Failed to serialize block for size check")?
+                        .len();
+                        if alone > max_block_size {
+                            // Alone it already overflows: deferring would stall for ever.
+                            warn!(
+                                %tx_hash,
+                                "Transaction's outbound messages exceed the block size in an \
+                                 empty block, dropping it"
+                            );
+                            self.count_dispatch_failure(&tx).await;
+                            continue;
+                        }
+                        warn!(
+                            %tx_hash,
+                            "Transaction deferred to next block: its outbound messages would \
+                             exceed the block size limit"
+                        );
+                        if !from_store {
+                            self.mempool.push_front((origin, tx));
+                        }
+                        break;
+                    }
+                }
+                outbound.extend(tx_outbound);
                 if tx_reverted {
                     reverted.push(u64::try_from(valid_transactions.len()).expect("fits u64"));
                 }
@@ -1749,6 +1831,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 prev_block_hash,
                 timestamp: new_block_timestamp,
                 reverted: reverted.clone(),
+                outbound: outbound.clone(),
             })
             .context("Failed to serialize block for size check")?
             .len();
@@ -1762,7 +1845,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 }
                 continue;
             }
-            if let Some(tx_reverted) = Self::apply_mempool_transaction(
+            let checkpoint_state = working_state.clone();
+            let checkpoint_summary = summary;
+            let checkpoint_withdrawals = withdrawals.len();
+            if let Some((tx_reverted, tx_outbound)) = Self::apply_mempool_transaction(
                 &mut working_state,
                 origin,
                 &tx,
@@ -1770,9 +1856,43 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 new_block_timestamp,
                 &mut withdrawals,
                 &opening,
+                self_zone,
                 valid_transactions.len().try_into().expect("fits u64"),
                 &mut summary,
             ) {
+                // The settled outbound can overflow what the pre-check sized; roll back.
+                if !tx_outbound.is_empty() {
+                    let with_outbound = borsh::to_vec(&HashableBlockData {
+                        block_id: new_block_height,
+                        transactions: [
+                            valid_transactions.as_slice(),
+                            &[
+                                tx.clone(),
+                                placeholder_fee_lee_tx.clone(),
+                                clock_lee_tx.clone(),
+                            ],
+                        ]
+                        .concat(),
+                        prev_block_hash,
+                        timestamp: new_block_timestamp,
+                        reverted: reverted.iter().copied().chain([0]).collect(),
+                        outbound: outbound.iter().chain(&tx_outbound).cloned().collect(),
+                    })
+                    .context("Failed to serialize block for size check")?
+                    .len();
+                    if with_outbound > max_block_size {
+                        working_state = checkpoint_state;
+                        summary = checkpoint_summary;
+                        withdrawals.truncate(checkpoint_withdrawals);
+                        warn!(
+                            tx_hash = %tx.hash(),
+                            "system_upgrader transaction's outbound messages would exceed the \
+                             block size limit, skipping it"
+                        );
+                        continue;
+                    }
+                }
+                outbound.extend(tx_outbound);
                 if tx_reverted {
                     reverted.push(u64::try_from(valid_transactions.len()).expect("fits u64"));
                 }
@@ -1820,6 +1940,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             prev_block_hash,
             timestamp: new_block_timestamp,
             reverted,
+            outbound,
         };
 
         let block = hashable_data.clone().into_pending_block();
@@ -1899,8 +2020,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         timestamp: u64,
     ) -> Result<bool> {
         let alone = HashableBlockData {
-            // A placeholder index: the size if the transaction reverts.
+            // A placeholder index: the size if the transaction reverts. Outbound is
+            // unknown here; the post-settlement guard covers it.
             reverted: vec![0],
+            outbound: Vec::new(),
             block_id,
             transactions: [std::slice::from_ref(tx), system_txs].concat(),
             prev_block_hash,

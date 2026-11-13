@@ -167,9 +167,18 @@ mod tests {
         let mut scratch = state.clone();
         let opening = opening_fee_state(state);
         let mut summary = BlockFeeSummary::default();
-        chain_state::apply::settle_transaction(tx, &mut scratch, &opening, 2, 200, 0, &mut summary)
-            .map(drop)
-            .map_err(|err| err.to_string())
+        chain_state::apply::settle_transaction(
+            tx,
+            &mut scratch,
+            &opening,
+            None,
+            2,
+            200,
+            0,
+            &mut summary,
+        )
+        .map(drop)
+        .map_err(|err| err.to_string())
     }
 
     #[test]

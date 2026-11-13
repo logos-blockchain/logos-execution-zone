@@ -101,6 +101,7 @@ pub fn build_initial_state(cross_zone: bool) -> lee::V03State {
 pub fn genesis_block_and_state(spec: &GenesisSpec) -> (Block, lee::V03State, Vec<TxEvents>) {
     let (genesis_state, genesis_txs, genesis_events) = build_genesis_state(spec);
     let genesis_block = HashableBlockData {
+        outbound: Vec::new(),
         reverted: Vec::new(),
         block_id: GENESIS_BLOCK_ID,
         transactions: genesis_txs,

@@ -1931,6 +1931,87 @@ fn a_private_part_keeps_its_async_messages_out_of_the_boundary_and_a_public_part
     );
 }
 
+#[test]
+fn a_public_actors_remote_async_message_is_an_outbound_effect() {
+    let zone = [0xAB; 32];
+    let to = actor(6, 7);
+    let mut script = Script::default().on(ENTRY, move |input| {
+        echo(
+            input,
+            Response::keep_state().send(AsyncMessage {
+                to: Target::Remote { zone, actor: to },
+                message: b"x".to_vec(),
+            }),
+        )
+    });
+
+    let outcome = public_transaction(public_context(vec![ENTRY]), ENTRY, &mut script).unwrap();
+
+    assert!(outcome.async_messages.is_empty());
+    assert_eq!(
+        outcome.outbound,
+        vec![OutboundMessage {
+            from: ENTRY,
+            zone,
+            to,
+            message: b"x".to_vec(),
+        }]
+    );
+}
+
+#[test]
+fn a_private_actors_remote_async_send_is_refused() {
+    let keys = Keys::new(1);
+    let zone = [0xAB; 32];
+    let to = actor(6, 7);
+    let mut script = Script::default().on(holder(&keys), move |input| {
+        echo(
+            input,
+            Response::keep_state().send(AsyncMessage {
+                to: Target::Remote { zone, actor: to },
+                message: b"x".to_vec(),
+            }),
+        )
+    });
+
+    let result = whole(
+        public_context(Vec::new()),
+        &[keys.regular(false)],
+        root(holder(&keys)),
+        &mut script,
+    );
+
+    assert!(matches!(
+        result,
+        Err(ExecutionError::RemoteSendFromPrivateActor { zone: sent, actor })
+            if sent == zone && actor == to
+    ));
+}
+
+#[test]
+fn a_remote_sync_send_is_refused() {
+    let zone = [0xAB; 32];
+    let to = actor(6, 7);
+    let mut script = Script::default().on(ENTRY, move |input| {
+        echo(
+            input,
+            Response::keep_state().send(SyncMessage {
+                to: Target::Remote { zone, actor: to },
+                message: Vec::new(),
+                pda_seeds: BTreeSet::new(),
+            }),
+        )
+    });
+
+    let result = public_transaction(public_context(vec![ENTRY]), ENTRY, &mut script);
+
+    assert!(matches!(
+        result,
+        Err(ExecutionError::RemoteTargetUnrouted { zone: sent, actor })
+            if sent == zone && actor == to
+    ));
+}
+
 fn sync_message(to: Actor, message: &[u8]) -> SyncMessage {
     SyncMessage {
         to: to.into(),

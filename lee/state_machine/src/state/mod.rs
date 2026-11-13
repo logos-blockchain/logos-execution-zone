@@ -260,6 +260,8 @@ impl V03State {
             events,
             published,
             recovery_bindings,
+            // Outbound messages are a block-level effect, not state.
+            outbound: _,
         } = diff.into_state_diff();
         // A diff validated against an earlier or another branch's state must still spend each
         // nullifier once, under a root this state knows.

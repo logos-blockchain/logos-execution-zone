@@ -146,7 +146,8 @@ impl From<ExecutionError> for LeeError {
             | ExecutionError::BoundaryMismatch { .. }
             | ExecutionError::CrossMessageMismatch { .. }
             | ExecutionError::IncompleteBoundary
-            | ExecutionError::RemoteTargetUnrouted { .. } => {
+            | ExecutionError::RemoteTargetUnrouted { .. }
+            | ExecutionError::RemoteSendFromPrivateActor { .. } => {
                 Self::InvalidProgramBehavior(error.into())
             }
         }
