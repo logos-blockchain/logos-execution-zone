@@ -192,6 +192,7 @@ async fn wait_for_delivery(client: &SequencerClient) -> Result<()> {
 }
 
 #[test]
+#[ignore = "Both zones inscribe from one Bedrock funding account whose genesis notes do not recycle. Once it empties the leader evicts every pending inscription, including ones that only lost their ordering, and the channel head freezes. Needs an upstream logos-blockchain fix"]
 async fn a_registered_program_sends_and_receives_across_zones() -> Result<()> {
     let partial = SequencerPartialConfig::default();
     let channel_a = config::bedrock_channel_id();
