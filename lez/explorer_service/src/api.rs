@@ -127,7 +127,7 @@ pub async fn get_transaction(tx_hash: HashType) -> Result<Transaction, ServerFnE
         })
 }
 
-/// Get a transaction's receipt by its hash; `None` for a block's fee and clock transactions.
+/// Get a transaction's receipt by its hash; `None` for a block's fee transaction.
 #[server]
 pub async fn get_transaction_receipt(
     tx_hash: HashType,

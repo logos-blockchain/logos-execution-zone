@@ -305,11 +305,9 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     Ok(())
 }
 
-/// The account `block` pays its producer, read from its fee transaction, which is second to last.
+/// The account `block` pays its producer, read from its fee transaction, which is last.
 fn producer_account(block: &Block) -> Option<AccountId> {
-    let transactions = &block.body.transactions;
-    let LeeTransaction::Public(fee_tx) = transactions.get(transactions.len().checked_sub(2)?)?
-    else {
+    let LeeTransaction::Public(fee_tx) = block.body.transactions.last()? else {
         return None;
     };
     fee_invocation_payee(fee_tx).map(FeePayee::producer)

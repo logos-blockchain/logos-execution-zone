@@ -13,6 +13,9 @@ use ping_core::{
     sender_config_account_id,
 };
 
+/// The body position of a block's first user transaction, after its clock.
+pub const FIRST_USER_TX_INDEX: u32 = 1;
+
 /// The peer's hash-linked chain from its genesis up to and including `last`,
 /// each block carrying the transactions `txs_at(block_id)` returns. Empty when
 /// `last` is below [`GENESIS_BLOCK_ID`].

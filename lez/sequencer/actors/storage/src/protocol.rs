@@ -29,7 +29,7 @@ pub struct GetTransactionByHash {
     pub hash: HashType,
 }
 
-/// `None` also for a block's trailing fee and clock transactions, which have no receipt.
+/// `None` also for a block's trailing fee transaction, which has no receipt.
 pub struct GetTransactionReceiptByHash {
     pub hash: HashType,
 }

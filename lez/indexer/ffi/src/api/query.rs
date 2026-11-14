@@ -348,8 +348,8 @@ pub unsafe extern "C" fn query_transaction(
 /// # Returns
 ///
 /// A `PointerResult<FfiOption<FfiTransactionReceipt>, OperationStatus>` indicating success or
-/// failure. The option is empty for an unknown transaction, and for a block's trailing fee and
-/// clock transactions. Free it with `free_ffi_transaction_receipt_opt`.
+/// failure. The option is empty for an unknown transaction, and for a block's trailing fee
+/// transaction. Free it with `free_ffi_transaction_receipt_opt`.
 ///
 /// # Safety
 ///

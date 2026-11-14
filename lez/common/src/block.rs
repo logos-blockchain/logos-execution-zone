@@ -99,8 +99,7 @@ impl TransactionReceipt {
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
 pub struct BlockBody {
     pub transactions: Vec<LeeTransaction>,
-    /// One per user transaction, parallel to `transactions`; the trailing fee and clock
-    /// transactions have none.
+    /// One per transaction, parallel to `transactions`; the trailing fee transaction has none.
     pub receipts: Vec<TransactionReceipt>,
 }
 

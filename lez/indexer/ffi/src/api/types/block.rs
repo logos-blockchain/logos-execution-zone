@@ -11,8 +11,7 @@ use crate::api::types::{
 pub struct FfiBlock {
     pub header: FfiBlockHeader,
     pub body: FfiBlockBody,
-    /// One per user transaction, parallel to `body`; the trailing fee and clock transactions
-    /// have none.
+    /// One per transaction, parallel to `body`; the trailing fee transaction has none.
     pub receipts: FfiVec<FfiTransactionReceipt>,
     pub bedrock_status: FfiBedrockStatus,
 }

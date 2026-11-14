@@ -438,12 +438,12 @@ fn settled_peer_block(
         chain_state::apply::derive_block_summary(state, &txs, id, timestamp)
             .expect("test transactions settle");
     let mut transactions = txs;
+    transactions.insert(0, LeeTransaction::Public(clock_invocation(id, timestamp)));
     transactions.push(LeeTransaction::Public(fee_invocation(
         summary,
         payout,
         FeePayee::Present(producer),
     )));
-    transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
     HashableBlockData {
         block_id: id,
         prev_block_hash: prev_hash,
@@ -454,14 +454,16 @@ fn settled_peer_block(
     .into_pending_block()
 }
 
-/// Asserts the block body is `user_txs` followed by the forced fee invocation
-/// (whatever summary it settled to) and the canonical clock invocation.
-fn assert_block_tail(block: &common::block::Block, user_txs: &[LeeTransaction]) {
-    let txs = &block.body.transactions;
-    assert_eq!(&txs[..user_txs.len()], user_txs, "user transactions differ");
-    let [fee_tx, clock_tx] = &txs[user_txs.len()..] else {
-        panic!("expected exactly the fee + clock tail");
+/// Asserts the block body is the canonical clock invocation, then `user_txs`, then the forced
+/// fee invocation (whatever summary it settled to).
+fn assert_block_body(block: &common::block::Block, user_txs: &[LeeTransaction]) {
+    let [clock_tx, rest @ ..] = block.body.transactions.as_slice() else {
+        panic!("expected a clock transaction");
     };
+    let [body @ .., fee_tx] = rest else {
+        panic!("expected a fee transaction");
+    };
+    assert_eq!(body, user_txs, "user transactions differ");
     let LeeTransaction::Public(fee_tx) = fee_tx else {
         panic!("fee tx must be public");
     };
@@ -679,8 +681,8 @@ async fn a_reverted_withdraw_releases_nothing_on_l1() {
     let built = sequencer.build_block_from_mempool().await.unwrap();
 
     // Withdrawing more than the payer holds reverts.
-    assert_block_tail(&built.block, std::slice::from_ref(&withdraw));
-    assert!(built.block.body.is_reverted(0));
+    assert_block_body(&built.block, std::slice::from_ref(&withdraw));
+    assert!(built.block.body.is_reverted(1));
     assert!(built.withdrawals.is_empty());
 }
 
@@ -1442,7 +1444,7 @@ async fn unused_declared_gas_is_recredited_after_settlement() {
         .await
         .unwrap()
         .unwrap();
-    assert_block_tail(&block, &transfers);
+    assert_block_body(&block, &transfers);
 }
 
 #[tokio::test]
@@ -1488,9 +1490,9 @@ async fn a_block_full_of_charged_gas_defers_the_rest() {
         .await
         .unwrap()
         .unwrap();
-    assert_block_tail(&block, &transfers[..1]);
-    // One receipt per user transaction; the reverted transfer is charged its whole budget.
-    assert_eq!(block.body.receipts.len(), block.body.transactions.len() - 2);
+    assert_block_body(&block, &transfers[..1]);
+    // One receipt per transaction but the fee; the reverted transfer is charged its whole budget.
+    assert_eq!(block.body.receipts.len(), block.body.transactions.len() - 1);
     let receipt = block.body.receipts.last().unwrap();
     assert!(!receipt.success);
     assert_eq!(receipt.fee.gas_exec, fee_core::market::MAX_GAS_EXEC >> 1);
@@ -1503,7 +1505,7 @@ async fn a_block_full_of_charged_gas_defers_the_rest() {
         .await
         .unwrap()
         .unwrap();
-    assert_block_tail(&block, &transfers[1..]);
+    assert_block_body(&block, &transfers[1..]);
 }
 
 #[tokio::test]
@@ -1549,7 +1551,7 @@ async fn an_over_cap_transaction_is_dropped_not_deferred() {
         .await
         .unwrap()
         .unwrap();
-    assert_block_tail(&block, std::slice::from_ref(&normal));
+    assert_block_body(&block, std::slice::from_ref(&normal));
 
     // Nothing was deferred: the next block carries no user transactions.
     let block_id = sequencer.run_production_turn().await.unwrap();
@@ -1559,7 +1561,7 @@ async fn an_over_cap_transaction_is_dropped_not_deferred() {
         .await
         .unwrap()
         .unwrap();
-    assert_block_tail(&block, &[]);
+    assert_block_body(&block, &[]);
 }
 
 #[test]
@@ -1824,8 +1826,8 @@ async fn replay_transactions_are_rejected_in_the_same_block() {
         .unwrap()
         .unwrap();
 
-    // Only one user tx should be included; the fee and clock txs are always appended last.
-    assert_block_tail(&block, std::slice::from_ref(&tx));
+    // Only one user tx should be included, between the clock and fee txs.
+    assert_block_body(&block, std::slice::from_ref(&tx));
 }
 
 #[tokio::test]
@@ -1855,7 +1857,7 @@ async fn replay_transactions_are_rejected_in_different_blocks() {
         .await
         .unwrap()
         .unwrap();
-    assert_block_tail(&block, std::slice::from_ref(&tx));
+    assert_block_body(&block, std::slice::from_ref(&tx));
 
     // Add same transaction should fail
     mempool_handle
@@ -1872,7 +1874,7 @@ async fn replay_transactions_are_rejected_in_different_blocks() {
         .unwrap()
         .unwrap();
     // The replay is rejected, so only the fee and clock txs are in the block.
-    assert_block_tail(&block, &[]);
+    assert_block_body(&block, &[]);
 }
 
 #[tokio::test]
@@ -1910,7 +1912,7 @@ async fn restart_from_storage() {
             .await
             .unwrap()
             .unwrap();
-        assert_block_tail(&block, std::slice::from_ref(&tx));
+        assert_block_body(&block, std::slice::from_ref(&tx));
         sequencer.storage_ref.downgrade()
     };
     storage_weak.wait_for_shutdown_with_result(|_| ()).await;
@@ -2027,7 +2029,7 @@ async fn produce_block_with_correct_prev_meta_after_restart() {
         new_block.header.prev_block_hash, expected_prev_meta.hash,
         "New block's prev_block_hash should match the stored metadata hash"
     );
-    assert_block_tail(&new_block, std::slice::from_ref(&tx));
+    assert_block_body(&new_block, std::slice::from_ref(&tx));
 }
 
 #[tokio::test]
@@ -2125,12 +2127,12 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
     };
 
-    // A tick for the block being produced passes the clock's own check, so only the
-    // restricted-account guard can drop it.
+    // The produced block's own tick runs first, so a tick for the block after it passes the
+    // clock's own check and only the restricted-account guard can drop it.
     let tick_block_id = sequencer.chain_height().await + 1;
     let tick = user_tx(&clock_core::Message::Tick {
         timestamp: 0,
-        block_id: tick_block_id,
+        block_id: tick_block_id + 1,
     });
     mempool_handle
         .push((TransactionOrigin::User, tick))
@@ -2140,7 +2142,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     let block = block_at(&sequencer, tick_block_id)
         .await
         .expect("The turn should produce the tick's block");
-    assert_block_tail(&block, &[]);
+    assert_block_body(&block, &[]);
 
     // The same transaction with a read-only message is included, so the setup is sound.
     let read = user_tx(&clock_core::Message::ReadBlockId { granularity: 1 });
@@ -2152,7 +2154,22 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     let block = block_at(&sequencer, tick_block_id + 1)
         .await
         .expect("The turn should produce a block");
-    assert_block_tail(&block, &[read]);
+    assert_block_body(&block, &[read]);
+    // It reads its own block's ID, since the clock ticks first.
+    let reply = sequencer
+        .with_state(|state| {
+            state
+                .get_account_by_id(payer.account_id)
+                .data
+                .actor_state(clock_reader_id)
+                .as_ref()
+                .to_vec()
+        })
+        .await;
+    assert_eq!(
+        clock_core::Reply::from_message(&reply),
+        clock_core::Reply::BlockId(tick_block_id + 1)
+    );
 }
 
 #[tokio::test]
@@ -2527,7 +2544,7 @@ fn resubmittable_txs_drops_clock_and_bridge_deposits() {
         vec![user_tx.clone(), deposit_tx, withdraw_tx.clone()],
     );
 
-    // The trailing clock tx and the sequencer-generated deposit are dropped;
+    // The leading clock tx and the sequencer-generated deposit are dropped;
     // user txs (withdrawals included) are returned.
     assert_eq!(resubmittable_txs(&block), vec![user_tx, withdraw_tx]);
 }

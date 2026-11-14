@@ -106,7 +106,7 @@ pub struct GetTransaction {
     pub tx_hash: HashType,
 }
 
-/// `None` also for a block's trailing fee and clock transactions, which have no receipt.
+/// `None` also for a block's trailing fee transaction, which has no receipt.
 pub struct GetTransactionReceipt {
     pub tx_hash: HashType,
 }

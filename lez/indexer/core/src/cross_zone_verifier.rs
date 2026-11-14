@@ -1478,7 +1478,9 @@ where
 #[cfg(test)]
 mod tests {
     use common::{HashType, test_utils::produce_dummy_block};
-    use cross_zone::test_utils::{generic_emission, linked_chain_to, ping_emission};
+    use cross_zone::test_utils::{
+        FIRST_USER_TX_INDEX, generic_emission, linked_chain_to, ping_emission,
+    };
     use futures::stream;
     use lee::Actor;
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
@@ -1612,7 +1614,7 @@ mod tests {
                 src_zone: PEER_ZONE,
                 src_block_id: PEER_BLOCK_ID,
                 src_block_hash,
-                src_tx_index: 0,
+                src_tx_index: FIRST_USER_TX_INDEX,
                 src_account_id: programs::ping_sender_account_id(),
             },
             receiver_id,
@@ -1666,7 +1668,7 @@ mod tests {
                 src_zone: PEER_ZONE,
                 src_block_id: PEER_BLOCK_ID,
                 src_block_hash,
-                src_tx_index: 0,
+                src_tx_index: FIRST_USER_TX_INDEX,
                 src_account_id: GENERIC_EMITTER,
             },
             GENERIC_TARGET,

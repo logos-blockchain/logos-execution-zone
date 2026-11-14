@@ -1550,11 +1550,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             0,
             payee,
         ));
+        // The clock ticks first, so every other transaction sees this block's ID and timestamp.
         let clock_tx = clock_invocation(new_block_height, new_block_timestamp);
-        let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
+        working_state
+            .transition_from_public_transaction(&clock_tx, new_block_height, new_block_timestamp)
+            .context("Clock transaction failed. Aborting block production.")?;
+        let clock_tx = LeeTransaction::Public(clock_tx);
+        valid_transactions.push(clock_tx.clone());
+        receipts.push(TransactionReceipt::EXEMPT);
         // The slot before the fee takes one `system_upgrader` transaction: the due `Apply`, which
         // its block must carry, else the first approved change. Its room is held from the start,
-        // with the fee's and the clock's; the slot itself is filled after the mempool.
+        // with the fee's; the slot itself is filled after the mempool.
         let due_apply = build_due_apply_tx(&working_state, new_block_height)?;
         let first_approved =
             committee_discovery::read_config(&working_state).and_then(|committee| {
@@ -1567,7 +1573,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .clone()
             .or(first_approved)
             .into_iter()
-            .chain([placeholder_fee_lee_tx.clone(), clock_lee_tx.clone()])
+            .chain([placeholder_fee_lee_tx.clone()])
             .collect();
 
         sequencer_core_metrics::record_mempool_size(self.mempool.len());
@@ -1647,6 +1653,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // counts whatever this block already holds: a transaction that
                 // merely does not fit *today* is the ordinary deferral below.
                 if !Self::fits_in_an_empty_block(
+                    &clock_tx,
                     &tx,
                     &trailing,
                     max_block_size,
@@ -1802,7 +1809,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 self.count_dispatch_failure(&tx).await;
             }
 
-            if valid_transactions.len() >= self.sequencer_config.max_num_tx_in_block {
+            // The leading clock does not count against the limit.
+            if valid_transactions.len() > self.sequencer_config.max_num_tx_in_block {
                 break;
             }
         }
@@ -1832,11 +1840,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 block_id: new_block_height,
                 transactions: [
                     valid_transactions.as_slice(),
-                    &[
-                        tx.clone(),
-                        placeholder_fee_lee_tx.clone(),
-                        clock_lee_tx.clone(),
-                    ],
+                    &[tx.clone(), placeholder_fee_lee_tx.clone()],
                 ]
                 .concat(),
                 prev_block_hash,
@@ -1914,11 +1918,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .transition_from_public_transaction(&fee_tx, new_block_height, new_block_timestamp)
             .context("Fee transaction failed. Aborting block production.")?;
         valid_transactions.push(LeeTransaction::Public(fee_tx));
-
-        working_state
-            .transition_from_public_transaction(&clock_tx, new_block_height, new_block_timestamp)
-            .context("Clock transaction failed. Aborting block production.")?;
-        valid_transactions.push(clock_lee_tx);
         sequencer_core_metrics::record_transactions_per_block(valid_transactions.len());
 
         let hashable_data = HashableBlockData {
@@ -2044,25 +2043,33 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .collect())
     }
 
-    /// Whether a block carrying nothing but `tx` and the appended system
-    /// transactions (fee and clock) would be within the size limit.
+    /// Whether a block carrying nothing but `clock`, `tx` and the `trailing`
+    /// system transactions would be within the size limit.
     ///
     /// Distinguishes "does not fit in this block" from "does not fit in any
     /// block". The first is an ordinary deferral; the second, for a transaction
     /// the store re-feeds every turn, is a permanent stall unless it is given up
     /// on.
     fn fits_in_an_empty_block(
+        clock: &LeeTransaction,
         tx: &LeeTransaction,
-        system_txs: &[LeeTransaction],
+        trailing: &[LeeTransaction],
         max_block_size: usize,
         block_id: u64,
         prev_block_hash: HashType,
         timestamp: u64,
     ) -> Result<bool> {
         let alone = HashableBlockData {
-            receipts: reserved_receipts(system_txs).collect(),
+            receipts: std::iter::once(TransactionReceipt::EXEMPT)
+                .chain(reserved_receipts(trailing))
+                .collect(),
             block_id,
-            transactions: [std::slice::from_ref(tx), system_txs].concat(),
+            transactions: [
+                std::slice::from_ref(clock),
+                std::slice::from_ref(tx),
+                trailing,
+            ]
+            .concat(),
             prev_block_hash,
             timestamp,
         };
@@ -2477,9 +2484,9 @@ pub fn chain_update(chain: &ChainState) -> AtomicUpdate {
 }
 
 /// Placeholder receipts for a transaction being sized and the `system_upgrader` slot `trailing`
-/// reserves, if any; the trailing fee and clock txs carry none.
+/// reserves, if any; the trailing fee carries none.
 fn reserved_receipts(trailing: &[LeeTransaction]) -> impl Iterator<Item = TransactionReceipt> {
-    std::iter::repeat_n(TransactionReceipt::EXEMPT, trailing.len().saturating_sub(1))
+    std::iter::repeat_n(TransactionReceipt::EXEMPT, trailing.len())
 }
 
 /// The largest transaction a block under `state`'s `max_block_size` can carry, [`None`] if
@@ -2674,14 +2681,14 @@ fn build_finalize_unstake_tx(
 }
 
 /// User transactions of an orphaned block to return to the mempool: everything
-/// except the trailing clock tx, sequencer-generated bridge deposits (replayed
+/// except the leading clock tx, sequencer-generated bridge deposits (replayed
 /// from their own bedrock events) and sequencer-only txs — cross-zone dispatches
 /// (replayed by the watcher), the fee tx (regenerated every block; the ingress
 /// guard rejects them as `User`) and `system_upgrader`'s `Apply` (rebuilt from
 /// the registry). An approved `system_upgrader` change can't be rebuilt, so it
 /// is returned.
 fn resubmittable_txs(block: &Block) -> Vec<LeeTransaction> {
-    let Some((_clock, rest)) = block.body.transactions.split_last() else {
+    let Some((_clock, rest)) = block.body.transactions.split_first() else {
         return Vec::new();
     };
     rest.iter()

@@ -637,8 +637,7 @@ typedef struct FfiBlock {
   struct FfiBlockHeader header;
   FfiBlockBody body;
   /**
-   * One per user transaction, parallel to `body`; the trailing fee and clock transactions
-   * have none.
+   * One per transaction, parallel to `body`; the trailing fee transaction has none.
    */
   struct FfiVec_FfiTransactionReceipt receipts;
   enum FfiBedrockStatus bedrock_status;

@@ -109,7 +109,7 @@ fn transfer(nonce: u128, amount: u128) -> LeeTransaction {
 
 fn assert_carries(block: &Block, user_txs: &[LeeTransaction]) {
     assert_eq!(
-        &block.body.transactions[..user_txs.len()],
+        &block.body.transactions[1..=user_txs.len()],
         user_txs,
         "user transactions differ"
     );

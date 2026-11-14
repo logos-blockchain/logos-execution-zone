@@ -218,8 +218,7 @@ typedef struct FfiBlock {
   struct FfiBlockHeader header;
   FfiBlockBody body;
   /**
-   * One per user transaction, parallel to `body`; the trailing fee and clock transactions
-   * have none.
+   * One per transaction, parallel to `body`; the trailing fee transaction has none.
    */
   struct FfiVec_FfiTransactionReceipt receipts;
   enum FfiBedrockStatus bedrock_status;
@@ -613,8 +612,8 @@ struct PointerResult_FfiOption_FfiTransaction_____OperationStatus query_transact
  * # Returns
  *
  * A `PointerResult<FfiOption<FfiTransactionReceipt>, OperationStatus>` indicating success or
- * failure. The option is empty for an unknown transaction, and for a block's trailing fee and
- * clock transactions. Free it with `free_ffi_transaction_receipt_opt`.
+ * failure. The option is empty for an unknown transaction, and for a block's trailing fee
+ * transaction. Free it with `free_ffi_transaction_receipt_opt`.
  *
  * # Safety
  *

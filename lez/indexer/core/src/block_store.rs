@@ -121,7 +121,7 @@ impl IndexerStore {
             .map(|(mut block, position)| block.body.transactions.swap_remove(position)))
     }
 
-    /// `None` also for the trailing fee and clock transactions, which have no receipt.
+    /// `None` also for the trailing fee transaction, which has no receipt.
     pub fn get_transaction_receipt_by_hash(
         &self,
         tx_hash: [u8; 32],
@@ -531,12 +531,12 @@ fn settled_test_block(
             .expect("test transactions settle");
     let producer = producer_account_for_testing();
     let mut transactions = txs;
+    transactions.insert(0, LeeTransaction::Public(clock_invocation(id, timestamp)));
     transactions.push(LeeTransaction::Public(fee_invocation(
         summary,
         payout,
         FeePayee::Present(producer),
     )));
-    transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
     let block = HashableBlockData {
         receipts,
         block_id: id,
@@ -966,7 +966,7 @@ mod tests {
             .unwrap()
             .expect("invoking block must have an events row");
         assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].tx_index, 0);
+        assert_eq!(groups[0].tx_index, 1);
         assert_eq!(groups[0].tx_hash, invoke_hash);
 
         let events = &groups[0].events;
@@ -1002,13 +1002,19 @@ mod tests {
             store
                 .get_transaction_receipt_by_hash(invoke_hash.0)
                 .unwrap(),
-            Some(block.body.receipts[0]),
+            Some(block.body.receipts[1]),
         );
-        let clock_hash = block.body.transactions.last().unwrap().hash();
+        let clock_hash = block.body.transactions.first().unwrap().hash();
         assert_eq!(
             store.get_transaction_receipt_by_hash(clock_hash.0).unwrap(),
+            Some(common::block::TransactionReceipt::EXEMPT),
+            "the clock transaction's receipt is exempt",
+        );
+        let fee_hash = block.body.transactions.last().unwrap().hash();
+        assert_eq!(
+            store.get_transaction_receipt_by_hash(fee_hash.0).unwrap(),
             None,
-            "the clock transaction has no receipt",
+            "the fee transaction has no receipt",
         );
     }
 
