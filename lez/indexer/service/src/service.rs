@@ -10,17 +10,17 @@ use futures::StreamExt as _;
 use indexer_core::{IndexerCore, config::IndexerConfig, event_filter::EventFilter};
 use indexer_service_protocol::{
     Account, AccountId, AccountSummary, Actor, ActorStateSummary, Block, BlockId, EventRecord,
-    EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus, MAX_GET_BLOCKS_LIMIT,
-    Selector, Transaction, resolve_event_block_range,
+    EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus, Selector, Transaction,
+    TransactionReceipt, resolve_event_block_range,
 };
 use jsonrpsee::{
     SubscriptionSink,
     core::{Serialize, SubscriptionResult, async_trait},
     types::{ErrorCode, ErrorObject, ErrorObjectOwned},
 };
-use log::{debug, error, warn};
 use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, warn};
 
 // Bounds the bytes one getEvents response can carry, measured as serialized:
 // base64 inflates `data` by 4/3 and the fixed fields cost a flat allowance. Kept
@@ -61,9 +61,9 @@ impl indexer_service_rpc::RpcServer for IndexerService {
         subscription_sink: jsonrpsee::PendingSubscriptionSink,
     ) -> SubscriptionResult {
         let sink = subscription_sink.accept().await?;
-        log::info!(
-            "Accepted new subscription to finalized blocks with ID {:?}",
-            sink.subscription_id()
+        info!(
+            subscription_id = ?sink.subscription_id(),
+            "Accepted new subscription to finalized blocks"
         );
         self.subscription_service
             .add_subscription(NewSubscription::Blocks(Subscription::new(sink)))
@@ -86,9 +86,9 @@ impl indexer_service_rpc::RpcServer for IndexerService {
             return Ok(());
         }
         let sink = subscription_sink.accept().await?;
-        log::info!(
-            "Accepted new subscription to events with ID {:?}",
-            sink.subscription_id()
+        info!(
+            subscription_id = ?sink.subscription_id(),
+            "Accepted new subscription to events"
         );
         self.subscription_service
             .add_subscription(NewSubscription::Events(Subscription::new(sink), filter))
@@ -209,13 +209,23 @@ impl indexer_service_rpc::RpcServer for IndexerService {
             .map(Into::into))
     }
 
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: HashType,
+    ) -> Result<Option<TransactionReceipt>, ErrorObjectOwned> {
+        Ok(self
+            .indexer
+            .store
+            .get_transaction_receipt_by_hash(tx_hash.0)
+            .map_err(db_error)?
+            .map(Into::into))
+    }
+
     async fn get_blocks(
         &self,
         before: Option<BlockId>,
         limit: u64,
     ) -> Result<Vec<Block>, ErrorObjectOwned> {
-        check_get_blocks_limit(limit)?;
-
         let blocks = self
             .indexer
             .store
@@ -377,7 +387,8 @@ impl SubscriptionService {
         let guard = self.parts.load();
         if let Err(send_err) = guard.new_subscription_sender.send(subscription) {
             error!(
-                "Failed to send new subscription to subscription service with error: {send_err:#?}"
+                error = ?send_err,
+                "Failed to send new subscription to subscription service"
             );
 
             // Respawn the subscription service loop if it has finished (either with error or panic)
@@ -390,7 +401,8 @@ impl SubscriptionService {
                 // verdict, so respawning would churn: verify, halt, die, respawn.
                 if self.halted_outside_accept_list() {
                     error!(
-                        "Not respawning block ingestion: a cross-zone halt record is persisted and its hash is not in cross_zone_accept_unverified."
+                        "Not respawning block ingestion: a cross-zone halt record is persisted and \
+                         its hash is not in cross_zone_accept_unverified"
                     );
                     bail!(send_err)
                 }
@@ -413,11 +425,15 @@ impl SubscriptionService {
                         Ok(Ok(())) => {}
                         Ok(Err(err)) => {
                             error!(
-                                "Subscription service loop has unexpectedly finished with error: {err:#}"
+                                error = format_args!("{err:#}"),
+                                "Subscription service loop has unexpectedly finished"
                             );
                         }
                         Err(err) => {
-                            error!("Subscription service loop has panicked with err: {err:#}");
+                            error!(
+                                error = format_args!("{err:#}"),
+                                "Subscription service loop has panicked"
+                            );
                         }
                     }
                 }
@@ -441,7 +457,10 @@ impl SubscriptionService {
                 .contains(&halt.block_hash),
             Ok(None) => false,
             Err(err) => {
-                warn!("Failed to read cross-zone halt record before respawn: {err:#}");
+                warn!(
+                    error = format_args!("{err:#}"),
+                    "Failed to read cross-zone halt record before respawn"
+                );
                 false
             }
         }
@@ -471,7 +490,7 @@ impl SubscriptionService {
                 loop {
                     tokio::select! {
                         () = shutdown.cancelled() => {
-                            log::info!("Shutdown requested; stopping block ingestion");
+                            info!("Shutdown requested, stopping block ingestion");
                             return Ok(());
                         }
                         sub = sub_receiver.recv() => {
@@ -480,11 +499,11 @@ impl SubscriptionService {
                             };
                             match subscription {
                                 NewSubscription::Blocks(subscription) => {
-                                    log::info!("Added new block subscription with ID {:?}", subscription.sink.subscription_id());
+                                    info!(subscription_id = ?subscription.sink.subscription_id(), "Added new block subscription");
                                     block_subscribers.push(subscription);
                                 }
                                 NewSubscription::Events(subscription, filter) => {
-                                    log::info!("Added new event subscription with ID {:?}", subscription.sink.subscription_id());
+                                    info!(subscription_id = ?subscription.sink.subscription_id(), "Added new event subscription");
                                     event_subscribers.push((subscription, filter));
                                 }
                             }
@@ -508,9 +527,10 @@ impl SubscriptionService {
                             for sub in &mut block_subscribers {
                                 if let Err(err) = sub.try_send(&block_id) {
                                     warn!(
-                                        "Failed to send block ID {:?} to subscription ID {:?} with error: {err:#?}",
                                         block_id,
-                                        sub.sink.subscription_id(),
+                                        subscription_id = ?sub.sink.subscription_id(),
+                                        error = ?err,
+                                        "Failed to send block to subscription"
                                     );
                                 }
                             }
@@ -547,8 +567,9 @@ impl SubscriptionService {
                                                     .clone();
                                                 if let Err(err) = sub.sink.try_send(json) {
                                                     warn!(
-                                                        "Dropping event subscription ID {:?}: {err:#?}",
-                                                        sub.sink.subscription_id(),
+                                                        subscription_id = ?sub.sink.subscription_id(),
+                                                        error = ?err,
+                                                        "Dropping event subscription"
                                                     );
                                                     dead[idx] = true;
                                                 }
@@ -564,7 +585,9 @@ impl SubscriptionService {
                                         }
                                     }
                                     Err(err) => warn!(
-                                        "Failed to read events for block {block_id} for event subscribers: {err:#}"
+                                        block_id,
+                                        error = format_args!("{err:#}"),
+                                        "Failed to read block events for event subscribers"
                                     ),
                                 }
                             }
@@ -574,7 +597,7 @@ impl SubscriptionService {
             };
             let res: anyhow::Result<()> = run_loop.await;
             if let Err(err) = &res {
-                error!("Subscription service loop has unexpectedly finished with error: {err:#?}");
+                error!(error = ?err, "Subscription service loop has unexpectedly finished");
             }
             res
         });
@@ -657,9 +680,9 @@ impl<T> Subscription<T> {
 
 impl<T> Drop for Subscription<T> {
     fn drop(&mut self) {
-        log::info!(
-            "Subscription with ID {:?} is being dropped",
-            self.sink.subscription_id()
+        info!(
+            subscription_id = ?self.sink.subscription_id(),
+            "Subscription is being dropped"
         );
     }
 }
@@ -815,15 +838,6 @@ fn uncovered_query_error() -> ErrorObjectOwned {
     )
 }
 
-fn check_get_blocks_limit(limit: u64) -> Result<(), ErrorObjectOwned> {
-    if limit > MAX_GET_BLOCKS_LIMIT {
-        return Err(invalid_params_error(format!(
-            "limit {limit} exceeds the maximum of {MAX_GET_BLOCKS_LIMIT}"
-        )));
-    }
-    Ok(())
-}
-
 fn invalid_params_error(message: impl Into<String>) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(
         ErrorCode::InvalidParams.code(),
@@ -875,17 +889,6 @@ mod tests {
             program_account_id: test_program_account_id(program),
             selector: Selector([selector; 8]),
             data: vec![],
-        }
-    }
-
-    #[test]
-    fn get_blocks_limit_is_capped() {
-        assert!(check_get_blocks_limit(0).is_ok());
-        assert!(check_get_blocks_limit(MAX_GET_BLOCKS_LIMIT).is_ok());
-
-        for limit in [MAX_GET_BLOCKS_LIMIT.saturating_add(1), u64::MAX] {
-            let err = check_get_blocks_limit(limit).unwrap_err();
-            assert_eq!(err.code(), ErrorCode::InvalidParams.code());
         }
     }
 

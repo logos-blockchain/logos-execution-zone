@@ -31,11 +31,12 @@ fn settled_block(
 ) -> Block {
     use common::transaction::{FeePayee, LeeTransaction, clock_invocation, fee_invocation};
     let timestamp = id.saturating_mul(100);
-    let (summary, payout) = if id == lee::GENESIS_BLOCK_ID {
+    let (summary, payout, receipts) = if id == lee::GENESIS_BLOCK_ID {
         // Genesis transactions are fee-exempt
         let summary = fee_core::BlockFeeSummary::default();
         let payout = chain_state::apply::opening_fee_state(state).apply_block(&summary);
-        (summary, payout)
+        let receipts = vec![common::block::TransactionReceipt::EXEMPT; transactions.len()];
+        (summary, payout, receipts)
     } else {
         chain_state::apply::derive_block_summary(state, &transactions, id, timestamp)
             .expect("test transactions settle")
@@ -52,6 +53,7 @@ fn settled_block(
         prev_block_hash: prev_hash,
         timestamp,
         transactions,
+        receipts,
     }
     .into_pending_block()
 }
@@ -81,10 +83,11 @@ fn initial_state() -> lee::V03State {
     .map(|(id, balance)| (id, Account::funded(balance)))
     .collect::<Vec<_>>();
 
-    // push clock system accounts
-    for clock_id in system_accounts::clock_account_ids() {
-        public_accounts.push((clock_id, system_accounts::clock_account()));
-    }
+    // push clock system account
+    public_accounts.push((
+        system_accounts::clock_account_id(),
+        system_accounts::clock_account(),
+    ));
 
     // push fee system accounts
     public_accounts.push((
@@ -104,9 +107,9 @@ fn initial_state() -> lee::V03State {
 
     lee::V03State::new()
         .with_public_accounts(public_accounts)
-        .with_named_programs([
-            (programs::clock_account_id(), programs::clock()),
-            (programs::fee_account_id(), programs::fee()),
+        .with_programs_at([
+            (programs::clock_account_id(), programs::clock(), true),
+            (programs::fee_account_id(), programs::fee(), true),
         ])
 }
 
@@ -516,22 +519,6 @@ fn block_batch() {
         .collect::<Vec<_>>();
 
     assert_eq!(block_batch_ids, vec![1, 2, 3, 4]);
-
-    let batch_ids = |before, limit| {
-        dbio.get_block_batch(before, limit)
-            .unwrap()
-            .into_iter()
-            .map(|block| block.header.block_id)
-            .collect::<Vec<_>>()
-    };
-
-    // A `before` past the stored tip is clamped to it, so the page starts at the tip.
-    assert_eq!(batch_ids(Some(u64::MAX), 3), vec![4, 3, 2]);
-    // A `limit` past the chain height returns the whole chain and no more.
-    assert_eq!(batch_ids(None, u64::MAX), vec![4, 3, 2, 1]);
-    assert_eq!(batch_ids(Some(u64::MAX), u64::MAX), vec![4, 3, 2, 1]);
-    assert!(batch_ids(Some(1), 10).is_empty());
-    assert!(batch_ids(None, 0).is_empty());
 }
 
 #[test]

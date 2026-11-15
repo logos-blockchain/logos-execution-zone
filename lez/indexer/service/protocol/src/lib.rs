@@ -52,9 +52,6 @@ mod base64 {
 // that serves the query (RPC service, FFI) enforces the identical bound.
 pub const MAX_EVENT_QUERY_BLOCK_SPAN: u64 = 1000;
 
-// Largest page a single `getBlocks` request may ask for.
-pub const MAX_GET_BLOCKS_LIMIT: u64 = 100;
-
 pub type Nonce = u128;
 
 #[derive(
@@ -210,9 +207,56 @@ impl FromStr for Signature {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct BlockBody {
     pub transactions: Vec<Transaction>,
+    /// One per user transaction, parallel to `transactions`; the trailing fee and clock
+    /// transactions have none.
+    pub receipts: Vec<TransactionReceipt>,
+}
+
+/// See `common::block::FeeReceipt`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct FeeReceipt {
+    pub gas_exec: u64,
+    pub gas_stor: u64,
+    pub fee_base: u128,
+    pub tip: u128,
+    pub refund: u128,
+}
+
+/// See `common::block::TransactionReceipt`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct TransactionReceipt {
+    /// `true`: applied; `false`: the action reverted, and its fee was still charged.
+    pub success: bool,
+    /// All zeros for a fee-exempt transaction.
+    pub fee: FeeReceipt,
+}
+
+impl TransactionReceipt {
+    #[must_use]
+    pub const fn is_exempt(&self) -> bool {
+        let FeeReceipt {
+            gas_exec,
+            gas_stor,
+            fee_base,
+            tip,
+            refund,
+        } = self.fee;
+        gas_exec == 0 && gas_stor == 0 && fee_base == 0 && tip == 0 && refund == 0
+    }
+
+    /// What the payer paid: the base fee and the tip.
+    #[must_use]
+    pub const fn fee_paid(&self) -> u128 {
+        self.fee.fee_base.saturating_add(self.fee.tip)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "both variants are whole transactions whose bulk is on the heap; the inline \
+              difference is a few hundred bytes, and boxing one would touch every match"
+)]
 pub enum Transaction {
     Public(PublicTransaction),
     PrivacyPreserving(PrivacyPreservingTransaction),
@@ -326,11 +370,25 @@ pub struct PrivateAction {
     pub encrypted_post_state: EncryptedNote,
 }
 
+/// What a proof commits about its in-proof fee: the public refund target, and the payer's
+/// transition after the fee transfer alone, applied when the public part fails.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct ProvenFee {
+    pub refund_to: Option<AccountId>,
+    pub fallback: Option<FeeFallback>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct FeeFallback {
+    pub action: PrivateAction,
+    pub boundary: Boundary,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PrivacyPreservingMessage {
     pub public_context: PublicExecutionContext,
     pub boundary: Boundary,
-    pub async_messages: Vec<SealedMessage>,
+    pub async_messages: Vec<Publication>,
     pub recovery_bindings: Vec<RecoveryBinding>,
     pub public_root: Option<RootCall>,
     pub nonces: Vec<(AccountId, Nonce)>,
@@ -338,6 +396,10 @@ pub struct PrivacyPreservingMessage {
     pub block_validity_window: ValidityWindow,
     pub timestamp_validity_window: ValidityWindow,
     pub admission_evidence: Vec<PublicAccountEvidence>,
+    /// The fee transfer's refund target and fallback, when the proof runs one.
+    pub proven_fee: Option<ProvenFee>,
+    /// The fee declaration, paid by a public signer instead of inside the proof.
+    pub fee: Option<FeeDeclaration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -363,6 +425,12 @@ pub struct RecoveryBinding {
 pub struct SealedMessage {
     pub commitment: Commitment,
     pub note: EncryptedNote,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum Publication {
+    Clear(MessageEnvelope<Actor>),
+    Sealed(SealedMessage),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -520,6 +588,9 @@ pub enum PeerHealth {
     /// The peer's live committee is below the configured floor; reading is
     /// suspended until it recovers.
     Suspended,
+    /// The configured genesis pin refused the only anchor the channel offered;
+    /// nothing from this peer verifies until the pin or the channel is fixed.
+    PinMismatch,
     /// A verified-absence verdict was issued against this peer's chain.
     Halted,
     /// A health this client build does not know: a newer server added one.
@@ -563,6 +634,12 @@ pub enum BlockIngestError {
     InvalidRewardTarget {
         reason: String,
     },
+    MisplacedSystemUpgraderTransaction {
+        tx_index: u64,
+    },
+    MissedSystemUpgrade {
+        name: String,
+    },
     InvalidFeeClass {
         tx_index: u64,
         reason: String,
@@ -579,11 +656,22 @@ pub enum BlockIngestError {
         reason: String,
     },
     NonPublicGenesisTransaction,
+    ReceiptMismatch {
+        tx_index: u64,
+        listed: Option<TransactionReceipt>,
+        settled: Option<TransactionReceipt>,
+    },
+    UnfinalizedRelease {
+        tx_index: u64,
+        /// The released sequencer key, hex.
+        key: String,
+    },
     StateTransition {
         /// Index of the failing transaction within the block body.
         tx_index: u64,
         reason: String,
     },
+    UndecodableSystemRegistry,
 }
 
 /// Diagnostic record of the first block that broke the L2 chain.
@@ -819,6 +907,7 @@ mod tests {
             PeerHealth::Lagging,
             PeerHealth::Holed,
             PeerHealth::Suspended,
+            PeerHealth::PinMismatch,
             PeerHealth::Halted,
             PeerHealth::Unknown,
         ] {
