@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     MembershipProof, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
-    ProgramImageWitness, ProvenExecution, ProvingInput, RecipientEncryption, SenderPresentation,
+    ProgramImageWitness, ProvenExecution, ProvingInput, PublicationMode, SenderPresentation,
     ShadowProgramWitness,
     account::{AccountId, Actor, ActorState, Cycles},
     execution_state::{
@@ -366,6 +366,9 @@ impl ExecutionEnvironment for Prover<'_> {
     }
 }
 
+type PublicationChooser<'choose> =
+    dyn FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, LeeError> + 'choose;
+
 fn handle_message_with(
     programs: &HashMap<AccountId, Dependency>,
     input: &ReceiveInput,
@@ -396,7 +399,7 @@ pub fn execute_and_prove(
     programs: &ProgramCatalog,
     mut present_sender: impl FnMut(Actor) -> SenderPresentation,
     mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
-    mut choose_seal: impl FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
+    mut choose_publications: impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, LeeError>,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     simulate_and_run(
         input,
@@ -404,7 +407,7 @@ pub fn execute_and_prove(
         programs,
         &mut present_sender,
         &mut select_promotion,
-        &mut choose_seal,
+        &mut choose_publications,
         true,
     )
     .map(|(output, proof)| (output, proof.expect("a proving run returns its proof")))
@@ -418,7 +421,7 @@ pub fn execute_unproven(
     programs: &ProgramCatalog,
     mut present_sender: impl FnMut(Actor) -> SenderPresentation,
     mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
-    mut choose_seal: impl FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
+    mut choose_publications: impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, LeeError>,
 ) -> Result<PrivacyPreservingCircuitOutput, LeeError> {
     simulate_and_run(
         input,
@@ -426,7 +429,7 @@ pub fn execute_unproven(
         programs,
         &mut present_sender,
         &mut select_promotion,
-        &mut choose_seal,
+        &mut choose_publications,
         false,
     )
     .map(|(output, _)| output)
@@ -438,7 +441,7 @@ fn simulate_and_run(
     programs: &ProgramCatalog,
     present_sender: &mut dyn FnMut(Actor) -> SenderPresentation,
     select_promotion: &mut dyn FnMut(Placement, &MessageBody) -> bool,
-    choose_seal: &mut dyn FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
+    choose_publications: &mut PublicationChooser<'_>,
     proving: bool,
 ) -> Result<(PrivacyPreservingCircuitOutput, Option<Proof>), LeeError> {
     let Simulated {
@@ -465,7 +468,7 @@ fn simulate_and_run(
         programs,
         &mut |_| presented.next(),
         &mut |index, _| recorded.contains(&index),
-        choose_seal,
+        choose_publications,
         proving,
     )
 }
@@ -606,7 +609,7 @@ pub fn execute_and_prove_with_cross_messages(
     programs: &ProgramCatalog,
     mut present_sender: impl FnMut(Actor) -> SenderPresentation,
     mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
-    mut choose_seal: impl FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
+    mut choose_publications: impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, LeeError>,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     run_with_cross_messages(
         input,
@@ -614,7 +617,7 @@ pub fn execute_and_prove_with_cross_messages(
         programs,
         &mut present_sender,
         &mut select_promotion,
-        &mut choose_seal,
+        &mut choose_publications,
         true,
     )
     .map(|(output, proof)| (output, proof.expect("a proving run returns its proof")))
@@ -628,7 +631,7 @@ pub fn execute_unproven_with_cross_messages(
     programs: &ProgramCatalog,
     mut present_sender: impl FnMut(Actor) -> SenderPresentation,
     mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
-    mut choose_seal: impl FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
+    mut choose_publications: impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, LeeError>,
 ) -> Result<PrivacyPreservingCircuitOutput, LeeError> {
     run_with_cross_messages(
         input,
@@ -636,7 +639,7 @@ pub fn execute_unproven_with_cross_messages(
         programs,
         &mut present_sender,
         &mut select_promotion,
-        &mut choose_seal,
+        &mut choose_publications,
         false,
     )
     .map(|(output, _)| output)
@@ -648,7 +651,7 @@ fn run_with_cross_messages(
     programs: &ProgramCatalog,
     present_sender: &mut dyn FnMut(Actor) -> SenderPresentation,
     select_promotion: &mut dyn FnMut(Placement, &MessageBody) -> bool,
-    choose_seal: &mut dyn FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
+    choose_publications: &mut PublicationChooser<'_>,
     proving: bool,
 ) -> Result<(PrivacyPreservingCircuitOutput, Option<Proof>), LeeError> {
     // The fee's credit reaches a native actor, which calls nothing back.
@@ -662,7 +665,7 @@ fn run_with_cross_messages(
         programs,
         &mut |sender| Some(present_sender(sender)),
         &mut |index, body| requested.contains(&index) || select_promotion(Placement::Private, body),
-        choose_seal,
+        choose_publications,
         proving,
     )
 }
@@ -673,7 +676,7 @@ fn prove(
     programs: &ProgramCatalog,
     choose: &mut dyn FnMut(Actor) -> Option<SenderPresentation>,
     select: &mut dyn FnMut(u64, &MessageBody) -> bool,
-    choose_seal: &mut dyn FnMut(&MessageBody) -> Result<RecipientEncryption, LeeError>,
+    choose_publications: &mut PublicationChooser<'_>,
     proving: bool,
 ) -> Result<(PrivacyPreservingCircuitOutput, Option<Proof>), LeeError> {
     let ProgramCatalog { programs } = programs;
@@ -707,11 +710,7 @@ fn prove(
     {
         return Err(ExecutionError::UnreachedPromotion { index }.into());
     }
-    let message_seals = outcome
-        .async_messages
-        .iter()
-        .map(choose_seal)
-        .collect::<Result<_, _>>()?;
+    let publication_modes = choose_publications(&outcome.async_messages)?;
     let Prover {
         mut env_builder,
         responses,
@@ -757,7 +756,7 @@ fn prove(
         shadow_program_witnesses,
         responses,
         sender_presentations: recorder.recorded,
-        message_seals,
+        publication_modes,
         predicted_cross_messages,
     };
 

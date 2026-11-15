@@ -17,6 +17,11 @@ typedef enum FfiBoundaryStepKind {
   FfiBoundaryStepKind_EndPublicSubtree,
 } FfiBoundaryStepKind;
 
+typedef enum FfiPublicationKind {
+  FfiPublicationKind_Clear = 0,
+  FfiPublicationKind_Sealed,
+} FfiPublicationKind;
+
 typedef enum FfiProgramImageClaimKind {
   FfiProgramImageClaimKind_Disclosed = 0,
   FfiProgramImageClaimKind_Undisclosed,
@@ -463,22 +468,35 @@ typedef struct FfiVec_FfiBoundaryStep {
 
 typedef struct FfiVec_FfiBoundaryStep FfiBoundaryStepList;
 
-/**
- * One async message a proof publishes.
- */
+typedef struct FfiMessageBody {
+  struct FfiActor from;
+  struct FfiActor to;
+  FfiMessageDataList message;
+} FfiMessageBody;
+
 typedef struct FfiSealedMessage {
   struct FfiBytes32 commitment;
   FfiVecU8 epk;
   FfiVecU8 ciphertext;
 } FfiSealedMessage;
 
-typedef struct FfiVec_FfiSealedMessage {
-  struct FfiSealedMessage *entries;
+/**
+ * One async message a proof publishes. Both `body` and `sealed` are read and freed for every
+ * kind, so the part `kind` does not select must be empty, not uninitialized.
+ */
+typedef struct FfiPublication {
+  enum FfiPublicationKind kind;
+  struct FfiMessageBody body;
+  struct FfiSealedMessage sealed;
+} FfiPublication;
+
+typedef struct FfiVec_FfiPublication {
+  struct FfiPublication *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiSealedMessage;
+} FfiVec_FfiPublication;
 
-typedef struct FfiVec_FfiSealedMessage FfiSealedMessageList;
+typedef struct FfiVec_FfiPublication FfiPublicationList;
 
 typedef struct FfiRecoveryBinding {
   FfiAccountId address;
@@ -544,7 +562,7 @@ typedef struct FfiProvenFee {
 typedef struct FfiPrivacyPreservingMessage {
   struct FfiPublicExecutionContext public_context;
   FfiBoundaryStepList boundary;
-  FfiSealedMessageList async_messages;
+  FfiPublicationList async_messages;
   FfiRecoveryBindingList recovery_bindings;
   bool has_public_root;
   struct FfiRootCall public_root;
@@ -590,9 +608,39 @@ typedef struct FfiVec_FfiTransaction {
 
 typedef struct FfiVec_FfiTransaction FfiBlockBody;
 
+/**
+ * The fee one transaction paid; all zeros for a fee-exempt one.
+ */
+typedef struct FfiFeeReceipt {
+  uint64_t gas_exec;
+  uint64_t gas_stor;
+  struct FfiU128 fee_base;
+  struct FfiU128 tip;
+  struct FfiU128 refund;
+} FfiFeeReceipt;
+
+typedef struct FfiTransactionReceipt {
+  /**
+   * `true`: applied; `false`: the action reverted, and its fee was still charged.
+   */
+  bool success;
+  struct FfiFeeReceipt fee;
+} FfiTransactionReceipt;
+
+typedef struct FfiVec_FfiTransactionReceipt {
+  struct FfiTransactionReceipt *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiTransactionReceipt;
+
 typedef struct FfiBlock {
   struct FfiBlockHeader header;
   FfiBlockBody body;
+  /**
+   * One per user transaction, parallel to `body`; the trailing fee and clock transactions
+   * have none.
+   */
+  struct FfiVec_FfiTransactionReceipt receipts;
   enum FfiBedrockStatus bedrock_status;
 } FfiBlock;
 
@@ -1300,8 +1348,8 @@ void primitves_ffi_free_ffi_account_opt(struct FfiOption_FfiAccount *val);
 /**
  * Frees the resources owned by an `FfiBlock` value.
  *
- * This frees the block's transaction bodies (the only heap-owning field); the
- * header/status fields are `Copy`. It operates on the struct by value because
+ * This frees the block's transaction bodies and receipts (the only heap-owning
+ * fields); the header/status fields are `Copy`. It operates on the struct by value because
  * it is an element-level helper, used both for the vector path
  * ([`free_ffi_block_vec`]) and the optional path ([`free_ffi_block_opt`]) — in
  * neither case is an `FfiBlock` itself wrapped in its own outer box.

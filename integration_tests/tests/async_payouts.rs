@@ -245,7 +245,7 @@ async fn trades_proven_at_one_custody_balance_pay_out_at_the_live_balance() -> R
     let pending = ctx.wallet_mut().owned_pending_messages().await?;
     assert_eq!(pending.len(), 2, "exactly the two payouts are pending");
     for (record, ((_, output), payout)) in pending.iter().zip(traders.iter().zip([200, 190])) {
-        let Publication::Clear { body, .. } = &record.publication else {
+        let Publication::Clear(body) = &record.publication else {
             anyhow::bail!("a public custody's payout is published clear");
         };
         assert_eq!(
@@ -320,7 +320,7 @@ async fn a_public_payout_reaches_a_private_pda_its_recipient_discovers_by_key() 
 
         let [pending] = <[_; 1]>::try_from(ctx.wallet_mut().owned_pending_messages().await?)
             .map_err(|pending| anyhow::anyhow!("expected one payout, found {}", pending.len()))?;
-        let Publication::Clear { body, recovery } = &pending.publication else {
+        let Publication::Clear(body) = &pending.publication else {
             anyhow::bail!("a public sender's payout is published clear");
         };
         assert_eq!(body.to, Actor::native_balance(payout_id));
@@ -328,7 +328,12 @@ async fn a_public_payout_reaches_a_private_pda_its_recipient_discovers_by_key() 
             borsh::from_slice::<native_token::Message>(&body.message)?,
             native_token::Message::Credit(amount)
         );
-        notes.push(recovery.clone());
+        notes.push(
+            ctx.wallet()
+                .get_recovery_binding(payout_id)
+                .await?
+                .context("the payout's address is bound")?,
+        );
         let spent = Nullifier::for_message(
             &keys.private_key_holder.nullifier_secret_key(),
             &Commitment::for_message(body),
@@ -361,9 +366,69 @@ async fn a_public_payout_reaches_a_private_pda_its_recipient_discovers_by_key() 
         notes[0], notes[1],
         "the second payout reuses the binding the first proved"
     );
+    Ok(())
+}
+
+#[test]
+async fn a_private_payment_reaches_a_certified_address_its_payer_knows_only_by_id() -> Result<()> {
+    let mut ctx = TestContext::new().await?;
+    let certifier = ctx.existing_public_accounts()[0];
+    let payer = ctx.existing_private_accounts()[0];
+    let (recorded, _) = ctx.wallet_mut().create_new_account_private(None);
+    let keys = restored_private_account(&ctx, recorded, "recipient keys")
+        .key_chain
+        .clone();
+    let recipient = AccountIdentity::PrivateForeign {
+        npk: keys.nullifier_public_key,
+        vpk: keys.viewing_public_key,
+        kind: PrivateAccountKind::Pda {
+            account_id: AccountId::new([5; 32]),
+            seed: PdaSeed::new([9; 32]),
+        },
+    };
+    let address = recipient.account_id();
+
+    let (certified, _) = NativeTokenTransfer(ctx.wallet())
+        .transfer(
+            AccountIdentity::Public(certifier),
+            recipient,
+            1,
+            CreditDelivery::Automatic,
+        )
+        .await?;
+    wait_for_inclusion(&ctx, certified).await?;
+    let [payout] = <[_; 1]>::try_from(ctx.wallet_mut().owned_pending_messages().await?)
+        .map_err(|pending| anyhow::anyhow!("expected one payout, found {}", pending.len()))?;
+    let (claimed, _) = ctx.wallet_mut().receive_pending_message(payout).await?;
+    wait_for_inclusion(&ctx, claimed).await?;
+    sync_private(&mut ctx).await?;
+
+    let (paid, _) = NativeTokenTransfer(ctx.wallet())
+        .transfer_clear(AccountIdentity::PrivateOwned(payer), address, 40)
+        .await?;
+    wait_for_inclusion(&ctx, paid).await?;
+    let [payment] = <[_; 1]>::try_from(ctx.wallet_mut().owned_pending_messages().await?)
+        .map_err(|pending| anyhow::anyhow!("expected one payment, found {}", pending.len()))?;
+    let Publication::Clear(body) = &payment.publication else {
+        anyhow::bail!("the requested credit is published clear");
+    };
     assert_eq!(
-        ctx.wallet().get_recovery_binding(payout_id).await?,
-        Some(notes[0].clone())
+        body.from.program_account_id,
+        native_token::NATIVE_TOKEN_PROGRAM_ID
     );
+    assert_ne!(
+        body.from.account_id, payer,
+        "the payer sends under an alias"
+    );
+    assert_eq!(body.to, Actor::native_balance(address));
+    assert_eq!(
+        borsh::from_slice::<native_token::Message>(&body.message)?,
+        native_token::Message::Credit(40)
+    );
+
+    let (received, _) = ctx.wallet_mut().receive_pending_message(payment).await?;
+    wait_for_inclusion(&ctx, received).await?;
+    sync_private(&mut ctx).await?;
+    assert_eq!(private_balance(&ctx, address)?, 41);
     Ok(())
 }

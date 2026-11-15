@@ -2,8 +2,14 @@
 
 use std::{fmt::Display, str::FromStr};
 
-pub use common::{HashType, PageLimit, block::Block, transaction::LeeTransaction};
-pub use lee::{Account, AccountData, AccountId, Actor, EncryptedNote, ProgramId, Publication};
+pub use common::{
+    HashType, PageLimit,
+    block::{Block, TransactionReceipt},
+    transaction::LeeTransaction,
+};
+pub use lee::{
+    Account, AccountData, AccountId, Actor, EncryptedNote, ProgramId, Publication, PublicationsPage,
+};
 pub use lee_core::{
     BlockId, Commitment, CommitmentPosition, CommitmentSetDigest, MembershipProof, Nullifier,
     account::Nonce,

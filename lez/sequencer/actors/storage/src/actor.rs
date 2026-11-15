@@ -7,7 +7,7 @@ use std::{
 use borsh::BorshDeserialize as _;
 use common::{
     HashType,
-    block::{BedrockStatus, Block, BlockMeta, PeerChainTip},
+    block::{BedrockStatus, Block, BlockMeta, PeerChainTip, TransactionReceipt},
     transaction::{LeeTransaction, TxEvents},
 };
 use itertools::Itertools as _;
@@ -37,7 +37,7 @@ use crate::{
         GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
         GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
         GetSlashRecordBytes, GetSystemApprovalsBytes, GetTransactionByHash,
-        GetTxHashToBlockIdMapItem, GetZoneAnchor, GetZoneCheckpoint,
+        GetTransactionReceiptByHash, GetTxHashToBlockIdMapItem, GetZoneAnchor, GetZoneCheckpoint,
         PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutFinalConfigsBytes,
         PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
         RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
@@ -109,6 +109,26 @@ impl StorageActor {
         self.db
             .as_ref()
             .expect("Database is closed, the actor has already stopped")
+    }
+
+    /// The block holding `hash`, and the transaction's position in it.
+    fn block_with_transaction(&self, hash: HashType) -> Result<Option<(Block, usize)>> {
+        let Some(block_id) = self.tx_index.block_for_tx(&hash) else {
+            return Ok(None);
+        };
+        let Some(block) = self
+            .db()
+            .get::<entities::Block>(&encoding::BigEndian::new(&block_id))?
+        else {
+            return Ok(None);
+        };
+        let block = block.block;
+        Ok(block
+            .body
+            .transactions
+            .iter()
+            .position(|transaction| transaction.hash() == hash)
+            .map(|position| (block, position)))
     }
 
     fn build_tx_index(db: &db::Database<entities::ColumnFamily>) -> Result<TransactionIndex> {
@@ -746,23 +766,28 @@ impl Message<GetTransactionByHash> for StorageActor {
         GetTransactionByHash { hash }: GetTransactionByHash,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let Some(block_id) = self.tx_index.block_for_tx(&hash) else {
-            return Ok(None);
-        };
-        let Some(block) = self
-            .db()
-            .get::<entities::Block>(&encoding::BigEndian::new(&block_id))?
-        else {
-            return Ok(None);
-        };
+        Ok(self
+            .block_with_transaction(hash)?
+            .map(|(mut block, position)| {
+                (
+                    block.body.transactions.swap_remove(position),
+                    block.header.block_id,
+                )
+            }))
+    }
+}
 
-        Ok(block
-            .block
-            .body
-            .transactions
-            .into_iter()
-            .find(|transaction| transaction.hash() == hash)
-            .map(|transaction| (transaction, block_id)))
+impl Message<GetTransactionReceiptByHash> for StorageActor {
+    type Reply = Result<Option<TransactionReceipt>>;
+
+    async fn handle(
+        &mut self,
+        GetTransactionReceiptByHash { hash }: GetTransactionReceiptByHash,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self
+            .block_with_transaction(hash)?
+            .and_then(|(block, position)| block.body.receipts.get(position).copied()))
     }
 }
 

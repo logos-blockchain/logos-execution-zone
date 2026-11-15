@@ -4,7 +4,7 @@
 )]
 
 use common::{
-    block::{Block, BlockMeta, PeerChainTip},
+    block::{Block, BlockMeta, PeerChainTip, TransactionReceipt},
     transaction::LeeTransaction,
 };
 use kameo::{
@@ -29,9 +29,10 @@ use crate::{
         GetDeadLetterDispatches, GetEventFilter, GetFinalConfigsBytes, GetFinalSnapshot,
         GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
         GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
-        GetSlashRecordBytes, GetSystemApprovalsBytes, GetTransactionByHash, GetZoneAnchor,
-        GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        PutFinalConfigsBytes, PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
+        GetSlashRecordBytes, GetSystemApprovalsBytes, GetTransactionByHash,
+        GetTransactionReceiptByHash, GetZoneAnchor, GetZoneCheckpoint,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutFinalConfigsBytes,
+        PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
         RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
         StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
     },
@@ -58,6 +59,12 @@ mockall::mock! {
             msg: GetTransactionByHash,
             ctx: &mut Context<Self, Result<Option<(LeeTransaction, BlockId)>>>
         ) -> Result<Option<(LeeTransaction, BlockId)>>;
+
+        pub fn handle_get_transaction_receipt_by_hash(
+            &mut self,
+            msg: GetTransactionReceiptByHash,
+            ctx: &mut Context<Self, Result<Option<TransactionReceipt>>>
+        ) -> Result<Option<TransactionReceipt>>;
 
         pub fn handle_delete_block(
             &mut self,
@@ -348,6 +355,18 @@ impl Message<GetTransactionByHash> for MockStorageActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_transaction_by_hash(msg, ctx)
+    }
+}
+
+impl Message<GetTransactionReceiptByHash> for MockStorageActor {
+    type Reply = Result<Option<TransactionReceipt>>;
+
+    async fn handle(
+        &mut self,
+        msg: GetTransactionReceiptByHash,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_transaction_receipt_by_hash(msg, ctx)
     }
 }
 

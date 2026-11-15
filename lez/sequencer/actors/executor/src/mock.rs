@@ -3,7 +3,10 @@
     reason = "`handle*` prefix is used for convenience with `Message` trait"
 )]
 
-use common::{block::Block, transaction::LeeTransaction};
+use common::{
+    block::{Block, TransactionReceipt},
+    transaction::LeeTransaction,
+};
 use kameo::{
     Actor,
     actor::ActorRef,
@@ -12,9 +15,8 @@ use kameo::{
 };
 use lee::Account;
 use lee_core::{
-    BlockId, CommitmentPosition, EncryptedNote, MembershipProof,
+    BlockId, EncryptedNote, MembershipProof,
     account::{Balance, Nonce},
-    program::Publication,
 };
 use sequencer_actors_common::Reply;
 pub use sequencer_actors_common::mock::{Checkpoint, Replace, ReplaceReply};
@@ -26,10 +28,10 @@ use crate::{
         ChannelId, ExecutorStatus, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces,
         GetAccountView, GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
         GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetMessagePath,
-        GetProofsAndRoot, GetProofsAndRootReply, GetPublications, GetRecoveryBinding, GetStatus,
-        GetSystemProposals, GetSystemProposalsReply, GetTransaction, ProduceBlock,
-        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, SubmitSystemApproval,
-        Transaction,
+        GetProofsAndRoot, GetProofsAndRootReply, GetPublications, GetPublicationsReply,
+        GetRecoveryBinding, GetStatus, GetSystemProposals, GetSystemProposalsReply, GetTransaction,
+        GetTransactionReceipt, ProduceBlock, RequeueCrossZoneDeadLetter,
+        RequeueCrossZoneDeadLetterReply, SubmitSystemApproval, Transaction,
     },
 };
 
@@ -77,6 +79,12 @@ mockall::mock! {
             ctx: &mut Context<Self, Result<Option<(LeeTransaction, BlockId)>>>
         ) -> Result<Option<(LeeTransaction, BlockId)>>;
 
+        pub fn handle_get_transaction_receipt(
+            &mut self,
+            msg: GetTransactionReceipt,
+            ctx: &mut Context<Self, Result<Option<TransactionReceipt>>>
+        ) -> Result<Option<TransactionReceipt>>;
+
         pub fn handle_get_account_nonces(
             &mut self,
             msg: GetAccountNonces,
@@ -104,8 +112,8 @@ mockall::mock! {
         pub fn handle_get_publications(
             &mut self,
             msg: GetPublications,
-            ctx: &mut Context<Self, Result<Vec<(CommitmentPosition, Publication)>>>
-        ) -> Result<Vec<(CommitmentPosition, Publication)>>;
+            ctx: &mut Context<Self, Result<GetPublicationsReply>>
+        ) -> Result<GetPublicationsReply>;
 
         pub fn handle_get_message_path(
             &mut self,
@@ -279,6 +287,18 @@ impl Message<GetTransaction> for MockExecutorActor {
     }
 }
 
+impl Message<GetTransactionReceipt> for MockExecutorActor {
+    type Reply = Result<Option<TransactionReceipt>>;
+
+    async fn handle(
+        &mut self,
+        msg: GetTransactionReceipt,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_transaction_receipt(msg, ctx)
+    }
+}
+
 impl Message<GetAccountNonces> for MockExecutorActor {
     type Reply = Result<Vec<Nonce>>;
 
@@ -328,7 +348,7 @@ impl Message<GetAccountView> for MockExecutorActor {
 }
 
 impl Message<GetPublications> for MockExecutorActor {
-    type Reply = Result<Vec<(CommitmentPosition, Publication)>>;
+    type Reply = Result<GetPublicationsReply>;
 
     async fn handle(
         &mut self,

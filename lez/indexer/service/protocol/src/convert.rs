@@ -8,11 +8,12 @@ use crate::{
     Account, AccountData, AccountId, Actor, ActorState, BedrockStatus, Block, BlockBody,
     BlockHeader, BlockId, BlockIngestError, BoundaryStep, Ciphertext, Commitment,
     CommitmentSetDigest, CrossZoneHalt, Delivery, EncryptedNote, EphemeralPublicKey, EventRecord,
-    FeeDeclaration, FeeFallback, HashType, IndexerStatus, IndexerSyncState, MessageEnvelope,
-    Nullifier, PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage,
+    FeeDeclaration, FeeFallback, FeeReceipt, HashType, IndexerStatus, IndexerSyncState,
+    MessageEnvelope, Nullifier, PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, Proof, ProvenFee, PublicAccountEvidence,
-    PublicExecutionContext, PublicKey, PublicMessage, PublicTransaction, RecoveryBinding, RootCall,
-    SealedMessage, Selector, Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
+    PublicExecutionContext, PublicKey, PublicMessage, PublicTransaction, Publication,
+    RecoveryBinding, RootCall, SealedMessage, Selector, Signature, StallReason, Transaction,
+    TransactionReceipt, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -565,6 +566,24 @@ impl From<SealedMessage> for lee_core::SealedMessage {
     }
 }
 
+impl From<lee_core::program::Publication> for Publication {
+    fn from(value: lee_core::program::Publication) -> Self {
+        match value {
+            lee_core::program::Publication::Clear(body) => Self::Clear(body.into()),
+            lee_core::program::Publication::Sealed(sealed) => Self::Sealed(sealed.into()),
+        }
+    }
+}
+
+impl From<Publication> for lee_core::program::Publication {
+    fn from(value: Publication) -> Self {
+        match value {
+            Publication::Clear(body) => Self::Clear(body.into()),
+            Publication::Sealed(sealed) => Self::Sealed(sealed.into()),
+        }
+    }
+}
+
 impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPreservingMessage {
     fn from(value: lee::privacy_preserving_transaction::message::Message) -> Self {
         let lee::TransactionMessage {
@@ -888,11 +907,69 @@ impl From<BlockHeader> for common::block::BlockHeader {
     }
 }
 
+impl From<common::block::FeeReceipt> for FeeReceipt {
+    fn from(value: common::block::FeeReceipt) -> Self {
+        let common::block::FeeReceipt {
+            gas_exec,
+            gas_stor,
+            fee_base,
+            tip,
+            refund,
+        } = value;
+        Self {
+            gas_exec,
+            gas_stor,
+            fee_base,
+            tip,
+            refund,
+        }
+    }
+}
+
+impl From<FeeReceipt> for common::block::FeeReceipt {
+    fn from(value: FeeReceipt) -> Self {
+        let FeeReceipt {
+            gas_exec,
+            gas_stor,
+            fee_base,
+            tip,
+            refund,
+        } = value;
+        Self {
+            gas_exec,
+            gas_stor,
+            fee_base,
+            tip,
+            refund,
+        }
+    }
+}
+
+impl From<common::block::TransactionReceipt> for TransactionReceipt {
+    fn from(value: common::block::TransactionReceipt) -> Self {
+        let common::block::TransactionReceipt { success, fee } = value;
+        Self {
+            success,
+            fee: fee.into(),
+        }
+    }
+}
+
+impl From<TransactionReceipt> for common::block::TransactionReceipt {
+    fn from(value: TransactionReceipt) -> Self {
+        let TransactionReceipt { success, fee } = value;
+        Self {
+            success,
+            fee: fee.into(),
+        }
+    }
+}
+
 impl From<common::block::BlockBody> for BlockBody {
     fn from(value: common::block::BlockBody) -> Self {
         let common::block::BlockBody {
             transactions,
-            reverted,
+            receipts,
         } = value;
 
         let transactions = transactions
@@ -907,7 +984,7 @@ impl From<common::block::BlockBody> for BlockBody {
 
         Self {
             transactions,
-            reverted,
+            receipts: receipts.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -918,7 +995,7 @@ impl TryFrom<BlockBody> for common::block::BlockBody {
     fn try_from(value: BlockBody) -> Result<Self, Self::Error> {
         let BlockBody {
             transactions,
-            reverted,
+            receipts,
         } = value;
 
         let transactions = transactions
@@ -931,7 +1008,7 @@ impl TryFrom<BlockBody> for common::block::BlockBody {
 
         Ok(Self {
             transactions,
-            reverted,
+            receipts: receipts.into_iter().map(Into::into).collect(),
         })
     }
 }
@@ -1143,9 +1220,15 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
             indexer_core::BlockIngestError::NonPublicGenesisTransaction => {
                 Self::NonPublicGenesisTransaction
             }
-            indexer_core::BlockIngestError::RevertMismatch { listed, settled } => {
-                Self::RevertMismatch { listed, settled }
-            }
+            indexer_core::BlockIngestError::ReceiptMismatch {
+                tx_index,
+                listed,
+                settled,
+            } => Self::ReceiptMismatch {
+                tx_index,
+                listed: listed.map(|receipt| (*receipt).into()),
+                settled: settled.map(|receipt| (*receipt).into()),
+            },
             indexer_core::BlockIngestError::UnfinalizedRelease { tx_index, key } => {
                 Self::UnfinalizedRelease { tx_index, key }
             }
@@ -1441,6 +1524,11 @@ mod tests {
             inherits_entry_authorizations: true,
             pda_seeds: BTreeSet::new(),
         };
+        let clear = lee_core::program::Publication::Clear(lee_core::program::MessageEnvelope {
+            from: actor(44, 94),
+            to: actor(45, 46),
+            message: vec![47],
+        });
         let message = lee::privacy_preserving_transaction::message::Message {
             public_context: lee_core::execution_state::PublicExecutionContext {
                 promotions: BTreeSet::from([27, 28]),
@@ -1503,14 +1591,15 @@ mod tests {
                     lee_core::execution_state::BoundaryStep::EndPublicSubtree,
                 ],
                 async_messages: vec![
-                    lee_core::SealedMessage {
+                    lee_core::program::Publication::Sealed(lee_core::SealedMessage {
                         commitment: lee_core::Commitment::from_byte_array([22; 32]),
                         note: lee_core::EncryptedNote {
                             epk: lee_core::EphemeralPublicKey(vec![23; 2]),
                             ciphertext: lee_core::encryption::Ciphertext::from_inner(vec![24; 3]),
                         },
-                    };
-                    2
+                    }),
+                    clear.clone(),
+                    clear,
                 ],
                 recovery_bindings: vec![],
                 public_root: Some(lee_core::RootCall {

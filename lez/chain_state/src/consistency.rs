@@ -342,7 +342,7 @@ mod tests {
             prev_block_hash: HashType([0; 32]),
             timestamp,
             transactions: vec![],
-            reverted: Vec::new(),
+            receipts: Vec::new(),
         }
         .into_pending_block()
     }

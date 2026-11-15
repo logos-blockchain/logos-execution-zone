@@ -696,7 +696,7 @@ fn direct_input(
         shadow_program_witnesses: Vec::new(),
         responses,
         sender_presentations: Vec::new(),
-        message_seals: Vec::new(),
+        publication_modes: Vec::new(),
         predicted_cross_messages: Vec::new(),
     }
 }

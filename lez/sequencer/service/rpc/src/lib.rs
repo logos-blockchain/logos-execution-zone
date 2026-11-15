@@ -7,8 +7,8 @@ pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as Sequenc
 use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
     CommitmentSetDigest, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, EncryptedNote,
-    HashType, LeeTransaction, MembershipProof, Nonce, PageLimit, ProgramId, Publication,
-    SequencerStatus, SystemProposalReport,
+    HashType, LeeTransaction, MembershipProof, Nonce, PageLimit, ProgramId, PublicationsPage,
+    SequencerStatus, SystemProposalReport, TransactionReceipt,
 };
 pub use sequencer_service_protocol::{FeeStateQuote, HexBytes};
 
@@ -88,6 +88,13 @@ pub trait Rpc {
         tx_hash: HashType,
     ) -> Result<Option<(LeeTransaction, BlockId)>, ErrorObjectOwned>;
 
+    /// `None` for an unknown transaction, and for a block's trailing fee and clock transactions.
+    #[method(name = "getTransactionReceipt")]
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: HashType,
+    ) -> Result<Option<TransactionReceipt>, ErrorObjectOwned>;
+
     #[method(name = "getAccountsNonces")]
     async fn get_accounts_nonces(
         &self,
@@ -107,7 +114,7 @@ pub trait Rpc {
         &self,
         from_position: CommitmentPosition,
         limit: PageLimit,
-    ) -> Result<Vec<(CommitmentPosition, Publication)>, ErrorObjectOwned>;
+    ) -> Result<PublicationsPage, ErrorObjectOwned>;
 
     #[method(name = "getMessagePath")]
     async fn get_message_path(

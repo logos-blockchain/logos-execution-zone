@@ -11,7 +11,7 @@ use indexer_core::{IndexerCore, config::IndexerConfig, event_filter::EventFilter
 use indexer_service_protocol::{
     Account, AccountId, AccountSummary, Actor, ActorStateSummary, Block, BlockId, EventRecord,
     EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus, Selector, Transaction,
-    resolve_event_block_range,
+    TransactionReceipt, resolve_event_block_range,
 };
 use jsonrpsee::{
     SubscriptionSink,
@@ -205,6 +205,18 @@ impl indexer_service_rpc::RpcServer for IndexerService {
             .indexer
             .store
             .get_transaction_by_hash(tx_hash.0)
+            .map_err(db_error)?
+            .map(Into::into))
+    }
+
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: HashType,
+    ) -> Result<Option<TransactionReceipt>, ErrorObjectOwned> {
+        Ok(self
+            .indexer
+            .store
+            .get_transaction_receipt_by_hash(tx_hash.0)
             .map_err(db_error)?
             .map(Into::into))
     }

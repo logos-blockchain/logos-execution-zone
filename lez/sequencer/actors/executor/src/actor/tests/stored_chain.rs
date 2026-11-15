@@ -141,7 +141,7 @@ pub(in crate::actor) fn genesis() -> Block {
 /// A valid empty block, like [`produce_dummy_block`] but at `timestamp`.
 pub(in crate::actor) fn block_at(id: u64, prev: HashType, timestamp: u64) -> Block {
     HashableBlockData {
-        reverted: Vec::new(),
+        receipts: Vec::new(),
         block_id: id,
         prev_block_hash: prev,
         timestamp,

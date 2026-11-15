@@ -15,10 +15,11 @@ use std::{
 use indexer_service_protocol::{
     Account, AccountData, AccountId, AccountSummary, Actor, ActorState, ActorStateSummary,
     BedrockStatus, Block, BlockBody, BlockHeader, BlockId, Commitment, CommitmentSetDigest,
-    EncryptedNote, EventRecord, EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus,
-    IndexerSyncState, PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
-    PublicExecutionContext, PublicMessage, PublicTransaction, RootCall, Selector, Transaction,
-    ValidityWindow, WitnessSet,
+    EncryptedNote, EventRecord, EventSubscriptionFilter, FeeDeclaration, FeeReceipt,
+    GetEventsFilter, HashType, IndexerStatus, IndexerSyncState, PrivacyPreservingMessage,
+    PrivacyPreservingTransaction, PrivateAction, PublicExecutionContext, PublicMessage,
+    PublicTransaction, RootCall, Selector, Transaction, TransactionReceipt, ValidityWindow,
+    WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -337,6 +338,28 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
             .map(|(tx, _)| tx.clone()))
     }
 
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: HashType,
+    ) -> Result<Option<TransactionReceipt>, ErrorObjectOwned> {
+        let state = self.state.read().await;
+        let Some((_, block_id)) = state.transactions.get(&tx_hash) else {
+            return Ok(None);
+        };
+        Ok(state
+            .blocks
+            .iter()
+            .find(|block| block.header.block_id == *block_id)
+            .and_then(|block| {
+                let position = block
+                    .body
+                    .transactions
+                    .iter()
+                    .position(|tx| *tx.hash() == tx_hash)?;
+                block.body.receipts.get(position).copied()
+            }))
+    }
+
     async fn get_blocks(
         &self,
         before: Option<BlockId>,
@@ -518,7 +541,13 @@ fn mock_public_tx(
                 to,
                 message: vec![1, 2, 3, 4],
             },
-            fee: None,
+            // Every other public transaction declares a fee; the rest are exempt.
+            fee: tx_idx.is_multiple_of(2).then_some(FeeDeclaration {
+                payer: to.account_id,
+                gas_limit: 100_000,
+                tip: 1,
+                max_fee: 1_000_000,
+            }),
             nonces: vec![(to.account_id, block_id as u128)],
             admission_evidence: vec![],
         },
@@ -593,6 +622,7 @@ fn build_mock_block(
 
     let num_txs = 2 + (block_id % 3);
     let mut block_transactions = Vec::new();
+    let mut receipts = Vec::new();
 
     for tx_idx in 0..num_txs {
         let tx_hash = {
@@ -607,6 +637,7 @@ fn build_mock_block(
             _ => mock_privacy_preserving_tx(tx_hash, block_id, tx_idx, account_ids),
         };
 
+        receipts.push(mock_receipt(&tx, tx_idx));
         block_transactions.push(tx);
     }
 
@@ -619,9 +650,38 @@ fn build_mock_block(
         },
         body: BlockBody {
             transactions: block_transactions,
-            reverted: Vec::new(),
+            receipts,
         },
         bedrock_status,
+    }
+}
+
+/// A public transaction without a declared fee is exempt; every third charged one reverts.
+fn mock_receipt(tx: &Transaction, tx_idx: u64) -> TransactionReceipt {
+    let exempt = matches!(tx, Transaction::Public(public_tx) if public_tx.message.fee.is_none());
+    if exempt {
+        return TransactionReceipt {
+            success: true,
+            fee: FeeReceipt {
+                gas_exec: 0,
+                gas_stor: 0,
+                fee_base: 0,
+                tip: 0,
+                refund: 0,
+            },
+        };
+    }
+    let gas_exec = 10_000 + tx_idx * 1_000;
+    let gas_stor = 200;
+    TransactionReceipt {
+        success: tx_idx % 3 != 2,
+        fee: FeeReceipt {
+            gas_exec,
+            gas_stor,
+            fee_base: u128::from(gas_exec + gas_stor) * 8,
+            tip: 1,
+            refund: 1_000,
+        },
     }
 }
 
@@ -630,11 +690,7 @@ fn index_block_transactions(
     block: &Block,
 ) {
     for tx in &block.body.transactions {
-        let tx_hash = match tx {
-            Transaction::Public(public_tx) => public_tx.hash,
-            Transaction::PrivacyPreserving(private_tx) => private_tx.hash,
-        };
-        transactions.insert(tx_hash, (tx.clone(), block.header.block_id));
+        transactions.insert(*tx.hash(), (tx.clone(), block.header.block_id));
     }
 }
 
@@ -657,6 +713,27 @@ mod tests {
         let block_ids: Vec<BlockId> = records.iter().map(|record| record.block_id).collect();
         assert!(block_ids.len() > 1);
         assert!(block_ids.is_sorted_by(|a, b| a < b));
+    }
+
+    #[tokio::test]
+    async fn a_transaction_receipt_is_found_by_hash() {
+        let service = MockIndexerService::new_with_mock_blocks();
+        let (tx_hash, receipt) = {
+            let state = service.state.read().await;
+            let body = &state.blocks[0].body;
+            (*body.transactions[1].hash(), body.receipts[1])
+        };
+        assert_eq!(
+            service.get_transaction_receipt(tx_hash).await.unwrap(),
+            Some(receipt)
+        );
+        assert_eq!(
+            service
+                .get_transaction_receipt(HashType([0xab; 32]))
+                .await
+                .unwrap(),
+            None
+        );
     }
 
     #[tokio::test]

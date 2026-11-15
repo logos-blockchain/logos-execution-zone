@@ -1,5 +1,5 @@
 use common::{
-    block::{Block, BlockMeta, PeerChainTip},
+    block::{Block, BlockMeta, PeerChainTip, TransactionReceipt},
     transaction::LeeTransaction,
 };
 use kameo::{Actor, message::Message};
@@ -18,9 +18,9 @@ use crate::{
         GetFinalConfigsBytes, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
         GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatchCount,
         GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,
-        GetSystemApprovalsBytes, GetTransactionByHash, GetZoneAnchor, GetZoneCheckpoint,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutFinalConfigsBytes,
-        PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
+        GetSystemApprovalsBytes, GetTransactionByHash, GetTransactionReceiptByHash, GetZoneAnchor,
+        GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+        PutFinalConfigsBytes, PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
         RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
         StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
     },
@@ -32,6 +32,7 @@ pub trait StorageActorTrait:
     + Message<GetBlock, Reply = Result<Option<Block>>>
     + Message<GetAllBlocks, Reply = Result<Vec<Block>>>
     + Message<GetTransactionByHash, Reply = Result<Option<(LeeTransaction, BlockId)>>>
+    + Message<GetTransactionReceiptByHash, Reply = Result<Option<TransactionReceipt>>>
     + Message<DeleteBlock, Reply = Result<()>>
     + Message<GetFirstBlockId, Reply = Result<Option<BlockId>>>
     + Message<GetLastBlockId, Reply = Result<Option<BlockId>>>
